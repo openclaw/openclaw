@@ -11,8 +11,6 @@ const runInSkillsWatcherContext = AsyncLocalStorage.snapshot();
 const MAX_REMOTE_WATCHERS = 128;
 type RemoteSkillsWatch = {
   access: AgentWorkspaceAccess;
-  agentIds: Set<string>;
-  unowned: boolean;
   signature: string;
   controller: AbortController;
   unavailable: boolean;
@@ -37,7 +35,6 @@ async function retireWatcher(watcherKey: string): Promise<void> {
 export function ensureRemoteSkillsWatcher(params: {
   watcherKey: string;
   workspaceDir: string;
-  agentId?: string;
   executionWorkspaceDir?: string;
   access: AgentWorkspaceAccess;
   sourcePlan: WorkspaceSkillSourcePlan;
@@ -55,11 +52,6 @@ export function ensureRemoteSkillsWatcher(params: {
     const signature = JSON.stringify(request);
     const previous = remoteWatchers.get(watcherKey);
     if (previous?.access === access && previous.signature === signature) {
-      if (params.agentId) {
-        previous.agentIds.add(params.agentId);
-      } else {
-        previous.unowned = true;
-      }
       remoteWatchers.delete(watcherKey);
       remoteWatchers.set(watcherKey, previous);
       if (previous.unavailable) {
@@ -76,8 +68,6 @@ export function ensureRemoteSkillsWatcher(params: {
     }
     const state: RemoteSkillsWatch = {
       access,
-      agentIds: new Set(params.agentId ? [params.agentId] : []),
-      unowned: params.agentId === undefined,
       signature,
       controller: new AbortController(),
       unavailable: !access.watchSkills,
@@ -134,20 +124,6 @@ export function ensureRemoteSkillsWatcher(params: {
 
 export function disposeRemoteSkillsWatcher(watcherKey: string): Promise<void> {
   return updateRegistry(() => retireWatcher(watcherKey));
-}
-
-export function closeRemoteSkillsWatchersForAgent(params: { agentId: string }): Promise<void> {
-  return updateRegistry(async () => {
-    const keys = [...remoteWatchers]
-      .filter(([, state]) => {
-        if (!state.agentIds.delete(params.agentId)) {
-          return false;
-        }
-        return state.agentIds.size === 0 && !state.unowned;
-      })
-      .map(([key]) => key);
-    await Promise.all(keys.map(retireWatcher));
-  });
 }
 
 export function closeRemoteSkillsWatchers(): Promise<void> {

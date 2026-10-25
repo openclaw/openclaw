@@ -23,6 +23,11 @@ title: "Store maintenance and retention"
 | `coldStorage.enabled`   | `false`               | move eligible inactive transcript payloads to compressed JSONL files in a background worker       |
 | `coldStorage.afterDays` | `30`                  | positive integer inactivity cutoff in days for cold storage                                       |
 
+The Gateway applies configured reset/deletion archive expiry at startup and once
+per minute, independently of cron and cold storage. `mode: "warn"` and disabled
+archive retention preserve these archives from age-based deletion. Live references
+and pending publication protect both the canonical archive and its derived file.
+
 Reset boundaries start a fresh history window without deleting earlier transcript rows. When session rollover advances the live `sessionKey -> sessionId` mapping, the previous SQLite session, transcript, trajectory, and search rows also remain; ordinary entry and session lists show only the live mapping. Retained reset history is bounded by the disk budget, not by `resetArchiveRetention`, which only ages archive artifacts. Explicit deletion is different: it stores and verifies the compressed transcript archive in SQLite in the same transaction that removes the deleted session's rows. It then publishes, syncs, and reads back the derived `*.jsonl.deleted.<timestamp>.zst` file before reporting success when zstd is available.
 
 If an archive file export fails after deletion commits, its stored archive
@@ -30,6 +35,16 @@ remains in SQLite for retry. Creating an unrelated new session does not retry
 that export or fail because of it. Retry the deletion after resolving the file
 error to publish the retained archive, even if the deleted session is already
 absent.
+
+Archive admission allows at most 128 outstanding claims. Archive and transcript
+reconciliation tasks request retirement after three minutes. Their FIFO slots,
+database leases, and temporary files remain owned until the worker physically
+exits. If retirement is still pending after five seconds, a Gateway running under
+a verified native service can request a fresh-process restart. A second recovery
+within five minutes is report-only; unmanaged or unsupported deployments are
+always report-only. If archiving reports overload, let pending work finish before
+retrying. If it remains stuck without automatic recovery, restart through the
+service owner before retrying.
 
 Archiving a session changes its visibility and retention metadata while keeping
 its transcript rows in SQLite. Converting reclaimed history to a transcript
@@ -158,6 +173,14 @@ to avoid repeatedly extracting recently viewed history. This cooldown is local
 to the process and resets when it restarts. Transcripts whose uncompressed
 JSONL, including restoration metadata, exceeds 64 MiB stay in SQLite; the bound
 limits restoration memory and worker time.
+
+Before building an archive, the worker sums the original event bytes. A sum above
+64 MiB skips envelope preparation and leaves the transcript in SQLite, while
+the batch continues with later candidates. The warning includes the session ID
+and a lower bound on the envelope bytes. Oversized rejections have a process-local
+24-hour cooldown to avoid repeated size checks and warnings; after a restart,
+the worker checks the stored byte counts again without unpacking known-oversized
+transcripts.
 
 The worker writes, syncs, and verifies an immutable archive before a guarded
 transaction records its location and removes the corresponding transcript

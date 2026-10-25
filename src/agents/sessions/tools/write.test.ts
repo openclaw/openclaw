@@ -9,6 +9,8 @@ import { applyPatch } from "diff";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
+import { hasErrnoCode } from "../../../infra/errno.js";
+import { readPersistedFileStat } from "./file-write-verification.js";
 import { WriteToolOutputSchema } from "./tool-schemas.js";
 import { createWriteTool, type WriteToolOptions } from "./write.js";
 
@@ -46,26 +48,8 @@ describe("write tool", () => {
       mkdir: (dir) => fs.mkdir(dir, { recursive: true }).then(() => {}),
       writeFile,
       readFile: (absolutePath) => fs.readFile(absolutePath),
-      statFile: async (absolutePath) => {
-        try {
-          const stat = await fs.stat(absolutePath);
-          return {
-            type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-          } as const;
-        } catch (error) {
-          if (
-            error &&
-            typeof error === "object" &&
-            "code" in error &&
-            (error as { code?: unknown }).code === "ENOENT"
-          ) {
-            return null;
-          }
-          throw error;
-        }
-      },
+      statFile: (absolutePath) =>
+        readPersistedFileStat(absolutePath, (error) => hasErrnoCode(error, "ENOENT")),
     };
   }
 

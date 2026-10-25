@@ -429,6 +429,19 @@ it.each([
   await rejected;
 });
 
+it("lets a published read follow the reload that supersedes its replacement gate", async () => {
+  mocks.configuredAgentIds = ["default"];
+  const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+  await refresh({}, options);
+  invalidate("operator replacement gate", { waitForReplacement: true });
+  const read = prepare(fixture.agentInput("default", {}), { readPublished: true });
+  // The reload resolves the operator gate first, then publishes behind its own gate.
+  await refresh({ messages: { responsePrefix: "replacement" } }, options);
+  const snapshot = await read;
+  expect(snapshot.isCurrent()).toBe(true);
+  expect(snapshot.config).toEqual({ messages: { responsePrefix: "replacement" } });
+});
+
 it("joins the latest of multiple replacements without rebuilding skipped config", async () => {
   mocks.configuredAgentIds = ["default"];
   const { started, release } = holdNextCatalogWrite();

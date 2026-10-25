@@ -351,7 +351,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             storePath: resolvedSessionTarget.storePath,
           }),
           assertCurrent: () => {
-            assertActiveRun();
             if (
               !attemptControls.isCurrent() ||
               sessionPromptState.sessionId !== sessionId ||
@@ -362,6 +361,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             ) {
               throw new Error("Session target preparation outlived its attempt");
             }
+            // Attempt controls check the source; retain its exact binding after that callback.
+            assertActiveRun.assertScopeCurrent();
           },
         }
       : undefined;
@@ -383,7 +384,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
-    executionSelection: params.executionSelection,
+    joinObservation: params.joinObservation,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
@@ -592,6 +593,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
+    extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
     gitCoauthorPrompt,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

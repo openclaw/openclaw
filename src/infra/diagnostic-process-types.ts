@@ -5,6 +5,38 @@ import type { WorkerMessageMetric } from "./worker-message-metrics.js";
 import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import type { WorkerRequestKind } from "./worker-request-kind.js";
 
+export type WorkerGcProfiles = { heap: string; cpu: string };
+
+export type WorkerGcStorm = {
+  workerId?: string;
+  runId?: string;
+  sessionKeyHash?: string;
+  cellCount: number;
+  activeCellCount: number;
+  bridgeMethods: string[];
+  majorCollections: number;
+  intervalMs: number;
+  heapUsed: number;
+  heapTotal: number;
+  external: number;
+  arrayBuffers: number;
+  heapSizeLimitBytes: number;
+  captureStatus?: "requested" | "complete" | "unavailable";
+  captureReason?: string;
+  profiles?: WorkerGcProfiles;
+};
+
+export type WorkerMemorySample = Pick<
+  NodeJS.MemoryUsage,
+  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
+> & {
+  heapSizeLimitBytes?: number;
+  oldGenerationAfterGcBytes?: number;
+  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
+  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
+  gc?: GcSample[];
+};
+
 export type DiagnosticRuntimeMeasurementFields =
   | {
       type: "gateway.http.cancelled";
@@ -113,6 +145,10 @@ export type DiagnosticMemoryUsage = {
   arrayBuffersBytes: number;
   heapSpaces?: HeapSpaceInfo[];
   workerCount?: number;
+  /** Live PostgreSQL bridges, including children of workers with diagnostic registration. */
+  postgresBridgeCount?: number;
+  /** Threads that started their own PostgreSQL pool without inherited endpoints. */
+  postgresPoolSelfRootCount?: number;
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;
   workerHeapUsedBytes?: number;

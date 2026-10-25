@@ -12,6 +12,7 @@ import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingDirectory as createStaging,
   createSqliteSnapshotStagingDirectorySync as createStagingSync,
+  createSqliteSnapshotStagingTokenSync,
 } from "./sqlite-snapshot-staging.js";
 import { acquireSqliteStagingToken } from "./sqlite-staging-token.js";
 
@@ -31,6 +32,31 @@ function assertReadable(location: string) {
   using database = nodeSqlite.openNodeSqliteDatabase(location, { readOnly: true });
   expect(database.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
 }
+
+it.each(["directory", "payload"] as const)(
+  "preserves recent %s activity during abandoned snapshot retirement",
+  (recent) => {
+    const { cache, source } = createFixture();
+    const owned = createSqliteSnapshotStagingTokenSync(cache);
+    const location = path.join(owned.directory, "database.sqlite");
+    fs.copyFileSync(source, location);
+    owned.release();
+    const cutoff = Date.now() - 15 * 60_000;
+    if (recent === "payload") {
+      const old = new Date(cutoff - 15 * 60_000);
+      fs.utimesSync(owned.directory, old, old);
+    }
+    const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+
+    expect(() => beginSqliteSnapshotRetirement(owned.directory, { cutoff })).toThrow(
+      "Snapshot contains activity within the reclamation grace period",
+    );
+    // A young directory is already ineligible; an old one still needs native custody.
+    expect(open).toHaveBeenCalledTimes(recent === "directory" ? 0 : 1);
+    assertReadable(location);
+    expect(fs.existsSync(path.join(owned.directory, "owner.sqlite"))).toBe(true);
+  },
+);
 
 it("preserves a live child during parent cleanup", async () => {
   const { cache, source } = createFixture();

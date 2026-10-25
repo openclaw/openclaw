@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   redactPublicSupportDiagnosticLine,
   redactSupportDiagnosticLine,
@@ -433,6 +433,25 @@ describe("diagnostic support redaction", () => {
         maxLength: redactedPathPrefix.length + 5,
       }),
     ).toBe(`${redactedPathPrefix}abcd${truncationSuffix}`);
+  });
+
+  it("redacts absolute path prefixes after the working directory disappears", () => {
+    const home = path.join(os.tmpdir(), "support-redaction-home");
+    const stateDir = path.join(home, ".openclaw");
+    const redaction = { env: { HOME: home }, stateDir };
+    // Post-update failure diagnostics run after the old install root may be removed.
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("uv_cwd"), { code: "ENOENT" });
+    });
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(redactSupportString(`failed at ${stateDir}/logs/gateway.log`, redaction)).toBe(
+          "failed at $OPENCLAW_STATE_DIR/logs/gateway.log",
+        );
+      }
+    } finally {
+      cwd.mockRestore();
+    }
   });
 
   it("redacts Windows USERPROFILE paths when HOME is unset", () => {

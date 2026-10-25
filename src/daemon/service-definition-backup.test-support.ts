@@ -17,6 +17,7 @@ import { captureGatewayServiceDefinitionBackup } from "./service-definition-back
 import { native } from "./service-definition-backup.mocks.test-support.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "./service-stage.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { stageSystemdService } from "./systemd-install.js";
 import { resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
@@ -30,18 +31,8 @@ beforeEach(() => {
   native.command.mockReset();
   native.task.mockReset();
   native.transport.mockReset().mockResolvedValue(undefined);
-  native.launchctl.mockReset().mockResolvedValue({
-    code: 113,
-    stdout: "",
-    stderr: "Could not find service",
-    termination: "exit",
-  });
-  native.identity.mockReset().mockResolvedValue({
-    code: 0,
-    stdout: "S-1-5-21-1-2-3-1001\n",
-    stderr: "",
-    termination: "exit",
-  });
+  native.launchctl.mockReset().mockResolvedValue(nativeExit("", "Could not find service", 113));
+  native.identity.mockReset().mockResolvedValue(nativeExit("S-1-5-21-1-2-3-1001\n"));
 });
 
 async function fixture(

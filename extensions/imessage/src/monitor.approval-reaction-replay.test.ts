@@ -97,10 +97,8 @@ describe("iMessage approval reaction durable replay", () => {
         // the released-pending state is not stably observable. Hold the
         // redelivered attempt open instead: reaching it at all proves the drain
         // released and reclaimed the claim rather than completing it.
-        let openSecondAttempt = () => {};
-        const secondAttemptGate = new Promise<void>((resolve) => {
-          openSecondAttempt = resolve;
-        });
+        const { promise: secondAttemptGate, resolve: openSecondAttempt } =
+          Promise.withResolvers<void>();
         resolverMocks.resolveApprovalOverGateway
           .mockRejectedValueOnce(new Error("gateway 503"))
           .mockImplementationOnce(async () => {

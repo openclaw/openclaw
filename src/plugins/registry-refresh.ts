@@ -69,7 +69,7 @@ export async function refreshPluginRegistryAfterConfigMutation(
     },
   });
   const callerLease = owner && guardLease(owner);
-  await callerLease?.assertOwned();
+  callerLease?.assertCurrent();
   const warn = (error: unknown) =>
     params.logger?.warn?.(`Plugin registry refresh failed: ${formatErrorMessage(error)}`);
   const refresh = async (acquiredLease: PluginMetadataLeaseContext) => {
@@ -98,7 +98,6 @@ export async function refreshPluginRegistryAfterConfigMutation(
               }),
             { command: params.traceCommand ?? "registry-refresh" },
           ));
-        await lease.assertOwned();
         await tracePluginLifecyclePhaseAsync(
           "registry refresh",
           async () => {
@@ -131,7 +130,6 @@ export async function refreshPluginRegistryAfterConfigMutation(
       await lease.assertOwned();
       warn(error);
     }
-    await lease.assertOwned();
   };
   try {
     if (callerLease) {
@@ -146,7 +144,6 @@ export async function refreshPluginRegistryAfterConfigMutation(
     await callerLease?.assertOwned();
     warn(error);
   }
-  await callerLease?.assertOwned();
   if (params.invalidateRuntimeCache !== false) {
     await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
       ...params,

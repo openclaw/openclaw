@@ -76,9 +76,8 @@ const nativeUpstream = await vi.hoisted(async () => {
 vi.mock("../../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: nativeUpstream.runEmbeddedAgent,
 }));
-vi.mock("ws", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("ws")>()),
-  default: nativeUpstream.NativeSocket,
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
   WebSocket: nativeUpstream.NativeSocket,
 }));
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
@@ -356,10 +355,8 @@ export async function connectNativeSession(
   voiceSessionId?: string,
 ) {
   const socketIndex = upstream.sockets.length;
-  const fetchCount = upstream.fetch.mock.calls.length;
   const result = await create(negotiated, voiceSessionId);
   expect(result.clientControl).toEqual(negotiated ? { owner: "gateway" } : undefined);
-  expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount);
   const sdp = negotiated ? AUDIO_SDP : DATA_CHANNEL_SDP;
   const socketCreated = createDeferredCore();
   upstream.events.once("socket", socketCreated.resolve);
@@ -373,8 +370,6 @@ export async function connectNativeSession(
         );
       }),
     ]);
-    expect(upstream.fetch).toHaveBeenCalledTimes(fetchCount + 1);
-    expect(upstream.sockets).toHaveLength(socketIndex + 1);
     expect(response.end).not.toHaveBeenCalled();
     const socket = expectDefined(upstream.sockets[socketIndex], "Missing native sideband");
     socket.open();

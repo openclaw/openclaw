@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import {
   createBeamTestCatalog,
@@ -26,14 +27,7 @@ const sourceModel = { provider: "openai", model: "gpt-5.6-sol" };
 
 const servers: http.Server[] = [];
 afterEach(async () => {
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        }),
-    ),
-  );
+  await Promise.all(servers.splice(0).map((server) => server[Symbol.asyncDispose]()));
 });
 
 async function requestStatus(url: string, body: string): Promise<number | undefined> {
@@ -70,14 +64,8 @@ async function serve(
     handler(req, res);
   });
   servers.push(server);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server did not bind a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}/api/v1/beam/sessions`;
+  const port = await listenOnLoopback(server);
+  return `http://127.0.0.1:${port}/api/v1/beam/sessions`;
 }
 
 it("rejects unknown fields, non-ISO timestamps, and oversized transcript entries", () => {

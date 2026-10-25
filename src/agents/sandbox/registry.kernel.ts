@@ -448,7 +448,9 @@ function readRegistryRows(
   return executeSqliteQuerySync(
     db,
     filter
-      ? query.orderBy("last_used_at_ms", "desc").orderBy("container_name", "asc")
+      ? query
+          .orderBy("last_used_at_ms", (order) => order.desc().nullsLast())
+          .orderBy("container_name", "asc")
       : query.orderBy("container_name", "asc"),
   ).rows;
 }

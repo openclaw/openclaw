@@ -1,3 +1,4 @@
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -334,15 +335,13 @@ it("leaves a stopped browser on its Start affordance instead of focusing a histo
   const panel = await mountPanel(gateway.client, false);
   panel.preferredTab = { tab: { ...hostTab, targetId: "dead-target" }, revision: "stale" };
   panel.presented = true;
-  await waitForSolid(() =>
-    expect(panel.querySelector(".bp-btn")?.textContent?.trim()).toBe("Start browser"),
-  );
+  const start = () => getQueriesForElement(panel).getByRole("button", { name: "Start browser" });
+  await waitForSolid(() => expect(start().textContent?.trim()).toBe("Start browser"));
   await panel.updateComplete;
 
   const paths = () => requests(gateway).map((request) => request.path);
   expect(paths()).toEqual(["/tabs"]);
   expect(panel.querySelector('[role="alert"]')).toBeNull();
-  const start = () => panel.querySelector<HTMLButtonElement>(".bp-btn")!;
   expect(start().textContent?.trim()).toBe("Start browser");
   const reload = reloadButton(panel);
   expect(reload?.disabled).toBe(true);
@@ -357,7 +356,7 @@ it("leaves a stopped browser on its Start affordance instead of focusing a histo
   }
   await flush();
 
-  await waitForSolid(() => expect(start()?.textContent?.trim()).toBe("Start browser"));
+  await waitForSolid(() => expect(start().textContent?.trim()).toBe("Start browser"));
   start().click();
   await waitForTitle(panel, "managed");
   expect(paths()).toEqual(expect.arrayContaining(["/start", "/screenshot"]));

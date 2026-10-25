@@ -85,6 +85,7 @@ export class SessionCatalogLiveState {
     },
   });
   private readonly progressIds = new Set<string>();
+  private latestProgressId: string | null = null;
   private readonly requestChangedHostKeys = new Set<string>();
   private readonly warnedRequestErrors = new Set<string>();
   private retryAttempts = 0;
@@ -140,6 +141,7 @@ export class SessionCatalogLiveState {
     this.resetRetry();
     this.requestGeneration = null;
     this.progressIds.clear();
+    this.latestProgressId = null;
     this.requestChangedHostKeys.clear();
     this.refreshPending = false;
     this.discoveryPages.clear();
@@ -152,6 +154,10 @@ export class SessionCatalogLiveState {
       hosts: catalog.hosts.map((host) => {
         const key = sessionCatalogHostKey(catalog.id, host.hostId);
         currentKeys.add(key);
+        if (catalog.requiresFreshList) {
+          this.discoveryPages.delete(key);
+          return host;
+        }
         const discovery = this.discoveryPages.get(key);
         if (!discovery || host.pending || host.error || catalog.error) {
           return host;
@@ -191,7 +197,7 @@ export class SessionCatalogLiveState {
             progressiveHost &&
             !progressiveHost.pending
             ? progressiveHost
-            : preserveExpandedCatalogHost(host, progressiveHost);
+            : preserveExpandedCatalogHost(host, progressiveHost, catalog.requiresFreshList);
         }
         return host.error &&
           this.requestChangedHostKeys.has(hostKey) &&
@@ -207,12 +213,18 @@ export class SessionCatalogLiveState {
     return this.progressIds.size > 0;
   }
 
+  isCurrentRequest(progressId: string) {
+    return this.latestProgressId === progressId;
+  }
+
   beginRequest(generation: number): { progressId: string } {
     this.eventRefresh.absorb();
     this.activationRefresh = null;
     this.requestGeneration = generation;
+    this.refreshScope = {};
     this.requestChangedHostKeys.clear();
     const progressId = generateUUID();
+    this.latestProgressId = progressId;
     this.progressIds.add(progressId);
     if (this.progressIds.size > 8) {
       this.progressIds.delete(this.progressIds.values().next().value!);
@@ -236,7 +248,7 @@ export class SessionCatalogLiveState {
     agentId: string;
     catalogs: SessionCatalog[];
     pageDepths: ReadonlyMap<string, number>;
-  }): { catalogs: SessionCatalog[]; catalogId: string } | null {
+  }): { catalogs: SessionCatalog[]; catalogId: string; replay?: SessionCatalog } | null {
     if (!isSessionsCatalogHostEvent(params.payload)) {
       return null;
     }
@@ -245,7 +257,11 @@ export class SessionCatalogLiveState {
       return null;
     }
     const freshHost = event.catalog.hosts[0];
-    if (!this.progressIds.has(event.progressId) || !freshHost) {
+    if (
+      !this.progressIds.has(event.progressId) ||
+      (event.catalog.requiresFreshList && !this.isCurrentRequest(event.progressId)) ||
+      !freshHost
+    ) {
       return null;
     }
     const hostKey = sessionCatalogHostKey(event.catalog.id, freshHost.hostId);
@@ -275,12 +291,15 @@ export class SessionCatalogLiveState {
       // the prior view was expanded. Pending and failed reads still retain it.
       const completeHost =
         !freshHost.pending && !sessionCatalogPageFailed(freshHost) && !freshHost.nextCursor;
-      const mergedHost =
-        !completeHost &&
-        (freshHost.pending ||
-          sessionCatalogPageFailed(freshHost) ||
-          (params.pageDepths.get(hostKey) ?? 0) > 0 ||
-          this.discoveryPages.has(hostKey))
+      const mergedHost = event.catalog.requiresFreshList
+        ? freshHost.pending || sessionCatalogPageFailed(freshHost)
+          ? preserveExpandedCatalogHost(freshHost, currentHost, true)
+          : freshHost
+        : !completeHost &&
+            (freshHost.pending ||
+              sessionCatalogPageFailed(freshHost) ||
+              (params.pageDepths.get(hostKey) ?? 0) > 0 ||
+              this.discoveryPages.has(hostKey))
           ? preserveExpandedCatalogHost(freshHost, currentHost)
           : freshHost;
       const hosts = currentHost
@@ -302,13 +321,25 @@ export class SessionCatalogLiveState {
     const sameCatalogMetadata =
       currentCatalog !== undefined &&
       currentCatalog.label === nextCatalog.label &&
+      currentCatalog.requiresFreshList === nextCatalog.requiresFreshList &&
       JSON.stringify(currentCatalog.capabilities) === JSON.stringify(nextCatalog.capabilities) &&
       currentCatalog.pending === nextCatalog.pending &&
       JSON.stringify(currentCatalog.error) === JSON.stringify(nextCatalog.error);
     if (sameCatalogMetadata && JSON.stringify(currentHost) === JSON.stringify(nextHost)) {
       return null;
     }
-    return { catalogs, catalogId: event.catalog.id };
+    return {
+      catalogs,
+      catalogId: event.catalog.id,
+      ...(event.catalog.requiresFreshList &&
+      this.requestGeneration === null &&
+      !freshHost.pending &&
+      !sessionCatalogPageFailed(freshHost) &&
+      freshHost.nextCursor &&
+      (params.pageDepths.get(hostKey) ?? 0) > 0
+        ? { replay: event.catalog }
+        : {}),
+    };
   }
 
   schedule(delayMs: number, isConnected: boolean, refresh: () => void) {
@@ -365,6 +396,7 @@ export async function refreshSessionCatalogsLive(params: {
   catalogs: () => SessionCatalog[];
   pageDepths: ReadonlyMap<string, number>;
   connected: () => boolean;
+  withdrawPrevious: () => void;
   applyFinal: (catalogs: SessionCatalog[]) => void;
   /** Finish the finite cursor sweep without repeating the root catalog request. */
   continueRefresh: () => Promise<void>;
@@ -381,9 +413,14 @@ export async function refreshSessionCatalogsLive(params: {
     return;
   }
   const { progressId } = live.beginRequest(generation);
+  const scope = live.refreshScope;
+  params.withdrawPrevious();
   let retryDelayMs: number | null = null;
   const requestIsCurrent = () =>
-    generation === params.currentGeneration() && client === params.currentClient();
+    generation === params.currentGeneration() &&
+    client === params.currentClient() &&
+    scope === live.refreshScope &&
+    live.isCurrentRequest(progressId);
   try {
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
       agentId: params.agentId,
@@ -394,21 +431,55 @@ export async function refreshSessionCatalogsLive(params: {
     if (!requestIsCurrent() || !result?.catalogs) {
       return;
     }
-    const previousCatalogs = params.catalogs();
-    const catalogs = await refetchExpandedSessionCatalogPages({
-      catalogs: live.mergeFinal(result.catalogs, previousCatalogs),
-      previousCatalogs,
-      client,
-      agentId: params.agentId,
-      pageDepths: params.pageDepths,
-      isCurrent: requestIsCurrent,
-      canRequestPage: () => requestIsCurrent() && document.visibilityState !== "hidden",
-    });
-    if (!requestIsCurrent()) {
-      return;
-    }
+    let catalogs = live.mergeFinal(result.catalogs, params.catalogs());
+    let pageDepths = params.pageDepths;
+    do {
+      const observed = params.catalogs();
+      catalogs = await refetchExpandedSessionCatalogPages({
+        catalogs,
+        previousCatalogs: observed,
+        client,
+        agentId: params.agentId,
+        pageDepths,
+        isCurrent: requestIsCurrent,
+        canRequestPage: () => requestIsCurrent() && document.visibilityState !== "hidden",
+      });
+      if (!requestIsCurrent()) {
+        return;
+      }
+      const changedDepths = new Map<string, number>();
+      // A slower sibling's replay must not overwrite a host published during
+      // that await. Replay only those new hosts, retaining already completed pages.
+      catalogs = catalogs.map((catalog) => {
+        const latest = params.catalogs().find((entry) => entry.id === catalog.id);
+        if (!catalog.requiresFreshList || !latest) {
+          return catalog;
+        }
+        const previous = observed.find((entry) => entry.id === catalog.id);
+        const hosts = new Map(catalog.hosts.map((host) => [host.hostId, host]));
+        let changed = false;
+        for (const host of latest.hosts) {
+          if (
+            host === previous?.hosts.find((entry) => entry.hostId === host.hostId) ||
+            (!hosts.has(host.hostId) && !catalog.pending)
+          ) {
+            continue;
+          }
+          hosts.set(host.hostId, host);
+          changed = true;
+          const key = sessionCatalogHostKey(catalog.id, host.hostId);
+          const depth = params.pageDepths.get(key);
+          if (depth && host.nextCursor && !host.pending && !sessionCatalogPageFailed(host)) {
+            changedDepths.set(key, depth);
+          }
+        }
+        return changed ? { ...latest, hosts: [...hosts.values()] } : catalog;
+      });
+      pageDepths = changedDepths;
+    } while (pageDepths.size > 0);
     live.resetRetry();
     params.applyFinal(catalogs);
+    live.requestGeneration = null;
     await params.continueRefresh();
   } catch (error) {
     // A transient refresh failure must not collapse already visible or expanded pages.

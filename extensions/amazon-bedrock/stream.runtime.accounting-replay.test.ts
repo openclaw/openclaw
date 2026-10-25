@@ -9,6 +9,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AssistantMessage, AssistantMessageEvent, Context } from "openclaw/plugin-sdk/llm";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
@@ -211,14 +212,7 @@ describe("Bedrock prompt cache ownership", () => {
     const previousAssistant = {
       ...replayAssistant(model.id, [textBlock("First answer")]),
       stopReason: "stop",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       timestamp: 1,
     } satisfies Context["messages"][number];
     const context: Context = {
@@ -309,45 +303,55 @@ describe("Bedrock prompt cache ownership", () => {
   });
 });
 
-it("prices one-hour cache writes from the provider's authoritative TTL breakdown", async () => {
-  mockStream([
-    startEvent,
-    {
-      metadata: {
-        usage: {
-          inputTokens: 20,
-          outputTokens: 5,
-          totalTokens: 25,
-          cacheReadInputTokens: 70,
-          cacheWriteInputTokens: 10,
-          cacheDetails: [
-            { ttl: CacheTTL.ONE_HOUR, inputTokens: 6 },
-            { ttl: CacheTTL.FIVE_MINUTES, inputTokens: 4 },
-          ],
+it.each([
+  [6, 4, 17, 82],
+  [undefined, 0, 12.5, 77.5],
+  [0, undefined, 12.5, 77.5],
+] as const)(
+  "preserves reported TTL buckets and prices one-hour writes for %s/%s",
+  async (oneHour, fiveMinutes, cacheWriteCost, totalCost) => {
+    mockStream([
+      startEvent,
+      {
+        metadata: {
+          usage: {
+            inputTokens: 20,
+            outputTokens: 5,
+            totalTokens: 25,
+            cacheReadInputTokens: 70,
+            cacheWriteInputTokens: 10,
+            cacheDetails: [
+              { ttl: CacheTTL.ONE_HOUR, inputTokens: oneHour },
+              { ttl: CacheTTL.FIVE_MINUTES, inputTokens: fiveMinutes },
+            ],
+          },
         },
       },
-    },
-    stopEvent,
-  ]);
+      stopEvent,
+    ]);
 
-  const result = await streamBedrockForTest(
-    bedrockModel({
-      cost: { input: 1_000_000, output: 2_000_000, cacheRead: 500_000, cacheWrite: 1_250_000 },
-    }),
-    userContext(),
-  ).result();
+    const result = await streamBedrockForTest(
+      bedrockModel({
+        cost: { input: 1_000_000, output: 2_000_000, cacheRead: 500_000, cacheWrite: 1_250_000 },
+      }),
+      userContext(),
+    ).result();
 
-  expect(result.usage).toMatchObject({
-    input: 20,
-    output: 5,
-    cacheRead: 70,
-    cacheWrite: 10,
-    cacheWrite1h: 6,
-    totalTokens: 105,
-    contextUsage: { state: "available", promptTokens: 100, totalTokens: 105 },
-    cost: { input: 20, output: 10, cacheRead: 35, cacheWrite: 17, total: 82 },
-  });
-});
+    expect(result.usage).toMatchObject({
+      input: 20,
+      output: 5,
+      cacheRead: 70,
+      cacheWrite: 10,
+      totalTokens: 105,
+      contextUsage: { state: "available", promptTokens: 100, totalTokens: 105 },
+      cost: { input: 20, output: 10, cacheRead: 35, cacheWrite: cacheWriteCost, total: totalCost },
+    });
+    expect(result.usage.cacheWrite1h).toBe(oneHour);
+    expect(result.usage.cacheWrite5m).toBe(fiveMinutes);
+    expect(Object.hasOwn(result.usage, "cacheWrite1h")).toBe(oneHour !== undefined);
+    expect(Object.hasOwn(result.usage, "cacheWrite5m")).toBe(fiveMinutes !== undefined);
+  },
+);
 
 it("lifts tool images into user content for OpenAI while preserving result associations", async () => {
   const image = { type: "image" as const, mimeType: "image/png", data: png };

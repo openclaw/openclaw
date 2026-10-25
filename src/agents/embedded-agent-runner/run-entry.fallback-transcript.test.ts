@@ -18,6 +18,7 @@ import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { FailoverError } from "../failover-error.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
+import { resetStickyRateLimitFallbacksForTest } from "../model-fallback-sticky.test-support.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import { createDirectHarness, makeResult } from "./run-entry.test-support.js";
 
@@ -38,6 +39,8 @@ vi.mock("../harness/selection.js", () => ({
 describe("run entry durable fallback notices", () => {
   const files = useTempSessionsFixture("fallback-transcript-");
   afterEach(() => {
+    // These cases share one session id and deliberately leave rate-limit stickiness behind.
+    resetStickyRateLimitFallbacksForTest();
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
   });
@@ -145,6 +148,8 @@ describe("run entry durable fallback notices", () => {
   it("persists a real transition once, preserving callbacks and source-session binding", async () => {
     using f = await fixture();
     expect((await f.run()).provider).toBe("anthropic");
+    // Stickiness skips the second transition; this test covers de-duplication across repeated transitions.
+    resetStickyRateLimitFallbacksForTest();
     expect((await f.run()).provider).toBe("anthropic");
     expect(f.steps.map((step) => step.fallbackStepFinalOutcome)).toEqual([
       "next_fallback",
@@ -248,6 +253,23 @@ describe("run entry durable fallback notices", () => {
       using f = await fixture({ [skip]: true });
       expect((await f.run()).provider).toBe("anthropic");
       expect(await loadTranscriptEvents(f.scope)).toEqual([]);
+    },
+  );
+
+  it.each([
+    { maintenance: false, second: ["anthropic/claude-haiku-3-5"] },
+    { maintenance: true, second: ["openai/gpt-4.1-mini", "anthropic/claude-haiku-3-5"] },
+  ])(
+    "opts normal turns into rate-limit stickiness (maintenance=$maintenance)",
+    async ({ maintenance, second }) => {
+      using f = await fixture({ maintenance });
+      await f.run();
+      await f.run();
+      expect(f.candidates).toEqual([
+        "openai/gpt-4.1-mini",
+        "anthropic/claude-haiku-3-5",
+        ...second,
+      ]);
     },
   );
 });

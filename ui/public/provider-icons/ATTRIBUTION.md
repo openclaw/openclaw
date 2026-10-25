@@ -17,6 +17,17 @@ content otherwise match the cited upstream files.
 
 Provider names and marks remain the property of their respective owners.
 
+## Abliteration icon
+
+`ProviderIcon-abliteration.svg` uses the official favicon mark from
+https://abliteration.ai/icon.svg, referenced by https://abliteration.ai/ and
+retrieved on October 23, 2026. The background plate is removed, the view box is
+cropped to the mark, and fills are normalized to `currentColor`. The three paths
+are combined without changing their geometry. The same mark supplies the plugin
+activity icon and the opaque white package tile.
+
+The name and mark remain the property of Abliteration AI, Inc.
+
 ## Pi icon
 
 `ProviderIcon-pi.svg` is a metadata-cleaned copy of the official Pi logo:

@@ -10,7 +10,7 @@ import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import type { SessionPullRequestReadCredential } from "./control-ui-session-pr-request.js";
-import { selectTaskPublicationSessions } from "./control-ui-session-task-prs.js";
+import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
@@ -162,7 +162,7 @@ function withControlUiTaskPrTarget(
   target: ControlUiSessionPrTarget | undefined,
   projection: SessionRowProjection,
   root: EntryRow,
-  getAllows: () => (row: EntryRow) => boolean,
+  getAllows: () => ReturnType<typeof createSessionListEntryFilter>,
   ownerProfileId?: string,
 ): ControlUiSessionPrTarget | undefined {
   if (!target || root.entry.incognito || isIncognitoSessionKey(root.key)) {
@@ -175,8 +175,8 @@ function withControlUiTaskPrTarget(
     generation: root.generation,
     entry: { sessionId: root.entry.sessionId, lifecycleRevision: root.entry.lifecycleRevision },
   };
-  const select = () => selectTaskPublicationSessions(projection, selected, getAllows());
-  const sessions = select();
+  const selection = prepareTaskPublicationSessions(projection, selected, getAllows);
+  const sessions = selection.sessions;
   const taskReceipts = { sessions, ...(ownerProfileId ? { ownerProfileId } : {}) };
   return {
     ...target,
@@ -185,22 +185,7 @@ function withControlUiTaskPrTarget(
     identity: JSON.stringify([target.identity, JSON.stringify(taskReceipts)]),
     assertCurrent: () => {
       target.assertCurrent?.();
-      const current = select();
-      if (
-        current.length !== sessions.length ||
-        current.some((session, index) => {
-          const previous = sessions[index];
-          return (
-            session !== previous &&
-            (session.agentId !== previous?.agentId ||
-              session.sessionKey !== previous.sessionKey ||
-              session.sessionId !== previous.sessionId ||
-              session.lifecycleRevision !== previous.lifecycleRevision)
-          );
-        })
-      ) {
-        throw new Error("Task pull-request audience changed");
-      }
+      selection.assertCurrent();
     },
   };
 }
@@ -274,7 +259,7 @@ export function createControlUiSessionPrRead(params: {
   const actorProfile = actor?.kind === "operator" ? actor.profileId : undefined;
   const profileInput = client.authenticatedUserProfile?.profileId;
   const userInput = client.authenticatedUserId;
-  const scopes = [...(client.connect.scopes ?? [])].toSorted().join("\0");
+  const scopes = (client.connect.scopes ?? []).toSorted().join("\0");
   const access = client.internal?.operatorAccessAuthority;
   const connectionSignal = client.connectionSignal;
   const projection = getSessionRowProjection();
@@ -297,7 +282,7 @@ export function createControlUiSessionPrRead(params: {
         client.authenticatedUserId !== userInput ||
         currentActor?.kind !== actorKind ||
         (currentActor?.kind === "operator" ? currentActor.profileId : undefined) !== actorProfile ||
-        [...(client.connect.scopes ?? [])].toSorted().join("\0") !== scopes ||
+        (client.connect.scopes ?? []).toSorted().join("\0") !== scopes ||
         client.internal?.operatorAccessAuthority !== access ||
         !hasCurrentGatewayOperatorAccess(access)
       ) {
@@ -410,10 +395,7 @@ export function createControlUiSessionPrRead(params: {
         projectedTarget,
         projection,
         current,
-        () => {
-          const filter = createSessionListEntryFilter({ cfg: getRuntimeConfig(), client });
-          return (row) => filter?.(row.key, row.entry) !== false;
-        },
+        () => createSessionListEntryFilter({ cfg: getRuntimeConfig(), client }),
         actorProfile,
       );
       return target

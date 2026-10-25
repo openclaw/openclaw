@@ -2,7 +2,6 @@ import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ExecMode } from "../infra/exec-approvals.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
@@ -27,6 +26,8 @@ import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factor
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Session-owned declaration used only for tool listing, never invocation authority. */
+  listingClientCaps?: string[];
   /** Creator policy retained by the scheduled session owner. */
   scheduledToolPolicy?: import("./scheduled-tool-policy.js").ScheduledToolPolicyContext;
   /** Complete model-discoverable catalog, prepared by the current host. */
@@ -128,6 +129,9 @@ export type OpenClawToolsOptions = {
   sessionPortalTarget?: import("./tools/session-portal-target.js").SessionPortalToolTarget;
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
+  /** Host-prepared local exec parity for this run's managed browser requests. */
+  allowLocalBrowserLoopback?: boolean;
+  assertLocalBrowserLoopbackCurrent?: () => void;
   agentSessionKey?: string;
   agentChannel?: string;
   /** Prepared active-conversation support for structured human questions. */
@@ -138,7 +142,7 @@ export type OpenClawToolsOptions = {
   /** Exact admitted session policy shared with terminal-input authorization. */
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */
-  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
+  execOverrides?: ExecPolicyOverrides;
   /** Trusted operator devices allowed to review this run's terminal input. */
   approvalReviewerDeviceIds?: string[];
   /** Trusted account used for authorization; delivery keeps agentAccountId. */

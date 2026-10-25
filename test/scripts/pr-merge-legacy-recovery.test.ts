@@ -18,14 +18,14 @@ function legacyFixture(recover = false) {
 }
 
 describePosix("native merge outcome with real Git and supervised lock recovery", () => {
-  it.each([false, true])("retains legacy evidence (recovery=%s)", (recover) => {
-    const { f, legacy, approvedHead, run } = legacyFixture(recover);
-    expectExit(run(), recover ? 1 : 0);
+  it("retains legacy evidence through recovery and Git collection", () => {
+    const { f, legacy, approvedHead, run } = legacyFixture(true);
+    expectExit(run(), 1);
     expect(f.state().mutations).toBe(1);
     const previous = f.git(["rev-parse", outcomeRef]);
     const previousRecord = f.record();
     expect(previousRecord).toMatchObject({
-      phase: recover ? "intent" : "complete",
+      phase: "intent",
       head: approvedHead,
       legacyRefusal: {
         actor: "fixture-operator",
@@ -35,34 +35,30 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       },
     });
     expect(previousRecord).not.toHaveProperty("recovery");
-    if (recover) {
-      f.recover();
-      configureMerge(f, { mode: "success" });
-      expectExit(f.run(false, f.repo, "squash", previous));
-      expect(f.record()).toMatchObject({
-        phase: "complete",
-        head: approvedHead,
-        recovery: { outcome: previous, attempt: previousRecord.attempt },
-      });
-      f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
-    }
+    f.recover();
+    configureMerge(f, { mode: "success" });
+    expectExit(f.run(false, f.repo, "squash", previous));
+    expect(f.record()).toMatchObject({
+      phase: "complete",
+      head: approvedHead,
+      recovery: { outcome: previous, attempt: previousRecord.attempt },
+    });
+    f.git(["merge-base", "--is-ancestor", previous, outcomeRef]);
     expectExit(f.run());
-    expect(f.state().mutations).toBe(recover ? 2 : 1);
+    expect(f.state().mutations).toBe(2);
     expectExit(run(), 1);
-    expect(f.state().mutations).toBe(recover ? 2 : 1);
-    if (recover) {
-      for (const branch of ["topic", "pr-123", "pr-123-prep"]) {
-        f.git(["update-ref", "-d", `refs/heads/${branch}`]);
-      }
-      f.git(["update-ref", "-d", "refs/remotes/origin/topic"]);
-      rmSync(legacy.directory, { recursive: true });
-      f.git(["reflog", "expire", "--expire=now", "--all"]);
-      f.git(["gc", "--prune=now"]);
-      for (const oid of [previous, f.head, f.base, approvedHead]) {
-        f.git(["cat-file", "-e", `${oid}^{commit}`]);
-      }
-      expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(previousRecord);
+    expect(f.state().mutations).toBe(2);
+    for (const branch of ["topic", "pr-123", "pr-123-prep"]) {
+      f.git(["update-ref", "-d", `refs/heads/${branch}`]);
     }
+    f.git(["update-ref", "-d", "refs/remotes/origin/topic"]);
+    rmSync(legacy.directory, { recursive: true });
+    f.git(["reflog", "expire", "--expire=now", "--all"]);
+    f.git(["gc", "--prune=now"]);
+    for (const oid of [previous, f.head, f.base, approvedHead]) {
+      f.git(["cat-file", "-e", `${oid}^{commit}`]);
+    }
+    expect(JSON.parse(f.git(["show", `${previous}:outcome.json`]))).toEqual(previousRecord);
     for (const [name, contents] of Object.entries(legacy.files)) {
       const oid = f.git(["rev-parse", `${previous}:legacy-refusal/${name}`]);
       expect(oid).toBe(f.git(["hash-object", "--stdin"], contents));

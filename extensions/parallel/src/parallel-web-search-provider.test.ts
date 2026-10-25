@@ -39,14 +39,8 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
 import { createParallelWebSearchProvider } from "../web-search-contract-api.js";
 import { createParallelFreeWebSearchProvider } from "./parallel-free-web-search-provider.js";
 const EMPTY_SEARCH_RESPONSE = { search_id: "x", session_id: "y", results: [] };
-function jsonResponse(body: unknown, headers: Record<string, string> = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "Content-Type": "application/json", ...headers },
-  });
-}
 function enqueueJson(body: unknown = EMPTY_SEARCH_RESPONSE): void {
-  endpointMockState.responses.push(jsonResponse(body));
+  endpointMockState.responses.push(Response.json(body));
 }
 function paidTool(searchConfig: Record<string, unknown> = { parallel: { apiKey: "par-secret" } }) {
   return expectDefined(
@@ -81,12 +75,12 @@ function pushMcpHandshake(
   protocolVersion: string | null = "2025-06-18",
 ): void {
   endpointMockState.responses.push(
-    jsonResponse(
+    Response.json(
       { jsonrpc: "2.0", id: "i", result: protocolVersion ? { protocolVersion } : {} },
-      { "mcp-session-id": sessionId },
+      { headers: { "mcp-session-id": sessionId } },
     ),
-    jsonResponse({ jsonrpc: "2.0" }),
-    jsonResponse({
+    Response.json({ jsonrpc: "2.0" }),
+    Response.json({
       jsonrpc: "2.0",
       id: "c",
       result: {
@@ -184,6 +178,22 @@ describe("parallel web search provider", () => {
       }).execute({ search_queries: ["openclaw"] }),
     ).resolves.toMatchObject({ error: "invalid_base_url" });
     expect(endpointMockState.calls).toHaveLength(1);
+  });
+  it.each([
+    "ftp://fixture-user:fixture-url-password@proxy.example/parallel?api_key=fixture-query-token",
+    "fixture-user:fixture-url-password@proxy.example:invalid/parallel?api_key=fixture-query-token",
+    "custom://fixture-user:fixture-url-password@proxy.example/parallel?api_key=fixture-query-token",
+  ])("redacts credentials from rejected custom endpoint %s", async (baseUrl) => {
+    const result = await paidTool({
+      parallel: { apiKey: "par-secret", baseUrl },
+    }).execute({ search_queries: ["invalid credential-bearing endpoint"] });
+    expect(result.message).not.toContain("fixture-url-password");
+    expect(result.message).not.toContain("fixture-query-token");
+    expect(result).toMatchObject({
+      error: "invalid_base_url",
+      message: expect.stringContaining("plugins.entries.parallel.config.webSearch.baseUrl"),
+    });
+    expect(endpointMockState.calls).toHaveLength(0);
   });
   it("normalizes bounded request fields before sending them", async () => {
     enqueueJson();
@@ -430,8 +440,8 @@ describe("parallel-free MCP transport", () => {
         ].join("\n"),
         { status: 200, headers: { "Content-Type": "text/event-stream" } },
       ),
-      jsonResponse({ jsonrpc: "2.0" }),
-      jsonResponse([
+      Response.json({ jsonrpc: "2.0" }),
+      Response.json([
         { jsonrpc: "2.0", method: "notifications/progress" },
         {
           jsonrpc: "2.0",
@@ -467,9 +477,9 @@ describe("parallel-free MCP transport", () => {
   ])("surfaces bounded tool-envelope failures", async (envelope, expectedPrefix) => {
     const detail = `${"x".repeat(600)}😀tail`;
     endpointMockState.responses.push(
-      jsonResponse({ result: { protocolVersion: "2025-06-18" } }),
-      jsonResponse({}),
-      jsonResponse({ result: { ...envelope.result, detail } }),
+      Response.json({ result: { protocolVersion: "2025-06-18" } }),
+      Response.json({}),
+      Response.json({ result: { ...envelope.result, detail } }),
     );
     await expect(
       freeTool().execute({ search_queries: [`parallel envelope ${expectedPrefix}`] }),
@@ -555,7 +565,7 @@ describe("parallel-free MCP transport", () => {
   });
   it("preserves HTTP status when tools/call fails", async () => {
     endpointMockState.responses.push(
-      jsonResponse({ jsonrpc: "2.0", id: "i", result: { protocolVersion: "2025-06-18" } }),
+      Response.json({ jsonrpc: "2.0", id: "i", result: { protocolVersion: "2025-06-18" } }),
       new Response(null, { status: 202 }),
       new Response("call rejected", { status: 401 }),
     );

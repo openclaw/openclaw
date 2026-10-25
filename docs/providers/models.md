@@ -21,6 +21,7 @@ Pick a provider, authenticate, then set the default model as `provider/model`.
 
 ## Supported providers (starter set)
 
+- [Abliteration](/providers/abliteration)
 - [Alibaba Model Studio](/providers/alibaba)
 - [Amazon Bedrock](/providers/bedrock)
 - [Anthropic (API + Claude CLI)](/providers/anthropic)

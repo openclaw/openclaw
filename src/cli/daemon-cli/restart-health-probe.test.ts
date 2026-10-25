@@ -15,6 +15,7 @@ import {
   monotonicClock,
   callGateway,
   gatewayResponseError,
+  gatewayProtocolMismatchError,
   requestReadinessProbe,
   requestStartupProbe,
   resetRestartHealthMocks,
@@ -185,6 +186,43 @@ describe("restart health", () => {
         : reason,
     );
     expect(callGateway).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { build: "candidate-build", outcome: "healthy" },
+    { build: "old-build", outcome: "build-id-mismatch" },
+  ])("settles an RPC protocol mismatch through HTTP identity ($build)", async (scenario) => {
+    // The updater runs the previous package, so a protocol bump or revert rejects its handshake.
+    const mismatch = gatewayProtocolMismatchError();
+    callGateway.mockRejectedValue(mismatch);
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        status: "started",
+        version: "2026.10.6",
+        buildId: scenario.build,
+      }),
+    });
+    requestReadinessProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({ ready: true }),
+    });
+    const snapshot = await waitForRunningGateway({
+      expectedVersion: "2026.10.6",
+      expectedBuildId: "candidate-build",
+      requirePluginHealth: false,
+      requireChannelHealth: false,
+      timeoutMs: 1_800_000,
+      delayMs: 30_000,
+    });
+    expect(snapshot.waitOutcome).toBe(scenario.outcome);
+    expect(snapshot.protocolMismatch).toBe(
+      "protocol mismatch: Control UI v5, Gateway v4, connection check min v3",
+    );
+    expect(snapshot.authenticationError).toBeUndefined();
     expect(sleep).not.toHaveBeenCalled();
   });
 

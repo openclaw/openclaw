@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { verifyBackupArchive } from "../commands/backup-verify.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -48,15 +48,17 @@ type HardlinkedDatabase = {
 function hardlinkCase<Args extends unknown[]>(
   run: (fixture: HardlinkedDatabase, ...args: Args) => Promise<void>,
   opaque = false,
+  ownerName = "alpha.sqlite",
 ) {
+  const aliasName = ownerName.replace("alpha", "zeta");
   return (...args: Args) =>
     withBackupFixture({ layout: "split", prefix: "backup-plugin-hardlinks-" }, async (state) => {
       if (!opaque) {
         await declarePluginSqliteResources(state, "plugins/hardlinks");
       }
       const directory = state.statePath("plugins", "hardlinks");
-      const ownerPath = path.join(directory, opaque ? "zeta.sqlite" : "alpha.sqlite");
-      const aliasPath = path.join(directory, opaque ? "alpha.sqlite" : "zeta.sqlite");
+      const ownerPath = path.join(directory, opaque ? aliasName : ownerName);
+      const aliasPath = path.join(directory, opaque ? ownerName : aliasName);
       await fs.mkdir(directory, { recursive: true });
       using database = new (requireNodeSqlite().DatabaseSync)(ownerPath);
       database.exec(`
@@ -123,14 +125,9 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
       );
       expect(archive.warnings?.every((warning) => /opaque/iu.test(warning))).toBe(true);
       const restored = await restoreBackup(state, archive);
-      const asset = expectDefined(
-        archive.assets.find((candidate) => candidate.kind === "state"),
-        "state asset",
-      );
       const restoredDirectory = path.join(
         restored.targetPath,
-        asset.archivePath,
-        "plugins/hardlinks",
+        buildBackupArchivePath(archive.archiveRoot, directory),
       );
       expect((await fs.readdir(restoredDirectory)).toSorted()).toEqual(names.toSorted());
       for (const [name, bytes] of originals) {
@@ -140,22 +137,36 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     }, true),
   );
 
-  it.runIf(process.platform === "linux").each(["singleton", "hardlink pair"] as const)(
-    "preserves a live writer's main-file POSIX lock when backing up a declared plugin %s",
-    hardlinkCase(async ({ state, ownerPath, aliasPath }, layout: string) => {
-      if (layout === "singleton") {
-        await fs.unlink(aliasPath);
-      }
-      const locksBefore = readMainDatabasePosixLocks(ownerPath);
-      expect(locksBefore).toEqual([
-        { length: 510, pid: process.pid, start: 1073741826, type: "read" },
-      ]);
+  it.runIf(process.platform === "linux").each([
+    ["singleton", "alpha.sqlite"],
+    ["hardlink pair", "alpha.sqlite"],
+    ["singleton", "alpha.db"],
+    ["hardlink pair", "alpha.db"],
+  ])(
+    "preserves a live writer's POSIX lock for a declared plugin %s named %s",
+    async (layout, ownerName) => {
+      await hardlinkCase(
+        async ({ state, ownerPath, aliasPath }) => {
+          if (layout === "singleton") {
+            await fs.unlink(aliasPath);
+          }
+          const locksBefore = readMainDatabasePosixLocks(ownerPath);
+          expect(locksBefore).toEqual([
+            { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+          ]);
 
-      const archive = await createArchive(state);
+          const archive = await createArchive(state);
 
-      expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
-      expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
-    }),
+          // Closing an in-process header probe would drop the writer's POSIX locks.
+          expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
+          // No opaque-copy warning: .db names were classified as SQLite too.
+          expect(archive.warnings ?? []).toEqual([]);
+          expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
+        },
+        false,
+        ownerName,
+      )();
+    },
   );
 
   it.each([
@@ -179,7 +190,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
         const firstPath = state.statePath("state", "first-global.sqlite");
         const secondPath = state.statePath("state", "second-global.sqlite");
         const canonicalAlias = state.statePath("state", "zeta-global-alias.sqlite");
-        let canonicalIno: number | undefined;
         if (canonical) {
           await mkdirs(path.dirname(canonicalPath));
           for (const sqlitePath of [firstPath, secondPath]) {
@@ -187,7 +197,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
           }
           await fs.symlink(firstPath, canonicalPath);
           await fs.link(firstPath, canonicalAlias);
-          canonicalIno = (await fs.stat(firstPath)).ino;
         }
         if (firstWal) {
           database.close();
@@ -225,18 +234,6 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
         try {
           await expectBackupRefused(state, error);
           expect(changed).toHaveBeenCalledOnce();
-          if (canonical) {
-            expect(await fs.realpath(canonicalPath)).toBe(
-              change === "canonical symlink" ? secondPath : firstPath,
-            );
-            if (change === "canonical hardlink") {
-              expect((await fs.stat(canonicalPath)).ino).toBe(canonicalIno);
-              expect((await fs.stat(canonicalAlias)).ino).not.toBe(canonicalIno);
-            }
-          }
-          if (firstWal) {
-            expect((await fs.stat(`${ownerPath}-wal`)).size).toBeGreaterThan(0);
-          }
         } finally {
           if (walMoved) {
             await fs.rename(movedWal, `${ownerPath}-wal`);

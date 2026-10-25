@@ -287,7 +287,7 @@ async function runDoctorConfigPreflightOperation(
     }
   }
   let postConvergenceStateConfig: OpenClawConfig | undefined;
-  let pluginConvergenceWarnings: string[] = [];
+  const preflightWarnings: string[] = [];
   if (stateDirMigrations) {
     const convergence = await runDoctorPluginConvergence({
       cfg: automaticConfigRepair?.config ?? baseConfig,
@@ -303,7 +303,7 @@ async function runDoctorConfigPreflightOperation(
       convergence.migrationInspection,
     );
     const refreshed = await readConfigSnapshotForPreflight(false);
-    pluginConvergenceWarnings = convergence.warnings ?? [];
+    preflightWarnings.push(...(convergence.warnings ?? []));
     configSnapshotRead = refreshed;
     pluginMetadata.invalidate();
     snapshot = refreshed.snapshot;
@@ -421,12 +421,36 @@ async function runDoctorConfigPreflightOperation(
       integrityCheck: options.integrityCheck,
     });
   }
+  if (stateDirMigrations && options.doctorOnlyStateMigrations === true) {
+    const { retireDoctorA2uiWidgets } = await import("./doctor-a2ui-widgets.js");
+    const retirement = await measurePreflightStep("retired-a2ui-widgets", () =>
+      retireDoctorA2uiWidgets({
+        cfg: automaticConfigRepair?.config ?? baseConfig,
+        env: process.env,
+        integrityCheck: options.integrityCheck,
+      }),
+    );
+    noteDoctorStateMigrationResult(retirement);
+    preflightWarnings.push(...retirement.warnings);
+  }
   // Import retired locators before removing them from the authored config.
   if (await pluginMigrations.complete()) {
     configSnapshotRead = await readConfigSnapshotForPreflight(false);
     snapshot = configSnapshotRead.snapshot;
     baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
     automaticConfigRepair = await planAdmittedConfigRepair(snapshot);
+  }
+  if (stateDirMigrations && options.doctorOnlyStateMigrations === true) {
+    const { repairRelativeSessionStores } = await import("./doctor-relative-session-store.js");
+    noteDoctorStateMigrationResult(
+      await measurePreflightStep("relative-session-store", () =>
+        repairRelativeSessionStores({
+          cfg: automaticConfigRepair?.config ?? baseConfig,
+          env: process.env,
+          registeredDatabases: options.agentDatabaseMigrationDiscovery?.registeredAgentDatabases,
+        }),
+      ),
+    );
   }
   const automaticHeartbeatRepair = options.automaticHeartbeatRepair;
   if (automaticHeartbeatRepair) {
@@ -482,7 +506,7 @@ async function runDoctorConfigPreflightOperation(
   return {
     snapshot,
     baseConfig,
-    ...(pluginConvergenceWarnings.length > 0 ? { warnings: pluginConvergenceWarnings } : {}),
+    ...(preflightWarnings.length > 0 ? { warnings: preflightWarnings } : {}),
     rosterMigrationSource,
     ...(rosterMigrationOwnerId ? { rosterMigrationOwnerId } : {}),
     ...(deferredPluginMigrations.length > 0 ? { deferredPluginMigrations } : {}),

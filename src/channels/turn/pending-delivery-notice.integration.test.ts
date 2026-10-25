@@ -26,7 +26,7 @@ import type { ChannelTurnDeliveryAdapter } from "./types.js";
 const dispatchCore = vi.hoisted(() => vi.fn());
 const sendRecoveryNotice = vi.hoisted(() => vi.fn());
 const appendAssistantMessageToSessionTranscript = vi.hoisted(() => vi.fn());
-const withDurableDeliveryRuntime = vi.hoisted(() => vi.fn());
+const resolveDurableSupport = vi.hoisted(() => vi.fn());
 
 vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../auto-reply/dispatch.js")>()),
@@ -39,7 +39,10 @@ vi.mock("../session.js", async (importOriginal) => ({
 vi.mock("../../gateway/server-recovery-runtime-context.js", () => ({
   getGatewayRecoveryRuntime: () => ({ sendRecoveryNotice }),
 }));
-vi.mock("./durable-delivery-runtime.js", () => ({ withDurableDeliveryRuntime }));
+vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/outbound/deliver.js")>()),
+  resolveOutboundDurableFinalDeliverySupport: resolveDurableSupport,
+}));
 vi.mock("../../config/sessions/transcript.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/transcript.js")>()),
   appendAssistantMessageToSessionTranscript,
@@ -213,7 +216,7 @@ describe("pending delivery notice end to end", () => {
             queueCustody: "held",
           })
         : cause;
-    withDurableDeliveryRuntime.mockImplementationOnce(async () => {
+    resolveDurableSupport.mockImplementationOnce(async () => {
       if (failure === "queue-owned") {
         await settle("queued");
       }

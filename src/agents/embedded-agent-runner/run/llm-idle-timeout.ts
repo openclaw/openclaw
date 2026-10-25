@@ -244,8 +244,8 @@ export function streamWithIdleTimeout(
 ): StreamFn {
   const guardIterationGaps = opts?.scope !== "creation-only";
   const runId = opts?.runId;
-  const progressTimeoutMs = clampTimeoutMs(timeoutMs * 2);
   return (model, context, options) => {
+    let progressTimeoutMs = clampTimeoutMs(timeoutMs * 2);
     const trackCleanup = captureAsyncWorkTracker();
     const streamAbortController = new AbortController();
     const firstEventTimeoutMs = clampTimeoutMs(getFirstStreamEventTimeoutMs(options) ?? timeoutMs);
@@ -256,7 +256,7 @@ export function streamWithIdleTimeout(
       reason = "no response from model",
       name = "LlmIdleTimeoutError",
     ) => {
-      const timer = setTimeout(() => {
+      return setTimeout(() => {
         if (requestDeadline?.reject === reject) {
           requestTimedOut = true;
         }
@@ -268,9 +268,7 @@ export function streamWithIdleTimeout(
         streamAbortController.abort(error);
         onIdleTimeout?.(error);
         reject(error);
-      }, delay);
-      timer.unref?.();
-      return timer;
+      }, delay).unref();
     };
     let requestDeadline:
       | { timer: NodeJS.Timeout; reject: (error: Error) => void; accepted: boolean }
@@ -308,9 +306,19 @@ export function streamWithIdleTimeout(
         clearRequestDeadline();
       }
     };
+    let producerReportsActivity = false;
+    const recordActivity = (reportedProgressTimeoutMs?: number) => {
+      producerReportsActivity = true;
+      if (reportedProgressTimeoutMs !== undefined) {
+        progressTimeoutMs = clampTimeoutMs(Math.max(timeoutMs, reportedProgressTimeoutMs));
+      }
+    };
     const unsubscribeCreationActivity = onLlmRequestActivity(
       streamAbortController.signal,
-      finishCreation,
+      (_progress, reportedProgressTimeoutMs) => {
+        recordActivity(reportedProgressTimeoutMs);
+        finishCreation();
+      },
     );
     const sourceSignal = options?.signal;
     const abortFromSourceSignal = () => {
@@ -368,6 +376,7 @@ export function streamWithIdleTimeout(
         };
         let idleTimer: NodeJS.Timeout | undefined;
         let progressTimer: NodeJS.Timeout | undefined;
+        let lastProgressAt = Date.now();
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
         // Consume pre-stream tool activity once; reusing it shortens later chunk budgets.
         let streamFirstArmDone = false;
@@ -403,20 +412,22 @@ export function streamWithIdleTimeout(
           if (requestDeadline?.accepted) {
             clearRequestDeadline();
           }
-          if (progress || !progressTimer) {
-            clearTimeout(progressTimer);
-            progressTimer = startTimer(
-              progressTimeoutMs,
-              rejectTimeout,
-              progressTimeoutMs,
-              "no model progress",
-              "LlmNoProgressError",
-            );
+          if (progress) {
+            lastProgressAt = Date.now();
           }
+          clearTimeout(progressTimer);
+          progressTimer = startTimer(
+            Math.max(1, progressTimeoutMs - (Date.now() - lastProgressAt)),
+            rejectTimeout,
+            progressTimeoutMs,
+            "no model progress",
+            "LlmNoProgressError",
+          );
         };
         const unsubscribeLlmActivity = onLlmRequestActivity(
           streamAbortController.signal,
-          (progress) => {
+          (progress, reportedProgressTimeoutMs) => {
+            recordActivity(reportedProgressTimeoutMs);
             armTimer(progress);
             if (progress && runId && areDiagnosticsEnabledForProcess()) {
               markDiagnosticRunProgress({ runId, reason: "model_call:stream_progress" });
@@ -466,7 +477,9 @@ export function streamWithIdleTimeout(
               rejectIdleTimeout = undefined;
               // Native producer completion lets us safely police parked consumers.
               // Structural streams retain their pending-next-only guard.
-              armTimer();
+              // A notifying producer owns progress, including content-free events.
+              // Structural streams without notifications retain the yield fallback.
+              armTimer(!producerReportsActivity);
               return result;
             } catch (error) {
               settle();

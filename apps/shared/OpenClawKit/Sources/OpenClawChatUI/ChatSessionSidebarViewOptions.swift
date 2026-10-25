@@ -50,23 +50,11 @@ extension ChatSessionSidebarModel {
         }
 
         func includes(_ session: OpenClawChatSessionEntry) -> Bool {
-            // Port src/shared/session-list-visibility.ts: cron keys own automation,
-            // even when system-created; other probes use provenance, never titles.
-            let key = session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let automation = key.range(of: #"^(?:cron:|agent::*[^:]+:+cron:+[^:])"#, options: .regularExpression) != nil
-            if automation { return self.showAutomation }
-            let named = [session.label, session.displayName, session.subject]
-                .contains { ChatPayloadDecoding.trimmedNonEmptyString($0) != nil }
-            // src/shared/session-list-visibility.ts:27: a named heartbeat outranks system provenance.
-            if session.classification == "heartbeat" { return self.showSystem || named }
-            let system: Bool
-            if session.createdActor?.type == "system" {
-                system = true
-            } else {
-                let internalSource = session.createdVia == "run" || session.createdVia == "internal"
-                system = internalSource && session.createdActor?.type != "human" && !named
+            if OpenClawChatSessionListVisibility.isCronSessionDisplayKey(session.key) {
+                return self.showAutomation
             }
-            return self.showSystem || !system
+            return self.showSystem
+                || !OpenClawChatSessionListVisibility.isSystemCreatedSessionRow(session)
         }
     }
 

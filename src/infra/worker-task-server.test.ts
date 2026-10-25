@@ -260,3 +260,41 @@ it("expires a task's admission budget without poisoning its successor or resourc
   expectCalls(0, port.close, boundary.closeMemory);
   expect(process.exitCode).toBe(exitCode);
 });
+
+it.each([undefined, "openclaw doctor --fix"])(
+  "settles encoded service failures through the owning lifecycle (next step: %s)",
+  async (nextStep) => {
+    const { port, task, closed, serveOwnedWorkerTasks } = await workerFixture();
+    const { bindPostgresPool, recordPostgresPoolFailure } = await import("./postgres-sync/pool.js");
+    const { port1, port2 } = new MessageChannel();
+    onTestFinished(() => {
+      port1.close();
+      port2.close();
+    });
+    bindPostgresPool({
+      allocation: new SharedArrayBuffer(4),
+      services: [{ port: port1, signal: new SharedArrayBuffer(8) }],
+      nextStep,
+    });
+    const error = new Error(
+      `PostgreSQL connection lost; outcome unknown${nextStep ? `. Run ${nextStep}.` : ""}`,
+    );
+    const result = { ok: false, error: error.message };
+    serveOwnedWorkerTasks(() => {
+      recordPostgresPoolFailure(error);
+      return result;
+    });
+    expect(await Promise.race([task(1), closed])).toBe(nextStep ? "result" : "closed");
+    if (nextStep) {
+      expect(port.postMessage).toHaveBeenCalledWith(
+        { status: "ok", taskId: 1, value: result, diagnostics: undefined },
+        [],
+      );
+      expect(port.close).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(exitCode);
+    } else {
+      expect(port.postMessage).not.toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+    }
+  },
+);

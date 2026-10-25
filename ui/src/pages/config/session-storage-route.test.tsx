@@ -10,21 +10,8 @@ import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { sessionStorageStatus as inventory } from "./session-storage.test-support.ts";
 import { SessionStorageSettings } from "./session-storage.tsx";
-
-function inventory(): SessionsStorageStatusResult {
-  return {
-    agents: [],
-    maintenance: {
-      running: false,
-      lastStartedAt: null,
-      lastCompletedAt: null,
-      lastError: null,
-      archivedTranscripts: 0,
-      externalizedTranscripts: 0,
-    },
-  };
-}
 
 it("leaves Storage while a submitted run is held and ignores its late completion", async () => {
   const heldRun = createDeferred<SessionsStorageStatusResult>();

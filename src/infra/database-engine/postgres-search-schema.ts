@@ -9,7 +9,7 @@ import type { SearchSchema } from "./contract.js";
 
 export const pgSearchName = (name: string) => `"${name.replaceAll('"', '""')}"`;
 export const searchConfig = "openclaw_simple_unaccent";
-const key: SqliteDatabaseFactKey<string[]> = {
+const key: SqliteDatabaseFactKey<{ signature: string; vectorSearchVersion: 1 | 2 }[]> = {
   name: "database.postgres.search",
   schemaDependent: true,
 };
@@ -19,10 +19,15 @@ export function admitPostgresSearch(
   db: PostgresSqlConnection,
   schema: SearchSchema,
   namespace: string,
+  vectorSearchVersion: 1 | 2 = 1,
 ): (() => void) | undefined {
   const signature = JSON.stringify(schema);
   const retained = getSqliteDatabaseAdmission(db, key);
-  if (retained?.includes(signature)) {
+  if (
+    retained?.some(
+      (fact) => fact.signature === signature && fact.vectorSearchVersion >= vectorSearchVersion,
+    )
+  ) {
     return undefined;
   }
   const required = new Set<string>();
@@ -45,7 +50,7 @@ export function admitPostgresSearch(
   }
   const extensionSchema = schema.extensionSchema ?? "public";
   const rows = db
-    .prepare(`SELECT a.name, e.extname, n.nspname FROM pg_catalog.pg_available_extensions a
+    .prepare(`SELECT a.name, e.extname, e.extversion, n.nspname FROM pg_catalog.pg_available_extensions a
     LEFT JOIN pg_catalog.pg_extension e ON e.extname = a.name
     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
     WHERE a.name IN ('unaccent', 'pg_trgm', 'vector')`)
@@ -63,6 +68,15 @@ export function admitPostgresSearch(
         `PostgreSQL ${name} capability unavailable. ${action}: CREATE EXTENSION IF NOT EXISTS ${pgSearchName(name)} WITH SCHEMA ${pgSearchName(extensionSchema)};${name === "vector" ? ' For keyword-only memory explicitly set memory.search.provider to "none".' : ""}`,
       );
     }
+    if (name === "vector" && vectorSearchVersion === 2) {
+      const version = /^(\d+)\.(\d+)/.exec(String(found.extversion));
+      if (!version || (Number(version[1]) === 0 && Number(version[2]) < 7)) {
+        throw new DatabaseSearchCapabilityUnavailableError(
+          "vector",
+          "PostgreSQL binary vector search requires pgvector 0.7 or newer. Upgrade the server extension package, then have a database administrator run ALTER EXTENSION vector UPDATE before reopening the store.",
+        );
+      }
+    }
   }
   const privilege = db
     .prepare(
@@ -74,13 +88,23 @@ export function admitPostgresSearch(
       `PostgreSQL search capability unavailable: insufficient CREATE privilege. Have the database owner grant CREATE on schema ${pgSearchName(namespace)} (or on the database before initial admission).`,
     );
   }
-  return () => publishPostgresSearch(db, schema);
+  return () => publishPostgresSearch(db, schema, vectorSearchVersion);
 }
 
-export function publishPostgresSearch(db: PostgresSqlConnection, schema: SearchSchema): void {
+export function publishPostgresSearch(
+  db: PostgresSqlConnection,
+  schema: SearchSchema,
+  vectorSearchVersion: 1 | 2 = 1,
+): void {
+  const signature = JSON.stringify(schema);
+  const retained = getSqliteDatabaseAdmission(db, key) ?? [];
+  const previous = retained.find((fact) => fact.signature === signature);
   publishSqliteDatabaseAdmission(db, key, [
-    ...(getSqliteDatabaseAdmission(db, key) ?? []),
-    JSON.stringify(schema),
+    ...retained.filter((fact) => fact.signature !== signature),
+    {
+      signature,
+      vectorSearchVersion: previous?.vectorSearchVersion === 2 ? 2 : vectorSearchVersion,
+    },
   ]);
 }
 
@@ -88,7 +112,10 @@ export function assertPostgresSearchAdmitted(
   db: PostgresSqlConnection,
   schema: SearchSchema,
 ): void {
-  if (!db.isOpen || !getSqliteDatabaseAdmission(db, key)?.includes(JSON.stringify(schema))) {
+  if (
+    !db.isOpen ||
+    !getSqliteDatabaseAdmission(db, key)?.some((fact) => fact.signature === JSON.stringify(schema))
+  ) {
     throw new DatabaseSearchCapabilityUnavailableError(
       schema.mode !== "keyword-only" && Object.keys(schema.vector ?? {}).length
         ? "vector"
@@ -171,6 +198,7 @@ export function postgresSearchSql(
   namespace: string,
   shared: { text?: boolean; vector?: boolean } = {},
   decoderVersion: 1 | 2 = 1,
+  vectorSearchVersion: 1 | 2 = 1,
 ): string {
   const ext = pgSearchName(schema.extensionSchema ?? "public");
   const config = `${pgSearchName(namespace)}.${pgSearchName(searchConfig)}`;
@@ -211,7 +239,11 @@ CREATE INDEX ${pgSearchName(`${index.table}_search_gin`)} ON ${table} USING gin(
       embedding = pgSearchName(source.embedding);
     // Empty canonical bytes mean a text-only row, including NOT NULL source columns.
     const project = `INSERT INTO ${table}(id, embedding) SELECT ${id}, openclaw_vector(${embedding}, ${source.dimensions}) FROM ${owner} WHERE octet_length(${embedding}) > 0`;
-    statements.push(`CREATE TABLE ${table} (id TEXT PRIMARY KEY REFERENCES ${owner}(${id}) ON UPDATE CASCADE ON DELETE CASCADE, embedding ${ext}.vector(${source.dimensions}) NOT NULL);
+    const bits =
+      vectorSearchVersion === 2
+        ? `, embedding_bits bit(${source.dimensions}) GENERATED ALWAYS AS (CASE WHEN ${ext}.vector_norm(embedding) > 0 THEN ${ext}.binary_quantize(embedding)::bit(${source.dimensions}) ELSE NULL END) STORED`
+        : "";
+    statements.push(`CREATE TABLE ${table} (id TEXT PRIMARY KEY REFERENCES ${owner}(${id}) ON UPDATE CASCADE ON DELETE CASCADE, embedding ${ext}.vector(${source.dimensions}) NOT NULL${bits});
 CREATE FUNCTION ${pgSearchName(`${index.table}_sync`)}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'UPDATE' AND OLD.${embedding} IS NOT DISTINCT FROM NEW.${embedding} THEN RETURN NEW; END IF;

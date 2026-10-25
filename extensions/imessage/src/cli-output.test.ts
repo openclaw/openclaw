@@ -1,5 +1,6 @@
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
@@ -10,24 +11,12 @@ const runCommandMock = vi.mocked(runCommandWithTimeout);
 const run = (timeoutMs?: number) =>
   runIMessageCliJsonCommand({ cliPath: "imsg", args: ["send"], timeoutMs });
 
-function commandResult(
-  overrides: Partial<Awaited<ReturnType<typeof runCommandWithTimeout>>> = {},
-): Awaited<ReturnType<typeof runCommandWithTimeout>> {
-  return {
-    stdout: '{"success":true,"messageId":"ok"}\n',
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
 describe("runIMessageCliJsonCommand", () => {
   beforeEach(() => {
     runCommandMock.mockReset();
-    runCommandMock.mockResolvedValue(commandResult());
+    runCommandMock.mockResolvedValue(
+      commandResult({ stdout: '{"success":true,"messageId":"ok"}\n' }),
+    );
   });
 
   it("uses the canonical wrapper with bounded asymmetric output", async () => {
@@ -68,7 +57,9 @@ describe("runIMessageCliJsonCommand", () => {
     [{ stdout: "not json" }, "imsg returned non-JSON output: not json"],
     [{ stdout: '{"success":false,"error":"failed"}\n' }, "failed"],
   ] as const)("rejects command result %j with %s", async (overrides, error) => {
-    runCommandMock.mockResolvedValueOnce(commandResult(overrides));
+    runCommandMock.mockResolvedValueOnce(
+      commandResult({ stdout: '{"success":true,"messageId":"ok"}\n', ...overrides }),
+    );
     await expect(run(25)).rejects.toThrow(error);
   });
 });

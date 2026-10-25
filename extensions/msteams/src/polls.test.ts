@@ -6,8 +6,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMSTeamsPollCard,
   createMSTeamsPollStoreState,
@@ -17,14 +16,10 @@ import {
 import { setMSTeamsRuntime } from "./runtime.js";
 import { resolveMSTeamsAccountStateNamespace } from "./sqlite-state.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    cleanup();
-  }),
-);
+const tempDirs = useMSTeamsStateTempDirs();
+let stateDir: string;
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -32,15 +27,18 @@ type Poll = Parameters<MSTeamsPollStore["createPoll"]>[0];
 type Votes = Record<string, string[]>;
 const pollStateKey = (id: string) => crypto.createHash("sha256").update(id).digest("hex");
 
-function pluginStore<T>(namespace: string, maxEntries: number, env: NodeJS.ProcessEnv) {
-  return createPluginStateKeyedStoreForTests<T>("msteams", { namespace, maxEntries, env });
+function pluginStore<T>(namespace: string, maxEntries: number) {
+  return createPluginStateKeyedStoreForTests<T>("msteams", {
+    namespace,
+    maxEntries,
+    env: process.env,
+  });
 }
 
 async function storedVotes(pollId: string, accountId?: string) {
   const buckets = pluginStore<{ pollId: string; votes: Votes }>(
     resolveMSTeamsAccountStateNamespace("poll-vote-buckets", accountId),
     32_032,
-    process.env,
   );
   const votes: Votes = {};
   for (const row of await buckets.entries()) {
@@ -62,13 +60,9 @@ function poll(overrides: Partial<Poll>): Poll {
   };
 }
 
-function stateStore() {
-  const stateDir = tempDirs.make("openclaw-msteams-polls-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  return createMSTeamsPollStoreState();
-}
-
 beforeEach(() => {
+  stateDir = tempDirs.make("openclaw-msteams-polls-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   resetPluginStateStoreForTests();
   setMSTeamsRuntime(msteamsRuntimeStub);
 });
@@ -103,13 +97,13 @@ describe("msteams polls", () => {
   });
 
   it("deduplicates selections before enforcing maxSelections", async () => {
-    const store = stateStore();
+    const store = createMSTeamsPollStoreState();
     await store.createPoll(poll({ options: ["A", "B", "C"], maxSelections: 2 }));
     await store.recordVote({ pollId: "poll-1", voterId: "user-1", selections: ["0", "0", "1"] });
     expect((await storedVotes("poll-1"))["user-1"]).toEqual(["0", "1"]);
   });
   it("hashes external poll ids before using plugin-state keys", async () => {
-    const store = stateStore();
+    const store = createMSTeamsPollStoreState();
     const longPollId = `poll-${"x".repeat(900)}`;
 
     await store.createPoll(poll({ id: longPollId }));
@@ -125,7 +119,6 @@ describe("msteams polls", () => {
   });
 
   it("isolates poll metadata and vote buckets between accounts", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-msteams-polls-accounts-"));
     const defaultStore = createMSTeamsPollStoreState();
     const supportStore = createMSTeamsPollStoreState({ accountId: "support" });
     await defaultStore.createPoll(poll({ question: "Default?" }));
@@ -148,7 +141,7 @@ describe("msteams polls", () => {
   });
 
   it("serializes concurrent votes for the same poll", async () => {
-    const store = stateStore();
+    const store = createMSTeamsPollStoreState();
     await store.createPoll(poll({ id: "poll-race" }));
 
     await Promise.all([
@@ -163,17 +156,11 @@ describe("msteams polls", () => {
   });
 
   it("keeps large vote maps split across bounded rows", async () => {
-    const store = stateStore();
-    const votes = Object.fromEntries(
-      Array.from({ length: 500 }, (_, index) => [
-        `user-${String(index).padStart(4, "0")}-${"x".repeat(160)}`,
-        ["0"],
-      ]),
-    );
-
+    const store = createMSTeamsPollStoreState();
     await store.createPoll(poll({ id: "poll-large" }));
-    for (const [voterId, selections] of Object.entries(votes)) {
-      await store.recordVote({ pollId: "poll-large", voterId, selections });
+    for (let index = 0; index < 500; index++) {
+      const voterId = `user-${String(index).padStart(4, "0")}-${"x".repeat(160)}`;
+      await store.recordVote({ pollId: "poll-large", voterId, selections: ["0"] });
     }
     await store.recordVote({ pollId: "poll-large", voterId: "user-new", selections: ["1"] });
 
@@ -185,11 +172,9 @@ describe("msteams polls", () => {
   it("bounds vote bucket scans while pruning 1003 existing polls", async () => {
     const expired = ["poll-expired-a", "poll-expired-b"];
     const removed = ["poll-old", ...Array.from({ length: 4 }, (_, i) => `poll-existing-${i}`)];
-    const stateDir = tempDirs.make("openclaw-msteams-polls-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     // Pruning consumes only identity and timestamps, not poll/card/vote content.
-    const metadataStore = pluginStore<Pick<Poll, "id" | "createdAt">>("polls", 2000, env);
-    const voteBucketStore = pluginStore<{ pollId: string }>("poll-vote-buckets", 32_032, env);
+    const metadataStore = pluginStore<Pick<Poll, "id" | "createdAt">>("polls", 2000);
+    const voteBucketStore = pluginStore<{ pollId: string }>("poll-vote-buckets", 32_032);
     const baseMs = Date.now() - 60_000;
     const oldPollId = "poll-old";
 
@@ -229,13 +214,11 @@ describe("msteams polls", () => {
       }
       return iterate.call(this, ...bindings);
     });
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const store = createMSTeamsPollStoreState();
     try {
       await store.createPoll(
         poll({
           id: "poll-new",
-          question: "New?",
           createdAt: new Date(baseMs + 2_000_000).toISOString(),
         }),
       );
@@ -254,11 +237,8 @@ describe("msteams polls", () => {
   it.each(["delete", "null value", "invalid JSON"])(
     "preserves partial cleanup before a bucket %s failure",
     async (failure) => {
-      const stateDir = tempDirs.make("openclaw-msteams-polls-");
-      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const metadata = pluginStore<unknown>("polls", 2000, env);
-      const buckets = pluginStore<unknown>("poll-vote-buckets", 32_032, env);
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const metadata = pluginStore<unknown>("polls", 2000);
+      const buckets = pluginStore<unknown>("poll-vote-buckets", 32_032);
       const store = createMSTeamsPollStoreState();
       await store.createPoll(poll({ id: "new", question: "Pick" }));
       const expiredAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();

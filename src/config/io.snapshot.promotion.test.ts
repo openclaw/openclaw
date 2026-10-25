@@ -23,6 +23,15 @@ import {
 } from "./io.js";
 import { promoteConfigSnapshotToLastKnownGoodCore } from "./io.observe-promotion.js";
 import { recoverConfigFromLastKnownGoodCore } from "./io.observe-recovery.js";
+import {
+  approveRecoveryCandidate,
+  createRecoveryBaselineConfig,
+  createRecoveryConfigEnv,
+  largeRecoverableCoreConfig,
+  makeDeps,
+  makeSnapshot,
+  resolveLastKnownGoodConfigPath,
+} from "./io.observe-recovery.test-support.js";
 import { createConfigHealthFingerprint } from "./io.observe-state.js";
 import {
   advanceConfigHealthBaselineForAcceptedWrite,
@@ -31,8 +40,8 @@ import {
   restoreConfigHealthBaselineForRolledBackWrite,
 } from "./io.observe.js";
 import { normalizeConfigIoDeps } from "./io.read-helpers.js";
+import { createSnapshot } from "./mutate.test-support.js";
 import { withTempHomeConfig } from "./test-helpers.js";
-import type { ConfigFileSnapshot } from "./types.js";
 
 // Split from io.snapshot.recovery.test.ts when main's growth left that file
 // over the 1000-line test budget; the promotion suites keep their own home.
@@ -47,63 +56,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 // Covers last-known-good promotion admission for suspicious snapshots (#152509).
-type ObserveRecoveryDeps = Parameters<typeof promoteConfigSnapshotToLastKnownGoodCore>[0]["deps"];
-
-const approveRecoveryCandidate = <T extends { raw: string; parsed: unknown }>(candidate: T) => ({
-  ok: true as const,
-  candidate,
-});
-
-function resolveLastKnownGoodConfigPath(configPath: string): string {
-  return `${configPath}.last-good`;
-}
-
 describe("config observe recovery promotion", () => {
-  async function makeSnapshot(configPath: string, config: Record<string, unknown>) {
-    const raw = `${JSON.stringify(config, null, 2)}\n`;
-    await fsp.mkdir(path.dirname(configPath), { recursive: true });
-    await fsp.writeFile(configPath, raw, "utf-8");
-    return {
-      path: configPath,
-      exists: true,
-      raw,
-      parsed: config,
-      sourceConfig: config,
-      resolved: config,
-      valid: true,
-      runtimeConfig: config,
-      config,
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
-    } satisfies ConfigFileSnapshot;
-  }
-
-  function makeDeps(home: string, warn = vi.fn()) {
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    return {
-      deps: {
-        fs,
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: { warn },
-      } satisfies ObserveRecoveryDeps,
-      configPath,
-      warn,
-    };
-  }
-
   it("refuses to promote a suspicious snapshot over last-known-good", async () => {
     const home = tempDirs.make("openclaw-config-lgg-promotion-");
     const { deps, configPath, warn } = makeDeps(home);
-    const healthyConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      update: { channel: "beta" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const healthyConfig = structuredClone(largeRecoverableCoreConfig);
     const healthy = await makeSnapshot(configPath, healthyConfig);
 
     await expect(
@@ -160,13 +117,7 @@ describe("config observe recovery promotion", () => {
     const error = vi.fn();
     const deps = normalizeConfigIoDeps({ env: {}, homedir: () => home, logger: { warn, error } });
     const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const healthyConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const healthyConfig = createRecoveryBaselineConfig();
     const healthy = await makeSnapshot(configPath, healthyConfig);
     await expect(
       promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: { warn } }),
@@ -255,14 +206,7 @@ describe("config observe recovery promotion", () => {
       homedir: () => home,
       logger: { warn: vi.fn(), error: vi.fn() },
     });
-    const healthyConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      update: { channel: "beta" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const healthyConfig = structuredClone(largeRecoverableCoreConfig);
     const healthy = await makeSnapshot(configPath, healthyConfig);
 
     // Seed a stored row with the current fingerprint producer. This exercises
@@ -341,18 +285,25 @@ describe("config observe recovery promotion", () => {
 });
 
 describe("last-known-good promotion after accepted writes", () => {
+  function registerFailingRuntimeOverlay(configPath: string, failure: Error) {
+    return registerConfigWriteListener(vi.fn(), {
+      ownsRuntimeActivationFor: configPath,
+      preCommitRuntimePreflight: async (sourceConfig) => ({
+        runtimeConfig: sourceConfig,
+        compareConfig: sourceConfig,
+        reapplyRuntimeOverlays() {
+          throw failure;
+        },
+        reapplyCompareOverlays: (config) => config,
+      }),
+    });
+  }
+
   function acceptedWriteFixture() {
     const root = tempDirs.make("openclaw-config-lgg-accepted-write-");
     const configPath = path.join(root, ".openclaw", "openclaw.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    const env = {
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_STATE_DIR: root,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      VITEST: "true",
-    } as NodeJS.ProcessEnv;
+    const env = createRecoveryConfigEnv(root, configPath, root);
     const io = createConfigIO({
       env,
       configPath,
@@ -715,17 +666,7 @@ describe("last-known-good promotion after accepted writes", () => {
       await expect(io.promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(false);
       const acceptedRaw = fs.readFileSync(configPath, "utf8");
       const failure = new Error("synthetic overlay failure");
-      const unsubscribe = registerConfigWriteListener(vi.fn(), {
-        ownsRuntimeActivationFor: configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          reapplyRuntimeOverlays() {
-            throw failure;
-          },
-          reapplyCompareOverlays: (config) => config,
-        }),
-      });
+      const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
       try {
         setRuntimeConfigSnapshot(edited.config, edited.config);
         await expect(
@@ -751,13 +692,7 @@ describe("last-known-good promotion after accepted writes", () => {
   });
 
   it("restores the last-known-good baseline when a committed write rolls back", async () => {
-    const initialConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const initialConfig = createRecoveryBaselineConfig();
     await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
       const lastGoodPath = `${configPath}.last-good`;
       const originalRaw = await fsp.readFile(configPath, "utf-8");
@@ -786,17 +721,7 @@ describe("last-known-good promotion after accepted writes", () => {
       expect(
         Buffer.byteLength(`${JSON.stringify(grownConfig, null, 2)}\n`, "utf-8"),
       ).toBeGreaterThan(Buffer.byteLength(originalRaw, "utf-8") * 2);
-      const unsubscribe = registerConfigWriteListener(vi.fn(), {
-        ownsRuntimeActivationFor: configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          reapplyRuntimeOverlays() {
-            throw failure;
-          },
-          reapplyCompareOverlays: (config) => config,
-        }),
-      });
+      const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
       try {
         setRuntimeConfigSnapshot(initialConfig, initialConfig);
         await expect(writeConfigFile(grownConfig)).rejects.toMatchObject({
@@ -826,13 +751,7 @@ describe("last-known-good promotion after accepted writes", () => {
   });
 
   it("restores the pre-write baseline when an intervening read records the published candidate", async () => {
-    const initialConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const initialConfig = createRecoveryBaselineConfig();
     await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
       const lastGoodPath = `${configPath}.last-good`;
       const originalRaw = await fsp.readFile(configPath, "utf-8");
@@ -874,32 +793,12 @@ describe("last-known-good promotion after accepted writes", () => {
         observedPublishedCandidate = true;
         const raw = fs.readFileSync(configPath, "utf-8");
         const parsed = JSON.parse(raw) as Record<string, unknown>;
-        observeConfigSnapshotSync(healthDeps, {
-          path: configPath,
-          exists: true,
-          raw,
-          parsed,
-          sourceConfig: parsed,
-          resolved: parsed,
-          runtimeConfig: parsed,
-          config: parsed,
-          valid: true,
-          issues: [],
-          warnings: [],
-          legacyIssues: [],
-        } satisfies ConfigFileSnapshot);
+        observeConfigSnapshotSync(
+          healthDeps,
+          createSnapshot({ path: configPath, raw, sourceConfig: parsed }),
+        );
       };
-      const unsubscribe = registerConfigWriteListener(vi.fn(), {
-        ownsRuntimeActivationFor: configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          reapplyRuntimeOverlays() {
-            throw failure;
-          },
-          reapplyCompareOverlays: (config) => config,
-        }),
-      });
+      const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
       try {
         setRuntimeConfigSnapshot(initialConfig, initialConfig);
         await expect(

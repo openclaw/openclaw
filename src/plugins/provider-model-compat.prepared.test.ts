@@ -15,6 +15,7 @@ vi.mock("../agents/provider-attribution.js", () => ({
   resolveProviderRequestCapabilities,
 }));
 
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { normalizeModelCompat } from "./provider-model-compat.js";
 
 function makeOwners(provider: string): PluginMetadataSnapshotOwnerMaps {
@@ -33,16 +34,10 @@ function makeOwners(provider: string): PluginMetadataSnapshotOwnerMaps {
 }
 
 const model = {
-  id: "model",
-  name: "Model",
+  ...buildCatalogModel("model", { name: "Model" }),
   provider: "custom",
   api: "openai-completions",
   baseUrl: "https://models.example/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
 } as Model;
 
 describe("normalizeModelCompat prepared metadata", () => {

@@ -107,6 +107,7 @@ export type RequesterSettleWakeParams = RequesterSettleWakeBatchCallbacks & {
   requesterOrigin?: DeliveryContext;
   settledEntry: SubagentRunRecord;
   signal?: AbortSignal;
+  onAccepted?: () => void;
   isSourceCurrent: () => boolean;
   onDescendantsPending?: (deadline?: number) => void;
 };

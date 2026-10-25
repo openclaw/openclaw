@@ -3,6 +3,7 @@ import { Errored, Loading, Show, createMemo, createSignal, isPending, latest } f
 import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
@@ -138,9 +139,12 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
           fallback={
             data().hasResult &&
             !data().stopError && (
-              <div class="chat-subagents__empty" role="status">
-                {t("chat.subagentsPanel.empty")}
-              </div>
+              <PanelEmptyState
+                presentation={props.mobile === true ? "mobile" : undefined}
+                icon={<Icon name="bot" />}
+                heading={t("chat.sidePanel.subagents")}
+                description={t("chat.subagentsPanel.empty")}
+              />
             )
           }
         >

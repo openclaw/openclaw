@@ -46,7 +46,8 @@ export function prepareChatMessageRender(message: unknown) {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
   let humanMentions: ReturnType<typeof readHumanMentions>;
-  if (record?.role === "user" && metadata?.humanMentions) {
+  // Gateway-authored assistant rows may carry the same selections as human input.
+  if ((record?.role === "user" || record?.role === "assistant") && metadata?.humanMentions) {
     const source =
       typeof record.content === "string"
         ? record.content

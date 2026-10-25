@@ -15,24 +15,27 @@ import {
   POSIX_PARSEABLE_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../shell-wrapper-resolution.js";
-import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
+import {
+  resolveCommandOperators,
+  type CommandOperatorSource,
+  type RecordedCommandStep,
+} from "./topology.js";
+import {
+  getBashParserForCommandExplanation,
+  type BashCommandParser,
+} from "./tree-sitter-runtime.js";
 import type {
   CommandContext,
   CommandExplanation,
-  CommandOperator,
-  CommandOperatorKind,
   CommandRisk,
   CommandShape,
-  CommandStep,
   SourceSpan,
 } from "./types.js";
-
-type RecordedCommandStep = CommandStep & { id: string };
 
 type MutableExplanation = {
   shapes: Set<CommandShape>;
   commands: RecordedCommandStep[];
-  operatorSources: OperatorSource[];
+  operatorSources: CommandOperatorSource[];
   risks: CommandRisk[];
   hasParseError: boolean;
   remainingNodes: number;
@@ -52,6 +55,7 @@ type CommandArgv = {
 };
 
 type WalkState = {
+  parse: BashCommandParser;
   wrapperPayloadDepth: number;
   spanBase: SpanBase;
   parentCommandId?: string;
@@ -75,15 +79,6 @@ type SpanBase = {
 };
 
 const ROOT_SPAN_BASE: SpanBase = {};
-
-type CommandTopologyBucket = [RecordedCommandStep, ...RecordedCommandStep[]];
-
-type OperatorSource = {
-  context: CommandContext;
-  parentCommandId?: string;
-  source: string;
-  spanBase: SpanBase;
-};
 
 function hasDirectChildType(node: TreeSitterNode, type: string): boolean {
   return node.children.some((child) => child.type === type);
@@ -127,19 +122,6 @@ function advancePosition(
     column += 1;
   }
   return { row, column };
-}
-
-function positionAtSourceIndex(source: string, index: number): SourceSpan["startPosition"] {
-  return advancePosition({ row: 0, column: 0 }, source.slice(0, index));
-}
-
-function spanFromSourceRange(source: string, startIndex: number, endIndex: number): SourceSpan {
-  return {
-    startIndex,
-    endIndex,
-    startPosition: positionAtSourceIndex(source, startIndex),
-    endPosition: positionAtSourceIndex(source, endIndex),
-  };
 }
 
 function valuePrefixLength(node: TreeSitterNode): number {
@@ -605,7 +587,6 @@ function payloadBaseFromArguments(
 
 function recordCommandRisks(
   parsed: CommandArgv,
-  text: string,
   span: SourceSpan,
   output: MutableExplanation,
 ): { command: string; spanBase: SpanBase } | null {
@@ -629,7 +610,6 @@ function recordCommandRisks(
       kind: "inline-eval",
       command: inlineEval.normalizedExecutable,
       flag: inlineEval.flag,
-      text,
       span,
     });
   }
@@ -656,14 +636,11 @@ function recordCommandRisks(
         executable: shellExecutable,
         flag: commandFlag?.flag ?? "-c",
         payload: shellWrapperPayload,
-        text,
         span,
       });
     } else {
       output.risks.push({
         kind: "shell-wrapper-through-carrier",
-        command: normalizedExecutable,
-        text,
         span,
       });
     }
@@ -674,18 +651,17 @@ function recordCommandRisks(
       kind: "command-carrier",
       command: carrier.command,
       flag: carrier.flag,
-      text,
       span,
     });
   }
   if (normalizedExecutable === "eval") {
-    output.risks.push({ kind: "eval", text, span });
+    output.risks.push({ kind: "eval", span });
   }
   if (SOURCE_EXECUTABLES.has(normalizedExecutable)) {
-    output.risks.push({ kind: "source", command: normalizedExecutable, text, span });
+    output.risks.push({ kind: "source", command: normalizedExecutable, span });
   }
   if (normalizedExecutable === "alias") {
-    output.risks.push({ kind: "alias", text, span });
+    output.risks.push({ kind: "alias", span });
   }
   const carrierShellWrapper = !shellWrapper.isWrapper
     ? detectShellWrapperThroughCarrierArgv(argv, shellCommandFlag)
@@ -693,40 +669,37 @@ function recordCommandRisks(
   if (carrierShellWrapper) {
     output.risks.push({
       kind: "shell-wrapper-through-carrier",
-      command: carrierShellWrapper,
-      text,
       span,
     });
   }
 
   const carriedShellBuiltin = detectCarriedShellBuiltinArgv(argv);
   if (carriedShellBuiltin?.kind === "eval") {
-    output.risks.push({ kind: "eval", text, span });
+    output.risks.push({ kind: "eval", span });
   } else if (carriedShellBuiltin?.kind === "source") {
     output.risks.push({
       kind: "source",
       command: carriedShellBuiltin.command,
-      text,
       span,
     });
   }
   return wrapperPayload;
 }
 
-async function visitNode(
+function visitNode(
   node: TreeSitterNode,
   output: MutableExplanation,
   context: CommandContext,
   state: WalkState,
-): Promise<CommandContext> {
+): CommandContext {
   recordShape(node, output);
 
   const span = spanFromNode(node, state.spanBase);
   let childContext = context;
   if (node.type === "program" && hasEscapedLineContinuation(node.text)) {
-    output.risks.push({ kind: "line-continuation", text: node.text, span });
+    output.risks.push({ kind: "line-continuation", span });
   } else if (node.type === "word" && hasLineBreakEscapedWordBoundary(node.text)) {
-    output.risks.push({ kind: "line-continuation", text: node.text, span });
+    output.risks.push({ kind: "line-continuation", span });
   }
 
   if (node.type === "function_definition") {
@@ -734,24 +707,23 @@ async function visitNode(
     output.risks.push({
       kind: "function-definition",
       name: nameNode?.text ?? "",
-      text: node.text,
       span,
     });
     childContext = "function-definition";
   } else if (node.type === "command_substitution") {
-    output.risks.push({ kind: "command-substitution", text: node.text, span });
+    output.risks.push({ kind: "command-substitution", span });
     childContext = "command-substitution";
   } else if (node.type === "process_substitution") {
-    output.risks.push({ kind: "process-substitution", text: node.text, span });
+    output.risks.push({ kind: "process-substitution", span });
     childContext = "process-substitution";
   } else if (node.type === "heredoc_redirect") {
-    output.risks.push({ kind: "heredoc", text: node.text, span });
+    output.risks.push({ kind: "heredoc", span });
   } else if (node.type === "herestring_redirect") {
-    output.risks.push({ kind: "here-string", text: node.text, span });
+    output.risks.push({ kind: "here-string", span });
   } else if (node.type === "file_redirect") {
-    output.risks.push({ kind: "redirect", text: node.text, span });
+    output.risks.push({ kind: "redirect", span });
   } else if (node.type === "ERROR") {
-    output.risks.push({ kind: "syntax-error", text: node.text, span });
+    output.risks.push({ kind: "syntax-error", span });
   }
 
   if (isCommandLikeNode(node)) {
@@ -760,7 +732,6 @@ async function visitNode(
     if (node.type === "command" && nameNode && !parsed) {
       output.risks.push({
         kind: "dynamic-executable",
-        text: nameNode.text,
         span: spanFromNode(nameNode, state.spanBase),
       });
     } else if (parsed) {
@@ -788,26 +759,25 @@ async function visitNode(
       }
       if (step.executable) {
         output.commands.push(step);
-        const wrapperPayload = recordCommandRisks(parsed, node.text, span, output);
+        const wrapperPayload = recordCommandRisks(parsed, span, output);
         if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
-          const wrapperTree = await parseBashForCommandExplanation(wrapperPayload.command);
+          const wrapperTree = state.parse(wrapperPayload.command);
           const wrapperSpanBase = wrapperPayload.spanBase;
           try {
             output.operatorSources.push({
               context: "wrapper-payload",
               parentCommandId: commandId,
               source: wrapperPayload.command,
-              spanBase: wrapperSpanBase,
             });
             if (wrapperTree.rootNode.hasError) {
               output.hasParseError = true;
               output.risks.push({
                 kind: "syntax-error",
-                text: wrapperPayload.command,
                 span: spanFromNode(wrapperTree.rootNode, wrapperSpanBase),
               });
             }
-            await walk(wrapperTree.rootNode, output, "wrapper-payload", {
+            walk(wrapperTree.rootNode, output, "wrapper-payload", {
+              parse: state.parse,
               wrapperPayloadDepth: state.wrapperPayloadDepth + 1,
               spanBase: wrapperSpanBase,
               parentCommandId: commandId,
@@ -822,12 +792,12 @@ async function visitNode(
   return childContext;
 }
 
-async function walk(
+function walk(
   root: TreeSitterNode,
   output: MutableExplanation,
   rootContext: CommandContext,
   rootState: WalkState,
-): Promise<void> {
+): void {
   if (root.descendantCount > output.remainingNodes) {
     throw new CommandExplanationWorkLimitError(
       "Shell command syntax is too complex to explain safely",
@@ -839,7 +809,7 @@ async function walk(
   const pending: WalkFrame[] = [{ node: root, context: rootContext, state: rootState }];
   for (let frame = pending.pop(); frame; frame = pending.pop()) {
     const { node, context, state } = frame;
-    const childContext = await visitNode(node, output, context, state);
+    const childContext = visitNode(node, output, context, state);
     for (let index = node.namedChildren.length - 1; index >= 0; index -= 1) {
       const child = node.namedChildren[index];
       if (child) {
@@ -849,141 +819,10 @@ async function walk(
   }
 }
 
-function commandTopologyBuckets(commands: RecordedCommandStep[]): CommandTopologyBucket[] {
-  const buckets = new Map<string, CommandTopologyBucket>();
-  for (const command of commands) {
-    const key = `${command.context}\0${command.parentCommandId ?? ""}`;
-    const bucket = buckets.get(key);
-    if (bucket) {
-      bucket.push(command);
-    } else {
-      buckets.set(key, [command]);
-    }
-  }
-
-  for (const bucket of buckets.values()) {
-    bucket.sort((left, right) => left.span.startIndex - right.span.startIndex);
-  }
-  return Array.from(buckets.values());
-}
-
-type CommandSourceRange = {
-  startIndex: number;
-  endIndex: number;
-};
-
-function commandSourceRanges(
-  source: string,
-  commands: readonly RecordedCommandStep[],
-): Map<string, CommandSourceRange> | null {
-  const ranges = new Map<string, CommandSourceRange>();
-  let cursor = 0;
-  for (const command of commands) {
-    const startIndex = source.indexOf(command.text, cursor);
-    if (startIndex < 0) {
-      return null;
-    }
-    const endIndex = startIndex + command.text.length;
-    ranges.set(command.id, { startIndex, endIndex });
-    cursor = endIndex;
-  }
-  return ranges;
-}
-
-function topologyOperatorFromSeparator(
-  separator: string,
-): { kind: CommandOperatorKind; text: string; offset: number } | null {
-  const candidates: Array<{ kind: CommandOperatorKind; text: string }> = [
-    { kind: "and", text: "&&" },
-    { kind: "or", text: "||" },
-    { kind: "stderr-pipe", text: "|&" },
-    { kind: "pipe", text: "|" },
-    { kind: "sequence", text: ";" },
-    { kind: "background", text: "&" },
-    { kind: "newline-sequence", text: "\r\n" },
-    { kind: "newline-sequence", text: "\n" },
-    { kind: "newline-sequence", text: "\r" },
-  ];
-  let best: { kind: CommandOperatorKind; text: string; offset: number } | null = null;
-  for (const candidate of candidates) {
-    const offset = separator.indexOf(candidate.text);
-    if (offset < 0) {
-      continue;
-    }
-    if (!best || offset < best.offset) {
-      best = { ...candidate, offset };
-    }
-  }
-  return best;
-}
-
-function resolveOperators(
-  source: string,
-  commands: RecordedCommandStep[],
-  operatorSources: readonly OperatorSource[],
-): CommandOperator[] {
-  const operators: CommandOperator[] = [];
-
-  for (const bucket of commandTopologyBuckets(commands)) {
-    const context = bucket[0].context;
-    const parentCommandId = bucket[0].parentCommandId || undefined;
-    const bucketOperatorSource = operatorSources.find(
-      (entry) => entry.context === context && entry.parentCommandId === parentCommandId,
-    );
-    const bucketRanges = bucketOperatorSource
-      ? commandSourceRanges(bucketOperatorSource.source, bucket)
-      : null;
-    for (const [index, fromCommand] of bucket.entries()) {
-      const toCommand = bucket[index + 1];
-      if (!toCommand) {
-        break;
-      }
-      let separatorSource = source;
-      let separatorStart = fromCommand.span.endIndex;
-      let separatorEnd = toCommand.span.startIndex;
-      let separatorBase: SpanBase | null = null;
-      const fromRange = bucketRanges?.get(fromCommand.id);
-      const toRange = bucketRanges?.get(toCommand.id);
-      if (bucketOperatorSource && fromRange && toRange) {
-        separatorSource = bucketOperatorSource.source;
-        separatorStart = fromRange.endIndex;
-        separatorEnd = toRange.startIndex;
-        separatorBase = bucketOperatorSource.spanBase;
-      }
-      if (separatorEnd < separatorStart) {
-        continue;
-      }
-      const separator = separatorSource.slice(separatorStart, separatorEnd);
-      const operator = topologyOperatorFromSeparator(separator);
-      if (!operator) {
-        continue;
-      }
-      const startIndex = separatorStart + operator.offset;
-      const span = separatorBase
-        ? translateSpan(
-            spanFromSourceRange(separatorSource, startIndex, startIndex + operator.text.length),
-            separatorBase,
-          )
-        : spanFromSourceRange(source, startIndex, startIndex + operator.text.length);
-      const topologyOperator: CommandOperator = {
-        id: `operator-${operators.length}`,
-        kind: operator.kind,
-        text: operator.text,
-        span,
-        fromCommandId: fromCommand.id,
-      };
-      if (parentCommandId) {
-        topologyOperator.parentCommandId = parentCommandId;
-      }
-      operators.push(topologyOperator);
-    }
-  }
-
-  return operators;
-}
-
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
-  const tree = await parseBashForCommandExplanation(source);
+  // Finish and delete each tree without yielding: overlapping walks grow the WASM high-water mark.
+  const parse = await getBashParserForCommandExplanation();
+  const tree = parse(source);
   try {
     const output: MutableExplanation = {
       shapes: new Set(),
@@ -993,15 +832,15 @@ export async function explainShellCommand(source: string): Promise<CommandExplan
       hasParseError: tree.rootNode.hasError,
       remainingNodes: MAX_COMMAND_EXPLANATION_NODES,
     };
-    await walk(tree.rootNode, output, "top-level", {
+    walk(tree.rootNode, output, "top-level", {
+      parse,
       wrapperPayloadDepth: 0,
       spanBase: ROOT_SPAN_BASE,
     });
     const topLevelCommands = output.commands.filter((command) => command.context === "top-level");
-    const operators = resolveOperators(source, output.commands, output.operatorSources);
+    const operators = resolveCommandOperators(source, output.commands, output.operatorSources);
     return {
       ok: !output.hasParseError,
-      source,
       shapes: [...output.shapes],
       topLevelCommands,
       nestedCommands: output.commands.filter((command) => command.context !== "top-level"),

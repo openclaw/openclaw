@@ -22,9 +22,11 @@ import {
   pluginIdForWidgetKind,
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { sharedPluginsProjection } from "../../lib/reactive/shared-application-projections.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { showToast } from "../../lib/toast.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
@@ -100,21 +102,13 @@ function BoardWidgetCellContent(
   const active = () => props.active !== false;
   const canMutate = () => props.canMutate !== false;
   const canGrant = () => props.canGrant !== false;
-  const plugins = projectSource(context?.plugins, {
-    read: (runtime) => runtime,
-    subscribe: (runtime, notify) => runtime?.subscribe(notify) ?? (() => {}),
-    equality: "revision",
-  });
-  const gateway = projectSource(context?.gateway, {
-    read: (owner) => owner?.snapshot,
-    subscribe: (owner, notify) => owner?.subscribe?.(notify) ?? (() => {}),
-    equality: "revision",
-  });
+  const plugins = context?.plugins ? sharedPluginsProjection(context.plugins) : undefined;
+  const gateway = context ? projectGateway(context.gateway) : undefined;
   // Usage and other Gateway publications do not change a frame's connection
   // authority. Sample mutable lifecycle facts before comparing the binding.
   const gatewayBinding = createMemo(
     () => {
-      const snapshot = gateway.read();
+      const snapshot = gateway?.read().snapshot;
       return [
         snapshot?.phase,
         snapshot?.client,
@@ -132,7 +126,7 @@ function BoardWidgetCellContent(
       void props.widget;
       void props.boardRevision;
       void props.widgetFrameUrl;
-      plugins.revision();
+      plugins?.revision();
       gatewayBinding();
       return undefined;
     },
@@ -159,7 +153,7 @@ function BoardWidgetCellContent(
     widget: () => props.widget,
   });
   const frameState = projectOwner(frame, (owner) => owner);
-  const activeKinds = () => gateway.read()?.hello?.controlUiWidgetKinds ?? [];
+  const activeKinds = () => gateway?.read().snapshot.hello?.controlUiWidgetKinds ?? [];
   const contribution = createMemo(() =>
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
       ? getPluginWidgetKindContribution(props.widget.pluginKind, activeKinds())
@@ -342,19 +336,19 @@ function BoardWidgetCellContent(
     const native = () =>
       advertised() &&
       plugins
-        .read()
+        ?.read()
         ?.registrations("widgets")
         .some((entry) => entry.key === key());
     const disabled = () =>
       plugins
-        .read()
+        ?.read()
         ?.errors.some(
           (entry) => entry.pluginId === pluginId() && entry.code === "custom-plugin-ui-disabled",
         );
     const runtimeError = () =>
       !disabled() && advertised()
         ? plugins
-            .read()
+            ?.read()
             ?.errors.find((entry) => entry.pluginId === pluginId() || entry.pluginId === "host")
         : undefined;
     const Loading = () => (
@@ -401,8 +395,8 @@ function BoardWidgetCellContent(
         </Match>
         <Match
           when={
-            (context && gateway.read()?.phase !== "connected") ||
-            plugins.read()?.isLoading(pluginId())
+            (context && gateway?.read().snapshot.phase !== "connected") ||
+            plugins?.read().isLoading(pluginId())
           }
         >
           <Loading />
@@ -410,7 +404,7 @@ function BoardWidgetCellContent(
         <Match when={runtimeError()}>
           <BoardWidgetError
             error={runtimeError()?.message}
-            onRetry={() => void plugins.read()?.refresh()}
+            onRetry={() => void plugins?.read().refresh()}
           />
         </Match>
       </Switch>
@@ -575,7 +569,7 @@ function BoardWidgetCellContent(
               {props.widget!.contentKind === "mcp-app"
                 ? t("board.widget.kindMcp")
                 : props.widget!.contentKind === "plugin"
-                  ? props.widget!.kindLabel || contribution()?.label || t("board.widget.kindPlugin")
+                  ? contribution()?.label || t("board.widget.kindPlugin")
                   : t("board.widget.kindHtml")}
             </span>
             <BoardGrantedCapabilities widget={props.widget!} />

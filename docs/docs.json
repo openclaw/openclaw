@@ -1889,6 +1889,7 @@
                 "group": "Building plugins",
                 "pages": [
                   "plugins/building-plugins",
+                  "plugins/runtime-compatibility",
                   "plugins/feature-plugins",
                   "plugins/tool-plugins",
                   "plugins/sdk-channel-plugins",
@@ -2221,6 +2222,7 @@
                   {
                     "group": "Chat and coding models",
                     "pages": [
+                      "providers/abliteration",
                       "providers/alibaba",
                       "providers/anthropic",
                       "plugins/reference/anthropic-vertex",
@@ -2314,6 +2316,7 @@
                       "providers/clawrouter",
                       "providers/cloudflare-ai-gateway",
                       "providers/kilocode",
+                      "providers/liquid-inference",
                       "providers/litellm",
                       "providers/neon",
                       "providers/openrouter",

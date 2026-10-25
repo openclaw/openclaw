@@ -114,11 +114,6 @@ const SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS = 10_000;
 
 const loadAcpSdkModule = createLazyRuntimeModule(() => import("@agentclientprotocol/sdk"));
 
-type AcpGatewayAgentOptions = AcpServerOptions & {
-  eventLedger: AcpEventLedger;
-  sessionStore?: AcpSessionStore;
-};
-
 export class AcpGatewayAgent implements Agent {
   private readonly sessionUpdates: AcpTranslatorSessionUpdates;
   private readonly promptStream: AcpTranslatorPromptStream;
@@ -134,7 +129,10 @@ export class AcpGatewayAgent implements Agent {
   constructor(
     connection: AgentSideConnection,
     private readonly gateway: GatewayClient,
-    private readonly opts: AcpGatewayAgentOptions,
+    private readonly opts: AcpServerOptions & {
+      eventLedger: AcpEventLedger;
+      sessionStore?: AcpSessionStore;
+    },
   ) {
     this.log = opts.verbose ? (msg: string) => process.stderr.write(`[acp] ${msg}\n`) : () => {};
     // Injected stores remain caller-owned; only the agent-created registry follows shutdown.

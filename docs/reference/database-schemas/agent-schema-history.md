@@ -49,6 +49,7 @@ backup and its matching build, not just reinstalling the older package.
 | 30      | Brotli trajectory payloads with per-row codec markers and logical-byte retention                                                                                                                                                                       | `Unreleased` |
 | 31      | Memory publication advances the index revision once per committed batch instead of once per source or chunk row                                                                                                                                        | `Unreleased` |
 | 32      | Set-based PostgreSQL vector decoding with one TOAST materialization; metadata-only SQLite advance                                                                                                                                                      | `Unreleased` |
+| 33      | Approximate PostgreSQL memory vector search with generated binary sketches and exact cosine reranking; metadata-only SQLite advance                                                                                                                    | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -68,6 +69,21 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Agent schema 33
+
+Schema 33 adds a stored binary sketch to each admitted PostgreSQL vector
+projection. Memory search uses those sketches to select candidates by Hamming
+distance, then reranks them by exact float32 cosine distance. Filters apply
+before candidate selection, and small candidate-ID scopes stay exact. This
+approximate path is enabled by default and requires pgvector 0.7 or newer.
+
+The migration backfills existing projections without building an HNSW index.
+Canonical embeddings remain unchanged, zero vectors remain ineligible, and
+stores without optional vector search keep it absent. Ports and backups retain
+their existing rule for rebuilding derived memory indexes. SQLite advances only
+its version metadata and keeps exact vector search. Rollback requires the
+verified pre-upgrade backup and its matching build.
 
 ### Agent schema 32
 

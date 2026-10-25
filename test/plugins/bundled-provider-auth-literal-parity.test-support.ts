@@ -17,7 +17,7 @@ const PARITY_SHARD_COUNT = 3;
 const SENTINEL_API_KEY = "parity-sentinel-api-key";
 // Manifest-derived factories and Copilot's full token setup have their own owner proof.
 const OWNER_TESTED_PLUGIN_IDS = new Set(
-  `baseten byteplus cerebras clawrouter cohere deepseek featherless fireworks gmi groq
+  `abliteration baseten byteplus cerebras clawrouter cohere deepseek featherless fireworks gmi groq
   huggingface kilocode kimi longcat meta mistral novita nvidia opencode opencode-go
   openrouter qianfan radius requesty synthetic together venice vercel-ai-gateway volcengine github-copilot`.split(
     /\s+/,

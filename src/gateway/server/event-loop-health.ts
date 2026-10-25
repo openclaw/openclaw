@@ -43,23 +43,6 @@ export type GatewayEventLoopHealth = SchemaContract<Static<typeof GatewayEventLo
 
 type GatewayEventLoopHealthReason = GatewayEventLoopHealth["reasons"][number];
 
-type GatewayEventLoopHealthMonitor = {
-  snapshot: () => GatewayEventLoopHealth | undefined;
-  persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
-  reset: () => void;
-  stop: () => void;
-};
-
-type GatewayEventLoopHealthMonitorDeps = {
-  scheduler: GatewayScheduler;
-  isIdle?: () => boolean;
-};
-
-type GatewayEventLoopHealthMetrics = Pick<
-  GatewayEventLoopHealth,
-  "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
->;
-
 function nanosecondsToMilliseconds(value: number): number {
   return roundMetric(value / 1_000_000, 1);
 }
@@ -128,7 +111,10 @@ function hostCpuUtilization(
 }
 
 function classifyGatewayEventLoopHealthReasons(
-  metrics: GatewayEventLoopHealthMetrics,
+  metrics: Pick<
+    GatewayEventLoopHealth,
+    "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
+  >,
 ): GatewayEventLoopHealthReason[] {
   const reasons: GatewayEventLoopHealthReason[] = [];
 
@@ -160,16 +146,21 @@ function classifyGatewayEventLoopHealthReasons(
   return reasons;
 }
 
-export function createGatewayEventLoopHealthMonitor(
-  deps: GatewayEventLoopHealthMonitorDeps,
-): GatewayEventLoopHealthMonitor {
+export function createGatewayEventLoopHealthMonitor(deps: {
+  scheduler: GatewayScheduler;
+  isIdle?: () => boolean;
+}): {
+  snapshot: () => GatewayEventLoopHealth | undefined;
+  persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
+  reset: () => void;
+  stop: () => void;
+} {
   const { scheduler } = deps;
   const nowMs = performance.now.bind(performance);
   const readCpuUsage = process.cpuUsage.bind(process);
   const readEventLoopUtilization = performance.eventLoopUtilization.bind(performance);
   const flightRecorder = createStallFlightRecorder((message) => log.warn(message));
   const stalls = createMainThreadStallMonitor(nowMs);
-  let unattributedDelayMs = 0;
   let histogram: ELDHistogram | null = null;
   let histogramEnabled = true;
   let sampleDueAt = 0;
@@ -276,16 +267,19 @@ export function createGatewayEventLoopHealthMonitor(
       areDiagnosticsEnabledForProcess() &&
       hasInternalDiagnosticEventInterest("gateway.main_thread.stall")
     ) {
-      runWithDiagnosticTraceContext(undefined, () =>
-        emitInternalDiagnosticEvent({
-          type: "gateway.main_thread.stall",
-          stalls: attributed.stalls.map((stall) => ({
-            task: stall.task,
-            durationMs: stall.elapsedMs,
-          })),
-          dropped: attributed.dropped,
-        }),
-      );
+      const scoped = attributed.stalls.filter((stall) => stall.task !== "unattributed");
+      if (scoped.length > 0) {
+        runWithDiagnosticTraceContext(undefined, () =>
+          emitInternalDiagnosticEvent({
+            type: "gateway.main_thread.stall",
+            stalls: scoped.map((stall) => ({
+              task: stall.task,
+              durationMs: stall.elapsedMs,
+            })),
+            dropped: attributed.dropped,
+          }),
+        );
+      }
     }
     // Idle windows retain callback attribution and overdue-deadline detection without
     // the native histogram's 20 ms wakeup. Full resolution returns with active work.
@@ -293,28 +287,39 @@ export function createGatewayEventLoopHealthMonitor(
       histogramEnabled ? nanosecondsToMilliseconds(histogram.max) : Math.max(0, now - sampleDueAt),
       attributed.delayMaxMs,
     );
-    let longestStallMs = attributed.stalls.length === 0 ? unattributedDelayMs : 0;
-    for (const stall of attributed.stalls) {
-      longestStallMs = Math.max(longestStallMs, stall.elapsedMs);
+    if (!histogramEnabled && delayMaxMs > EVENT_LOOP_DELAY_WARN_MS && !attributed.stalls.length) {
+      // Idle has no heartbeat: its observed delay is the missed deadline through this wake.
+      attributed.stalls.push({
+        elapsedMs: now - sampleDueAt,
+        startedAt: sampleDueAt,
+        endedAt: now,
+        task: "unattributed",
+        taskMs: now - sampleDueAt,
+      });
     }
-    const profile = flightRecorder.sample(longestStallMs);
-    if (unattributedDelayMs > 0 && attributed.stalls.length === 0) {
-      log.warn(`main-thread stall: elapsedMs=${Math.round(unattributedDelayMs)} task=unattributed`);
-    }
-    unattributedDelayMs =
-      delayMaxMs > EVENT_LOOP_DELAY_WARN_MS && attributed.stalls.length === 0 ? delayMaxMs : 0;
+    let longestStall: (typeof attributed.stalls)[number] | undefined;
+    const reportedAtMs = Math.round(performance.timeOrigin + nowMs());
     for (const stall of attributed.stalls) {
+      if (!longestStall || stall.elapsedMs > longestStall.elapsedMs) {
+        longestStall = stall;
+      }
+      const task =
+        stall.task === "unattributed"
+          ? "task=unattributed"
+          : `task=${JSON.stringify(stall.task.slice(0, 160))} taskMs=${Math.round(stall.taskMs)}`;
       log.warn(
-        `main-thread stall: elapsedMs=${Math.round(stall.elapsedMs)} task=${JSON.stringify(stall.task.slice(0, 160))} taskMs=${Math.round(stall.taskMs)}`,
+        `main-thread stall: elapsedMs=${Math.round(stall.elapsedMs)} ${task} stallStartMs=${Math.round(performance.timeOrigin + stall.startedAt)} stallEndMs=${Math.round(performance.timeOrigin + stall.endedAt)} reportedAtMs=${reportedAtMs}`,
       );
     }
-    // Several callbacks can finish before this sample; the trailing profile is batch evidence.
+    // Several callbacks may finish before reporting; profile only the longest captured interval.
+    const profile = flightRecorder.sample(longestStall);
     if (profile) {
       log.warn(`main-thread stall profile: ${profile}`);
     }
     const intervalMs = Math.max(1, now - lastWallAt);
-    if (attributed.dropped > 0) {
-      log.warn(`main-thread stall: omitted=${attributed.dropped} pendingLimit=8`);
+    const omitted = attributed.dropped + attributed.unattributedDropped;
+    if (omitted > 0) {
+      log.warn(`main-thread stall: omitted=${omitted} pendingLimit=8`);
     }
     if (
       delayMaxMs < EVENT_LOOP_DELAY_WARN_MS &&
@@ -399,6 +404,7 @@ export function createGatewayEventLoopHealthMonitor(
 
   const scheduleSample = (delayMs: number) => {
     const enableHistogram = delayMs !== IDLE_SAMPLE_INTERVAL_MS;
+    stalls.setEventLoopSampling(enableHistogram);
     if (histogram && histogramEnabled !== enableHistogram) {
       histogramEnabled = enableHistogram;
       if (enableHistogram) {
@@ -432,7 +438,6 @@ export function createGatewayEventLoopHealthMonitor(
 
   const reset = () => {
     stalls.reset();
-    unattributedDelayMs = 0;
     histogram?.reset();
     lastWallAt = nowMs();
     lastCpuUsage = readCpuUsage();

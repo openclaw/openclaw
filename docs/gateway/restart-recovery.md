@@ -55,6 +55,10 @@ An accepted child continuation, including a child created with `sessions_spawn`
 or an interrupted child resumed with `sessions_send`,
 keeps the restored operator's current identity and permission checks independently
 of the parent's recovery claim. Completing the parent does not cancel that child.
+A fresh authenticated human follow-up in a completed task session retains its own
+recovery source. After a restart, the child recovery owner resumes that follow-up
+from its saved history without another user message or reuse of the original
+parent turn's grant.
 Provider retries reuse the child's retained authority, including when session tools
 are prepared again after a transient provider error.
 Explicitly stopping the parent still cancels its children. Revoking the operator,
@@ -539,6 +543,12 @@ cannot resume reconciliation or hold the shutdown guard. Interrupted maintenance
 retains the lease and provisioning identity for a later sweep; it does not request
 worker destruction. Provider mutations already in progress still settle before
 their owners close.
+Reconciliation also passes cancellation into provider teardown, including Crabbox
+image capture and stop commands. Teardown's provider deadline aborts the command;
+shutdown still joins its subprocess settlement and records the interruption. An
+unconfirmed stop retains the lease and cleanup intent so the next startup retries
+the same environment. Pending replies and terminal persistence keep their normal
+drain obligations.
 Read-only allocation lookups made by reconciliation also release their wait on shutdown, without
 publishing a late lookup result or changing the saved cleanup intent. Reconciliation
 waiting for an environment lock releases its observer on cancellation; any admitted
@@ -1161,6 +1171,11 @@ If a CLI runtime cannot enforce the required restart-safe tools, recovery keeps
 the cycle as a tombstone before refusing in-place continuation. The operator can
 then use **Resume in new session** without losing the interrupted transcript.
 
+Concurrent `sessions.recover` requests for that replacement return the same
+successor and continuation acknowledgment. Recovery serializes admission while
+preserving each caller's current authorization; it does not wait for the resumed
+model turn to finish.
+
 Definitive revocation of the original operator's authority remains terminal for
 that input: recovery records one visible interruption instead of retrying it.
 The same applies when a retained requester profile has no matching operator
@@ -1205,6 +1220,12 @@ the saved final has a delivery context and intent ID. Settling that turn clears
 its recovery ownership together with its delivery claim, so the next agent turn
 can proceed. The notice and terminal deduplication evidence survive another
 restart; completed work is not replayed.
+
+A recovery continuation for a legacy saved final without a delivery intent or
+queue owner may fail terminally. In that case, recovery preserves the saved
+reply in the local transcript as delivery-unconfirmed and retires its pending
+marker. Later Gateway boots do not replay that failed continuation. An interrupted
+continuation or a newer pending delivery keeps its own recovery ownership.
 
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved

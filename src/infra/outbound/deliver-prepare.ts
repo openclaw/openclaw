@@ -133,18 +133,10 @@ export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
   options?: OutboundPayloadPreparationOptions,
 ): Promise<PreparedOutboundBatch> {
-  return await prepareOutboundPlan(params, undefined, options);
+  return await prepareStructuredOutboundPayloadBatch(params, undefined, options);
 }
 
 export async function prepareStructuredOutboundPayloadBatch(
-  params: DeliverOutboundPayloadsParams,
-  plan: readonly OutboundPayloadPlan[],
-  options?: OutboundPayloadPreparationOptions,
-): Promise<PreparedOutboundBatch> {
-  return await prepareOutboundPlan(params, plan, options);
-}
-
-async function prepareOutboundPlan(
   params: DeliverOutboundPayloadsParams,
   structuredPlan: readonly OutboundPayloadPlan[] | undefined,
   options?: OutboundPayloadPreparationOptions,

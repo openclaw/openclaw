@@ -186,6 +186,8 @@ export type DoctorConfigCapture = {
   deferredInspectionCheckIds?: string[];
 };
 export type UpdateDoctorWriteAuthority = {
+  /** Parent Doctor phase deadline for nested managed-service inspection. */
+  serviceInspectionDeadlineAtMs?: number;
   inputHash: string;
   assertCurrent: () => void;
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Admitted parent, worker, and registered spawn fixtures shared by recursive boundary proofs. */
 import { expect, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -8,6 +9,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
@@ -15,7 +17,7 @@ import type { GatewayRequestContext } from "../../../gateway/server-methods/type
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { placementTurnOwner } from "../../../gateway/worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
-import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-environments/placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "../../../gateway/worker-environments/placement-test-fixtures.js";
 import {
   bindWorkerTurnOwner,
   getWorkerTurnExecutionIdentityCapability,
@@ -44,8 +46,24 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+export function holdSpawnCapacity(groupId: string, runId: string): Promise<void> {
+  const started = createDeferred();
+  enqueueSwarmRun({
+    groupId,
+    runId,
+    maxConcurrent: 1,
+    activeRunIds: [],
+    start: async () => {
+      started.resolve();
+    },
+    onStartFailure: () => true,
+  });
+  return started.promise;
+}
 
 export async function recordSpawnBoundaryFinal(params: {
   storePath: string;
@@ -197,46 +215,16 @@ export async function createBoundWorker(
   const database = openOpenClawStateDatabase();
   const store = createWorkerSessionPlacementStore({ database });
   const session = { sessionId: "parent-session", agentId: "main", sessionKey: parentSessionKey };
-  let placement = await store.startDispatch({ ...session, executionMode: "worker-turn" });
-  placement = await store.transition({
-    sessionId: session.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: "queued-worker-environment" },
-  });
-  placement = await store.transition({
-    sessionId: session.sessionId,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: "a".repeat(64) },
-  });
-  placement = await store.transition({
-    sessionId: session.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+  const placement = await advancePlacementFixtureToActive(
+    store,
+    database,
+    { ...session, executionMode: "worker-turn" },
+    {
+      environmentId: "queued-worker-environment",
+      ownerEpoch: 1,
       remoteWorkspaceDir: "/workspace/queued-worker",
     },
-  });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId: "queued-worker-environment",
-    sessionId: session.sessionId,
-    ownerEpoch: 1,
-  });
-  placement = await store.transition({
-    sessionId: session.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: 1 },
-  });
-  if (placement.state !== "active") {
-    throw new Error("expected the active worker placement");
-  }
+  );
   const claim = await store.claimTurn({
     ...session,
     owner: placementTurnOwner(placement),
@@ -255,10 +243,10 @@ export async function createBoundWorker(
       }
     },
   );
-  const capability = getWorkerTurnExecutionIdentityCapability(store, claim);
-  if (!capability) {
-    throw new Error("expected the admitted worker capability");
-  }
+  const capability = expectDefined(
+    getWorkerTurnExecutionIdentityCapability(store, claim),
+    "admitted worker capability",
+  );
   return { store, session, claim, capability };
 }
 
@@ -313,10 +301,7 @@ export function createBoundSpawnInvocation(
       },
       abortSignal: bound.parent.controller.signal,
     });
-    if (!finalized) {
-      throw new Error("expected the finalized spawn tool");
-    }
-    tool = finalized;
+    tool = expectDefined(finalized, "finalized spawn tool");
   }
   const caller = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: bound.admitted,
@@ -338,6 +323,17 @@ export function createBoundSpawnInvocation(
 }
 
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
+
+export function createSpawnTranscriptTarget(bound: BoundParent, entry: InternalSessionEntry) {
+  return {
+    agentId: "main",
+    sessionKey: bound.parentSessionKey,
+    sessionId: entry.sessionId,
+    sessionEntry: entry,
+    storePath: bound.storePath,
+    config: bound.cfg,
+  };
+}
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
 
 export type NativePluginSpawnTestOptions = {
@@ -465,17 +461,13 @@ export async function prepareIsolatedChildAdmissionProof(bound: BoundParent) {
   };
 }
 
-export type RequestCustodySpawnCaseOptions = {
+export type RequestCustodySpawnCaseOptions = Pick<
+  NativePluginSpawnTestOptions,
+  "closeBoundGateway" | "throwBoundFailures" | "runEmbeddedAgent"
+> & {
   createBoundParent: () => Promise<BoundParent>;
   createBoundGateway: (bound: BoundParent) => Promise<{ runtime: GatewayRuntime }>;
-  closeBoundGateway: (
-    bound: BoundParent,
-    runtime: GatewayRuntime,
-    childRunId?: string,
-  ) => Promise<unknown[]>;
-  throwBoundFailures: (failures: unknown[]) => void;
   parentSessionKey: string;
   parentRunId: string;
   assertNoModelExecution: () => void;
-  runEmbeddedAgent: Mock<typeof import("../../embedded-agent.js").runEmbeddedAgent>;
 };

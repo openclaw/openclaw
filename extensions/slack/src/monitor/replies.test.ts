@@ -139,7 +139,7 @@ function baseParams(overrides?: Record<string, unknown>) {
     replyToMode: "off" as const,
     ...overrides,
   };
-  return { ...params, replies: params.replies.map(prepareSlackReply) };
+  return { ...params, replies: params.replies.map((reply) => prepareSlackReply(reply)) };
 }
 
 type TestReply = Parameters<typeof prepareSlackReply>[0];

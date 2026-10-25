@@ -712,6 +712,8 @@ export function initSubagentRegistry() {
   return subagentRestorer.restoreOnce();
 }
 
+export { getPrivateRequesterSettleRecoveryOwner } from "./subagent-registry-read.js";
+
 export async function prepareRequesterSettleWakeRecoverySource(
   params: Omit<Parameters<typeof captureRequesterSettleWakeRecoverySource>[0], "context">,
 ) {

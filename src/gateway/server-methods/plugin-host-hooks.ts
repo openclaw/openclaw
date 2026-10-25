@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   formatValidationErrors,
   missingScopeErrorShape,
   validatePluginsSessionActionParams,
@@ -71,7 +70,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     async (options) => {
       const { params, client, respond, context } = options;
       const reject = (message: string) =>
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+        respondError(respond, ErrorCodes.INVALID_REQUEST, message);
       const pluginId = normalizeOptionalString(params.pluginId);
       const actionId = normalizeOptionalString(params.actionId);
       const rawSessionKey = normalizeOptionalString(params.sessionKey);
@@ -215,11 +214,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         log.warn(
           `plugin session action failed plugin=${pluginId} action=${actionId}: ${formatErrorMessage(error)}`,
         );
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "plugin session action failed"),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "plugin session action failed");
       }
     },
   ),

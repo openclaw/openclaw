@@ -296,13 +296,13 @@ function scheduleActiveRunExpiry(): void {
         removeExpiredRuns();
         scheduleActiveRunExpiry();
       },
-      Math.max(1, nextExpiresAt - Date.now()),
+      Math.max(1, nextExpiresAt - performance.now()),
     ),
   );
-  activeRunExpiryTimer.unref?.();
+  activeRunExpiryTimer.unref();
 }
 
-export function removeExpiredRuns(now = Date.now()): void {
+export function removeExpiredRuns(now = Math.floor(performance.now())): void {
   for (const [runId, state] of activeRuns) {
     if (!isFutureDateTimestampMs(state.expiresAt, { nowMs: now })) {
       // Parked collectors extend idle TTL, bounded so a lost terminal event cannot pin all slots.
@@ -590,7 +590,7 @@ export function createPendingBridgeStates(
         const active = activeRuns.get(params.activeRunId);
         if (active?.pending.includes(state)) {
           const renewed = resolveExpiresAtMsFromDurationSeconds(active.config.snapshotTtlSeconds, {
-            nowMs: Date.now(),
+            nowMs: Math.floor(performance.now()),
           });
           if (renewed !== undefined) {
             active.expiresAt = renewed;
@@ -616,7 +616,7 @@ export function storeSuspendedRun(
     cancelPendingBridgeStates(params.pending);
     return codeModeAbortedResult(params);
   }
-  const now = Date.now();
+  const now = Math.floor(performance.now());
   const expiresAt = resolveExpiresAtMsFromDurationSeconds(params.config.snapshotTtlSeconds, {
     nowMs: now,
   });

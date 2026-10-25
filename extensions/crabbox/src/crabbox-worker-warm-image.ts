@@ -22,14 +22,18 @@ import {
   resolveCrabboxWarmImagePolicy,
   type CrabboxWarmImagePolicy,
 } from "./crabbox-worker-warm-image-policy.js";
-import { WARM_IMAGE_MAX_ENTRIES } from "./crabbox-worker-warm-image-records.js";
+import { reconcileCrabboxWarmImageCapture } from "./crabbox-worker-warm-image-reconciliation.js";
+import {
+  crabboxWarmImageCaptureStatus,
+  crabboxWarmImageRecoveryHint,
+  CRABBOX_WARM_IMAGE_WAIT_HINT,
+  WARM_IMAGE_MAX_ENTRIES,
+  withoutCrabboxWarmImageOperation,
+} from "./crabbox-worker-warm-image-records.js";
 import {
   assertCrabboxWarmImageMigrationReady,
   assertCrabboxWarmImagePreparation,
   assertCrabboxWarmImageReplay,
-  crabboxWarmImageCaptureStatus,
-  crabboxWarmImageRecoveryHint,
-  CRABBOX_WARM_IMAGE_WAIT_HINT,
   CrabboxWarmImageRequestError,
   isCrabboxCaptureRefusalRetained,
   isCrabboxWarmImageHeld as held,
@@ -37,7 +41,6 @@ import {
   projectCrabboxWarmImage,
   sameCrabboxWarmImageGeneration as sameImage,
   withCrabboxWarmImageDisplayFacts,
-  withoutCrabboxWarmImageOperation,
   type CrabboxState,
   type WarmImageRecord,
   type WarmProfileRecord,
@@ -54,6 +57,7 @@ type LeaseContext = CheckpointContext & {
 export function createCrabboxWarmImageManager(dependencies: {
   state: CrabboxState;
   warn: (message: string) => void;
+  info?: (message: string) => void;
   prepareCapture: (
     context: LeaseContext & { profile: CrabboxProfile; sourcePreparationTimeoutMs: number },
   ) => Promise<void>;
@@ -61,6 +65,14 @@ export function createCrabboxWarmImageManager(dependencies: {
 }) {
   const policy = dependencies.policy ?? resolveCrabboxWarmImagePolicy();
   let store: ReturnType<typeof openCrabboxWarmImageStore> | undefined;
+  // Legacy allocations have no online writer; recovery and migration require stopped owners.
+  let migrationReady = false;
+  const assertMigrationReady = async () => {
+    if (!migrationReady) {
+      await assertCrabboxWarmImageMigrationReady(dependencies.state);
+      migrationReady = true;
+    }
+  };
   const warned = new Set<string>();
   let pausedCaptureSnapshot = "";
   const openStore = () => (store ??= openCrabboxWarmImageStore(dependencies.state));
@@ -205,28 +217,30 @@ export function createCrabboxWarmImageManager(dependencies: {
   ) => {
     const deadline = performance.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
     assertCurrent(context);
-    const paused = entries
-      .flatMap(({ value }) => {
-        const capture = crabboxWarmImageCaptureStatus(value);
-        return capture?.phase === "uncertain" ? [capture.selector] : [];
-      })
-      .toSorted();
-    const snapshot = JSON.stringify(paused);
-    if (phase === "maintenance" && snapshot !== pausedCaptureSnapshot) {
-      pausedCaptureSnapshot = snapshot;
-      if (paused.length > 0) {
-        dependencies.warn(
-          `Crabbox warm image capture paused (${paused.length}; ${paused.join(", ")}): ${crabboxWarmImageRecoveryHint(paused.length === 1 ? paused[0]! : "<selector>")}`,
-        );
-      }
-    }
+    const paused: { selector: string; reason: string }[] = [];
     for (const { key, value } of entries) {
       assertCurrent(context);
       const capture = crabboxWarmImageCaptureStatus(value);
       if (capture) {
-        if (capture.phase === "uncertain" && phase !== "maintenance") {
+        if (
+          capture.phase === "uncertain" &&
+          "binaries" in context &&
+          value.operation?.type === "capture"
+        ) {
+          const reason = await reconcileCrabboxWarmImageCapture(
+            context,
+            openStore(),
+            key,
+            value.operation,
+            () => deadline - performance.now(),
+            dependencies.info ?? (() => {}),
+          );
+          if (reason) {
+            paused.push({ selector: capture.selector, reason });
+          }
+        } else if (capture.phase === "uncertain") {
           warnOnce("capture paused", crabboxWarmImageRecoveryHint(capture.selector), false);
-        } else if (capture.phase !== "uncertain" && capture.stale) {
+        } else if (capture.stale) {
           warnOnce(
             `capture ${capture.selector} still pending`,
             CRABBOX_WARM_IMAGE_WAIT_HINT,
@@ -266,6 +280,15 @@ export function createCrabboxWarmImageManager(dependencies: {
         remaining() > 0
       ) {
         await deleteImage(context, key, current, remaining);
+      }
+    }
+    const snapshot = JSON.stringify(paused);
+    if (phase === "maintenance" && snapshot !== pausedCaptureSnapshot) {
+      pausedCaptureSnapshot = snapshot;
+      if (paused.length > 0) {
+        dependencies.warn(
+          `Crabbox warm image capture paused (${paused.length}; ${paused.map(({ selector, reason }) => `${selector}: ${reason}`).join(", ")}): ${crabboxWarmImageRecoveryHint(paused.length === 1 ? paused[0]!.selector : "<selector>")}`,
+        );
       }
     }
   };
@@ -617,7 +640,7 @@ export function createCrabboxWarmImageManager(dependencies: {
     },
     maintain: async (context: MaintenanceContext) => {
       assertCurrent(context);
-      await assertCrabboxWarmImageMigrationReady(dependencies.state);
+      await assertMigrationReady();
       await collectImages(
         { ...context, binaries: [...new Set(context.binaries)].toSorted() },
         "maintenance",
@@ -693,7 +716,7 @@ export function createCrabboxWarmImageManager(dependencies: {
 
     startContext: createCrabboxWarmImageStartContext,
     allocate: createCrabboxWarmImageAllocation({
-      state: dependencies.state,
+      assertMigrationReady,
       lookupLease,
       selectAllocation,
       openStore,

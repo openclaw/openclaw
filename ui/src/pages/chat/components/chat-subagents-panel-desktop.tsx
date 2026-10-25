@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createStore, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
@@ -270,9 +271,12 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
               <Show
                 when={props.loading}
                 fallback={
-                  <div class="chat-subagents__empty" role="status">
-                    {t("chat.subagentsPanel.empty")}
-                  </div>
+                  <PanelEmptyState
+                    presentation="desktop"
+                    icon={<Icon name="bot" />}
+                    heading={t("chat.sidePanel.subagents")}
+                    description={t("chat.subagentsPanel.empty")}
+                  />
                 }
               >
                 <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} />

@@ -32,6 +32,7 @@ import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/c
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
@@ -12156,8 +12157,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     expect(prerelease.uses).toBe(reusableWorkflow);
     expect(prerelease.with).toMatchObject({
-      candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
+      candidate_artifact_name:
+        "${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}",
+      candidate_artifact_run_id: "${{ github.run_id }}",
+      candidate_sha256: "${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}",
       windows_node_release_asset_name:
         "${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_name }}",
       windows_node_release_asset_sha256:
@@ -12170,8 +12173,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(stable.uses).toBe(reusableWorkflow);
     expect(stable.with).toMatchObject({
       allow_protocol_mismatch: false,
-      candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
+      candidate_artifact_name:
+        "${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}",
+      candidate_artifact_run_id: "${{ github.run_id }}",
+      candidate_sha256: "${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}",
       windows_node_release_asset_name:
         "${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_name }}",
       windows_node_release_asset_sha256:
@@ -12188,8 +12193,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "resolve_windows_node_main_source",
     ]);
     expect(main.with).toMatchObject({
-      candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
+      candidate_artifact_name:
+        "${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}",
+      candidate_artifact_run_id: "${{ github.run_id }}",
+      candidate_sha256: "${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}",
       windows_node_source: "main",
       windows_node_source_sha:
         "${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}",
@@ -15801,7 +15808,8 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     // turns a content move into a failure.
     const ciDocs = [
       readFileSync("docs/ci.md", "utf8"),
-      ...readdirSync("docs/ci", { encoding: "utf8", recursive: true })
+      ...listDirectoryTreeStrictSync("docs/ci")
+        .map((walkEntry) => walkEntry.relativePath)
         .filter((name) => name.endsWith(".md"))
         .toSorted()
         .map((name) => readFileSync(`docs/ci/${name}`, "utf8")),

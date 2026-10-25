@@ -1,12 +1,101 @@
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  pauseVirtualClock,
+  reconnectMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI composer outbox" });
 
 suite.define(() => {
+  it.each([
+    { name: "mobile", viewport: { width: 393, height: 852 } },
+    { name: "desktop", viewport: { width: 1280, height: 900 } },
+  ])(
+    "holds messages during suspension and resumes exactly once ($name)",
+    async ({ name, viewport }) => {
+      await suite.withPage({ viewport }, async ({ page }) => {
+        await page.clock.install();
+        const sessionKey = "agent:main:main";
+        const prompt = "Keep this message queued through the Gateway restart.";
+        const gateway = await installMockGateway(page, { sessionKey });
+        await page.goto(suite.server.baseUrl + "chat");
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        await composer.waitFor();
+        await gateway.waitForRequest("chat.startup");
+        await pauseVirtualClock(page);
+        await gateway.setMethodResponse("chat.send", {
+          __mockError: {
+            code: "UNAVAILABLE",
+            message: "chat.send unavailable during gateway suspension",
+            retryable: true,
+            retryAfterMs: 500,
+            details: { reason: "gateway-suspending", phase: "draining" },
+          },
+        });
+        await gateway.emitGatewayEvent("gateway.suspension", { phase: "draining" });
+        await composer.fill(prompt);
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        await page.clock.runFor(2_000);
+        const queue = page.locator(".chat-queue__item");
+        await queue.getByText(prompt, { exact: true }).waitFor();
+        await page.screenshot({ path: suite.artifactDir + "/" + name + "-suspended.png" });
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await composer.inputValue()).toBe("");
+        expect(await queue.count()).toBe(1);
+        expect(
+          await page
+            .getByText("The Gateway asked us to retry this message shortly.", { exact: true })
+            .count(),
+        ).toBe(0);
+
+        await gateway.setMethodResponse("chat.send", { status: "started", messageSeq: 1 });
+        await gateway.emitGatewayEvent("gateway.suspension", { phase: "accepting" });
+        await page.clock.resume();
+        const request = await gateway.waitForRequest("chat.send");
+        const runId = requireString(
+          requireRecord(request.params).idempotencyKey,
+          "resumed send id",
+        );
+        const message = {
+          role: "user",
+          content: prompt,
+          __openclaw: { id: "restart-queued-message", seq: 1, idempotencyKey: runId + ":user" },
+        };
+        await gateway.setMethodResponse("chat.history", {
+          sessionId: "session:" + sessionKey,
+          sessionInfo: {
+            key: sessionKey,
+            sessionId: "session:" + sessionKey,
+            hasActiveRun: false,
+            status: "done",
+          },
+          messages: [message],
+          inputReceipts: [
+            { runId, state: "consumed", consumedByEventId: "restart-queued-message" },
+          ],
+        });
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey,
+          message,
+          messageId: "restart-queued-message",
+          messageSeq: 1,
+          clientRunId: runId,
+        });
+        await page.locator(".chat-group.user").getByText(prompt, { exact: true }).waitFor();
+        await queue.waitFor({ state: "detached" });
+        await reconnectMockGateway(page, gateway);
+        await page.locator(".chat-group.user").getByText(prompt, { exact: true }).waitFor();
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+        expect(await page.getByText(prompt, { exact: true }).count()).toBe(1);
+        await page.screenshot({ path: suite.artifactDir + "/" + name + "-resumed.png" });
+      });
+    },
+  );
+
   it("keeps server-queued inputs in the composer through reconnect until consumption or cancellation", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const sessionKey = "agent:main:main";
@@ -60,31 +149,30 @@ suite.define(() => {
         messages: [],
         sessionInfo: { key: sessionKey, sessionId, hasActiveRun: false, status: "done" },
       };
-      await gateway.setMethodResponse("chat.history", {
+      const queuedHistory = {
         ...history,
         pendingInputs: { items: [pending], total: 1, queuedCount: 1 },
         inputReceipts: [{ runId, state: "pending", queued: true }],
-      });
+      };
+      await gateway.setMethodResponse("chat.history", queuedHistory);
+      await gateway.setMethodResponse("chat.startup", queuedHistory);
       await gateway.resolveDeferred("chat.send", { runId, status: "queued" });
       await gateway.emitGatewayEvent("sessions.changed", {
         sessionKey,
         agentId: "main",
         reason: "agent.input.settled",
       });
-      // Accepted custody has no persisted entry ID until the input is consumed.
-      await page.waitForFunction(
-        ({ runId: expectedRunId, sessionId: expectedSessionId }) =>
-          document
-            .querySelector<
-              HTMLElement & {
-                state?: { chatQueue: Array<{ sendRunId?: string; sessionId?: string }> };
-              }
-            >("openclaw-chat-pane")
-            ?.state?.chatQueue.some(
-              (item) => item.sendRunId === expectedRunId && item.sessionId === expectedSessionId,
+      // The ACK retires local delivery; the Gateway's pending input owns the queued row.
+      await expect
+        .poll(() =>
+          page
+            .locator("openclaw-chat-pane")
+            .evaluate(
+              (pane) =>
+                (pane as HTMLElement & { state: { chatQueue: unknown[] } }).state.chatQueue.length,
             ),
-        { runId, sessionId },
-      );
+        )
+        .toBe(0);
       await queue.getByText(prompt, { exact: true }).waitFor();
       expect(await page.getByText(prompt, { exact: true }).count()).toBe(1);
       expect(await queue.count()).toBe(1);

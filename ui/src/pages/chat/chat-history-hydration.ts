@@ -10,7 +10,11 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
-import { requestSharedHistory } from "./chat-history-request.ts";
+import {
+  captureChatHistoryRun,
+  chatHistoryRequestParams,
+  requestSharedHistory,
+} from "./chat-history-request.ts";
 import { formatChatHistoryLoadError, isRetryableChatReadError } from "./chat-history-retry.ts";
 import {
   type ObservedChatHistoryResult,
@@ -27,10 +31,10 @@ import {
   ownsHistoryRequest,
   acceptsHistoryResult,
   resetChatHistoryProjection,
+  retireInitialChatSnapshot,
   setChatError,
   setChatHistoryLoad,
   setChatHistoryRetrying,
-  waitForInitialChatSnapshot,
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
@@ -38,6 +42,7 @@ import {
   readRunProjections,
   applyHistoryRun,
 } from "./chat-history-stream.ts";
+import { loadChatLiveTools } from "./chat-live-tools.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
@@ -48,7 +53,6 @@ import {
   publishChatSessionProjection,
   publishChatSessionProjectionMessages,
 } from "./history-merge.ts";
-import type { ChatHistoryRunObservation } from "./run-lifecycle.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { readChatHistoryCursor, readChatHistoryState } from "./session-message-cache.ts";
 import { retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
@@ -79,22 +83,7 @@ export async function hydrateChatHistory(
 ): Promise<ObservedChatHistoryResult | undefined> {
   const ownership = beginHistoryRequest(state, client, connectionEpoch, sessionKey, requestAgentId);
   const isCurrent = () => state.sessions === sessions && acceptsHistoryResult(state, ownership);
-  const captureRun = (): ChatHistoryRunObservation | undefined => {
-    const runId = state.chatRunId;
-    const sessionId = state.currentSessionId;
-    const generation = state.chatRunLifecycleGeneration ?? 0;
-    return isCurrent() && runId && sessionId
-      ? {
-          runId,
-          sessionId,
-          isCurrent: () =>
-            isCurrent() &&
-            state.chatRunId === runId &&
-            (state.chatRunLifecycleGeneration ?? 0) === generation &&
-            state.currentSessionId === sessionId,
-        }
-      : undefined;
-  };
+  const captureRun = () => captureChatHistoryRun(state, isCurrent);
   const previousRunProjections = readRunProjections(state, sessionKey, requestAgentId);
   const previousRunId = state.chatRunId;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
@@ -102,8 +91,21 @@ export async function hydrateChatHistory(
   state.chatLoading = true;
   const requests = chatHistoryRequests(state);
   const request = (cursor?: string) => {
-    const historyState = readChatHistoryState(state, cursor);
-    const key = `${requestKeyPrefix}${cursor === undefined ? "page" : `cursor:${cursor}`}${JSON.stringify(historyState?.stateRevision ?? null)}`;
+    const initialHistory = requests.initialHistory;
+    delete requests.initialHistory;
+    // A full page already covers a cache restored while its subscription was pending.
+    // Keep the exact request check: changed input-run receipts still need a fresh read.
+    const requestedCursor =
+      method === "chat.startup" &&
+      initialHistory?.isCurrent() &&
+      initialHistory.paramsKey ===
+        JSON.stringify(
+          chatHistoryRequestParams(method, sessionKey, requestAgentId, undefined, inputRunIds),
+        )
+        ? undefined
+        : cursor;
+    const historyState = readChatHistoryState(state, requestedCursor);
+    const key = `${requestKeyPrefix}${requestedCursor === undefined ? "page" : `cursor:${requestedCursor}`}${JSON.stringify(historyState?.stateRevision ?? null)}`;
     const load = requests.historyLoad;
     // Keep pane-level coalescing aligned with the cursor actually sent.
     if (load.phase === "in-flight") {
@@ -126,10 +128,10 @@ export async function hydrateChatHistory(
           }
         },
       },
-      cursor,
+      requestedCursor,
       inputRunIds,
-      undefined,
       historyState,
+      initialHistory,
     );
   };
   try {
@@ -157,10 +159,8 @@ export async function hydrateChatHistory(
       }
       admission = requests.subscriptionReady;
     }
-    // A pane mounted after hello can still be hydrating its retained cursor and
-    // receipts. Join that data read before constructing the first request.
-    const hydration = waitForInitialChatSnapshot(state);
-    if ((hydration && !(await hydration)) || !isCurrent()) {
+    // Use a restored cursor when ready, but never hold live history on browser storage.
+    if (!isCurrent()) {
       return undefined;
     }
     // The snapshot covers activity emitted before the foreground observer was
@@ -177,6 +177,18 @@ export async function hydrateChatHistory(
         return undefined;
       }
     }
+    const inFlightEvents =
+      isHistoryCursor(response) && response.kind === "reset"
+        ? undefined
+        : response.inFlightRun?.events;
+    const replayAgentEvent = inFlightEvents?.length
+      ? (await loadChatLiveTools()).handleAgentEvent
+      : undefined;
+    if (!isCurrent()) {
+      return undefined;
+    }
+    // Live history wins even if a pending IndexedDB read settles in the next microtask.
+    retireInitialChatSnapshot(state);
     const previousMessages = state.chatMessages;
     const previousPagination = state.chatHistoryPagination;
     const previousSessionId = state.currentSessionId ?? null;
@@ -229,6 +241,7 @@ export async function hydrateChatHistory(
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
       applyHistoryRun({
+        replayAgentEvent,
         state,
         run: response.inFlightRun,
         sessionInfo: response.sessionInfo,
@@ -419,6 +432,7 @@ export async function hydrateChatHistory(
     }
 
     applyHistoryRun({
+      replayAgentEvent,
       state,
       run: res.inFlightRun,
       observedRunActivity,

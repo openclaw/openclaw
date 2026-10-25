@@ -1,12 +1,13 @@
+import "./web-search-runtime.test-support.js";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+const { preparedWebSearchCatalog: preparedCatalog, webSearchRuntimeMocks: runtimeMocks } =
+  await import("./web-search-runtime.test-support.js");
 
 const mocks = vi.hoisted(() => ({
-  catalog: vi.fn(),
-  runtime: vi.fn(),
   prepareProfile: vi.fn(),
   search: vi.fn(),
   assertSecret: vi.fn(),
@@ -16,51 +17,6 @@ const mocks = vi.hoisted(() => ({
 // mock-isolation: Control requester revocation without opening the live identity database.
 vi.mock("./users-profile-access.js", () => ({
   prepareAuthenticatedProfile: mocks.prepareProfile,
-}));
-// mock-isolation: Search projection uses synthetic prepared auth without reading machine stores.
-vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
-  getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
-}));
-// mock-isolation: The synthetic Gateway request has one fixed agent, not machine agent state.
-vi.mock("./model-auth-agent-scope.js", () => ({
-  resolveModelAuthAgentScope: () => ({ ok: true, agentId: "main", agentDir: "/synthetic/agent" }),
-}));
-// mock-isolation: Fix model selection before exercising real search status projection.
-vi.mock("../../agents/model-selection.js", () => ({
-  resolveDefaultModelForAgent: () => ({ provider: "local", model: "local-model" }),
-}));
-// mock-isolation: This request fixture does not load the provider discovery registry.
-vi.mock("../../config/io.plugin-metadata.js", () => ({
-  resolveConfigWidePluginMetadataSnapshotAsync: async () => ({ byPluginId: new Map() }),
-}));
-// mock-isolation: Discovery policy is an input, not machine state under test here.
-vi.mock("../../plugins/bundled-discovery-state.js", () => ({
-  prepareBundledDiscoveryMode: async () => () => {},
-  readBundledDiscoveryModeMemoized: () => undefined,
-}));
-vi.mock("../../config/runtime-snapshot.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/runtime-snapshot.js")>()),
-  getRuntimeConfigSourceSnapshot: () => undefined,
-  selectLiveRuntimeConfig: (config?: OpenClawConfig) => config,
-}));
-// mock-isolation: Tool eligibility is fixed input; projection and handler authority stay real.
-vi.mock("../../agents/web-search-tool-policy.js", () => ({
-  resolveWebSearchToolPolicy: () => ({ allowed: true }),
-}));
-// mock-isolation: Catalog publication is fixed input; no credential/catalog initialization runs.
-vi.mock("../server-model-catalog-auth.js", () => ({ readPreparedCatalog: mocks.catalog }));
-// mock-isolation: Fixed catalog decisions select a runtime without initializing model accounts.
-vi.mock("../../agents/model-catalog-decisions.js", () => ({
-  prepareModelCatalogDecisions: async () => ({
-    evaluateEntry: () => ({}),
-    evaluateNative: () => ({}),
-  }),
-  resolveCatalogDecisionRuntime: mocks.runtime,
-}));
-// mock-isolation: Use a managed model route while retaining real service probing.
-vi.mock("../../agents/native-web-search.js", () => ({
-  resolveNativeWebSearchRoute: () => ({ kind: "managed" }),
 }));
 // mock-isolation: Synthetic provider discovery is input to the real status projection.
 vi.mock("../../flows/search-setup.js", () => ({
@@ -94,13 +50,6 @@ const exampleProvider = {
   label: "Example Search",
   envVars: [],
 };
-const preparedCatalog = () => ({
-  entries: [{ provider: "local", id: "local-model" }],
-  routeVariants: [],
-  metadataSnapshot: {},
-  authStore: { version: 1, profiles: {} },
-  isCurrent: () => true,
-});
 function request(
   method: "webSearch.status" | "webSearch.test",
   params: Record<string, unknown> = {},
@@ -171,8 +120,8 @@ beforeEach(() => {
     profileId: mocks.profile(),
     assertCurrent: mocks.assertProfile,
   }));
-  mocks.catalog.mockImplementation(async () => preparedCatalog());
-  mocks.runtime.mockReturnValue({ id: "openclaw" });
+  runtimeMocks.catalog.mockImplementation(async () => preparedCatalog());
+  runtimeMocks.runtime.mockReturnValue({ id: "openclaw" });
   mocks.search.mockResolvedValue({ provider: "example", result: sourceResult });
 });
 
@@ -224,7 +173,7 @@ it.each([
 });
 
 it("probes only the configured service beside an external harness", async () => {
-  mocks.runtime.mockReturnValue({ id: "custom-harness" });
+  runtimeMocks.runtime.mockReturnValue({ id: "custom-harness" });
   await expectFailure(probe(), "INVALID_REQUEST");
   expect(mocks.search).not.toHaveBeenCalled();
   await expectFailure(probe({ providerId: "other" }), "INVALID_REQUEST");
@@ -237,7 +186,7 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
     const readOnly = probe();
     readOnly.client!.connect.scopes = ["operator.read"];
     await invoke(readOnly);
-    expect(mocks.catalog).not.toHaveBeenCalled();
+    expect(runtimeMocks.catalog).not.toHaveBeenCalled();
     expect(mocks.prepareProfile).not.toHaveBeenCalled();
   }
   if (authority === "profile") {
@@ -247,7 +196,7 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
     authority === "read" ? "webSearch.status" : "webSearch.test",
     authority === "read" ? {} : { query: "query" },
   );
-  mocks.catalog.mockImplementationOnce(async () => {
+  runtimeMocks.catalog.mockImplementationOnce(async () => {
     if (authority === "profile") {
       mocks.assertProfile.mockImplementation(() => {
         throw new Error("profile authority changed");
@@ -263,7 +212,7 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
 
 it("rejects config drift before search and revocation after search", async () => {
   const original = config;
-  mocks.catalog.mockImplementationOnce(async () => {
+  runtimeMocks.catalog.mockImplementationOnce(async () => {
     config = { tools: { web: { search: { enabled: false } } } };
     return preparedCatalog();
   });

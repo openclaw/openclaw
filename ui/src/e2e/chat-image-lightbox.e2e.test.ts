@@ -3,6 +3,7 @@ import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { exactButton, newChatPage } from "./chat-flow.test-support.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
@@ -334,14 +335,8 @@ suite.define(() => {
     const sources = names.map((name) => "media://inbound/" + name + ".png");
     const mediaRequests: { source: string; variant: string | null; width: string | null }[] = [];
     const metadataSources: string[] = [];
-    // Routing disables HTTP caching, so revisiting a decoded URL may refetch it.
-    const renditionSources = () => [
-      ...new Set(
-        mediaRequests
-          .filter((request) => request.width === "1920")
-          .map((request) => request.source),
-      ),
-    ];
+    const renditionSources = () =>
+      mediaRequests.filter((request) => request.width === "1920").map((request) => request.source);
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
       const url = new URL(route.request().url());
       const index = sources.indexOf(url.searchParams.get("source") ?? "");
@@ -349,11 +344,7 @@ suite.define(() => {
       if (url.searchParams.get("meta") === "1") {
         metadataSources.push(sources[index]!);
         await route.fulfill({
-          json: {
-            available: true,
-            mediaTicket: "gallery-proof",
-            mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          },
+          json: mediaTicketPayload("gallery-proof", 300_000),
         });
       } else {
         expect(url.searchParams.get("mediaTicket")).toBe("gallery-proof");
@@ -389,6 +380,7 @@ suite.define(() => {
     const trigger = exactButton(page, "Open image before.png");
     const lightbox = page.locator("openclaw-image-lightbox");
     const image = lightbox.locator(".image");
+    const protocol = await page.context().newCDPSession(page);
     for (const reloaded of [false, true]) {
       if (reloaded) {
         await page.reload();
@@ -405,6 +397,8 @@ suite.define(() => {
       expect(renditionSources()).toEqual(sources.slice(0, 2));
       await page.keyboard.press("ArrowRight");
       await polledAttribute(image, "alt").toBe("hover.png");
+      // Routing disables HTTP caching: an unretained neighbor would be fetched again.
+      await protocol.send("HeapProfiler.collectGarbage");
       await page.keyboard.press("ArrowLeft");
       await polledAttribute(image, "alt").toBe("after.png");
       expect(renditionSources()).toEqual(sources);

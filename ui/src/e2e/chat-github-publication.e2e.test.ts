@@ -23,6 +23,7 @@ import {
   sharedPublisher,
   showPublicationBranch,
 } from "./chat-github-publication.test-support.ts";
+import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI personal GitHub publication" });
@@ -74,17 +75,8 @@ async function expectText(locator: Locator, text: string) {
   await expect.poll(() => locator.textContent()).toContain(text);
 }
 
-function publicationContextOptions(): Parameters<typeof suite.newBrowserContext>[0] {
-  return {
-    colorScheme: "light",
-    locale: "en-US",
-    serviceWorkers: "block",
-    viewport: { height: 800, width: 1180 },
-  };
-}
-
 async function newPublicationContext() {
-  return await suite.newBrowserContext(publicationContextOptions());
+  return await suite.newBrowserContext(createLightDesktopControlUiContextOptions());
 }
 
 async function openPublicationPage(
@@ -107,7 +99,7 @@ suite.define(() => {
   it.each(["global", "per-sender"] as const)(
     "carries the selected agent through the complete %s publication flow",
     async (scope) => {
-      await suite.withPage(publicationContextOptions(), async ({ page }) => {
+      await suite.withPage(createLightDesktopControlUiContextOptions(), async ({ page }) => {
         const sessionKey = scope === "global" ? "global" : "agent:research:main";
         const target = { sessionKey, agentId: "research" };
         const requestId = "8c698e8a-bdc7-4927-a0f2-73a842c2d7b6";

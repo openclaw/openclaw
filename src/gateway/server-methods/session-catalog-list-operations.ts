@@ -185,7 +185,9 @@ function startProviderOperation(
       return enumeration;
     }
     const error = enumeration.catalogs[0]!.error;
-    const state = operations.pages.get(key);
+    const state = enumeration.catalogs[0]!.requiresFreshList
+      ? undefined
+      : operations.pages.get(key);
     const previous = state?.page;
     if (error) {
       catalogLog.warn("session catalog provider refresh failed", {
@@ -196,6 +198,10 @@ function startProviderOperation(
       catalogLog.info("session catalog provider refresh recovered", {
         catalogId: enumeration.catalogs[0]!.id,
       });
+    }
+    if (enumeration.catalogs[0]!.requiresFreshList) {
+      // A source-owned publication cannot be cached for a later receiver request.
+      return enumeration;
     }
     const previousCatalogs = previous && resolvePublishedSessionCatalogs(previous);
     const page = error
@@ -271,7 +277,10 @@ export async function listSessionCatalogWithinBudget(
   const catalog = result?.catalogs[0];
   const error = catalog?.error;
   const state =
-    retirement.aborted || operations.gatewaySignal?.aborted || operations.connectionSignal?.aborted
+    empty.requiresFreshList ||
+    retirement.aborted ||
+    operations.gatewaySignal?.aborted ||
+    operations.connectionSignal?.aborted
       ? undefined
       : operations.pages.get(key);
   const cached = state?.page;

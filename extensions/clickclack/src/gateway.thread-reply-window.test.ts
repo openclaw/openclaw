@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { ClickClackMessage, ResolvedClickClackAccount } from "./types.js";
 
 type GatewayContext = ChannelGatewayContext<ResolvedClickClackAccount>;
@@ -82,18 +83,7 @@ async function startClickClackTestServer() {
     }
     json(404, { error: `unhandled ${url.pathname}` });
   });
-  const port = await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
+  const port = await listenOnLoopback(server);
   const wss = new WebSocketServer({ server, path: "/api/realtime/ws" });
   const sockets = new Set<import("ws").WebSocket>();
   wss.on("connection", (socket) => {

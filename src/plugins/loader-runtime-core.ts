@@ -297,7 +297,6 @@ export function* loadOpenClawPluginsSteps(
       devSourceRoot: context.devSourceRoot,
       pluginSdkResolution: options.pluginSdkResolution,
       expectedSourceDigests: options.expectedSourceDigests,
-      replacePluginIds: options.replacePluginIds,
       ...overrides?.moduleLoader,
     });
     const borrowedSubagent = context.borrowedGatewayRuntime
@@ -314,6 +313,7 @@ export function* loadOpenClawPluginsSteps(
             // SAFETY: bundled-capability-runtime uses this base only for uncached, non-activating registration.
             (overrides.runtime as PluginRuntime)
           : createLazyPluginRuntime({
+              inspectionResources,
               devSourceRoot: context.devSourceRoot,
               pluginSdkResolution: options.pluginSdkResolution,
               runtimeOptions: {

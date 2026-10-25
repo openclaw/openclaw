@@ -107,9 +107,27 @@ it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
         );
       });
       expect(monitor.drain().stalls).toEqual([
-        { elapsedMs: 300, task: `${task}:session-rows:select`, taskMs: 300 },
-        { elapsedMs: 350, task: `${task}:session-rows:prepare`, taskMs: 350 },
-        { elapsedMs: 900, task: `${task}:agent-roster`, taskMs: 500 },
+        {
+          elapsedMs: 300,
+          task: `${task}:session-rows:select`,
+          taskMs: 300,
+          startedAt: 5_000,
+          endedAt: 5_300,
+        },
+        {
+          elapsedMs: 350,
+          task: `${task}:session-rows:prepare`,
+          taskMs: 350,
+          startedAt: 5_300,
+          endedAt: 5_650,
+        },
+        {
+          elapsedMs: 900,
+          task: `${task}:agent-roster`,
+          taskMs: 500,
+          startedAt: 5_650,
+          endedAt: 6_550,
+        },
       ]);
     } finally {
       owner.dispose();

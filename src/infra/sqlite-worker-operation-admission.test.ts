@@ -562,7 +562,7 @@ it.each(
       payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
       unmeasuredMessages: before?.unmeasuredMessages ?? 0,
     });
-    expect(readSqliteWorkerRequestCustody(custody.descriptor)).toBe(false);
+    expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);
     expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
     expect(publish).toHaveBeenCalledOnce();
     expect(rows()).toEqual([{ value: 1 }]);

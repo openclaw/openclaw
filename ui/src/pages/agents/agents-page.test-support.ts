@@ -8,6 +8,7 @@ import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createAgentsPageState } from "./agents-page-state.ts";
@@ -138,6 +139,7 @@ export function createAgentsPage(context: ApplicationContext, routeData?: Agents
   return {
     identitySavePending: state.identitySavePending,
     read: () => state.read(),
+    data: () => state.read().readData(),
     setRouteData(next?: AgentsRouteData) {
       state.setRouteData(next);
       flush();
@@ -165,17 +167,12 @@ export function snapshot(
   client: GatewayBrowserClient | null,
   connected = true,
 ): ApplicationGatewaySnapshot {
-  return {
+  return createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: AGENTS_PAGE_GATEWAY_HELLO,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
 }
 
 const eventListeners = new WeakMap<

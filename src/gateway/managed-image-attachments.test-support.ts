@@ -4,6 +4,7 @@ import http, { type IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import { buffer as readResponseBuffer } from "node:stream/consumers";
 import { deserialize } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -157,11 +158,7 @@ export function requireBlock(
   blocks: readonly Record<string, unknown>[],
   index = 0,
 ): Record<string, unknown> {
-  const block = blocks[index];
-  if (!block) {
-    throw new Error(`expected block ${index}`);
-  }
-  return block;
+  return expectDefined(blocks[index], `block ${index}`);
 }
 
 export function requireAttachmentIdFromUrl(url: unknown): string {
@@ -177,10 +174,7 @@ export async function requireManagedOriginalPath(
   stateDir: string,
   attachmentId: string,
 ): Promise<string> {
-  const record = await readManagedImageRecord(attachmentId, stateDir);
-  if (!record) {
-    throw new Error(`expected managed image record ${attachmentId}`);
-  }
+  const record = expectDefined(await readManagedImageRecord(attachmentId, stateDir), attachmentId);
   return path.join(stateDir, "media", record.original.mediaSubdir, record.original.mediaId);
 }
 
@@ -194,27 +188,15 @@ export async function prepareManagedSessionStore(stateDir: string): Promise<stri
   closeOpenClawAgentDatabasesForTest();
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const storePath = path.join(stateDir, "sessions.sqlite");
-  const { replaceSessionEntrySync } = await import("../config/sessions/session-accessor.js");
-  replaceSessionEntrySync(
-    {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    },
-    { sessionId: "sess-1", updatedAt: Date.now() },
-  );
+  const scope = { agentId: "main", env, sessionKey: "agent:main:main", storePath };
+  await replaceTestSessionEntry(scope, { sessionId: "sess-1", updatedAt: Date.now() });
   closeOpenClawAgentDatabasesForTest();
   const { loadExactSessionEntryReadOnlyResult } =
     await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
-  expect(
-    loadExactSessionEntryReadOnlyResult({
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    }),
-  ).toMatchObject({ found: true, value: { sessionKey: "agent:main:main" } });
+  expect(loadExactSessionEntryReadOnlyResult(scope)).toMatchObject({
+    found: true,
+    value: { sessionKey: "agent:main:main" },
+  });
   return storePath;
 }
 

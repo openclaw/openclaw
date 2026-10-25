@@ -5,6 +5,7 @@ import {
   type AgentMessage,
 } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../test-support/message-fixtures.test-support.js";
 import {
   buildCodexContinuityCalibration,
   fitCodexProjectedContextForTurnStart,
@@ -282,14 +283,9 @@ describe("projectContextEngineAssemblyForCodex", () => {
     "does not spend the history window on omitted tools (prior prose: %s)",
     async (priorProse) => {
       const instruction = "Keep the blue database available until verification finishes.";
-      const tools: AgentMessage[] = Array.from({ length: 12 }, (_, index) => ({
-        role: "toolResult",
-        toolCallId: `call-${index}`,
-        toolName: "read",
-        content: [{ type: "text", text: "Completed synthetic read." }],
-        isError: false,
-        timestamp: index + 2,
-      }));
+      const tools: AgentMessage[] = Array.from({ length: 12 }, (_, index) =>
+        makeTextToolResult(`call-${index}`, "read", "Completed synthetic read.", false, index + 2),
+      );
       const result = await projectContextEngineAssemblyForCodex({
         assembledMessages: [...(priorProse ? [textMessage("user", instruction)] : []), ...tools],
         maxRenderedContextChars: 256,

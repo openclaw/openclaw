@@ -177,6 +177,7 @@ function composeReceiptAuthority(
     (predicate, index): predicate is ReceiptAuthority =>
       predicate !== undefined && predicates.indexOf(predicate) === index,
   );
+  const sources = checks.map((check) => captureGatewayToolReceiptAssertion(check));
   return checks.length === 0
     ? undefined
     : Object.assign(
@@ -191,9 +192,14 @@ function composeReceiptAuthority(
           }
           return active;
         },
-        composeSessionSourceAssertion(
-          checks.map((check) => captureGatewayToolReceiptAssertion(check)),
-        ),
+        composeSessionSourceAssertion(sources),
+        {
+          assertScopeCurrent: () => {
+            for (const source of sources) {
+              (source.assertScopeCurrent ?? source)();
+            }
+          },
+        },
       );
 }
 
@@ -432,7 +438,10 @@ export function captureGatewayToolCallerAssertion(
   const assertCurrent = composeSessionSourceAssertion(
     [
       selection?.assertCurrent,
-      caller.operatorAuthority?.assertCurrent,
+      // Selection already checks its exact operator source in this synchronous guard.
+      selection?.operatorAuthority === caller.operatorAuthority
+        ? undefined
+        : caller.operatorAuthority?.assertCurrent,
       composeSessionSourceAssertion(
         isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
         (assertReceipt) => {

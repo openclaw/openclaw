@@ -14,7 +14,7 @@ import {
 const shortName = "cached-conversation-12345678";
 const location = (pathname: string) => ({ pathname, search: "", hash: "" });
 
-it("mounts a literal dashboard before connect while deferring its cached rows", async () => {
+it("mounts a literal dashboard before connect", async () => {
   const { context, request } = createSessionRouteContext();
   const dispatch = createDeferred();
   context.gateway.snapshot.phase = "connecting";
@@ -30,7 +30,6 @@ it("mounts a literal dashboard before connect while deferring its cached rows", 
   await expect(loading).resolves.toMatchObject({
     kind: "session",
     sessionKey: "agent:roboclaw:dashboard:12345678-90ab-cdef-1234-567890abcdef",
-    deferSnapshotRows: true,
   });
   expect(request).not.toHaveBeenCalled();
   expect(context.gateway.snapshot.phase).toBe("connecting");

@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import "./browser-panel.ts";
 import {
+  stubBrowserPanelTestStageBounds,
   createBrowserClient,
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
@@ -17,17 +19,7 @@ import { createBrowserPageClient } from "./test-helpers/browser-page.ts";
 
 function attachAnnotationOverlay(panel: HTMLElement) {
   const stage = panel.querySelector<HTMLElement>(".bp-stage")!;
-  vi.spyOn(stage, "getBoundingClientRect").mockReturnValue({
-    x: 0,
-    y: 0,
-    left: 0,
-    top: 0,
-    right: 100,
-    bottom: 100,
-    width: 100,
-    height: 100,
-    toJSON: () => ({}),
-  });
+  stubBrowserPanelTestStageBounds(stage);
   const overlay = stage.querySelector("canvas")!;
   const capturedPointers = new Set<number>();
   overlay.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
@@ -49,14 +41,7 @@ function attachAnnotationOverlay(panel: HTMLElement) {
 describe("normalizeBrowserUrlDraft", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
+    stubResizeObserver();
   });
 
   afterEach(() => {
@@ -201,14 +186,8 @@ describe("normalizeBrowserUrlDraft", () => {
       "openclaw.browser.panel.v1",
       JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
     );
-    type TestPanel = HTMLElement & {
-      available: boolean;
-      presented: boolean;
-      handleToggleRequest: (event: Event) => void;
-      updateComplete: Promise<unknown>;
-    };
-    const dock = document.createElement("openclaw-browser-panel") as unknown as TestPanel;
-    const embedded = document.createElement("openclaw-browser-panel") as unknown as TestPanel;
+    const dock = document.createElement("openclaw-browser-panel");
+    const embedded = document.createElement("openclaw-browser-panel");
     // Chat side panels mount their Browser with the static `embedded` attribute.
     embedded.setAttribute("embedded", "");
     dock.available = embedded.available = true;
@@ -235,12 +214,7 @@ describe("normalizeBrowserUrlDraft", () => {
       "openclaw.browser.panel.v1",
       JSON.stringify({ open: true, dock: "right", height: 420, width: 560 }),
     );
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      suppressed: boolean;
-      browserPanelIsOpen(): boolean;
-      updateComplete: Promise<unknown>;
-    };
+    const panel = document.createElement("openclaw-browser-panel");
     panel.suppressed = true;
     mountSolid(() => panel);
     await panel.updateComplete;
@@ -265,13 +239,7 @@ describe("normalizeBrowserUrlDraft", () => {
         return {} as T;
       },
     } as GatewayBrowserClient;
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      client: GatewayBrowserClient | null;
-      available: boolean;
-      suppressed: boolean;
-      browserPanelIsOpen(): boolean;
-      updateComplete: Promise<unknown>;
-    };
+    const panel = document.createElement("openclaw-browser-panel");
     panel.client = client;
     panel.available = true;
     panel.suppressed = true;
@@ -392,13 +360,7 @@ describe("normalizeBrowserUrlDraft", () => {
   });
 
   it("starts a fresh browser tab draft when an embedded panel receives a new-tab request", async () => {
-    const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
-      available: boolean;
-      embedded: boolean;
-      presented: boolean;
-      handleToggleRequest: (event: Event) => void;
-      updateComplete: Promise<unknown>;
-    };
+    const panel = document.createElement("openclaw-browser-panel");
     panel.available = true;
     panel.embedded = true;
     panel.presented = true;

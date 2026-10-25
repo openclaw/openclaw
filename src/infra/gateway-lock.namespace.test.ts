@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireDoctorGatewayMaintenanceOwner } from "../commands/doctor-maintenance-foreground.js";
 import { resolveStateDir } from "../config/paths.js";
 import * as processIdentity from "../shared/pid-alive.js";
+import { mockLinuxNamespace } from "./gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   parseGatewayLockPayload,
@@ -79,28 +80,6 @@ function createLockPayload(params: { configPath: string; startTime: number; port
     startTime: params.startTime,
     processNamespace: readGatewayLockProcessNamespace(),
   };
-}
-
-function mockLinuxNamespace(root: string) {
-  if (process.platform !== "linux") {
-    vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-      platform: "linux",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    const namespaceLink = `pid:[${fsSync.statSync(root, { bigint: true }).ino}]`;
-    const readlink = fsSync.readlinkSync.bind(fsSync);
-    vi.spyOn(fsSync, "readlinkSync").mockImplementation((file, options) =>
-      file === "/proc/self/ns/pid" ? namespaceLink : readlink(file, options),
-    );
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    readGatewayLockProcessNamespace();
-    platform.mockRestore();
-  }
-  const namespace = readGatewayLockProcessNamespace();
-  if (!namespace || !("pidNsInode" in namespace)) {
-    throw new Error("Expected Linux process namespace identity");
-  }
-  return namespace;
 }
 
 describe("gateway lock namespaces", () => {
@@ -367,6 +346,66 @@ describe("gateway lock namespaces", () => {
       await expect(fs.readFile(paths.ownerLockPath, "utf8")).resolves.toBe(record);
     },
   );
+
+  it.each([
+    { owner: "exited", dead: true, startTime: null, stale: true, reclaim: true },
+    { owner: "reused", dead: false, startTime: 124, stale: true, reclaim: true },
+    { owner: "live", dead: false, startTime: 123, stale: true, reclaim: false },
+    { owner: "unknown", dead: false, startTime: null, stale: true, reclaim: false },
+    { owner: "recently exited", dead: true, startTime: null, stale: false, reclaim: false },
+  ])("inspects and acquires a legacy Windows lock with a $owner owner", async (test) => {
+    const env = await makeEnv();
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(processIdentity, "isPidAlive").mockReturnValue(!test.dead);
+    vi.spyOn(processIdentity, "isPidDefinitelyDead").mockReturnValue(test.dead);
+    vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid) =>
+      pid === process.pid ? 123 : test.startTime,
+    );
+    const paths = resolveGatewayLockPaths(env, resolveTestLockDir(env));
+    const record = JSON.stringify({
+      pid: 2_147_483_647,
+      role: "gateway",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      configPath: paths.configPath,
+      startTime: 123,
+      port: 18789,
+    });
+    // Both historical projections and the state owner must agree before startup.
+    for (const file of [paths.ownerLockPath, paths.stateLockPath, paths.configLockPath]) {
+      fsSync.mkdirSync(path.dirname(file), { recursive: true });
+      fsSync.writeFileSync(file, record);
+      const stamp = new Date(
+        Date.now() - (test.stale ? GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1000 : 0),
+      );
+      fsSync.utimesSync(file, stamp, stamp);
+    }
+    if (!test.reclaim) {
+      await expect(
+        readActiveGatewayLockIdentity({
+          env,
+          lockDir: resolveTestLockDir(env),
+          requireInspection: true,
+        }),
+      ).rejects.toThrow("openclaw gateway recover-lock");
+      await expect(acquireForTest(env)).rejects.toThrow("openclaw gateway recover-lock");
+      expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(record);
+      return;
+    }
+    await expect(
+      readActiveGatewayLockIdentity({
+        env,
+        lockDir: resolveTestLockDir(env),
+        requireInspection: true,
+      }),
+    ).resolves.toBeUndefined();
+    const acquired = await acquireForTest(env);
+    try {
+      expect(acquired).not.toBeNull();
+      expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).not.toBe(record);
+    } finally {
+      await acquired?.release();
+    }
+  });
 
   it("recovers automatically after a verified boot change on the same non-Windows host", async () => {
     const env = await makeEnv();

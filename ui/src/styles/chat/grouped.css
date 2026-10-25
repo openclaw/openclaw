@@ -780,6 +780,11 @@
   margin: 0 auto;
 }
 
+.chat-notice__actions {
+  display: flex;
+  justify-content: center;
+}
+
 /* Mid-run context is part of the agent's turn: a compact card flush with its column. */
 .chat-notice-inline {
   width: fit-content;
@@ -1386,7 +1391,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: var(--accent-subtle);
   background: var(--chat-bubble-background);
 
-  &:where(.shell[data-background-managed] *) {
+  :where(.shell[data-background-managed]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -1412,7 +1417,7 @@ button.chat-reply-attribution__target:disabled {
   border-color: transparent;
   background: var(--chat-bubble-background);
 
-  &:where(.shell[data-background-managed] *) {
+  :where(.shell[data-background-managed]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -1439,7 +1444,7 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
   background: var(--chat-bubble-background);
 
-  &:where(.shell[data-background-managed] *) {
+  :where(.shell[data-background-managed]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -1719,7 +1724,7 @@ button.chat-reply-attribution__target:disabled {
   border-radius: var(--radius-md);
   background: var(--chat-bubble-background);
 
-  &:where(.shell[data-background-managed] *) {
+  :where(.shell[data-background-managed]) & {
     background:
       linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
       var(--bg-content, var(--bg));
@@ -2096,7 +2101,8 @@ button.chat-reply-attribution__target:disabled {
   cursor: var(--cursor-action);
 }
 
-.chat-bubble-activity--working > .chat-bubble-activity__summary {
+.chat-bubble-activity--working > .chat-bubble-activity__summary,
+.chat-activity-group--working > .chat-activity-group__summary {
   min-width: 60px;
   min-height: 40px;
   justify-content: center;

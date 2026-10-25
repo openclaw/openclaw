@@ -10,6 +10,17 @@ import type { ConfigFormProps } from "../components/config-form.shared.ts";
 import { mountSolid } from "./mount-solid.ts";
 import { flush } from "./solid-settle.ts";
 
+export function connectionSchemaFixture(): ConfigNodeRenderParams["schema"] {
+  return {
+    type: "object",
+    required: ["host", "port"],
+    properties: {
+      host: { type: "string", minLength: 1 },
+      port: { type: "integer", minimum: 1 },
+    },
+  };
+}
+
 type NodeDefaults = Pick<ConfigNodeRenderParams, "hints" | "unsupported" | "disabled">;
 type FixtureOptions<Extra = object> = Omit<ConfigNodeRenderParams, keyof NodeDefaults> &
   Partial<NodeDefaults> &

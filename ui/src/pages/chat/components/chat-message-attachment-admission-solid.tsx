@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createSignal, onSettled } from "solid-js";
+import { Show, createMemo, createSignal, onSettled } from "solid-js";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import type { AttachmentAdmission } from "./chat-message-attachment-admission-model.ts";
 import type { AttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
@@ -29,7 +29,38 @@ export function ChatAttachmentAdmission(props: AttachmentAdmissionProps): JSX.El
 }
 
 function AdmissionContent(props: Pick<AttachmentAdmissionProps, "render">): JSX.Element {
-  let didAdmit = typeof IntersectionObserver !== "function";
+  const admission = createAdmission();
+  return <>{props.render(admission)}</>;
+}
+
+/** Keep a reader mounted while its source receives a fresh viewport admission. */
+export function createChatAttachmentAdmission(scope: () => string, immediate: () => boolean) {
+  let element: Element | undefined;
+  let admission: ReturnType<typeof createAdmission> | undefined;
+  const key = createMemo(() => JSON.stringify([scope(), immediate()]));
+  const current = createMemo(() => {
+    key();
+    admission = createAdmission(immediate(), () => element);
+    return admission;
+  });
+  const observeElement = (next: Element | undefined) => {
+    element = next;
+    admission?.observe(next);
+  };
+  return {
+    get observeElement() {
+      current();
+      return observeElement;
+    },
+    onAdmit: () => current().onAdmit(),
+    get admitted() {
+      return current().admitted;
+    },
+  };
+}
+
+function createAdmission(immediate = false, retainedElement?: () => Element | undefined) {
+  let didAdmit = immediate || typeof IntersectionObserver !== "function";
   const [admitted, setAdmitted] = createSignal(didAdmit);
   let active = false;
   let currentElement: Element | undefined;
@@ -53,20 +84,20 @@ function AdmissionContent(props: Pick<AttachmentAdmissionProps, "render">): JSX.
   };
   onSettled(() => {
     active = true;
-    observeElement(currentElement);
+    observeElement(retainedElement?.() ?? currentElement);
     return () => {
       active = false;
       stopObserving?.();
     };
   });
-  return (
-    <>
-      {props.render({
-        get observeElement() {
-          return admitted() ? undefined : observeElement;
-        },
-        onAdmit: admit,
-      })}
-    </>
-  );
+  return {
+    observe: observeElement,
+    get observeElement() {
+      return admitted() ? undefined : observeElement;
+    },
+    onAdmit: admit,
+    get admitted() {
+      return admitted();
+    },
+  };
 }

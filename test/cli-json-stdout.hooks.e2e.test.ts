@@ -198,7 +198,7 @@ describe("cli json stdout contract", () => {
               expect(result.stderr).toContain("[openclaw] The CLI command failed.");
               expect(result.stderr).not.toContain(message);
             } else {
-              expect(result.stderr).toContain(message);
+              expect(result.stderr).toContain(message.replaceAll("\n", "\\n"));
             }
           }
         }

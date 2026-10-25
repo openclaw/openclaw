@@ -117,7 +117,10 @@ it.each(
       await userEvent.click(sharingSearch);
     }
     await expect.element(input).toBeVisible();
-    await userEvent.click(input);
+    if (surface === "members") {
+      await userEvent.click(input);
+    }
+    // Assignment typing must enter the visible search without a separate click.
     await userEvent.keyboard("pc");
     expect(onAction).not.toHaveBeenCalled();
     await expect.element(input).toHaveValue("pc");

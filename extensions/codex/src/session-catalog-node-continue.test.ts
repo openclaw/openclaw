@@ -67,6 +67,7 @@ function registerProvider(
     runtime,
     startupConfig,
     control,
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
     getRuntimeConfig,
   });
 }

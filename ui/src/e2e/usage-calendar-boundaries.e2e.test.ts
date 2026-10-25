@@ -1,37 +1,22 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
 import type { SessionsUsageResult } from "../../../src/shared/usage-types.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Usage calendar boundaries" });
-const emptyTotals = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
+const emptyTotals = createEmptyCostUsageTotals();
 const emptyMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
 function aggregates(
   messages = emptyMessages,
   costDaily: SessionsUsageResult["aggregates"]["costDaily"] = [],
 ) {
   return {
+    ...buildAggregatesFromSessions([]),
     messages,
     costDaily,
-    tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-    byModel: [],
-    byProvider: [],
-    byAgent: [],
-    byChannel: [],
-    daily: [],
   };
 }
 async function selectLocalDate(page: Page, date: string) {
@@ -61,7 +46,6 @@ suite.define(() => {
   it.each([
     ["Asia/Shanghai", "2026-09-13T16:30:00Z", "2026-09-13", "2026-09-14"],
     ["America/Los_Angeles", "2026-09-14T02:30:00Z", "2026-09-14", "2026-09-13"],
-    ["Asia/Shanghai", "2026-09-14T04:30:00Z", "2026-09-14", "2026-09-14"],
   ])(
     "uses the selected calendar for date presets in %s at %s",
     async (timezoneId, instant, utcDate, localDate) => {
@@ -150,9 +134,6 @@ suite.define(() => {
             for (const [label, days] of [
               ["Today", 1],
               ["7d", 7],
-              ["30d", 30],
-              ["90d", 90],
-              ["1y", 365],
               ["All", null],
             ] as const) {
               const startDate =

@@ -17,7 +17,6 @@ import { loadCronRows } from "../../../cron/store/row-codec.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import type { CronJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
-import { buildUpdateDoctorEnv } from "../../../infra/update-runner-doctor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -25,6 +24,7 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { externalDoctorEnv } from "../../doctor-update.test-support.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 import {
   applyLegacyCronStoreRepair,
@@ -79,12 +79,7 @@ async function loadRepairStateForStore(storePath: string) {
 }
 
 const updateDoctorEnv = {
-  ...buildUpdateDoctorEnv({
-    allowGatewayServiceRepair: false,
-    allowGatewayActivation: false,
-    serviceRepairPolicy: "external",
-    deferConfiguredPluginInstallRepair: true,
-  }),
+  ...externalDoctorEnv(),
   OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
 };
 

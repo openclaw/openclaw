@@ -107,6 +107,9 @@ suite.define(() => {
         0,
       );
       for (const file of files) {
+        if (file !== files[0]) {
+          await page.getByRole("button", { name: "Toggle file tree", exact: true }).click();
+        }
         selected = file;
         await gateway.setMethodResponse("sessions.files.download", {
           filename: file.name,

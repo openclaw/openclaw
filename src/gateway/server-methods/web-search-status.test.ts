@@ -1,6 +1,7 @@
+import { Check } from "typebox/schema";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { WebSearchStatusParams } from "../../../packages/gateway-protocol/src/index.js";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
+import { createProtocolValidator } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import { WebSearchStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/web-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry } from "../../plugins/web-provider-types.js";
@@ -74,7 +75,9 @@ vi.mock("./users-profile-access.js", () => ({
 }));
 import { webSearchHandlers } from "./web-search.js";
 
-const validateStatus = lazyCompile(WebSearchStatusResultSchema);
+const validateStatus = createProtocolValidator(WebSearchStatusResultSchema, (value) =>
+  Check(WebSearchStatusResultSchema, value),
+);
 
 let config: OpenClawConfig;
 const secret = "synthetic-key-never-return";

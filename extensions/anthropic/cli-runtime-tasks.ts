@@ -43,14 +43,12 @@ export function recordTaskOwnership(
     return undefined;
   }
   const previous = session.taskOwners.get(taskId);
+  // Nested tasks report back to their launching agent, not the parent input.
+  // Native marks nested Bash explicitly; Agents and workflows carry a parent ID.
   const owner =
-    task.owned_by_subagent === true
+    task.owned_by_subagent === true || typeof task.parent_task_id === "string"
       ? false
-      : (previous ??
-        (typeof task.parent_task_id === "string"
-          ? session.taskOwners.get(task.parent_task_id)
-          : undefined) ??
-        inputUuid);
+      : (previous ?? inputUuid);
   if (owner !== previous) {
     session.taskOwners.set(taskId, owner);
   }

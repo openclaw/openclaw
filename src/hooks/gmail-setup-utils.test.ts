@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
-import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const itUnix = process.platform === "win32" ? it.skip : it;
@@ -13,14 +13,7 @@ const { runCommand } = vi.hoisted(() => ({ runCommand: vi.fn() }));
 // mock-isolation: setup command results are synthetic and must not invoke real cloud tools.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: runCommand }));
 
-const success = {
-  code: 0,
-  stdout: "",
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit",
-} satisfies SpawnResult;
+const success = createCommandResult();
 const tailscaleStatus = { ...success, stdout: '{"Self":{"DNSName":"fixture.example."}}' };
 const progress = Array.from({ length: 1000 }, (_, i) => `progress ${i}`).join("\r");
 const noisy = {

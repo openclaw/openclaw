@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/ai",
-  "version": "2026.10.6",
+  "version": "2026.10.7",
   "description": "Reusable model provider adapters and streaming runtime from OpenClaw",
   "keywords": [
     "ai",
@@ -76,6 +76,11 @@
       "import": "./dist/internal/anthropic.mjs",
       "default": "./dist/internal/anthropic.mjs"
     },
+    "./internal/google": {
+      "types": "./dist/internal/google.d.mts",
+      "import": "./dist/internal/google.mjs",
+      "default": "./dist/internal/google.mjs"
+    },
     "./internal/google-model-family": {
       "types": "./dist/internal/google-model-family.d.mts",
       "import": "./dist/internal/google-model-family.mjs",
@@ -123,12 +128,13 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.133.0",
-    "@google/genai": "2.28.0",
+    "@anthropic-ai/sdk": "0.135.0",
+    "@google/genai": "2.30.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
-    "openai": "7.32.0",
+    "openai": "7.35.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.37",
+    "proxy-from-env": "2.1.0",
+    "typebox": "1.4.1",
     "zod": "4.6.7",
     "zod-to-json-schema": "3.25.2"
   },

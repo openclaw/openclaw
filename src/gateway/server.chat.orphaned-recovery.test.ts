@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import {
@@ -13,13 +14,10 @@ import { recoverTerminalSessionEntryForVisibleTurn } from "../config/sessions/te
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { createRestartSafeChatRequest } from "./server-methods/chat-restart-recovery.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayBackgroundTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 it("preserves interrupted recovery custody when reusing a failed session", () => {
@@ -41,16 +39,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   const token = "orphaned-recovery-chat-token";
   const state = await createOpenClawTestState({
     label: "orphaned-recovery-chat",
-    env: {
-      OPENCLAW_GATEWAY_TOKEN: token,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
+    env: createGatewayBackgroundTestEnv(token),
   });
   const priorMessage = "Finish the interrupted recovery task.";
   const nextMessage = "Then verify the new request.";
@@ -58,7 +47,7 @@ it("chat.send recovers failed and statusless work for new messages and retained 
   let responseCount = 0;
   const providerServer = createServer((request, response) => {
     void (async () => {
-      const body = await readProviderBody(request);
+      const body = await readRequestText(request);
       if (request.method !== "POST" || request.url !== "/v1/responses") {
         response.writeHead(404).end();
         return;

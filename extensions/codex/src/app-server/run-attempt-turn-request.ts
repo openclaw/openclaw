@@ -27,8 +27,9 @@ import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
 import { buildCodexParentLocalInstructions, buildTurnStartParams } from "./turn-params.js";
 import type { CodexThreadRouteReservation } from "./turn-router.js";
@@ -40,7 +41,7 @@ export type CodexStartedTurn = {
 };
 
 export async function prepareCodexAttemptTurnRequest(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   ensureCurrentThreadRoute: () => Promise<
     Pick<CodexThreadRouteReservation, "armTurn" | "cancelTurn">
@@ -233,6 +234,10 @@ export async function prepareCodexAttemptTurnRequest(
                 memoryInstructions: workspaceBootstrapContext.memoryInstructions,
               }) ?? undefined),
           turnState.promptBuild.turnDeveloperInstructions,
+          buildCodexConversationTurnInstructions(
+            runtimeParams,
+            attemptTools.toolBridge.availableSpecs,
+          ),
         ),
         signal: runAbortController.signal,
         assertCurrent: () => {

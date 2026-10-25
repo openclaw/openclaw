@@ -14,6 +14,7 @@ import {
 } from "./manager.test-harness.js";
 import { MAX_CALL_REPLAY_KEYS } from "./manager/replay-keys.js";
 import { getCallHistoryFromStore, loadActiveCallsFromStore } from "./manager/store.js";
+import { PlivoProvider } from "./providers/plivo.js";
 import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 
 function installStateRuntime(): VoiceCallStateRuntime["state"] {
@@ -67,10 +68,9 @@ async function initializeManager(
   provider = new FakeProvider(),
 ) {
   const storePath = createTestStorePath();
-  const call = makePersistedCall(callOverrides);
-  await writeCallsToStore(storePath, [call]);
+  await writeCallsToStore(storePath, [makePersistedCall(callOverrides)]);
   const manager = await restoreManager(storePath, { maxDurationSeconds }, provider);
-  return { call, manager, provider, storePath };
+  return { manager, provider, storePath };
 }
 
 async function restoreManager(
@@ -172,14 +172,8 @@ it("restores existing records through the retained runtime without a data migrat
 it("prefers active provider state before persisted fallback", async () => {
   const storePath = createTestStorePath();
   await writeCallsToStore(storePath, [
-    completedCall({
-      callId: "call-target",
-      providerCallId: "provider-completed",
-    }),
-    makePersistedCall({
-      callId: "call-active",
-      providerCallId: "call-target",
-    }),
+    completedCall({ callId: "call-target", providerCallId: "provider-completed" }),
+    makePersistedCall({ callId: "call-active", providerCallId: "call-target" }),
   ]);
   const manager = await restoreManager(storePath);
 
@@ -190,57 +184,52 @@ it("prefers active provider state before persisted fallback", async () => {
   });
 });
 
-it("expires a restored call at its persisted brief duration cap", async () => {
-  const { manager, provider, storePath } = await initializeManager(
-    {
-      startedAt: Date.now() - 20_000,
-      answeredAt: Date.now() - 19_000,
-      metadata: { maxDurationSeconds: 10 },
-    },
-    300,
-  );
-  await expectExpired(manager, provider, storePath);
-});
-
-it("restores the remaining brief duration without charging time spent ringing", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-  const now = Date.now();
-  const { manager, provider, storePath } = await initializeManager({
-    startedAt: now - 35_000,
-    answeredAt: now - 10_000,
-    metadata: { maxDurationSeconds: 30 },
-  });
-  requireSingleActiveCall(manager);
-  expect(provider.hangupCalls).toEqual([]);
-  await vi.advanceTimersByTimeAsync(19_999);
-  expect(provider.hangupCalls).toEqual([]);
-  await vi.advanceTimersByTimeAsync(1);
-  await manager.stop();
-  await expectExpired(manager, provider, storePath);
-});
-
-it.each([0, 2_000])(
-  "hangs up a call that reaches its deadline during a %ims restore probe",
-  async (probeDelay) => {
+it.each([
+  ["expired brief", 20_000, 19_000, 10, 0, 0],
+  ["brief excludes ringing", 35_000, 10_000, 30, 20_000, 0],
+  ["exact deadline", 30_000, 30_000, 30, 1, 0],
+  ["deadline during probe", 29_000, 29_000, 30, 1, 2_000],
+  ["missing live anchor", 290_000, undefined, undefined, 10_000, 0],
+] as const)(
+  "restores max-duration policy: %s",
+  async (_, startedAgo, answeredAgo, cap, wait, probeDelay) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const now = Date.now();
-    const answeredAt = now - (probeDelay ? 29_000 : 30_000);
     const provider = new FakeProvider();
-    provider.getCallStatus = async () => {
-      vi.setSystemTime(now + probeDelay);
-      return { status: "in-progress", isTerminal: false };
-    };
+    if (probeDelay) {
+      provider.getCallStatus = async () => {
+        vi.setSystemTime(now + probeDelay);
+        return { status: "in-progress", isTerminal: false };
+      };
+    }
+    const unanchored = answeredAgo === undefined;
     const { manager, storePath } = await initializeManager(
       {
-        startedAt: answeredAt,
-        answeredAt,
-        metadata: { maxDurationSeconds: 30 },
+        state: unanchored ? "listening" : "answered",
+        startedAt: now - startedAgo,
+        answeredAt: unanchored ? undefined : now - answeredAgo,
+        metadata: { maxDurationSeconds: cap },
       },
-      undefined,
+      300,
       provider,
     );
-    await vi.advanceTimersByTimeAsync(1);
-    await manager.stop();
+    if (wait) {
+      const call = requireSingleActiveCall(manager);
+      if (unanchored) {
+        expect(call).toMatchObject({ state: "listening", answeredAt: now - startedAgo });
+        expect(
+          (await loadActiveCallsFromStore(storePath)).activeCalls.get(call.callId)?.answeredAt,
+        ).toBe(call.answeredAt);
+      }
+      expect(provider.hangupCalls).toEqual([]);
+      if (wait > 1) {
+        await vi.advanceTimersByTimeAsync(wait - 1);
+        expect(manager.getActiveCalls()).toHaveLength(1);
+        expect(provider.hangupCalls).toEqual([]);
+      }
+      await vi.advanceTimersByTimeAsync(1);
+      await manager.stop();
+    }
     await expectExpired(manager, provider, storePath);
   },
 );
@@ -248,33 +237,28 @@ it.each([0, 2_000])(
 it("summarizes repeated restored-call verification outcomes", async () => {
   const now = Date.now();
   const storePath = createTestStorePath();
-  await writeCallsToStore(storePath, [
-    ...(
-      [
-        ["missing-provider-a", undefined, 10_000],
-        ["missing-provider-b", undefined, 10_000],
-        ["expired-a", "expired-provider-a", 600_000],
-        ["terminal-a", "terminal-provider-a", 20_000],
-        ["terminal-b", "terminal-provider-b", 20_000],
-      ] as const
-    ).map(([callId, providerCallId, age]) =>
+  const rows = [
+    ["missing-provider-a", undefined, 10_000],
+    ["missing-provider-b", undefined, 10_000],
+    ["expired-a", "expired-provider-a", 600_000],
+    ["terminal-a", "terminal-provider-a", 20_000],
+    ["terminal-b", "terminal-provider-b", 20_000],
+    ["active-a", "active-provider-a"],
+    ["unknown-a", "unknown-provider-a"],
+    ["failure-a", "failure-provider-a"],
+  ] as const;
+  await writeCallsToStore(
+    storePath,
+    rows.map(([callId, providerCallId, age]) =>
       makePersistedCall({
         callId,
         providerCallId,
-        state: "initiated",
-        startedAt: now - age,
-        answeredAt: undefined,
+        state: age ? "initiated" : "answered",
+        startedAt: now - (age ?? 30_000),
+        answeredAt: age ? undefined : now - 25_000,
       }),
     ),
-    ...["active", "unknown", "failure"].map((outcome) =>
-      makePersistedCall({
-        callId: `${outcome}-a`,
-        providerCallId: `${outcome}-provider-a`,
-        startedAt: now - 30_000,
-        answeredAt: now - 25_000,
-      }),
-    ),
-  ]);
+  );
 
   const provider = new FakeProvider();
   provider.getCallStatus = async ({ providerCallId }) => {
@@ -320,40 +304,6 @@ it("summarizes repeated restored-call verification outcomes", async () => {
   expect(logSpy.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain("terminal-a");
 });
 
-it("uses call start as max-duration anchor for restored listening calls without answeredAt", async () => {
-  const state = "listening";
-  vi.useFakeTimers();
-  const now = new Date("2026-03-17T03:07:00Z").getTime();
-  vi.setSystemTime(now);
-  const startedAt = now - 290_000;
-  const { manager, provider, storePath } = await initializeManager(
-    {
-      state,
-      startedAt,
-      answeredAt: undefined,
-    },
-    300,
-  );
-
-  const activeCall = requireSingleActiveCall(manager);
-  expect(activeCall).toMatchObject({ state, answeredAt: startedAt });
-  expect(
-    (await loadActiveCallsFromStore(storePath)).activeCalls.get(activeCall.callId)?.answeredAt,
-  ).toBe(startedAt);
-
-  await vi.advanceTimersByTimeAsync(9_000);
-  expect(manager.getActiveCalls()).toHaveLength(1);
-  expect(provider.hangupCalls).toHaveLength(0);
-
-  const endCall = vi.spyOn(manager, "endCall");
-  await vi.advanceTimersByTimeAsync(1_100);
-  expect(endCall).toHaveBeenCalledOnce();
-  await requireRecord(endCall.mock.results[0], "timeout completion").value;
-  expect(manager.getActiveCalls()).toHaveLength(0);
-  const hangupCall = requireSingleHangupCall(provider);
-  expect(hangupCall.reason).toBe("timeout");
-});
-
 it("keeps terminal identity when a replay key is retained or evicted", async () => {
   const storePath = createTestStorePath();
   const replayKeys = Array.from(
@@ -383,4 +333,59 @@ it("keeps terminal identity when a replay key is retained or evicted", async () 
   expect(new Set((await manager.getCallHistory()).map((call) => call.callId))).toEqual(
     new Set([persisted.callId]),
   );
+});
+
+it("resolves a late Plivo request alias to the terminal snapshot after restart", async () => {
+  const storePath = createTestStorePath();
+  await writeCallsToStore(storePath, [
+    makePersistedCall({
+      callId: "aliased",
+      providerCallId: "request-uuid",
+      agentId: "sales",
+      sessionKey: "agent:sales:voice:fixture",
+    }),
+  ]);
+  const provider = new FakeProvider();
+  const previous = await restoreManager(storePath, {}, provider);
+  await previous.processEvent({
+    id: "answer",
+    type: "call.answered",
+    callId: "aliased",
+    providerCallId: "call-uuid",
+    timestamp: Date.now(),
+  });
+  await expect(previous.speak("aliased", "Recorded.")).resolves.toEqual({ success: true });
+  await expect(previous.endCall("aliased")).resolves.toEqual({ success: true });
+  const terminal = await previous.getCallFromMemoryOrStore("aliased");
+  expect(terminal).toMatchObject({
+    agentId: "sales",
+    sessionKey: "agent:sales:voice:fixture",
+    state: "hangup-bot",
+    transcript: [expect.objectContaining({ text: "Recorded." })],
+  });
+  resetPluginStateStoreForTests();
+  const manager = await restoreManager(storePath, { agentId: "default-agent" }, provider);
+  const { events } = new PlivoProvider({
+    authId: "MA-fixture",
+    authToken: "synthetic-token",
+  }).parseWebhookEvent({
+    headers: {},
+    method: "POST",
+    url: "https://example.com/voice/webhook",
+    query: {},
+    rawBody:
+      "RequestUUID=request-uuid&CallStatus=ringing&Direction=outbound&From=%2B15550000000&To=%2B15550000001",
+  });
+  expect(events).toHaveLength(1);
+  await expect(
+    manager.processEvent(expectDefined(events[0], "late Plivo callback")),
+  ).resolves.toEqual({ kind: "ignored" });
+  expect(await manager.getCallFromMemoryOrStore("request-uuid")).toEqual(terminal);
+  expect(new Set((await manager.getCallHistory()).map(({ callId }) => callId))).toEqual(
+    new Set(["aliased"]),
+  );
+  expect(manager.getActiveCalls()).toEqual([]);
+  expect(provider.playTtsCalls).toHaveLength(1);
+  expect(provider.hangupCalls).toHaveLength(1);
+  expect(provider.startListeningCalls).toEqual([]);
 });

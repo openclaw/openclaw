@@ -5,7 +5,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "./cli-backends.test-support.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -44,15 +48,7 @@ afterEach(() => {
 const request = { agentId: "main", provider: "fixture", model: "model" };
 const custom: OpenClawConfig = {
   plugins: { enabled: false },
-  models: {
-    providers: {
-      fixture: {
-        api: "openai-completions",
-        baseUrl: "https://custom.invalid/v1",
-        models: [],
-      },
-    },
-  },
+  ...configFor("fixture", "https://custom.invalid/v1", { api: "openai-completions" }),
 };
 
 it.each([
@@ -189,14 +185,7 @@ it("reports missing sign-in instead of a catalog refresh", async () => {
 it("keeps the configured Claude CLI runtime when switching models with saved setup tokens", async () => {
   vi.stubEnv("ANTHROPIC_API_KEY", "");
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-      },
-    ],
+    resolveRuntimeCliBackends: createClaudeCliBackends,
   });
   const entry: ModelCatalogEntry = {
     provider: "anthropic",

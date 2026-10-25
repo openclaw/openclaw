@@ -30,7 +30,7 @@ function countRejection(reason: Parameters<typeof onRejected>[0]): number {
 type RelayHandlers = {
   onevent: (event: Record<string, unknown>) => void | Promise<void>;
   oneose?: () => void;
-  onclose?: (reason: string[]) => void;
+  onclose?: (reasons: Array<{ url: string; reason: string }>) => void;
 };
 
 const mockState = vi.hoisted(() => ({
@@ -59,7 +59,10 @@ vi.mock("nostr-tools", () => {
       mockState.subscribeMany(relays, filters, handlers);
       mockState.handlers.push(handlers);
       return {
-        close: mockState.subscriptionClose,
+        close: async (reason: string) => {
+          await mockState.subscriptionClose(reason);
+          handlers.onclose?.(relays.map((url) => ({ url, reason })));
+        },
       };
     }
 
@@ -174,12 +177,91 @@ describe("startNostrBus inbound guards", () => {
   });
 
   afterEach(async () => {
-    await activeBus?.close();
-    activeBus = undefined;
-    mockState.handlers = [];
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
+    try {
+      await activeBus?.close();
+    } finally {
+      activeBus = undefined;
+      mockState.handlers = [];
+      vi.useRealTimers();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
+
+  it("relay backfill confirms only after every relay reports real EOSE", async ({ signal }) => {
+    const relays = ["wss://one.example", "wss://two.example"];
+    const complete = createDeferred<void>();
+    const onEose = vi.fn(() => complete.resolve());
+    await startTestNostrBus({ relays, onEose });
+    expect(mockState.subscribeMany.mock.calls.map(([urls]) => urls)).toEqual([
+      [relays[0]],
+      [relays[1]],
+    ]);
+    mockState.handlers[0]?.oneose?.();
+    mockState.handlers[1]?.oneose?.();
+    await withinTest(complete.promise, signal);
+    expect(onEose).toHaveBeenCalledOnce();
+    expect(onEose).toHaveBeenCalledWith("wss://one.example, wss://two.example");
+  });
+
+  it.each(["timeout", "same-turn close"])(
+    "relay backfill rejects synthetic EOSE after %s",
+    async (cause) => {
+      if (cause === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const onEose = vi.fn();
+      const bus = await startTestNostrBus({
+        relays: ["wss://one.example", "wss://two.example"],
+        onEose,
+      });
+      expect(mockState.handlers).toHaveLength(2);
+      if (cause === "timeout") {
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      mockState.handlers[0]?.oneose?.();
+      if (cause === "same-turn close") {
+        mockState.handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay closed" }]);
+      }
+      mockState.handlers[1]?.oneose?.();
+      await Promise.resolve();
+      await bus.close();
+      expect(onEose).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false])(
+    "relay backfill reports closure only for remote initiators (local=%s)",
+    async (local) => {
+      const onDisconnect = vi.fn();
+      const onError = vi.fn();
+      const bus = await startTestNostrBus({
+        relays: ["wss://one.example", "wss://two.example"],
+        onDisconnect,
+        onError,
+      });
+      expect(mockState.handlers).toHaveLength(2);
+      if (local) {
+        await bus.close();
+      } else {
+        mockState.handlers[0]?.onclose?.([
+          { url: "wss://one.example", reason: "relay unavailable" },
+        ]);
+      }
+      if (local) {
+        expect(onDisconnect).not.toHaveBeenCalled();
+        expect(onError).not.toHaveBeenCalled();
+      } else {
+        expect(onDisconnect).toHaveBeenCalledOnce();
+        expect(onDisconnect).toHaveBeenCalledWith("wss://one.example");
+        expect(onError).toHaveBeenCalledOnce();
+        expect(onError).toHaveBeenCalledWith(
+          expect.objectContaining({ message: "Subscription closed: relay unavailable" }),
+          "subscription",
+        );
+      }
+    },
+  );
 
   it("classifies a durable queue open failure as unavailable ingress", async () => {
     const queueError = new Error("sqlite unavailable");

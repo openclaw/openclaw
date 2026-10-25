@@ -118,7 +118,7 @@ export function prepareDeletedAgentSessionCheck(params: {
   params.assertCurrent?.();
   return readAcpSessionMetaForEntries({
     cfg: params.cfg,
-    entries: [...keys].map((sessionKey) => ({
+    entries: Array.from(keys, (sessionKey) => ({
       sessionKey,
       agentId:
         parseAgentSessionKey(sessionKey)?.agentId ??

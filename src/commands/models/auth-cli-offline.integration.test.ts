@@ -7,6 +7,7 @@ import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
 import { registerModelsCli } from "../../cli/models-cli.js";
+import { createCliTtyMock } from "../../cli/test-runtime-capture.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -35,8 +36,8 @@ it("keeps offline custody through credential input, writes, order changes, and r
       expect(captureGatewayStateOwner(databasePath)?.role).toBe("agent-embedded");
       return "synthetic-provider-key";
     });
-    const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    const ttyMock = createCliTtyMock([process.stdin]);
+    ttyMock.set(true);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
@@ -78,11 +79,7 @@ it("keeps offline custody through credential input, writes, order changes, and r
         "Removed auth profile: synthetic:manual (synthetic/api_key)",
       );
     } finally {
-      if (ttyDescriptor) {
-        Object.defineProperty(process.stdin, "isTTY", ttyDescriptor);
-      } else {
-        Reflect.deleteProperty(process.stdin, "isTTY");
-      }
+      ttyMock.restore();
     }
   });
 });

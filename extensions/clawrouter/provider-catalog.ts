@@ -325,24 +325,6 @@ function buildRoutedModel(
   };
 }
 
-function buildDiscoveredModels(
-  rootUrl: string,
-  providers: CatalogProvider[],
-  resolveNativeModelFacts: ResolveNativeModelFacts,
-): ModelDefinitionConfig[] {
-  const models = new Map<string, ModelDefinitionConfig>();
-  for (const provider of providers) {
-    for (const model of provider.models) {
-      const routed = buildRoutedModel(rootUrl, provider, model, resolveNativeModelFacts);
-      if (!routed || models.has(routed.id)) {
-        continue;
-      }
-      models.set(routed.id, routed);
-    }
-  }
-  return [...models.values()].toSorted((left, right) => left.id.localeCompare(right.id));
-}
-
 export async function buildClawRouterProviderConfig(params: {
   apiKey: string;
   discoveryApiKey?: string;
@@ -361,15 +343,23 @@ export async function buildClawRouterProviderConfig(params: {
   const providers = rows
     .map(parseCatalogProvider)
     .filter((provider): provider is CatalogProvider => Boolean(provider));
+  const apiKey = params.apiKey;
+  const resolveNativeModelFacts = await loadBundledModelIdentityFactsResolver();
+  const models = new Map<string, ModelDefinitionConfig>();
+  for (const provider of providers) {
+    for (const model of provider.models) {
+      const routed = buildRoutedModel(rootUrl, provider, model, resolveNativeModelFacts);
+      if (!routed || models.has(routed.id)) {
+        continue;
+      }
+      models.set(routed.id, routed);
+    }
+  }
   return {
     baseUrl: `${rootUrl}/v1`,
     api: "openai-responses",
-    apiKey: params.apiKey,
-    models: buildDiscoveredModels(
-      rootUrl,
-      providers,
-      await loadBundledModelIdentityFactsResolver(),
-    ),
+    apiKey,
+    models: [...models.values()].toSorted((left, right) => left.id.localeCompare(right.id)),
   };
 }
 

@@ -147,6 +147,26 @@ describe("trusted in-process Gateway session creation", () => {
     options?: Parameters<typeof callInProcessGatewayToolWithCreation>[3],
   ) => callInProcessGatewayToolWithCreation("sessions.create", params, provenance, options);
 
+  it.each([
+    { origin: { delegatedCreatorProfileId: "linked-human" }, expected: "linked-human" },
+    {
+      origin: { delegatedCreatorProfileId: null, operatorProfileId: "selected-human" },
+      expected: undefined,
+    },
+    { origin: { senderId: "claimed-profile", messageProvider: "x" }, expected: undefined },
+  ])(
+    "uses only the host causal requester for default task ownership: $expected",
+    async ({ origin, expected }) => {
+      await asCaller({ requesterOrigin: { sessionKey: mainCaller.sessionKey, ...origin } }, () =>
+        createSession(),
+      );
+      expect(mocks.dispatch.mock.calls[0]?.[2].sessionCreation).toEqual({
+        ...creation,
+        ...(expected ? { requesterProfileId: expected } : {}),
+      });
+    },
+  );
+
   const subagentResume = {
     caller: { ...mainCaller, assertCurrent: vi.fn() },
     childSessionKey: "agent:main:dashboard:child",

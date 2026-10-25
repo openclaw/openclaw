@@ -448,6 +448,17 @@ it("accepts Bun built-in modules without npm dependency declarations", () => {
   expect(dependencyErrors(packageRoot)).toStrictEqual([]);
 });
 
+it("accepts the optional A2UI renderer import shipped by supported release lines", () => {
+  const packageRoot = makeInstalledPackageRoot({ dependencies: {} });
+  writeInstalledFile(
+    packageRoot,
+    "dist/canvas-host/a2ui/a2ui.bundle.js",
+    'export const load = () => import("@a2ui/markdown-it").catch(() => null);\n',
+  );
+
+  expect(dependencyErrors(packageRoot)).toStrictEqual([]);
+});
+
 const companionSource = 'const voice = require("@discordjs/voice");\nexport { voice };\n';
 const discordManifest = {
   name: "@openclaw/discord",

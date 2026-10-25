@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
   mockBrowserGateway,
 } from "../browser-cli.test-support.js";
@@ -12,22 +12,14 @@ import * as batchSharedModule from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
-    (
-      opts?: unknown,
-      req?: unknown,
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
+    typeof browserCliSharedModule.callBrowserRequest<Record<string, unknown>>
   >(async () => ({ results: [{ ok: true }] })),
   readActionsPayload: vi.fn(async () => ""),
 }));
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
 vi.spyOn(batchSharedModule, "readActionsPayload").mockImplementation(mocks.readActionsPayload);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
 

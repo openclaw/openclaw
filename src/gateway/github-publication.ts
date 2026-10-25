@@ -316,6 +316,10 @@ export function createGitHubPublicationCoordinator(params: {
             return await executeGitHubPublication({
               initial: claimed,
               requester: getRequester,
+              requesterProfileId: () => {
+                const actor = getRequester().snapshot.actor;
+                return actor.kind === "operator" ? actor.profileId : undefined;
+              },
               validateCustody,
               assertWorkflowChangesAllowed: () =>
                 assertGitHubPublicationWorkflowChangesAllowed(getRequester()),
@@ -586,11 +590,17 @@ export function createGitHubPublicationCoordinator(params: {
     async processClaim(claim: WorkerSessionTurnClaim) {
       return [...(await methods.processClaim(claim)), ...(await repository.processClaim(claim))];
     },
-    async resumeSessionRequests(isStopping?: () => boolean) {
+    async resumeSessionRequests(
+      isStopping?: () => boolean,
+      isRepositoryPendingEmpty?: () => boolean,
+    ) {
       const failures: unknown[] = [];
       for (const coordinator of [methods, repository]) {
         if (isStopping?.()) {
           break;
+        }
+        if (coordinator === repository && isRepositoryPendingEmpty?.()) {
+          continue;
         }
         try {
           await coordinator.resumeSessionRequests(isStopping);
@@ -611,9 +621,11 @@ export function createGitHubPublicationCoordinator(params: {
     deferOrphanedRequests(): void {
       return refuseLegacyPublication("deferOrphanedRequests", "deferOrphanedRequestsAsync");
     },
-    async deferOrphanedRequestsAsync(): Promise<void> {
+    async deferOrphanedRequestsAsync(isRepositoryPendingEmpty?: () => boolean): Promise<void> {
       await methods.deferOrphanedRequestsAsync();
-      await repository.deferOrphanedRequestsAsync();
+      if (!isRepositoryPendingEmpty?.()) {
+        await repository.deferOrphanedRequestsAsync();
+      }
     },
     /** @deprecated Use listUnreportedResultsAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     listUnreportedResults(): GitHubPublicationTranscriptReport[] {

@@ -619,7 +619,7 @@ export type SessionEventProjection = {
   serializeSession?: () => string;
   /** Publication-owned UTF-8 message field, including its trailing comma. */
   serializeMessage?: () => Buffer;
-  delivered?: () => void;
+  delivered?: (client: GatewayClient) => void;
 };
 
 type SessionEventProjectionScope = {
@@ -636,7 +636,6 @@ type SessionEventProjectionContext = {
   ) => readonly [string | undefined, string | undefined, string | undefined] | null;
   forgetAncestors: (key?: string) => void;
   references: (client: GatewayClient) => ConnectionSessionRows;
-  forgetConnectionAncestors: (client: GatewayClient) => void;
   createRunProjector: () => VisibleActiveSessionRunProjector;
 };
 

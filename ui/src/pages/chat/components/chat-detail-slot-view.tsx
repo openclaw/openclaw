@@ -7,10 +7,7 @@ import { selectedChatSessionRow } from "../chat-state-route.ts";
 import { openSlot } from "../sidebar-layout.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
-import {
-  getSessionWorkspace,
-  selectSessionWorkspacePreview,
-} from "./chat-session-workspace-state.ts";
+import { getSessionWorkspace } from "./chat-session-workspace-state.ts";
 import {
   openSessionWorkspaceFile,
   openSessionWorkspaceFileView,
@@ -139,7 +136,6 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
             onOpenSessionLink={props.chat.onOpenSessionLink}
             onRevealInWorkspace={(path: string) => {
               revealSessionWorkspaceFile(props.host, path);
-              selectSessionWorkspacePreview(props.host, null);
               props.host.updateSidebarLayout(openSlot(props.host.sidebarLayout, "workspace"));
               props.onWorkspaceIntent?.();
             }}

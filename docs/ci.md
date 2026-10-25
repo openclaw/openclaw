@@ -64,7 +64,9 @@ Unknown targets retain a default weight. Inspect any assignment with
 runs as the suite changes. The latest two file samples track recent workload
 changes; configuration and preparation costs use observed medians. These are
 estimates, including inferred import/hook costs from verbose logs, not exact
-per-file profiler measurements. Rebalancing adds no jobs or per-job setup.
+per-file profiler measurements. Refresh weights when adding expensive files:
+the unknown-target default preserves coverage but can underestimate their cost
+enough to unbalance a shard. Rebalancing adds no jobs or per-job setup.
 The combined inventory matches the local full suite; a failure in one shard leaves
 the others running and fails the aggregate gate.
 
@@ -266,6 +268,8 @@ The WebKit project requires every selected assertion to pass, with no expected-f
 Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 15.2.0 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
+
+When the public artifact build is already selected, current-target browser extension E2E runs in `checks-ui-browser-extension` and restores that exact checkout's runtime instead of rebuilding it. The producer archives the runtime before mutable built-artifact verifiers run; the consumer checks its digest and source commit. This replaces the extension matrix row without adding a runner. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation.
 
 Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports, including the same seven Control UI seed files on Node and the pinned Bun fork in both Linux cache backends; ordinary CI remains restore-only.
 

@@ -39,7 +39,7 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
     // Exclusive creation precedes publication; an incomplete record still owns its lock.
     return false;
   }
-  const namespace = classifyGatewayLockProcessNamespace(payload.processNamespace, lockPath);
+  const namespace = classifyGatewayLockProcessNamespace(payload, lockPath);
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload, lockPath);
   }
@@ -86,7 +86,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   }
   // Ordinary SQLite access does not reclaim the owner or borrow schema custody.
   // Unknown namespaces retain maintenance contention without probing a local PID.
-  const namespace = classifyGatewayLockProcessNamespace(owner.processNamespace, ownerPath);
+  const namespace = classifyGatewayLockProcessNamespace(owner, ownerPath);
   if (isComparableStateOwnerStale(owner, namespace)) {
     return;
   }

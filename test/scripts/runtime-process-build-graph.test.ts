@@ -1,7 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
-import { standaloneRuntimeProcessBuildEntries } from "../../scripts/lib/runtime-process-core-build-entries.mts";
+import {
+  sharedRuntimeProcessBuildEntries,
+  standaloneRuntimeProcessBuildEntries,
+} from "../../scripts/lib/runtime-process-core-build-entries.mts";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const forbiddenInputs = [
@@ -14,6 +17,15 @@ const forbiddenInputs = [
 ];
 
 describe("standalone runtime process build graph", () => {
+  it("isolates the metadata inventory program from the shared runtime graph", () => {
+    expect(
+      sharedRuntimeProcessBuildEntries({
+        "infra/update-state-sizes.entry": "src/infra/update-state-sizes.entry.ts",
+        "fixture/shared": "fixture/shared.ts",
+      }),
+    ).toEqual({ "fixture/shared": "fixture/shared.ts" });
+  });
+
   it.each(Object.entries(standaloneRuntimeProcessBuildEntries))(
     "keeps %s out of the Gateway server graph",
     async (name, entry) => {

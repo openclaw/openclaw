@@ -15,7 +15,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { captureReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
+import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { resolveUserPath } from "../../utils.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
@@ -40,7 +40,7 @@ import {
 } from "../cli-session.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
-import { resolveDelegationCapability } from "../delegation-capability.js";
+import { isFallbackAttempt, resolveDelegationCapability } from "../delegation-capability.js";
 import { withAdmittedCliCandidate } from "../embedded-agent-runner/run-entry-cli.js";
 import { resolveRunEntryCliRuntime } from "../embedded-agent-runner/run-entry-runtime.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -345,6 +345,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       lane: params.opts.lane,
       swarmExecutionLane: params.opts.swarmExecutionLane,
       extraSystemPrompt: params.opts.extraSystemPrompt,
+      extraSystemPromptTurnContext: params.opts.extraSystemPromptTurnContext,
       inputProvenance: params.opts.inputProvenance,
       privateCompletion: params.opts.privateCompletion,
       skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
@@ -584,7 +585,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             // inputs match the tool state this invocation actually runs with.
             ...buildCliMcpDelegationCapabilityBinding(
               resolveDelegationCapability({
-                fallbackActive: params.isFallbackRetry,
+                fallbackActive: isFallbackAttempt(params),
                 inputProvenance: params.opts.inputProvenance,
                 disableTools,
                 toolsAllow: runtimeToolsAllow,
@@ -757,7 +758,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     },
     onSessionIdChanged: params.opts.onSessionIdChanged,
   };
-  embeddedRunParams.executionSelection = captureReplyExecutionSelection({
+  embeddedRunParams.joinObservation = captureReplyMessageJoinObservation({
     run: { ...embeddedRunParams, sessionFile: params.sessionFile },
     sessionEntry: params.sessionEntry,
   });

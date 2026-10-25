@@ -4,10 +4,10 @@ import {
   createUpdateStateInspectionDiagnostics,
   createUpdateStateInspectionReporter,
   formatUpdateStateInspectionError,
-  UPDATE_STATE_INSPECTION_PROGRESS_PREFIX,
 } from "./update-candidate-state.diagnostics.js";
 import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { createUpdateErrorFact, normalizeUpdateFailureFacts } from "./update-failure-facts.js";
+import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),

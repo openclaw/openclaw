@@ -217,17 +217,15 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
     });
     try {
       for (const [index, runId] of runIds.entries()) {
-        const response = await rpcReq(
-          ws,
-          "chat.send",
-          {
-            sessionKey: SESSION_KEY,
-            message: messages[index],
-            idempotencyKey: runId,
-            queueMode: "steer",
-          },
-          1_000,
-        );
+        // `older` is retired only after this loop, so an acknowledgement that waited for
+        // injection would never arrive; the default RPC timeout still fails that case.
+        // A tighter bound is unsafe: the first call pays cold handler setup (>1s on CI).
+        const response = await rpcReq(ws, "chat.send", {
+          sessionKey: SESSION_KEY,
+          message: messages[index],
+          idempotencyKey: runId,
+          queueMode: "steer",
+        });
         expect(response).toMatchObject({ ok: true, payload: { status: "started", runId } });
       }
       expect(queueMessage).not.toHaveBeenCalled();

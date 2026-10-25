@@ -118,6 +118,7 @@ export async function executePreparedReplyRun(
     useFastReplyRuntime,
     fullAccessState,
     extraSystemPromptParts,
+    extraSystemPromptTurnContext,
     sourceConversationContextByMode,
     sourceConversationContextPromptOffset,
     extraSystemPromptStatic,
@@ -319,6 +320,8 @@ export async function executePreparedReplyRun(
       }),
       sessionKey,
       operatorProfileId: opts?.operatorAuthority?.profileId,
+      // Linked channel identity establishes the initiator even without operator authority.
+      delegatedCreatorProfileId: getRequesterProfile(ctx)?.id,
     });
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
@@ -634,6 +637,7 @@ export async function executePreparedReplyRun(
         ? { suppressNextUserMessagePersistence: true }
         : {}),
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      extraSystemPromptTurnContext,
       sourceReplyDeliveryMode,
       bootstrapContextMode: opts?.bootstrapContextMode,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,

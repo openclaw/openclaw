@@ -205,6 +205,7 @@ export async function createComposedCatalogFixture(
         url: `ws://127.0.0.1:${address.port}`,
       },
       computerUse: { enabled: false },
+      supervision: { enabled: true },
     };
     const config: OpenClawConfig = {
       agents: { entries: { main: { agentDir, workspace: state.workspaceDir } } },

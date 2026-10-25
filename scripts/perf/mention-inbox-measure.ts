@@ -22,6 +22,8 @@ import {
   publicKeyRawBase64UrlFromEd25519Pem,
   signEd25519Payload,
 } from "../../src/infra/ed25519-signature.ts";
+import { requestSessionListParams } from "../../ui/src/lib/sessions/session-requests.ts";
+import type { SessionRequestClient } from "../../ui/src/lib/sessions/session-types.ts";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
@@ -41,6 +43,8 @@ const { values } = parseArgs({
     clients: { type: "string", default: "24" },
     operations: { type: "string", default: "2000" },
     broadcasts: { type: "string", default: "100" },
+    "sidebar-limit": { type: "string", default: "0" },
+    "broadcast-allocation-start-at": { type: "string" },
     "start-at": { type: "string" },
     "cpu-start-at": { type: "string" },
     "broadcast-start-at": { type: "string" },
@@ -62,7 +66,16 @@ const mentions = integer(values.mentions, "mentions");
 const clients = integer(values.clients, "clients");
 const operations = integer(values.operations, "operations");
 const broadcasts = integer(values.broadcasts, "broadcasts");
-const counts = { readTarget: 0, currentTarget: 0, readView: 0 };
+const sidebarLimit = integer(values["sidebar-limit"], "sidebar-limit", 0);
+const counts = {
+  readTarget: 0,
+  currentTarget: 0,
+  readView: 0,
+  shareSidebarSessionRows: 0,
+  sidebarFull: 0,
+  sidebarDelta: 0,
+  sidebarUnchanged: 0,
+};
 const hooks: string[] = [];
 const observerKey = Symbol.for("openclaw.bench.mention-counts");
 Object.defineProperty(globalThis, observerKey, { value: counts });
@@ -75,6 +88,7 @@ registerHooks({
       "mention-inbox.ts",
       "mention-inbox-projection.ts",
       "mention-inbox-recording.ts",
+      "session-row-presentation.ts",
     ];
     const replaced =
       values["owner-dir"] && ownerNames.find((name) => url.endsWith(`/src/gateway/${name}`));
@@ -88,7 +102,9 @@ registerHooks({
         ? ["readTarget"]
         : url.endsWith("/src/gateway/mention-inbox.ts")
           ? ["currentTarget", "readView"]
-          : [];
+          : url.endsWith("/src/gateway/session-row-presentation.ts")
+            ? ["shareSidebarSessionRows"]
+            : [];
     if (!names.length) {
       return loaded;
     }
@@ -303,6 +319,10 @@ function resetCounts() {
   counts.readTarget = 0;
   counts.currentTarget = 0;
   counts.readView = 0;
+  counts.shareSidebarSessionRows = 0;
+  counts.sidebarFull = 0;
+  counts.sidebarDelta = 0;
+  counts.sidebarUnchanged = 0;
 }
 function tails(samples: number[]) {
   samples.sort((a, b) => a - b);
@@ -388,7 +408,50 @@ try {
     await list(peer);
   }
   assert(modelRequests >= mentions, "every seeded turn must reach the loopback model");
-  assert.deepEqual(hooks.toSorted(), ["currentTarget", "readTarget", "readView"]);
+  assert.deepEqual(hooks.toSorted(), [
+    "currentTarget",
+    "readTarget",
+    "readView",
+    "shareSidebarSessionRows",
+  ]);
+  const sidebarViewers: SessionRequestClient[] = viewers.map((peer) => ({
+    async request<T>(method: string, params?: unknown): Promise<T> {
+      const result = await peer.request(method, params, 120_000);
+      assert(result.ok, `${method}: ${JSON.stringify(result.error)}`);
+      if (method === "sessions.list") {
+        assert(isRecord(result.payload));
+        counts[
+          result.payload.rowsUnchanged
+            ? "sidebarUnchanged"
+            : result.payload.rowsDelta
+              ? "sidebarDelta"
+              : "sidebarFull"
+        ]++;
+      }
+      return result.payload as T;
+    },
+  }));
+  async function refreshSidebars(label?: string) {
+    if (!sidebarLimit) {
+      return;
+    }
+    await Promise.all(
+      sidebarViewers.map(async (peer) => {
+        const result = await requestSessionListParams(
+          peer,
+          { rowMode: "sidebar", source: "sidebar", limit: sidebarLimit, archived: "all" },
+          () => true,
+        );
+        assert(result && result.sessions.length === sidebarLimit, "incomplete sidebar");
+        const selected = result.sessions.find((row) => row.key === keys[0]);
+        assert(selected, "changed mention session is missing from the sidebar");
+        if (label !== undefined) {
+          assert.equal(selected.label, label, "sidebar did not observe the current broadcast");
+        }
+      }),
+    );
+  }
+  await refreshSidebars();
   await delay(250);
   resetCounts();
   await list();
@@ -410,6 +473,7 @@ try {
       await delay(5);
     }
     assert(delivered(), "mention title change did not reach every viewer");
+    await refreshSidebars(`Synthetic revision ${patchSequence}`);
   }
   resetCounts();
   await broadcast();
@@ -441,54 +505,77 @@ try {
     return latencies;
   }
   console.log(
-    JSON.stringify({ phase: "ready", mentions, clients, singleListCounts, singleBroadcastCounts }),
+    JSON.stringify({
+      phase: "ready",
+      mentions,
+      clients,
+      sidebarLimit,
+      singleListCounts,
+      singleBroadcastCounts,
+    }),
   );
   const measurements: Record<string, unknown> = {};
-  let measuredModelRequests = modelRequests;
+  const measuredModelRequests = modelRequests;
   if (!values["count-only"]) {
     assert(global.gc, "run with --expose-gc");
     inspector.connect();
     await run("list", 100);
-    global.gc();
-    await waitStart(values["start-at"], "--start-at");
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
-    measuredModelRequests = modelRequests;
-    resetCounts();
-    const allocatedAt = Date.now();
-    await run("list", operations);
-    const allocationElapsedMs = Date.now() - allocatedAt;
-    const { profile } = await inspector.post("HeapProfiler.stopSampling");
-    writeFileSync(`${values.output}.heapprofile`, JSON.stringify(profile));
-    let totalBytes = 0;
-    let targetBytes = 0;
-    function visit(node: HeapProfiler.SamplingHeapProfileNode, owned = false) {
-      const underOwner = owned || node.callFrame.functionName === "readTarget";
-      totalBytes += node.selfSize;
-      if (underOwner) {
-        targetBytes += node.selfSize;
+    for (const kind of ["list", "broadcast"] as const) {
+      const count = kind === "list" ? operations : broadcasts;
+      const startOption = kind === "list" ? "start-at" : "broadcast-allocation-start-at";
+      global.gc();
+      await waitStart(values[startOption], `--${startOption}`);
+      await inspector.post("HeapProfiler.startSampling", {
+        samplingInterval: 32768,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+      resetCounts();
+      const allocatedAt = Date.now();
+      await run(kind, count);
+      const allocationElapsedMs = Date.now() - allocatedAt;
+      const { profile } = await inspector.post("HeapProfiler.stopSampling");
+      const profilePath = `${values.output}${kind === "list" ? "" : ".broadcast"}.heapprofile`;
+      writeFileSync(profilePath, JSON.stringify(profile));
+      let totalBytes = 0;
+      const ownerBytes = { readTarget: 0, readView: 0, shareSidebarSessionRows: 0 };
+      function visit(node: HeapProfiler.SamplingHeapProfileNode, owners: string[] = []) {
+        const name = node.callFrame.functionName;
+        const active = Object.hasOwn(ownerBytes, name) ? [...owners, name] : owners;
+        totalBytes += node.selfSize;
+        for (const owner of Object.keys(ownerBytes) as Array<keyof typeof ownerBytes>) {
+          if (active.includes(owner)) {
+            ownerBytes[owner] += node.selfSize;
+          }
+        }
+        for (const child of node.children) {
+          visit(child, active);
+        }
       }
-      for (const child of node.children) {
-        visit(child, underOwner);
-      }
+      visit(profile.head);
+      measurements[kind === "list" ? "allocation" : "broadcastAllocation"] = {
+        startedAt: allocatedAt,
+        elapsedMs: allocationElapsedMs,
+        operations: count,
+        totalBytes,
+        ownerBytes,
+        bytesPerOperation: totalBytes / count,
+        ...(kind === "list"
+          ? {
+              targetBytes: ownerBytes.readTarget,
+              bytesPerRead: totalBytes / count,
+              targetBytesPerRead: ownerBytes.readTarget / count,
+              bytesPer450Reads: (totalBytes * 450) / count,
+            }
+          : {
+              bytesPerBroadcast: totalBytes / count,
+              bytesPerConnectedViewer: totalBytes / count / clients,
+            }),
+        measuredOperationsPerMinute: (count * 60_000) / allocationElapsedMs,
+        estimatedBytesPerMinute: (totalBytes * 60_000) / allocationElapsedMs,
+        counts: { ...counts },
+      };
     }
-    visit(profile.head);
-    measurements.allocation = {
-      startedAt: allocatedAt,
-      elapsedMs: allocationElapsedMs,
-      operations,
-      totalBytes,
-      targetBytes,
-      bytesPerRead: totalBytes / operations,
-      targetBytesPerRead: targetBytes / operations,
-      measuredOperationsPerMinute: (operations * 60_000) / allocationElapsedMs,
-      estimatedBytesPerMinute: (totalBytes * 60_000) / allocationElapsedMs,
-      bytesPer450Reads: (totalBytes * 450) / operations,
-      counts: { ...counts },
-    };
     global.gc();
     await waitStart(values["cpu-start-at"], "--cpu-start-at");
     for (const kind of ["list", "broadcast"] as const) {
@@ -586,6 +673,7 @@ try {
     fixture: fixture.summary,
     mentions,
     clients,
+    sidebarLimit,
     modelRequests,
     hooks,
     singleListCounts,

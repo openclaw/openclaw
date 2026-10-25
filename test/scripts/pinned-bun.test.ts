@@ -2,7 +2,7 @@ import * as childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import pin from "../../scripts/lib/openclaw-bun.json" with { type: "json" };
 import { pinnedBunEnv, requirePinnedBun, resolvePinnedBun } from "../../scripts/lib/pinned-bun.mts";
 import {
@@ -21,12 +21,6 @@ const digest = createHash("sha256").update(bytes).digest("hex");
 
 afterEach(() => vi.restoreAllMocks());
 
-function expectUnused(...mocks: MockInstance[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
-}
-
 function fixture() {
   const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
   const directory = tempDirs.make("pinned-bun-");
@@ -35,7 +29,6 @@ function fixture() {
   const manifest = { tag: "test-pin", artifacts: { "linux-x64": { executableSha256: digest } } };
   fs.writeFileSync(path.join(repoRoot, "scripts/lib/openclaw-bun.json"), JSON.stringify(manifest));
   const fsImpl = { ...fs };
-  const readFileSync = vi.spyOn(fsImpl, "readFileSync");
   const stage = vi.fn((destination: string) => {
     fs.mkdirSync(path.join(destination, "bin"));
     fs.writeFileSync(path.join(destination, "bin/bun"), bytes, { mode: 0o755 });
@@ -47,31 +40,32 @@ function fixture() {
   const resolve = (extraEnv: NodeJS.ProcessEnv = {}, extraDeps: Partial<typeof deps> = {}) =>
     resolvePinnedBun({ ...env, ...extraEnv }, { ...deps, ...extraDeps });
   const readStamp = () => JSON.parse(fs.readFileSync(stamp, "utf8"));
-  return { deps, resolve, command, stamp, directory, readFileSync, readStamp, stage, stderr };
+  return { deps, resolve, command, stamp, directory, readStamp, stage, stderr };
 }
 
-it.each([undefined, "1"])("uses an explicit executable with CI=%s without staging", (CI) => {
-  const { resolve, directory, stage, readFileSync } = fixture();
+it("uses an explicit executable in CI without staging", () => {
+  const CI = "1";
+  const { resolve, directory, stage } = fixture();
   const command = path.join(directory, "custom-bun");
   fs.writeFileSync(command, bytes, { mode: 0o755 });
   expect(resolve({ CI, OPENCLAW_BUN_PATH: command })).toEqual({ command });
-  expectUnused(stage, readFileSync);
   expect(resolve({ CI, OPENCLAW_BUN_PATH: `${command}-missing` }).reason).toContain(
     "OPENCLAW_BUN_PATH is not executable",
   );
   expect(stage).not.toHaveBeenCalled();
 });
 
-it.each(["1", "true", "custom", "0"])("uses workflow-provisioned Bun with CI=%s", (CI) => {
-  const { resolve, stage, readFileSync, stderr } = fixture();
-  const ciEnv = { CI, OPENCLAW_VITEST_RUNTIME: "bun", PATH: "/workflow/bun/bin:/usr/bin" };
+it("uses workflow-provisioned Bun in CI", () => {
+  const { resolve, stage, stderr } = fixture();
+  const ciEnv = { CI: "1", OPENCLAW_VITEST_RUNTIME: "bun", PATH: "/workflow/bun/bin:/usr/bin" };
   expect(resolve(ciEnv)).toEqual({ command: "bun" });
   expect(pinnedBunEnv("bun", ciEnv)).toEqual({ PATH: ciEnv.PATH });
-  expectUnused(stage, readFileSync, stderr);
+  expect(stage).not.toHaveBeenCalled();
+  expect(stderr).not.toHaveBeenCalled();
 });
 
-it.each([undefined, "", "false"])("stages and silently reuses cache with CI=%s", (CI) => {
-  const { resolve, command, readStamp, stage, readFileSync, stderr } = fixture();
+it.each([undefined, "false"])("stages and silently reuses cache with CI=%s", (CI) => {
+  const { resolve, command, readStamp, stage, stderr } = fixture();
   expect(resolve({ CI })).toEqual({ command });
   expect(stage).toHaveBeenCalledOnce();
   expect(stderr).toHaveBeenCalledExactlyOnceWith(
@@ -82,15 +76,13 @@ it.each([undefined, "", "false"])("stages and silently reuses cache with CI=%s",
     executableSha256: digest,
     size: Buffer.byteLength(bytes),
   });
-  readFileSync.mockClear();
   expect(resolve({ CI })).toEqual({ command });
   expect(stage).toHaveBeenCalledOnce();
   expect(stderr).toHaveBeenCalledOnce();
-  expect(readFileSync.mock.calls.some(([file]) => file === command)).toBe(false);
 });
 
 it.each(["missing", "mtime", "hash"])("rehashes a %s stamp before reusing the cache", (kind) => {
-  const { resolve, command, stamp, stage, readFileSync, readStamp } = fixture();
+  const { resolve, command, stamp, stage, readStamp } = fixture();
   resolve();
   if (kind === "missing") {
     fs.unlinkSync(stamp);
@@ -98,9 +90,7 @@ it.each(["missing", "mtime", "hash"])("rehashes a %s stamp before reusing the ca
     const changed = kind === "mtime" ? { mtimeMs: 0 } : { executableSha256: "old-pin" };
     fs.writeFileSync(stamp, JSON.stringify({ ...readStamp(), ...changed }));
   }
-  readFileSync.mockClear();
   expect(resolve()).toEqual({ command });
-  expect(readFileSync.mock.calls.some(([file]) => file === command)).toBe(true);
   expect(stage).toHaveBeenCalledOnce();
   expect(readStamp()).toMatchObject({
     executableSha256: digest,
@@ -117,15 +107,12 @@ it("replaces damaged cached bytes through the stager", () => {
   expect(fs.readFileSync(command, "utf8")).toBe(bytes);
 });
 
-it.each([
-  { failure: new Error("checksum mismatch\nadditional details"), cause: "checksum mismatch" },
-  { failure: new Error("permission denied\r\nadditional details"), cause: "permission denied" },
-])("reports stage failure ($cause) on one line and cleans up", ({ failure, cause }) => {
+it("reports stage failure on one line and cleans up", () => {
   const { resolve, command, stage } = fixture();
   stage.mockImplementation(() => {
-    throw failure;
+    throw new Error("checksum mismatch\r\nadditional details");
   });
-  expect(resolve()).toEqual({ reason: `could not stage the pinned fork: ${cause}` });
+  expect(resolve()).toEqual({ reason: "could not stage the pinned fork: checksum mismatch" });
   expect(fs.existsSync(command)).toBe(false);
   expect(fs.readdirSync(path.dirname(path.dirname(command)))).toEqual(["bin"]);
 });

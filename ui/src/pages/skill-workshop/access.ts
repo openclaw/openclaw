@@ -1,15 +1,7 @@
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 
-export type SkillWorkshopAccess = {
-  canArchive: boolean;
-  canRestore: boolean;
-  canSetMode: boolean;
-};
-
-export function resolveWorkshopAccess(
-  snapshot: ApplicationGatewaySnapshot | null | undefined,
-): SkillWorkshopAccess {
+export function resolveWorkshopAccess(snapshot: ApplicationGatewaySnapshot | null | undefined) {
   return {
     canArchive: canCallGatewayMethod(snapshot, "skills.workshop.archive", "operator.admin"),
     canRestore: canCallGatewayMethod(snapshot, "skills.workshop.restore", "operator.admin"),

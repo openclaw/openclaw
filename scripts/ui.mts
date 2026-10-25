@@ -479,7 +479,9 @@ async function buildAndPublishUi(
           "package.json",
           "pnpm-lock.yaml",
           "tsconfig.json",
-          "docs/assets/openclaw-hero-dark.png",
+          // Poster generation reads bundled fonts outside the UI source tree.
+          "src/gateway/assets/session-card/Lato-Regular.ttf",
+          "src/gateway/assets/session-card/InstrumentSerif-Regular.ttf",
           // Package metadata discovers new generations; all copied files (including
           // deferred chunks absent from Vite's module graph) invalidate reuse.
           ...(() => {

@@ -44,7 +44,7 @@ import {
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
-import { buildInboundLine } from "./message-line.js";
+import { formatInboundEnvelope as formatWhatsAppInboundEnvelope } from "./message-line.runtime.js";
 import {
   buildHistoryContextFromEntries,
   createChannelMessageReplyPipeline,
@@ -233,11 +233,28 @@ export async function processMessage(params: {
     groupAllowFrom: inboundPolicy.groupAllowFrom,
   });
 
-  let combinedBody = buildInboundLine({
-    msg: msgForAgent,
+  let replyContext: string | null = null;
+  if (visibleReplyTo?.body) {
+    const replySender =
+      visibleReplyTo.sender?.label ?? visibleReplyTo.sender?.e164 ?? "unknown sender";
+    const idPart = visibleReplyTo.id ? ` id:${visibleReplyTo.id}` : "";
+    replyContext = `[Replying to ${replySender}${idPart}]\n${visibleReplyTo.body}\n[/Replying]`;
+  }
+  const envelopeSender = getSenderIdentity(msgForAgent);
+  let combinedBody = formatWhatsAppInboundEnvelope({
+    channel: "WhatsApp",
+    from: conversationKind === "group" ? conversationId : conversationId.replace(/^whatsapp:/, ""),
+    timestamp: msgForAgent.event.timestamp,
+    body: `${msgForAgent.payload.body}${replyContext ? `\n\n${replyContext}` : ""}`,
+    chatType: conversationKind,
+    sender: {
+      name: envelopeSender.name ?? undefined,
+      e164: envelopeSender.e164 ?? undefined,
+      id: getPrimaryIdentityId(envelopeSender) ?? undefined,
+    },
     previousTimestamp,
     envelope: envelopeOptions,
-    visibleReplyTo,
+    fromMe: msgForAgent.platform.fromMe,
   });
   const visibleGroupHistory =
     conversationKind === "group"

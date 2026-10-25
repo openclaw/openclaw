@@ -4,8 +4,10 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import {
+  readHotSessionTranscriptSnapshot,
+  SessionTranscriptColdError,
+} from "./session-cold-storage-state.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import {
   TRANSCRIPT_PAYLOAD_SLICE_BYTES,

@@ -158,6 +158,9 @@ if (parentPort) {
       ),
   );
 } else {
+  // Stdout carries only the JSON result; raised console levels must not prefix it.
+  const { routeLogsToStderr } = await import("../logging/console.js");
+  routeLogsToStderr();
   const { formatUpdateStateInspectionError } =
     await import("./update-candidate-state.diagnostics.js");
   void snapshotCandidateState()

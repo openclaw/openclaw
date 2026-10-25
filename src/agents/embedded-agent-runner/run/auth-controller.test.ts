@@ -92,7 +92,7 @@ function keyProfile(key: string) {
   return { type: "api_key" as const, provider: "custom-openai", key };
 }
 
-function expectProtected(value: string | undefined, plaintext: string): void {
+function expectProtected(value: string | null | undefined, plaintext: string): void {
   expect(value).not.toBe(plaintext);
   expect(looksLikeSecretSentinel(value ?? "")).toBe(true);
   expect(resolveSecretSentinel(value ?? "")).toBe(plaintext);

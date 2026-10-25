@@ -18,9 +18,14 @@ import {
 import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
+  createClaudeMcpCliBackend,
+  testing as cliBackendsTesting,
+} from "../cli-backends.test-support.js";
+import {
+  createPersistedCompletionHandoff,
   createCliRunnerPrepareFixture,
+  createTestCliSessionBinding,
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
@@ -42,23 +47,7 @@ const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
   buildAnthropicCliBackend: () => CliBackendPlugin;
 }>({ pluginId: "anthropic", artifactBasename: "api.js" });
 
-const claudeBackend: CliBackendPlugin & { pluginId: string } = {
-  id: "claude-cli",
-  pluginId: "anthropic",
-  bundleMcp: true,
-  bundleMcpMode: "claude-config-file",
-  nativeToolMode: "selectable",
-  toolAvailabilityEnforcement: "execution-args",
-  resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
-  config: {
-    command: "claude",
-    args: ["--print"],
-    output: "jsonl",
-    jsonlDialect: "claude-stream-json",
-    input: "stdin",
-    sessionMode: "existing",
-  },
-};
+const claudeBackend = createClaudeMcpCliBackend();
 
 /** A completion run whose handoff names a child without persisted lineage. */
 function completionRun(sessionTarget: {
@@ -598,22 +587,7 @@ describe("restricted CLI tool preparation", () => {
       const context = await fixture.prepare({
         ...base,
         ...(completion
-          ? {
-              trustedInternalHandoff: {
-                kind: "subagent-completion" as const,
-                sourceSessionKey: childSessionKey,
-                sourceSessionId: "cache-prefix-child",
-                targetSessionKey: sessionTarget.sessionKey,
-                targetSessionId: sessionTarget.sessionId,
-                provider: "claude-cli",
-                model: "opus",
-              },
-              inputProvenance: {
-                kind: "inter_session" as const,
-                sourceTool: "subagent_announce",
-                sourceSessionKey: childSessionKey,
-              },
-            }
+          ? createPersistedCompletionHandoff(childSessionKey, "cache-prefix-child", sessionTarget)
           : {}),
       });
       try {
@@ -684,22 +658,7 @@ describe("restricted CLI tool preparation", () => {
       const context = await fixture.prepare({
         ...base,
         ...(completion
-          ? {
-              trustedInternalHandoff: {
-                kind: "subagent-completion" as const,
-                sourceSessionKey: childSessionKey,
-                sourceSessionId: "surface-tools-child",
-                targetSessionKey: sessionTarget.sessionKey,
-                targetSessionId: sessionTarget.sessionId,
-                provider: "claude-cli",
-                model: "opus",
-              },
-              inputProvenance: {
-                kind: "inter_session" as const,
-                sourceTool: "subagent_announce",
-                sourceSessionKey: childSessionKey,
-              },
-            }
+          ? createPersistedCompletionHandoff(childSessionKey, "surface-tools-child", sessionTarget)
           : {
               clientCaps: ["ui-commands", "inline-widgets"],
               taskSuggestionDeliveryMode: "gateway" as const,
@@ -707,17 +666,7 @@ describe("restricted CLI tool preparation", () => {
       });
       try {
         turns.push({
-          binding: {
-            sessionId: "native-surface-session",
-            authEpoch: context.authEpoch,
-            authEpochVersion: context.authEpochVersion,
-            extraSystemPromptHash: context.extraSystemPromptHash,
-            messageToolPolicyHash: context.messageToolPolicyHash,
-            promptToolNamesHash: context.promptToolNamesHash,
-            cwdHash: context.cwdHash,
-            mcpConfigHash: context.preparedBackend.mcpConfigHash,
-            mcpResumeHash: context.preparedBackend.mcpResumeHash,
-          },
+          binding: createTestCliSessionBinding(context, "native-surface-session"),
           systemPrompt: context.systemPrompt,
           names: [...(mintGrant.mock.lastCall?.[0]?.context.toolsAllow ?? [])].toSorted(),
         });
@@ -857,17 +806,7 @@ describe("restricted CLI tool preparation", () => {
       const context = await fixture.prepare({
         ...run,
         senderIsOwner,
-        cliSessionBinding: {
-          sessionId: "native-parent-session",
-          authEpoch: owner.authEpoch,
-          authEpochVersion: owner.authEpochVersion,
-          extraSystemPromptHash: owner.extraSystemPromptHash,
-          messageToolPolicyHash: owner.messageToolPolicyHash,
-          promptToolNamesHash: owner.promptToolNamesHash,
-          cwdHash: owner.cwdHash,
-          mcpConfigHash: owner.preparedBackend.mcpConfigHash,
-          mcpResumeHash: owner.preparedBackend.mcpResumeHash,
-        },
+        cliSessionBinding: createTestCliSessionBinding(owner, "native-parent-session"),
         trustedInternalHandoff,
         inputProvenance: {
           kind: "inter_session",
@@ -906,12 +845,12 @@ describe("restricted CLI tool preparation", () => {
           [
             "write",
             { path: deniedPath, content: "must not execute" },
-            "write is outside the authority this completion turn carries from its requester. Do not retry write.",
+            "write is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry write.",
           ],
           [
             "gateway",
             { action: "config.get" },
-            "gateway needs the owner's authority, and this turn was not started by the owner. Do not retry gateway.",
+            "gateway is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry gateway.",
           ],
           [
             "intent",

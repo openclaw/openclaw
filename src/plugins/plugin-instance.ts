@@ -711,7 +711,7 @@ export class PluginInstance {
         hostFailure = { error };
       }
     }
-    const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
+    const deadline = performance.now() + SHUTDOWN_TIMEOUT_MS;
     this.abortDisposal(cleanupWork);
     const moduleCleanups: Array<() => void | Promise<void>> = [];
     for (const [cleanup, kind] of Array.from(this.cleanups).toReversed()) {
@@ -720,9 +720,13 @@ export class PluginInstance {
         continue;
       }
       try {
-        await raceWithTimeout(runCleanup(cleanup), Math.max(0, deadline - Date.now()), () => {
-          throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
-        });
+        await raceWithTimeout(
+          runCleanup(cleanup),
+          Math.max(0, deadline - performance.now()),
+          () => {
+            throw new Error(`Plugin ${this.pluginId} cleanup did not settle`);
+          },
+        );
       } catch (error) {
         failures.push(error);
       }

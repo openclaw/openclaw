@@ -14,6 +14,7 @@ import {
 } from "node:perf_hooks";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { writeHeapSnapshot } from "node:v8";
 import {
   MAX_PROMETHEUS_FAMILY_SERIES,
   PROMETHEUS_FAMILY_RESERVES,
@@ -29,6 +30,8 @@ import { recordWorkerRequest } from "./service-worker.js";
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    "pool-churn": { type: "boolean", default: false },
+    "heap-snapshot": { type: "string" },
     iterations: { type: "string", default: "100000" },
     "render-only": { type: "boolean", default: false },
     http: { type: "boolean", default: false },
@@ -73,6 +76,7 @@ const withHttp = values.http || values["http-only"];
 const httpPort = values["http-port"]
   ? integerOption(values["http-port"], "--http-port", 40000, 65535)
   : undefined;
+assert(!values["heap-snapshot"] || !withHttp, "Heap snapshots are a separate retention-only pass");
 assert(!withHttp || httpPort, "--http-port is required with --http or --http-only");
 const startAt = values["start-at"] ? Number(values["start-at"]) : Date.now() + 30000;
 assert(Number.isSafeInteger(startAt), "--start-at must be an epoch millisecond integer");
@@ -283,9 +287,13 @@ function parseShape(raw: unknown): Shape {
   return { histograms, scalars };
 }
 
+// Dead traffic between new series exposes long-lived views pinning unrelated pool slabs.
+const churnPool = () => values["pool-churn"] && Buffer.from("x".repeat(8192));
+
 function populateShape(store: PrometheusMetricStore, shape: Shape) {
   for (const { name, labelSets, finiteBuckets } of shape.histograms) {
     for (let index = 0; index < labelSets; index++) {
+      churnPool();
       store.histogram(
         name,
         "Synthetic histogram",
@@ -297,6 +305,7 @@ function populateShape(store: PrometheusMetricStore, shape: Shape) {
   }
   for (const { name, labelSets, type } of shape.scalars) {
     for (let index = 0; index < labelSets; index++) {
+      churnPool();
       store[type](
         name,
         "Synthetic scalar",
@@ -378,6 +387,7 @@ function populateCapacity(store: PrometheusMetricStore) {
       if (series === capacity) {
         break;
       }
+      churnPool();
       const labels = { kind: `kind-${label % 8}`, worker_slot: String(label) };
       const buckets = rpcBuckets[name];
       if (buckets || familyIndex % 4 >= 2) {
@@ -630,8 +640,11 @@ try {
     retainedStore.render();
   }
   const warmedMemory = await retainedMemory();
+  if (values["heap-snapshot"]) {
+    writeHeapSnapshot(values["heap-snapshot"]);
+  }
   let consumedUnits = 0;
-  if (!values["http-only"]) {
+  if (!values["http-only"] && !values["heap-snapshot"]) {
     const durations = new Float64Array(renderSamples);
     await measure(
       "prometheus.full-capacity-render",
@@ -687,6 +700,7 @@ try {
         node: process.version,
         iterations,
         renderSamples,
+        poolChurn: values["pool-churn"],
         allocationRenders,
         updatesPerRender,
         http: withHttp,

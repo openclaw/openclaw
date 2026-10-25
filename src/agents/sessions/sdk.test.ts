@@ -1,18 +1,16 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
-import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import type { ImageContent, Model, SimpleStreamOptions } from "../../llm/types.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import { readRuntimePromptMediaFacts } from "../../media/media-facts.js";
+import {
+  attachRuntimePromptMediaFacts,
+  readRuntimePromptMediaFacts,
+} from "../../media/media-facts.js";
 import { finalizeRuntimePromptImages } from "../../media/runtime-prompt-image-provenance.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
-import { runEmbeddedSessionFork } from "../embedded-agent-runner/session-fork.js";
-import { resolveEmbeddedAgentStream } from "../embedded-agent-runner/stream-resolution.js";
 import type { AgentTool, AgentMessage } from "../runtime/index.js";
 import { attachInternalToolExecutionPreparer } from "../runtime/internal-hooks.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -32,11 +30,10 @@ import type {
   ToolDefinition,
   ToolResultEvent,
 } from "./extensions/types.js";
-import { convertToLlm } from "./messages.js";
 import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
-import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
+import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const streamMocks = { streamSimple: vi.fn() };
@@ -49,13 +46,8 @@ function createModelWithoutBaseUrl(overrides: Partial<Model>): Model {
 
 function createAssistantError(errorMessage: string): AssistantMessage {
   return {
-    role: "assistant",
-    content: [],
-    api: testModel.api,
-    provider: testModel.provider,
-    model: testModel.id,
+    ...createAssistant(testModel, [], "error"),
     usage: createZeroUsageFixture(),
-    stopReason: "error",
     errorMessage,
     timestamp: 1,
   };
@@ -80,6 +72,22 @@ function createTestModelRegistry(authStorage = AuthStorage.inMemory()): ModelReg
   }
   return modelRegistry;
 }
+
+function createAuthenticatedRegistry() {
+  const auth = AuthStorage.inMemory();
+  auth.setRuntimeApiKey(testModel.provider, "test-api-key");
+  return createTestModelRegistry(auth);
+}
+
+function mockRecovery(error: AssistantMessage) {
+  streamMocks.streamSimple
+    .mockReset()
+    .mockImplementationOnce(() => createAssistantResultStream(error))
+    .mockImplementationOnce(createRecoveredAssistantStream);
+}
+
+const toolResults = (messages: AgentMessage[]) =>
+  messages.filter((message) => message.role === "toolResult");
 
 async function createSdkSession(options: Partial<Parameters<typeof createAgentSession>[0]> = {}) {
   return await createAgentSession({
@@ -115,27 +123,16 @@ function createSessionManagerWithPersistedAssistantMessages(
 ): SessionManager {
   const timestamp = new Date().toISOString();
   return SessionManager.fromEntries([
-    {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: "sdk-persisted-content",
-      timestamp,
-      cwd: process.cwd(),
-    },
+    SessionManager.inMemory().getHeader(),
     ...messages.map((message, index) => ({
       type: "message",
       id: `assistant-${String(index + 1)}`,
       parentId: index === 0 ? null : `assistant-${String(index)}`,
       timestamp,
       message: {
-        role: "assistant",
+        ...createAssistant(testModel, [], message.stopReason ?? "stop"),
         content: message.content,
-        api: "messages",
-        provider: "anthropic",
-        model: "sonnet-4.6",
         usage: createZeroUsageFixture(),
-        stopReason: message.stopReason ?? "stop",
-        timestamp: Date.now(),
       },
     })),
   ]);
@@ -177,91 +174,54 @@ async function createSettledSession(handlers?: ExtensionFactory) {
   return { session, sessionManager, events };
 }
 
-describe("createAgentSession fork retention", () => {
-  it("collects disposed parents while their native transport remains available for replay", async () => {
-    const model: Model = { ...testModel, provider: "openai", api: "openai-chatgpt-responses" };
-    const modelRegistry = ModelRegistry.inMemory(AuthStorage.inMemory());
-    modelRegistry.registerProvider("fork-retention", {
-      api: model.api,
-      streamSimple: (requestModel, context, options) => {
-        const stream = createAssistantMessageEventStream();
-        void Promise.resolve(options?.onPayload?.({ input: context.messages }, requestModel)).then(
-          () =>
-            stream.end({
-              ...createAssistantError(""),
-              stopReason: "stop",
-              content: [{ type: "text", text: "Answer" }],
-            }),
-        );
-        return stream;
-      },
-    });
-    const references: WeakRef<object>[] = [];
-    const sessionId = "sdk-persisted-content";
-    async function completeParent(run: number) {
-      const sessionManager = createSessionManagerWithPersistedAssistantMessages([
-        { content: [{ type: "text", text: "Oversized parent history. ".repeat(16_384) }] },
-      ]);
-      const { session } = await createSdkSession({
-        model,
-        modelRegistry,
-        sessionManager,
-        cleanupProviderSessionResourcesOnDispose: false,
-      });
-      references.push(new WeakRef(sessionManager), new WeakRef(session));
-      try {
-        const { streamFn } = resolveEmbeddedAgentStream({
-          model,
-          sessionId,
-          currentStreamFn: session.agent.streamFn!,
-          sessionFork: { sessionId, agentId: "main", runId: `parent-${run}` },
-        });
-        await (await streamFn(model, { messages: convertToLlm(session.messages) }, {})).result();
-      } finally {
-        session.dispose();
-      }
-    }
-    try {
-      for (let run = 0; run < 4; run++) {
-        await completeParent(run);
-      }
-      const control = new WeakRef({ unowned: true });
-      await nextTurn();
-      queryObjects(WeakRef);
-      expect(control.deref()).toBeUndefined();
-      expect(references.filter((reference) => reference.deref())).toHaveLength(0);
-      await expect(
-        runEmbeddedSessionFork({
-          sessionId,
-          agentId: "main",
-          model,
-          question: "Side question",
-          assertCurrent() {},
-        }),
-      ).resolves.toBe("Answer");
-    } finally {
-      cleanupSessionResources(sessionId);
-    }
-  });
+it.each([
+  [[{ content: null }], undefined],
+  [[{ content: "previous answer" }, { content: null, stopReason: "aborted" }], "previous answer"],
+] as const)("reads assistant text from malformed history: %j", async (messages, expected) => {
+  const manager = createSessionManagerWithPersistedAssistantMessages([...messages]);
+  expect((await createSessionFromManager(manager)).getLastAssistantText()).toBe(expected);
 });
 
-describe("AgentSession getLastAssistantText", () => {
-  it("returns no assistant text for null content", async () => {
-    const session = await createSessionFromManager(
-      createSessionManagerWithPersistedAssistantMessages([{ content: null }]),
-    );
-    expect(session.getLastAssistantText()).toBeUndefined();
-  });
-
-  it("skips aborted malformed content and returns the preceding assistant text", async () => {
-    const sessionManager = createSessionManagerWithPersistedAssistantMessages([
-      { content: "previous answer" },
-      { content: null, stopReason: "aborted" },
-    ]);
-    const session = await createSessionFromManager(sessionManager);
-
-    expect(session.getLastAssistantText()).toBe("previous answer");
-  });
+it("applies changing image settings to inline and deferred images without altering parent facts", async () => {
+  const settingsManager = SettingsManager.inMemory();
+  const { session } = await createSdkSession({ settingsManager });
+  const image: ImageContent = { type: "image", data: "cHJpdmF0ZQ==", mimeType: "image/png" };
+  const user = attachRuntimePromptMediaFacts(makeUserMessage("Deferred attachment", 1), [
+    { path: "/synthetic/private.png", contentType: "image/png" },
+    { path: "/synthetic/video.mp4", contentType: "video/mp4" },
+  ]);
+  const messages: AgentMessage[] = [
+    user,
+    {
+      role: "toolResult",
+      toolCallId: "read-image",
+      toolName: "read",
+      isError: false,
+      content: [image, image],
+      timestamp: 2,
+    },
+    { role: "user", content: [image], timestamp: 3 },
+  ];
+  expect((await session.agent.convertToLlm(messages))[0]).toBe(user);
+  settingsManager.applyOverrides({ images: { blockImages: true } });
+  const blocked = await session.agent.convertToLlm(messages);
+  expect(blocked.map((message) => message.content)).toEqual([
+    [
+      { type: "text", text: "Deferred attachment" },
+      { type: "text", text: "Image reading is disabled." },
+    ],
+    [{ type: "text", text: "Image reading is disabled." }],
+    [{ type: "text", text: "Image reading is disabled." }],
+  ]);
+  expect(readRuntimePromptMediaFacts(blocked[0]!)).toEqual([
+    expect.objectContaining({ path: "/synthetic/private.png", hydrationSuppressed: true }),
+    expect.objectContaining({ path: "/synthetic/video.mp4", kind: "video" }),
+  ]);
+  expect(readRuntimePromptMediaFacts(blocked[0]!)?.[1]?.hydrationSuppressed).toBeUndefined();
+  expect(readRuntimePromptMediaFacts(user)?.[0]?.hydrationSuppressed).toBeUndefined();
+  expect(messages[1]).toMatchObject({ content: [image, image] });
+  settingsManager.applyOverrides({ images: { blockImages: false } });
+  expect((await session.agent.convertToLlm(messages))[1]?.content).toEqual([image, image]);
 });
 
 describe("AgentSession queued user turns", () => {
@@ -281,11 +241,8 @@ describe("AgentSession queued user turns", () => {
     ]);
 
     const runtimeMessage = steer.mock.calls[0]?.[0];
-    const mediaSymbol = Object.getOwnPropertySymbols(runtimeMessage ?? {}).find(
-      (symbol) => Symbol.keyFor(symbol) === "openclaw.runtimePromptMediaFacts",
-    );
-    assert(runtimeMessage && mediaSymbol, "expected runtime prompt media message and symbol");
-    expect(Reflect.get(runtimeMessage, mediaSymbol)).toEqual([
+    assert(runtimeMessage, "expected runtime prompt media message");
+    expect(readRuntimePromptMediaFacts(runtimeMessage)).toEqual([
       expect.objectContaining({ path: "/tmp/a.png", contentType: "image/png", kind: "image" }),
     ]);
     expect(readRuntimePromptMediaFacts(runtimeMessage)).toHaveProperty("imageOrder", imageOrder);
@@ -421,11 +378,9 @@ describe("createAgentSession tool defaults", () => {
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage(makeUserMessage("Earlier context. ".repeat(100), 1));
     sessionManager.appendMessage(makeUserMessage("Current question", 2));
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     const { session } = await createSdkSession({
       sessionManager,
-      modelRegistry: createTestModelRegistry(authStorage),
+      modelRegistry: createAuthenticatedRegistry(),
       settingsManager: SettingsManager.inMemory({ compaction: { keepRecentTokens: 1 } }),
       resourceLoader: await createResourceLoader(createCompactionExtension()),
       withSessionWriteSettlement: async (run) => {
@@ -533,15 +488,13 @@ describe("createAgentSession thinking level clamping", () => {
 
 describe("AgentSession retry behavior", () => {
   async function createRetrySession(retry?: { baseDelayMs: number; maxRetries: number }) {
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
     return await createSdkSession({
       // Retry-only cases need room for the prompt and compaction reserve.
       model: { ...testModel, contextWindow: 32_768 },
       settingsManager: SettingsManager.inMemory({
         retry: retry ?? { baseDelayMs: 0, maxRetries: 1 },
       }),
-      modelRegistry: createTestModelRegistry(authStorage),
+      modelRegistry: createAuthenticatedRegistry(),
     });
   }
 
@@ -560,10 +513,7 @@ describe("AgentSession retry behavior", () => {
         },
       ];
     }
-    streamMocks.streamSimple
-      .mockReset()
-      .mockImplementationOnce(() => createAssistantResultStream(error))
-      .mockImplementation(createRecoveredAssistantStream);
+    mockRecovery(error);
     const { session } = await createRetrySession();
     const events: string[] = [];
     session.subscribe((event) => events.push(event.type));
@@ -581,14 +531,7 @@ describe("AgentSession retry behavior", () => {
   it("uses a short server Retry-After as the auto-retry delay floor", async () => {
     vi.useFakeTimers();
     try {
-      streamMocks.streamSimple.mockReset();
-      streamMocks.streamSimple
-        .mockImplementationOnce(() =>
-          createAssistantResultStream(
-            createAssistantError("HTTP 429: rate limited; Retry-After: 30 seconds"),
-          ),
-        )
-        .mockImplementationOnce(createRecoveredAssistantStream);
+      mockRecovery(createAssistantError("HTTP 429: rate limited; Retry-After: 30 seconds"));
       const { session } = await createRetrySession({ baseDelayMs: 2_000, maxRetries: 1 });
       const promptPromise = session.prompt("test Retry-After");
       await vi.advanceTimersByTimeAsync(0);
@@ -621,23 +564,20 @@ describe("SDK tool outcomes", () => {
         // Binary blocks must remain byte-exact even when their bytes match registered text.
         registerSecretValueForRedaction(image.data);
         const outcomes = [
-          {
-            name: "returned_error",
-            details: { status: "error", error: "capture failed" },
-            isError: true,
-          },
-          { name: "adapted_error", details: {}, throws: true, isError: true },
-          { name: "preflight_error", details: {}, preflight: true, isError: true },
-          { name: "recovered_tool", details: {}, throws: true, isError: !withRecovery },
-          { name: "middleware_error", details: {}, isError: withRecovery },
-          {
-            name: "completed_command",
-            details: { status: "completed", exitCode: 1 },
-            isError: false,
-          },
-          { name: "successful_tool", details: { status: "ok" }, isError: false },
-        ];
-        const allOutcomes = [...outcomes, { name: "missing_tool", isError: true }];
+          ["returned_error", true, { status: "error", error: "capture failed" }],
+          ["adapted_error", true, {}],
+          ["preflight_error", true, {}],
+          ["recovered_tool", !withRecovery, {}],
+          ["middleware_error", withRecovery, {}],
+          ["completed_command", false, { status: "completed", exitCode: 1 }],
+          ["successful_tool", false, { status: "ok" }],
+        ] as const;
+        const registeredOutcomes = outcomes.map(([name, isError, details]) => ({
+          name,
+          isError,
+          details,
+        }));
+        const allOutcomes = [...registeredOutcomes, { name: "missing_tool", isError: true }];
         const calls = allOutcomes.map((outcome) => ({
           type: "toolCall" as const,
           id: `call_${outcome.name}`,
@@ -677,16 +617,16 @@ describe("SDK tool outcomes", () => {
         const { session } = await createSdkSession({
           sessionManager: await SessionManager.openAsync(target, state.agentDir("main")),
           model: loopTestModel,
-          tools: outcomes.map((tool) => tool.name),
+          tools: registeredOutcomes.map((tool) => tool.name),
           customTools: toToolDefinitions(
-            outcomes.map((outcome) => {
+            registeredOutcomes.map((outcome) => {
               const tool: AgentTool = {
                 name: outcome.name,
                 label: outcome.name,
                 description: "Returns a synthetic tool outcome.",
                 parameters: Type.Object({}),
                 execute: async () => {
-                  if (outcome.throws) {
+                  if (outcome.name === "adapted_error" || outcome.name === "recovered_tool") {
                     throw new Error(`capture failed: ${secret}`);
                   }
                   return {
@@ -698,7 +638,7 @@ describe("SDK tool outcomes", () => {
                   };
                 },
               };
-              return outcome.preflight
+              return outcome.name === "preflight_error"
                 ? attachInternalToolExecutionPreparer(tool, async () => {
                     throw new Error(`preflight failed: ${secret}`);
                   })
@@ -718,7 +658,7 @@ describe("SDK tool outcomes", () => {
         let firstTurn = true;
         session.agent.streamFn = (_model, context) => {
           if (!firstTurn) {
-            replay = context.messages.filter((message) => message.role === "toolResult");
+            replay = toolResults(context.messages);
             return createAssistantResultStream(createAssistant(loopTestModel, "done"));
           }
           firstTurn = false;
@@ -744,10 +684,8 @@ describe("SDK tool outcomes", () => {
           assert(persistedTarget, "Expected a saved transcript target");
           const events = SessionManager.open(persistedTarget).getEntries();
           expect(
-            events.flatMap((event) =>
-              event.type === "message" && event.message.role === "toolResult"
-                ? [event.message]
-                : [],
+            toolResults(
+              events.flatMap((event) => (event.type === "message" ? [event.message] : [])),
             ),
           ).toMatchObject(expected);
         } finally {

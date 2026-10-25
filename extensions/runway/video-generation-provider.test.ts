@@ -189,7 +189,7 @@ it("keeps the resolved proxy and private-network route while polling", async () 
   };
   resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => ({
     baseUrl: params.defaultBaseUrl,
-    headers: new Headers(params.defaultHeaders),
+    headers: new Headers(omitNullRequestHeaders(params.defaultHeaders)),
     allowPrivateNetwork: true,
     dispatcherPolicy,
   }));
@@ -251,3 +251,4 @@ testVideoGenerationDeadlines({
   pendingStatus: "RUNNING",
   loadPlugin: async () => (await import("./index.js")).default,
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

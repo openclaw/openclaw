@@ -18,6 +18,7 @@ import {
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
   refreshSessionWorkspaceState,
+  selectSessionWorkspacePreview,
   sessionWorkspaceForHost,
 } from "./chat-session-workspace-state.ts";
 import type {
@@ -198,6 +199,11 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   workspace.browserPath = separator > 0 ? normalizedPath.slice(0, separator) : "";
   workspace.browserSearch = "";
   workspace.filter = "all";
+  workspace.tree!.treeVisible = true;
+  workspace.tree!.searchOpen = false;
+  // Selecting Files must restore the explicit reveal, not the previous catalog filter.
+  workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
+  selectSessionWorkspacePreview(state, null);
   workspace.activeId = `file:${path}`;
   loadSessionWorkspace(state, workspace, true);
   sessionWorkspaceForHost(state).publish();

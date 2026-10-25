@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./restart-sentinel.js";
 import type { UpdateRunResult } from "./update-run-result.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
@@ -93,7 +94,10 @@ export function buildUpdateRestartSentinelPayload(params: {
     ...(meta.threadId ? { threadId: meta.threadId } : {}),
     message: meta.note ?? null,
     ...(continuation ? { continuation } : {}),
-    doctorHint: formatDoctorNonInteractiveHint(),
+    doctorHint:
+      result.status === "error"
+        ? `If repair requires stopping the Gateway, run \`${formatCliCommand("openclaw update repair")}\` from a terminal outside the Gateway process tree. Do not run this repair through the Gateway's exec tool.`
+        : formatDoctorNonInteractiveHint(),
     stats: {
       ...(meta.runId || result.runId ? { runId: meta.runId ?? result.runId } : {}),
       mode: result.mode,
