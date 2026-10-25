@@ -126,12 +126,6 @@ function buildConfig(workspace: string, modelUrl: string): OpenClawConfig {
       ...config.agents,
       ownership: "explicit",
       entries: { ops: {}, research: {} },
-      defaults: {
-        workspace,
-        skipBootstrap: true,
-        model: { primary: "synthetic/announce-owner" },
-        subagents: { allowAgents: ["*"] },
-      },
     },
     session: { scope: "global" },
     gateway: { controlUi: { enabled: false } },
@@ -183,9 +177,7 @@ it("delivers an idle requester's child completion to that requester while a peer
   const wait = (runId: string) =>
     expect(
       gateway.client.request("agent.wait", { runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({
-      status: "ok",
-    });
+    ).resolves.toMatchObject({ status: "ok" });
   try {
     await gateway.server.startupSettled;
     await gateway.client.request("sessions.subscribe", {});

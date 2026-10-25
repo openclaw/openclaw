@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-support.js";
+import { issueOperatorToken } from "./device-authz.test-helpers.js";
 import {
   BACKEND_GATEWAY_CLIENT,
   connectReq,
@@ -20,8 +20,6 @@ import {
 } from "./server.auth.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-
-const makeIdentityPath = useAuthIdentityFixture();
 
 const CLI_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.CLI,
@@ -120,42 +118,22 @@ describe("gateway auth compatibility baseline", () => {
     );
 
     test("keeps local backend device-token reconnects out of pairing", async () => {
-      const identityPath = makeIdentityPath("backend-device");
-      const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
-        await import("../infra/device-identity.js");
-      const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
-      const { rotateDeviceToken } = await import("../infra/device-pairing-tokens.js");
-      const { requestDevicePairing } = await import("../infra/device-pairing.js");
-
-      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-      const pending = await requestDevicePairing({
-        deviceId: identity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      const { identityPath, token: deviceToken } = await issueOperatorToken({
+        name: "backend-device",
         clientId: BACKEND_GATEWAY_CLIENT.id,
         clientMode: BACKEND_GATEWAY_CLIENT.mode,
-        role: "operator",
-        scopes: ["operator.admin"],
+        approvedScopes: ["operator.admin"],
+        tokenScopes: ["operator.admin"],
       });
-      await approveDevicePairing(pending.request.requestId, {
-        callerScopes: ["operator.admin"],
-      });
-
-      const rotated = await rotateDeviceToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        scopes: ["operator.admin"],
-      });
-      expect(rotated.ok).toBe(true);
-      const rotatedToken = rotated.ok ? rotated.entry.token : "";
-      expect(rotatedToken).toBeTypeOf("string");
-      expect(rotatedToken.length).toBeGreaterThan(0);
+      expect(deviceToken).toBeTypeOf("string");
+      expect(deviceToken.length).toBeGreaterThan(0);
 
       await withSocket(gateway.port, undefined, async (ws) => {
         const res = await connectReq(ws, {
           skipDefaultAuth: true,
           client: { ...BACKEND_GATEWAY_CLIENT },
           deviceIdentityPath: identityPath,
-          deviceToken: rotatedToken,
+          deviceToken,
           scopes: ["operator.admin"],
         });
         expect(res).toMatchObject({

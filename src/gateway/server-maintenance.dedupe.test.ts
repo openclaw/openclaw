@@ -35,12 +35,6 @@ function createActiveRun(kind: "chat-send" | "agent" = "agent"): RpcSourceRef {
   return ref;
 }
 
-function createMaintenanceTimerDeps() {
-  return {
-    ...createGatewayMaintenanceStateForTest(),
-  };
-}
-
 function expiredDedupe(runId: string, status = "accepted") {
   return { ts: Date.now() - DEDUPE_TTL_MS - 1, ok: true, payload: { runId, status } };
 }
@@ -48,7 +42,7 @@ function expiredDedupe(runId: string, status = "accepted") {
 function createTimedMaintenanceScenario(resolveGatewayContext?: GatewayContextResolver) {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
-  const deps = createMaintenanceTimerDeps();
+  const deps = createGatewayMaintenanceStateForTest();
   let timers: ReturnType<typeof startGatewayMaintenanceTimers> | undefined;
   return {
     deps,
@@ -87,7 +81,7 @@ describe("gateway dedupe maintenance", () => {
     using now = vi.spyOn(Date, "now");
     now.mockImplementation(() => clock.clock.now());
     const scheduler = createTestGatewayScheduler(clock.clock);
-    const deps = { ...createMaintenanceTimerDeps(), scheduler, isNixMode: true };
+    const deps = { ...createGatewayMaintenanceStateForTest(), scheduler, isNixMode: true };
     const controller = new AbortController();
     const client: GatewayClient = {
       connId: "unused-artifact",
