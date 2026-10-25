@@ -10,6 +10,34 @@ import {
   withClawRouterAudioFixture as fixture,
 } from "./audio-transcription.test-support.js";
 
+type Fixture = Parameters<Parameters<typeof fixture>[0]>[0];
+async function rejectsUpload(message: RegExp, respond: Parameters<typeof fixture>[1]) {
+  await fixture(async ({ cfg, filePath, requests }) => {
+    await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(message);
+    expect(requests).toHaveLength(1);
+  }, respond);
+}
+
+function enableFallback(cfg: Fixture["cfg"]) {
+  delete cfg.tools!.media!.models;
+  cfg.plugins!.allow!.push("openai");
+  cfg.models!.providers!.openai = {
+    baseUrl: cfg.models!.providers!.clawrouter!.baseUrl + "/fallback",
+    apiKey: "fixture-fallback",
+    request: { allowPrivateNetwork: true },
+    models: [],
+  };
+}
+
+function holdTranscript(
+  res: Parameters<NonNullable<Parameters<typeof fixture>[1]>>[0],
+  close: () => void,
+) {
+  res.setHeader("content-type", "application/json");
+  res.write('{"text":"');
+  res.once("close", close);
+}
+
 describe("ClawRouter registered file transcription", () => {
   it("uses the native default, scoped router auth and byte-exact multipart through the media runner", async () => {
     await fixture(async ({ cfg, filePath, requests, audio }) => {
@@ -43,10 +71,7 @@ describe("ClawRouter registered file transcription", () => {
     });
   });
   it("keeps pricing_required readable and never retries an uploaded request", async () => {
-    await fixture(async ({ cfg, filePath, requests }) => {
-      await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/pricing_required/);
-      expect(requests).toHaveLength(1);
-    }, respondPricingRequired);
+    await rejectsUpload(/pricing_required/, respondPricingRequired);
   });
   it("does not borrow an upstream key or substitute a model", async () => {
     await fixture(async ({ cfg, filePath, requests }) => {
@@ -88,24 +113,13 @@ describe("ClawRouter registered file transcription", () => {
   it.each(["not-json", JSON.stringify({ text: 42 })])(
     "rejects malformed provider payload %s without replay",
     async (body) => {
-      await fixture(
-        async ({ cfg, filePath, requests }) => {
-          await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/JSON|text/);
-          expect(requests).toHaveLength(1);
-        },
-        (res) => res.end(body),
-      );
+      await rejectsUpload(/JSON|text/, (res) => res.end(body));
     },
   );
   it("does not leak a rejected credential in a provider error", async () => {
     await fixture(
       async ({ cfg, filePath, requests }) => {
-        let error: unknown;
-        try {
-          await transcribeAudioFile({ cfg, filePath });
-        } catch (caught) {
-          error = caught;
-        }
+        const error = await transcribeAudioFile({ cfg, filePath }).catch(String);
         expect(String(error)).toMatch(/401.*invalid_api_key/);
         expect(String(error)).not.toContain("fixture-router");
         expect(requests).toHaveLength(1);
@@ -165,9 +179,7 @@ describe("ClawRouter registered file transcription", () => {
         expect(requests).toHaveLength(1);
       },
       (res) => {
-        res.setHeader("content-type", "application/json");
-        res.write('{"text":"');
-        res.once("close", () => closed.resolve());
+        holdTranscript(res, () => closed.resolve());
         started.resolve();
       },
     );
@@ -224,31 +236,17 @@ describe("ClawRouter registered file transcription", () => {
     });
   });
   it("does not replay a multipart upload through a redirect", async () => {
-    await fixture(
-      async ({ cfg, filePath, requests }) => {
-        await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(/fetch|redirect/i);
-        expect(requests).toHaveLength(1);
-      },
-      (res) => {
-        res.statusCode = 307;
-        res.setHeader("location", "/redirected");
-        res.end();
-      },
-    );
+    await rejectsUpload(/fetch|redirect/i, (res) => {
+      res.statusCode = 307;
+      res.setHeader("location", "/redirected");
+      res.end();
+    });
   });
   it("bounds a successful JSON body before accepting transcript text", async () => {
-    await fixture(
-      async ({ cfg, filePath, requests }) => {
-        await expect(transcribeAudioFile({ cfg, filePath })).rejects.toThrow(
-          /JSON response exceeds 16777216 bytes/,
-        );
-        expect(requests).toHaveLength(1);
-      },
-      (res) => {
-        res.setHeader("content-type", "application/json");
-        res.end(JSON.stringify({ text: "x".repeat(17 * 1024 * 1024) }));
-      },
-    );
+    await rejectsUpload(/JSON response exceeds 16777216 bytes/, (res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ text: "x".repeat(17 * 1024 * 1024) }));
+    });
   });
   it("honors the configured deadline through response EOF and releases the socket", async () => {
     const closed = createDeferred();
@@ -259,11 +257,7 @@ describe("ClawRouter registered file transcription", () => {
         await closed.promise;
         expect(requests).toHaveLength(1);
       },
-      (res) => {
-        res.setHeader("content-type", "application/json");
-        res.write('{"text":"');
-        res.once("close", () => closed.resolve());
-      },
+      (res) => holdTranscript(res, () => closed.resolve()),
     );
   });
 });
@@ -280,14 +274,7 @@ describe("ClawRouter automatic transcription", () => {
     "continues before upload after $name without disclosing to ClawRouter",
     async ({ name, fileName, reason }) => {
       await fixture(async ({ cfg, filePath, requests, home }) => {
-        delete cfg.tools!.media!.models;
-        cfg.plugins!.allow!.push("openai");
-        cfg.models!.providers!.openai = {
-          baseUrl: cfg.models!.providers!.clawrouter!.baseUrl + "/fallback",
-          apiKey: "fixture-fallback",
-          request: { allowPrivateNetwork: true },
-          models: [],
-        };
+        enableFallback(cfg);
         let uploadPath = filePath;
         if (name === "missing key") {
           delete cfg.models!.providers!.clawrouter!.apiKey;
@@ -330,14 +317,7 @@ describe("ClawRouter automatic transcription", () => {
 
   it("stops automatic selection after a pricing_required HTTP upload without contacting another provider", async () => {
     await fixture(async ({ cfg, filePath, requests }) => {
-      delete cfg.tools!.media!.models;
-      cfg.plugins!.allow!.push("openai");
-      cfg.models!.providers!.openai = {
-        baseUrl: cfg.models!.providers!.clawrouter!.baseUrl + "/fallback",
-        apiKey: "fixture-fallback",
-        request: { allowPrivateNetwork: true },
-        models: [],
-      };
+      enableFallback(cfg);
       await expect(
         transcribeAudioFile({
           cfg,

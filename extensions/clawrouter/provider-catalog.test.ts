@@ -84,9 +84,9 @@ const CATALOG = {
   ],
 };
 
-function buildFetchGuard() {
+function buildFetchGuard(providers?: unknown[]) {
   return vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
-    response: Response.json(CATALOG),
+    response: Response.json(providers ? { providers } : CATALOG),
     finalUrl: "https://clawrouter.example/v1/catalog",
     release: async () => undefined,
   }));
@@ -167,16 +167,10 @@ describe("ClawRouter provider catalog", () => {
       "gpt-4.1-nano",
       "gpt-6-unknown",
     ];
-    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
-      response: Response.json({
-        providers: [
-          ...upstreamIds.map((id) => catalogProvider("openai", "OpenAI", id, ["llm.responses"])),
-          catalogProvider("deepseek", "DeepSeek", "gpt-6.1-sol", ["llm.chat"]),
-        ],
-      }),
-      finalUrl: "https://clawrouter.example/v1/catalog",
-      release: async () => undefined,
-    }));
+    buildFetchGuard([
+      ...upstreamIds.map((id) => catalogProvider("openai", "OpenAI", id, ["llm.responses"])),
+      catalogProvider("deepseek", "DeepSeek", "gpt-6.1-sol", ["llm.chat"]),
+    ]);
     const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
     expect(Object.fromEntries(provider.models.map((model) => [model.id, model.input]))).toEqual({
       "openai/gpt-6.1-sol": ["text", "image"],
@@ -202,15 +196,11 @@ describe("ClawRouter provider catalog", () => {
       { id: "object-modality", upstream: "gpt-6.1-sol", input: ["image", {}] },
       { id: "null-modality", upstream: "gpt-6.1-sol", input: null },
     ];
-    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
-      response: Response.json({
-        providers: rows.map(({ upstream, ...model }) =>
-          catalogProvider("openai", "OpenAI", upstream, ["llm.responses"], [], model),
-        ),
-      }),
-      finalUrl: "https://clawrouter.example/v1/catalog",
-      release: async () => undefined,
-    }));
+    buildFetchGuard(
+      rows.map(({ upstream, ...model }) =>
+        catalogProvider("openai", "OpenAI", upstream, ["llm.responses"], [], model),
+      ),
+    );
     const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
     expect(Object.fromEntries(provider.models.map((model) => [model.id, model.input]))).toEqual({
       "declared-vision": ["text", "image"],
@@ -255,50 +245,44 @@ describe("ClawRouter provider catalog", () => {
   });
 
   it("validates catalog prices and limits while retaining the first supported duplicate", async () => {
-    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
-      response: Response.json({
-        providers: [
+    buildFetchGuard([
+      null,
+      {
+        ...catalogProvider("invalid", "Invalid", "model", ["llm.chat"]),
+        nativeBaseUrl: "/wrong",
+      },
+      {
+        ...catalogProvider("openai", "OpenAI", "model", ["llm.responses"]),
+        models: [
           null,
+          { id: "missing-upstream", capabilities: ["llm.responses"] },
+          { id: "duplicate", upstream: "model", capabilities: ["audio.speech"] },
           {
-            ...catalogProvider("invalid", "Invalid", "model", ["llm.chat"]),
-            nativeBaseUrl: "/wrong",
+            id: "duplicate",
+            upstream: "model",
+            displayName: "First",
+            capabilities: ["llm.responses"],
+            pricing: {
+              inputMicrosPerMillion: -1,
+              outputMicrosPerMillion: "3000000",
+              cachedInputMicrosPerMillion: 0,
+              cacheWrite5mInputMicrosPerMillion: -1,
+              cacheWrite1hInputMicrosPerMillion: 2_000_000,
+              maxInputTokens: 1.5,
+              defaultMaxOutputTokens: 0,
+              serviceTiers: [{ id: " priority " }, null, { id: "priority" }, { id: "default" }],
+            },
           },
           {
-            ...catalogProvider("openai", "OpenAI", "model", ["llm.responses"]),
-            models: [
-              null,
-              { id: "missing-upstream", capabilities: ["llm.responses"] },
-              { id: "duplicate", upstream: "model", capabilities: ["audio.speech"] },
-              {
-                id: "duplicate",
-                upstream: "model",
-                displayName: "First",
-                capabilities: ["llm.responses"],
-                pricing: {
-                  inputMicrosPerMillion: -1,
-                  outputMicrosPerMillion: "3000000",
-                  cachedInputMicrosPerMillion: 0,
-                  cacheWrite5mInputMicrosPerMillion: -1,
-                  cacheWrite1hInputMicrosPerMillion: 2_000_000,
-                  maxInputTokens: 1.5,
-                  defaultMaxOutputTokens: 0,
-                  serviceTiers: [{ id: " priority " }, null, { id: "priority" }, { id: "default" }],
-                },
-              },
-              {
-                id: "duplicate",
-                upstream: "model",
-                displayName: "Later",
-                capabilities: ["llm.responses"],
-              },
-              { id: "defaults", upstream: "model", capabilities: ["llm.chat"], pricing: null },
-            ],
+            id: "duplicate",
+            upstream: "model",
+            displayName: "Later",
+            capabilities: ["llm.responses"],
           },
+          { id: "defaults", upstream: "model", capabilities: ["llm.chat"], pricing: null },
         ],
-      }),
-      finalUrl: "https://clawrouter.example/v1/catalog",
-      release: async () => undefined,
-    }));
+      },
+    ]);
 
     const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
 
