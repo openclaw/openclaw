@@ -46,12 +46,6 @@ const request = {
 
 const makeToolResult = (text: string) => makeTextToolResult("call-1", "read", text, false, 1);
 
-function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
-  const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
-  return sessionManager;
-}
-
 function preflight(
   overrides: Partial<Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]>,
 ) {
@@ -161,9 +155,11 @@ describe("attempt prompt preflight", () => {
           : undefined,
     });
     if (discarded || fitting) {
-      expect(result.skipPromptSubmission).toBe(false);
-      expect(result.promptError).toBeNull();
-      expect(result.preflightRecovery).toBeUndefined();
+      expect(result).toMatchObject({
+        skipPromptSubmission: false,
+        promptError: null,
+        preflightRecovery: undefined,
+      });
       if (fitting) {
         expect(result.contextBudgetStatus?.estimatedPromptTokens).toBeGreaterThan(20_000);
       }
@@ -199,9 +195,10 @@ describe("attempt prompt preflight", () => {
   ] as const)(
     "handles mid-turn %s",
     async (_name, route, text, contextTokenBudget, truncatedCount) => {
-      const sessionManager = text
-        ? createSessionManagerWithMessage(makeToolResult(text))
-        : SessionManager.inMemory();
+      const sessionManager = SessionManager.inMemory();
+      if (text) {
+        sessionManager.appendMessage(makeToolResult(text));
+      }
       const messagesBefore = sessionManager.buildSessionContext().messages;
       const replaceMessages = vi.fn();
       const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
