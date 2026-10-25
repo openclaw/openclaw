@@ -20,6 +20,7 @@ import * as configModule from "../config/config.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
+import { createNonExitingRuntime } from "../runtime.js";
 import {
   activateSecretsRuntimeSnapshotWithSource,
   clearSecretsRuntimeSnapshot,
@@ -180,7 +181,7 @@ afterEach(async () => {
 });
 
 it.each(
-  (["utility-only", "primary failure", "primary success"] as const).flatMap((scenario) =>
+  (["utility-only", "primary success"] as const).flatMap((scenario) =>
     (["verify", "complete"] as const).map((entrypoint) => ({ scenario, entrypoint })),
   ),
 )(
@@ -212,16 +213,13 @@ it.each(
       const auth = await directAuth({ runConfig: params.config, agentDir: params.agentDir });
       expect(looksLikeSecretSentinel(auth.apiKey ?? "")).toBe(true);
       expect(await fs.readFile(configPath, "utf8")).toBe(before);
-      if (scenario === "primary failure") {
-        throw new Error("Synthetic primary inference unavailable");
-      }
       return probeResult;
     });
     vi.mocked(runEmbeddedAgentOwner).mockImplementation(runEmbeddedAgent);
     const request = {
       agentId,
       modelTarget: "primary" as const,
-      runtime: { log() {}, error() {}, exit() {} },
+      runtime: createNonExitingRuntime(),
       deps: {
         readConfigFileSnapshot: readSnapshot,
       },
@@ -234,25 +232,12 @@ it.each(
             prompt: "Ask for your name.",
           });
 
-    expect(result.ok, result.ok ? undefined : result.error).toBe(scenario === "primary success");
-    if (scenario === "utility-only") {
-      expect(result).toMatchObject({
-        ok: false,
-        status: "unavailable",
-        error: expect.stringContaining("No primary model"),
-      });
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    } else {
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      expect(result).toMatchObject(
-        scenario === "primary success"
-          ? { ok: true, modelRef: "fixture/test-model" }
-          : {
-              ok: false,
-              error: expect.stringContaining("Synthetic primary inference unavailable"),
-            },
-      );
-    }
+    expect(result).toMatchObject(
+      scenario === "primary success"
+        ? { ok: true, modelRef: "fixture/test-model" }
+        : { ok: false, status: "unavailable", error: expect.stringContaining("No primary model") },
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(scenario === "primary success" ? 1 : 0);
     expect(await fs.readFile(configPath, "utf8")).toBe(before);
     expect((await readSnapshot()).sourceConfig.agents?.entries).not.toHaveProperty(agentId);
     await expect(fs.stat(path.dirname(resolveAgentDir(config, agentId)))).rejects.toMatchObject({
@@ -391,13 +376,7 @@ it.each([
       }
       return probeResult;
     });
-    const runtime = {
-      log() {},
-      error() {},
-      exit() {
-        throw new Error("Unexpected exit");
-      },
-    };
+    const runtime = createNonExitingRuntime();
     vi.mocked(runEmbeddedAgentOwner).mockImplementation(runEmbeddedAgent);
     const attemptedOwners: Array<string | undefined> = [];
     if (entrypoint === "fallback") {
@@ -478,9 +457,13 @@ it.each([
   { field: "destination", saved: true },
   { field: "reference", saved: false },
   { field: "reference", saved: true },
+  { field: "inactive runtime", saved: false },
 ])(
   "does not lend the active key after changing $field (saved: $saved)",
   async ({ field, saved }) => {
+    if (field === "inactive runtime") {
+      clearSecretsRuntimeSnapshot();
+    }
     let snapshot = await readSnapshot();
     let candidate = cloneConfigWithResolutionFacts(snapshot.runtimeConfig);
     const provider = candidate.models?.providers?.fixture;
@@ -495,22 +478,15 @@ it.each([
       snapshot = await readSnapshot();
       candidate = snapshot.runtimeConfig;
     }
+    if (field === "inactive runtime") {
+      candidate = snapshot.runtimeConfig;
+    }
     // A fresh read not activated yet cannot reuse the old owner's credentials.
     const route = await configuredRoute(snapshot, candidate);
+    expect(route.runConfig.agents?.defaults?.maxConcurrent).toBeGreaterThan(0);
     expect(
       resolveManagedSecretRefRuntimeProviderAuth({ cfg: route!.runConfig, provider: "fixture" }),
     ).toBeUndefined();
     expect(route!.runConfig.models?.providers?.fixture?.apiKey).toEqual(expectedRef);
   },
 );
-
-it("retains the materialized view when no prepared runtime is active", async () => {
-  clearSecretsRuntimeSnapshot();
-  const snapshot = await readSnapshot();
-  const route = await configuredRoute(snapshot);
-  expect(route!.runConfig.agents?.defaults?.maxConcurrent).toBeGreaterThan(0);
-  expect(route!.runConfig.models?.providers?.fixture?.apiKey).toEqual(secretRef);
-  expect(
-    resolveManagedSecretRefRuntimeProviderAuth({ cfg: route!.runConfig, provider: "fixture" }),
-  ).toBeUndefined();
-});

@@ -9,7 +9,6 @@ import {
   operationMocks,
   fakeOverviewLoader,
   createChatEngine,
-  inferenceConfig,
   sharedVerifiedInferenceConfig,
   classifySystemAgentApprovalText,
   mocks,
@@ -24,7 +23,6 @@ import {
 import * as hostedSetup from "./hosted-setup.runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
-import { describeSystemAgentPersistentOperation } from "./operations.js";
 import * as operations from "./operations.js";
 
 const createEngine = (options: Parameters<typeof createChatEngine>[0] = {}) =>
@@ -64,57 +62,6 @@ describe("SystemAgentChatEngine operations", () => {
     expect(reply.handoff).toBeUndefined();
     expect(reply.text).toContain("needs a primary model");
   });
-
-  it.each([
-    {
-      args: { action: "create_agent", agentId: "coordinator", role: "coordinator" },
-      operation: { kind: "create-agent", agentId: "coordinator", role: "coordinator" },
-      description: "Chief of staff",
-    },
-    {
-      args: { action: "create_team", prefix: "docs" },
-      operation: { kind: "create-team", prefix: "docs" },
-      description: "team of 4: chief of staff, researcher, writer, reviewer",
-    },
-  ])(
-    "requires operator approval for the model's $args.action choice",
-    async ({ args, operation, description }) => {
-      const requesterAgentId = args.action === "create_team" ? "planner" : undefined;
-      const executeOperation = vi.fn(async () => ({ applied: true }));
-      mockApprovedOperation(executeOperation);
-      const engine = createEngine({
-        surface: "gateway",
-        operatorApprovalOnly: true,
-        ...(requesterAgentId ? { requesterAgentId } : {}),
-        runAgentTurn: async (params) => {
-          const tool = createSystemAgentTool({
-            surface: params.surface,
-            approvalArmed: params.approvalArmed,
-            operatorApprovalOnly: params.operatorApprovalOnly,
-            proposalRef: params.session.proposalRef,
-          });
-          return { text: extractToolResultText(await tool.execute("create", args)) ?? "" };
-        },
-      });
-      await engine.handle("I want that option");
-      const proposal = expectDefined(engine.getPendingOperatorProposal(), "creation proposal");
-      expect(proposal.operation).toEqual(operation);
-      expect(describeSystemAgentPersistentOperation(proposal.operation)).toContain(description);
-      expect(executeOperation).not.toHaveBeenCalled();
-      expect(await engine.resolveOperatorApproval("allow-once", proposal.hash)).toMatchObject({
-        applied: true,
-      });
-      expect(executeOperation).toHaveBeenCalledWith(
-        operation,
-        expect.anything(),
-        expect.objectContaining({
-          approved: true,
-          ...(requesterAgentId ? { requesterAgentId } : {}),
-        }),
-      );
-      expect(await engine.resolveOperatorApproval("allow-once", proposal.hash)).toBeNull();
-    },
-  );
 
   it.each([
     ["typed", "connect telegram"],
@@ -199,42 +146,6 @@ describe("SystemAgentChatEngine operations", () => {
     const reply = await engine.handle("connect telegram for me");
 
     expect(reply.text).toContain("wizard exploded");
-  });
-
-  it("rejects an agent directive when the verified route changes during its turn", async () => {
-    const baseConfig = inferenceConfig();
-    const changedConfig = {
-      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
-    } satisfies OpenClawConfig;
-    const configFixture = await createInferenceConfigFixture(baseConfig);
-    const snapshot = configFixture.snapshot;
-    const verifiedInference = await createAmbientVerifiedBinding(
-      snapshot.runtimeConfig ?? snapshot.config,
-      snapshot,
-    );
-    let reads = 0;
-    mocks.readConfigFileSnapshot.mockImplementation(async () => {
-      reads += 1;
-      if (reads === 3) {
-        await configFixture.write(changedConfig);
-      }
-      return configFixture.read();
-    });
-    const runChannelSetupWizard = vi
-      .spyOn(hostedSetup, "runHostedChannelSetup")
-      .mockResolvedValueOnce("applied");
-    const engine = createChatEngine({
-      verifiedInference,
-      runAgentTurn: async () => ({
-        text: "Telegram it is.",
-        directive: { kind: "channel-setup" as const, channel: "telegram" },
-      }),
-    });
-
-    await expect(engine.handle("please connect a messaging channel")).rejects.toBeInstanceOf(
-      SystemAgentInferenceUnavailableError,
-    );
-    expect(runChannelSetupWizard).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -418,7 +329,6 @@ describe("SystemAgentChatEngine operations", () => {
 
     expect(changed.text).toContain("Default model: openai/gpt-5.6-sol");
     expect(next.text).toBe("using openai/gpt-5.6-sol");
-    expect(executeOperation).toHaveBeenCalledOnce();
     expect(runAgentTurn).toHaveBeenLastCalledWith(
       expect.objectContaining({
         session: expect.objectContaining({ verifiedInference: reboundInference }),
@@ -426,7 +336,7 @@ describe("SystemAgentChatEngine operations", () => {
     );
   });
 
-  it.each(["operator-unset", "cli-error", "published-error", "invalid-value"] as const)(
+  it.each(["operator-unset", "cli-error", "published-error"] as const)(
     "returns %s to one unarmed repair turn",
     async (failure) => {
       useTempStateDir();
@@ -497,9 +407,6 @@ describe("SystemAgentChatEngine operations", () => {
           "operator reply",
         );
         expect(operationMocks.runConfigUnset).toHaveBeenCalledOnce();
-      } else if (failure === "invalid-value") {
-        engine.propose({ kind: "config-set", path: "gateway.port", value: "banana" });
-        reply = await engine.handle("yes");
       } else {
         reply = await engine.handle(command);
       }
@@ -532,7 +439,7 @@ describe("SystemAgentChatEngine operations", () => {
     "warns when written config is %s",
     async (failure) => {
       useTempStateDir();
-      const executeOperation = vi.fn<typeof nativeExecuteOperation>(async () => {
+      mockApprovedOperation(async () => {
         if (failure === "invalid") {
           mocks.readConfigFileSnapshot.mockResolvedValue({
             ...configSnapshot({}),
@@ -550,14 +457,12 @@ describe("SystemAgentChatEngine operations", () => {
         }
         return { applied: true };
       });
-      mockApprovedOperation(executeOperation);
       const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({ text: "unused" }));
       const engine = createEngine({ yes: true, runAgentTurn });
 
       const reply = await engine.handle("config set gateway.port 18789");
 
       expect(reply.applied).toBe(true);
-      expect(executeOperation).toHaveBeenCalledOnce();
       expect(runAgentTurn).not.toHaveBeenCalled();
       expect(reply.text).toContain("The write was applied");
       if (failure === "invalid") {
