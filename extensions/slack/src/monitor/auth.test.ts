@@ -30,16 +30,11 @@ beforeEach(() => {
   readChannelIngressStoreAllowFromForDmPolicyMock.mockReset().mockResolvedValue([]);
 });
 
-vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/channel-ingress-runtime")
-  >("openclaw/plugin-sdk/channel-ingress-runtime");
-  return {
-    ...actual,
-    readChannelIngressStoreAllowFromForDmPolicy: (...args: unknown[]) =>
-      readChannelIngressStoreAllowFromForDmPolicyMock(...args),
-  };
-});
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>()),
+  readChannelIngressStoreAllowFromForDmPolicy: (...args: unknown[]) =>
+    readChannelIngressStoreAllowFromForDmPolicyMock(...args),
+}));
 
 function makeAuthorizeCtx(
   params: {
@@ -93,6 +88,9 @@ const deniedChannel: AuthorizeExpected = {
   channelName: "general",
 };
 const channelUsers = { C1: { users: ["U_ALLOWED"] } };
+const owner = { allowFrom: ["U_OWNER"] };
+const ownerAndChannel = { ...owner, channelsConfig: channelUsers };
+const channelSender = (senderId: string): AuthorizeRequest => ({ senderId, channelId: "C1" });
 type MembersResponse = { members: string[]; response_metadata: { next_cursor?: string } };
 
 function interactiveRequest(
@@ -232,7 +230,6 @@ describe("authorizeSlackSystemEventSender", () => {
 
   it("reuses cached channel members", async () => {
     const { authorize, conversationsMembers } = makeChannelMemberAuth();
-
     await expect(authorize()).resolves.toBe(true);
     await expect(authorize()).resolves.toBe(true);
     expect(conversationsMembers).toHaveBeenCalledTimes(1);
@@ -274,22 +271,12 @@ describe("authorizeSlackSystemEventSender", () => {
   });
 
   it.each([
-    [
-      "keeps non-interactive channels open with only global allowFrom",
-      { allowFrom: ["U_OWNER"] },
-      { senderId: "U_ATTACKER", channelId: "C1" },
-      allowedChannel,
-    ],
-    [
-      "allows channel users absent from global allowFrom",
-      { allowFrom: ["U_OWNER"], channelsConfig: channelUsers },
-      { senderId: "U_ALLOWED", channelId: "C1" },
-      allowedChannel,
-    ],
+    ["global-only stays open", owner, channelSender("U_ATTACKER"), allowedChannel],
+    ["channel user need not be owner", ownerAndChannel, channelSender("U_ALLOWED"), allowedChannel],
     [
       "keeps owners behind the channel users gate despite a global wildcard",
       { allowFrom: ["U_OWNER", "*"], channelsConfig: channelUsers },
-      { senderId: "U_OWNER", channelId: "C1" },
+      channelSender("U_OWNER"),
       deniedChannel,
     ],
   ] satisfies AuthorizeCase[])("%s", async (_name, ctx, request, expected) => {
@@ -418,23 +405,29 @@ describe("resolveSlackCommandIngress", () => {
 });
 
 describe("authorizeSlackSystemEventSender interactiveEvent", () => {
+  const interactiveChannel = (senderId: string) =>
+    interactiveRequest(senderId, { channelId: "C1" });
+  const mystery = (type?: "group"): AuthorizeContextOptions => ({
+    ...owner,
+    resolveChannelName: async () => ({ name: "mystery", type }),
+  });
   it.each([
     [
       "rejects missing expectedSenderId",
-      { allowFrom: ["U_OWNER"] },
+      owner,
       { senderId: "U_OWNER", channelId: "C1", interactiveEvent: true },
       { allowed: false, reason: "missing-expected-sender" },
     ],
     [
       "reports denial by both global and channel allowlists",
-      { allowFrom: ["U_OWNER"], channelsConfig: channelUsers },
-      interactiveRequest("U_ATTACKER", { channelId: "C1" }),
+      ownerAndChannel,
+      interactiveChannel("U_ATTACKER"),
       { ...deniedChannel, reason: "sender-not-authorized" },
     ],
     [
       "preserves explicit owner access alongside a wildcard",
       { allowFrom: ["U_OWNER", "*"], channelsConfig: channelUsers },
-      interactiveRequest("U_OWNER", { channelId: "C1" }),
+      interactiveChannel("U_OWNER"),
       allowedChannel,
     ],
     [
@@ -445,25 +438,19 @@ describe("authorizeSlackSystemEventSender interactiveEvent", () => {
     ],
     [
       "denies no-channel senders outside allowFrom",
-      { allowFrom: ["U_OWNER"] },
+      owner,
       interactiveRequest("U_ATTACKER"),
       { allowed: false, reason: "sender-not-allowlisted" },
     ],
     [
       "rejects ambiguous channel type",
-      {
-        allowFrom: ["U_OWNER"],
-        resolveChannelName: async () => ({ name: "mystery" }),
-      },
+      mystery(),
       interactiveRequest("U_OWNER", { channelId: "X1" }),
       { ...deniedChannel, reason: "ambiguous-channel-type", channelName: "mystery" },
     ],
     [
       "accepts explicit channel type",
-      {
-        allowFrom: ["U_OWNER"],
-        resolveChannelName: async () => ({ name: "mystery", type: "group" as const }),
-      },
+      mystery("group"),
       interactiveRequest("U_OWNER", { channelId: "X1", channelType: "group" }),
       { allowed: true, channelType: "group", channelName: "mystery" },
     ],

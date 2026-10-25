@@ -6,8 +6,8 @@ import {
   resolveSlackInstallationIdentity,
 } from "./enterprise-install.js";
 
-const checkPolicy = (config: SlackAccountConfig) =>
-  assertEnterpriseSlackPolicyConfig({ accountId: "org", config });
+const expectPolicy = (config: SlackAccountConfig) =>
+  expect(() => assertEnterpriseSlackPolicyConfig({ accountId: "org", config }));
 const bindingConfig = (
   bindings: OpenClawConfig["bindings"],
   defaultAccount = "org",
@@ -54,40 +54,38 @@ describe("resolveSlackInstallationIdentity", () => {
 
 describe("assertEnterpriseSlackPolicyConfig", () => {
   it("accepts only runtime-supported stable channel forms", () => {
-    expect(() =>
-      checkPolicy({
-        allowFrom: ["U01234567", "slack:W01234567", "user:U12345678", scopedUser],
-        dm: { groupChannels: ["team:T01234567:channel:G01234567"] },
-        mentionPatterns: {
-          mode: "allow",
-          allowIn: ["team:T01234567:channel:C01234567"],
-          denyIn: ["team:T12345678:channel:C12345678"],
-        },
-        channels: {
-          [scopedChannel]: {
-            users: ["U01234567", "slack:W01234567", "user:B01234567", scopedUser],
-            toolsBySender: {
-              "id:U01234567": {},
-              "id:W01234567": {},
-              "id:B01234567": {},
-              "channel:slack:U12345678": {},
-              "channel:slack:B12345678": {},
-              "*": {},
-            },
+    expectPolicy({
+      allowFrom: ["U01234567", "slack:W01234567", "user:U12345678", scopedUser],
+      dm: { groupChannels: ["team:T01234567:channel:G01234567"] },
+      mentionPatterns: {
+        mode: "allow",
+        allowIn: ["team:T01234567:channel:C01234567"],
+        denyIn: ["team:T12345678:channel:C12345678"],
+      },
+      channels: {
+        [scopedChannel]: {
+          users: ["U01234567", "slack:W01234567", "user:B01234567", scopedUser],
+          toolsBySender: {
+            "id:U01234567": {},
+            "id:W01234567": {},
+            "id:B01234567": {},
+            "channel:slack:U12345678": {},
+            "channel:slack:B12345678": {},
+            "*": {},
           },
-          "team:T12345678:channel:C12345678": {},
-          "*": {},
         },
-        reactionNotifications: "allowlist",
-        reactionAllowlist: ["W01234567", scopedUser],
-      }),
-    ).not.toThrow();
+        "team:T12345678:channel:C12345678": {},
+        "*": {},
+      },
+      reactionNotifications: "allowlist",
+      reactionAllowlist: ["W01234567", scopedUser],
+    }).not.toThrow();
   });
 
   it.each(["allowIn", "denyIn"] as const)(
     "rejects unqualified Enterprise mention pattern policy %s",
     (field) => {
-      expect(() => checkPolicy({ mentionPatterns: { [field]: ["C123"] } })).toThrow(
+      expectPolicy({ mentionPatterns: { [field]: ["C123"] } }).toThrow(
         /stable Slack IDs.*mentionPatterns/,
       );
     },
@@ -97,14 +95,14 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
     ["channel ID", { channels: { C01234567: {} } }],
     ["group DM channel ID", { dm: { groupChannels: ["G01234567"] } }],
   ])("rejects unscoped Enterprise %s", (_label, config) => {
-    expect(() => checkPolicy(config)).toThrow(/Slack Enterprise Grid/);
+    expectPolicy(config).toThrow(/Slack Enterprise Grid/);
   });
 
   it.each<[string, SlackAccountConfig]>([
     ["allowFrom", { allowFrom: ["ursula"] }],
     ["reaction allowlist", { reactionNotifications: "allowlist", reactionAllowlist: ["ursula"] }],
   ])("rejects lowercase mutable names in %s", (_label, config) => {
-    expect(() => checkPolicy(config)).toThrow(/stable Slack/);
+    expectPolicy(config).toThrow(/stable Slack/);
   });
 
   it.each<[string, SlackAccountConfig, RegExp]>([
@@ -134,7 +132,7 @@ describe("assertEnterpriseSlackPolicyConfig", () => {
     ],
     ["channel names", { channels: { "#general": {} } }, /stable Slack channel IDs/],
   ])("rejects %s", (_label, config, error) => {
-    expect(() => checkPolicy(config)).toThrow(error);
+    expectPolicy(config).toThrow(error);
   });
 });
 
@@ -143,16 +141,7 @@ describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
     expect(() => assertEnterpriseSlackBindingsAreWorkspaceQualified({ cfg, accountId }));
   it("canonicalizes binding account IDs the same way as runtime routing", () => {
     const cfg = bindingConfig(
-      [
-        binding(
-          {
-            channel: "slack",
-            accountId: "WORK",
-            peer: { kind: "channel", id: "C01234567" },
-          },
-          "main",
-        ),
-      ],
+      [binding({ ...channelBinding("C01234567").match, accountId: "WORK" }, "main")],
       "other",
       { work: {}, other: {} },
     );
@@ -189,16 +178,7 @@ describe("assertEnterpriseSlackBindingsAreWorkspaceQualified", () => {
   });
 
   it("retains the workspace boundary for configured ACP bindings", () => {
-    const cfg = bindingConfig([
-      {
-        type: "acp",
-        match: {
-          channel: "slack",
-          peer: { kind: "channel", id: scopedChannel },
-        },
-        agentId: "channel",
-      },
-    ]);
+    const cfg = bindingConfig([{ ...channelBinding(scopedChannel), type: "acp" }]);
 
     expectBindings(cfg).toThrow(/cannot use configured ACP bindings/);
   });

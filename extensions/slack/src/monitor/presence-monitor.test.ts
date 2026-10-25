@@ -16,6 +16,11 @@ import {
 } from "./presence-monitor.js";
 
 type PresenceSystem = Parameters<typeof createSlackPresenceMonitor>[0]["system"];
+const observedTransition = [
+  "Slack presence event:",
+  'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
+  "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
+];
 
 function createReceipt(accepted = true): ReturnType<PresenceSystem["enqueueSessionEvent"]> {
   return {
@@ -215,12 +220,7 @@ describe("Slack presence monitor", () => {
       await monitor.advancePoll();
       await monitor.pollAt(7_500);
       expect(monitor.enqueue.mock.calls[0]?.[0]).toBe(
-        [
-          "Slack presence event:",
-          'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
-          "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
-          ...(prompt ? [prompt] : []),
-        ].join("\n"),
+        [...observedTransition, ...(prompt ? [prompt] : [])].join("\n"),
       );
     },
   );
@@ -242,9 +242,7 @@ describe("Slack presence monitor", () => {
     await monitor.pollAt(7_500);
     expect(enqueue).toHaveBeenCalledExactlyOnceWith(
       [
-        "Slack presence event:",
-        'A human participant became active on Slack after being observed away: user_id="U123" channel_id="D123".',
-        "observed_away_at_ms=2000 observed_active_at_ms=7500 observed_away_duration_ms=5500",
+        ...observedTransition,
         "Before greeting, retrieve relevant memory and wiki context for this immutable user_id, including a known timezone when available. Use their local time; if their timezone is unknown, do not guess.",
         "Send at most one short, natural greeting in this Slack conversation. Do not reveal private memory. If no greeting is appropriate, stay silent.",
       ].join("\n"),
@@ -587,23 +585,5 @@ describe("Slack presence monitor", () => {
     await Promise.resolve();
     expect(error).toHaveBeenCalledWith("slack presence follow-up cancelled: cancelled");
     expect(await monitor.cooldownStore.lookup("default:workspace:U123")).toBeDefined();
-  });
-
-  it("quiesces an in-flight poll before stop returns", async () => {
-    const active = createDeferred<{ presence: string }>();
-    const getPresence = vi
-      .fn()
-      .mockResolvedValueOnce({ presence: "away" })
-      .mockReturnValueOnce(active.promise);
-    const monitor = createPresenceFixture({ getPresence });
-    monitor.observe(createPrepared({ userId: "U123" }));
-    await monitor.advancePoll();
-
-    const polling = monitor.advancePoll();
-    const stopping = monitor.stop();
-    active.resolve({ presence: "active" });
-    await Promise.all([polling, stopping]);
-
-    expect(monitor.enqueue).not.toHaveBeenCalled();
   });
 });

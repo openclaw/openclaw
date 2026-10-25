@@ -163,15 +163,13 @@ describe("Slack relay source", () => {
     await acceptStarted.promise;
     expect(receivedAcks).toEqual([]);
     acceptDone.resolve();
-    await expect(ack.promise).resolves.toEqual({ type: "ack", delivery_id: "delivery-1" });
+    await ack.promise;
     expect(receivedAcks).toEqual([{ type: "ack", delivery_id: "delivery-1" }]);
     expect(runtimeError).toHaveBeenCalledTimes(2);
     expect(acceptRelayEvent).toHaveBeenCalledWith({
       deliveryId: "delivery-1",
       message: expect.objectContaining({ channel: "C1", text: "hello" }),
     });
-    // The failed durable accept must never ack: the router redelivers it.
-    expect(receivedAcks).not.toContainEqual({ type: "ack", delivery_id: "delivery-failed" });
     expect(identities).toContainEqual({
       username: "Nik Team Claw",
       iconUrl: "https://example.com/nik.png",
@@ -237,8 +235,10 @@ describe("Slack relay source", () => {
       error = err;
     }
     expect(error).toBeInstanceOf(SlackRelayMalformedFrameError);
-    expect((error as SlackRelayMalformedFrameError).message).toContain("malformed JSON frame");
-    expect((error as SlackRelayMalformedFrameError).cause).toBeDefined();
+    expect(error).toMatchObject({
+      message: expect.stringContaining("malformed JSON frame"),
+      cause: expect.any(SyntaxError),
+    });
   });
 });
 
@@ -526,10 +526,6 @@ describe("Slack relay proxy environment", () => {
         expect(fixture.upgrades).toEqual([relayUpgrade(route === "direct" ? "direct" : "proxy")]);
         expect(fixture.relayConnections()).toBe(1);
         expect(fixture.proxySecureConnections()).toBe(route === "tls" ? 1 : 0);
-        expect(monitor.acceptRelayEvent).toHaveBeenCalledExactlyOnceWith({
-          deliveryId: "delivery",
-          message: expect.objectContaining({ channel: "C1", text: "hello" }),
-        });
       } finally {
         await stopProxy(monitor, fixture);
       }

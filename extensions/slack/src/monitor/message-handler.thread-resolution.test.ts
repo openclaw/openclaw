@@ -15,6 +15,14 @@ import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import { createMonitorTestContext } from "./monitor-context.test-support.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
 import { isTransientSlackApiError } from "./transient-api-error.js";
+
+const threadMessage: SlackMessageEvent = {
+  type: "message",
+  channel: "C1",
+  parent_user_id: "U2",
+  ts: "1",
+};
+const historyResult = { messages: [{ ts: "1", thread_ts: "9" }] };
 const enqueue = vi.hoisted(() => vi.fn(async (_entry: unknown) => {}));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
@@ -58,8 +66,6 @@ describe("Slack message handler thread resolution", () => {
           tokenVerificationEnabled: false,
           clientOptions,
         });
-        const listenerClient = client("synthetic-listener");
-        const replacementClient = client("synthetic-replacement");
         const handler = createSlackMessageHandler({
           ctx: createMonitorTestContext({ cfg: {}, accountId: "thread-test", app }),
         });
@@ -71,12 +77,15 @@ describe("Slack message handler thread resolution", () => {
           ts: "100.3",
           text: "thread reply",
         };
-        const eventScope = { teamId: "T111", client: listenerClient };
-        await Promise.all([
-          handler(message, { source: "message", eventScope }),
-          handler(message, { source: "app_mention", eventScope }),
-        ]);
-        await handler(message, { source: "message", eventScope });
+        async function handleTwins(scopedClient?: WebClient) {
+          const eventScope = scopedClient ? { teamId: "T111", client: scopedClient } : undefined;
+          await Promise.all([
+            handler(message, { source: "message", eventScope }),
+            handler(message, { source: "app_mention", eventScope }),
+          ]);
+          await handler(message, { source: "message", eventScope });
+        }
+        await handleTwins(client("synthetic-listener"));
         expect(requests).toHaveLength(1);
         expect(enqueue).toHaveBeenCalledTimes(3);
         for (const [entry] of enqueue.mock.calls) {
@@ -85,18 +94,14 @@ describe("Slack message handler thread resolution", () => {
 
         await handler(message, {
           source: "message",
-          eventScope: { teamId: "T111", client: replacementClient },
+          eventScope: { teamId: "T111", client: client("synthetic-replacement") },
         });
         expect(requests).toHaveLength(2);
         expect(enqueue).toHaveBeenLastCalledWith(
           expect.objectContaining({ message: expect.objectContaining({ thread_ts: "100.2" }) }),
         );
 
-        await Promise.all([
-          handler(message, { source: "message" }),
-          handler(message, { source: "app_mention" }),
-        ]);
-        await handler(message, { source: "message" });
+        await handleTwins();
         expect(requests).toHaveLength(3);
         expect(requests.map((request) => request.token)).toEqual([
           "Bearer synthetic-listener",
@@ -127,11 +132,10 @@ function createResolver(history: ReturnType<typeof vi.fn>) {
   const resolver = createSlackThreadTsResolver({
     client: { conversations: { history } } as unknown as SlackThreadClient,
   });
-  const message = { type: "message" as const, channel: "C1", parent_user_id: "U2", ts: "1" };
   return (
     source: "message" | "app_mention" = "message",
     turnAdoptionLifecycle?: SlackIngressTurnLifecycle,
-  ) => resolver.resolve({ message, source, turnAdoptionLifecycle });
+  ) => resolver.resolve({ message: threadMessage, source, turnAdoptionLifecycle });
 }
 
 function createWebClient(fetch: NonNullable<ConstructorParameters<typeof WebClient>[1]>["fetch"]) {
@@ -160,9 +164,7 @@ describe("createSlackThreadTsResolver", () => {
 
   it("caches resolved thread_ts lookups", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    const historyMock = vi.fn().mockResolvedValue({
-      messages: [{ ts: "1", thread_ts: "9" }],
-    });
+    const historyMock = vi.fn().mockResolvedValue(historyResult);
     const resolve = createResolver(historyMock);
 
     expect((await resolve("message")).thread_ts).toBe("9");
@@ -207,10 +209,10 @@ describe("createSlackThreadTsResolver", () => {
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
-      .mockResolvedValueOnce(Response.json({ ok: true, messages: [{ ts: "1", thread_ts: "9" }] }));
+      .mockResolvedValueOnce(Response.json({ ok: true, ...historyResult }));
     const resolver = createSlackThreadTsResolver({ client: createWebClient(fetch) });
     const request = {
-      message: { type: "message" as const, channel: "C1", parent_user_id: "U2", ts: "1" },
+      message: threadMessage,
       source: "message" as const,
       turnAdoptionLifecycle: createDurableTurnLifecycle(),
     };
@@ -226,10 +228,7 @@ describe("createSlackThreadTsResolver", () => {
     { error: new WebAPIRateLimitedError(1), durable: true },
     { error: new WebAPIHTTPError(503, "Service Unavailable", {}, "outage"), durable: false },
   ])("does not cache transient lookup failures (durable=$durable)", async ({ error, durable }) => {
-    const historyMock = vi
-      .fn()
-      .mockRejectedValueOnce(error)
-      .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
+    const historyMock = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(historyResult);
     const resolve = createResolver(historyMock);
     const lifecycle = durable ? createDurableTurnLifecycle() : undefined;
     const first = resolve("message", lifecycle);
@@ -243,11 +242,11 @@ describe("createSlackThreadTsResolver", () => {
   });
 
   it("releases all coalesced durable twins for their existing queue retry", async () => {
-    const history = createDeferred<{ messages: Array<{ ts: string; thread_ts: string }> }>();
+    const history = createDeferred<typeof historyResult>();
     const historyMock = vi
       .fn()
       .mockReturnValueOnce(history.promise)
-      .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
+      .mockResolvedValueOnce(historyResult);
     const resolve = createResolver(historyMock);
     const firstLifecycle = createDurableTurnLifecycle();
     const secondLifecycle = createDurableTurnLifecycle();

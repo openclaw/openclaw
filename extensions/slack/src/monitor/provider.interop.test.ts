@@ -353,10 +353,8 @@ describe("createSlackBoltApp", () => {
         receiver: wrappedReceiver,
         tokenVerificationEnabled: false,
       });
-      const receiverArgs = receiver.args;
-      expect(receiverArgs.processEventErrorHandler).toBeTypeOf("function");
       await expect(
-        (receiverArgs.processEventErrorHandler as () => Promise<boolean>)(),
+        (receiver.args.processEventErrorHandler as () => Promise<boolean>)(),
       ).resolves.toBe(false);
     },
   );
