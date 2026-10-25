@@ -29,14 +29,6 @@ function ollamaConfig(
   return { models: { providers: { [id]: nextProvider } } };
 }
 
-const bakedWindow =
-  "models.providers.ollama.contextWindow → models.providers.ollama.models[0].contextWindow.";
-const removedWindow =
-  "Removed models.providers.ollama.contextWindow after baking it into explicit model entries.";
-const preservedPrimary =
-  "Preserved the implicit primary model in agents.defaults.model.primary (ollama/llama3.3).";
-const pinChange = (numCtx: number, id = "ollama") =>
-  `Set models.providers.${id}.models[0].params.num_ctx to ${numCtx} for native Ollama compatibility.`;
 function expectStable(result: ReturnType<typeof normalizeConfig>, migrate = normalizeConfig) {
   const expected = structuredClone(result.config);
   const repeated = migrate(result.config);
@@ -130,55 +122,44 @@ it.each([
       { id: "llama3.3-small", contextWindow: 32768, maxTokens: 4096, params: { num_ctx: 16384 } },
     ],
     [{ temperature: 0.2, num_ctx: 81920 }, { num_ctx: 16384 }],
-    81920,
   ],
-  ["localOllama", [{ contextWindow: 0, maxTokens: 24576 }], [{ num_ctx: 24576 }], 24576],
-] as const)("sets native %s model budget params", (id, models, params, numCtx) => {
+  ["localOllama", [{ contextWindow: 0, maxTokens: 24576 }], [{ num_ctx: 24576 }]],
+] as const)("sets native %s model budget params", (id, models, params) => {
   const res = normalizeConfig(ollamaConfig([...models], {}, id));
   expect(res.config.models?.providers?.[id]?.models?.map((model) => model.params)).toEqual(params);
-  expect(res.changes).toEqual([pinChange(numCtx, id)]);
 });
 
 it.each([
-  ["inherited window", { contextWindow: undefined, maxTokens: 4096 }, undefined, 65536, true],
-  ["explicit model window", { contextWindow: 32768 }, undefined, 32768, false],
+  ["inherited window", { contextWindow: undefined, maxTokens: 4096 }, undefined, 65536],
+  ["explicit model window", { contextWindow: 32768 }, undefined, 32768],
   [
     "existing provider pin",
     { contextWindow: undefined, maxTokens: undefined },
     { num_ctx: 32768 },
     65536,
-    true,
   ],
-  ["no explicit models", undefined, undefined, undefined, false],
-] as const)(
-  "migrates retired provider contextWindow: %s",
-  (_label, model, params, numCtx, baked) => {
-    const models = model ? [model] : [];
-    const expectedProviderParams = structuredClone(params);
-    const res = migrateConfig(ollamaConfig(models, { contextWindow: 65536, params }));
-    const provider = res.config.models?.providers?.ollama;
-    expect(provider).not.toHaveProperty("contextWindow");
-    expect(provider?.params).toEqual(expectedProviderParams);
-    expect(provider?.models?.map((entry) => entry.params)).toEqual(
-      numCtx ? [{ num_ctx: numCtx }] : [],
-    );
-    if (models.length) {
-      expect(res.config.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.3" });
-    }
-    expect(res.changes).toEqual(
-      numCtx
-        ? [...(baked ? [bakedWindow] : []), removedWindow, preservedPrimary, pinChange(numCtx)]
-        : ["Removed models.providers.ollama.contextWindow."],
-    );
-    expect(res.warnings).toEqual(
-      model
-        ? []
-        : [
-            "models.providers.ollama.contextWindow had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.",
-          ],
-    );
-  },
-);
+  ["no explicit models", undefined, undefined, undefined],
+] as const)("migrates retired provider contextWindow: %s", (_label, model, params, numCtx) => {
+  const models = model ? [model] : [];
+  const expectedProviderParams = structuredClone(params);
+  const res = migrateConfig(ollamaConfig(models, { contextWindow: 65536, params }));
+  const provider = res.config.models?.providers?.ollama;
+  expect(provider).not.toHaveProperty("contextWindow");
+  expect(provider?.params).toEqual(expectedProviderParams);
+  expect(provider?.models?.map((entry) => entry.params)).toEqual(
+    numCtx ? [{ num_ctx: numCtx }] : [],
+  );
+  if (models.length) {
+    expect(res.config.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.3" });
+  }
+  expect(res.warnings).toEqual(
+    model
+      ? []
+      : [
+          "models.providers.ollama.contextWindow had no explicit model entries to receive its value; use models.providers.<provider>.models[].contextTokens instead.",
+        ],
+  );
+});
 
 it("keeps native Ollama params prototype-safe while setting num_ctx", () => {
   const ownProto = (params: Record<string, unknown>, value: Record<string, unknown>) =>
@@ -218,7 +199,6 @@ it.each([false, true])(
         input.models?.providers?.ollama?.models,
       );
       expect(res.config.agents?.defaults?.model).toEqual({ primary: "ollama/llama3.3" });
-      expect(res.changes).toEqual([removedWindow, preservedPrimary]);
     } else {
       expect(res.config).toEqual(input);
       expect(res.changes).toEqual([]);

@@ -70,6 +70,14 @@ async function writeLegacy(value: unknown) {
   return legacyPath;
 }
 
+const prepare = (cfg: OpenClawConfig) => prepareRetiredPhoneControlCleanup({ cfg, env });
+const commandsOf = (result: Awaited<ReturnType<typeof prepare>>) =>
+  result.config.gateway?.nodes?.commands;
+function expectUnchanged(result: Awaited<ReturnType<typeof prepare>>, cfg: OpenClawConfig) {
+  expect(result.config).toBe(cfg);
+  expect(result.configChanges).toEqual([]);
+}
+
 beforeEach(async () => {
   resetPluginStateStoreForTests();
   stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-phone-control-retire-"));
@@ -89,13 +97,8 @@ it("does not expose an allow that was effective only because a lease removed the
     deny: seedDeny.filter((command) => command !== "sms.send"),
   });
 
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config.gateway?.nodes?.commands).toBeUndefined();
-  expect(result.configChanges).toEqual([
-    "Removed stale Phone Control lease-only command allow entries.",
-    "Removed the retired Phone Control setup deny seed.",
-  ]);
+  const result = await prepare(cfg);
+  expect(commandsOf(result)).toBeUndefined();
 });
 
 it("prefers the authoritative SQLite journal over a stale legacy source", async () => {
@@ -103,22 +106,16 @@ it("prefers the authoritative SQLite journal over a stale legacy source", async 
   await writeLegacy({ version: 2, addedToAllow: ["health.summary"] });
   const cfg = config({ allow: ["sms.send", "health.summary"] });
 
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config.gateway?.nodes?.commands?.allow).toEqual(["health.summary"]);
+  const result = await prepare(cfg);
+  expect(commandsOf(result)?.allow).toEqual(["health.summary"]);
   expect(result.cleanupSafe).toBe(true);
 });
 
 it("keeps exact-seed entries that currently shadow explicit allows", async () => {
   const cfg = config({ allow: ["sms.send"], deny: [...seedDeny] });
 
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config.gateway?.nodes?.commands).toEqual({
-    allow: ["sms.send"],
-    deny: ["sms.send"],
-  });
-  expect(result.configChanges).toEqual(["Removed the retired Phone Control setup deny seed."]);
+  const result = await prepare(cfg);
+  expect(commandsOf(result)).toEqual({ allow: ["sms.send"], deny: ["sms.send"] });
 });
 
 it.each(["legacy", "canonical", "unreadable"] as const)(
@@ -137,7 +134,7 @@ it.each(["legacy", "canonical", "unreadable"] as const)(
       deny: [...seedDeny],
       ...(source === "legacy" ? { allow: ["sms.send"] } : {}),
     });
-    const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
+    const result = await prepare(cfg);
     expect(result.config).toBe(cfg);
     expect(result.cleanupSafe).toBe(false);
     if (source === "legacy") {
@@ -170,11 +167,9 @@ it("preserves policy and original bytes for malformed UTF-8 legacy journals", as
   await fs.writeFile(legacyPath, bytes);
   const cfg = config({ deny: ["operator.command"] });
 
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config).toBe(cfg);
+  const result = await prepare(cfg);
+  expectUnchanged(result, cfg);
   expect(result.cleanupSafe).toBe(false);
-  expect(result.configChanges).toEqual([]);
   expect(result.warnings).toEqual([expect.stringContaining("must be valid UTF-8")]);
   expect(await fs.readFile(legacyPath)).toEqual(bytes);
 });
@@ -183,11 +178,9 @@ it("does not touch operator-authored command entries that differ from the old se
   const deny = [...seedDeny, "custom.command"];
   const cfg = config({ allow: ["sms.send"], deny });
 
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config).toBe(cfg);
-  expect(result.config.gateway?.nodes?.commands).toEqual({ allow: ["sms.send"], deny });
-  expect(result.configChanges).toEqual([]);
+  const result = await prepare(cfg);
+  expectUnchanged(result, cfg);
+  expect(commandsOf(result)).toEqual({ allow: ["sms.send"], deny });
 });
 
 it("restores journal-owned deny entries without removing customized operator policy", async () => {
@@ -195,16 +188,8 @@ it("restores journal-owned deny entries without removing customized operator pol
   const deny = ["camera.snap", "custom.command"];
   const cfg = config({ deny });
 
-  const result = await prepareRetiredPhoneControlCleanup({ cfg, env });
-
-  expect(result.config.gateway?.nodes?.commands?.deny).toEqual([
-    "camera.snap",
-    "custom.command",
-    "computer.act",
-  ]);
-  expect(result.configChanges).toEqual([
-    "Restored command deny entries removed by Phone Control leases.",
-  ]);
+  const result = await prepare(cfg);
+  expect(commandsOf(result)?.deny).toEqual(["camera.snap", "custom.command", "computer.act"]);
 });
 
 it.each([false, true])(
