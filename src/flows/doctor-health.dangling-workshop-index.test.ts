@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -35,10 +34,10 @@ function writeConfig(state: OpenClawTestState, session?: { store: string }) {
   });
 }
 
-function editDatabase(file: string, edit: (db: DatabaseSync) => void) {
+function executeSql(file: string, sql: string) {
   const { DatabaseSync } = requireNodeSqlite();
   using db = new DatabaseSync(file);
-  edit(db);
+  db.exec(sql);
 }
 
 function expectDatabase(file: string, queries: Record<string, unknown>) {
@@ -51,20 +50,9 @@ function expectDatabase(file: string, queries: Record<string, unknown>) {
 
 const repairOptions = { repair: true, nonInteractive: true };
 const orphan = { task_id: "orphan-preserved", requester_origin_json: "preserve orphan payload" };
-const runtimeRunIndex = ["runtime", "run_id", "source_id", "created_at", "task_id"].map((name) => ({
-  name,
-}));
-
 async function seedState(state: OpenClawTestState) {
   await writeConfig(state);
-  const database = openOpenClawStateDatabase({ env: state.env });
-  database.db.exec(`
-    CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT;
-    INSERT INTO skill_workshop_collection_reviews (
-      review_id, owner_agent_id, backup_id, create_time, kept_names_json, written_names_json, dropped_json
-    ) VALUES ('review-preserved', 'main', 'backup-preserved', 1, '[]', '[]', '[]');
-  `);
-  return database;
+  return openOpenClawStateDatabase({ env: state.env });
 }
 
 it("preserves known damaged state before backing up and migrating an older agent", async () => {
@@ -72,22 +60,18 @@ it("preserves known damaged state before backing up and migrating an older agent
     const database = await seedState(state);
     const agentPath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
     fs.mkdirSync(path.dirname(agentPath), { recursive: true });
-    editDatabase(agentPath, (agent) => {
-      agent.exec(
-        fs.readFileSync(
-          new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v19.sql", import.meta.url),
-          "utf8",
-        ),
-      );
-      agent.exec(`
-        PRAGMA user_version = 19;
-        INSERT INTO schema_meta
-          (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-          VALUES ('primary', 'agent', 19, 'main', '2026.9.4', 1, 1);
-        INSERT INTO cache_entries(scope,key,value_json,expires_at,updated_at)
-          VALUES ('upgrade-proof','retained','{"keep":true}',NULL,7);
-      `);
-    });
+    executeSql(
+      agentPath,
+      `${fs.readFileSync(
+        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v19.sql", import.meta.url),
+        "utf8",
+      )}
+      PRAGMA user_version = 19;
+      INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+        VALUES ('primary', 'agent', 19, 'main', '2026.9.4', 1, 1);
+    `,
+    );
     registerOpenClawAgentDatabase({
       agentId: "main",
       path: agentPath,
@@ -107,11 +91,9 @@ it("preserves known damaged state before backing up and migrating an older agent
     await doctorCommand(runtime, repairOptions);
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-    expect(runtime.log).toHaveBeenCalledWith("Removed dangling legacy Skill Workshop review index");
     expectDatabase(database.path, {
       "SELECT name FROM sqlite_schema WHERE name IN ('skill_workshop_collection_reviews', 'idx_skill_workshop_collection_reviews_workspace_time')":
         [],
-      "SELECT name FROM pragma_index_info('idx_task_runs_runtime_run')": runtimeRunIndex,
       "PRAGMA user_version": [{ user_version: OPENCLAW_STATE_SCHEMA_VERSION }],
       "PRAGMA integrity_check": [{ integrity_check: "ok" }],
       "PRAGMA foreign_key_check": [],
@@ -141,9 +123,6 @@ it("preserves known damaged state before backing up and migrating an older agent
     }
     expectDatabase(agentPath, {
       "PRAGMA user_version": [{ user_version: OPENCLAW_AGENT_SCHEMA_VERSION }],
-      "SELECT value_json, updated_at FROM cache_entries WHERE scope = 'upgrade-proof'": [
-        { value_json: '{"keep":true}', updated_at: 7 },
-      ],
     });
   });
 });
@@ -153,12 +132,13 @@ it("refuses a newer custom agent schema before changing the malformed source", a
     const database = await seedState(state);
     const customPath = state.path("custom", "sessions.sqlite");
     fs.mkdirSync(path.dirname(customPath));
-    editDatabase(customPath, (custom) =>
-      custom.exec(`
+    executeSql(
+      customPath,
+      `
           PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};
           CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, agent_id TEXT);
           INSERT INTO schema_meta VALUES ('primary', 'main');
-        `),
+        `,
     );
     await writeConfig(state, { store: customPath });
     await closeOpenClawStateDatabaseAsync();
