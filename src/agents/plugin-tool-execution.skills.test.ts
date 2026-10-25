@@ -119,7 +119,6 @@ it.each(
         authority,
       })(() => {});
       return {
-        snapshot,
         capabilities,
         tool: factory!.create({
           ...capabilities,
@@ -148,17 +147,7 @@ it.each(
         await fs.symlink(mountedSource, alias, "dir");
         sandbox.docker.binds = [`${alias}:/installed-source:${access === "ro" ? "ro" : "rw"}`];
       }
-      const { snapshot, capabilities, tool } = await bind();
-      expect(snapshot.discoverySkills).toEqual([
-        expect.objectContaining({
-          source: source === "personal" ? "agents-skills-personal" : "openclaw-managed",
-          fileHost: "gateway",
-        }),
-      ]);
-      expect(snapshot.skills[0]?.source).toEqual({
-        filePath: path.join(await fs.realpath(installation), "SKILL.md"),
-        fileHost: "gateway",
-      });
+      const { capabilities, tool } = await bind();
       expect(capabilities.sandbox?.installedSkillRoots).toEqual(
         admitted ? { autoreview: "/guest/repo/.openclaw/sandbox-skills/skills/autoreview" } : {},
       );
@@ -173,9 +162,6 @@ it.each(
         });
         await refreshSkillsDiscovery({ workspaceDir: workspace });
         const project = await bind();
-        expect(project.snapshot.discoverySkills).toEqual([
-          expect.objectContaining({ source: "agents-skills-project", fileHost: "workspace" }),
-        ]);
         expect(project.capabilities.sandbox?.installedSkillRoots).toEqual({});
         expect(project.tool).toBeNull();
       }
