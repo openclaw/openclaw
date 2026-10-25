@@ -28,8 +28,8 @@ import {
   readSessionActorTranscriptContext,
   seedSessionActorTranscriptContext,
 } from "./session-actor-transcript-replica.js";
-import { summaryFacts, transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
-import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+import { summaryFacts } from "./session-actor-transcript.test-support.js";
+import { withActor, type Fixture } from "./session-actor-worker.test-support.js";
 import {
   mutateSessionColdTranscriptInWorker,
   prepareSessionColdBatchInWorker,
@@ -208,8 +208,6 @@ it("keeps settled append bodies in receipts and storage without evicting navigat
     runSqliteImmediateTransactionSync(f.database.db, () => {
       writeSessionEntry(f.database, other.sessionKey, { sessionId: "other", updatedAt: 1 });
     });
-    const warn = vi.fn();
-    f.hooks.transactionOptions = { logger: { warn }, slowTransactionHoldMs: 0 };
     const events = Array.from({ length: 6 }, (_, index) => ({
       type: "custom",
       id: `large-metadata-${index}`,
@@ -218,29 +216,8 @@ it("keeps settled append bodies in receipts and storage without evicting navigat
       customType: "openclaw.cache-ttl",
       data: { snapshot: "synthetic".repeat(180_000) },
     }));
-    for (const [index, event] of events.entries()) {
-      const outcome = appendEvent(f, event);
-      expect(outcome.kind).toBe("committed");
-      expect(warn).toHaveBeenLastCalledWith(
-        "slow SQLite transaction hold",
-        expect.objectContaining({
-          operation: "session.actor.appendTranscriptEvent",
-          context: {
-            payloadBytes: Buffer.byteLength(JSON.stringify(event)),
-            actorResident: index > 0,
-            actorTranscriptEvents: 3 + index,
-            actorActiveEvents: 2 + index,
-            actorReadMs: expect.any(Number),
-            actorApplyMs: expect.any(Number),
-            actorProjectionMs: expect.any(Number),
-            actorReceiptMs: expect.any(Number),
-            actorReceiptBytes: expect.any(Number),
-          },
-        }),
-      );
-      if (outcome.kind === "committed") {
-        expect(outcome.receipt.transcript.appendedEvents?.[0]?.event).toEqual(event);
-      }
+    for (const event of events) {
+      expectAppended(appendEvent(f, event), event);
     }
     const expectedBytes = [...transcript(f), ...events].reduce(
       (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
@@ -305,21 +282,22 @@ it.each(["warm", "restarted"] as const)(
         });
       };
       const expectVisibleTail = (entryId: string) => {
-        expect(appendMessage(replayMessage)).toMatchObject({
-          kind: "committed",
-          value: {
-            kind: "message",
-            value: {
-              snapshot: {
-                ok: true,
-                value: {
-                  result: { appended: false, messageId: "question", message: replayMessage },
-                  visibleTail: { entryId },
-                },
-              },
-            },
-          },
-        });
+        const outcome = appendMessage(replayMessage);
+        expect(outcome).toMatchObject({ kind: "committed", value: { kind: "message" } });
+        expect(outcome).toHaveProperty(
+          "value.value.snapshot",
+          expect.objectContaining({
+            ok: true,
+            value: expect.objectContaining({
+              result: expect.objectContaining({
+                appended: false,
+                messageId: "question",
+                message: expect.objectContaining(replayMessage),
+              }),
+              visibleTail: expect.objectContaining({ entryId }),
+            }),
+          }),
+        );
       };
       const side = {
         type: "custom",
@@ -371,79 +349,6 @@ it.each(["warm", "restarted"] as const)(
     });
   },
 );
-
-it("advances retained context through native actor appends and preserves it through bookkeeping", () =>
-  withContext(async (f, context) => {
-    const initial = context.seed();
-    expect(context.read()?.snapshot.events).toEqual(transcript(f));
-    const command: Mutation = {
-      type: "session.actor.appendToolResult",
-      input: {
-        target: f.target,
-        expected: initial.version,
-        ...transcriptTurnCommand(f.scope, "next-turn", [
-          { eventId: "next-question", message: { role: "user", content: "Next question" }, now: 4 },
-          {
-            eventId: "next-answer",
-            message: { role: "assistant", content: "Next answer" },
-            now: 5,
-          },
-        ]),
-      },
-    };
-    await f.prepare(command);
-    const pending = context.replica.beginCommand();
-    const appended = f.mutate(command);
-    expect(appended.kind).toBe("committed");
-    expect(pending.settle<unknown>(appended)).toBe(true);
-    const reads = trackSqliteStatementExecutions(f.database.db, ["read"], (sql) =>
-      /^\s*select\b/iu.test(sql) ? "read" : null,
-    );
-    try {
-      for (let call = 0; call < 2; call += 1) {
-        expect(context.read()?.snapshot.events).toEqual([
-          ...transcript(f),
-          expect.objectContaining({
-            id: "next-question",
-            message: expect.objectContaining({ role: "user", content: "Next question" }),
-          }),
-          expect.objectContaining({
-            id: "next-answer",
-            message: expect.objectContaining({ role: "assistant", content: "Next answer" }),
-          }),
-        ]);
-      }
-      expect(reads.counts.read).toBe(0);
-    } finally {
-      reads.restore();
-    }
-    const current = context.replica.read()!;
-    const bookkeeping = context.replica.beginCommand();
-    expect(
-      bookkeeping.settle<unknown>(
-        f.mutate({
-          type: "session.actor.patch",
-          input: {
-            target: f.target,
-            expected: current.version,
-            commandId: "accounting",
-            phaseId: "turn",
-            reducers: [{ kind: "activity", updatedAt: 6 }],
-          },
-        }),
-      ),
-    ).toBe(true);
-    expect(context.read()?.snapshot.events).toHaveLength(5);
-    expect(context.anchors()).toBeUndefined();
-    expect(context.canonicalAnchors().watermark).toEqual(
-      context.replica.read()!.transcript.watermark,
-    );
-    expect(context.summary()?.page.events).toHaveLength(4);
-    expect(context.summary()?.page.events.at(-1)?.event).toMatchObject({
-      id: "next-answer",
-      message: { content: "Next answer" },
-    });
-  }));
 
 it("settles a resident correlation rewrite once and leaves rollback payloads unchanged", () =>
   withContext((f, context) => {

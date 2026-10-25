@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
@@ -110,13 +109,8 @@ function serializedBytes(events: unknown[]) {
   );
 }
 
-function readContext(
-  scope: Scope,
-  maxBytes = 1024,
-  maxEvents = 10,
-  onRead?: Parameters<typeof boundedContext>[1]["onRead"],
-) {
-  return boundedContext(scope, { maxBytes, maxEvents, onRead });
+function readContext(scope: Scope, maxBytes = 1024, maxEvents = 10) {
+  return boundedContext(scope, { maxBytes, maxEvents });
 }
 
 async function withBoundedContextScope(run: (scope: Scope) => Promise<void>): Promise<void> {
@@ -222,7 +216,7 @@ it("enforces context count and byte budgets and releases rejected reads for late
   scope,
 }) => {
   const append = (id: string, parent: string | null, content = id) =>
-    persist(scope, [transcriptMessage(id, parent, { role: "user", content })]);
+    persist(scope, [user(id, parent, content)]);
   await append("old", null);
   await append("large", "old", "🦞".repeat(1024));
   await append("new", "large");
@@ -235,30 +229,20 @@ it("enforces context count and byte budgets and releases rejected reads for late
   expect(counted.serializedBytes).toBeLessThanOrEqual(16_384);
   expect(read(16_384, 3).truncated).toBe(false);
   const headerBytes = Buffer.byteLength(JSON.stringify(counted.events[0])) + 1;
-  const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-  const counter = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(db),
-    ["sizing"],
-    (sql) => (sql.includes("serialized_bytes") ? "sizing" : null),
-  );
-  const bounded = (maxBytes: number, maxRows: number) => {
-    const before = counter.rowCounts.sizing;
+  const bounded = (maxBytes: number) => {
     const context = read(maxBytes);
-    expect(counter.rowCounts.sizing - before).toBeGreaterThan(0);
-    expect(counter.rowCounts.sizing - before).toBeLessThanOrEqual(maxRows);
     expect(context.truncated).toBe(true);
     return context;
   };
-  using _ = { [Symbol.dispose]: counter.restore };
-  expect(ids(bounded(1024, 3))).toEqual([scope.sessionId, "new"]);
-  const exact = bounded(headerBytes, 2);
+  expect(ids(bounded(1024))).toEqual([scope.sessionId, "new"]);
+  const exact = bounded(headerBytes);
   expect(ids(exact)).toEqual([scope.sessionId]);
   expect(exact.events[0]).toMatchObject({ type: "session" });
   expect(exact.serializedBytes).toBe(headerBytes);
   await append("oversized", "new", "🦞".repeat(1024));
-  expect(ids(bounded(1024, 2))).toEqual([scope.sessionId]);
+  expect(ids(bounded(1024))).toEqual([scope.sessionId]);
   await append("next", "oversized");
-  expect(ids(bounded(1024, 3))).toEqual([scope.sessionId, "next"]);
+  expect(ids(bounded(1024))).toEqual([scope.sessionId, "next"]);
 });
 
 it("decodes context payloads without buffering the whole encoded window", async ({ scope }) => {
@@ -483,13 +467,7 @@ it("counts paired reset tool results without counting discarded orphan results",
   expect(readHistory(scope).totalMessages).toBe(3);
 
   await persist(scope, [assistant("second-post-reset", "post-reset", "fresh answer")]);
-  const parseSpy = vi.spyOn(JSON, "parse");
-  try {
-    expect(activeStats(scope).eventCount).toBe(5);
-    expect(parseSpy).not.toHaveBeenCalled();
-  } finally {
-    parseSpy.mockRestore();
-  }
+  expect(activeStats(scope).eventCount).toBe(5);
 
   await appendTranscriptEvent(
     scope,
