@@ -50,9 +50,12 @@ try {
     let serializedChars = 0;
     let result;
     try {
-      JSON.stringify = (...args: Parameters<typeof JSON.stringify>) => {
+      JSON.stringify = (input: unknown, replacer, space) => {
         stringifyCalls++;
-        const json = stringify(...args);
+        const json =
+          typeof replacer === "function"
+            ? stringify(input, replacer, space)
+            : stringify(input, replacer, space);
         serializedChars += json?.length ?? 0;
         return json;
       };
