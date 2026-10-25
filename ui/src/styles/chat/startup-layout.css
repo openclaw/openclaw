@@ -292,6 +292,7 @@
   place-items: center;
   font-weight: 600;
   font-size: 13px;
+  line-height: 1;
   flex-shrink: 0;
   align-self: flex-start;
   margin-bottom: 4px;
