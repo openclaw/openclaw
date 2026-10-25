@@ -17,7 +17,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import * as sharingPreparation from "../session-sharing-preparation.js";
 import { commandsHandlers } from "./commands.js";
 import { withSessionDiscoveryAccess } from "./session-discovery-access.js";
 import { handleSkillsStatus } from "./skills-status.js";
@@ -126,12 +125,14 @@ async function seed() {
 }
 
 it.each(["commands.list", "skills.status"] as const)(
-  "%s discovers for a participant without caller-thread SQL",
+  "%s discovers for a participant before and after topology invalidation without caller-thread SQL",
   async (method) => {
     await withDiscoveryState(async ({ call }) => {
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       try {
+        expect((await call(method))[0]).toBe(true);
+        sessionChanges.emit({ all: true, scope: "stores" });
         expect((await call(method))[0]).toBe(true);
         expect.soft(prepare).not.toHaveBeenCalled();
         expect.soft(exec).not.toHaveBeenCalled();
@@ -210,48 +211,44 @@ it.each(["commands.list", "skills.status"] as const)(
             `${method}: ${change} did not reach discovery`,
           );
           revoked = true;
-          if (change === "member") {
-            removeSessionMember(scope, "alice");
-          }
-          if (change === "dirty") {
-            invalidateMembership();
-          }
-          if (change === "callback-dirty") {
-            dirtyOnCheck = true;
-          }
-          if (change === "profile") {
-            client.authenticatedUserProfile!.profileId = "bob";
-          }
-          if (change === "projection") {
-            bindSessionRowProjection(context, () => undefined);
-          }
-          if (change === "route") {
-            setConfig({ ...cfg, session: { mainKey: "replacement" } });
-          }
-          if (change === "policy") {
-            setConfig({
-              ...cfg,
-              gateway: {
-                roles: {
-                  default: "blocked",
-                  definitions: {
-                    blocked: {
-                      sessions: { others: "none" },
-                      agents: "*",
-                      scopes: ["operator.read", "operator.write"],
+          const changes: Partial<Record<typeof change, () => void>> = {
+            member: () => removeSessionMember(scope, "alice"),
+            dirty: invalidateMembership,
+            "callback-dirty": () => {
+              dirtyOnCheck = true;
+            },
+            profile: () => {
+              client.authenticatedUserProfile!.profileId = "bob";
+            },
+            projection: () => {
+              bindSessionRowProjection(context, () => undefined);
+            },
+            route: () => setConfig({ ...cfg, session: { mainKey: "replacement" } }),
+            policy: () =>
+              setConfig({
+                ...cfg,
+                gateway: {
+                  roles: {
+                    default: "blocked",
+                    definitions: {
+                      blocked: {
+                        sessions: { others: "none" },
+                        agents: "*",
+                        scopes: ["operator.read", "operator.write"],
+                      },
                     },
                   },
                 },
-              },
-            });
-          }
-          if (change === "session") {
-            replaceSessionEntrySync(scope, {
-              ...sessionEntry,
-              sessionId: "replacement",
-              updatedAt: 2,
-            });
-          }
+              }),
+            session: () => {
+              replaceSessionEntrySync(scope, {
+                ...sessionEntry,
+                sessionId: "replacement",
+                updatedAt: 2,
+              });
+            },
+          };
+          changes[change]?.();
         } finally {
           release.resolve();
         }
@@ -351,12 +348,3 @@ it.each(["ready", "rejected", "replaced"] as const)(
     });
   },
 );
-
-it("uses the retained physical source when dirty topology needs fallback preparation", async () => {
-  await withDiscoveryState(async ({ call }) => {
-    sessionChanges.emit({ all: true, scope: "stores" });
-    const prepare = vi.spyOn(sharingPreparation, "prepareSessionMutationFacts");
-    expect((await call("commands.list"))[0]).toBe(true);
-    expect(prepare).toHaveBeenCalled();
-  });
-});

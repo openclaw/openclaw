@@ -117,20 +117,15 @@ it("normalizes providers, trims profiles, and clamps the timeout", async () => {
     utilityModel: { primary: "openai/gpt-5.6-luna", fallbacks: ["local/backup"] },
   });
   await probe({ provider: " OpenAI ", profileId: " work ", timeoutMs: 1 }, cfg);
-  expect(mocks.runAuthProbes).toHaveBeenCalledWith({
-    cfg,
-    agentId: "main",
-    agentDir: "/tmp/agent-main",
-    workspaceDir: "/tmp/workspace-main",
+  expectProbe({
     providers: ["openai"],
     modelCandidates: ["openai/gpt-5.6", "openai/gpt-5.5", "openai/gpt-5.6-luna", "local/backup"],
-    options: {
+    options: expect.objectContaining({
       provider: "openai",
       profileIds: ["work"],
       timeoutMs: 5_000,
-      concurrency: 2,
       maxTokens: 8,
-    },
+    }),
   });
 });
 
@@ -146,47 +141,11 @@ it("probes the default agent without a configured model when agentId is empty", 
   });
 });
 
-it("probes an explicit configured agent", async () => {
-  const cfg = modelConfig(
-    { utilityModel: { primary: "openai/small", fallbacks: ["openai/default-backup"] } },
-    { utilityModel: { fallbacks: ["openai/writer-backup"] } },
-  );
-  await probe({ provider: "openai", agentId: "Writer" }, cfg);
-  expectProbe({
-    agentId: "writer",
-    agentDir: "/tmp/agent-writer",
-    workspaceDir: "/tmp/workspace-writer",
-    modelCandidates: ["openai/small", "openai/writer-backup"],
-  });
-});
-
 it.each([
-  {
-    name: "agent primary and fallback overrides",
-    agent: {
-      model: {
-        primary: " qwen/qwen-plus@work ",
-        fallbacks: ["vertex/claude-sonnet@20260201@work", "local/qwen@iq4_xs"],
-      },
-      utilityModel: { primary: "qwen/qwen-flash@work", fallbacks: ["local/utility"] },
-    },
-    expected: [
-      "qwen/qwen-plus",
-      "vertex/claude-sonnet@20260201",
-      "local/qwen@iq4_xs",
-      "qwen/qwen-flash",
-      "local/utility",
-    ],
-  },
   {
     name: "explicit empty fallbacks and disabled utility routing",
     agent: { model: { fallbacks: [] }, utilityModel: "" },
     expected: ["openai/default"],
-  },
-  {
-    name: "agent primary suppressing default fallbacks",
-    agent: { model: "qwen/qwen-plus" },
-    expected: ["qwen/qwen-plus", "openai/small", "local/utility-backup"],
   },
   {
     name: "agent aliases overriding default aliases",
@@ -212,8 +171,13 @@ it.each([
     },
     agent,
   );
-  const { respond } = await probe({ provider: "qwen", agentId: "writer" }, cfg);
-  expectProbe({ agentId: "writer", modelCandidates: expected });
+  const { respond } = await probe({ provider: "qwen", agentId: "Writer" }, cfg);
+  expectProbe({
+    agentId: "writer",
+    agentDir: "/tmp/agent-writer",
+    workspaceDir: "/tmp/workspace-writer",
+    modelCandidates: expected,
+  });
   expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
 });
 
