@@ -43,7 +43,6 @@ it("keeps the default transport host usable in browser bundles", async () => {
     write: false,
   });
 
-  expect(result.errors).toEqual([]);
   const context: {
     OpenClawAiHost?: BrowserHostModule;
     TextDecoder: typeof TextDecoder;

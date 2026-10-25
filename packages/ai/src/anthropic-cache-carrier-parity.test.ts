@@ -60,6 +60,11 @@ function system(text: string, turnScoped = false) {
   };
 }
 
+const wireUser = (content: unknown) => ({ role: "user", content });
+const wireAssistant = (content: unknown) => ({ role: "assistant", content });
+const toolBlocks = [{ type: "tool_use" }, { type: "tool_use" }];
+const resultBlocks = [{ type: "tool_result" }, { type: "tool_result" }];
+
 function appendToolRound(messages: Context["messages"], model: Model, round: number) {
   const ids = [`call_${round}_a`, `call_${round}_b`];
   const calls = ids.map((id) => ({
@@ -160,16 +165,13 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       appendToolRound(messages, model, 2);
       const expected = [
         ...(priorConversation
-          ? [
-              { role: "user", content: "Earlier question" },
-              { role: "assistant", content: [textBlock("Answer")] },
-            ]
+          ? [wireUser("Earlier question"), wireAssistant([textBlock("Answer")])]
           : []),
-        { role: "user", content: "." },
+        wireUser("."),
         system("Changed instructions"),
         system("Consult facts", true),
-        { role: "assistant", content: [{ type: "tool_use" }, { type: "tool_use" }] },
-        { role: "user", content: [{ type: "tool_result" }, { type: "tool_result" }] },
+        wireAssistant(toolBlocks),
+        wireUser(resultBlocks),
       ];
       for (const implementation of ["provider", "transport"] as const) {
         const first = await captureMessages(implementation, model, messages);
@@ -181,8 +183,8 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         ]);
         expect(second.payload.messages).toMatchObject([
           ...expected,
-          { role: "assistant", content: [textBlock("Answer")] },
-          { role: "user", content: "Next question" },
+          wireAssistant([textBlock("Answer")]),
+          wireUser("Next question"),
         ]);
         expect(second.payload.system).toEqual(first.payload.system);
         expect(second.payload.system).toEqual([textBlock(context.systemPrompt)]);
@@ -204,7 +206,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
         headers: { "anthropic-beta": "custom-beta" },
       });
       expect(payload.messages).toEqual([
-        { role: "user", content: "Question" },
+        wireUser("Question"),
         system("Prompt update"),
         system("Runtime facts", true),
       ]);
@@ -232,21 +234,13 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       });
       expect(payload.messages).toMatchObject([
         { role: "user" },
-        {
-          role: "assistant",
-          content: [
-            { type: "thinking", thinking: "Use lookup", signature: "signed-tool-turn" },
-            { type: "tool_use" },
-            { type: "tool_use" },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            { type: "tool_result", tool_use_id: "call_1_a" },
-            { type: "tool_result", tool_use_id: "call_1_b" },
-          ],
-        },
+        wireAssistant([
+          { type: "thinking", thinking: "Use lookup", signature: "signed-tool-turn" },
+          ...toolBlocks,
+        ]),
+        wireUser(
+          ["call_1_a", "call_1_b"].map((tool_use_id) => ({ type: "tool_result", tool_use_id })),
+        ),
         system("Permission changed"),
       ]);
     }
@@ -269,11 +263,8 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       expect(replay.payload.system).toEqual(initial.payload.system);
       expect(replay.payload.messages).toEqual([
         ...initial.payload.messages,
-        {
-          role: "assistant",
-          content: [textBlock(STREAM_ERROR_FALLBACK_TEXT)],
-        },
-        { role: "user", content: "Second question" },
+        wireAssistant([textBlock(STREAM_ERROR_FALLBACK_TEXT)]),
+        wireUser("Second question"),
         system("Second turn facts", true),
       ]);
     }
@@ -289,11 +280,9 @@ describe("Anthropic runtime-context cache lifecycle", () => {
       const { payload, headers } = await captureMessages(implementation, opusModel, messages, {
         apiKey: "test-sk-ant-oat-fixture",
       });
-      expect(payload.messages).toEqual([
-        { role: "user", content: "Question" },
-        { role: "user", content: "Runtime facts" },
-        { role: "user", content: "Next question" },
-      ]);
+      expect(payload.messages).toEqual(
+        ["Question", "Runtime facts", "Next question"].map(wireUser),
+      );
       expect(headers.get("anthropic-beta")?.split(",") ?? []).not.toContain(
         "mid-conversation-system-clear-at-2026-08-21",
       );
@@ -337,10 +326,7 @@ describe("Anthropic runtime-context cache lifecycle", () => {
           const wire = payload.messages as Array<{ role: string; content: unknown }>;
           const stable = retained ? wire : wire.slice(0, -1);
           if (!retained) {
-            expect(wire.at(-1)).toEqual({
-              role: "user",
-              content: runtimeText,
-            });
+            expect(wire.at(-1)).toEqual(wireUser(runtimeText));
           } else {
             const retainedContent = wire[1]?.content;
             expect(

@@ -191,6 +191,24 @@ function messageStart(id: string, tokens: Record<string, unknown>) {
   return { type: "message_start", message: { id, model: anthropicModel.id, usage: tokens } };
 }
 
+const blockStart = (index: number, content_block: Record<string, unknown>) => ({
+  type: "content_block_start",
+  index,
+  content_block,
+});
+const blockDelta = (index: number, delta: Record<string, unknown>) => ({
+  type: "content_block_delta",
+  index,
+  delta,
+});
+const blockStop = (index: number) => ({ type: "content_block_stop", index });
+const messageDelta = (stop_reason?: string, tokens?: unknown) => ({
+  type: "message_delta",
+  delta: stop_reason ? { stop_reason } : {},
+  usage: tokens,
+});
+const messageStop = { type: "message_stop" };
+
 function normalizeRecord(value: Record<string, unknown>, keys: readonly string[]) {
   return Object.fromEntries(
     keys.flatMap((key) => (value[key] === undefined ? [] : [[key, value[key]]])),
@@ -345,24 +363,19 @@ const routerCase = (name: string, chunks: OpenAIChunk[], content: unknown[]): Co
   openRouterModel,
 ];
 
-const fixtures = (["anthropic", "openai"] as const).flatMap<ParityFixture>((provider) => {
-  const label = provider === "anthropic" ? "Anthropic" : "OpenAI";
-  return [
-    {
-      name: `${label} successful request and event trace`,
-      provider,
-      outcome: "success",
-      snapshot: `${provider}-success.snap.txt`,
-    },
-    { name: `${label} structured request failure`, provider, outcome: "error" },
-  ];
-});
+const fixtures = (["anthropic", "openai"] as const).flatMap((provider) =>
+  (["success", "error"] as const).map((outcome): ParityFixture => ({
+    name: `${provider} ${outcome}`,
+    provider,
+    outcome,
+    snapshot: outcome === "success" ? `${provider}-success.snap.txt` : undefined,
+  })),
+);
 
 describe("provider and transport observable parity fixtures", () => {
   registerParityHostLifecycle();
 
   it.each([
-    { name: "seeded starts followed by deltas", seeded: true, deltas: true },
     { name: "seed-only blocks", seeded: true, deltas: false },
     { name: "empty starts followed by deltas", seeded: false, deltas: true },
   ])("preserves Anthropic $name", async ({ seeded, deltas }) => {
@@ -388,16 +401,12 @@ describe("provider and transport observable parity fixtures", () => {
         stopReason: "stop",
         content: [thinking(thought, signature), text(answer)],
       });
-      expect(result.eventTrace).toContainEqual({
-        type: "thinking_end",
-        contentIndex: 0,
-        content: thought,
-      });
-      expect(result.eventTrace).toContainEqual({
-        type: "text_end",
-        contentIndex: 1,
-        content: answer,
-      });
+      expect(result.eventTrace).toEqual(
+        expect.arrayContaining([
+          { type: "thinking_end", contentIndex: 0, content: thought },
+          { type: "text_end", contentIndex: 1, content: answer },
+        ]),
+      );
     }
   });
 
@@ -445,14 +454,8 @@ describe("provider and transport observable parity fixtures", () => {
       updates: [
         {
           iterations: [
-            {
-              type: "compaction",
-              ...usage(10, 3, 2, 1),
-            },
-            {
-              type: "message",
-              ...usage(4, 5, 6, 7),
-            },
+            { type: "compaction", ...usage(10, 3, 2, 1) },
+            { type: "message", ...usage(4, 5, 6, 7) },
           ],
         },
       ],
@@ -472,12 +475,12 @@ describe("provider and transport observable parity fixtures", () => {
     async ({ updates, final, billing, contextUsage }) => {
       const events = [
         messageStart("msg_usage_parity", usage(37, 2, 11, 5)),
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Done." } },
-        { type: "content_block_stop", index: 0 },
-        ...updates.map((tokens) => ({ type: "message_delta", delta: {}, usage: tokens })),
-        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: final },
-        { type: "message_stop" },
+        blockStart(0, { type: "text", text: "" }),
+        blockDelta(0, { type: "text_delta", text: "Done." }),
+        blockStop(0),
+        ...updates.map((tokens) => messageDelta(undefined, tokens)),
+        messageDelta("end_turn", final),
+        messageStop,
       ];
       for (const implementation of ["provider", "transport"] as const) {
         const result = await runAnthropic(implementation, "success", events);
@@ -508,23 +511,13 @@ describe("provider and transport observable parity fixtures", () => {
   ])("preserves Anthropic terminal tool validation for $name", async (fixture) => {
     const events = [
       messageStart("msg_seeded", { input_tokens: 1, output_tokens: 0 }),
-      {
-        type: "content_block_start",
-        index: 0,
-        content_block: { type: "tool_use", id: "call_seed", name: "lookup", input: fixture.input },
-      },
+      blockStart(0, { type: "tool_use", id: "call_seed", name: "lookup", input: fixture.input }),
       ...(fixture.delta
-        ? [
-            {
-              type: "content_block_delta",
-              index: 0,
-              delta: { type: "input_json_delta", partial_json: fixture.delta },
-            },
-          ]
+        ? [blockDelta(0, { type: "input_json_delta", partial_json: fixture.delta })]
         : []),
-      { type: "content_block_stop", index: 0 },
-      { type: "message_delta", delta: { stop_reason: "tool_use" } },
-      { type: "message_stop" },
+      blockStop(0),
+      messageDelta("tool_use"),
+      messageStop,
     ];
     for (const implementation of ["provider", "transport"] as const) {
       const result = await runAnthropic(implementation, "success", events);

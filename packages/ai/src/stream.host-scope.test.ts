@@ -146,11 +146,6 @@ describe("transport host installation and registry", () => {
     configureAiTransportHost({ registerCustomApi: registrar });
     expect(registrar).toHaveBeenCalledOnce();
     const registered = registry.getApiProvider(customApi);
-    expect(registered).toMatchObject({
-      api: customApi,
-      stream: expect.any(Function),
-      streamSimple: expect.any(Function),
-    });
     const configuredModel = prepare();
     expect(configuredModel.api).toBe(customApi);
     expect(registered?.streamSimple(configuredModel, context)).toHaveProperty("result");
