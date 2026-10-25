@@ -139,19 +139,21 @@ it("offers an optional report, previews it, and submits once only after confirma
   expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
 });
 
-it("does not submit when confirmation is cancelled", async () => {
+it.each(["cancelled", "declined"])("does not submit when confirmation is %s", async (action) => {
   mocks.select.mockResolvedValue("report");
-  const cancelled = await clackConfirm({
-    message: "Cancelled fixture",
-    signal: AbortSignal.abort(),
-  });
-  expect(isCancel(cancelled)).toBe(true);
-  mocks.confirm.mockResolvedValue(cancelled);
+  const confirmation =
+    action === "cancelled"
+      ? await clackConfirm({ message: "Cancelled fixture", signal: AbortSignal.abort() })
+      : false;
+  expect(isCancel(confirmation)).toBe(action === "cancelled");
+  mocks.confirm.mockResolvedValue(confirmation);
 
   await f.run();
 
   expect(defaultRuntime.log).toHaveBeenCalledWith(f.prepared.body);
   expect(defaultRuntime.log).toHaveBeenCalledWith("Update failure report cancelled.");
+  expect(mocks.prepare).toHaveBeenCalledOnce();
+  expectOnceContaining("confirm", { initialValue: false });
   expectUnused("submit", "triage");
 });
 
@@ -188,7 +190,7 @@ it("does not prompt after a successful update", async () => {
 });
 
 describe("interactive report actions", () => {
-  function action(actions = ["report"], confirmed = true) {
+  function action(actions = ["report"]) {
     vi.spyOn(ledger, "getUpdateRun").mockReturnValue(undefined);
     Object.assign(f.prepared, {
       browserFallback: {
@@ -197,18 +199,9 @@ describe("interactive report actions", () => {
       },
     });
     mocks.select.mockImplementation(async () => actions.shift() ?? "dismiss");
-    mocks.confirm.mockResolvedValue(confirmed);
+    mocks.confirm.mockResolvedValue(true);
     return f.run;
   }
-
-  it("shows the sanitized preview and honors cancellation without submission", async () => {
-    await action(["report"], false)();
-    expect(mocks.prepare).toHaveBeenCalledOnce();
-    expect(defaultRuntime.log).toHaveBeenCalledWith(f.prepared.body);
-    expect(mocks.confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
-    expect(defaultRuntime.log).toHaveBeenCalledWith("Update failure report cancelled.");
-    expect(mocks.submit).not.toHaveBeenCalled();
-  });
 
   it.each([
     { status: "duplicate", url: "https://github.com/openclaw/openclaw/issues/123" },

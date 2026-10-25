@@ -140,68 +140,38 @@ async function runCleanup(options: { dryRun?: boolean; yes?: boolean }) {
   };
 }
 
-const expectedPreview = (captures: Record<string, string>) => ({
-  [captures.superseded!]: {
-    outcome: "candidate",
-    reason: "superseded-update-capture",
-    bytes: 1038,
-  },
-  [captures.unsealed!]: { outcome: "candidate", reason: "unsealed-update-capture", bytes: 1035 },
-  [captures.alreadyCurrent!]: {
-    outcome: "candidate",
-    reason: "superseded-update-capture",
-    bytes: 1038,
-  },
-  [captures.failedBaseline!]: {
+function expectedPreview(captures: Record<string, string>) {
+  const candidate = (reason: string, bytes: number) => ({ outcome: "candidate", reason, bytes });
+  const protectedCapture = (reason: string, bytes: unknown = expect.any(Number)) => ({
     outcome: "protected",
-    reason: "unresolved-failed-update",
-    bytes: 1038,
-  },
-  [captures.latest!]: {
-    outcome: "protected",
-    reason: "awaiting-later-completed-update",
-    bytes: 1035,
-  },
-  [captures.unfinished!]: { outcome: "protected", reason: "unfinished-update-run", bytes: 1038 },
-  [captures.orphan!]: {
-    outcome: "protected",
-    reason: "orphan-update-capture",
-    bytes: expect.any(Number),
-  },
-  [captures.incomplete!]: {
-    outcome: "protected",
-    reason: "unmanifested-update-capture",
-    bytes: expect.any(Number),
-  },
-  [captures.unattributed!]: {
-    outcome: "protected",
-    reason: "unmanifested-update-capture",
-    bytes: 1038,
-  },
-  [captures.unmarked!]: {
-    outcome: "protected",
-    reason: "unmanifested-update-capture",
-    bytes: 1003,
-  },
-});
+    reason,
+    bytes,
+  });
+  return Object.fromEntries(
+    Object.entries({
+      superseded: candidate("superseded-update-capture", 1038),
+      unsealed: candidate("unsealed-update-capture", 1035),
+      alreadyCurrent: candidate("superseded-update-capture", 1038),
+      failedBaseline: protectedCapture("unresolved-failed-update", 1038),
+      latest: protectedCapture("awaiting-later-completed-update", 1035),
+      unfinished: protectedCapture("unfinished-update-run", 1038),
+      orphan: protectedCapture("orphan-update-capture"),
+      incomplete: protectedCapture("unmanifested-update-capture"),
+      unattributed: protectedCapture("unmanifested-update-capture", 1038),
+      unmarked: protectedCapture("unmanifested-update-capture", 1003),
+    }).map(([label, expected]) => [captures[label], expected]),
+  );
+}
 
 it.each(["current", "pre-migration"] as const)(
-  "previews %s update captures with their classification and bytes without removing them",
+  "previews %s captures without mutation, then removes only confirmed candidates",
   async (location) => {
-    await withCaptureHistory(async (captures) => {
-      const preview = await runCleanup({ dryRun: true });
-      expect(preview).toEqual({ status: "preview", captures: expectedPreview(captures) });
+    await withCaptureHistory(async (captures, root) => {
+      const preview = expectedPreview(captures);
+      expect(await runCleanup({ dryRun: true })).toEqual({ status: "preview", captures: preview });
       for (const directory of Object.values(captures)) {
         expect(fs.existsSync(directory)).toBe(true);
       }
-    }, location);
-  },
-);
-
-it.each(["current", "pre-migration"] as const)(
-  "removes only %s candidate captures and keeps protected captures",
-  async (location) => {
-    await withCaptureHistory(async (captures, root) => {
       using stderr = vi.spyOn(process.stderr, "write").mockImplementation((text) => {
         if (!String(text).startsWith("Removing capture ")) {
           return true;
@@ -222,7 +192,6 @@ it.each(["current", "pre-migration"] as const)(
           new RegExp(`^Removing capture ${index + 1}/3: .+ \\(103[58] bytes\\)\\n$`),
         );
       }
-      const preview = expectedPreview(captures);
       for (const [directory, item] of Object.entries(preview)) {
         expect(result.captures[directory]).toEqual(
           item.outcome === "candidate"
