@@ -369,6 +369,18 @@ describe("interrupted chat input recovery", () => {
           sessionId: fixture.target.sessionId,
           sourceRunId: fixture.target.sourceRunId,
         });
+        for (const sourceTool of ["cron_execution", "progress_card_refresh"]) {
+          expect(
+            createRestartRecoveryOperatorSource({
+              ...params,
+              inputProvenance: { kind: "internal_system", sourceTool },
+              requesterOrigin: {
+                sessionKey: params.sessionKey,
+                operatorProfileId: captured.authority.profileId,
+              },
+            }),
+          ).toBeUndefined();
+        }
       } finally {
         captured.release();
       }
