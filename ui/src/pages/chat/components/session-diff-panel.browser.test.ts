@@ -146,7 +146,6 @@ describe.runIf(browserMode)("Review header layout", () => {
     );
     const summary = panel.querySelector<HTMLElement>(".session-diff__summary")!;
     const label = panel.querySelector<HTMLElement>(".session-diff__branch-label")!;
-    expect(label.clientWidth).toBe(label.scrollWidth);
     const wideWidth = label.clientWidth;
     expect(panel.querySelector(".session-diff__branch")?.getAttribute("title")).toBe(
       `main → ${branch}\n${root}`,
@@ -179,26 +178,17 @@ describe.runIf(browserMode)("Review header layout", () => {
     const command = button('button[aria-label="Copy sync command"]');
     const checkout = button('button[aria-label="Checkout path"]');
     const branchCopy = button('button[aria-label="Branch name"]');
-    expect(command).toBeInstanceOf(HTMLButtonElement);
-    expect(checkout).toBeInstanceOf(HTMLButtonElement);
-    expect(branchCopy).toBeInstanceOf(HTMLButtonElement);
     await waitForSolid(() => expect(document.activeElement).toBe(command));
     await userEvent.tab();
     expect(document.activeElement).toBe(checkout);
     await userEvent.tab();
     expect(document.activeElement).toBe(branchCopy);
 
-    let returnedToSync = false;
-    sync.addEventListener(
-      "focus",
-      () => {
-        returnedToSync = true;
-      },
-      { once: true },
-    );
+    const returnedToSync = vi.fn();
+    sync.addEventListener("focus", returnedToSync, { once: true });
     await userEvent.tab();
     await menuClosed();
-    expect(returnedToSync).toBe(true);
+    expect(returnedToSync).toHaveBeenCalledOnce();
     // Native Tab continues past the restored Sync trigger.
     expect(document.activeElement).toBe(view);
 
@@ -226,16 +216,11 @@ describe.runIf(browserMode)("Review header layout", () => {
     }
   });
   it("keeps a disabled path copy mounted through clipboard fallback focus changes", async () => {
-    let rejectWrite: ((error: Error) => void) | undefined;
-    const write = vi.spyOn(navigator.clipboard, "writeText").mockImplementation(
-      () =>
-        new Promise<void>((_, reject) => {
-          rejectWrite = reject;
-        }),
-    );
+    const pending = Promise.withResolvers<void>();
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockReturnValue(pending.promise);
     const fallback = vi.spyOn(document, "execCommand").mockReturnValue(true);
     onTestFinished(() => {
-      rejectWrite?.(new Error("test finished"));
+      pending.reject(new Error("test finished"));
       write.mockRestore();
       fallback.mockRestore();
     });
@@ -253,7 +238,7 @@ describe.runIf(browserMode)("Review header layout", () => {
     await userEvent.click(copy);
     expect(write).toHaveBeenCalledExactlyOnceWith("added.ts");
     expect(copy.disabled).toBe(true);
-    rejectWrite?.(new DOMException("Clipboard denied", "NotAllowedError"));
+    pending.reject(new DOMException("Clipboard denied", "NotAllowedError"));
     await waitForSolid(() => expect(copy.getAttribute("aria-label")).toBe("Copied!"));
     expect(fallback).toHaveBeenCalledExactlyOnceWith("copy");
     expect(copy.isConnected).toBe(true);

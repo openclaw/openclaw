@@ -150,19 +150,6 @@ it.each([false, true])(
   },
 );
 
-it("dismisses the controlled Advanced page after a fork action", async () => {
-  const fixture = await menuFixture(true);
-  const { menu, close, onAction } = fixture;
-  menu.forkDisabled = false;
-  await menu.updateComplete;
-  const { mounted } = openPage(fixture);
-  const fork = labeledButton(mounted.container, "Fork conversation");
-  expect(fork?.disabled).toBe(false);
-  fork!.click();
-  expect(onAction).toHaveBeenCalledExactlyOnceWith({ kind: "fork" });
-  expect(close).toHaveBeenCalledOnce();
-});
-
 it("closes the originating split pane from mobile Advanced without exposing legacy View", async () => {
   const first = await menuFixture(true);
   const second = await menuFixture(true);

@@ -186,25 +186,13 @@ describe("effort bar colour and flow", () => {
     await expect.poll(() => document.activeElement).toBe(trigger);
   });
 
-  it("keeps inherited speed selectable", async () => {
-    document.documentElement.dataset.themeMode = "dark";
-    const { onFastModeSelect } = await speedFixture(
-      speedState("ultrafast", ["default", "priority", "ultrafast"], true, true),
-    );
-    for (const value of ["off", "on", "ultrafast"]) {
-      const option = speed(value);
-      expect(option.disabled).toBe(false);
-      option.click();
-      expect(onFastModeSelect).toHaveBeenLastCalledWith(value, "effort-preview");
-    }
-  });
-  it("keeps speed names accessible without chip labels and only exposes entitled choices", async () => {
+  it("keeps inherited speed selectable, accessible, and limited to entitled choices", async () => {
     await speedFixture(speedState(false));
     expect(summary().textContent?.trim()).toBe("High");
     expect(host!.querySelectorAll("[data-chat-speed-option]")).toHaveLength(2);
     expect(host!.textContent).not.toContain("higher usage");
     const { onFastModeSelect } = await speedFixture(
-      speedState("ultrafast", ["priority", "ultrafast"]),
+      speedState("ultrafast", ["priority", "ultrafast"], true, true),
     );
     expect(summary().textContent?.trim()).toBe("High");
     expect(summary().getAttribute("aria-label")).toContain("High · Ultrafast");
@@ -216,6 +204,11 @@ describe("effort bar colour and flow", () => {
     ).toEqual(["Standard", "Fast", "Ultrafast"]);
     const ultra = speed("ultrafast");
     expect(ultra.getAttribute("aria-checked")).toBe("true");
+    for (const value of ["off", "on", "ultrafast"]) {
+      expect(speed(value).disabled).toBe(false);
+      speed(value).click();
+      expect(onFastModeSelect).toHaveBeenLastCalledWith(value, "effort-preview");
+    }
     ultra.focus();
     ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");

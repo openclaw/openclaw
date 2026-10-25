@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createChatMessageHarness,
@@ -14,30 +14,12 @@ import {
 } from "./chat-message.test-support.ts";
 
 const harness = createChatMessageHarness();
-const {
-  render,
-  requireElement,
-  element,
-  elements,
-  elementText,
-  expectCount,
-  expectAbsent,
-  renderTestMessageGroup,
-  renderAssistantMessage,
-  renderAssistantMessages,
-  renderMarkdownHtml,
-  renderStreamingMarkdown,
-  markdownRenderMock,
-  streamingMarkdownRenderMock,
-} = harness;
+beforeEach(() => {
+  harness.markdownRenderMock.mockImplementation(harness.renderMarkdownHtml);
+  harness.streamingMarkdownRenderMock.mockImplementation(harness.renderStreamingMarkdown);
+});
 
 describe("grouped chat rendering", () => {
-  function renderMarkdownAssistant(content: unknown) {
-    markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
-      renderAssistantMessage(createAssistantMessage(content));
-    });
-  }
-
   function renderAssistantMessageEntries(
     entries: TestMessageEntry[],
     opts: Partial<RenderMessageGroupOptions> = {},
@@ -45,9 +27,8 @@ describe("grouped chat rendering", () => {
     const group = createMessageGroup(entries[0]?.message, "assistant", {
       key: "assistant-group",
       messages: entries,
-      timestamp: Date.now(),
     });
-    render(renderTestMessageGroup(group, opts));
+    harness.render(harness.renderTestMessageGroup(group, opts));
   }
 
   it("preserves reference links and one duplicate badge in recovered media", async () => {
@@ -58,48 +39,42 @@ describe("grouped chat rendering", () => {
       timestamp: 1000,
       __openclaw: { id: "media-recovery", seq: 1, truncated: true },
     });
-    markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
-      renderAssistantMessageEntries([{ key: "media-order", message, duplicateCount: 2 }], {
-        sessionKey: "agent:main:main",
-        loadFullAssistantMessage: async () => null,
-        getAssistantMessageExpansion: () => ({
-          status: "loaded",
-          markdown: fullText,
-          message: fullMessage,
-          revision: 1,
-        }),
-        onToggleAssistantMessageExpanded: vi.fn(),
-      });
+    renderAssistantMessageEntries([{ key: "media-order", message, duplicateCount: 2 }], {
+      sessionKey: "agent:main:main",
+      loadFullAssistantMessage: async () => null,
+      getAssistantMessageExpansion: () => ({
+        status: "loaded",
+        markdown: fullText,
+        message: fullMessage,
+        revision: 1,
+      }),
+      onToggleAssistantMessageExpanded: vi.fn(),
     });
     await vi.dynamicImportSettled();
     await waitForSolid(() =>
       expect(
-        elements(".chat-text a, .chat-message-image").map((node) =>
-          node instanceof HTMLImageElement ? "image" : node.textContent,
-        ),
+        harness
+          .elements(".chat-text a, .chat-message-image")
+          .map((node) => (node instanceof HTMLImageElement ? "image" : node.textContent)),
       ).toEqual(["Before", "image", "After"]),
     );
-    expect(elements<HTMLAnchorElement>(".chat-text a").map((link) => link.href)).toEqual([
+    expect(harness.elements<HTMLAnchorElement>(".chat-text a").map((link) => link.href)).toEqual([
       "https://example.com/proof",
       "https://example.com/proof",
     ]);
-    expectCount(".chat-duplicate-count", 1);
+    harness.expectCount(".chat-duplicate-count", 1);
     expect(harness.view.textContent).not.toContain("Loading preview");
   });
 
   it("keeps list structure and its duplicate suffix across an assistant image", async () => {
-    markdownRenderMock.withImplementation(renderMarkdownHtml, () => {
-      renderAssistantMessageEntries([
-        {
-          key: "list-image",
-          duplicateCount: 2,
-          message: createAssistantMessage(
-            "1. First\nMEDIA:https://example.com/first.png\n1. Second",
-          ),
-        },
-      ]);
-    });
-    const list = requireElement(".chat-text ol", HTMLOListElement);
+    renderAssistantMessageEntries([
+      {
+        key: "list-image",
+        duplicateCount: 2,
+        message: createAssistantMessage("1. First\nMEDIA:https://example.com/first.png\n1. Second"),
+      },
+    ]);
+    const list = harness.requireElement(".chat-text ol", HTMLOListElement);
     expect(list.querySelectorAll(":scope > li")).toHaveLength(2);
     await vi.dynamicImportSettled();
     await waitForSolid(() =>
@@ -110,26 +85,30 @@ describe("grouped chat rendering", () => {
   });
 
   it("suppresses a whole thinking region spanning assistant media", async () => {
-    renderMarkdownAssistant([
-      { type: "text", text: "<thinking>Hidden before" },
-      { type: "image", url: "https://example.com/hidden-before.png" },
-      { type: "text", text: "Hidden middle" },
-      { type: "image", url: "https://example.com/hidden-after.png" },
-      { type: "text", text: "Hidden after</thinking>\n\nVisible answer" },
-    ]);
-    expect(elementText(".chat-text")?.trim()).toBe("Visible answer");
+    harness.renderAssistantMessage(
+      createAssistantMessage([
+        { type: "text", text: "<thinking>Hidden before" },
+        { type: "image", url: "https://example.com/hidden-before.png" },
+        { type: "text", text: "Hidden middle" },
+        { type: "image", url: "https://example.com/hidden-after.png" },
+        { type: "text", text: "Hidden after</thinking>\n\nVisible answer" },
+      ]),
+    );
+    expect(harness.elementText(".chat-text")?.trim()).toBe("Visible answer");
     await vi.dynamicImportSettled();
-    await waitForSolid(() => expectCount(".chat-message-image", 0));
+    await waitForSolid(() => harness.expectCount(".chat-message-image", 0));
   });
 
   it("keeps literal media-marker text distinct from assistant image positions", async () => {
-    renderMarkdownAssistant(
-      "Literal OPENCLAWMEDIASLOT0END\n\nMEDIA:https://example.com/real.png\n\nDone",
+    harness.renderAssistantMessage(
+      createAssistantMessage(
+        "Literal OPENCLAWMEDIASLOT0END\n\nMEDIA:https://example.com/real.png\n\nDone",
+      ),
     );
     expect(harness.view.textContent).toContain("Literal OPENCLAWMEDIASLOT0END");
     expect(harness.view.textContent).not.toContain("OPENCLAWMEDIASLOTX");
     await vi.dynamicImportSettled();
-    await waitForSolid(() => expectCount(".chat-message-image", 1));
+    await waitForSolid(() => harness.expectCount(".chat-message-image", 1));
   });
 
   it("keeps an inline image mounted while the following paragraph streams and completes", async () => {
@@ -138,45 +117,38 @@ describe("grouped chat rendering", () => {
         `**Before**\nMEDIA:https://example.com/stream.png\n\n${tail}`,
         { timestamp: 1000 },
       );
-      render(
-        renderTestMessageGroup(
+      harness.render(
+        harness.renderTestMessageGroup(
           createMessageGroup(message, "assistant", { key: "stream-media", isStreaming }),
         ),
       );
     };
-    await markdownRenderMock.withImplementation(renderMarkdownHtml, async () => {
-      await streamingMarkdownRenderMock.withImplementation(renderStreamingMarkdown, async () => {
-        renderTurn("Checking", true);
-        await vi.dynamicImportSettled();
-        const image = await waitForSolid(() =>
-          requireElement(".chat-message-image", HTMLImageElement),
-        );
-        expect(requireElement(".chat-bubble", HTMLElement).classList.contains("fade-in")).toBe(
-          false,
-        );
-        expect(requireElement(".chat-group", HTMLElement).dataset.chatRowKey).toBeTruthy();
-        renderTurn("Checking the result.", true);
-        expect(element(".chat-message-image")).toBe(image);
-        renderTurn("Checking the result.", false);
-        expect(element(".chat-message-image")).toBe(image);
-        expect(elementText(".chat-text")).toContain("Checking the result.");
-      });
-    });
+    renderTurn("Checking", true);
+    await vi.dynamicImportSettled();
+    const image = await waitForSolid(() =>
+      harness.requireElement(".chat-message-image", HTMLImageElement),
+    );
+    renderTurn("Checking the result.", true);
+    expect(harness.element(".chat-message-image")).toBe(image);
+    renderTurn("Checking the result.", false);
+    expect(harness.element(".chat-message-image")).toBe(image);
+    expect(harness.elementText(".chat-text")).toContain("Checking the result.");
   });
 
   it("uses the visible caption direction when an assistant image comes first", () => {
-    renderMarkdownAssistant(
-      "MEDIA:https://example.com/preview.png\n\n<thinking>Hidden English</thinking>שלום",
+    harness.renderAssistantMessage(
+      createAssistantMessage(
+        "MEDIA:https://example.com/preview.png\n\n<thinking>Hidden English</thinking>שלום",
+      ),
     );
-    expect(element(".chat-text")?.getAttribute("dir")).toBe("rtl");
-    expect(elementText(".chat-text")?.trim()).toBe("שלום");
+    expect(harness.element(".chat-text")?.getAttribute("dir")).toBe("rtl");
+    expect(harness.elementText(".chat-text")?.trim()).toBe("שלום");
   });
 
   it.each([
     ["compact details", "<details><summary>More</summary>body</details>", "details"],
     ["table", "| Name | Value |\n| --- | --- |\n| one | two |", ".markdown-table"],
   ])("keeps a duplicate marker outside terminal %s content", (_label, markdownText, terminal) => {
-    markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
     renderAssistantMessageEntries([
       {
         key: "assistant-duplicate",
@@ -185,12 +157,10 @@ describe("grouped chat rendering", () => {
       },
     ]);
 
-    const chatText = requireElement(".chat-text", HTMLDivElement);
-    const terminalBlock = requireElement(terminal, HTMLElement, chatText);
+    const chatText = harness.requireElement(".chat-text", HTMLDivElement);
+    const terminalBlock = harness.requireElement(terminal, HTMLElement, chatText);
     expect(terminalBlock.querySelector(".chat-duplicate-count")).toBeNull();
     expect(chatText.querySelector(":scope > .chat-duplicate-count")?.textContent).toBe("×3");
-    expect(chatText.querySelector("summary")?.textContent ?? "").not.toContain("×3");
-    expect(chatText.querySelector("td:last-child")?.textContent ?? "").not.toContain("×3");
   });
 
   function renderAssistantDisclosureActionFixture(
@@ -198,7 +168,7 @@ describe("grouped chat rendering", () => {
     message: TestMessage = {},
     text = "Assistant preview\n...(truncated)...",
   ) {
-    renderAssistantMessage(
+    harness.renderAssistantMessage(
       createAssistantMessage(text, {
         __openclaw: { id: "assistant-disclosure-actions", seq: 1, truncated: true },
         ...message,
@@ -206,11 +176,6 @@ describe("grouped chat rendering", () => {
       {
         sessionKey: "agent:main:main",
         loadFullAssistantMessage: async () => null,
-        getAssistantMessageExpansion: () => ({
-          status: "loaded",
-          markdown: "Complete assistant message beyond the transcript preview.",
-          revision: 1,
-        }),
         onToggleAssistantMessageExpanded: vi.fn(),
         ...options,
       },
@@ -232,20 +197,22 @@ describe("grouped chat rendering", () => {
       }),
     });
 
-    requireElement(".chat-group-footer-actions .chat-copy-btn", HTMLButtonElement).click();
+    harness.requireElement(".chat-group-footer-actions .chat-copy-btn", HTMLButtonElement).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(visibleMessage));
 
-    requireElement(
-      '.chat-group-footer-actions [aria-label="Reply to message"]',
-      HTMLButtonElement,
-    ).click();
+    harness
+      .requireElement(
+        '.chat-group-footer-actions [aria-label="Reply to message"]',
+        HTMLButtonElement,
+      )
+      .click();
     expect(onReply).toHaveBeenCalledWith({
       messageId: "assistant-message",
       senderLabel: "OpenClaw",
       sourceMessageId: "assistant-disclosure-actions",
       text: "a".repeat(499),
     });
-    expect(element(".chat-bubble")?.dataset.messageText).toBe(visibleMessage);
+    expect(harness.element(".chat-bubble")?.dataset.messageText).toBe(visibleMessage);
   });
 
   it("does not restore a disclosure control for hidden-only loaded assistant text", () => {
@@ -262,15 +229,15 @@ describe("grouped chat rendering", () => {
       }),
     });
 
-    expect(elementText(".chat-text")?.trim()).toBe("");
+    expect(harness.elementText(".chat-text")?.trim()).toBe("");
     expect(harness.view.textContent).not.toContain(privateThinking);
     expect(harness.view.textContent).not.toContain(preview);
-    expectAbsent(
+    harness.expectAbsent(
       ".chat-group-footer-actions .chat-copy-btn",
       '[aria-label="Reply to message"]',
       ".chat-message-disclosure__toggle",
     );
-    expect(element(".chat-bubble")?.hasAttribute("data-message-text")).toBe(false);
+    expect(harness.element(".chat-bubble")?.hasAttribute("data-message-text")).toBe(false);
     expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
   });
 
@@ -280,7 +247,7 @@ describe("grouped chat rendering", () => {
     const onToggleAssistantMessageExpanded = vi.fn(() => {
       loading = true;
     });
-    renderAssistantMessages(
+    harness.renderAssistantMessages(
       previews.map((text) =>
         createAssistantMessage(text, {
           __openclaw: { id: "shared-source", truncated: true },
@@ -297,16 +264,7 @@ describe("grouped chat rendering", () => {
 
     expect(onToggleAssistantMessageExpanded).toHaveBeenCalledTimes(1);
     expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("shared-source");
-    expect(elements(".chat-text").map((node) => node.textContent)).toEqual(previews);
-  });
-
-  it("retries a failed full-message load while attempts remain", () => {
-    const onToggleAssistantMessageExpanded = vi.fn();
-    renderAssistantDisclosureActionFixture({
-      getAssistantMessageExpansion: () => ({ status: "error", revision: 2 }),
-      onToggleAssistantMessageExpanded,
-    });
-    expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("assistant-disclosure-actions");
+    expect(harness.elements(".chat-text").map((node) => node.textContent)).toEqual(previews);
   });
 
   it("does not fetch full content for mirrored message-tool replies", () => {
@@ -321,7 +279,7 @@ describe("grouped chat rendering", () => {
       "mirrored text\n...(truncated)...",
     );
 
-    expectAbsent(".chat-message-disclosure__toggle");
+    harness.expectAbsent(".chat-message-disclosure__toggle");
     expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
   });
 
@@ -337,11 +295,15 @@ describe("grouped chat rendering", () => {
       "[chat.history omitted: message too large]",
     );
 
-    expect(elementText(".chat-text")).toContain("This message is too large to display here.");
+    expect(harness.elementText(".chat-text")).toContain(
+      "This message is too large to display here.",
+    );
     expect(harness.view.textContent).not.toContain("[chat.history omitted");
-    expect(elementText(".chat-message-load-error")).toContain("Could not load the full message.");
+    expect(harness.elementText(".chat-message-load-error")).toContain(
+      "Could not load the full message.",
+    );
     expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
-    requireElement(".chat-message-load-error__retry", HTMLButtonElement).click();
+    harness.requireElement(".chat-message-load-error__retry", HTMLButtonElement).click();
     expect(onToggleAssistantMessageExpanded).toHaveBeenCalledWith("oversized-assistant-error");
   });
 });

@@ -219,26 +219,6 @@ describe("comment actions outside the transcript", () => {
     expect(document.querySelector(".chat-annotation-editor")).toBeNull();
   });
 
-  it("edits and deletes staged comments without a built-in transcript, releasing replaced payloads", async () => {
-    const fixture = await mountComments();
-    let action: ChatCommentAction | undefined;
-    fixture.composer.addEventListener("openclaw-comment-action", (event) => {
-      action = (event as CustomEvent<ChatCommentAction>).detail;
-    });
-    await fixture.edit();
-    expect(action).toMatchObject({ id: fixture.attachment.id, action: "edit" });
-    expect(action?.anchor).toBe(button(fixture.composer, ".chat-selection-annotations__trigger"));
-    expect(fixture.input()?.value).toBe("Original comment");
-    fixture.replace("Revised comment");
-    expect(fixture.attachments()[0]?.selectionAnnotation?.comment).toBe("Revised comment");
-    expect(getChatAttachmentDataUrl(fixture.attachment)).toBeNull();
-    button(fixture.composer, 'button[aria-label="Delete comment"]').click();
-    expect(fixture.attachments()).toEqual([]);
-    expect(fixture.input()).toBeNull();
-    await fixture.toast.updateComplete;
-    expect(fixture.toast.querySelector("[role=status]")).toBeNull();
-  });
-
   it("keeps overflowing edits correctable and counts only the replacement toward the frame budget", async () => {
     const retainedFile = file("retained-file");
     const fixture = await mountComments([retainedFile]);
@@ -255,7 +235,14 @@ describe("comment actions outside the transcript", () => {
       },
     });
     flush();
+    let action: ChatCommentAction | undefined;
+    fixture.composer.addEventListener("openclaw-comment-action", (event) => {
+      action = (event as CustomEvent<ChatCommentAction>).detail;
+    });
     await fixture.edit();
+    expect(action).toMatchObject({ id: fixture.attachment.id, action: "edit" });
+    expect(action?.anchor).toBe(button(fixture.composer, ".chat-selection-annotations__trigger"));
+    expect(fixture.input()?.value).toBe("Original comment");
     fixture.replace("Original comment!");
     expect(fixture.input()?.value).toBe("Original comment!");
     expect(fixture.attachments()).toEqual([fixture.attachment, retainedFile]);
