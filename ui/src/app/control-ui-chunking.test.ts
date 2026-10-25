@@ -245,11 +245,12 @@ describe("Control UI build chunking", () => {
     expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);
   });
 
-  it("groups stable runtime dependencies into bounded chunks", () => {
+  it("keeps optional runtime dependencies separate from initial modules", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
-    expect(controlUiCodeSplitting.groups[1]).toMatchObject({
+    expect(
+      controlUiCodeSplitting.groups.find((group) => group.name === "control-ui-core"),
+    ).toMatchObject({
       tags: ["$initial"],
-      maxSize: 1024 * 1024,
     });
     for (const [id, expected] of [
       ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-highlight-runtime"],
