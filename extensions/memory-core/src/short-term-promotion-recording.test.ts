@@ -2,15 +2,10 @@
 // snippets: heading-inherited ordinary prose is kept, transcript wrappers are
 // still rejected (issue #161268).
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
+import { describe, expect, it as baseIt, vi } from "vitest";
 import { recordShortTermRecalls, type ShortTermRecallEntry } from "./short-term-promotion.js";
-import {
-  configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
-  shortTermTestState as testing,
-} from "./test-helpers.js";
+import { createMemoryCoreTestHarness, shortTermTestState as testing } from "./test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
@@ -44,20 +39,7 @@ async function readRecallStoreSnippets(workspaceDir: string): Promise<string[]> 
 }
 
 describe("short-term recall recording of Conversation Summary snippets", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
-
-  beforeAll(async () => {
-    await configureMemoryCoreDreamingStateForTests();
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-promote-recording-"));
-  });
-
-  afterAll(async () => {
-    if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true });
-    }
-    resetMemoryCoreDreamingStateForTests();
-  });
+  const { createTempWorkspace } = createMemoryCoreTestHarness();
 
   baseIt.each([
     ["Conversation Summary: Router VLAN 20 was migrated successfully.", true],
@@ -75,7 +57,7 @@ describe("short-term recall recording of Conversation Summary snippets", () => {
     ["Conversation Summary: - **Session Key**: agent:main:main", false],
     ["Conversation Summary: Session Key rotation was completed.", true],
   ])("records %s: %s", async (snippet, accepted) => {
-    const workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
+    const workspaceDir = await createTempWorkspace("memory-promote-recording-");
     await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
     await recordMemoryRecalls(workspaceDir, "session recap", [
       memoryRecallResult("memory/2026-06-18.md", 1, 1, 0.92, snippet),

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ErrorCodes,
@@ -26,6 +27,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { projectChatDisplayMessagesWithState } from "../chat-display-projection.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
@@ -300,6 +302,85 @@ async function createCatalog(restricted: boolean) {
 }
 
 describe("sessions.catalog.import with durable Gateway owners", () => {
+  it("reopens preserved tool records through the shared display conversion", () =>
+    withCatalog(async (fixture) => {
+      fixture.source.splice(
+        0,
+        fixture.source.length,
+        {
+          id: "failed",
+          activity: {
+            itemId: "tool:failed",
+            toolCallId: "failed",
+            name: "bash",
+            kind: "tool",
+            phase: "end",
+            title: "Run false",
+            status: "failed",
+            commandBearing: true,
+          },
+          type: "toolResult",
+          toolName: "bash",
+          toolCallId: "failed",
+          toolInput: { command: "false" },
+          text: "failure",
+          isError: true,
+          exitCode: 1,
+        },
+        {
+          id: "unknown",
+          type: "toolResult",
+          toolName: "custom",
+          toolCallId: "unknown",
+          text: "error-shaped text without a recorded outcome",
+        },
+      );
+      expectSuccess(await fixture.call(), { created: true, importedItems: 2 });
+      const stored = await fixture.transcript();
+      expect(stored[1]?.message).toMatchObject({
+        content: [{ type: "text", text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT") }],
+      });
+      const display = projectChatDisplayMessagesWithState(
+        stored.map(({ message, entryId }) =>
+          Object.assign({}, message, {
+            __openclaw: {
+              ...asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]),
+              id: entryId,
+            },
+          }),
+        ),
+      );
+      expect(display.activity).toMatchObject([
+        { items: [{ name: "bash", status: "failed", title: "Run false" }] },
+      ]);
+      expect(display.messages.slice(1)).toMatchObject([
+        {
+          content: [
+            { type: "toolCall", id: "failed", name: "bash", arguments: { command: "false" } },
+            {
+              type: "toolResult",
+              toolCallId: "failed",
+              name: "bash",
+              isError: true,
+              content: [{ type: "text", text: "failure" }],
+              details: { exitCode: 1 },
+            },
+          ],
+        },
+        {
+          content: [
+            {
+              type: "toolResult",
+              name: "custom",
+              toolCallId: "unknown",
+              content: [{ type: "text", text: "error-shaped text without a recorded outcome" }],
+              __openclaw: { toolOutput: { outcome: "unknown" } },
+            },
+          ],
+        },
+      ]);
+    }));
+
   it("imports and re-imports without waiting on model catalog publication", () =>
     withCatalog(async (fixture) => {
       const loadCatalog = vi

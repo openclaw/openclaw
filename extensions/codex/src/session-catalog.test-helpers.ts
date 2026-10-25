@@ -282,15 +282,7 @@ type SessionEntrySummary = ReturnType<SessionRuntime["listSessionEntries"]>[numb
 type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
   agentId?: string;
 };
-type CatalogMethodName = "list" | "read" | "continueSession" | "archive" | "openTerminal";
-type CatalogMethod<K extends CatalogMethodName> = (
-  params: OptionalCatalogAgent<Parameters<NonNullable<RegisteredSessionCatalogProvider[K]>>[0]>,
-) => ReturnType<NonNullable<RegisteredSessionCatalogProvider[K]>>;
-type SessionCatalogProvider = {
-  [K in keyof RegisteredSessionCatalogProvider]: K extends CatalogMethodName
-    ? CatalogMethod<K>
-    : RegisteredSessionCatalogProvider[K];
-};
+type SessionCatalogProvider = RegisteredSessionCatalogProvider;
 
 function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
   const forAgent = <P extends { agentId?: string }>(params: P) => ({ agentId: "main", ...params });

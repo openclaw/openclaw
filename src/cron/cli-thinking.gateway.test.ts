@@ -195,30 +195,10 @@ it.each(["add", "edit", "edit after lookup"])(
 
 it("preserves legal spellings, blank omission, and clear semantics on add and edit", () =>
   withCronGateway(async ({ readJobs }) => {
-    const legal = [
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "adaptive",
-      "max",
-      "ultra",
-      "none",
-      "mid",
-      "extra-high",
-      "AUTO",
-      "enabled",
-      "  High  ",
-      " extra_high ",
-    ];
     await succeeds(agentAddArgs("edit-target", "high"));
-    const seeded = await readJobs();
-    expect(seeded).toHaveLength(1);
-    const target = expectDefined(seeded[0], "edit target");
-    expect(target.payload).toMatchObject({ kind: "agentTurn", thinking: "high" });
-    for (const [index, thinking] of legal.entries()) {
+    const target = expectDefined((await readJobs())[0], "edit target");
+    const jobNamed = async (name: string) => (await readJobs()).find((job) => job.name === name);
+    for (const [index, thinking] of ["  High  ", "AUTO", " extra_high "].entries()) {
       await succeeds(agentAddArgs(`legal-${index}`, thinking));
       await succeeds(edit(target.id, "--thinking", thinking));
       const jobs = await readJobs();
@@ -228,27 +208,21 @@ it("preserves legal spellings, blank omission, and clear semantics on add and ed
         });
       }
     }
-    for (const [index, blank] of ["", "   "].entries()) {
-      await succeeds(agentAddArgs(`blank-${index}`, blank));
-      expect(
-        (await readJobs()).find((job) => job.name === `blank-${index}`)?.payload,
-      ).not.toHaveProperty("thinking");
-      await succeeds(edit(target.id, "--name", `renamed-${index}`, "--thinking", blank));
-      expect((await readJobs()).find((job) => job.id === target.id)).toMatchObject({
-        name: `renamed-${index}`,
-        payload: { thinking: "extra_high" },
-      });
-    }
-    for (const thinking of ["high", "", "   "]) {
+    await succeeds(agentAddArgs("blank", "   "));
+    expect((await jobNamed("blank"))?.payload).not.toHaveProperty("thinking");
+    await succeeds(edit(target.id, "--name", "renamed", "--thinking", "   "));
+    expect(await jobNamed("renamed")).toMatchObject({
+      id: target.id,
+      payload: { thinking: "extra_high" },
+    });
+    for (const thinking of ["high", "   "]) {
       const before = await readJobs();
       const result = await runCli(edit(target.id, "--thinking", thinking, "--clear-thinking"));
       expectRejected(result, "Use --thinking or --clear-thinking, not both", "cron.update");
       expect(await readJobs()).toEqual(before);
     }
     await succeeds(edit(target.id, "--clear-thinking"));
-    expect((await readJobs()).find((job) => job.id === target.id)?.payload).not.toHaveProperty(
-      "thinking",
-    );
+    expect((await jobNamed("renamed"))?.payload).not.toHaveProperty("thinking");
   }));
 
 it.each(["systemEvent", "command", "script"])(

@@ -2,6 +2,22 @@ import { tableFromArrays } from "apache-arrow";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createMemoryCliHarness as createHarness } from "./memory-cli.test-support.js";
 
+vi.mock("openclaw/plugin-sdk/cli-state-owner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/cli-state-owner")>();
+  return {
+    ...actual,
+    runWithLocalStateOwner: vi.fn(
+      async (params: Parameters<typeof actual.runWithLocalStateOwner>[0]) =>
+        await params.runLocal({
+          env: {},
+          config: {},
+          signal: new AbortController().signal,
+          assertCurrent: () => {},
+        }),
+    ),
+  };
+});
+
 let stdout = "";
 beforeEach(() => {
   stdout = "";
@@ -12,6 +28,24 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("optimizes the whole table offline and closes it after reporting counts", async () => {
+  const { runWithLocalStateOwner } = await import("openclaw/plugin-sdk/cli-state-owner");
+  const harness = createHarness();
+  await harness.run("optimize");
+  await expect(harness.run("optimize", "--agent", "private")).rejects.toMatchObject({
+    code: "commander.unknownOption",
+  });
+
+  expect(runWithLocalStateOwner).toHaveBeenCalledWith(
+    expect.objectContaining({ onForeignOwner: "refuse", params: {} }),
+  );
+  expect(harness.optimize).toHaveBeenCalledExactlyOnceWith(expect.any(Function));
+  expect(console.log).toHaveBeenCalledWith("Fragments: 6 -> 1");
+  expect(console.log).toHaveBeenCalledWith("Rows: 6 -> 6");
+  expect(harness.dbClose).toHaveBeenCalledOnce();
+  expect(harness.embed).not.toHaveBeenCalled();
+});
 
 it("embeds a CLI search with the explicitly requested agent's authentication", async () => {
   const harness = createHarness();

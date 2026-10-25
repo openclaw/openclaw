@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { CronJob, CronRunLogEntry } from "../api/types.ts";
+import type { CronJob, CronRunsResult } from "../api/types.ts";
+import { createCronRunsResult } from "../lib/cron/cron.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
@@ -26,7 +27,7 @@ suite.define(() => {
       delivery: { mode: "announce", channel: "last", bestEffort: true },
       state: {},
     };
-    const entries: CronRunLogEntry[] = [
+    const entries: CronRunsResult["entries"] = [
       {
         ts: 4_000,
         jobId: job.id,
@@ -66,14 +67,7 @@ suite.define(() => {
               nextOffset: null,
               hasMore: false,
             }),
-            "cron.runs": {
-              entries,
-              total: entries.length,
-              offset: 0,
-              limit: 50,
-              nextOffset: null,
-              hasMore: false,
-            },
+            "cron.runs": createCronRunsResult(entries),
             "cron.status": { enabled: true, triggersEnabled: true, jobs: 1 },
           },
         });

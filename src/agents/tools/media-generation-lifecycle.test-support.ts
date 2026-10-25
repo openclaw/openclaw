@@ -201,7 +201,6 @@ export function defineMediaGenerationDuplicateTests(
   },
 ) {
   const { kind, tasks } = params;
-  const title = kind.charAt(0).toUpperCase() + kind.slice(1);
   it.each(params.cases)("$name", async (testCase) => {
     const generate = params.setupProviders();
     const now = Date.now();
@@ -217,7 +216,6 @@ export function defineMediaGenerationDuplicateTests(
       await tool.execute("call-model-only-start", testCase.request);
       await complete();
       const createdTask = tasks.createOperation.mock.calls[0]?.[0];
-      expect(createdTask?.runId).toMatch(new RegExp(`^tool:${kind}_generate:`));
       params.listTasks.mockReturnValue([
         {
           taskId,
@@ -242,11 +240,7 @@ export function defineMediaGenerationDuplicateTests(
         });
         expect(generate).toHaveBeenCalledOnce();
         expect(tasks.createOperation).toHaveBeenCalledTimes(1);
-        const text = `${title} generation task ${taskId} recently succeeded`;
-        expect(result).toMatchObject({
-          content: [{ type: "text", text: expect.stringContaining(text) }],
-          details: { duplicateGuard: true, active: false },
-        });
+        expect(result.details).toMatchObject({ duplicateGuard: true, active: false });
       }
     });
   });

@@ -40,6 +40,7 @@ import {
   prepareGitHubPublicationOptionsRead,
   preparePersonalGitHubSessionActionV2,
 } from "./github-personal-authorization.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
@@ -261,10 +262,10 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
 
       const coordinator = context.githubPublicationService;
       if (!coordinator) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "GitHub publication is unavailable on this Gateway"),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "GitHub publication is unavailable on this Gateway",
         );
         return;
       }
@@ -277,11 +278,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           params.agentId &&
           normalizeAgentId(params.agentId) !== normalizeAgentId(caller.agentId))
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "GitHub publication session is invalid"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "GitHub publication session is invalid");
         return;
       }
       const agentId = caller?.agentId ?? params.agentId;
@@ -307,10 +304,10 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       });
       const loaded = selectedSession.loaded;
       if (!loaded.entry?.sessionId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "GitHub publication session was not found"),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "GitHub publication session was not found",
         );
         return;
       }

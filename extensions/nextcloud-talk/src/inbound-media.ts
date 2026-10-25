@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { containsAsciiControlCharacter as containsControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { fetchWithSsrFGuard, type OpenClawConfig, type PluginRuntime } from "../runtime-api.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
@@ -154,8 +154,7 @@ function resolveCanonicalUserId(payload: unknown): string | undefined {
   if (!isRecord(payload) || !isRecord(payload.ocs) || !isRecord(payload.ocs.data)) {
     return undefined;
   }
-  const id = payload.ocs.data.id;
-  return typeof id === "string" && id.trim() ? id.trim() : undefined;
+  return normalizeOptionalString(payload.ocs.data.id);
 }
 
 function parseHistorySize(value: unknown): number | undefined {

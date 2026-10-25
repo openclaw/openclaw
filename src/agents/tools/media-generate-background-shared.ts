@@ -14,7 +14,7 @@ import {
   captureSessionTranscriptTargetBinding,
   sameSessionTranscriptStorageEnvironment,
 } from "../../config/sessions/transcript-target-binding.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../cron/run-continuation-cleanup.js";
 import {
@@ -391,7 +391,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
           progressSummary: params.progressSummary,
         });
       }, MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS);
-      interval.unref?.();
+      interval.unref();
       try {
         executed = await params.run();
       } finally {

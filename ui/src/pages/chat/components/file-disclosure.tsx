@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, onSettled, Show } from "solid-js";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
+import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 
 /** Retains exiting file content; disclosure state and data remain with the caller. */
 export function FileDisclosure(props: {
@@ -22,7 +22,7 @@ export function FileDisclosure(props: {
   let applied: typeof current | undefined;
   let height = 0;
   let ready = false;
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const reducedMotion = createMediaQuerySource("(prefers-reduced-motion: reduce)");
   const folder = () => props.variant === "folder";
   const finish = () => {
     animation?.cancel();
@@ -42,7 +42,7 @@ export function FileDisclosure(props: {
       !ready ||
       !current.active ||
       current.instant ||
-      reducedMotion.matches ||
+      reducedMotion.read() ||
       from === destination
     ) {
       finish();
@@ -106,11 +106,11 @@ export function FileDisclosure(props: {
   onSettled(() => {
     ready = true;
     const motionChanged = () => {
-      if (reducedMotion.matches) {
+      if (reducedMotion.read()) {
         finish();
       }
     };
-    const stopMotion = listen(reducedMotion, "change", motionChanged);
+    const stopMotion = reducedMotion.subscribe(motionChanged);
     return () => {
       animation?.cancel();
       stopMotion();

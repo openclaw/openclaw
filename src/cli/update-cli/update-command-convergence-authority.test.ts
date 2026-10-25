@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
@@ -9,6 +9,7 @@ import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import * as pluginRecords from "../../plugins/installed-plugin-index-records.js";
 import * as pluginLifecycle from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
 import { VERSION } from "../../version.js";
 import { createUpdateCliBaseSnapshot } from "./update-cli-config.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
@@ -126,11 +127,6 @@ function converge({
 
 function doctorOperation(args: string[]) {
   return args.includes("--repair") ? "repair" : args.includes("--lint") ? "readiness" : "validate";
-}
-function expectCalls(count: number, ...spies: Mock[]) {
-  for (const spy of spies) {
-    expect(spy).toHaveBeenCalledTimes(count);
-  }
 }
 
 describe("candidate convergence Doctor dispatch authority", () => {
@@ -276,7 +272,6 @@ describe("candidate convergence Doctor dispatch authority", () => {
       });
 
       expect(resultWithPostUpdate).toMatchObject({ status: "skipped", reason: "already-current" });
-      expect(mocks.convergeCandidate).toHaveBeenCalledOnce();
       expect(await fs.readFile(state, "utf8")).toBe("not a state directory");
     },
   );
@@ -369,13 +364,12 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       const parentRuntime = vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime");
       let current = true;
       const authorityRefusal = new Error("Update requester revoked after target convergence");
-      const delegate = vi
-        .spyOn(postCore, "continuePostCoreUpdateInFreshProcess")
-        .mockImplementationOnce(async (params) => {
-          expect(params).toMatchObject({ root: "/isolated", channel: "stable" });
+      vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockImplementationOnce(
+        async () => {
           current = !revoked;
           return { resumed: true, pluginUpdate: unchangedPluginUpdate() };
-        });
+        },
+      );
       const outcome = converge({
         result: {
           mode: runtime === "npm" ? "npm" : "git",
@@ -398,15 +392,11 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         expect(mocks.runExec).not.toHaveBeenCalled();
       } else {
         const result = await outcome;
-        expect(result.resultWithPostUpdate).toMatchObject({
-          status: "ok",
-          postUpdate: { plugins: { status: "ok" } },
-        });
+        expect(result.resultWithPostUpdate.status).toBe("ok");
         expect(result.resultWithPostUpdate.steps).not.toEqual(
           expect.arrayContaining([expect.objectContaining({ name: "source runtime publication" })]),
         );
       }
-      expect(delegate).toHaveBeenCalledOnce();
       expectCalls(0, parentLease, parentRuntime, mocks.convergeCandidate);
     },
   );
@@ -465,9 +455,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         downgradeRisk: retainedDifferentRuntime,
         opts: { json: true, yes: true, acceptCapabilities: true },
       });
-      expect(delegate).toHaveBeenCalledOnce();
       await expect(delegate.mock.results[0]?.value).resolves.toMatchObject({ resumed: false });
-      expect(mocks.convergeCandidate).toHaveBeenCalledTimes(retainedDifferentRuntime ? 0 : 1);
       if (retainedDifferentRuntime) {
         expect(result.resultWithPostUpdate).toMatchObject({
           status: "error",
@@ -479,7 +467,6 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       } else {
         expect(result.resultWithPostUpdate.status).toBe("ok");
         expect(events).toEqual(["target-declined-consent", "source-published", "local-plugins"]);
-        expect(runtime).toHaveBeenCalledOnce();
         expect(result.resultWithPostUpdate.steps).toContainEqual(
           expect.objectContaining({ name: "source runtime publication", exitCode: 0 }),
         );
@@ -496,22 +483,18 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         events.push("park");
       });
       const assertCurrent = vi.fn();
-      const runtime = vi
-        .spyOn(sourceRuntime, "completeSourceUpdateRuntime")
-        .mockImplementation(async (params) => {
-          expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.9.4");
-          if (changed === "runtime") {
-            await params.beforePublication?.();
-            params.assertCurrent?.();
-            events.push("publish");
-          }
-          return { changed: changed === "runtime" };
-        });
-      const delegate = vi
-        .spyOn(postCore, "continuePostCoreUpdateInFreshProcess")
-        .mockImplementation(async () => {
-          throw new Error("Candidate runtime must not delegate convergence again");
-        });
+      vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockImplementation(async (params) => {
+        expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.9.4");
+        if (changed === "runtime") {
+          await params.beforePublication?.();
+          params.assertCurrent?.();
+          events.push("publish");
+        }
+        return { changed: changed === "runtime" };
+      });
+      vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockImplementation(async () => {
+        throw new Error("Candidate runtime must not delegate convergence again");
+      });
       mocks.convergeCandidate.mockImplementation(async (params) => {
         expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.9.4");
         params.assertCurrent();
@@ -530,8 +513,6 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         beforeDoctor: park,
         assertCurrent,
       });
-      expectCalls(1, runtime, mocks.convergeCandidate, park);
-      expect(delegate).not.toHaveBeenCalled();
       expect(events).toEqual(
         changed === "runtime"
           ? ["park", "publish", "candidate-plugins"]

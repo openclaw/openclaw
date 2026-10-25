@@ -5,21 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { PreparedWorkerSsh } from "./ssh.js";
 import { sshArgvPort } from "./worker-ssh-argv.test-support.js";
 import { runBoundedInboundRsync } from "./workspace-sync-helpers.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 afterEach(() => vi.restoreAllMocks());
-
-const result = (code = 0): SpawnResult => ({
-  stdout: "",
-  stderr: "",
-  code,
-  signal: null,
-  killed: false,
-  termination: "exit",
-});
 
 function createPreparedSsh(): PreparedWorkerSsh {
   const prepared = {
@@ -55,7 +47,7 @@ function createWorkspaceActions(
 
 const retries = ["never", "idempotent"] as const;
 it.each(retries)("rejects stale %s authority after preparation", async (transportRetry) => {
-  const run = vi.fn(async () => result());
+  const run = vi.fn(async () => createCommandResult());
   let current = true;
   const actions = createWorkspaceActions(run, async () => {
     await Promise.resolve();
@@ -76,15 +68,17 @@ it.each(retries)("rejects stale %s authority after preparation", async (transpor
   expect(run).not.toHaveBeenCalled();
 });
 
-it.each(retries)("bounds %s retry and selected ports", async (transportRetry) => {
+it.each(retries)("bounds %s retry by monotonic time and selected ports", async (transportRetry) => {
   let now = 1_000;
   vi.spyOn(performance, "now").mockImplementation(() => now);
+  const wall = vi.spyOn(Date, "now").mockReturnValue(1_000);
   const run = vi
     .fn<(argv: string[], options: CommandOptions) => Promise<SpawnResult>>()
-    .mockResolvedValue(result())
+    .mockResolvedValue(createCommandResult())
     .mockImplementationOnce(async () => {
+      wall.mockReturnValue(-300_000);
       now += transportRetry === "idempotent" ? 175 : 0;
-      return result(255);
+      return createCommandResult({ code: 255 });
     });
   const actions = createWorkspaceActions(run);
 
@@ -94,7 +88,7 @@ it.each(retries)("bounds %s retry and selected ports", async (transportRetry) =>
       argv: ["printf", "command"],
       timeoutMs: transportRetry === "never" ? 777 : 1_000,
     }),
-  ).resolves.toEqual(result(transportRetry === "never" ? 255 : 0));
+  ).resolves.toEqual(createCommandResult({ code: transportRetry === "never" ? 255 : 0 }));
   const calls = run.mock.calls;
   const observed = calls.map(([argv, { timeoutMs }]) => [sshArgvPort(argv), timeoutMs]);
   if (transportRetry === "idempotent") {
@@ -153,7 +147,7 @@ describe("bounded inbound workspace transfer", () => {
       signal?.addEventListener("abort", () => completed.reject(new Error("transfer cancelled")), {
         once: true,
       });
-      return (active ? completed.promise : Promise.resolve(result())).finally(() => {
+      return (active ? completed.promise : Promise.resolve(createCommandResult())).finally(() => {
         state.settled = true;
       });
     };
@@ -178,8 +172,8 @@ describe("bounded inbound workspace transfer", () => {
       if (transferState === "active") {
         await vi.advanceTimersByTimeAsync(25);
         await renamed.promise;
-        completed.resolve(result());
-        await expect(outcome).resolves.toEqual(result());
+        completed.resolve(createCommandResult());
+        await expect(outcome).resolves.toEqual(createCommandResult());
       } else {
         await expect(outcome).resolves.toMatchObject({
           error: { code: "not-found", cause: { code: "ENOENT", path: temporaryManifest } },
@@ -221,7 +215,7 @@ describe("bounded inbound workspace transfer", () => {
           destinationRoot,
           async () => {
             await fs.writeFile(path.join(destinationRoot, "oversized"), "over quota");
-            return result();
+            return createCommandResult();
           },
           limit === "entries" ? { entryLimit: 0 } : { totalByteLimit: 1 },
         ),

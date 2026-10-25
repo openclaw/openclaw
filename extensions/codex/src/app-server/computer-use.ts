@@ -618,11 +618,11 @@ async function resolveMarketplaceRef(params: {
   }
 
   const waitUntil = discoverDefaultMarketplace
-    ? Date.now() + params.config.marketplaceDiscoveryTimeoutMs
+    ? performance.now() + params.config.marketplaceDiscoveryTimeoutMs
     : 0;
   if (
     candidates.length === 0 &&
-    waitUntil > Date.now() &&
+    waitUntil > performance.now() &&
     (await codexNativePluginsDisabled(params.request))
   ) {
     return {
@@ -631,11 +631,11 @@ async function resolveMarketplaceRef(params: {
     };
   }
   while (candidates.length === 0) {
-    if (Date.now() >= waitUntil) {
+    if (performance.now() >= waitUntil) {
       break;
     }
     await delay(
-      Math.min(CURATED_MARKETPLACE_POLL_INTERVAL_MS, waitUntil - Date.now()),
+      Math.min(CURATED_MARKETPLACE_POLL_INTERVAL_MS, waitUntil - performance.now()),
       params.signal,
     );
     candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);

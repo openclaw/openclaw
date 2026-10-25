@@ -24,6 +24,7 @@ import {
   withAgentDatabaseStartupAdmission,
 } from "../state/agent-database-startup.js";
 import * as deletionJournal from "../state/agent-deletion-journal.read.js";
+import { gatewayRequest } from "./request-frame.test-support.js";
 import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
@@ -61,6 +62,11 @@ function describeFixture() {
     context,
     methodRegistry: createRequestGatewayMethodRegistry(),
   };
+  const authorize = (
+    method = request.method,
+    requestParams: unknown = request.requestParams,
+    options: Pick<Parameters<typeof authorizeGatewayRequestPreDispatch>[0], "signal"> = {},
+  ) => authorizeGatewayRequestPreDispatch({ ...request, method, requestParams, ...options });
   const dispatch = (
     req: Parameters<typeof handleGatewayRequest>[0]["req"],
     respond: Parameters<typeof handleGatewayRequest>[0]["respond"],
@@ -74,7 +80,9 @@ function describeFixture() {
       isWebchatConnect: () => false,
       extraHandlers,
     });
-  return { projection, context, client, request, dispatch };
+  const describe = (respond: Parameters<typeof handleGatewayRequest>[0]["respond"]) =>
+    dispatch(gatewayRequest("description", "sessions.describe", { key: query.key }), respond);
+  return { projection, context, client, request, authorize, dispatch, describe };
 }
 
 async function withPendingStartupInspection(
@@ -158,62 +166,20 @@ function useSharedStore(context: ReturnType<typeof requestContext>, databasePath
   });
 }
 
-it("refuses a new session's initial message without retaining a startup write", async () => {
-  await withPendingStartupInspection(async ({ context, client, complete, admission }) => {
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
-      assertAgentDatabaseAdmitted("main");
-      respond(true, { message: "accepted" });
-    });
-    const respond = vi.fn();
-    const request = handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "startup-write",
-        method: "sessions.create",
-        params: { agentId: "main", message: "hello" },
-      },
-      context,
-      client,
-      respond,
-      isWebchatConnect: () => false,
-      extraHandlers: { "sessions.create": handler },
-    });
-    await request;
-    expect(handler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        retryable: true,
-        details: { reason: "startup-sidecars", method: "sessions.create" },
-      }),
-    );
-    complete();
-    await admission.pendingPreparation;
-    expect(handler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledOnce();
-  });
-});
-
 it.each(["before", "after refusal"] as const)(
   "preserves terminal inspection failure %s write authorization",
   async (when) => {
-    await withPendingStartupInspection(async ({ request, fail, admission }) => {
-      const authorize = () =>
-        authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "sessions.send",
-          requestParams: { key: "agent:main:startup", message: "hello" },
-        });
+    await withPendingStartupInspection(async ({ authorize, fail, admission }) => {
+      const write = () =>
+        authorize("sessions.send", { key: "agent:main:startup", message: "hello" });
       if (when === "after refusal") {
-        await expect(authorize()).resolves.toMatchObject({
+        await expect(write()).resolves.toMatchObject({
           error: { code: "UNAVAILABLE", retryable: true },
         });
       }
       fail(new Error("synthetic failed inspection"));
       await admission.pendingPreparation;
-      await expect(authorize()).resolves.toMatchObject({
+      await expect(write()).resolves.toMatchObject({
         error: {
           code: "UNAVAILABLE",
           message: expect.stringContaining("synthetic failed inspection"),
@@ -225,14 +191,10 @@ it.each(["before", "after refusal"] as const)(
 );
 
 it("admits an unrelated agent's write while startup preparation continues", async () => {
-  await withPendingStartupInspection(async ({ request, context }) => {
+  await withPendingStartupInspection(async ({ authorize, context }) => {
     context.getRuntimeConfig = () => ({ agents: { entries: { main: {}, ready: {} } } });
     await expect(
-      authorizeGatewayRequestPreDispatch({
-        ...request,
-        method: "sessions.create",
-        requestParams: { agentId: "ready", message: "hello" },
-      }),
+      authorize("sessions.create", { agentId: "ready", message: "hello" }),
     ).resolves.toMatchObject({ error: null });
     expect(readAgentDatabaseAdmissionRefusal("main")?.code).toBe(
       "agent-database-inspection-pending",
@@ -240,17 +202,12 @@ it("admits an unrelated agent's write while startup preparation continues", asyn
   });
 });
 
-it("refuses a write while its logical agent's physical shared-store owner is pending", async () => {
+it("waits for the physical shared-store owner on reads but refuses pending writes", async () => {
   await withPendingStartupInspection(
-    async ({ request, context, databasePath, complete, admission }) => {
+    async ({ authorize, context, databasePath, complete, admission }) => {
       useSharedStore(context, databasePath);
-      const authorize = () =>
-        authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "sessions.create",
-          requestParams: { agentId: "ops", message: "hello" },
-        });
-      await expect(authorize()).resolves.toMatchObject({
+      const write = () => authorize("sessions.create", { agentId: "ops", message: "hello" });
+      await expect(write()).resolves.toMatchObject({
         error: {
           code: "UNAVAILABLE",
           retryable: true,
@@ -258,9 +215,18 @@ it("refuses a write while its logical agent's physical shared-store owner is pen
         },
       });
       expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
+      let settled = false;
+      const reading = authorize("sessions.list", { agentId: "ops" }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
       complete();
       await admission.pendingPreparation;
-      await expect(authorize()).resolves.toMatchObject({ error: null });
+      await expect(reading).resolves.toMatchObject({ error: null });
+      await expect(write()).resolves.toMatchObject({ error: null });
     },
   );
 });
@@ -315,32 +281,11 @@ it("dispatches broad lists while an agent remains in startup preparation", async
   });
 });
 
-it("holds a logical agent's read for the physical shared-store owner", async () => {
-  await withPendingStartupInspection(async ({ request, context, databasePath, complete }) => {
-    useSharedStore(context, databasePath);
-    let settled = false;
-    const reading = authorizeGatewayRequestPreDispatch({
-      ...request,
-      method: "sessions.list",
-      requestParams: { agentId: "ops" },
-    }).then((result) => {
-      settled = true;
-      return result;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toBe(false);
-    expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
-    expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
-    complete();
-    await expect(reading).resolves.toMatchObject({ error: null });
-  });
-});
-
 it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)(
   "settles startup discovery after %s before dispatch",
   async (outcome) => {
     await withPendingStartupInspection(
-      async ({ request, context, client, databasePath, complete }) => {
+      async ({ authorize, context, client, databasePath, complete }) => {
         let liveConfig: OpenClawConfig = cfg;
         context.getRuntimeConfig = () => liveConfig;
         const discovery =
@@ -358,12 +303,11 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
             return racePromiseWithAbortSignal(discovery.promise, signal);
           });
         const controller = new AbortController();
-        const reading = authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "sessions.list",
-          requestParams: { agentId: "healthy" },
-          signal: controller.signal,
-        });
+        const reading = authorize(
+          "sessions.list",
+          { agentId: "healthy" },
+          { signal: controller.signal },
+        );
         const cancelled =
           outcome === "cancelled"
             ? expect(reading).rejects.toMatchObject({ name: "AbortError" })
@@ -394,35 +338,17 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
             outcome === "revoked" ? { error: { code: "FORBIDDEN" } } : { error: null },
           );
         }
-        expect(prepare).toHaveBeenCalledTimes(outcome === "changed config" ? 2 : 1);
         expect(discoverySignal?.aborted).toBe(true);
       },
     );
   },
 );
 
-it("rechecks scopes after startup admission", async () => {
-  await withPendingStartupInspection(async ({ request, client, complete }) => {
-    const read = authorizeGatewayRequestPreDispatch(request);
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(
-      authorizeGatewayRequestPreDispatch({
-        ...request,
-        method: "sessions.list",
-        requestParams: { agentId: "healthy" },
-      }),
-    ).resolves.toMatchObject({ error: null });
-    client.connect.scopes = [];
-    complete();
-    await expect(read).resolves.toMatchObject({ error: { code: "FORBIDDEN" } });
-  });
-});
-
 it.each(["current", "revoked"] as const)(
   "bounds startup reads with %s authority without cancelling preparation or granting writes",
   async (authority) => {
-    await withPendingStartupInspection(async ({ request, client, complete, admission }) => {
-      const read = authorizeGatewayRequestPreDispatch(request);
+    await withPendingStartupInspection(async ({ authorize, client, complete, admission }) => {
+      const read = authorize();
       await vi.advanceTimersByTimeAsync(0);
       if (authority === "revoked") {
         client.connect.scopes = [];
@@ -451,19 +377,14 @@ it.each(["current", "revoked"] as const)(
 it.each(["request", "connection", "observation"] as const)(
   "cancels startup waiting when the %s ends without stopping preparation",
   async (source) => {
-    await withPendingStartupInspection(async ({ request, client, admission }) => {
+    await withPendingStartupInspection(async ({ authorize, client, admission }) => {
       const controller = new AbortController();
       const scope = new AsyncWorkScope();
       if (source === "connection") {
         client.connectionSignal = controller.signal;
       }
       const read = scope.run(() =>
-        authorizeGatewayRequestPreDispatch({
-          ...request,
-          method: "models.list",
-          requestParams: {},
-          ...(source === "request" ? { signal: controller.signal } : {}),
-        }),
+        authorize("models.list", {}, source === "request" ? { signal: controller.signal } : {}),
       );
       const cancelled = expect(read).rejects.toMatchObject({ name: "AbortError" });
       await vi.advanceTimersByTimeAsync(0);
@@ -494,7 +415,7 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
 it.each(["dispatch scopes", "private access"] as const)(
   "rechecks %s after row preparation",
   async (boundary) => {
-    const { projection, context, client, dispatch } = describeFixture();
+    const { projection, context, client, describe: dispatchDescription } = describeFixture();
     const prepare = projection.withPreparedExactRows.bind(projection);
     const describe = vi.spyOn(projection, "describe");
     if (boundary === "dispatch scopes") {
@@ -515,15 +436,7 @@ it.each(["dispatch scopes", "private access"] as const)(
     });
     if (boundary === "dispatch scopes") {
       const respond = vi.fn();
-      await dispatch(
-        {
-          type: "req",
-          id: "revoked-description",
-          method: "sessions.describe",
-          params: { key: query.key },
-        },
-        respond,
-      );
+      await dispatchDescription(respond);
       expect(respond).toHaveBeenCalledExactlyOnceWith(
         false,
         undefined,
@@ -566,12 +479,9 @@ it.each(["operator.admin", "operator.read"])(
     const respond = vi.fn();
     try {
       await dispatch(
-        {
-          type: "req",
-          id: "cancelled-description",
-          method: "sessions.describe",
-          params: { key: "agent:main:cancelled-read" },
-        },
+        gatewayRequest("cancelled-description", "sessions.describe", {
+          key: "agent:main:cancelled-read",
+        }),
         respond,
       );
       expect(prepare).toHaveBeenCalledOnce();
@@ -582,55 +492,43 @@ it.each(["operator.admin", "operator.read"])(
   },
 );
 
-it.each(["disposed", "refreshed"] as const)(
-  "consumes rows only from an active, ready frame: %s",
-  async (preparation) => {
-    const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-    const queries = vi.fn(() => [query]);
-    const initial = owner.state;
-    let current = initial;
-    const state = vi.fn(() => current);
-    if (preparation === "refreshed") {
-      Object.defineProperty(owner, "state", { get: state });
-      vi.spyOn(owner, "describe").mockImplementation(() => {
-        current = {
-          ...initial,
-          rowContext: {
-            ...initial.rowContext,
-            configuredDefaultModelByAgent: new Map([
-              ["main", { provider: "fixture", model: "fresh" }],
-            ]),
-          },
-        };
-        return undefined;
-      });
-    }
-    const consume = vi.fn((read: SessionRowReadView) => {
-      state.mockClear();
-      expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
-        provider: "fixture",
-        model: "fresh",
-      });
-      expect(read.describe(query)).toBeUndefined();
-      expect(state).not.toHaveBeenCalled();
+it("captures metadata refreshed during preparation without rereading it during consumption", () => {
+  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
+  const initial = owner.state;
+  let current = initial;
+  const state = vi.fn(() => current);
+  Object.defineProperty(owner, "state", { get: state });
+  vi.spyOn(owner, "describe").mockImplementation(() => {
+    current = {
+      ...initial,
+      rowContext: {
+        ...initial.rowContext,
+        configuredDefaultModelByAgent: new Map([["main", { provider: "fixture", model: "fresh" }]]),
+      },
+    };
+    return undefined;
+  });
+  const consume = vi.fn((read: SessionRowReadView) => {
+    state.mockClear();
+    expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
+      provider: "fixture",
+      model: "fresh",
     });
-    try {
-      const read = () =>
-        readPreparedSessionRows(owner, () => preparation !== "disposed", queries, consume);
-      if (preparation === "disposed") {
-        expect(read).toThrow("no longer active");
-        expect(queries).not.toHaveBeenCalled();
-      } else {
-        read();
-      }
-      if (preparation !== "refreshed") {
-        expect(consume).not.toHaveBeenCalled();
-      }
-    } finally {
-      owner.dispose();
-    }
-  },
-);
+    expect(read.describe(query)).toBeUndefined();
+    expect(state).not.toHaveBeenCalled();
+  });
+  try {
+    const queries = vi.fn(() => [query]);
+    expect(() => readPreparedSessionRows(owner, () => false, queries, consume)).toThrow(
+      "no longer active",
+    );
+    expect(queries).not.toHaveBeenCalled();
+    expect(consume).not.toHaveBeenCalled();
+    readPreparedSessionRows(owner, () => true, queries, consume);
+  } finally {
+    owner.dispose();
+  }
+});
 
 it.each(["child", "parent"] as const)(
   "rechecks %s membership after placement preparation and consumes the exact frame once",

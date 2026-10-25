@@ -509,7 +509,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
           runId,
           runSessionKey: runtime.context.sessionKey,
           toolsAllow: request.toolsAllow,
-          operatorAuthorityRestored: false,
         }),
         cfg: runtime.context.config,
         runId,

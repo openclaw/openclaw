@@ -613,24 +613,20 @@ describe("retained npm package integrity", () => {
         await fs.symlink("../../fixture-dependency", link);
         expect(await fs.realpath(link)).toBe(await fs.realpath(dependency));
       }
-      if (shape === "unavailable inode") {
+      if (shape === "unavailable inode" || shape === "timed-out scan") {
         const lstat = fs.lstat.bind(fs);
         vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          if (timedOut && String(args[0]) === packageRoot) {
+            throw new Error("identity fallback unavailable");
+          }
           const stat = await lstat(...args);
-          if (typeof stat.ino === "bigint") {
+          if (shape === "unavailable inode" && typeof stat.ino === "bigint") {
             Object.assign(stat, { ino: 0n });
           }
           return stat;
         });
       }
       if (shape === "timed-out scan") {
-        const lstat = fs.lstat.bind(fs);
-        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-          if (timedOut && String(args[0]) === packageRoot) {
-            throw new Error("identity fallback unavailable");
-          }
-          return lstat(...args);
-        });
         interceptPackageFileHashes(async () => {
           timedOut = true;
           throw new PackageIntegrityTimeoutError(40);

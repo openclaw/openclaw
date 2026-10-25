@@ -4,6 +4,7 @@ import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { readAgentDatabaseLeaseProvenance } from "../state/openclaw-agent-db-lease-provenance.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
@@ -344,6 +345,8 @@ export function acquireGatewayOwnerLease(params: {
             ...payload,
             owner: { ...processOwner, startedAt },
             listeningAt: Date.now(),
+            // Listening follows startup admission. Peers trust this live owner of the exact file.
+            stateDatabaseProvenance: readAgentDatabaseLeaseProvenance(databasePath),
           }),
         );
         if (!updated) {

@@ -158,49 +158,6 @@ function isExcludedProjectSource(value: string): boolean {
     .some((segment) => segment === ".git" || segment === "node_modules");
 }
 
-async function isCaseInsensitiveProjectRoot(root: string): Promise<boolean> {
-  const [canonical, folded] = await Promise.all([
-    lstat(resolve(root, "CLAW.md")).catch(() => undefined),
-    lstat(resolve(root, "claw.md")).catch(() => undefined),
-  ]);
-  return Boolean(
-    canonical && folded && canonical.dev === folded.dev && canonical.ino === folded.ino,
-  );
-}
-
-async function collectExcludedPaths(root: string, selectedPaths: Set<string>): Promise<string[]> {
-  const excluded: string[] = [];
-  const caseInsensitive = await isCaseInsensitiveProjectRoot(root);
-  const selectedPathKeys = new Set(
-    [...selectedPaths].map((path) => projectPathKey(path, caseInsensitive)),
-  );
-  let entryCount = 0;
-  const visit = async (directory: string): Promise<void> => {
-    const entries = await readdir(resolve(root, directory), { withFileTypes: true });
-    for (const entry of entries) {
-      entryCount += 1;
-      if (entryCount > MAX_PROJECT_ENTRIES) {
-        throw new ClawProjectError(
-          "project_too_many_entries",
-          `Claw projects may contain at most ${MAX_PROJECT_ENTRIES} entries outside excluded dependency and source-control trees.`,
-        );
-      }
-      const path = directory ? `${directory}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        if (entry.name === ".git" || entry.name === "node_modules") {
-          excluded.push(`${path}/`);
-        } else {
-          await visit(path);
-        }
-      } else if (!selectedPathKeys.has(projectPathKey(path, caseInsensitive))) {
-        excluded.push(path);
-      }
-    }
-  };
-  await visit("");
-  return excluded.toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)));
-}
-
 export async function createClawProject(
   projectPath: string,
   options: { name?: string; agentId?: string } = {},
@@ -438,7 +395,44 @@ export async function validateClawProject(
   const selectedPaths = new Set(selectedPathList);
   let excludedPaths: string[];
   try {
-    excludedPaths = await collectExcludedPaths(root, selectedPaths);
+    const excluded: string[] = [];
+    const [canonical, folded] = await Promise.all([
+      lstat(resolve(root, "CLAW.md")).catch(() => undefined),
+      lstat(resolve(root, "claw.md")).catch(() => undefined),
+    ]);
+    const caseInsensitive = Boolean(
+      canonical && folded && canonical.dev === folded.dev && canonical.ino === folded.ino,
+    );
+    const selectedPathKeys = new Set(
+      [...selectedPaths].map((path) => projectPathKey(path, caseInsensitive)),
+    );
+    let entryCount = 0;
+    const visit = async (directory: string): Promise<void> => {
+      const entries = await readdir(resolve(root, directory), { withFileTypes: true });
+      for (const entry of entries) {
+        entryCount += 1;
+        if (entryCount > MAX_PROJECT_ENTRIES) {
+          throw new ClawProjectError(
+            "project_too_many_entries",
+            `Claw projects may contain at most ${MAX_PROJECT_ENTRIES} entries outside excluded dependency and source-control trees.`,
+          );
+        }
+        const path = directory ? `${directory}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) {
+          if (entry.name === ".git" || entry.name === "node_modules") {
+            excluded.push(`${path}/`);
+          } else {
+            await visit(path);
+          }
+        } else if (!selectedPathKeys.has(projectPathKey(path, caseInsensitive))) {
+          excluded.push(path);
+        }
+      }
+    };
+    await visit("");
+    excludedPaths = excluded.toSorted((left, right) =>
+      Buffer.compare(Buffer.from(left), Buffer.from(right)),
+    );
   } catch (error) {
     return failure(
       error instanceof ClawProjectError ? error.code : "project_enumeration_failed",

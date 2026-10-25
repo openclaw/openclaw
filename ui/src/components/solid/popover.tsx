@@ -23,6 +23,8 @@ export interface PopoverProps {
   id: string;
   label: string;
   anchor?: HTMLElement;
+  /** Geometry only; the trigger retains activation, dismissal, and focus ownership. */
+  positionAnchor?: HTMLElement;
   trigger?: JSX.Element;
   triggerId?: string;
   triggerClass?: JSX.HTMLAttributes<HTMLButtonElement>["class"];
@@ -65,7 +67,11 @@ export function Popover(props: PopoverProps): JSX.Element {
   const anchor = createAnchoredOverlay(
     overlay,
     () => trigger,
-    () => ({ anchor: props.anchor, placement: props.placement }),
+    () => ({
+      anchor: props.anchor,
+      positionAnchor: props.positionAnchor,
+      placement: props.placement,
+    }),
     { sameRoot: initialIdentity.sameRoot },
   );
   onSettled(() => {

@@ -50,6 +50,7 @@ backup and its matching build, not just reinstalling the older package.
 | 31      | Memory publication advances the index revision once per committed batch instead of once per source or chunk row                                                                                                                                        | `Unreleased` |
 | 32      | Set-based PostgreSQL vector decoding with one TOAST materialization; metadata-only SQLite advance                                                                                                                                                      | `Unreleased` |
 | 33      | Approximate PostgreSQL memory vector search with generated binary sketches and exact cosine reranking; metadata-only SQLite advance                                                                                                                    | `Unreleased` |
+| 36      | Indexed PostgreSQL exact-path memory candidates with unchanged ranking; metadata-only SQLite advance                                                                                                                                                   | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -69,6 +70,20 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Agent schema 36
+
+Schema 36 adds three PostgreSQL B-tree expression indexes for normalized memory
+paths, basenames, and extensionless basenames. Keyword searches use them to select
+exact path candidates before computing their existing specificity and relevance
+scores. The indexes store bounded digests; the original exact-path predicate
+rechecks every candidate, preserving results, ordering, and scores.
+
+Doctor builds only these indexes under the existing agent migration transaction.
+Canonical paths, chunks, embeddings, and other indexes stay unchanged. SQLite
+advances version metadata only. Rollback requires the verified pre-upgrade backup
+and its matching build. SQLite's Unicode keyword fallback can still scan broadly;
+this migration does not change that engine's search behavior.
 
 ### Agent schema 33
 

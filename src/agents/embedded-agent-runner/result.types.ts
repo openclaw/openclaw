@@ -27,6 +27,9 @@ export type EmbeddedAgentMeta = {
     provider?: string;
     category?: string;
     review?: ProviderRefusalReview;
+    /** Physical request facts used only to retry the same model and account. */
+    accessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
+    authProfileId?: string;
     nativeThreadId?: string;
     nativeTurnId?: string;
   };

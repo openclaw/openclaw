@@ -147,18 +147,17 @@ export function createAccessPolicyTransport(initialEmails: readonly string[] = [
   return { fetcher, writes, emails: () => targets.filter((target) => typeof target === "string") };
 }
 
-export async function startVisitorGateway(options: {
+export async function startVisitorGateway({
+  config,
+  state: { workspaceDir, env },
+  context,
+  resolveGatewayContext,
+}: {
   config: OpenClawConfig;
   state: OpenClawTestState;
   context: GatewayRequestContext;
   resolveGatewayContext: GatewayContextResolver;
 }) {
-  const {
-    config,
-    state: { workspaceDir, env },
-    context,
-    resolveGatewayContext,
-  } = options;
   const handlers = {
     agent: expectDefined(agentHandlers.agent, "agent handler missing"),
     "tools.invoke": expectDefined(toolsInvokeHandlers["tools.invoke"], "tools.invoke missing"),

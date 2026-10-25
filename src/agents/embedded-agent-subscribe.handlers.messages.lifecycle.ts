@@ -115,7 +115,7 @@ export function handleMessageEnd(
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = assistantPhase === "commentary";
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
-  const suppressSourceReplyOutput = shouldSuppressSourceReplyOutput(ctx);
+  const suppressSourceReplyOutput = shouldSuppressSourceReplyOutput(ctx, assistantMessage);
   const canEmitReply = () =>
     !ctx.params.silentExpected &&
     !suppressDeterministicApprovalOutput &&
@@ -309,8 +309,8 @@ export function handleMessageEnd(
     ctx.state.hasFlushedPartialText = false;
     ctx.blockChunker.reset();
     // Late text_end events still use the partial lane's tag/inline state.
-    const { thinking, final, inlineCode } = ctx.state.partialBlockState;
-    ctx.state.partialBlockState = { thinking, final, inlineCode };
+    const { reasoningDepth, final, inlineCode } = ctx.state.partialBlockState;
+    ctx.state.partialBlockState = { reasoningDepth, final, inlineCode };
     ctx.state.assistantStream = undefined;
     ctx.state.reasoningStreamOpen = false;
   };

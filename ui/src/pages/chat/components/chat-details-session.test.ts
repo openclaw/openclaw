@@ -12,6 +12,8 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
+import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatContextPanel } from "./chat-context-panel.tsx";
 import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
@@ -224,7 +226,9 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
     label: "Projected owner",
     identity: { type: "profile", id: "projected" },
   });
-  expect(element.querySelector(".chat-details-people")?.textContent).toContain("Projected owner");
+  await waitForSolid(() =>
+    expect(element.querySelector(".chat-details-people")?.textContent).toContain("Projected owner"),
+  );
   expect(element.querySelector(".chat-details__person")).toBeNull();
 });
 it("shows participant controls only while the session has participants", async () => {
@@ -457,7 +461,7 @@ it("shows live environment facts without duplicating composer context", async ()
     },
   });
   const environment = element.querySelector('[data-details-group="environment"]')!;
-  expect(environment.textContent).toContain("feature/details");
+  await waitForSolid(() => expect(environment.textContent).toContain("feature/details"));
   expect(environment.textContent).not.toContain("Design workstation");
   expect(environment.textContent).not.toContain("/workspace/project");
   expect(environment.querySelector('[aria-label="Copy path"]')).toBeNull();
@@ -472,7 +476,7 @@ it.each([
     detailsWorkspace: { root, label: null, branch: "feature/details" },
   });
   const environment = element.querySelector('[data-details-group="environment"]')!;
-  expect(environment.textContent).toContain("feature/details");
+  await waitForSolid(() => expect(environment.textContent).toContain("feature/details"));
   expect(environment.textContent).not.toContain(root);
   expect(environment.textContent).not.toContain("private-user");
   const openProject = vi.fn();
@@ -538,19 +542,14 @@ it("demands mobile changes only while presented and retires native navigation ca
   setSession({
     key: "agent:main:details",
     kind: "direct",
-    placement: {
-      state: "active",
-      generation: 1,
+    placement: createActiveSessionPlacement({
       createdAtMs: 100_000,
       updatedAtMs: 300_000,
       stateChangedAtMs: 300_000,
-      environmentId: "worker:device",
-      activeOwnerEpoch: 1,
-      workerBundleHash: "a".repeat(64),
       workspaceBaseManifestRef: "base-manifest",
       remoteWorkspaceDir: "/worker/repo",
       runner: { kind: "device", status: "available" },
-    },
+    }),
   });
   flush();
   const buttons = Array.from(view.container.querySelectorAll<HTMLButtonElement>("button"));
@@ -593,8 +592,10 @@ it.each([false, true])(
     element.desktop = desktop;
     await element.updateComplete;
     const environment = element.querySelector('[data-details-group="environment"]')!;
+    await waitForSolid(() =>
+      expect(environment.querySelector("button.chat-pr__create")?.textContent).toBe("Create PR"),
+    );
     const create = environment.querySelector<HTMLButtonElement>("button.chat-pr__create");
-    expect(create?.textContent).toBe("Create PR");
     expect(environment.textContent).toContain("+7");
     expect(environment.textContent).toContain("−2");
     expect(
@@ -655,6 +656,9 @@ it("keeps local Changes after publication and accepts a confirmed clean working 
     }),
   });
   const environment = element.querySelector('[data-details-group="environment"]')!;
+  await waitForSolid(() =>
+    expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+7"),
+  );
   expect(environment.textContent).toContain(branch.branch);
   expect(environment.querySelector(".chat-pr__publication-actions")).toBeNull();
   expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+7");
@@ -699,20 +703,24 @@ it("keeps unresolved publication recovery and a different unpublished branch ava
     }),
   };
   await element.updateComplete;
-  expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Check publication");
+  await waitForSolid(() =>
+    expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Check publication"),
+  );
   element.props = {
     ...element.props!,
     githubPublication: failed,
     pullRequestsBranch: sessionBranch({ branch: "feature/next", additions: 3 }),
   };
   await element.updateComplete;
-  expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Retry");
+  await waitForSolid(() =>
+    expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Retry"),
+  );
   expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+3");
 });
 
 it.each([false, true])(
   "shows only textual Changes facts without binary metadata (mobile=%s)",
-  (mobile) => {
+  async (mobile) => {
     // jsdom has no Web Animations API; arrival motion has separate browser proof.
     const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
     Object.defineProperty(Element.prototype, "animate", {
@@ -739,11 +747,7 @@ it.each([false, true])(
     );
     onTestFinished(() => {
       view.unmount();
-      if (animate) {
-        Object.defineProperty(Element.prototype, "animate", animate);
-      } else {
-        Reflect.deleteProperty(Element.prototype, "animate");
-      }
+      restorePropertyDescriptor(Element.prototype, "animate", animate);
     });
     const row = () =>
       [...view.container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
@@ -783,7 +787,7 @@ it.each([false, true])(
     ]) {
       setUncommitted(data);
       flush();
-      expect(row()).toBeDefined();
+      await waitForSolid(() => expect(row()).toBeDefined());
       expect(row()?.querySelector('[aria-label="Binary file"]')).toBeNull();
       expect(row()?.textContent).not.toContain("…");
       row()!.click();

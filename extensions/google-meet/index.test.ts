@@ -30,6 +30,7 @@ import { buildGoogleMeetPreflightReport, fetchGoogleMeetArtifacts } from "./src/
 import {
   createTestMeetRealtimeAudioTransport,
   meetAudioBridge,
+  meetLaunchedTab,
   meetBrowserState,
   meetRuntime,
   meetSession,
@@ -2314,16 +2315,8 @@ describe("google-meet plugin", () => {
     const browserLeave = createDeferred<{ left: boolean; note: string }>();
     const launchChromeMeet = vi
       .spyOn(chromeTransport, "launchChromeMeet")
-      .mockResolvedValueOnce({
-        launched: true,
-        tab: { targetId: "leaving-meet-tab", openedByPlugin: true },
-        browser: { inCall: true, micMuted: true },
-      })
-      .mockResolvedValueOnce({
-        launched: true,
-        tab: { targetId: "replacement-meet-tab", openedByPlugin: true },
-        browser: { inCall: true, micMuted: true },
-      });
+      .mockResolvedValueOnce(meetLaunchedTab("leaving-meet-tab"))
+      .mockResolvedValueOnce(meetLaunchedTab("replacement-meet-tab"));
     const leaveChromeMeet = vi
       .spyOn(chromeTransport, "leaveChromeMeet")
       .mockReturnValue(browserLeave.promise);
@@ -2372,11 +2365,7 @@ describe("google-meet plugin", () => {
     }>();
     const launchChromeMeet = vi
       .spyOn(chromeTransport, "launchChromeMeet")
-      .mockResolvedValueOnce({
-        launched: true,
-        tab: { targetId: "shared-meet-tab", openedByPlugin: true },
-        browser: { inCall: true, micMuted: true },
-      })
+      .mockResolvedValueOnce(meetLaunchedTab("shared-meet-tab"))
       .mockReturnValueOnce(replacementLaunch.promise);
     const leaveChromeMeet = vi.spyOn(chromeTransport, "leaveChromeMeet").mockResolvedValue({
       left: true,
@@ -2406,11 +2395,7 @@ describe("google-meet plugin", () => {
       await Promise.resolve();
       expect(leaveChromeMeet).not.toHaveBeenCalled();
 
-      replacementLaunch.resolve({
-        launched: true,
-        tab: { targetId: "shared-meet-tab", openedByPlugin: false },
-        browser: { inCall: true, micMuted: true },
-      });
+      replacementLaunch.resolve(meetLaunchedTab("shared-meet-tab", false));
       const adopted = await replacement;
       await oldLeave;
 

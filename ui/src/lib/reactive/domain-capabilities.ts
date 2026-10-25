@@ -1,4 +1,3 @@
-import type { AgentIdentityCapability } from "../agents/identity.ts";
 import type { AgentCapability } from "../agents/index.ts";
 import type { ChannelCapability } from "../channels/index.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
@@ -8,19 +7,6 @@ import { projectOwner, projectSource } from "./projection.ts";
 /** These owners mutate synchronously; every publication invalidates their projection. */
 export function projectAgents(source: Pick<AgentCapability, "state" | "subscribe">) {
   return projectOwner(source, (agents) => agents.state);
-}
-
-export type AgentIdentityProjectionSource = {
-  identities: Pick<AgentIdentityCapability, "get" | "subscribe">;
-  agentId: string | null | undefined;
-};
-
-export function projectAgentIdentity(source: AgentIdentityProjectionSource) {
-  return projectSource(source, {
-    read: ({ identities, agentId }) => identities.get(agentId),
-    subscribe: ({ identities }, notify) => identities.subscribe(notify),
-    equality: "revision",
-  });
 }
 
 export function projectChannels(source: Pick<ChannelCapability, "state" | "subscribe">) {

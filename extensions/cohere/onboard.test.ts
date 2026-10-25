@@ -7,6 +7,7 @@ import {
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveAgentModelPrimaryValue as primary } from "openclaw/plugin-sdk/provider-onboard";
 import { expect, it } from "vitest";
+import { createNoBrowserAuth } from "../test-support/no-browser-auth.test-support.js";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -31,14 +32,7 @@ async function configureCohere(config: OpenClawConfig) {
     prompter: createTestWizardPrompter(),
     secretInputMode: "plaintext",
     isRemote: false,
-    openUrl: async () => {
-      throw new Error("Unexpected browser auth");
-    },
-    oauth: {
-      createVpsAwareHandlers: () => {
-        throw new Error("Unexpected OAuth");
-      },
-    },
+    ...createNoBrowserAuth(),
   });
   if (!result.configPatch) {
     throw new Error("Cohere auth did not configure the provider");

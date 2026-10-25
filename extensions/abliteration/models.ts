@@ -8,6 +8,6 @@ export function buildAbliterationProvider() {
   });
 }
 
-export const ABLITERATION_DEFAULT_MODEL_ID = "abliterated-model-large-flash";
+const ABLITERATION_DEFAULT_MODEL_ID = "abliterated-model-large-flash";
 export const ABLITERATION_DEFAULT_MODEL_REF =
   `abliteration/${ABLITERATION_DEFAULT_MODEL_ID}` as const;

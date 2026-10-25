@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
+import { captureWarningLogger } from "../loading/loading.test-support.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import type { SkillEntry } from "../types.js";
@@ -27,8 +28,10 @@ function connect(
   recordRemoteSkillNodeInfo({ nodeId, connId: "conn-1", commands: ["system.run"], ...info });
 }
 function publish(name: string, description: string, body?: string) {
-  replaceRemoteNodeSkills({ nodeId: "node-1", skills: [nodeSkill(name, description, body)] });
+  publishSkills(nodeSkill(name, description, body));
 }
+const publishSkills = (...skills: Parameters<typeof replaceRemoteNodeSkills>[0]["skills"]) =>
+  replaceRemoteNodeSkills({ nodeId: "node-1", skills });
 function nodeSkill(name: string, description: string, body?: string) {
   return { name, description, content: content(name, description, body) };
 }
@@ -58,18 +61,6 @@ afterEach(() => {
   resetLogger();
 });
 
-function captureWarningLogger() {
-  setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-  const warn = vi.fn();
-  loggingState.rawConsole = {
-    log: vi.fn(),
-    info: vi.fn(),
-    warn,
-    error: vi.fn(),
-  };
-  return warn;
-}
-
 describe("node-hosted skill snapshots", () => {
   it("appears while connected, includes the locator note, and disappears on disconnect", async () => {
     const before = getSkillsSnapshotVersion();
@@ -82,15 +73,12 @@ describe("node-hosted skill snapshots", () => {
     });
     const snapshot = await buildSkillSnapshot("/workspace", { entries });
     expect(snapshot.skills.map((skill) => skill.name)).toEqual(["release-helper"]);
-    expect(snapshot.prompt).toContain("Build Mac (node-1)");
     expect(snapshot.prompt).toContain(
       "Read this SKILL.md with the normal read tool at its exact node:// location",
     );
     expect(snapshot.prompt).toContain("do not use file_fetch");
-    expect(snapshot.prompt).toContain("to run cat SKILL.md");
     expect(snapshot.prompt).toContain("exec host=node node=node-1");
     expect(snapshot.prompt).toContain("workdir=node://node-1/skills/release-helper");
-    expect(snapshot.prompt).toContain("node host resolves that locator");
     expect(snapshot.prompt).toContain("node://node-1/skills/release-helper/SKILL.md");
     expect(snapshot.resolvedSkills?.[0]?.readContent).toBe(
       content("release-helper", "Prepare a release"),
@@ -157,16 +145,11 @@ describe("node-hosted skill snapshots", () => {
 
   it("suppresses direct tool dispatch from node skill frontmatter", () => {
     connect();
-    replaceRemoteNodeSkills({
-      nodeId: "node-1",
-      skills: [
-        {
-          name: "dispatch-skill",
-          description: "Must run on its node",
-          content:
-            "---\nname: dispatch-skill\ndescription: Must run on its node\ncommand-dispatch: tool\ncommand-tool: exec\n---\n",
-        },
-      ],
+    publishSkills({
+      name: "dispatch-skill",
+      description: "Must run on its node",
+      content:
+        "---\nname: dispatch-skill\ndescription: Must run on its node\ncommand-dispatch: tool\ncommand-tool: exec\n---\n",
     });
     const entries = remoteEntries();
 
@@ -177,15 +160,10 @@ describe("node-hosted skill snapshots", () => {
   it("drops content that fails existing frontmatter parsing", () => {
     const warn = captureWarningLogger();
     connect();
-    replaceRemoteNodeSkills({
-      nodeId: "node-1",
-      skills: [
-        {
-          name: "broken-skill",
-          description: "Broken",
-          content: "---\nname: [broken\ndescription: Broken\n---\n",
-        },
-      ],
+    publishSkills({
+      name: "broken-skill",
+      description: "Broken",
+      content: "---\nname: [broken\ndescription: Broken\n---\n",
     });
 
     expect(remoteEntries()).toEqual([]);

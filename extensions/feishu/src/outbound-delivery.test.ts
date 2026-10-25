@@ -61,23 +61,19 @@ function readDeliveryQueueRow(stateDir: string, id: string): DeliveryQueueRow | 
   }
 }
 
+const sendBatch = (
+  options: Omit<Parameters<typeof sendDurableMessageBatch>[0], "cfg" | "channel" | "to">,
+) => sendDurableMessageBatch({ cfg: {}, channel: "feishu", to: "chat_1", ...options });
+const sendResult = (messageId: string, kind: "text" | "media") =>
+  toFeishuSendResult({ data: { message_id: messageId } }, "chat_1", kind);
+
 describe("Feishu outbound shared delivery", () => {
   beforeEach(() => {
     let textMessageIndex = 0;
-    sendMediaFeishuMock
-      .mockReset()
-      .mockResolvedValue(
-        toFeishuSendResult({ data: { message_id: "media-1" } }, "chat_1", "media"),
-      );
+    sendMediaFeishuMock.mockReset().mockResolvedValue(sendResult("media-1", "media"));
     sendMessageFeishuMock
       .mockReset()
-      .mockImplementation(async () =>
-        toFeishuSendResult(
-          { data: { message_id: `text-${String(++textMessageIndex)}` } },
-          "chat_1",
-          "text",
-        ),
-      );
+      .mockImplementation(async () => sendResult(`text-${String(++textMessageIndex)}`, "text"));
     sendCardFeishuMock.mockReset().mockResolvedValue({ messageId: "card-1", chatId: "chat_1" });
     const plugin = createOutboundTestPlugin({ id: "feishu", outbound: feishuOutbound });
     setActivePluginRegistry(createTestRegistry([{ pluginId: "feishu", plugin, source: "test" }]));
@@ -97,10 +93,7 @@ describe("Feishu outbound shared delivery", () => {
       workspaceDir: "/approved/workspace",
       readFile,
     };
-    await sendDurableMessageBatch({
-      cfg: {},
-      channel: "feishu",
-      to: "chat_1",
+    await sendBatch({
       skipQueue: true,
       mediaAccess,
       payloads: [
@@ -132,16 +125,14 @@ describe("Feishu outbound shared delivery", () => {
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
-    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mediaUrl: "pipeline.png",
-        mediaAccess,
-        mediaLocalRoots: mediaAccess.localRoots,
-        mediaReadFile: readFile,
-        to: "chat_1",
-      }),
-    );
     const sentMedia = sendMediaFeishuMock.mock.calls[0]?.[0];
+    expect(sentMedia).toMatchObject({
+      mediaUrl: "pipeline.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile: readFile,
+      to: "chat_1",
+    });
     expect(sentMedia?.mediaAccess?.localRoots).toBe(mediaAccess.localRoots);
     expect(sentMedia?.mediaAccess?.readFile).toBe(readFile);
     expect(textChunks.length).toBeGreaterThan(1);
@@ -172,10 +163,7 @@ describe("Feishu outbound shared delivery", () => {
 
     try {
       await withStateDirEnv("openclaw-feishu-recovery-", async ({ stateDir }) => {
-        const initial = await sendDurableMessageBatch({
-          cfg: {},
-          channel: "feishu",
-          to: "chat_1",
+        const initial = await sendBatch({
           accountId: "default",
           durability: "required",
           deliveryIntentId,

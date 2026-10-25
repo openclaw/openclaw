@@ -9,7 +9,6 @@ import {
   getSubagentSessionListReadSnapshotIdentity,
   prepareSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
@@ -81,9 +80,7 @@ it("settles a registry revision after persisting an already absent run", async (
       expect(projection.needsMaterialization).toBe(false);
       expect(
         projection.snapshot({ agentId: target.agentId, key: target.sessionKey }).row,
-      ).toMatchObject({
-        sessionId: "registry-revision",
-      });
+      ).toMatchObject({ sessionId: "registry-revision" });
     } finally {
       projection.dispose();
       releaseForeground();
@@ -281,7 +278,7 @@ it.each([
       for (const key of [child, parent, nextParent]) {
         writeRow(key, archived && key === child ? { archivedAt: 1 } : {});
       }
-      const run: SubagentRunRecord = {
+      const run = createSubagentRunRecord({
         runId: "run",
         childSessionKey: child,
         requesterSessionKey: parent,
@@ -291,12 +288,11 @@ it.each([
         collect: true,
         requesterDisplayKey: "parent",
         task: "Synthetic task",
-        cleanup: "keep",
         createdAt: 1,
         execution: { status: "running", startedAt: 1 },
         completion: { required: false },
         delivery: { status: "not_required" },
-      };
+      });
       using _ = holdSubagentExecution(run.runId, child);
       subagentRuns.set(run.runId, run);
       if (archived) {

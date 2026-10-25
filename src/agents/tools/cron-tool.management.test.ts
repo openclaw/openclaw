@@ -14,6 +14,16 @@ import * as gatewayModule from "./gateway.js";
 
 const jobId = "existing-job";
 const configRevision = "sha256:stored-job";
+const getCall = ["cron.get", { id: jobId }];
+function updateCalls(patch: Record<string, unknown>, readsCurrent = false) {
+  return [
+    ...(readsCurrent ? [getCall] : []),
+    [
+      "cron.update",
+      { id: jobId, patch, ...(readsCurrent ? { expectedConfigRevision: configRevision } : {}) },
+    ],
+  ];
+}
 
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(clearRuntimeConfigSnapshot);
@@ -76,15 +86,7 @@ it.each([
       tool.execute("update", { action: "update", jobId, job: { payload: input } }),
     ).resolves.toMatchObject({ details: { id: jobId } });
     const patch = { payload: stored ? { kind: "command", timeoutSeconds: null } : input };
-    const params = {
-      id: jobId,
-      patch,
-      ...(stored ? { expectedConfigRevision: configRevision } : {}),
-    };
-    expect(calls).toEqual([
-      ...(stored ? [["cron.get", { id: jobId }]] : []),
-      ["cron.update", params],
-    ]);
+    expect(calls).toEqual(updateCalls(patch, Boolean(stored)));
   });
 });
 
@@ -92,7 +94,7 @@ it("permits explicit on-exit edits through admitted management", async () => {
   await withAdminTool("unknown", undefined, async (tool, calls) => {
     const patch = { schedule: { kind: "on-exit", command: "make", cwd: "/repo" } };
     await tool.execute("on-exit-update", { action: "update", jobId, job: patch });
-    expect(calls).toEqual([["cron.update", { id: jobId, patch }]]);
+    expect(calls).toEqual(updateCalls(patch));
   });
 });
 
@@ -107,73 +109,60 @@ it("does not expose stream creation through a management grant", async () => {
           payload: { kind: "agentTurn", message: "handle events" },
         },
       }),
-    ).rejects.toThrow("can only list, get, update, run, or remove automations");
+    ).rejects.toThrow("can only list, get, update, run, remove, or bind automations");
     expect(calls).toEqual([]);
   });
 });
 
-it.each([
-  {
-    label: "complete exec authority",
-    tools: [{ name: "exec", execOrigin: "openclaw" }],
-    capture: { value: { version: 1, source: "final-executable-surface" } },
-    error: undefined,
-  },
-  {
-    label: "no exec authority",
-    tools: ["read"],
-    capture: { value: { version: 1, source: "final-executable-surface" } },
-    error: "Gateway exec authority",
-  },
-  {
-    label: "incomplete executable surface",
-    tools: [{ name: "exec", execOrigin: "openclaw" }],
-    capture: {},
-    error: "did not capture the complete model-callable tool surface",
-  },
-] satisfies {
-  label: string;
-  tools: CronToolOptions["creatorToolAllowlist"];
-  capture: CronToolOptions["creatorToolAllowlistCaptureRef"];
-  error: string | undefined;
-}[])(
-  "checks the manager's own stream exec authority: $label",
-  async ({ tools, capture, error }) => {
-    const config = { tools: { exec: { host: "gateway", mode: "full" } } } as const;
-    setRuntimeConfigSnapshot(config);
-    await withAdminTool(
-      "unknown",
-      undefined,
-      async (tool, calls) => {
-        const activation = tool.execute("stream-enable", {
-          action: "update",
-          jobId,
-          job: { enabled: true },
-        });
-        if (error) {
-          await expect(activation).rejects.toThrow(error);
-          expect(calls).toEqual([["cron.get", { id: jobId }]]);
-        } else {
-          await expect(activation).resolves.toMatchObject({ details: { id: jobId } });
-          expect(calls).toEqual([
-            ["cron.get", { id: jobId }],
-            [
-              "cron.update",
-              { id: jobId, patch: { enabled: true }, expectedConfigRevision: configRevision },
-            ],
-          ]);
-        }
-      },
-      {
-        enabled: false,
-        schedule: { kind: "stream", command: ["node", "events.mjs"] },
-        state: {},
-      },
-      false,
-      { config, creatorToolAllowlist: tools, creatorToolAllowlistCaptureRef: capture },
-    );
-  },
-);
+const completeCapture = { value: { version: 1, source: "final-executable-surface" } } as const;
+const execTools: NonNullable<CronToolOptions["creatorToolAllowlist"]> = [
+  { name: "exec", execOrigin: "openclaw" },
+];
+it.each<
+  [
+    string,
+    CronToolOptions["creatorToolAllowlist"],
+    CronToolOptions["creatorToolAllowlistCaptureRef"],
+    string | undefined,
+  ]
+>([
+  ["complete exec authority", execTools, completeCapture, undefined],
+  ["no exec authority", ["read"], completeCapture, "Gateway exec authority"],
+  [
+    "incomplete executable surface",
+    execTools,
+    {},
+    "did not capture the complete model-callable tool surface",
+  ],
+])("checks the manager's own stream exec authority: %s", async (_label, tools, capture, error) => {
+  const config = { tools: { exec: { host: "gateway", mode: "full" } } } as const;
+  setRuntimeConfigSnapshot(config);
+  await withAdminTool(
+    "unknown",
+    undefined,
+    async (tool, calls) => {
+      const activation = tool.execute("stream-enable", {
+        action: "update",
+        jobId,
+        job: { enabled: true },
+      });
+      if (error) {
+        await expect(activation).rejects.toThrow(error);
+        expect(calls).toEqual([getCall]);
+      } else {
+        await expect(activation).resolves.toMatchObject({ details: { id: jobId } });
+        expect(calls).toEqual(updateCalls({ enabled: true }, true));
+      }
+    },
+    {
+      enabled: false,
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      state: {},
+    },
+    false,
+    { config, creatorToolAllowlist: tools, creatorToolAllowlistCaptureRef: capture },
+  );
+});
 
 it.each([false, true])(
   "keeps management authority intersected with readOnly=%s",
@@ -182,7 +171,9 @@ it.each([false, true])(
       "unknown",
       undefined,
       async (tool, calls) => {
-        const actions = readOnly ? ["list", "get"] : ["list", "get", "update", "run", "remove"];
+        const actions = readOnly
+          ? ["list", "get"]
+          : ["list", "get", "update", "run", "remove", "bind"];
         expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
         for (const key of ["in", "text", "mode", "contextMessages", "sessionKey"]) {
           expect(tool.parameters).not.toHaveProperty(`properties.${key}`);
@@ -213,7 +204,7 @@ it.each([false, true])(
             await expect(tool.execute(`manager-${action}`, { action, jobId })).rejects.toThrow(
               action === "status"
                 ? "read-only during recovery"
-                : "can only list, get, update, run, or remove automations",
+                : "can only list, get, update, run, remove, or bind automations",
             );
           }
           await expect(tool.execute("manager-remove", { action: "remove", jobId })).rejects.toThrow(

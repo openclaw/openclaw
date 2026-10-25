@@ -11,6 +11,7 @@ import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { resolveWorktreeBase } from "./base-ref.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { gitIdentity } from "./git-fixture.test-support.js";
@@ -231,14 +232,9 @@ describe("Git ref mutation ownership", () => {
 
   it("rejects an interrupted explicit-base lookup even with exit code zero", async () => {
     const root = await repository();
-    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce({
-      stdout: "refs/heads/-fixture\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "signal",
-    });
+    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce(
+      createCommandResult({ stdout: "refs/heads/-fixture\n", termination: "signal" }),
+    );
     await expect(resolveWorktreeBase(root, "-fixture")).rejects.toThrow("terminated");
   });
 
@@ -299,14 +295,9 @@ describe("Git ref mutation ownership", () => {
       if (command !== "symbolic-ref") {
         return run(argv, options);
       }
-      return Promise.resolve({
-        stdout: "refs/remotes/origin/main\n",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "signal",
-      });
+      return Promise.resolve(
+        createCommandResult({ stdout: "refs/remotes/origin/main\n", termination: "signal" }),
+      );
     });
     await expect(resolveWorktreeBase(root)).rejects.toThrow("Remote default branch is unavailable");
   });

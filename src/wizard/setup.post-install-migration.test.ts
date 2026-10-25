@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -30,10 +31,8 @@ const migrateDefaultCommand = vi.hoisted(() =>
 );
 vi.mock("../commands/migrate.js", () => ({ migrateDefaultCommand }));
 
-const originalStdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-function setTTY(isTTY: boolean): void {
-  Object.defineProperty(process.stdin, "isTTY", { value: isTTY, configurable: true });
-}
+const ttyMock = createCliTtyMock([process.stdin]);
+const setTTY = ttyMock.set;
 function buildProvider(overrides: Partial<MigrationProviderPlugin> = {}): MigrationProviderPlugin {
   return {
     id: "codex",
@@ -68,11 +67,7 @@ describe("offerPostInstallMigrations", () => {
     setTTY(true);
   });
   afterEach(() => {
-    if (originalStdinIsTTYDescriptor) {
-      Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTYDescriptor);
-    } else {
-      delete (process.stdin as Partial<typeof process.stdin>).isTTY;
-    }
+    ttyMock.restore();
   });
 
   it("returns unchanged without loading providers when no plugins were installed", async () => {

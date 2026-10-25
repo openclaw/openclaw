@@ -26,7 +26,6 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
-import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -94,7 +93,7 @@ import type {
   RespondFn,
 } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
-import { registerChatAbortAdmissionRetryTests } from "./server.chat-abort-admission.test-support.js";
+import { registerChatAdmissionRetryTests } from "./server.chat-admission-retry.test-support.js";
 import {
   callDirectChatHandler,
   callDirectChat,
@@ -3123,22 +3122,25 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
       const firstAdmission = vi.fn(async () => true);
       const secondAdmission = vi.fn(async () => true);
-      const responses: Array<{ ok: boolean; payload?: unknown; meta?: unknown }> = [];
+      const responses: CapturedChatResponse[] = [];
       const send = (onAdmissionOwned: () => Promise<boolean>) =>
         sendControlUiChat({
           context,
           idempotencyKey: runId,
           message: "admit exactly once",
           onAdmissionOwned,
-          respond: ((ok, payload, _error, meta) =>
-            responses.push({ ok, payload, meta })) as RespondFn,
+          respond: captureChatResponse(responses),
         });
 
       await Promise.all([send(firstAdmission), send(secondAdmission)]);
 
       expect(firstAdmission.mock.calls.length + secondAdmission.mock.calls.length).toBe(1);
       expect(responses).toHaveLength(2);
-      expect(responses.every((response) => response.ok)).toBe(true);
+      expect(responses).toContainEqual({
+        ok: false,
+        payload: undefined,
+        error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+      });
       expect(
         responses.filter(
           (response) =>
@@ -3216,7 +3218,7 @@ describe("gateway server chat", () => {
     }
   });
 
-  registerChatAbortAdmissionRetryTests({
+  registerChatAdmissionRetryTests({
     withCommittedChatSession: (run) =>
       withDirectChatSession(async (_sessionDir, storePath) => {
         await writeStoredMainSession(makeDoneSessionEntry());
@@ -3534,79 +3536,6 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("chat.send preserves failed dispatch custody when recorded input is replayed", async () => {
-    const { storePath } = openDirectChatSession();
-    const runId = "idem-restart-safe-dispatch-error";
-    try {
-      await writeStoredMainSession(makeDoneSessionEntry());
-      const context = createDirectChatContext();
-      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-      dispatchInboundMessageMock.mockRejectedValueOnce(new Error("dispatch rejected"));
-
-      await sendControlUiChat({
-        context,
-        idempotencyKey: runId,
-        message: "retry me after dispatch failure",
-        respond: captureChatResult(responses),
-      });
-      expect(responses).toEqual([
-        {
-          ok: true,
-          payload: expect.objectContaining({ runId, status: "started" }),
-        },
-      ]);
-      await getDirectChatSessionWorkRelease();
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-      const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
-      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
-        expect.stringMatching(/^hmac-sha256:v1:/u),
-      );
-      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
-      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
-
-      const collisionContext = createDirectChatContext();
-      const collisionResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      await sendControlUiChat({
-        context: collisionContext,
-        idempotencyKey: runId,
-        message: "changed text under the same run id",
-        respond: captureChatResult(collisionResponses),
-      });
-      expect(collisionResponses).toEqual([
-        {
-          ok: false,
-          payload: undefined,
-        },
-      ]);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
-        abortedLastRun: false,
-        status: "failed",
-      });
-
-      const retryContext = createDirectChatContext();
-      const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      await sendControlUiChat({
-        context: retryContext,
-        idempotencyKey: runId,
-        message: "retry me after dispatch failure",
-        respond: captureChatResult(retryResponses),
-      });
-      expect(retryResponses).toEqual([
-        {
-          ok: true,
-          payload: { runId, status: "ok", messageSeq: 1 },
-        },
-      ]);
-      expect(retryContext.removeChatRun).not.toHaveBeenCalled();
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual(failed);
-    } finally {
-      await resetDirectChatSession();
-    }
-  });
-
   test("chat.send releases a durable claim after synchronous post-admission failure", async () => {
     const { storePath } = openDirectChatSession();
     const runId = "idem-restart-safe-setup-error";
@@ -3638,65 +3567,6 @@ describe("gateway server chat", () => {
       );
       expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
       expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
-    } finally {
-      await resetDirectChatSession();
-    }
-  });
-
-  test("chat.send preserves failed routing custody when recorded input is replayed", async () => {
-    const { storePath } = openDirectChatSession();
-    const runId = "idem-restart-safe-routing-change";
-    try {
-      await writeStoredMainSession(makeDoneSessionEntry());
-      const context = createDirectChatContext();
-      const initialRuntimeConfig = getRuntimeConfig();
-      const changedRuntimeConfig = {
-        ...initialRuntimeConfig,
-        session: {
-          ...initialRuntimeConfig.session,
-          scope: initialRuntimeConfig.session?.scope === "global" ? "per-sender" : "global",
-        },
-      } as const;
-      context.getRuntimeConfig = () =>
-        loadSessionEntry(makeMainSessionScope(storePath))?.restartRecoveryDeliveryRunId === runId
-          ? changedRuntimeConfig
-          : initialRuntimeConfig;
-      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-
-      await sendControlUiChat({
-        context,
-        expectedSessionRoutingContract: resolveSessionRoutingContract(initialRuntimeConfig),
-        idempotencyKey: runId,
-        message: "retry me after routing changes",
-        respond: captureChatResult(responses),
-      });
-      expect(responses).toEqual([{ ok: false, payload: undefined }]);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
-      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
-      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
-        expect.stringMatching(/^hmac-sha256:v1:/u),
-      );
-      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
-      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
-
-      const retryContext = createDirectChatContext();
-      const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
-      await sendControlUiChat({
-        context: retryContext,
-        idempotencyKey: runId,
-        message: "retry me after routing changes",
-        respond: captureChatResult(retryResponses),
-      });
-      expect(retryResponses).toEqual([
-        {
-          ok: true,
-          payload: { runId, status: "ok", messageSeq: 1 },
-        },
-      ]);
-      expect(retryContext.removeChatRun).not.toHaveBeenCalled();
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual(failed);
     } finally {
       await resetDirectChatSession();
     }

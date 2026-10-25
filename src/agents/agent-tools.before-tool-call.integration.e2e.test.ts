@@ -116,6 +116,17 @@ function installBeforeToolCallHooks(hooks: BeforeToolCallHookInstall[]): void {
   initializeGlobalHookRunner(registry);
 }
 
+function clientToolDefinition(
+  name: string,
+  description: string,
+  properties: Record<string, unknown>,
+): Parameters<typeof toClientToolDefinitions>[0][number] {
+  return {
+    type: "function",
+    function: { name, description, parameters: { type: "object", properties } },
+  };
+}
+
 describe("before_tool_call hook integration", () => {
   let beforeToolCallHook: BeforeToolCallHandlerMock;
 
@@ -587,16 +598,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
             )
           : expectDefined(
               toClientToolDefinitions(
-                [
-                  {
-                    type: "function",
-                    function: {
-                      name: "client_read",
-                      description: "client read",
-                      parameters: { type: "object", properties: {} },
-                    },
-                  },
-                ],
+                [clientToolDefinition("client_read", "client read", {})],
                 clientCall,
               )[0],
               "client adapter definition",
@@ -1228,16 +1230,7 @@ describe("before_tool_call adapter and client tool integration", () => {
     };
     const tool = expectDefined(
       toClientToolDefinitions(
-        [
-          {
-            type: "function",
-            function: {
-              name: "client_tool",
-              description: "Client tool",
-              parameters: { type: "object", properties: {} },
-            },
-          },
-        ],
+        [clientToolDefinition("client_tool", "Client tool", {})],
         recorder,
       )[0],
       "client tool definition",
@@ -1266,16 +1259,7 @@ describe("before_tool_call adapter and client tool integration", () => {
     });
     const onClientToolCall = vi.fn();
     const clientTools = toClientToolDefinitions(
-      [
-        {
-          type: "function",
-          function: {
-            name: "client_tool",
-            description: "Client tool",
-            parameters: { type: "object", properties: { value: { type: "string" } } },
-          },
-        },
-      ],
+      [clientToolDefinition("client_tool", "Client tool", { value: { type: "string" } })],
       onClientToolCall,
       { agentId: "main", sessionKey: "main" },
     );
@@ -1327,22 +1311,8 @@ describe("before_tool_call adapter and client tool integration", () => {
     };
     const [firstTool, secondTool] = toClientToolDefinitions(
       [
-        {
-          type: "function",
-          function: {
-            name: "first_tool",
-            description: "First client tool",
-            parameters: { type: "object", properties: { value: { type: "string" } } },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "second_tool",
-            description: "Second client tool",
-            parameters: { type: "object", properties: { value: { type: "string" } } },
-          },
-        },
+        clientToolDefinition("first_tool", "First client tool", { value: { type: "string" } }),
+        clientToolDefinition("second_tool", "Second client tool", { value: { type: "string" } }),
       ],
       { reserve, complete },
       { agentId: "main", sessionKey: "main" },
@@ -1443,16 +1413,7 @@ describe("before_tool_call adapter and client tool integration", () => {
       });
 
       const clientTools = toClientToolDefinitions(
-        [
-          {
-            type: "function",
-            function: {
-              name: "client_tool",
-              description: "Client tool",
-              parameters: { type: "object", properties: {} },
-            },
-          },
-        ],
+        [clientToolDefinition("client_tool", "Client tool", {})],
         undefined,
         {
           agentId: "main",

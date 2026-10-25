@@ -111,7 +111,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   if (
     (witness.role === "agent" &&
       (witness.agentId === null ||
-        ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(witness.schemaVersion))) ||
+        ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36].includes(witness.schemaVersion))) ||
     (witness.role !== "agent" && witness.agentId !== null) ||
     (witness.role !== "agent" && witness.schemaSha256 !== witness.migrationSchemaSha256) ||
     (witness.role !== "global" && witness.registryMigrationBinding !== null) ||
@@ -421,7 +421,7 @@ export function captureOpenClawMigrationWitness(
         throw new Error("Migration witness database owner does not match the backup inventory");
       }
       if (owner.role === "agent") {
-        if (![24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(schemaVersion)) {
+        if (![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36].includes(schemaVersion)) {
           throw new Error(`Unsupported agent migration witness schema: ${schemaVersion}`);
         }
         assertOpenClawAgentSchemaContains(

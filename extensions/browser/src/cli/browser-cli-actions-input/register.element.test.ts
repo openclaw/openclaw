@@ -1,28 +1,19 @@
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "../browser-cli.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
-    (
-      opts?: unknown,
-      req?: unknown,
-      extra?: { timeoutMs?: number },
-    ) => Promise<Record<string, unknown>>
+    typeof browserCliSharedModule.callBrowserRequest<Record<string, unknown>>
   >(async () => ({ url: "https://example.test" })),
 }));
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserActionInputCommands } = await import("./register.js");
 

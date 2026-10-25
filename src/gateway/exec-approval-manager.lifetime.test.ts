@@ -265,6 +265,7 @@ describe("ExecApprovalManager lifetime", () => {
                 {
                   execPolicy,
                   streamExecApproval: {
+                    createdAtMs: proposal.job.createdAtMs,
                     policyKey,
                     binding: cronStreamExecApprovalBinding(proposal),
                     consumption,

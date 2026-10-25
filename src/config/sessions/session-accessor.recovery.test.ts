@@ -38,6 +38,7 @@ import {
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir as reconcile } from "./session-transcript-reconcile.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import {
   createTranscriptEventInserter,
   prepareTranscriptPayloadForReuse,
@@ -68,18 +69,11 @@ async function createFixture() {
     { agentId: "main", sessionId: sourceSessionId, sessionKey: sourceKey, storePath },
     [
       { type: "session", version: 3, id: sourceSessionId, cwd: root },
-      {
-        type: "message",
-        id: "user-1",
-        parentId: null,
-        message: { role: "user", content: "finish this" },
-      },
-      {
-        type: "message",
-        id: "side-branch",
-        parentId: "user-1",
-        message: { role: "assistant", content: "preserve the whole transcript" },
-      },
+      messageEvent("user-1", null, { role: "user", content: "finish this" }),
+      messageEvent("side-branch", "user-1", {
+        role: "assistant",
+        content: "preserve the whole transcript",
+      }),
       { type: "leaf", id: "leaf-1", parentId: "side-branch", targetId: "user-1" },
     ],
   );

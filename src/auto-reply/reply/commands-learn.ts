@@ -126,12 +126,7 @@ async function resolveLearnMedia(params: HandleCommandsParams): Promise<LearnMed
     toolsAllow === undefined || isToolAllowedByPolicyName(name, { allow: toolsAllow });
   const memoryLearn = getMemoryLearnContribution();
 
-  const policySessionKey = resolveRuntimePolicySessionKey({
-    agentId: params.agentId,
-    cfg: params.cfg,
-    ctx: params.ctx,
-    sessionKey: params.sessionKey,
-  });
+  const policySessionKey = resolveRuntimePolicySessionKey(params);
   const sandboxRuntime = await resolveSandboxRuntimeStatusAsync({
     cfg: params.cfg,
     agentId: params.agentId,
