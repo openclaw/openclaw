@@ -60,6 +60,11 @@ const canvasDetails = (id: string) => ({
   view: { id },
   presentation: { target: "assistant_message" },
 });
+const expectMatch = async (
+  scope: Parameters<typeof findTranscriptEvent>[0],
+  match: SessionTranscriptEventMatch,
+  event?: unknown,
+) => expect(await findTranscriptEvent(scope, match)).toEqual(event ? { event } : undefined);
 
 it("keeps incognito matching and raw reads in their memory owner without creating disk state", () =>
   withOpenClawTestState({ label: "transcript-incognito-matching" }, async (state) => {
@@ -74,7 +79,7 @@ it("keeps incognito matching and raw reads in their memory owner without creatin
         ),
       ).resolves.toEqual([]);
     };
-    await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
+    await expectMatch(scope, { kind: "latest" });
     const answer = assistant("private-final", "private-run", {
       content: "private complete answer",
     });
@@ -85,17 +90,13 @@ it("keeps incognito matching and raw reads in their memory owner without creatin
       transcriptEvents: [answer, unrelated],
     }));
 
-    await expect(
-      findTranscriptEvent(scope, { kind: "visible-final", runId: "private-run" }),
-    ).resolves.toEqual({ event: answer });
-    await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toEqual({
-      event: unrelated,
-    });
+    await expectMatch(scope, { kind: "visible-final", runId: "private-run" }, answer);
+    await expectMatch(scope, { kind: "latest" }, unrelated);
     await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([answer, unrelated]);
     await expectNoArchiveOrDisk();
 
     memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
-    await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
+    await expectMatch(scope, { kind: "latest" });
     await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([]);
     await expectNoArchiveOrDisk();
   }));
@@ -178,9 +179,8 @@ it("recovers the exact complete child answer without preventing host event progr
     for (const call of hostSql.calls) {
       expect(call).not.toHaveBeenCalled();
     }
-    expect(old.prepared.text).toBe(fullAnswer);
+    expect(old).toMatchObject({ prepared: { text: fullAnswer }, hostProgressBeforeResult: true });
     expect(old.prepared.isCurrent()).toBe(true);
-    expect(old.hostProgressBeforeResult).toBe(true);
   }));
 
 it("keeps match filters and active anchors authoritative across worker payload encodings", () =>
@@ -206,14 +206,13 @@ it("keeps match filters and active anchors authoritative across worker payload e
           final: true,
         },
       });
-      const deliveryMirror = encodedAssistant("delivery-mirror", "delivery-run", {
-        idempotencyKey: "shared-key",
+      const keyed = (id: string, extra: Record<string, unknown> = {}) =>
+        encodedAssistant(id, "delivery-run", { idempotencyKey: "shared-key", ...extra });
+      const deliveryMirror = keyed("delivery-mirror", {
         provider: "openclaw",
         model: "delivery-mirror",
       });
-      const ordinary = encodedAssistant("ordinary", "delivery-run", {
-        idempotencyKey: "shared-key",
-      });
+      const ordinary = keyed("ordinary");
       const user = encodedAssistant("user", "other-run", {
         role: "user",
         idempotencyKey: "shared-key",
@@ -236,10 +235,7 @@ it("keeps match filters and active anchors authoritative across worker payload e
             toolCallId: "nested-call",
             toolName: "show_widget",
             input: {},
-            result: {
-              content: [],
-              details: canvasDetails("cv_nested"),
-            },
+            result: { content: [], details: canvasDetails("cv_nested") },
             isError: false,
             startedAt: 1,
             timestamp: 2,
@@ -304,9 +300,7 @@ it("keeps match filters and active anchors authoritative across worker payload e
       const hostSql = observeHostDataSql();
       try {
         for (const [match, event] of cases) {
-          await expect(findTranscriptEvent(scope, match)).resolves.toEqual(
-            event ? { event } : undefined,
-          );
+          await expectMatch(scope, match, event);
         }
         expect(hostSql.queries).toEqual([]);
       } finally {
