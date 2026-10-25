@@ -63,6 +63,18 @@ vi.mock("./sdk.js", () => ({
   createMSTeamsTokenProvider: sendContextMockState.createMSTeamsTokenProvider,
 }));
 
+const {
+  store,
+  openConversationStore,
+  loadMSTeamsSdkWithAuth,
+  createMSTeamsTokenProvider,
+  createActivity,
+  getActivities,
+  getAccessToken,
+  logInfo,
+  logWarn,
+} = sendContextMockState;
+
 function createConfig(overrides: MSTeamsConfig = {}): OpenClawConfig {
   return createMSTeamsTestConfig({
     enabled: true,
@@ -87,7 +99,7 @@ function channelRef(params?: Partial<StoredConversationReference>): StoredConver
 const conversationId = "19:channel@thread.tacv2";
 const serviceUrl = "https://smba.trafficmanager.net/amer/";
 function storedChannel(overrides: Partial<StoredConversationReference> = {}) {
-  sendContextMockState.store.get.mockResolvedValue(channelRef({ serviceUrl, ...overrides }));
+  store.get.mockResolvedValue(channelRef({ serviceUrl, ...overrides }));
 }
 function resolveContext(
   cfg = createConfig(),
@@ -97,19 +109,18 @@ function resolveContext(
 }
 
 beforeEach(() => {
-  sendContextMockState.openConversationStore.mockClear();
-  sendContextMockState.store.upsert.mockReset();
-  sendContextMockState.store.get.mockReset();
-  sendContextMockState.store.list.mockReset();
-  sendContextMockState.store.remove.mockReset();
-  sendContextMockState.store.findPreferredDmByUserId.mockReset();
-  sendContextMockState.loadMSTeamsSdkWithAuth.mockClear();
-  sendContextMockState.createMSTeamsTokenProvider.mockClear();
-  sendContextMockState.createActivity.mockClear();
-  sendContextMockState.getActivities.mockClear();
-  sendContextMockState.getAccessToken.mockReset();
-  sendContextMockState.logInfo.mockReset();
-  sendContextMockState.logWarn.mockReset();
+  for (const mock of [
+    openConversationStore,
+    loadMSTeamsSdkWithAuth,
+    createMSTeamsTokenProvider,
+    createActivity,
+    getActivities,
+  ]) {
+    mock.mockClear();
+  }
+  for (const mock of [...Object.values(store), getAccessToken, logInfo, logWarn]) {
+    mock.mockReset();
+  }
   vi.unstubAllEnvs();
 });
 
@@ -131,8 +142,8 @@ describe("resolveMSTeamsSendContext", () => {
       expect(error.message).toBe("msteams credential file is configured but unavailable");
       expect(error.message).not.toContain(certificatePath);
     }
-    expect(sendContextMockState.store.get).not.toHaveBeenCalled();
-    expect(sendContextMockState.loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
+    expect(store.get).not.toHaveBeenCalled();
+    expect(loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
   });
 
   it("ignores ambient SERVICE_URL for default public-cloud proactive sends", async () => {
@@ -158,7 +169,7 @@ describe("resolveMSTeamsSendContext", () => {
         replyStyle: "thread",
         threadActivityId: "explicit-root",
       });
-      expect(sendContextMockState.store.get).toHaveBeenCalledWith(conversationId);
+      expect(store.get).toHaveBeenCalledWith(conversationId);
     },
   );
 
@@ -184,11 +195,9 @@ describe("resolveMSTeamsSendContext", () => {
         text: "parity proof",
       });
 
-      expect(sendContextMockState.store.get).toHaveBeenCalledWith(targetId);
-      expect(sendContextMockState.getActivities).toHaveBeenCalledExactlyOnceWith(
-        `${targetId}${expectedSuffix}`,
-      );
-      expect(sendContextMockState.createActivity).toHaveBeenCalledWith(
+      expect(store.get).toHaveBeenCalledWith(targetId);
+      expect(getActivities).toHaveBeenCalledExactlyOnceWith(`${targetId}${expectedSuffix}`);
+      expect(createActivity).toHaveBeenCalledWith(
         expect.objectContaining({
           conversation: expect.objectContaining({
             id: `${targetId}${expectedSuffix}`,
@@ -201,29 +210,26 @@ describe("resolveMSTeamsSendContext", () => {
 
   it("removes stored conversation references with blocked serviceUrl hosts", async () => {
     storedChannel({ serviceUrl: "https://attacker.example.com/teams/" });
-    sendContextMockState.store.remove.mockResolvedValue(true);
+    store.remove.mockResolvedValue(true);
 
     await expect(resolveContext()).rejects.toThrow(
       /Stored Microsoft Teams conversation reference has blocked serviceUrl host: attacker\.example\.com/,
     );
 
-    expect(sendContextMockState.store.remove).toHaveBeenCalledWith("19:channel@thread.tacv2");
+    expect(store.remove).toHaveBeenCalledWith("19:channel@thread.tacv2");
   });
 
-  it("uses named account credentials and scoped conversation references", async () => {
+  it.each([true, undefined])("uses scoped credentials with account enabled=%s", async (enabled) => {
     storedChannel();
-
     const cfg = createMSTeamsTestConfig({
-      enabled: true,
+      enabled,
       tenantId: "tenant-id",
       accounts: {
-        default: {
-          enabled: true,
-          appId: "default-app-id",
-          appPassword: "default-app-password",
-        },
+        ...(enabled
+          ? { default: { appId: "default-app-id", appPassword: "default-password", enabled } }
+          : {}),
         secondary: {
-          enabled: true,
+          enabled,
           appId: "secondary-app-id",
           appPassword: "secondary-app-password",
         },
@@ -231,14 +237,15 @@ describe("resolveMSTeamsSendContext", () => {
     });
 
     await expect(resolveContext(cfg, { accountId: "secondary" })).resolves.toMatchObject({
+      accountId: "secondary",
       conversationId,
     });
 
-    expect(sendContextMockState.store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
-    expect(sendContextMockState.openConversationStore).toHaveBeenCalledWith({
+    expect(store.get).toHaveBeenCalledWith("19:channel@thread.tacv2");
+    expect(openConversationStore).toHaveBeenCalledWith({
       accountId: "secondary",
     });
-    expect(sendContextMockState.loadMSTeamsSdkWithAuth).toHaveBeenCalledWith(
+    expect(loadMSTeamsSdkWithAuth).toHaveBeenCalledWith(
       {
         appId: "secondary-app-id",
         appPassword: "secondary-app-password",
@@ -265,26 +272,7 @@ describe("resolveMSTeamsSendContext", () => {
     await expect(resolveContext(cfg, { accountId: "support" })).rejects.toThrow(
       "msteams provider is not enabled",
     );
-    expect(sendContextMockState.store.get).not.toHaveBeenCalled();
-  });
-
-  it("treats omitted account enabled as enabled for proactive sends", async () => {
-    storedChannel();
-
-    const cfg = createMSTeamsTestConfig({
-      tenantId: "tenant-id",
-      accounts: {
-        secondary: {
-          appId: "secondary-app-id",
-          appPassword: "secondary-app-password",
-        },
-      },
-    });
-
-    await expect(resolveContext(cfg, { accountId: "secondary" })).resolves.toMatchObject({
-      accountId: "secondary",
-      conversationId: "19:channel@thread.tacv2",
-    });
+    expect(store.get).not.toHaveBeenCalled();
   });
 });
 
@@ -330,7 +318,7 @@ describe("resolveMSTeamsProactiveReplyTarget", () => {
 
 describe("stored serviceUrl cloud admission", () => {
   it("rejects a missing URL after SDK setup without creating a token provider or deleting the reference", async () => {
-    sendContextMockState.store.get.mockResolvedValue(channelRef());
+    store.get.mockResolvedValue(channelRef());
     await expect(
       resolveContext(
         createConfig({
@@ -344,8 +332,8 @@ describe("stored serviceUrl cloud admission", () => {
           "Ask the bot to receive a new Teams message in this conversation, then retry.",
       ),
     );
-    expect(sendContextMockState.loadMSTeamsSdkWithAuth).toHaveBeenCalledTimes(1);
-    expect(sendContextMockState.createMSTeamsTokenProvider).not.toHaveBeenCalled();
-    expect(sendContextMockState.store.remove).not.toHaveBeenCalled();
+    expect(loadMSTeamsSdkWithAuth).toHaveBeenCalledTimes(1);
+    expect(createMSTeamsTokenProvider).not.toHaveBeenCalled();
+    expect(store.remove).not.toHaveBeenCalled();
   });
 });
