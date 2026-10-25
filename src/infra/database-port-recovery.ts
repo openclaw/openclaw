@@ -85,7 +85,7 @@ export type DatabasePortRecoveryIntent = {
 export function assertDatabasePortPlatformSupported(): void {
   if (process.platform === "win32") {
     throw new Error(
-      "Native Windows does not support SQLite ↔ PostgreSQL database port yet. Existing SQLite data stays unchanged. Use a fresh setup directly on PostgreSQL on Windows, or run the port on Linux or macOS.",
+      "Native Windows does not support SQLite ↔ PostgreSQL database port yet. Existing data and engine selection stay unchanged. Start with a fresh PostgreSQL setup on Windows, or run the port on Linux or macOS.",
     );
   }
 }

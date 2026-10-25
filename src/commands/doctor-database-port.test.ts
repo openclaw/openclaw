@@ -25,7 +25,7 @@ describe("native Windows database port", () => {
         const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
         try {
           await expect(doctorDatabasePort(options)).rejects.toThrow(
-            /Native Windows does not support SQLite.*PostgreSQL database port yet.*Existing SQLite data stays unchanged.*fresh setup directly on PostgreSQL.*Linux or macOS/s,
+            /Native Windows does not support SQLite.*PostgreSQL database port yet.*Existing data and engine selection stay unchanged.*fresh PostgreSQL setup on Windows.*Linux or macOS/s,
           );
         } finally {
           platform.mockRestore();
