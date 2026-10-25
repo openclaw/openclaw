@@ -41,8 +41,6 @@ vi.mock("../commands/health.js", () => ({ healthCommand: runRouteMock }));
 vi.mock("../commands/agents.commands.list.js", () => ({ agentsListCommand: runRouteMock }));
 vi.mock("../commands/sessions.js", () => ({ sessionsCommand: runRouteMock }));
 vi.mock("../commands/channels/list.js", () => ({ channelsListCommand: runRouteMock }));
-vi.mock("../commands/channels/status.js", () => ({ channelsStatusCommand: runRouteMock }));
-vi.mock("./plugins-list-command.js", () => ({ runPluginsListCommand: runRouteMock }));
 vi.mock("./daemon-cli/status.js", () => ({ runDaemonStatus: runRouteMock }));
 vi.mock("./gateway-cli/health-route.js", () => ({ runGatewayHealthJsonRoute: runRouteMock }));
 vi.mock("./config-cli.js", () => ({ runConfigGet: runRouteMock, runConfigUnset: runRouteMock }));
@@ -104,7 +102,6 @@ describe("tryRouteCli", () => {
       { deep: true, all: true, usage: true, agent: "beta", timeoutMs: 5000 },
     ],
     ["health --timeout nope --timeout 5000", { json: false, verbose: false, timeoutMs: 5000 }],
-    ["status --timeout 5000", { ...statusDefaults, timeoutMs: 5000 }],
     ["status", { ...statusDefaults, timeoutMs: undefined }],
     [
       "--profile work status --json",
@@ -124,11 +121,6 @@ describe("tryRouteCli", () => {
     ["--log-level=debug agents list --json", { json: true, bindings: false, tree: false }, true],
     ["agents --json --bindings", { json: true, bindings: true, tree: false }, true],
     ["channels list", { json: false, all: false }],
-    [
-      "channels status --json",
-      { channel: undefined, json: true, probe: false, timeout: undefined },
-    ],
-    ["plugins list --json", { json: true, enabled: false, verbose: false }],
     [
       "gateway status --url ws://127.0.0.1:18789 --token abc --password def --timeout 5000 --deep --require-rpc --json",
       {

@@ -93,8 +93,7 @@ vi.mock("../daemon/gateway-entrypoint.js", async (importOriginal) => {
 
 vi.mock("./update-cli/update-command-readiness.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-cli/update-command-readiness.js")>()),
-  observeUpdateGatewayReadiness: (...args: Parameters<typeof observeUpdateGatewayReadiness>) =>
-    observeUpdateGatewayReadiness(...args),
+  observeUpdateGatewayReadiness,
 }));
 
 vi.mock("./update-cli/update-command-post-plugin-readiness.js", async (importOriginal) => {
@@ -109,20 +108,13 @@ vi.mock("./update-cli/update-command-post-plugin-readiness.js", async (importOri
   };
 });
 
-vi.mock("../utils.js", async (importOriginal) => {
-  const [actual, { isRecord: isRecordGuard }] = await Promise.all([
-    importOriginal<typeof import("../utils.js")>(),
-    import("@openclaw/normalization-core/record-coerce"),
-  ]);
-  return {
-    ...actual,
-    displayString: (input: string) => input,
-    isRecord: isRecordGuard,
-    pathExists: (...args: unknown[]) => pathExists(...args),
-    resolveConfigDir: () => "/tmp/openclaw-config",
-    sleep: vi.fn(async () => undefined),
-  };
-});
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
+  displayString: (input: string) => input,
+  pathExists,
+  resolveConfigDir: () => "/tmp/openclaw-config",
+  sleep: vi.fn(async () => undefined),
+}));
 
 vi.mock("../plugins/official-external-install-records.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/official-external-install-records.js")>()),
@@ -130,14 +122,11 @@ vi.mock("../plugins/official-external-install-records.js", async (importOriginal
   resolveTrustedSourceLinkedOfficialNpmInstall: vi.fn(() => undefined),
 }));
 
-vi.mock("../plugins/update.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../plugins/update.js")>();
-  return {
-    ...actual,
-    syncPluginsForUpdateChannel: (...args: unknown[]) => syncPluginsForUpdateChannel(...args),
-    updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
-  };
-});
+vi.mock("../plugins/update.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/update.js")>()),
+  syncPluginsForUpdateChannel,
+  updateNpmInstalledPlugins,
+}));
 
 // mock-isolation: Deferred completion supplies convergence facts without running Doctor or plugin installs.
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
@@ -180,9 +169,7 @@ export const runPostCorePluginConvergenceSpy = vi.spyOn(
 export function installDeferredCompletionFixture() {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
   let tempHome: TempHomeEnv | undefined;
-  let fixtureRoot = "";
-  let fixtureCount = 0;
-  const createCaseDir = (prefix: string) => path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
+  const createCaseDir = (prefix: string) => dirs.make(`${prefix}-`);
   const FRESH_POST_UPDATE_ENTRYPOINT = "/tmp/openclaw-updated-entry.mjs";
   const baseConfig: OpenClawConfig = {};
   const baseSnapshot = createUpdateCliBaseSnapshot(baseConfig);
@@ -233,7 +220,6 @@ export function installDeferredCompletionFixture() {
 
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-deferred-completion-");
-    fixtureRoot = dirs.make("openclaw-deferred-completion-fixtures-");
     vi.resetAllMocks();
     sourceRuntimeCompletion.mockResolvedValue({ changed: false });
     resetRuntimeCapture();

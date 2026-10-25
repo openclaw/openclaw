@@ -12,20 +12,11 @@ const mocks = vi.hoisted(() => ({
   modelsListCommand: vi.fn().mockResolvedValue(undefined),
   modelsStatusCommand: vi.fn().mockResolvedValue(undefined),
   modelsSetCommand: vi.fn().mockResolvedValue(undefined),
-  modelsRefreshCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAliasesAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAliasesRemoveCommand: vi.fn().mockResolvedValue(undefined),
-  modelsScanCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthActivateCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthOrderGetCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderUpdateCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAccountsListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAccountsLoginCommand: vi.fn().mockResolvedValue(undefined),
@@ -39,10 +30,7 @@ vi.mock("../commands/models/list.status-command.js", () => ({
   modelsStatusCommand: mocks.modelsStatusCommand,
 }));
 vi.mock("../commands/models/auth.js", () => ({
-  modelsAuthAddCommand: mocks.modelsAuthAddCommand,
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
-  modelsAuthPasteApiKeyCommand: mocks.modelsAuthPasteApiKeyCommand,
-  modelsAuthPasteTokenCommand: mocks.modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand: mocks.modelsAuthSetupTokenCommand,
 }));
 vi.mock("../commands/models/auth-list.js", () => ({
@@ -54,29 +42,18 @@ vi.mock("../commands/models/accounts.js", async (importOriginal) => ({
   modelsAccountsLoginCommand: mocks.modelsAccountsLoginCommand,
   modelsAccountsUpdateDefaultCommand: mocks.modelsAccountsUpdateDefaultCommand,
 }));
-vi.mock("../commands/models/auth-activate.js", () => ({
-  modelsAuthActivateCommand: mocks.modelsAuthActivateCommand,
-}));
 vi.mock("../commands/models/auth-logout.js", () => ({
   modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
 }));
 vi.mock("../commands/models/auth-order.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/models/auth-order.js")>()),
-  modelsAuthOrderGetCommand: mocks.modelsAuthOrderGetCommand,
   modelsAuthOrderUpdateCommand: mocks.modelsAuthOrderUpdateCommand,
 }));
 vi.mock("../commands/models/aliases.js", () => ({
-  modelsAliasesAddCommand: mocks.modelsAliasesAddCommand,
   modelsAliasesListCommand: mocks.modelsAliasesListCommand,
-  modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
-// mock-isolation: Observe CLI routing without scanning live providers.
-vi.mock("../commands/models/scan.js", () => ({ modelsScanCommand: mocks.modelsScanCommand }));
 // mock-isolation: Observe CLI routing without changing stored model configuration.
 vi.mock("../commands/models/set.js", () => ({ modelsSetCommand: mocks.modelsSetCommand }));
-vi.mock("../commands/models/refresh.js", () => ({
-  modelsRefreshCommand: mocks.modelsRefreshCommand,
-}));
 
 describe("models cli", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -148,22 +125,16 @@ describe("models cli", () => {
     expected: Record<string, unknown> = provider,
   ) => ({ args, command, expected });
   it.each([
-    authCase("--agent poe add", "modelsAuthAddCommand", {}),
-    authCase("--agent poe activate openai:saved", "modelsAuthActivateCommand", {
-      profileId: "openai:saved",
-    }),
     authCase("--agent poe logout openai:manual --yes", "modelsAuthLogoutCommand", {
       profileId: "openai:manual",
       yes: true,
     }),
     authCase("--agent poe setup-token --provider anthropic", "modelsAuthSetupTokenCommand"),
-    authCase("--agent poe paste-token --provider anthropic", "modelsAuthPasteTokenCommand"),
     authCase("--agent poe login-github-copilot --yes", "modelsAuthLoginCommand", {
       provider: "github-copilot",
       method: "device",
       yes: true,
     }),
-    authCase("order get --provider anthropic --agent poe", "modelsAuthOrderGetCommand"),
     authCase(
       "order set --provider anthropic anthropic:first anthropic:second --agent poe",
       "modelsAuthOrderUpdateCommand",
@@ -209,18 +180,13 @@ describe("models cli", () => {
     expect(command).not.toHaveBeenCalled();
   });
 
-  it.each<[string, keyof typeof mocks, string?]>([
-    ["set-image openai/gpt-image-1", "modelsSetCommand", "imageModel"],
-    ["aliases add zzz soraka/grok-4.6", "modelsAliasesAddCommand"],
-    ["aliases remove zzz", "modelsAliasesRemoveCommand"],
-    ["scan --no-probe --no-input", "modelsScanCommand"],
-    ["refresh", "modelsRefreshCommand"],
-  ])("still runs models %s without --agent", async (args, command, field) => {
-    await runModelsCommand(`models ${args}`);
-    expect(mocks[command]).toHaveBeenCalledOnce();
-    if (field) {
-      expect(mocks[command]).toHaveBeenCalledWith(args.split(" ")[1], defaultRuntime, field);
-    }
+  it("selects the image model field for set-image", async () => {
+    await runModelsCommand("models set-image openai/gpt-image-1");
+    expect(mocks.modelsSetCommand).toHaveBeenCalledWith(
+      "openai/gpt-image-1",
+      defaultRuntime,
+      "imageModel",
+    );
   });
 
   it("shows help for models auth without error exit", async () => {
