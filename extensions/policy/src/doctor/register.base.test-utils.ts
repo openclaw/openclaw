@@ -1427,21 +1427,20 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("repairs automatic channel ingress narrowing findings", async () => {
-    const cfg: Record<string, unknown> = cfgWithWorkspaceRepairs({
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          requireMention: false,
-          groups: {
-            ops: {
-              topics: {
-                incidents: { requireMention: false },
-              },
+    const channels: Record<string, unknown> = {
+      telegram: {
+        groupPolicy: "open",
+        requireMention: false,
+        groups: {
+          ops: {
+            topics: {
+              incidents: { requireMention: false },
             },
           },
         },
       },
-    });
+    };
+    const cfg: Record<string, unknown> = cfgWithWorkspaceRepairs({ channels });
     const configPath = await writePolicyFixture({
       ingress: {
         channels: {

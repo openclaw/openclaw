@@ -55,7 +55,7 @@ export function cfgWithPolicyOverrides(
   return { ...cfgWithPolicy(), ...overrides };
 }
 
-export function cfgWithWorkspaceRepairs<T extends object>(overrides: T) {
+export function cfgWithWorkspaceRepairs(overrides: Partial<RawLegacyDoctorConfig>) {
   return { ...cfgWithPolicy({ workspaceRepairs: true }), ...overrides };
 }
 
