@@ -310,7 +310,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/acpx/src/session-owner-migration.test.ts",
   "extensions/active-memory/index.test.ts",
   "extensions/agentsapi/agentsapi-attempt.instructions.test.ts",
-  "extensions/amazon-bedrock/stream.runtime.accounting-replay.test.ts",
   "extensions/amazon-bedrock/stream.runtime.test.ts",
   "extensions/anthropic-vertex/region.test.ts",
   "extensions/anthropic/cli-migration.test.ts",
