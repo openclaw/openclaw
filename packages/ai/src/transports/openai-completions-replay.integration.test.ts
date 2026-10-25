@@ -5,7 +5,11 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
 import type { Context } from "../types.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
-import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
+import {
+  makeCompletionsChunk,
+  makeCompletionsModel,
+  makeCompletionsToolDelta,
+} from "./openai-completions.test-support.js";
 
 describe("streamed Chat Completions reasoning replay on the wire", () => {
   let fixture: Awaited<ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>>;
@@ -29,16 +33,7 @@ describe("streamed Chat Completions reasoning replay on the wire", () => {
                 ? [
                     makeCompletionsChunk({ [reasoningField]: "Check the forecast." }),
                     makeCompletionsChunk(
-                      {
-                        tool_calls: [
-                          {
-                            index: 0,
-                            id: "call_weather",
-                            type: "function",
-                            function: { name: "weather", arguments: "{}" },
-                          },
-                        ],
-                      },
+                      makeCompletionsToolDelta("call_weather", "weather", "{}"),
                       "tool_calls",
                     ),
                   ]

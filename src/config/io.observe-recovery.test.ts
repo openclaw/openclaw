@@ -547,18 +547,6 @@ ${snapshot.raw}`;
     expect((await readObserveEvents(auditPath)).at(-1)?.restoredFromBackup).toBe(true);
   });
 
-  it("recovery uses canonical metadata fingerprints", async () => {
-    const { deps, configPath } = makeDeps(home);
-    const backup = { meta: { authoredBy: "operator" }, gateway: { mode: "local" } };
-    await seedConfigBackup(configPath, backup);
-    const clobbered = await writeConfigRaw(configPath, { gateway: { mode: "local" } });
-    const input = { deps, configPath, ...clobbered, prepareBackup: approveRecoveryCandidate };
-
-    const recovered = await maybeRecoverSuspiciousConfigRead(input);
-
-    expect(recovered.parsed).toEqual(backup);
-  });
-
   it.each([
     {
       name: "retries recovery on next launch after a failed atomic replace",

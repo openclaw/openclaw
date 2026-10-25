@@ -1,5 +1,43 @@
 # Team-scale Control UI cold-load benchmark
 
+## Cold routes and dependency leaks
+
+`bench-control-ui-route-leaks.ts` visits selected routes in fresh browser contexts,
+with the HTTP cache disabled and service workers blocked. It serves immutable
+production bundles through the Gateway HTTP handler and uses synthetic Gateway
+responses. Coverage runs record requested chunks, source-map modules, import
+initiators, and V8 executed versus unexecuted bytes, including preloaded modules
+that were never evaluated. Requested source bytes and completed/evaluated bytes
+are separate: a preload still transferring at readiness is not a completed load.
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-route-leaks.ts \
+  --bundle-dir /absolute/base/control-ui --compare-bundle-dir /absolute/head/control-ui \
+  --mode coverage --profiles local --output /absolute/proof/routes
+```
+
+Use `--routes sessions,cron,usage` to narrow the inventory. Timing runs are
+separate from coverage instrumentation: `--mode timing --pairs 20 --profiles
+local,remote` interleaves base, a second base control, and head. The remote profile
+adds 100 ms HTTP latency at 10 Mbps; synthetic WebSocket responses have no RTT.
+Reports retain readiness, thread-clock script/task CPU, host load, and each failed
+or unsupported scenario. Usable route readiness requires a loaded route and a
+visible usable control; sharing additionally opens its menu. Compare medians and
+p95 against the A/A control before attributing timing changes on a loaded host.
+
+Use `--routes agents,cron --interactions agents-files,cron-history,cron-transcript`
+for the corresponding follow-through probes. Their automation-to-ready wall and
+CPU intervals are separate from cold readiness; they are not INP measurements.
+Coverage mode also records which requested modules actually evaluated during
+each action. Transcript probing opts into a synthetic completed run and messages.
+Every matching Agents/Cron variant receives at least 2,000 ms of post-ready
+think time, including builds without passive preloads. When the built navigation
+descriptor provides `agents-next` or `cron-next`, the probe also waits for those
+byte preloads. It records the actual warmup wall time and CPU for every variant;
+preload completion may extend the window. Coverage mode records V8 evaluation
+and rejects a panel that evaluates before its action. Cold readiness and
+coverage remain bounded before this optional warmup.
+
 ## Media load, remount, and disposal
 
 `bench-control-ui-media.ts` compares **already-built** base and head bundles with

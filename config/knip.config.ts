@@ -1308,6 +1308,17 @@ const config = {
     // Mirror config parsing, redaction mapping, cap fitting, and the runner are
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
+    // Knowledge's focused tests assert response budgets, link parsing, keyword
+    // expressions, flush request IDs, descriptor paths and the worker operation
+    // table through these seams; production reaches them through service handlers.
+    "extensions/knowledge/src/connections.ts": ["exports"],
+    "extensions/knowledge/src/ingestion-contract.ts": ["exports", "types"],
+    "extensions/knowledge/src/inspection.ts": ["exports"],
+    "extensions/knowledge/src/markdown-links.ts": ["exports"],
+    "extensions/knowledge/src/retrieval.ts": ["exports"],
+    "extensions/knowledge/src/service.ts": ["exports"],
+    "extensions/knowledge/src/source-descriptors.ts": ["exports"],
+    "extensions/knowledge/src/storage-host.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
     // Lazy loaders import these modules opaquely (media-understanding runner, config model
     // validation), which Knip counts as using every export until a bare namespace reference

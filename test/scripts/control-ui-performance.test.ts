@@ -316,7 +316,7 @@ describe("Control UI performance budgets", () => {
     expect(formatReport(metrics, budgets)).toContain("startup JS gzip: 40 B exceeds 30 B");
   });
 
-  it("bounds the approved mobile header CSS restoration", () => {
+  it("bounds stylesheet growth at the fixed CSS ceilings", () => {
     const { distDir, writeAsset } = createStartupFixture();
     for (let index = 0; index < 6; index++) {
       writeAsset(
@@ -326,10 +326,12 @@ describe("Control UI performance budgets", () => {
       );
     }
     const base = collectMetrics(distDir);
-    writeAsset("mobile-header.css", 2_066, 845);
+    const headerRaw = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes - base.total.css.rawBytes;
+    const headerGzip = CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes - base.total.css.gzipBytes;
+    writeAsset("mobile-header.css", headerRaw, headerGzip);
     const accepted = collectMetrics(distDir);
     expect(evaluateBudgets(accepted, undefined, null, 512, base)).toEqual([]);
-    writeAsset("mobile-header.css", 2_067, 846);
+    writeAsset("mobile-header.css", headerRaw + 1, headerGzip + 1);
     expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
       expect.objectContaining({ metric: "total CSS gzip" }),
       expect.objectContaining({ metric: "total CSS raw" }),
