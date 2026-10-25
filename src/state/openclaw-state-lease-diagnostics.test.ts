@@ -166,27 +166,22 @@ it.each([
 
 it("still reports commit contention after nonblocking admission succeeds", () => {
   const pathname = path.join(dirs.make("lease-commit-diagnostics-"), "state.sqlite");
-  const db = new DatabaseSync(pathname);
+  using db = new DatabaseSync(pathname);
   db.exec("PRAGMA busy_timeout=0; CREATE TABLE entries (value TEXT)");
-  const peer = new DatabaseSync(pathname);
-  try {
-    peer.exec("BEGIN");
-    peer.prepare("SELECT * FROM entries").all();
-    warn.mockClear();
-    expect(() =>
-      runSqliteImmediateTransactionSync(db, () => db.exec("INSERT INTO entries VALUES ('new')"), {
-        beginLockFailureReporting: "suppress",
-        busyTimeoutMs: 0,
-      }),
-    ).toThrow(expect.objectContaining({ errcode: 5 }));
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "SQLite transaction lock wait failed",
-      expect.objectContaining({ step: "commit", failureKind: "lock-contention" }),
-    );
-    peer.exec("ROLLBACK");
-    expect(db.prepare("SELECT * FROM entries").all()).toEqual([]);
-  } finally {
-    peer.close();
-    db.close();
-  }
+  using peer = new DatabaseSync(pathname);
+  peer.exec("BEGIN");
+  peer.prepare("SELECT * FROM entries").all();
+  warn.mockClear();
+  expect(() =>
+    runSqliteImmediateTransactionSync(db, () => db.exec("INSERT INTO entries VALUES ('new')"), {
+      beginLockFailureReporting: "suppress",
+      busyTimeoutMs: 0,
+    }),
+  ).toThrow(expect.objectContaining({ errcode: 5 }));
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "SQLite transaction lock wait failed",
+    expect.objectContaining({ step: "commit", failureKind: "lock-contention" }),
+  );
+  peer.exec("ROLLBACK");
+  expect(db.prepare("SELECT * FROM entries").all()).toEqual([]);
 });

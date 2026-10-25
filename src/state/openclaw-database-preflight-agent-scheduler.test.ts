@@ -9,10 +9,8 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: vi.fn(() => 2),
 }));
 
-function fixture<T>(targets: readonly T[], timed = false) {
-  if (timed) {
-    vi.useFakeTimers();
-  }
+function fixture<T extends string | number>(targets: readonly T[]) {
+  vi.useFakeTimers();
   const pending = targets.map(() => createDeferred());
   const tracked: Promise<unknown>[] = [];
   const started: T[] = [];
@@ -34,6 +32,10 @@ function fixture<T>(targets: readonly T[], timed = false) {
     result,
     defer,
     releaseAll,
+    async inspect(target: T, inspection: OpenClawDatabaseSchemaPreflight) {
+      await pending[targets.indexOf(target)]!.promise;
+      inspection.indeterminate.push({ kind: "agent", path: `agent-${target}`, reason: "fixture" });
+    },
     run(
       inspect: Parameters<typeof preflightAgentDatabasesBounded<T>>[1],
       canDefer?: (target: T) => boolean,
@@ -66,28 +68,14 @@ function fixture<T>(targets: readonly T[], timed = false) {
       gateway.abort();
       releaseAll();
       await Promise.allSettled(tracked);
-      if (timed) {
-        vi.useRealTimers();
-      }
+      vi.useRealTimers();
     },
   };
 }
 
-async function inspectNumbered(
-  pending: ReturnType<typeof createDeferred>[],
-  target: number,
-  inspection: OpenClawDatabaseSchemaPreflight,
-) {
-  await pending[target]!.promise;
-  inspection.indeterminate.push({ kind: "agent", path: `agent-${target}`, reason: "fixture" });
-}
-
 it("shares one foreground wait across active and queued agent inspections", async () => {
-  await using f = fixture([0, 1, 2, 3], true);
-  void f.run(
-    (target, inspection) => inspectNumbered(f.pending, target, inspection),
-    () => true,
-  );
+  await using f = fixture([0, 1, 2, 3]);
+  void f.run(f.inspect, () => true);
   await vi.advanceTimersByTimeAsync(4_000);
   f.pending[0]!.resolve();
   await vi.advanceTimersByTimeAsync(0);
@@ -113,13 +101,13 @@ it("shares one foreground wait across active and queued agent inspections", asyn
 });
 
 it("bounds active inspections while preserving out-of-order results in input order", async () => {
-  await using f = fixture([0, 1, 2], true);
+  await using f = fixture([0, 1, 2]);
   let active = 0;
   let peak = 0;
   const run = f.run(async (target, inspection) => {
     peak = Math.max(peak, ++active);
     try {
-      await inspectNumbered(f.pending, target, inspection);
+      await f.inspect(target, inspection);
     } finally {
       active--;
     }
@@ -141,7 +129,7 @@ it("bounds active inspections while preserving out-of-order results in input ord
 });
 
 it("keeps unowned custom stores in strict foreground admission", async () => {
-  await using f = fixture(["custom.sqlite"], true);
+  await using f = fixture(["custom.sqlite"]);
   const run = f.run(
     async () => await f.pending[0]!.promise,
     () => false,
@@ -156,7 +144,7 @@ it("keeps unowned custom stores in strict foreground admission", async () => {
 });
 
 it("keeps deferred inspections alive until the Gateway owner stops", async () => {
-  await using f = fixture(["slow.sqlite"], true);
+  await using f = fixture(["slow.sqlite"]);
   let signal: AbortSignal | undefined;
   await sqliteInspection.withSqliteReadOnlyWorkerScope(async () => {
     const foreground = f.run(
@@ -177,7 +165,7 @@ it("keeps deferred inspections alive until the Gateway owner stops", async () =>
 });
 
 it("rejects a deferred failure while a strict store still prevents handoff", async () => {
-  await using f = fixture([0, 1, 2], true);
+  await using f = fixture([0, 1, 2]);
   const failure = new Error("unowned database inspection failed");
   f.defer.mockImplementation(() => {
     throw new Error("An unfinished healthy peer prevents background handoff");
