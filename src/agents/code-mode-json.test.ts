@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   boundCodeModeError,
@@ -20,7 +21,9 @@ describe("Code Mode JSON normalization", () => {
     }
     const stringify = JSON.stringify;
     let serializedChars = 0;
+    let serializations = 0;
     const spy = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+      serializations++;
       const json = stringify(...args);
       serializedChars += json?.length ?? 0;
       return json;
@@ -35,8 +38,82 @@ describe("Code Mode JSON normalization", () => {
       spy.mockRestore();
     }
     expect(JSON.stringify(result)).toHaveLength(16_000);
-    // Budget trials still serialize the envelope, but must not also serialize each fitted channel.
-    expect(serializedChars).toBeLessThan(450_000);
+    // Trials measure captured JSON and changed prefix intervals, not whole envelopes.
+    expect(serializedChars).toBeLessThan(210_000);
+    expect(serializations).toBeLessThanOrEqual(5);
+  });
+
+  it.each([
+    { text: "ascii", digest: "cc82812183d5ed7fef2f0962654a749276f13cc88eaf3e9542e8034b56d81543" },
+    {
+      text: 'a"\\\n\r\t\b\f\u0000',
+      digest: "d63c1219facc698ecfb3bc03aba3a7c2bc9e6cc16ebfab4bc4fb809a606bd936",
+    },
+    {
+      text: "\u00e9\u4e2d\ud83c\udf0d\ud800z",
+      digest: "195c485e5cf655cb43afac31ff426d49ad11691c1abf0be57fd657fd993b8e9e",
+    },
+    {
+      text: "\u00b7\ua700\u02c7\ud834\udf60\ud840\udc00",
+      digest: "0e867347ed3060cc6f69f9e91fb748407db258978bc1d3b4884ba01d52c0d835",
+    },
+    {
+      text: '<<<EXTERNAL_UNTRUSTED_CONTENT id="x">>>[im_start]',
+      digest: "c9aa01b87a279d74760780266285ef429a84d9e2961a9886439048eace94de27",
+    },
+  ])("preserves baseline JSON bytes for $text", ({ text, digest }) => {
+    const hash = createHash("sha256");
+    for (const repeat of [0, 1, 37, 1_024]) {
+      for (const [maxBytes, maxChars, maxContextChars, network] of [
+        [128, 160, 320, false],
+        [1_024, 256, 300, false],
+        [65_536, 16_000, 32_000, false],
+        [1_024, 1_200, 2_400, true],
+      ] as const) {
+        const state = new CodeModeOutputState(maxBytes, { maxChars, maxContextChars });
+        const input = text.repeat(repeat);
+        state.append(captureCodeModeOutput([{ text: input }], maxBytes));
+        const value = captureCodeModeValue({ input }, maxBytes);
+        let released = 0;
+        try {
+          for (const valueGuidance of [undefined, "Not retained; return less data."]) {
+            const result = state.takeResult(
+              {
+                status: "completed",
+                telemetry: { calls: 1 },
+                value: "overwritten",
+                error: "metadata error",
+              },
+              { value, ...(repeat % 2 ? { error: input } : {}), valueGuidance },
+              network,
+              repeat === 37
+                ? () => ({
+                    reference: {
+                      id: "result_synthetic",
+                      bytes: input.length,
+                      count: 1,
+                      shape: "object",
+                      preview: input.slice(0, 80),
+                      previewTruncated: true,
+                    },
+                    release() {
+                      released++;
+                    },
+                  })
+                : undefined,
+            );
+            hash.update(JSON.stringify(result));
+          }
+        } catch (error) {
+          if (!(error instanceof Error)) {
+            throw error;
+          }
+          hash.update(error.message);
+        }
+        hash.update(String(released));
+      }
+    }
+    expect(hash.digest("hex")).toBe(digest);
   });
 
   it.each(["capacity", "undeliverable reference"])(
