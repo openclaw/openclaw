@@ -5,6 +5,7 @@ import * as ts from "typescript/ast";
 import { afterEach, expect, it, vi } from "vitest";
 import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeArtifacts as writeFiles } from "../plugins/public-surface.test-support.js";
 import { createDeclarationClosureRenderer } from "./api-baseline-declaration-closure.js";
 import { formatPluginSdkApiTypeAlias as formatTypeAlias } from "./api-baseline-declaration-print.js";
 import {
@@ -26,14 +27,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixtureSource = { path: "src/plugin-sdk/fixture.ts" };
 const tsOptions = { module: "NodeNext", moduleResolution: "NodeNext", target: "ESNext" };
-
-function writeFiles(root: string, files: Readonly<Record<string, string>>) {
-  for (const [name, contents] of Object.entries(files)) {
-    const file = path.join(root, name);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, contents);
-  }
-}
 
 function expectItems(actual: unknown, ...expected: Record<string, unknown>[]) {
   expect(actual).toEqual(expected.map((item) => expect.objectContaining(item)));

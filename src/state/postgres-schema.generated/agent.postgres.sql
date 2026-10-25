@@ -752,6 +752,12 @@ CREATE INDEX "idx_agent_transcript_event_sequence" ON "transcript_event_identiti
 
 CREATE UNIQUE INDEX "idx_agent_transcript_message_idempotency" ON "transcript_event_identities" (("session_id") ASC, ("message_idempotency_key") ASC) WHERE "message_idempotency_key" IS NOT NULL;
 
+CREATE INDEX "idx_memory_index_sources_exact_path" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')))));
+
+CREATE INDEX "idx_memory_index_sources_basename" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.regexp_replace(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')), '^.*/', ''))));
+
+CREATE INDEX "idx_memory_index_sources_stem" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')), '^.*/', ''), '^(.+)\.[^.]*$', '\1'))));
+
 ALTER TABLE "acp_parent_stream_events" ADD FOREIGN KEY ("session_id") REFERENCES "session_windows" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 
 ALTER TABLE "board_tabs" ADD FOREIGN KEY ("session_key") REFERENCES "session_nodes" ("session_key") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

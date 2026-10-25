@@ -56,12 +56,20 @@ it("reuses immutable list projections and encoded rows until the owner or defaul
     const frame = serializeGatewayFrame({ type: "res", id: "snapshot", ok: true, payload });
     return { row: payload.jobs[0]!, wire: JSON.parse(frame.toString()).payload.jobs[0] };
   };
+  using descriptors = vi.spyOn(Object, "getOwnPropertyDescriptor");
   const full = await read(false);
   const compact = await read(true);
+  const projectionInspections = descriptors.mock.calls.filter(
+    ([, key]) => key === "effectiveAgentId",
+  ).length;
+  descriptors.mockRestore();
+  expect(projectionInspections).toBe(0);
   expect((await read(false)).row).toBe(full.row);
   expect((await read(true)).row).toBe(compact.row);
   expect(Object.isFrozen(full.row)).toBe(true);
   expect(Object.isFrozen(compact.row)).toBe(true);
+  expect(Reflect.set(full.row.state as object, "nextRunAtMs", 999)).toBe(false);
+  expect(Reflect.set(compact.row.schedule as object, "everyMs", 999)).toBe(false);
   expect(full.wire).toMatchObject({ effectiveAgentId: "main", nextRunAtMs: 100 });
   expect(compact.wire).toMatchObject({ effectiveAgentId: "main", nextRunAtMs: 100 });
 

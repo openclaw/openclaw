@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { MEMORY_PATH_POSTGRES_INDEX_SQL } from "../../packages/memory-host-sdk/src/host/memory-path-postgres.js";
 import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import type { SearchSchema, StoreSchema } from "../infra/database-engine/contract.js";
@@ -36,6 +37,7 @@ import {
   AGENT_INDEX_RETIREMENT_SQL,
   withLegacyAgentPostgresIndexes,
 } from "./openclaw-agent-index-retirement-migration.js";
+import { withLegacyAgentPostgresMemoryPaths } from "./openclaw-agent-memory-path-migration.js";
 import {
   AGENT_MEMORY_REVISION_POSTGRES_SQL,
   withLegacyAgentPostgresMemoryRevisionTriggers,
@@ -90,7 +92,11 @@ export function admitAgentEngineSearchExtensions(
 }
 
 const agentPostgresSql = `${agentPostgresRuntime.sql}\n${agentSearchPostgresRuntime.sql}`;
-const agentPostgresV34Sql = withLegacyPostgresIndexOrdering(agentPostgresSql, "schema-nullability");
+const agentPostgresV35Sql = withLegacyAgentPostgresMemoryPaths(agentPostgresSql);
+const agentPostgresV34Sql = withLegacyPostgresIndexOrdering(
+  agentPostgresV35Sql,
+  "schema-nullability",
+);
 const agentPostgresV33Sql = withLegacyPostgresIndexOrdering(agentPostgresV34Sql);
 const agentPostgresV30Sql = withLegacyAgentPostgresMemoryRevisionTriggers(agentPostgresV33Sql);
 const agentPostgresV29Sql = withLegacyAgentPostgresTrajectoryStorage(agentPostgresV30Sql);
@@ -204,13 +210,32 @@ export const agentEngineSchema: StoreSchema = {
         postgresVectorSearchVersion: 2,
       },
       schema: {
+        postgres: agentPostgresV35Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+      },
+      sql: `${postgresIndexOrderingMigration(agentPostgresV35Sql, "schema-nullability")}
+        UPDATE schema_meta
+        SET schema_version = 35,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';`,
+    },
+    {
+      version: 36,
+      fromSchema: {
+        postgres: agentPostgresV35Sql,
+        postgresVectorDecoderVersion: 2,
+        postgresVectorSearchVersion: 2,
+      },
+      schema: {
         postgres: agentPostgresSql,
         postgresVectorDecoderVersion: 2,
         postgresVectorSearchVersion: 2,
       },
-      sql: `${postgresIndexOrderingMigration(agentPostgresSql, "schema-nullability")}
+      sql: `${MEMORY_PATH_POSTGRES_INDEX_SQL}
         UPDATE schema_meta
-        SET schema_version = 35,
+        SET schema_version = 36,
           app_version = '${VERSION.replaceAll("'", "''")}',
           updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
         WHERE meta_key = 'primary';`,

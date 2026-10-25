@@ -800,6 +800,11 @@ the upgrade. [Doctor's migration owner](https://github.com/openclaw/openclaw/blo
 and the [agent maintenance gate](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-agent-db-maintenance-authority.ts)
 enforce stopped-writer maintenance.
 
+After a PostgreSQL major-version upgrade, `REINDEX` the
+`idx_memory_index_sources_exact_path`, `idx_memory_index_sources_basename`, and
+`idx_memory_index_sources_stem` indexes because `normalize()` follows PostgreSQL's
+Unicode tables.
+
 First boot, ports, rebuilds, and migrations can take longer on slow disks or a
 remote server. Connection waits allow 60 seconds. On runtime store connections,
 OpenClaw sets session-level `lock_timeout` to 60 seconds and `statement_timeout`
