@@ -67,6 +67,14 @@ function fakeClock() {
   vi.setSystemTime(0);
 }
 
+function heldRequest(result: unknown = { ok: "second" }) {
+  const response = createDeferred<Response>();
+  const fetch = vi.fn(async () =>
+    fetch.mock.calls.length === 1 ? await response.promise : createJsonResponse(result),
+  );
+  return { fetch, response };
+}
+
 describe("RequestClient", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -112,33 +120,31 @@ describe("RequestClient", () => {
   });
 
   it("dispatches critical interaction callbacks before older background requests", async () => {
-    const releaseWorkers = createDeferred<void>();
+    const release = createDeferred<void>();
     const blockers = Array.from({ length: 4 }, (_, index) => `/guilds/blocked-${index}/roles`);
-    const responses = new Map<string, Promise<Response>>([
-      ["/interactions/123/token/callback", Promise.resolve(createJsonResponse({ ok: "critical" }))],
-      ["/guilds/g2/roles", Promise.resolve(createJsonResponse({ ok: "background" }))],
+    const responses = new Map([
+      ["/interactions/123/token/callback", "critical"],
+      ["/guilds/g2/roles", "background"],
     ]);
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
-      const url = readRequestUrl(input);
-      const path = new URL(url).pathname.replace(/^\/api\/v\d+/, "");
+      const path = new URL(readRequestUrl(input)).pathname.replace(/^\/api\/v\d+/, "");
       if (blockers.includes(path)) {
-        await releaseWorkers.promise;
+        await release.promise;
         return createJsonResponse({ ok: "first" });
       }
-      const response = responses.get(path);
-      if (!response) {
+      const result = responses.get(path);
+      if (!result) {
         throw new Error(`unexpected request ${path}`);
       }
-      return await response;
+      return createJsonResponse({ ok: result });
     });
     const client = requestClient(fetchSpy);
-
     const active = blockers.map((path) => client.get(path));
     const background = client.get("/guilds/g2/roles");
     const critical = client.post("/interactions/123/token/callback", { body: { type: 5 } });
 
     expect(fetchSpy).toHaveBeenCalledTimes(4);
-    releaseWorkers.resolve();
+    release.resolve();
 
     await Promise.all(active);
     await expect(critical).resolves.toEqual({ ok: "critical" });
@@ -152,12 +158,7 @@ describe("RequestClient", () => {
 
   it("executes an aged queued read after the active request finishes", async () => {
     fakeClock();
-    const firstResponse = createDeferred<Response>();
-    const fetchSpy = vi.fn(async () =>
-      fetchSpy.mock.calls.length === 1
-        ? await firstResponse.promise
-        : createJsonResponse({ ok: "second" }),
-    );
+    const { response: firstResponse, fetch: fetchSpy } = heldRequest();
     const client = requestClient(fetchSpy, { timeout: 30_000 });
 
     const first = client.get("/guilds/g1/roles");
@@ -174,10 +175,10 @@ describe("RequestClient", () => {
 
   it("keeps standard mutations queued until Discord accepts or rejects them", async () => {
     fakeClock();
-    const releaseWorkers = createDeferred<void>();
+    const release = createDeferred<void>();
     const fetchSpy = vi.fn(async () => {
       if (fetchSpy.mock.calls.length <= 4) {
-        await releaseWorkers.promise;
+        await release.promise;
       }
       return createJsonResponse({ ok: true });
     });
@@ -200,7 +201,7 @@ describe("RequestClient", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(4);
 
     await vi.advanceTimersByTimeAsync(20_001);
-    releaseWorkers.resolve();
+    release.resolve();
     await Promise.all(active);
 
     await expect(Promise.all(requests)).resolves.toEqual(
@@ -211,12 +212,7 @@ describe("RequestClient", () => {
 
   it("drains same-bucket requests when the active request finishes without polling", async () => {
     fakeClock();
-    const firstResponse = createDeferred<Response>();
-    const fetchSpy = vi.fn(async () =>
-      fetchSpy.mock.calls.length === 1
-        ? await firstResponse.promise
-        : createJsonResponse({ id: "second" }),
-    );
+    const { response: firstResponse, fetch: fetchSpy } = heldRequest({ id: "second" });
     const client = requestClient(fetchSpy);
 
     const first = client.get("/channels/c1/messages");
@@ -310,44 +306,34 @@ describe("RequestClient", () => {
   it.each(["streamed", "gzip-compressed"] as const)(
     "bounds %s REST response bodies",
     async (encoding) => {
-      let pullCount = 0;
-      let cancelCount = 0;
-      const client =
+      const cancel = vi.fn();
+      const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+        controller.enqueue(new TextEncoder().encode("x".repeat(4 * 1024 * 1024)));
+      });
+      const response =
         encoding === "streamed"
-          ? streamClient({
-              pull(controller) {
-                pullCount += 1;
-                controller.enqueue(new TextEncoder().encode("x".repeat(4 * 1024 * 1024)));
-              },
-              cancel() {
-                cancelCount += 1;
-              },
-            })
-          : requestClient(
-              async () =>
-                new Response(
-                  gzipSync(Buffer.from(JSON.stringify({ data: "x".repeat(8 * 1024 * 1024) }))),
-                  { headers: { "Content-Encoding": "gzip", "Content-Type": "application/json" } },
-                ),
-              { queueRequests: false },
+          ? new Response(new ReadableStream({ pull, cancel }))
+          : new Response(
+              gzipSync(Buffer.from(JSON.stringify({ data: "x".repeat(8 * 1024 * 1024) }))),
+              { headers: { "Content-Encoding": "gzip", "Content-Type": "application/json" } },
             );
+      const client = requestClient(async () => response, { queueRequests: false });
       await expect(client.get("/channels/c1/messages")).rejects.toThrow(
         /Discord REST response body exceeds 8388608 bytes/,
       );
       if (encoding === "streamed") {
-        expect(cancelCount).toBe(1);
-        expect(pullCount).toBeLessThanOrEqual(4);
+        expect(cancel).toHaveBeenCalledTimes(1);
+        expect(pull.mock.calls.length).toBeLessThanOrEqual(4);
       }
     },
   );
 
   it("aborts stalled REST response bodies after the idle timeout", async () => {
-    const encoder = new TextEncoder();
     let cancelReason: unknown;
     const client = streamClient(
       {
         start(controller) {
-          controller.enqueue(encoder.encode("partial payload"));
+          controller.enqueue(new TextEncoder().encode("partial payload"));
         },
         cancel(reason) {
           cancelReason = reason;

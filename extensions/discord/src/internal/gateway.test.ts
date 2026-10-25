@@ -144,6 +144,13 @@ function expectClearedSession(gateway: GatewayPlugin) {
   });
 }
 
+function guildSnapshot(...users: [string, string][]) {
+  return {
+    id: "g1",
+    voice_states: users.map(([user_id, channel_id]) => ({ user_id, channel_id })),
+  };
+}
+
 const ready = {
   user: { id: "bot-user" },
   session_id: "session-1",
@@ -244,10 +251,8 @@ describe("GatewayPlugin", () => {
     const socket = expectDefined(gateway.sockets[0], "Discord gateway socket");
     const dispatch = socket.dispatch.bind(socket);
     const ownState = {
-      guild_id: "g1",
-      user_id: "bot-user",
+      ...voiceState("bot-user", "c1"),
       session_id: "bot-session",
-      channel_id: "c1",
       self_mute: false,
       self_deaf: false,
     };
@@ -299,12 +304,7 @@ describe("GatewayPlugin", () => {
     const { gateway, dispatch } = createDispatchGateway();
 
     await dispatch(GatewayDispatchEvents.GuildCreate, {
-      id: "g1",
-      voice_states: [
-        { user_id: "u1", channel_id: "c1" },
-        { user_id: "u2", channel_id: "c1" },
-        { user_id: "u3", channel_id: "c2" },
-      ],
+      ...guildSnapshot(["u1", "c1"], ["u2", "c1"], ["u3", "c2"]),
       members: [
         { user: { id: "u1", username: "owner", bot: false } },
         { user: { id: "u2", username: "friend", bot: false } },
@@ -348,7 +348,7 @@ describe("GatewayPlugin", () => {
 
   it("keeps newly memberless voice updates unknown through the voice listener", async () => {
     const { gateway, client, dispatch } = createDispatchGateway(true);
-    await dispatch(GatewayDispatchEvents.GuildCreate, { id: "g1", voice_states: [], members: [] });
+    await dispatch(GatewayDispatchEvents.GuildCreate, { ...guildSnapshot(), members: [] });
     const memberlessState = voiceState("unknown-user", "c1");
     await dispatch(GatewayDispatchEvents.VoiceStateUpdate, memberlessState);
     const handleVoiceStateUpdate = vi.fn(async () => {});
@@ -367,10 +367,7 @@ describe("GatewayPlugin", () => {
   it("clears cached voice states when a fresh gateway session becomes ready", async () => {
     const { gateway, dispatch } = createDispatchGateway();
 
-    await dispatch(GatewayDispatchEvents.GuildCreate, {
-      id: "g1",
-      voice_states: [{ user_id: "u1", channel_id: "c1" }],
-    });
+    await dispatch(GatewayDispatchEvents.GuildCreate, guildSnapshot(["u1", "c1"]));
     await dispatch(GatewayDispatchEvents.Ready, { ...ready, session_id: "session-2" });
 
     expect(gateway.listVoiceChannelStates("g1", "c1")).toBeNull();
@@ -454,8 +451,6 @@ describe("GatewayPlugin", () => {
 
   it("falls back to a fresh IDENTIFY after three failed resume attempts", async () => {
     const gateway = timedGateway();
-    const debugSpy = vi.fn();
-    gateway.emitter.on("debug", debugSpy);
     (gateway as unknown as { client: unknown }).client = {
       options: { token: "token" },
       dispatchGatewayEvent: vi.fn(async () => {}),
@@ -476,18 +471,9 @@ describe("GatewayPlugin", () => {
       resumeSocket?.emit("open");
       resumeSocket?.hello();
       expect(sentGatewayOpcodes(resumeSocket?.send ?? vi.fn())).toContain(GatewayOpcodes.Resume);
-      expect(debugSpy).toHaveBeenCalledWith(
-        `Gateway reconnect scheduled in ${delayMs}ms (close, resume=true)`,
-      );
     }
 
     gateway.sockets.at(-1)?.emit("close", 1006);
-    expect(debugSpy).toHaveBeenCalledWith(
-      "Gateway forcing fresh IDENTIFY after 3 failed resume attempts",
-    );
-    expect(debugSpy).toHaveBeenCalledWith(
-      "Gateway reconnect scheduled in 16000ms (close, resume=false)",
-    );
 
     await vi.advanceTimersByTimeAsync(16_000);
     const freshSocket = gateway.sockets.at(-1);

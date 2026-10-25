@@ -42,9 +42,7 @@ function interactionFixture(
   const rest = attachRestMock(client, overrides);
   return {
     interaction: createInteraction(client, raw),
-    post: rest.post,
-    patch: rest.patch,
-    delete: rest.delete,
+    ...rest,
   };
 }
 
@@ -217,15 +215,7 @@ describe("BaseInteraction", () => {
         await interaction.defer();
       }
       await interaction.reply({
-        components: [
-          {
-            isV2: true,
-            serialize: () => ({
-              type: ComponentType.Container,
-              components: [{ type: ComponentType.TextDisplay, content: "done" }],
-            }),
-          },
-        ],
+        components: [{ isV2: true, serialize: () => v2Payload.components[0] }],
       });
       const args = [{ body: v2Payload }, { with_components: true }];
       if (mode === "follow-up") {
@@ -250,7 +240,6 @@ describe("BaseInteraction", () => {
       {},
       createInternalInteractionPayload({
         ...identity,
-        type: InteractionType.ApplicationCommand,
         guild_id: "guild1",
         member: {
           roles: [],

@@ -32,6 +32,21 @@ function liveCommand(options: Record<string, unknown>[], extra: Record<string, u
   };
 }
 
+function deployFixture(
+  commands: DiscordCommand[],
+  existing: unknown[],
+  overrides: Parameters<typeof attachRestMock>[1] = {},
+) {
+  const client = createInternalTestClient(commands);
+  return { client, ...attachRestMock(client, { get: vi.fn(async () => existing), ...overrides }) };
+}
+
+function expectNoWrites(...methods: ReturnType<typeof vi.fn>[]) {
+  for (const method of methods) {
+    expect(method).not.toHaveBeenCalled();
+  }
+}
+
 function existingCommand(command: DiscordCommand, id: string) {
   return { ...command.serialize(), id, application_id: "app1" };
 }
@@ -67,29 +82,11 @@ describe("ComponentRegistry", () => {
 
 describe("Client.deployCommands", () => {
   it("does not patch live-only command metadata or reordered unordered arrays", async () => {
-    const client = createInternalTestClient([
-      createTestCommand("one", [
-        {
-          type: 7,
-          name: "value",
-          description: "Value",
-          required: false,
-          channel_types: [1, 0],
-        },
-      ]),
-    ]);
-    const get = vi.fn(async () => [
-      liveCommand(
-        [
-          {
-            type: 7,
-            name: "value",
-            description: "Value",
-            description_localized: "Value",
-            channel_types: [0, 1],
-          },
-        ],
-        {
+    const option = { type: 7 as const, name: "value", description: "Value" };
+    const { client, ...rest } = deployFixture(
+      [createTestCommand("one", [{ ...option, required: false, channel_types: [1, 0] }])],
+      [
+        liveCommand([{ ...option, description_localized: "Value", channel_types: [0, 1] }], {
           name_localized: "one",
           description_localized: "one command",
           default_member_permissions: null,
@@ -98,16 +95,11 @@ describe("Client.deployCommands", () => {
           contexts: [2, 1, 0],
           guild_id: undefined,
           version: "1",
-        },
-      ),
-    ]);
-    const { patch, post, delete: deleteRequest } = attachRestMock(client, { get });
-
+        }),
+      ],
+    );
     await client.deployCommands();
-
-    expect(patch).not.toHaveBeenCalled();
-    expect(post).not.toHaveBeenCalled();
-    expect(deleteRequest).not.toHaveBeenCalled();
+    expectNoWrites(rest.patch, rest.post, rest.delete);
   });
 
   it("bulk overwrites when a capped application cannot create a replacement", async () => {
@@ -115,39 +107,40 @@ describe("Client.deployCommands", () => {
       createTestCommand(`retained-${index}`),
     );
     const replacement = createTestCommand("replacement");
-    const client = createInternalTestClient([...retainedCommands, replacement]);
     const existing = [
       ...retainedCommands.map((command, index) => existingCommand(command, `retained-id-${index}`)),
       existingCommand(createTestCommand("stale"), "stale-id"),
     ];
-    const get = vi.fn(async () => existing);
     const post = vi.fn(async () => {
       throw new DiscordError(new Response(null, { status: 400 }), {
         message: "Maximum number of application commands reached (100).",
         code: 30032,
       });
     });
-    const put = vi.fn(async () => undefined);
-    const { delete: deleteRequest } = attachRestMock(client, { get, post, put });
+    const { client, ...rest } = deployFixture([...retainedCommands, replacement], existing, {
+      post,
+    });
 
     await client.deployCommands();
 
-    expect(deleteRequest).not.toHaveBeenCalled();
+    expect(rest.delete).not.toHaveBeenCalled();
     expect(post).toHaveBeenCalledWith(Routes.applicationCommands("app1"), {
       body: replacement.serialize(),
     });
-    expect(put).toHaveBeenCalledExactlyOnceWith(Routes.applicationCommands("app1"), {
+    expect(rest.put).toHaveBeenCalledExactlyOnceWith(Routes.applicationCommands("app1"), {
       body: [...retainedCommands, replacement].map((command) => command.serialize()),
     });
   });
 
   it("keeps stale commands when a replacement create fails below the cap", async () => {
-    const client = createInternalTestClient([createTestCommand("replacement")]);
-    const get = vi.fn(async () => [existingCommand(createTestCommand("stale"), "stale-id")]);
     const post = vi.fn(async () => {
       throw new Error("Discord unavailable");
     });
-    const { delete: deleteRequest } = attachRestMock(client, { get, post });
+    const { client, delete: deleteRequest } = deployFixture(
+      [createTestCommand("replacement")],
+      [existingCommand(createTestCommand("stale"), "stale-id")],
+      { post },
+    );
 
     await expect(client.deployCommands()).rejects.toThrow("Discord unavailable");
 
@@ -163,21 +156,22 @@ describe("Client.deployCommands", () => {
       description_localizations: { de: "Wert" },
     };
     const command = createTestCommand("one", [option]);
-    const client = createInternalTestClient([command]);
-    const get = vi.fn(async () => [
-      liveCommand([
-        {
-          ...option,
-          name_localizations: { de: "alter-wert" },
-          description_localizations: { de: "Alter Wert" },
-        },
-      ]),
-    ]);
-    const { patch, post, delete: deleteRequest } = attachRestMock(client, { get });
+    const { client, ...rest } = deployFixture(
+      [command],
+      [
+        liveCommand([
+          {
+            ...option,
+            name_localizations: { de: "alter-wert" },
+            description_localizations: { de: "Alter Wert" },
+          },
+        ]),
+      ],
+    );
 
     await client.deployCommands();
 
-    expect(patch).toHaveBeenCalledWith(Routes.applicationCommand("app1", "cmd1"), {
+    expect(rest.patch).toHaveBeenCalledWith(Routes.applicationCommand("app1", "cmd1"), {
       body: {
         name: "one",
         description: "one command",
@@ -188,8 +182,7 @@ describe("Client.deployCommands", () => {
         default_member_permissions: null,
       },
     });
-    expect(post).not.toHaveBeenCalled();
-    expect(deleteRequest).not.toHaveBeenCalled();
+    expectNoWrites(rest.post, rest.delete);
   });
 
   it("skips unchanged command deploys across client restarts using the hash store", async () => {
@@ -206,8 +199,7 @@ describe("Client.deployCommands", () => {
     const second = await deploy();
     expect(first.get).toHaveBeenCalledTimes(1);
     expect(first.post).toHaveBeenCalledTimes(1);
-    expect(second.get).not.toHaveBeenCalled();
-    expect(second.post).not.toHaveBeenCalled();
+    expectNoWrites(second.get, second.post);
   });
 
   it("caches REST object fetches briefly and invalidates from gateway updates", async () => {
@@ -232,7 +224,7 @@ describe("Client gateway event queue", () => {
 
   function createQueuedClient(
     listeners: AnyListener[],
-    eventQueue: ConstructorParameters<typeof Client>[0]["eventQueue"],
+    eventQueue: ConstructorParameters<typeof Client>[0]["eventQueue"] = { maxConcurrency: 1 },
   ): Client {
     return new Client({ clientId: "app1", token: "token", eventQueue }, { listeners });
   }
@@ -249,7 +241,7 @@ describe("Client gateway event queue", () => {
     const second = listener(async () => {
       started.push("second");
     });
-    const client = createQueuedClient([first, second], { maxConcurrency: 1 });
+    const client = createQueuedClient([first, second]);
 
     const dispatch = client.dispatchGatewayEvent("READY", {});
     await firstStarted.promise;
@@ -268,7 +260,7 @@ describe("Client gateway event queue", () => {
     const settlement = createDeferred<void>();
     const failure = new Error("listener failure");
     const waiting = listener(async () => await settlement.promise);
-    const client = createQueuedClient([waiting], { maxConcurrency: 1 });
+    const client = createQueuedClient([waiting]);
 
     const dispatch = client.dispatchGatewayEvent("READY", {});
     settlement.reject(failure);
