@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, isPending, onSettled } from "solid-js";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
+import { observeDocumentRootAttributes } from "../lib/reactive/document-root-attributes.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { createDocumentVisibility, createMediaQuery } from "../lib/reactive/platform.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
@@ -147,15 +148,15 @@ defineSolidBridge<Props>(
       },
     );
     onSettled(() => {
-      const themeObserver = new MutationObserver(() => setThemeRevision((value) => value + 1));
-      themeObserver.observe(document.documentElement, {
-        attributes: true,
-        attributeFilter: ["data-theme-mode", "data-theme-mascot"],
-      });
+      const stopTheme = observeDocumentRootAttributes(
+        document,
+        ["data-theme-mode", "data-theme-mascot"],
+        () => setThemeRevision((value) => value + 1),
+      );
       draw(performance.now() / 1_000);
       syncPlayback();
       return () => {
-        themeObserver.disconnect();
+        stopTheme();
         stopAnimation();
       };
     });

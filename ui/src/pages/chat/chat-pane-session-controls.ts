@@ -30,6 +30,7 @@ import type { ChatProps } from "./chat-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.tsx";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+import { readChatSessionSnapshot } from "./session-message-cache.ts";
 
 registerModelControlsEnglish();
 
@@ -92,7 +93,25 @@ export function readChatPaneMutationAccess(
     }),
     permission: scopedPatchAccess({ permissionMode: "guarded" }),
     unarchive: scopedPatchAccess({ archived: false }),
+    pendingInputDismiss: readSessionMethodAccess(snapshot, {
+      method: "chat.pendingInputs.dismiss",
+      requiredScope: "operator.sessions.write",
+      session,
+    }),
   };
+}
+
+export function canDismissChatPendingInputs(
+  access: ReturnType<typeof readChatPaneMutationAccess>,
+  session: Pick<GatewaySessionRow, "sharingRole"> | undefined,
+  options: { nativeConversation: boolean; participationBlocked: boolean },
+): boolean {
+  return (
+    access.pendingInputDismiss.allowed &&
+    session?.sharingRole !== "viewer" &&
+    options.nativeConversation &&
+    !options.participationBlocked
+  );
 }
 
 export function renderChatPaneComposerControls(params: {
@@ -195,6 +214,11 @@ export function renderChatPaneComposerControls(params: {
     composerControls: {
       component: ChatPaneModelControl,
       model: {
+        snapshot:
+          state.connected && state.chatModelCatalogInitialized && selectedSession
+            ? undefined
+            : (readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
+                ?.composer ?? undefined),
         modelAuthStatusResult: state.modelAuthStatusResult,
         accountSelection,
         renderAccountSection: (accountModel) =>

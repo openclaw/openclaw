@@ -413,9 +413,10 @@ try {
     const framesBefore = eventFrames;
     await Promise.all([
       ...clients.map(async (client, index) => {
+        const maxRounds = Math.ceil((seconds * 1000 - index * 10) / integer("poll-ms"));
         let ordinal = 0;
         await delay(index * 10);
-        while (performance.now() < deadline) {
+        while (performance.now() < deadline && ordinal < maxRounds) {
           if (failure) {
             throw failure;
           }
@@ -440,17 +441,19 @@ try {
             mutations++;
           }
           ordinal++;
-          await delay(
-            Math.min(
-              Math.max(0, integer("poll-ms") - (performance.now() - at)),
-              Math.max(0, deadline - performance.now()),
-            ),
-          );
+          const nextAt = at + integer("poll-ms");
+          // A deadline-clamped timer can wake early and admit an extra round.
+          if (nextAt >= deadline) {
+            break;
+          }
+          await delay(Math.max(0, nextAt - performance.now()));
         }
       }),
       ...clients.slice(0, active).map(async (client, index) => {
+        const maxRounds = Math.ceil((seconds * 1000 - index * 50) / integer("turn-ms"));
+        let ordinal = 0;
         await delay(index * 50);
-        while (performance.now() < deadline) {
+        while (performance.now() < deadline && ordinal < maxRounds) {
           if (failure) {
             throw failure;
           }
@@ -468,15 +471,17 @@ try {
           assert(isRecord(completed) && completed.status === "ok", "mock turn failed");
           assert(successfulTools.delete(runId), "turn lacked successful read/grep tool evidence");
           turns++;
-          await delay(
-            Math.min(
-              Math.max(0, integer("turn-ms") - (performance.now() - at)),
-              Math.max(0, deadline - performance.now()),
-            ),
-          );
+          ordinal++;
+          const nextAt = at + integer("turn-ms");
+          // A deadline-clamped timer can wake early and admit an extra round.
+          if (nextAt >= deadline) {
+            break;
+          }
+          await delay(Math.max(0, nextAt - performance.now()));
         }
       }),
     ]);
+    await delay(Math.max(0, deadline - performance.now()));
     if (failure) {
       throw failure;
     }

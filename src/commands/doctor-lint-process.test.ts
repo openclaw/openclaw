@@ -10,6 +10,7 @@ import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { runUpdateDoctorLintProcess } from "./doctor-lint-process.js";
 
 vi.mock("../process/exec.js", () => ({ runUtf8CommandWithTimeout: vi.fn() }));
@@ -22,16 +23,7 @@ let stdout: MockInstance<typeof process.stdout.write>;
 let stderr: MockInstance<typeof process.stderr.write>;
 
 function workerResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: report,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    cleanup: "normal",
-    termination: "exit",
-    ...overrides,
-  };
+  return createCommandResult({ stdout: report, cleanup: "normal", ...overrides });
 }
 
 function reportingWorker(result: SpawnResult | Promise<SpawnResult> = workerResult()) {

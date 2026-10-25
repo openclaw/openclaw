@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import "./detached-async-context.js";
+import { runWithAsyncStore } from "./async-store.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
@@ -8,12 +9,12 @@ type AsyncWorkScopeFrame = { scope: AsyncWorkScope; parent?: AsyncWorkScopeFrame
 // Lazy runtime chunks share the context carrier, never the lifetime of its owners.
 const currentWorkScope = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncWorkScope"),
-  () => new AsyncLocalStorage<AsyncWorkScope>(),
+  () => new AsyncLocalStorage<AsyncWorkScope | undefined>(),
 );
 // Keep the shipped owner carrier intact when replacement chunks join a live process.
 const currentWorkScopeAncestry = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncWorkScopeAncestry"),
-  () => new AsyncLocalStorage<AsyncWorkScopeFrame>(),
+  () => new AsyncLocalStorage<AsyncWorkScopeFrame | undefined>(),
 );
 
 // Replacement chunks reject through the same class so callers can classify lifecycle refusals.
@@ -246,7 +247,11 @@ export function runOutsideAsyncWorkScope<T>(run: () => T): T {
       ? run()
       : currentWorkScopeAncestry.exit(run);
   }
-  return currentWorkScope.exit(() => currentWorkScopeAncestry.exit(run));
+  // One isolated frame restores both carriers without copying each on exit.
+  return runWithAsyncStore(currentWorkScope, undefined, () => {
+    currentWorkScopeAncestry.enterWith(undefined);
+    return run();
+  });
 }
 
 export function getAsyncWorkSignal(): AbortSignal | undefined {
