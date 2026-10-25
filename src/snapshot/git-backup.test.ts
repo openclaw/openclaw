@@ -440,9 +440,12 @@ it("redacts and durably preserves credential-bearing push diagnostics", async ()
       "https://***:***@example.invalid/repository?access_token=***",
     );
     expect(result.pushWarning?.length).toBeLessThanOrEqual(1_200);
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Warning: Git backup committed, but push failed: ${result.pushWarning}`,
-    );
+    const warning = runtime.error.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.startsWith("Warning: Git backup committed, but push failed: "));
+    expectDiagnostics(warning, "https://***:***@example.invalid/repository?access_token=***");
+    expect(warning).toContain("\\n");
+    expect(warning).not.toMatch(/\p{Cc}/u);
 
     const persisted = (await readBackupRunFreshness(process.env)).latest?.error;
     expect(persisted).toBe(result.pushWarning);

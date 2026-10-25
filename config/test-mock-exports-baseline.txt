@@ -3710,7 +3710,6 @@
 ["src/commands/auth-choice.test.ts","../plugins/provider-install-catalog.js","68c213b948e821c222ff8c9f430f93de97c2af1203aaeb50a67272e5d40b3d05",1]
 ["src/commands/auth-choice.test.ts","../plugins/provider-oauth-flow.js","1bc803b59b23465b486e1a13acf26875380b2a5bd6cdabbbb4ea59b1ff19e2af",1]
 ["src/commands/auth-choice.test.ts","./auth-choice.apply.api-providers.js","b63dfcac9084efdb83af6079af989a9deb2a7103fc853eed5c7d053eff8a2279",1]
-["src/commands/backup-git.test.ts","../snapshot/git-backup.js","6e004d8862065f106268a3c387138a43e283689ae3aff75e96ce47d3c6cfd58f",1]
 ["src/commands/backup.atomic.test.ts","../utils/sleep.js","e4d686f2b2345abbb7054e846a1e71ffd62ac23f2fb16d4225abaa2db5941313",1]
 ["src/commands/backup.create-verify.test.ts","../infra/backup-create.js","5ca706772f6fe80781b4a90961ad8d50d68a61683024501dd50aa3e4cf8f21e1",1]
 ["src/commands/backup.create-verify.test.ts","./backup-verify.js","690f14550fe37b8dfe289765bfbbd96bb1f9f6a61a0383b7c001da57815e6269",1]
