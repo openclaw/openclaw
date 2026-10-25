@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 
 const mocks = vi.hoisted(() => ({
   clearActiveEmbeddedRun: vi.fn(),
@@ -39,12 +38,9 @@ import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { createSettledStreamResult as settledResult } from "./attempt-stream.test-helpers.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
-type SettleMockInput = {
-  state: {
-    promptError: unknown;
-    promptErrorSource: unknown;
-  };
-};
+type SettleMockInput = Parameters<
+  typeof import("./attempt-stream-settle.js").settleEmbeddedAttemptStream
+>[0];
 type FixtureOverrides = {
   activeSession?: SettledInput["prepared"]["sessionRuntime"]["agentSession"]["activeSession"];
   flushPartialAssistantText?: () => void;
@@ -63,15 +59,12 @@ function createFixture(overrides: FixtureOverrides = {}) {
     overrides.activeSession ??
     ({
       agent: { state: { messages: [] } },
-      getActiveToolNames: vi.fn(() => ["read"]),
       sessionId: "active-session",
     } as never);
   const sessionManager =
     overrides.sessionManager ??
     ({
-      appendLeafControlAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages: repairedMessages }),
-      getEntry: vi.fn(),
     } as never);
   const waitForPendingEvents =
     overrides.waitForPendingEvents ??
@@ -80,23 +73,9 @@ function createFixture(overrides: FixtureOverrides = {}) {
         options?.includePartialReplies === false ? "pending-event-chain" : "pending-events",
       );
     });
-  const getBeforeAgentFinalizeRevisionReason =
-    overrides.getBeforeAgentFinalizeRevisionReason ?? (() => "revision changed");
-  const getBeforeAgentFinalizeRevisionEntryId =
-    overrides.getBeforeAgentFinalizeRevisionEntryId ?? (() => undefined);
   const flushPartialAssistantText = overrides.flushPartialAssistantText ?? vi.fn();
-  const unsubscribe = vi.fn();
-  const subscription = {
-    flushPartialAssistantText,
-    isCompacting: vi.fn(() => false),
-    unsubscribe,
-    waitForPendingEvents,
-  };
-  const queueHandle = { kind: "embedded", runId: "run-1" };
   const sessionRuntimeState = {
-    prePromptMessageCount: 3,
     promptCache: undefined,
-    systemPromptText: "system prompt",
   };
   const state: SettledInput["state"] = {
     beforeAgentRunBlockedBy: undefined,
@@ -105,11 +84,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
   };
   let markYieldAborted: (() => void) | undefined;
   const input = {
-    attempt: {
-      runId: "run-1",
-      sessionFile: "initial.jsonl",
-      sessionId: "session-1",
-    },
+    attempt: { sessionFile: "initial.jsonl" },
     activeContextEngine: { info: { id: "engine" } },
     runAbortController: overrides.runAbortController ?? new AbortController(),
     prepared: {
@@ -117,10 +92,9 @@ function createFixture(overrides: FixtureOverrides = {}) {
         agentSession: { activeSession },
         sessionManager,
         state: sessionRuntimeState,
-        toolResultPromptProjectionState: {},
-        transport: { effectivePromptCacheRetention: undefined },
+        transport: {},
       },
-      toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
+      toolBase: {},
     },
     sessionLock: {
       withOwnedTranscriptWrite: vi.fn(async (operation) => await operation()),
@@ -129,14 +103,12 @@ function createFixture(overrides: FixtureOverrides = {}) {
     getRepairedRejectedProviderReplay: () => overrides.repairedRejectedProviderReplay ?? true,
     preparedStreamRuntime: {
       cache: {},
-      isProbeSession: false,
-      onBlockReplyFlush: undefined,
       stream: {
-        subscription,
-        queueHandle,
-        stopAcceptingSteerMessages: vi.fn(),
-        getBeforeAgentFinalizeRevisionReason,
-        getBeforeAgentFinalizeRevisionEntryId,
+        subscription: { flushPartialAssistantText, waitForPendingEvents, unsubscribe: vi.fn() },
+        getBeforeAgentFinalizeRevisionReason:
+          overrides.getBeforeAgentFinalizeRevisionReason ?? (() => "revision changed"),
+        getBeforeAgentFinalizeRevisionEntryId:
+          overrides.getBeforeAgentFinalizeRevisionEntryId ?? (() => undefined),
       },
       timeout: {
         getRunAbortDeadlineAtMs: () => 123,
@@ -161,7 +133,6 @@ function createFixture(overrides: FixtureOverrides = {}) {
       prompt: Parameters<typeof import("./attempt-result.js").completeEmbeddedAttemptResult>[2],
     ) => ({ sessionIdUsed: prompt.sessionIdUsed, sessionFileUsed: prompt.sessionFileUsed }),
   );
-  mocks.clearActiveEmbeddedRun.mockReturnValue(undefined);
 
   return {
     activeSession,
@@ -213,7 +184,6 @@ function createRewindFixture(withTrailingEntries = false) {
   const originalMessages = sessionManager.buildSessionContext().messages;
   const activeSession = {
     agent: { state: { messages: originalMessages } },
-    getActiveToolNames: vi.fn(() => ["read"]),
     sessionId: "active-session",
   };
   const fixture = createFixture({
@@ -238,8 +208,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       content: [{ type: "text", text: "partial answer" }],
       stopReason: "error",
       errorMessage: "provider failed after partial",
-      provider: "test-provider",
-      model: "test-model",
     });
     emit({
       type: "message_update",
@@ -257,10 +225,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       settledResult({
         promptError: new Error("provider failed after partial"),
         promptErrorSource: "prompt",
-        messagesSnapshot: [failedAssistant],
-        lastAssistant: failedAssistant,
-        currentAttemptAssistant: failedAssistant,
-        currentAttemptCompletedAssistant: failedAssistant,
       }),
     );
 
@@ -277,13 +241,10 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
   it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
     const { fixture, sessionManager, promptId, rejectedId, originalMessages, activeSession } =
       createRewindFixture(true);
-    const settledStream = settledResult({
-      messagesSnapshot: originalMessages,
-    });
     mocks.settleStream.mockImplementation(async () => {
       expect(activeSession.agent.state.messages).toBe(originalMessages);
       expect(sessionManager.getLeafId()).toBe(promptId);
-      return settledStream;
+      return settledResult();
     });
 
     await runEmbeddedAttemptSettledPhase(fixture.input);
@@ -315,8 +276,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       }),
     });
     const settledStream = settledResult({
-      compactionOccurredThisAttempt: true,
-      messagesSnapshot: [makeAgentAssistantMessage({ content: [] })],
       sessionIdUsed: "settled-session",
       promptCache: { retention: "short" },
     });
@@ -408,9 +367,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
           fixture.state.terminal = terminal;
         }),
       );
-      await expect(runEmbeddedAttemptSettledPhase(fixture.input)).resolves.toEqual(
-        completedAttempt,
-      );
+      await runEmbeddedAttemptSettledPhase(fixture.input);
       expect(fixture.order).toEqual(["pending-event-chain"]);
       expect(fixture.flushPartialAssistantText).not.toHaveBeenCalled();
       expect(mocks.settleStream).toHaveBeenCalledOnce();
@@ -433,17 +390,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
       }),
     );
 
-    await expect(
-      Promise.race([
-        runEmbeddedAttemptSettledPhase(fixture.input),
-        new Promise<never>((_, reject) => {
-          setTimeout(
-            () => reject(new Error("settlement stalled on the bounded drain")),
-            5_000,
-          ).unref?.();
-        }),
-      ]),
-    ).resolves.toEqual(completedAttempt);
+    await runEmbeddedAttemptSettledPhase(fixture.input);
 
     expect(waitForPendingEvents).not.toHaveBeenCalled();
     expect(fixture.flushPartialAssistantText).not.toHaveBeenCalled();

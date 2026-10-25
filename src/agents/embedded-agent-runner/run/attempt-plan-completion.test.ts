@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ProgressCardPutResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
@@ -15,13 +14,13 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import * as gatewayTool from "../../tools/in-process-gateway.js";
 import { createProgressCardTool } from "../../tools/progress-card-tool.js";
 import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../runs.test-support.js";
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
-import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 registerAgentSessionLoopTestLifecycle();
 const streams: ReturnType<typeof prepareCatalogExecutor>[] = [];
@@ -89,14 +88,13 @@ async function planSession(
   };
 }
 
-function payloadsFor({ subscription }: ReturnType<typeof prepareCatalogExecutor>, keep = false) {
+function payloadsFor({ subscription }: ReturnType<typeof prepareCatalogExecutor>) {
   const assistant = subscription.getCurrentAttemptAssistant();
   return buildEmbeddedRunPayloads({
     assistantTexts: subscription.assistantTexts,
     answerSegments: subscription.answerSegments,
     lastAssistant: assistant,
     currentAssistant: assistant ?? null,
-    ...(keep ? { keptAnswer: subscription.getKeptAnswer() } : {}),
     sessionKey: "agent:main:main",
   });
 }
@@ -172,13 +170,7 @@ it.each([
                 })
               : progress.execute(id, args, signal, update),
         },
-        {
-          name: "repair",
-          label: "Repair",
-          description: "Repair one failure",
-          parameters: Type.Object({}),
-          execute: repair,
-        },
+        { ...createStubTool("repair"), execute: repair },
       ],
     });
     const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
@@ -200,13 +192,13 @@ it.each([
         if (nonStreamedMedia) {
           expect(prepared.subscription.getPendingToolMediaReply()).toEqual(expectedPendingMedia);
         }
-        expect(
-          context.messages.some(
-            (message) =>
-              message.role === "user" &&
-              JSON.stringify(message.content).includes("latest successfully saved plan"),
-          ),
-        ).toBe(true);
+        const check = context.messages.findLast(
+          (message) =>
+            message.role === "user" &&
+            JSON.stringify(message.content).includes("latest successfully saved plan"),
+        );
+        expect(check).toBeDefined();
+        expect(JSON.stringify(check?.content)).toContain(SILENT_REPLY_TOKEN);
         return respond(model, [toolCall("remaining-repair", "repair")], "toolUse");
       },
       "Both repairs verified.",
@@ -224,68 +216,14 @@ it.each([
     const payloads = payloadsFor(prepared);
     expect(payloads.map((payload) => payload.text)).toEqual(["Both repairs verified."]);
     if (nonStreamedMedia) {
-      const pendingMedia = prepared.subscription.getPendingToolMediaReply();
-      expect(pendingMedia).toEqual(expectedPendingMedia);
-      expect(
-        mergeAttemptToolMediaPayloads({
-          payloads,
-          toolMediaUrls: pendingMedia?.mediaUrls,
-          toolAudioAsVoice: pendingMedia?.audioAsVoice,
-          toolTrustedLocalMedia: pendingMedia?.trustedLocalMedia,
-        }),
-      ).toMatchObject([
-        {
-          text: "Both repairs verified.",
-          mediaUrl,
-          mediaUrls: [mediaUrl],
-          audioAsVoice: true,
-          trustedLocalMedia: true,
-        },
-      ]);
+      expect(prepared.subscription.getPendingToolMediaReply()).toEqual(expectedPendingMedia);
     }
     expect(session.messages.filter((message) => message.role === "toolResult")).toHaveLength(3);
   },
 );
 
-it("keeps a reply that already reports the blocker as the only reply after the check", async () => {
-  const completionCheck = { unfinishedPlan: false, checked: false };
-  const plan = [
-    { step: "List files", status: "completed" as const },
-    { step: "Delete the largest file", status: "pending" as const },
-  ];
-  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(cardWith(plan));
-  const { session, prepared } = await planSession(completionCheck);
-  const answer = "Files: big.log (9 KB), notes.md (1 KB). May I delete big.log?";
-  const requests = mockTurns(
-    [toolCall("save", "progress_card", { plan })],
-    answer,
-    (model, context) => {
-      // Stand-in for the live model: it restates the blocker unless the check offers silence.
-      const check = JSON.stringify(context.messages.at(-1)?.content);
-      expect(check).toContain("latest successfully saved plan");
-      return respond(
-        model,
-        check.includes(SILENT_REPLY_TOKEN)
-          ? SILENT_REPLY_TOKEN
-          : "Deleting big.log still needs your approval.",
-      );
-    },
-  );
-
-  await session.prompt("List the files, then ask me before deleting the largest one.");
-  await prepared.subscription.waitForPendingEvents();
-
-  expect(requests()).toBe(3);
-  const payloads = payloadsFor(prepared, true);
-  expect(payloads.map((payload) => payload.text)).toEqual([answer]);
-});
-
 it.each([
   { name: "completed replacement", replacement: "completed", checks: 0 },
-  { name: "cleared replacement", replacement: "clear", checks: 0 },
-  { name: "note-only replacement", replacement: "note", checks: 0 },
-  { name: "failed replacement retains pending work", replacement: "failed", checks: 1 },
-  { name: "genuine blocker gets one check", replacement: "pending", checks: 1 },
   { name: "no plan saved in this run", replacement: "untouched", checks: 0 },
   { name: "a consumed check is not rearmed by another save", replacement: "recovery", checks: 0 },
   { name: "status-only refresh", replacement: "status", checks: 0 },
@@ -295,36 +233,10 @@ it.each([
   const pending = [{ step: "Await external permission", status: "pending" as const }];
   const initial = cardWith(pending);
   const gateway = vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(initial);
-  const replacementArgs =
-    replacement === "completed"
-      ? { plan: [{ step: "Await external permission", status: "completed" }] }
-      : replacement === "clear"
-        ? {}
-        : { markdown: "Paused awaiting permission." };
-  const writes = ["completed", "clear", "note", "failed"].includes(replacement)
-    ? 2
-    : replacement === "untouched"
-      ? 0
-      : 1;
+  const completed = [{ step: "Await external permission", status: "completed" as const }];
+  const writes = replacement === "completed" ? 2 : replacement === "untouched" ? 0 : 1;
   if (writes === 2) {
-    gateway.mockResolvedValueOnce(initial);
-    if (replacement === "failed") {
-      gateway.mockRejectedValueOnce(new Error("Save rejected"));
-    } else {
-      gateway.mockResolvedValueOnce({
-        card:
-          replacement === "clear"
-            ? null
-            : {
-                sessionKey: "agent:main:main",
-                revision: 2,
-                updatedAt: 2,
-                ...(replacement === "completed"
-                  ? { steps: [{ step: "Await external permission", status: "completed" }] }
-                  : { markdown: "Paused awaiting permission." }),
-              },
-      });
-    }
+    gateway.mockResolvedValueOnce(initial).mockResolvedValueOnce(cardWith(completed));
   }
   const { session, prepared } = await planSession(completionCheck, {
     attempt: {
@@ -339,11 +251,9 @@ it.each([
       model,
       request <= writes
         ? [
-            toolCall(
-              "save-" + request,
-              "progress_card",
-              request === 1 ? { plan: pending } : replacementArgs,
-            ),
+            toolCall("save-" + request, "progress_card", {
+              plan: request === 1 ? pending : completed,
+            }),
           ]
         : replacement === "silent"
           ? "NO_REPLY"

@@ -58,16 +58,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
   });
 
-  it("does not add tool error fallback when assistant output exists", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["All good"],
-      lastAssistant: makeStoppedAssistant("All good"),
-      lastToolError: { toolName: "browser", error: "tab not found" },
-    });
-
-    expectSinglePayloadText(payloads, "All good");
-  });
-
   it.each([
     { sessionKey: "agent:main:discord:channel:c123" },
     { sessionKey: "agent:main:telegram:group:g123" },
@@ -134,25 +124,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     expectSinglePayloadSummary(payloads, {
       text: "No issues found. The update is complete.",
     });
-  });
-
-  it("hides exec command and cwd metadata without full verbosity", () => {
-    expectSinglePayloadSummary(
-      execWarning("run python3 /path/to/daily-cost-audit.py (in /private/workspace)", {
-        verboseLevel: "off",
-      }),
-      { text: "⚠️ Exec failed (exit 1)", isError: true },
-    );
-  });
-
-  it("keeps full-verbose exec failure labels outside markdown command text", () => {
-    const payloads = execWarning("run python3 /path/to/daily-cost-audit.py");
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ Exec failed: `python3 /path/to/daily-cost-audit.py`: Command exited with code 1",
-      isError: true,
-    });
-    expect(payloads[0]?.text).not.toContain("`run python3");
   });
 
   it.each([

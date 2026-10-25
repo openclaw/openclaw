@@ -294,7 +294,7 @@ describe("embedded attempt tool catalog", () => {
   it.each([
     { name: "explicit client", cataloged: true, entries: ["client_pick_file"] },
     { name: "wildcard directory client", cataloged: false, entries: ["client_*"] },
-    { name: "explicit control", cataloged: true, entries: ["dispatch_action"] },
+    { name: "explicit control", cataloged: true, entries: ["dispatch_action", "missing_tool"] },
   ])("recognizes $name as callable", async ({ cataloged, entries }) => {
     const result = await plan({
       directory: !cataloged,
@@ -304,6 +304,7 @@ describe("embedded attempt tool catalog", () => {
       cataloged ? ["dispatch_action"] : ["dispatch_action", "client_pick_file"],
     );
     expect(result.hasCallableTools).toBe(true);
+    expect(result.emptyExplicitToolAllowlistError).toBeNull();
   });
 
   it("keeps ambiguous deferred names replayable but not directly callable", async () => {
@@ -348,23 +349,19 @@ describe("explicit tool allowlist diagnostics", () => {
         sandboxed: true,
       });
       expect(error?.message).toContain(expected);
+      expect(error?.message).toContain(`runtime toolsAllow: ${entry}`);
     },
   );
 
   it.each([
     {
       name: "unmatched config allowlist",
-      options: { configAllow: [" query_db "] },
+      options: { configAllow: [" query_db ", ""], allow: ["missing_tool"] },
       messages: [
         "No callable tools remain",
-        "tools.allow: query_db",
+        "tools.allow: query_db; runtime toolsAllow: missing_tool",
         "no registered tools matched",
       ],
-    },
-    {
-      name: "runtime allowlist with tools disabled",
-      options: { allow: ["query_db"], disableTools: true },
-      messages: ["runtime toolsAllow: query_db", "tools are disabled for this run"],
     },
     {
       name: "model without tools",
@@ -394,18 +391,5 @@ describe("explicit tool allowlist diagnostics", () => {
     });
     expect(error?.message).toContain("runtime toolsAllow: query_db");
     expect(error?.message).not.toContain("tools.allow: read");
-  });
-
-  it("allows explicit allowlists when at least one callable tool remains", async () => {
-    expect(
-      (await plan({ visibleTools: [tool("read")], allow: ["read", "missing_tool"] }))
-        .emptyExplicitToolAllowlistError,
-    ).toBeNull();
-  });
-
-  it("keeps normalized source labels for config and runtime allowlists", async () => {
-    expect((await diagnostic({ configAllow: [" read ", ""], allow: ["query_db"] }))?.message).toBe(
-      "No callable tools remain after resolving explicit tool allowlist (tools.allow: read; runtime toolsAllow: query_db); no registered tools matched. Fix the allowlist or enable the plugin that registers the requested tool.",
-    );
   });
 });

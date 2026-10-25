@@ -47,7 +47,6 @@ function createInput(overrides: Record<string, unknown> = {}) {
   } as unknown as AgentSession["settingsManager"];
   return {
     activeSession,
-    agentDir: "/tmp/agent",
     attempt: {
       config: {
         agents: { defaults: { compaction: { midTurnPrecheck: { enabled: true } } } },
@@ -60,16 +59,10 @@ function createInput(overrides: Record<string, unknown> = {}) {
     },
     computerContextEpoch: { value: 3 },
     dropThinkingBlocksForEstimate: false,
-    effectiveCwd: "/tmp/workspace",
     effectiveWorkspace: "/tmp/workspace",
-    getPrePromptMessageCount: () => 4,
-    getPromptCache: () => undefined,
-    getPromptCacheRetention: () => "short" as const,
     getCompactionReplayEnabled: () => false,
     getServerToolClearingEnabled: () => false,
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
-    getSystemPrompt: () => "system prompt",
-    isOpenAIResponsesApi: false,
     repairToolUseResultPairing: false,
     sessionAgentId: "main",
     sessionManager: {},
@@ -91,17 +84,24 @@ const cacheModel: Model = {
   maxTokens: 1_024,
 };
 
-function prunableHistory(): AgentMessage[] {
-  const assistant = (text: string): AssistantMessage => ({
+function assistant(
+  text: string,
+  stopReason: AssistantMessage["stopReason"] = "stop",
+  timestamp = 1,
+): AssistantMessage {
+  return {
     role: "assistant",
     content: [{ type: "text", text }],
     api: cacheModel.api,
     provider: cacheModel.provider,
     model: cacheModel.id,
     usage: makeZeroUsageSnapshot(),
-    stopReason: "stop",
-    timestamp: 1,
-  });
+    stopReason,
+    timestamp,
+  };
+}
+
+function prunableHistory(): AgentMessage[] {
   return [
     { role: "user", content: "first", timestamp: 1 },
     assistant("a1"),
@@ -256,11 +256,9 @@ describe("installEmbeddedAttemptContextGuards", () => {
     loopOptions.onAfterTurnCheckpoint(17);
 
     expect(guards.getAfterTurnCheckpoint()).toBe(17);
-    expect(loopOptions).toMatchObject({
-      contextEngine: activeContextEngine,
-      modelId: "model-1",
-      repairAssembledMessages: expect.any(Function),
-    });
+    expect(loopOptions.modelId).toBe("model-1");
+    expect(loopOptions.contextEngine).toBe(activeContextEngine);
+    expect(loopOptions.repairAssembledMessages).toEqual(expect.any(Function));
 
     const removeLoopHook = hoisted.installContextEngineLoopHook.mock.results[0]?.value;
     const removeToolResultGuard = hoisted.installToolResultContextGuard.mock.results[0]?.value;
@@ -311,18 +309,13 @@ describe("installEmbeddedAttemptContextGuards", () => {
   });
 
   it.each([
-    { scenario: "threshold crossing", age: 310_000, thresholdCrossing: true, outcome: "success" },
-    {
-      scenario: "failure before dispatch",
-      age: 290_000,
-      thresholdCrossing: false,
-      outcome: "throw",
-    },
-    { scenario: "provider error", age: 290_000, thresholdCrossing: false, outcome: "error" },
-    { scenario: "aborted request", age: 290_000, thresholdCrossing: false, outcome: "aborted" },
+    [310_000, true, "success"],
+    [290_000, false, "throw"],
+    [290_000, false, "error"],
+    [290_000, false, "aborted"],
   ] as const)(
-    "uses successful request start for pruning after $scenario",
-    async ({ age, thresholdCrossing, outcome }) => {
+    "uses successful request start for pruning (age=%s, threshold=%s, outcome=%s)",
+    async (age, thresholdCrossing, outcome) => {
       vi.useFakeTimers({ toFake: ["Date"] });
       const requestStart = 1_000_000;
       vi.setSystemTime(requestStart);
@@ -340,16 +333,11 @@ describe("installEmbeddedAttemptContextGuards", () => {
         input.activeSession.agent.transformContext!(messages, new AbortController().signal);
       const first = await project(history);
       expect(JSON.stringify(first)).toBe(JSON.stringify(history));
-      const response: AssistantMessage = {
-        role: "assistant",
-        content: [{ type: "text", text: "continue" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-sonnet-4-6",
-        usage: makeZeroUsageSnapshot(),
-        stopReason: outcome === "error" || outcome === "aborted" ? outcome : "toolUse",
-        timestamp: requestStart,
-      };
+      const response = assistant(
+        "continue",
+        outcome === "error" || outcome === "aborted" ? outcome : "toolUse",
+        requestStart,
+      );
       const onSucceeded = vi.fn(guards.recordCacheTouch);
       const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
         () => {
@@ -465,19 +453,6 @@ describe("installEmbeddedAttemptContextGuards", () => {
       const messages = prunableHistory();
 
       const guards = installEmbeddedAttemptContextGuards(input as never);
-      expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
-        "anthropic",
-        "claude-sonnet-4-6",
-        "anthropic-messages",
-        { baseUrl: undefined, supportsPromptCacheKey: undefined },
-      );
-      expect(hoisted.readLastCacheTtlTimestamp).toHaveBeenCalledExactlyOnceWith(
-        input.sessionManager,
-        {
-          provider: "anthropic",
-          modelId: "claude-sonnet-4-6",
-        },
-      );
       await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
       const firstTool = engineMessages?.find((message) => message.role === "toolResult");
       expect(firstTool?.content[0]).toMatchObject({

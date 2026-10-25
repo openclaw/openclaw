@@ -32,24 +32,11 @@ const mainTarget = (sessionId = "session-before") => ({
   storePath: "/tmp/sessions.json",
 });
 
-const sessionAccessorMocks = vi.hoisted(() => ({
-  patchSessionEntryCore:
-    vi.fn<typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore>(),
-  updateSessionEntry: vi.fn(async () => undefined),
-}));
+type SessionReaders = typeof import("../../../config/sessions/session-entry-read-runtime.js");
 const sessionReaderMocks = vi.hoisted(() => ({
-  readSessionEntrySummariesInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntrySummariesInWorker
-    >(),
-  readSessionEntryInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryInWorker
-    >(),
-  readSessionEntryReadOnlyInWorker:
-    vi.fn<
-      typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
-    >(),
+  readSessionEntrySummariesInWorker: vi.fn<SessionReaders["readSessionEntrySummariesInWorker"]>(),
+  readSessionEntryInWorker: vi.fn<SessionReaders["readSessionEntryInWorker"]>(),
+  readSessionEntryReadOnlyInWorker: vi.fn<SessionReaders["readSessionEntryReadOnlyInWorker"]>(),
 }));
 
 // mock-isolation: Keep normalization entry fixtures outside the session database.
@@ -58,12 +45,11 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", () => sessionR
 // mock-isolation: Normalization fixtures control transcript lookup and persistence without starting storage.
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: vi.fn(async () => undefined),
-  ...sessionAccessorMocks,
+  patchSessionEntryCore: vi.fn(async () => null),
+  updateSessionEntry: vi.fn(async () => undefined),
 }));
 
 beforeEach(() => {
-  sessionAccessorMocks.patchSessionEntryCore.mockReset().mockResolvedValue(null);
-  sessionAccessorMocks.updateSessionEntry.mockReset().mockResolvedValue(undefined);
   sessionReaderMocks.readSessionEntrySummariesInWorker.mockReset().mockResolvedValue([]);
   sessionReaderMocks.readSessionEntryInWorker.mockReset().mockResolvedValue(undefined);
   sessionReaderMocks.readSessionEntryReadOnlyInWorker.mockReset().mockResolvedValue(undefined);
@@ -321,12 +307,9 @@ describe("normalizeEmbeddedRunAttempt session identity", () => {
         const started = createDeferred();
         const gate = createDeferred();
         const failure = new Error(`identity read ${outcome}`);
-        let active = true;
-        const assertCurrent = () => {
-          if (!active) {
-            throw failure;
-          }
-        };
+        const controller = new AbortController();
+        const assertCurrent = () => controller.signal.throwIfAborted();
+        state.activePrompt.persisted = true;
         const entry = { sessionId: "session-after", updatedAt: 2 };
         sessionReaderMocks.readSessionEntrySummariesInWorker.mockImplementationOnce(async () => {
           started.resolve();
@@ -349,7 +332,7 @@ describe("normalizeEmbeddedRunAttempt session identity", () => {
         expect(state.adoptSessionId).not.toHaveBeenCalled();
         expect(state.sessionFile).toBe(previousFile);
         if (outcome === "revoked") {
-          active = false;
+          controller.abort(failure);
         } else if (outcome === "binding-changed") {
           state.sessionTarget.sessionKey = "agent:main:replacement";
         }
@@ -377,44 +360,6 @@ describe("normalizeEmbeddedRunAttempt session identity", () => {
       }
     },
   );
-
-  it("normalization rechecks lane cancellation before adopting a delayed successor", async () => {
-    const state = {
-      ...promptState(),
-      activePrompt: { persisted: true },
-      waitForCurrentUserMessagePersistence: async () => {},
-    };
-    const started = createDeferred();
-    const read = createDeferred<[]>();
-    sessionReaderMocks.readSessionEntrySummariesInWorker.mockImplementationOnce(() => {
-      started.resolve();
-      return read.promise;
-    });
-    const controller = new AbortController();
-    const cancelled = new Error("lane cancelled during identity lookup");
-    const normalization = normalizeEmbeddedRunAttempt({
-      runInput: {
-        runParams: { abortSignal: controller.signal },
-        laneController: { throwIfAborted: () => controller.signal.throwIfAborted() },
-      },
-      preparedRuntime: { snapshot: () => ({}) },
-      dispatchedAttempt: {
-        rawAttempt: {
-          terminal: { kind: "ok" },
-          sessionIdUsed: "session-after",
-          sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
-        },
-      },
-      sessionPromptState: state,
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-    } as never);
-    await awaitGateBeforeSettlement(started.promise, normalization, "identity read was skipped");
-    controller.abort(cancelled);
-    read.resolve([]);
-    await expect(normalization).rejects.toBe(cancelled);
-    expect(state.adoptSessionId).not.toHaveBeenCalled();
-    expect(state.sessionTarget.sessionId).toBe("session-before");
-  });
 
   it("rebinds a legacy SQLite marker successor over the retained active entry", async () => {
     sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([

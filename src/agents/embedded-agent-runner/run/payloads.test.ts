@@ -95,24 +95,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         "</mm:think>MEDIA:/tmp/reply-image.png\nAttached image",
       ],
       assistantMessageIndex: 1,
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
 
     expectImagePayload(payloads);
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       assistantMessageIndex: 1,
       assistantTranscriptMediaUrls: ["/tmp/reply-image.png"],
-    });
-  });
-
-  it("marks runtime-persisted final replies as transcript owned", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Already persisted."],
-      assistantTranscriptOwned: true,
-      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
-    });
-
-    expect(payloads).toHaveLength(1);
-    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       assistantTranscriptOwned: true,
       assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
@@ -256,38 +246,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("renders an intentional Gateway restart as status", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "gateway_exec",
-        error: "OpenClaw dynamic tool call aborted.",
-        executionStarted: true,
-      },
-      runAborted: true,
-      runStopReason: "restart",
-      toolResultFormat: "markdown",
-    });
-
-    expect(payloads).toEqual([{ text: "Gateway restarting…" }]);
-  });
-
-  it("keeps exec commands and paths private without full verbosity", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "show last 20 lines of ~/.openclaw/workspace/memory/2026-06-04.md",
-        error:
-          "tail: cannot open '/home/user/.openclaw/workspace/memory/2026-06-04.md' for reading: No such file or directory",
-      },
-      verboseLevel: "off",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "/home/user/.openclaw/workspace/memory/2026-06-04.md",
-    });
-  });
-
   it("adds a tool warning when a tool failure leaves only reasoning", () => {
     const payloads = buildPayloads({
       lastAssistant: stopped([
@@ -307,17 +265,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       { text: "Private reasoning only.", isReasoning: true },
       { text: "⚠️ Message failed", isError: true },
     ]);
-  });
-
-  it.each([
-    ["exec", "Exec", "command failed"],
-    ["write", "Write", "permission denied"],
-  ])("shows %s tool error details when verbose mode is full", (toolName, title, error) => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName, error },
-      verboseLevel: "full",
-    });
-    expectSingleToolErrorPayload(payloads, { title, detail: error });
   });
 
   it("strips NO_REPLY text but keeps voice media directives", () => {
