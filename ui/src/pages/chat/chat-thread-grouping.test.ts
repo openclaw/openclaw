@@ -503,3 +503,32 @@ it.each(["error", "aborted"])(
     );
   },
 );
+
+it("keeps each run's reply visible when completions answer without new user input", () => {
+  const run = (runId: string) => ({ __openclaw: { runId } });
+  const items = collapse([
+    message("user", "Start two subagents", 1_000),
+    message("assistant", "Spawning both.", 1_500, run("run-user")),
+    { ...toolResult("spawn", "bash", "ok", 2_000), ...run("run-user") },
+    message("assistant", "Both started.", 3_000, run("run-user")),
+    message("assistant", "Child A finished.", 4_000, run("announce:v1:child-a")),
+    { ...toolResult("lookup", "bash", "ok", 4_500), ...run("announce:v1:child-b") },
+    message("assistant", "Child B finished.", 5_000, run("announce:v1:child-b")),
+    message("assistant", "All children settled.", 6_000, run("announce:requester-settle:a,b")),
+  ]);
+  const text = (entries: unknown[]) =>
+    entries.map((entry) => (entry as { content?: unknown }).content);
+  expect(text(messagesOf(groupsOf(items)))).toEqual([
+    "Start two subagents",
+    "Both started.",
+    "Child A finished.",
+    "Child B finished.",
+    "All children settled.",
+  ]);
+  const rollup = items.find((item) => item.kind === "work-group");
+  expect(rollup?.kind === "work-group" ? text(messagesOf(rollup.groups)) : []).toEqual([
+    "Spawning both.",
+    "ok",
+    "ok",
+  ]);
+});
