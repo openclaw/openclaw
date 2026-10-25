@@ -51,6 +51,9 @@ function mountPane(context: ApplicationContext, render: () => JSX.Element, nativ
 }
 
 const composerSelector = ".agent-chat__composer-combobox textarea";
+function required<T extends Element = HTMLElement>(root: ParentNode, selector: string): T {
+  return expectDefined(root.querySelector<T>(selector), selector);
+}
 
 function stubLifecycle() {
   vi.spyOn(ChatPaneRuntime.prototype, "start").mockImplementation(() => {});
@@ -69,15 +72,9 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
     <ChatPaneView paneId="bridge-draft" sessionKey={sessionKey} {...props()} />
   ));
   const textarea = await waitForSolid(() =>
-    expectDefined(
-      view.container.querySelector<HTMLTextAreaElement>(composerSelector),
-      composerSelector,
-    ),
+    required<HTMLTextAreaElement>(view.container, composerSelector),
   );
-  const pane = expectDefined(
-    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
-    "openclaw-chat-pane",
-  );
+  const pane = required<ChatPaneElement>(view.container, "openclaw-chat-pane");
   setProps((p) => ({ ...p, draft: "What can you do?", focusComposer: true }));
   await pane.updateComplete;
   expect(textarea.value).toBe("What can you do?");
@@ -116,14 +113,8 @@ it("updates held Send as a mounted composer's draft changes between commands and
   const sendChat = vi.spyOn(pane.state, "handleSendChat").mockResolvedValue(undefined);
   pane.state.handleChatDraftChange("/stop");
   await pane.updateComplete;
-  const input = expectDefined(
-    pane.querySelector<HTMLTextAreaElement>(composerSelector),
-    composerSelector,
-  );
-  const send = expectDefined(
-    pane.querySelector<HTMLButtonElement>(".chat-send-btn--send"),
-    ".chat-send-btn--send",
-  );
+  const input = required<HTMLTextAreaElement>(pane, composerSelector);
+  const send = required<HTMLButtonElement>(pane, ".chat-send-btn--send");
   const edit = async (draft: string) => {
     input.value = draft;
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -155,10 +146,7 @@ it("settles clean hidden reads and fences actual property changes until reveal",
     () => <ChatPaneView paneId="clean-hidden" presented={false} />,
     false,
   );
-  const pane = expectDefined(
-    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
-    "openclaw-chat-pane",
-  );
+  const pane = required<ChatPaneElement>(view.container, "openclaw-chat-pane");
   await pane.updateComplete;
   await expect(pane.updateComplete).resolves.toBe(true);
   render.mockClear();
@@ -187,10 +175,7 @@ it("replaces the command provider while document-hidden rendering is parked", as
   const second = createMockBoardProvider(sessionKey);
   const subscribe = vi.spyOn(second.events, "subscribe");
   const view = render({ boardProvider: first });
-  const pane = expectDefined(
-    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
-    "openclaw-chat-pane",
-  );
+  const pane = required<ChatPaneElement>(view.container, "openclaw-chat-pane");
   await pane.updateComplete;
   visibility = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));
@@ -218,29 +203,20 @@ it("opens provider findings through the mounted pane's first rendered frame", as
     providerReview: review,
   });
   const view = fixture.render({ active: true });
+  const dialog = () => view.container.querySelector("openclaw-modal-dialog");
   const reviewButton = await waitForSolid(() =>
-    expectDefined(
-      view.container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
-      ".chat-provider-review button",
-    ),
+    required<HTMLButtonElement>(view.container, ".chat-provider-review button"),
   );
   expect(reviewButton.textContent).toContain("Review findings");
   reviewButton.click();
   await vi.dynamicImportSettled();
   await waitForSolid(() => {
-    const dialog = view.container.querySelector("openclaw-modal-dialog");
-    expect(dialog?.textContent).toContain(review.explanation);
-    expect(dialog?.querySelector("blockquote")?.textContent).toBe(review.continuationMessage);
+    expect(dialog()?.textContent).toContain(review.explanation);
+    expect(dialog()?.querySelector("blockquote")?.textContent).toBe(review.continuationMessage);
   });
-  view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions button")!.click();
-  await waitForSolid(() =>
-    expect(view.container.querySelector("openclaw-modal-dialog")).toBeNull(),
-  );
+  required<HTMLButtonElement>(view.container, "openclaw-modal-actions button").click();
+  await waitForSolid(() => expect(dialog()).toBeNull());
   expect(reviewButton.isConnected).toBe(true);
   reviewButton.click();
-  await waitForSolid(() => {
-    expect(view.container.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      review.explanation,
-    );
-  });
+  await waitForSolid(() => expect(dialog()?.textContent).toContain(review.explanation));
 });

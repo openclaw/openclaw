@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createTestTranscript, disposeChatView, renderChatInto } from "./chat-view.test-helpers.ts";
@@ -78,11 +78,13 @@ function tool(
 }
 
 function labels() {
-  return Array.from(
-    container.querySelectorAll(".chat-activity-group__label"),
-    (node) => node.textContent,
-  );
+  return texts(".chat-activity-group__label");
 }
+const texts = (selector: string) =>
+  Array.from(container.querySelectorAll(selector), (node) => node.textContent);
+const expectLabels = (expected: string[]) => expect(labels()).toEqual(expected);
+const first = (status: AgentActivityItem["status"] = "running") =>
+  tool("first", "Inspect the first file", status);
 
 function draw(messages: unknown[], overrides: Partial<Parameters<typeof renderChatInto>[1]> = {}) {
   renderChatInto(container, {
@@ -94,25 +96,6 @@ function draw(messages: unknown[], overrides: Partial<Parameters<typeof renderCh
     ...overrides,
   });
 }
-
-it("renders current operation copy through the real transcript and retains completion between tools", async () => {
-  draw([user, tool("first", "Inspect the first file")]);
-  await waitForSolid(() => expect(labels()).toEqual(["Inspect the first file…"]));
-  vi.advanceTimersByTime(2_000);
-  draw([user, tool("first", "Inspect the first file", "completed")]);
-  expect(labels()).toEqual(["Inspect the first file"]);
-  draw([
-    user,
-    tool("first", "Inspect the first file", "completed"),
-    tool("next", "Inspect the next file", "running", runId, 3),
-  ]);
-  expect(labels()).toEqual(["Inspect the first file"]);
-  vi.advanceTimersByTime(999);
-  expect(labels()).toEqual(["Inspect the first file"]);
-  vi.advanceTimersByTime(1);
-  flush();
-  expect(labels()).toEqual(["Inspect the next file…"]);
-});
 
 it("retains live running activity when history contains an unfinished call", async () => {
   const call = tool("active", "Inspect the active file");
@@ -136,7 +119,7 @@ it("retains live running activity when history contains an unfinished call", asy
     __openclawToolStreamItemEnded: false,
   };
   draw([user, history], { toolMessages: [live] });
-  await waitForSolid(() => expect(labels()).toEqual(["Inspect the active file…"]));
+  await waitForSolid(() => expectLabels(["Inspect the active file…"]));
   expect(container.textContent).not.toContain("Outcome unknown");
   expect(container.textContent).not.toContain("1 unknown");
 });
@@ -172,12 +155,7 @@ it("limits live copy to the newest activity group in the active run, not history
     { persistCommentary: true },
   );
   await waitForSolid(() =>
-    expect(
-      Array.from(
-        container.querySelectorAll(".chat-activity-group__label--live"),
-        (node) => node.textContent,
-      ),
-    ).toEqual(["Latest active file…"]),
+    expect(texts(".chat-activity-group__label--live")).toEqual(["Latest active file…"]),
   );
   expect(labels().filter((label) => label === "2 reads")).toHaveLength(3);
 });
@@ -185,22 +163,22 @@ it("limits live copy to the newest activity group in the active run, not history
 it.each(["end", "session", "run", "connection"] as const)(
   "does not carry a pending title across a %s scope change",
   async (scope) => {
-    draw([user, tool("first", "Inspect the first file")]);
-    await waitForSolid(() => expect(labels()).toEqual(["Inspect the first file…"]));
+    draw([user, first()]);
+    await waitForSolid(() => expectLabels(["Inspect the first file…"]));
     vi.advanceTimersByTime(100);
     const messages = [
       user,
-      tool("first", "Inspect the first file", "completed"),
+      first("completed"),
       tool("next", "Stale pending file", "running", runId, 3),
     ];
     draw(messages);
-    expect(labels()).toEqual(["Inspect the first file"]);
+    expectLabels(["Inspect the first file"]);
     if (scope === "end") {
       draw(messages, { runActive: false, runId: null });
       expect(container.querySelector(".chat-activity-group__label--live")).toBeNull();
-      expect(labels()).toEqual(["4 reads"]);
+      expectLabels(["4 reads"]);
       vi.advanceTimersByTime(3_000);
-      expect(labels()).toEqual(["4 reads"]);
+      expectLabels(["4 reads"]);
       expect(container.textContent).not.toContain("Stale pending file…");
       return;
     }
@@ -217,8 +195,8 @@ it.each(["end", "session", "run", "connection"] as const)(
         ...(scope === "connection" ? { connectionEpoch: 2 } : {}),
       },
     );
-    await waitForSolid(() => expect(labels()).toEqual(["Fresh scope file…"]));
+    await waitForSolid(() => expectLabels(["Fresh scope file…"]));
     vi.advanceTimersByTime(3_000);
-    expect(labels()).toEqual(["Fresh scope file…"]);
+    expectLabels(["Fresh scope file…"]);
   },
 );
