@@ -6,11 +6,7 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRegistryFixture } from "openclaw/plugin-sdk/plugin-test-contracts";
 import * as registryApi from "openclaw/plugin-sdk/plugin-test-runtime";
-import {
-  getSandboxBackendFactory,
-  getSandboxBackendManager,
-  getSandboxBackendWorkdirResolver,
-} from "openclaw/plugin-sdk/sandbox";
+import * as sandbox from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ resolveBinary: vi.fn(() => "mxc-test-binary"), probe: vi.fn() }));
@@ -51,12 +47,13 @@ function mockHost(
 
 function readBackend() {
   return {
-    factory: getSandboxBackendFactory("mxc"),
-    manager: getSandboxBackendManager("mxc"),
-    resolveWorkdir: getSandboxBackendWorkdirResolver("mxc"),
+    factory: sandbox.getSandboxBackendFactory("mxc"),
+    manager: sandbox.getSandboxBackendManager("mxc"),
+    resolveWorkdir: sandbox.getSandboxBackendWorkdirResolver("mxc"),
   };
 }
 
+type CleanupContext = Parameters<NonNullable<PluginRuntimeLifecycleRegistration["cleanup"]>>[0];
 const stops: Array<() => Promise<void>> = [];
 
 function setProcessPlatformForTest(platform: NodeJS.Platform): void {
@@ -77,19 +74,15 @@ function createApi(
     registerService,
     registerRuntimeLifecycle: (lifecycle) => lifecycles.push(lifecycle),
   });
-  const cleanup = async (
-    context: Parameters<NonNullable<PluginRuntimeLifecycleRegistration["cleanup"]>>[0],
-  ) => {
+  const cleanup = async (context: CleanupContext = { reason: "disable" }) => {
     for (const lifecycle of lifecycles.toReversed()) {
       await lifecycle.cleanup?.(context);
     }
   };
-  const stop = () => cleanup({ reason: "disable" });
-  stops.push(stop);
+  stops.push(cleanup);
 
   return {
     cleanup,
-    stop,
     register: () => registerMxcPlugin(api),
     expectDormant() {
       expect(readBackend()).toEqual(original);
@@ -119,8 +112,7 @@ describe("registerMxcPlugin", () => {
 
   beforeEach(() => {
     mocks.probe.mockReset().mockReturnValue(readyHost);
-    mocks.resolveBinary.mockReset();
-    mocks.resolveBinary.mockReturnValue("mxc-test-binary");
+    mocks.resolveBinary.mockReset().mockReturnValue("mxc-test-binary");
     setProcessPlatformForTest("win32");
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
   });
@@ -261,11 +253,11 @@ describe("registerMxcPlugin", () => {
       expect(newerBackend.factory).not.toBe(olderBackend.factory);
       const first = order === "older-first" ? older : newer;
       const last = order === "older-first" ? newer : older;
-      await first.stop();
+      await first.cleanup();
       expect(readBackend()).toEqual(order === "older-first" ? newerBackend : olderBackend);
-      await last.stop();
+      await last.cleanup();
       expect(readBackend()).toEqual(original);
-      await first.stop();
+      await first.cleanup();
       expect(readBackend()).toEqual(original);
     },
   );
