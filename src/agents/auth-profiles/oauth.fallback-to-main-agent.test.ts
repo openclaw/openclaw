@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -6,10 +8,9 @@ import {
   FILE_LOCK_TIMEOUT_ERROR_CODE,
   resetFileLockStateForTest,
 } from "../../plugin-sdk/file-lock.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createOAuthRefreshCredential as oauth } from "./credential-fixtures.test-support.js";
 import { isSettledOAuthRefreshFailure, OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
@@ -77,7 +78,8 @@ afterAll(() => {
 });
 
 describe("resolveApiKeyForProfile fallback to main agent", () => {
-  let state: OpenClawTestState;
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR", "OPENAI_API_KEY"]);
+  let tmpDir: string;
   let mainAgentDir: string;
 
   beforeEach(async () => {
@@ -86,13 +88,13 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       throw new Error("invalid_grant");
     });
     refreshCredentialMock.mockReset().mockResolvedValue(undefined);
-    state = await createOpenClawTestState({
-      prefix: "oauth-fallback-test-",
-      layout: "state-only",
-      agentEnv: "main",
-      env: { OPENAI_API_KEY: undefined },
-    });
-    mainAgentDir = state.agentDir();
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-fallback-test-"));
+    mainAgentDir = path.join(tmpDir, "agents", "main", "agent");
+    await fs.mkdir(mainAgentDir, { recursive: true });
+
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+    setTestEnvValue("OPENCLAW_AGENT_DIR", mainAgentDir);
+    deleteTestEnvValue("OPENAI_API_KEY");
     clearRuntimeAuthProfileStoreSnapshots();
     setRuntimeConfigSnapshot({});
   });
@@ -121,7 +123,13 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     clearRuntimeConfigSnapshot();
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
-    await state.cleanup();
+    await cleanupSessionStateForTest({ stateDir: tmpDir });
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllGlobals();
+
+    envSnapshot.restore();
+
+    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it("persists a forced model-auth plugin refresh before returning", async () => {
@@ -147,6 +155,9 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         lockedProfile: true,
       }),
     ).resolves.toMatchObject({ apiKey: rotated.access, profileId: params.profileId });
+    expect(refreshCredentialMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining(params.store.profiles[params.profileId]!),
+    );
     expect(readStore().profiles[params.profileId]).toEqual(rotated);
   });
 
@@ -160,6 +171,24 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
       access: expect.stringContaining(":failed:access:"),
       refresh: expect.stringContaining(":failed:refresh:"),
     });
+  });
+
+  it("rejects direct API-key routes before refreshing managed OAuth", async () => {
+    const { profileId, ...auth } = setup({}, "openai:user@example.test");
+    const { hasAvailableAuthForProvider: hasAuth, resolveApiKeyForProviderCore: resolve } =
+      await import("../model-auth.js");
+    const params = {
+      provider: "openai",
+      modelApi: "openai-responses",
+      ...auth,
+    };
+    await expect(resolve(params)).rejects.toThrow('No API key found for provider "openai"');
+    await expect(resolve({ ...params, profileId, lockedProfile: true })).rejects.toThrow(
+      /requires an OpenAI API key profile/,
+    );
+    await expect(hasAuth(params)).resolves.toBe(false);
+    expect(refreshCredentialMock).not.toHaveBeenCalled();
+    expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
   });
 
   it("surfaces frozen contention once without exposing the lock path", async () => {
@@ -239,12 +268,17 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     const { store, profileId } = params;
     store.lastGood = { openai: profileId };
     saveAuthProfileStore(store, mainAgentDir);
-    vi.spyOn(profiles, "clearLastGoodProfileWithLock").mockRejectedValueOnce(
-      new Error("synthetic last-good cleanup failure"),
-    );
+    const cleanup = vi
+      .spyOn(profiles, "clearLastGoodProfileWithLock")
+      .mockRejectedValueOnce(new Error("synthetic last-good cleanup failure"));
     getOAuthApiKeyMock.mockRejectedValueOnce(new Error("refresh_token_reused"));
     const failure = await resolveProfile(params).catch((error: unknown) => error);
     expect(getOAuthApiKeyMock).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith({
+      provider: "openai",
+      profileId,
+      agentDir: undefined,
+    });
     expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
     expect(String(failure)).toContain("refresh_token_reused");
     expect(String(failure)).not.toContain("synthetic last-good cleanup failure");
