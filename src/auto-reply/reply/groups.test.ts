@@ -21,6 +21,13 @@ function sourceContext(Provider: string, ChatType = "group", toolOnly = false) {
   });
 }
 
+function deliveredSession(channel: string, to: string, accountId?: string, threadId?: number) {
+  return makeSessionEntry({
+    groupId: threadId ? `${to}:topic:${threadId}` : to,
+    delivery: normalizeSessionDeliveryState({ context: { channel, to, accountId, threadId } }),
+  });
+}
+
 async function requireMentionForConversation(
   params: Parameters<typeof prepareReplyConversation>[0] & { cfg: OpenClawConfig },
 ) {
@@ -162,12 +169,7 @@ it("keeps group wording out of automatic channel context", () => {
 it("resolves requireMention through runtime and generic fallback paths", async () => {
   vi.resetModules();
   const groupsRuntimeLoads = mockRuntime();
-  const persistedSessionEntry = makeSessionEntry({
-    groupId: "C123",
-    delivery: normalizeSessionDeliveryState({
-      context: { channel: "slack", to: "C123", accountId: "work" },
-    }),
-  });
+  const persistedSessionEntry = deliveredSession("slack", "C123", "work");
 
   const defaultConfig = slackConfig({ groups: { C123: { requireMention: false } } });
   const redirectedConfig = slackConfig({
@@ -240,12 +242,7 @@ it("preserves Telegram topics when resolving automation mention policy", async (
 
   expect(extractExplicitGroupId("telegram:-1001:topic:77")).toBe("-1001");
 
-  const sessionEntry = makeSessionEntry({
-    groupId: "-1001:topic:77",
-    delivery: normalizeSessionDeliveryState({
-      context: { channel: "telegram", to: "-1001", threadId: 77 },
-    }),
-  });
+  const sessionEntry = deliveredSession("telegram", "-1001", undefined, 77);
   const resolveForThread = (messageThreadId: number) =>
     requireMentionForConversation({
       cfg: {} as OpenClawConfig,
@@ -288,23 +285,14 @@ it("does not mix persisted room metadata across accounts", async () => {
         OriginatingChannel: "zalouser",
         OriginatingTo: "shared",
       },
-      sessionEntry: makeSessionEntry({
-        groupId: "shared",
+      sessionEntry: {
+        ...deliveredSession("zalouser", "shared", "account-a"),
         groupChannel: "persisted-account-a-room",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "zalouser", to: "shared", accountId: "account-a" },
-        }),
-      }),
+      },
     }),
   ).resolves.toBe(true);
   expect(resolveRequireMention.mock.calls).toMatchObject([
-    [
-      {
-        accountId: "account-b",
-        groupId: "shared",
-        groupChannel: undefined,
-      },
-    ],
+    [{ accountId: "account-b", groupId: "shared", groupChannel: undefined }],
   ]);
   vi.doUnmock("./groups.runtime.js");
 });
