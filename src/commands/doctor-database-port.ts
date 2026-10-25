@@ -27,6 +27,7 @@ import {
   type DatabaseEngineId,
 } from "../infra/database-engine/registry.js";
 import {
+  assertDatabasePortPlatformSupported,
   assertDatabasePortRecoveryAllowed,
   databasePortManifestPath,
   prepareDatabasePortDirectory,
@@ -623,6 +624,7 @@ async function loadRecovery(ctx: Context) {
 }
 
 export async function doctorDatabasePort(options: DatabasePortOptions) {
+  assertDatabasePortPlatformSupported();
   const stateDir = path.resolve(resolveStateDir());
   const ctx: Context = {
     family:
