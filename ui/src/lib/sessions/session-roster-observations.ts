@@ -1,11 +1,8 @@
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { projectSessionResultRows, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import { createSessionDescribeReads } from "./session-describe.ts";
-import {
-  createSessionEventDelivery,
-  type SessionEventDelivery,
-} from "./session-event-observation.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
@@ -39,6 +36,11 @@ type RegisteredRow = {
   isValid: (sessionId: string) => boolean;
   decorate: (row: GatewaySessionRow) => GatewaySessionRow | null;
 };
+type SessionEventDelivery = {
+  results: Map<RegisteredRow, SessionChangedRowResult>;
+  deliver: (event: GatewayEventFrame, acceptsGeneration?: () => boolean) => void;
+};
+
 type RowProjection = (entry: { target: SessionRowTarget; row: GatewaySessionRow | null }) => {
   row: GatewaySessionRow | null;
   invalidate?: "now" | "later";
@@ -135,17 +137,42 @@ export function createSessionRosterObservations(
   };
   const { indexRows, merge, prepareProjection, projectFields, currentRow } =
     createSessionRosterProjection(provenance, captureHeldRows);
-  const captureEventDelivery = createSessionEventDelivery(
-    registeredRows,
-    host.connection,
-    isAttached,
-    isCurrent,
-  );
+  const connection = host.connection;
+  const captureEventDelivery = (scope: SessionConnectionScope | null): SessionEventDelivery => {
+    const registrations = new Set([...registeredRows].filter(isCurrent));
+    const results: SessionEventDelivery["results"] = new Map();
+    return {
+      results,
+      deliver(event, acceptsGeneration) {
+        for (const entry of registrations) {
+          if (!scope || !connection.isCurrent(scope)) {
+            return;
+          }
+          if (!entry.onEvent || !isAttached(entry)) {
+            continue;
+          }
+          try {
+            const recorded = results.get(entry);
+            const result: Parameters<SessionRowEventListener>[1] =
+              acceptsGeneration?.() === false
+                ? { applied: false, generationRejected: true }
+                : recorded && (isCurrent(entry) || recorded.deletedKey)
+                  ? recorded
+                  : { applied: false };
+            // Rejected generations still wake outboxes; they cannot mutate a pane's transcript.
+            entry.onEvent(event, result);
+          } catch (error) {
+            console.error("[sessions] event observer error:", error);
+          }
+        }
+      },
+    };
+  };
   const stageManagedResults = (
     scope: SessionConnectionScope | null,
     project: (entry: ObservedSessionList) => SessionsListResult | null,
     projectRow?: RowProjection,
-    event?: SessionEventDelivery<RegisteredRow>,
+    event?: SessionEventDelivery,
     reason?: string,
   ) => {
     if (!scope || !host.connection.isCurrent(scope)) {
