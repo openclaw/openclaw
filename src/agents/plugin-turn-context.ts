@@ -24,7 +24,7 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
-/** Collect queued context before prepare, heartbeat, and prompt-build hooks. */
+/** Collect queued context before prepare and prompt-build hooks. */
 export async function resolvePluginTurnContext(params: {
   config: OpenClawConfig;
   prompt: string;

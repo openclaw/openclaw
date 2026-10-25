@@ -167,6 +167,7 @@ it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
         toolOverrides: { webSearch: true },
       });
       const generation = await prepareSessionGenerationFacts({ ...scope, ...original });
+      const initialSettings = generation.readSessionSettings();
       const settings = {
         permissionMode:
           setting === "permissionMode" ? ("read-only" as const) : original.permissionMode,
@@ -180,7 +181,7 @@ it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
         // Exec wakes check identity and settings synchronously after tool-preparation awaits.
         generation.assertCurrent();
         if (setting === "lifecycleRunId") {
-          expect(generation.readSessionSettings()).toEqual(settings);
+          expect(generation.readSessionSettings()).toMatchObject(settings);
         } else {
           expect(generation.readSessionSettings).toThrow(
             expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
@@ -189,7 +190,10 @@ it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
         release.resolve();
         await withinTest(write, signal);
         generation.assertCurrent();
-        expect(generation.readSessionSettings()).toEqual(settings);
+        expect(generation.readSessionSettings()).toMatchObject(settings);
+        if (setting === "lifecycleRunId") {
+          expect(generation.readSessionSettings()).toBe(initialSettings);
+        }
       } finally {
         held.close();
         await Promise.allSettled([write]);

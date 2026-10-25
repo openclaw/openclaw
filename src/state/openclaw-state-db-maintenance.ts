@@ -335,7 +335,9 @@ export function markCurrentStateSchemaVersion(
     return;
   }
   const version = resolveStateSchemaVersionToPublish(db);
-  db.exec(`PRAGMA user_version = ${version};`);
+  if (readSqliteUserVersion(db) !== version) {
+    db.exec(`PRAGMA user_version = ${version};`);
+  }
   publishStateSchemaVersionAdmission(db, {
     userVersion: version,
     contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
@@ -357,13 +359,14 @@ export function markCurrentStateSchemaVersion(
          ) VALUES ('primary', 'global', ?, NULL, NULL, ?, ?)
          ON CONFLICT(meta_key) DO UPDATE SET
            schema_version = excluded.schema_version,
-           updated_at = excluded.updated_at`,
+           updated_at = excluded.updated_at
+         WHERE schema_meta.schema_version IS NOT excluded.schema_version`,
       ).run(version, now, now);
       return;
     }
     db.prepare(
-      "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary'",
-    ).run(version, now);
+      "UPDATE schema_meta SET schema_version = ?, updated_at = ? WHERE meta_key = 'primary' AND schema_version IS NOT ?",
+    ).run(version, now, version);
   }
 }
 
@@ -566,6 +569,13 @@ export function migrateBoundedStateSchema(
     stateClientCredentialMigration,
     stateAutomationPolicyMigration,
     stateLocalWorkspaceManifestMigration,
+    {
+      version: 32,
+      tables: [],
+      columns: [],
+      migrate: () => false,
+      applied: "Aligned PostgreSQL non-null index ordering (v32)",
+    },
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -692,7 +702,9 @@ export function runStateSchemaMigrationTransaction<T>(
 export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): void {
   const kysely = getNodeSqliteKysely<Pick<DB, "schema_meta">>(db);
   const schemaVersion = resolveStateSchemaVersionToPublish(db);
-  db.exec(`PRAGMA user_version = ${schemaVersion};`);
+  if (readSqliteUserVersion(db) !== schemaVersion) {
+    db.exec(`PRAGMA user_version = ${schemaVersion};`);
+  }
   publishStateSchemaVersionAdmission(db, {
     userVersion: schemaVersion,
     contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,

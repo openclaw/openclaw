@@ -11,11 +11,13 @@ import {
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "../../../components/session-progress-hovercard-target.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
@@ -124,6 +126,8 @@ function openReport(key = "click") {
 function titlerFor(key: string, title: string) {
   const titler = new SessionLinkTitler();
   titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
+  titler.context = createInitializationContext(titler.client);
+  titler.context.gateway.snapshot.hello = gatewayHelloForMethods(["controlUi.sessionPreview"]);
   const request = vi.spyOn(titler.client, "request").mockResolvedValueOnce({
     status: "ok",
     sessionKey: key,

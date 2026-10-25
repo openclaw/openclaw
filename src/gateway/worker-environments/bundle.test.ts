@@ -14,7 +14,6 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import * as bundleStaging from "./bundle-staging.js";
 import {
   createWorkerBundleProducer,
   resolveWorkerNpmInstallationArtifact,
@@ -315,7 +314,7 @@ describe("worker bundle producer", () => {
   it("skips retention reads when the cache has no cleanup candidates", async () => {
     await withBundleFixture(async ({ packageRoot, cacheDir }) => {
       await writeFixture(packageRoot);
-      const owner = producer(packageRoot, cacheDir, { cacheOwnership: "exclusive" });
+      const owner = producer(packageRoot, cacheDir);
       const current = await owner.prepare();
       for (const name of ["keep-me.txt", "not-a-hash.tgz", ".staging"]) {
         await fs.writeFile(path.join(cacheDir, name), "operator-owned");
@@ -336,7 +335,7 @@ describe("worker bundle producer", () => {
       await writeFixture(packageRoot, "export const value = 1;\n");
       const retained = await producer(packageRoot, cacheDir).prepare();
       await fs.writeFile(artifactPath(packageRoot), "export const value = 2;\n");
-      const owner = producer(packageRoot, cacheDir, { cacheOwnership: "exclusive" });
+      const owner = producer(packageRoot, cacheDir);
       const current = await owner.prepare();
       const removedPath = path.join(cacheDir, `${"c".repeat(64)}.tgz`);
       await fs.writeFile(removedPath, "historical");
@@ -399,7 +398,7 @@ describe("worker bundle producer", () => {
           closeOpenClawStateDatabaseForTest();
 
           await writeFixture(packageRoot, "export const value = 2;\n");
-          const successor = producer(packageRoot, cacheDir, { cacheOwnership: "exclusive" });
+          const successor = producer(packageRoot, cacheDir);
           const current = await successor.prepare();
           expect(current.bundleHash).not.toBe(admitted.bundleHash);
           const reopened = await createWorkerEnvironmentStore({
@@ -434,7 +433,7 @@ describe("worker bundle producer", () => {
   it("reclaims recognized crash artifacts but preserves unknown cache entries", async () => {
     await withBundleFixture(async ({ packageRoot, cacheDir }) => {
       await writeFixture(packageRoot);
-      const owner = producer(packageRoot, cacheDir, { cacheOwnership: "exclusive" });
+      const owner = producer(packageRoot, cacheDir);
       const current = await owner.prepare();
       const staging = path.join(cacheDir, ".staging-stale");
       const temporary = path.join(
@@ -460,7 +459,7 @@ describe("worker bundle producer", () => {
     async (kind) => {
       await withBundleFixture(async ({ packageRoot, cacheDir }) => {
         await writeFixture(packageRoot);
-        const owner = producer(packageRoot, cacheDir, { cacheOwnership: "exclusive" });
+        const owner = producer(packageRoot, cacheDir);
         const current = await owner.prepare();
         const historical = path.join(cacheDir, `${"b".repeat(64)}.tgz`);
         const staging = path.join(cacheDir, ".staging-stale");
@@ -510,7 +509,7 @@ describe("worker bundle producer", () => {
   it("reads retention when queued pruning runs", async () => {
     await withBundleFixture(async ({ packageRoot, cacheDir }) => {
       await writeFixture(packageRoot);
-      const owner = producer(packageRoot, cacheDir, { cacheOwnership: "exclusive" });
+      const owner = producer(packageRoot, cacheDir);
       const current = await owner.prepare();
       const firstHash = "a".repeat(64);
       const secondHash = "b".repeat(64);
@@ -580,16 +579,20 @@ describe("worker bundle producer", () => {
       await writeFixture(baselineRoot, originalContents);
       await writeFixture(packageRoot, originalContents);
       const baseline = await producer(baselineRoot, path.join(root, "baseline-cache")).prepare();
-      const originalCollect = bundleStaging.collectWorkerBundleManifest;
+      const originalWriteFile = fs.writeFile;
       let sourceMutated = false;
-      const stagingSpy = vi
-        .spyOn(bundleStaging, "collectWorkerBundleManifest")
-        .mockImplementation(async (...args) => {
-          const manifest = await originalCollect(...args);
+      const stagingWrite = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        await originalWriteFile(...args);
+        const [target] = args;
+        if (
+          typeof target === "string" &&
+          path.basename(target) === "worker.mjs" &&
+          path.dirname(target).startsWith(`${cacheDir}${path.sep}.staging-`)
+        ) {
           sourceMutated = true;
-          await fs.writeFile(artifactPath(packageRoot), changedContents);
-          return manifest;
-        });
+          await originalWriteFile(artifactPath(packageRoot), changedContents);
+        }
+      });
 
       try {
         const artifact = await producer(packageRoot, cacheDir).prepare();
@@ -601,7 +604,7 @@ describe("worker bundle producer", () => {
         expect(artifact.bundleHash).toBe(baseline.bundleHash);
         await expect(readText(extractDir, "worker.mjs")).resolves.toBe(originalContents);
       } finally {
-        stagingSpy.mockRestore();
+        stagingWrite.mockRestore();
       }
     });
   });
@@ -704,18 +707,19 @@ describe("worker npm installation artifact", () => {
     await expect(
       resolveWorkerNpmInstallationArtifact({
         bundle: bundleArtifact({ openclawVersion: "dev" }),
-        isPackageInstall: async () => true,
         verifyRelease,
       }),
     ).rejects.toThrow("exact published gateway version");
     expect(verifyRelease).not.toHaveBeenCalled();
-    await expect(
-      resolveWorkerNpmInstallationArtifact({
-        bundle: bundleArtifact(),
-        isPackageInstall: async () => true,
-        verifyRelease,
-      }),
-    ).rejects.toThrow("use the worker bundle install");
+    await withTestDir({ prefix: "openclaw-worker-npm-unpublished-" }, async (packageRoot) => {
+      await expect(
+        resolveWorkerNpmInstallationArtifact({
+          bundle: bundleArtifact(),
+          packageRoot,
+          verifyRelease,
+        }),
+      ).rejects.toThrow("use the worker bundle install");
+    });
   });
 
   it("rejects a source checkout even when its version is published", async () => {

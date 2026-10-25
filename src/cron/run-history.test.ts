@@ -275,6 +275,30 @@ it("retains history across worker reads, isolates stores, and recovers only an e
     ]);
   }));
 
+it("preserves structured automation results through full and summary worker reads", () =>
+  withHistoryState(async (storeKey) => {
+    const results = [
+      { outcome: "no_change" },
+      { outcome: "blocked", summary: "Waiting for release approval." },
+    ] as const;
+    for (const result of results) {
+      const write = outcome(storeKey, result.outcome);
+      await recordCronRun({
+        ...write,
+        detail: outcomeDetail(storeKey, { runId: result.outcome, result }),
+      });
+    }
+    for (const view of ["full", "summary"] as const) {
+      const page = await readCronRunHistoryPage({ storeKey, jobId: "job", view });
+      expect(page.entries).toHaveLength(2);
+      for (const result of results) {
+        expect(page.entries.find((entry) => entry.runId === result.outcome)?.result).toEqual(
+          result,
+        );
+      }
+    }
+  }));
+
 it("pages large history without reading off-page payloads or changing completion order", () =>
   withHistoryState(async (storeKey) => {
     const payload = "diagnostic-payload:" + "x".repeat(16 * 1024);

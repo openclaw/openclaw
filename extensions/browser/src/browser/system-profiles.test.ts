@@ -14,11 +14,6 @@ const profileMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
-  resolvePreferredOpenClawTmpDir: () => profileMocks.tempRoot,
-}));
-
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   readRuntimeConfig: () => ({ browser: {} }),
@@ -132,11 +127,13 @@ beforeEach(() => {
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
   profileMocks.cookiesSetManyViaPlaywright.mockClear();
   profileMocks.tempRoot = tempDirs.make("openclaw-system-cookies-test-");
+  vi.stubEnv("XDG_CACHE_HOME", profileMocks.tempRoot);
 });
 
 afterEach(() => {
   Object.defineProperty(process, "platform", platformDescriptor);
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 it.skipIf(process.platform === "win32")(
@@ -198,18 +195,43 @@ it("snapshots, decrypts, and applies the domain allowlist", async () => {
     cookies: [{ name: "session", value: "allowed-value", domain: ".example.com" }],
   });
   expect(readSecret).toHaveBeenCalledOnce();
-  expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
+  expect(fs.readdirSync(path.join(profileMocks.tempRoot, "openclaw"))).toEqual([]);
 });
 
-it("removes cookie snapshot scratch when opening the source database fails", async () => {
+it("reads committed WAL cookies without synchronous snapshot writes on the request thread", async () => {
   const cookiesFile = createSystemProfileFixture();
-  fs.rmSync(cookiesFile);
-  fs.mkdirSync(cookiesFile);
+  const writer = new DatabaseSync(cookiesFile);
+  try {
+    writer.exec("PRAGMA wal_autocheckpoint = 0");
+    writer
+      .prepare("UPDATE cookies SET value = ?, encrypted_value = ? WHERE name = ?")
+      .run("fresh-wal-value", Buffer.alloc(0), "session");
+    expect(fs.statSync(`${cookiesFile}-wal`).size).toBeGreaterThan(0);
+    const syncFlush = vi.spyOn(fs, "fsyncSync");
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
 
-  await expect(readSystemProfileCookies(source)).rejects.toMatchObject({
-    code: "ERR_SQLITE_ERROR",
-  });
-  expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
+    const result = await readSystemProfileCookies(
+      { ...source, domains: ["example.com"] },
+      { readSecret: async () => Buffer.from(KEYCHAIN_FIXTURE) },
+    );
+
+    expect(result.cookies).toEqual([
+      expect.objectContaining({ name: "session", value: "fresh-wal-value" }),
+    ]);
+    expect(syncFlush).not.toHaveBeenCalled();
+    expect(prepare.mock.calls.some(([sql]) => /\b(?:VACUUM|COMMIT)\b/i.test(sql))).toBe(false);
+    expect(fs.readdirSync(path.join(profileMocks.tempRoot, "openclaw"))).toEqual([]);
+  } finally {
+    writer.close();
+  }
+});
+
+it("removes cookie snapshot scratch when reading invalid SQLite bytes fails", async () => {
+  const cookiesFile = createSystemProfileFixture();
+  fs.writeFileSync(cookiesFile, "not a SQLite database");
+
+  await expect(readSystemProfileCookies(source)).rejects.toThrow(/not a database/);
+  expect(fs.readdirSync(path.join(profileMocks.tempRoot, "openclaw"))).toEqual([]);
 });
 
 it("keeps the existing import flow on the shared reader", async () => {

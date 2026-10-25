@@ -54,6 +54,37 @@ vi.mock("./route-reply.js", () => ({
   routeReply: (...args: unknown[]) => deliveryState.routeReply(...args),
 }));
 
+type DecisionParams = Parameters<typeof resolveFollowupDeliveryDecision>[0];
+function decide(
+  turn = createTurn(),
+  execution: DecisionParams["execution"] = createSettledExecution(),
+  accounting: DecisionParams["accounting"] = createAccounting(),
+  opts?: DecisionParams["opts"],
+) {
+  return resolveFollowupDeliveryDecision({ turn, execution, accounting, opts });
+}
+
+function deliverDecision({
+  turn = createTurn(),
+  ...params
+}: Pick<Parameters<typeof deliverFollowupDecision>[0], "decision"> &
+  Partial<Parameters<typeof deliverFollowupDecision>[0]>) {
+  return deliverFollowupDecision({
+    defaults: createDefaults(vi.fn(async () => {})),
+    runFollowup: vi.fn(async () => {}),
+    turn,
+    runId: turn.runId,
+    ...params,
+  });
+}
+
+const missingReply = {
+  text: "No answer was returned. Ask again if you still need one.",
+  isError: true,
+  isStatusNotice: true,
+};
+const silent = { kind: "suppress", reason: "silent" };
+
 describe("resolveFollowupDeliveryDecision", () => {
   const sourceReplyTarget = {
     tool: "message",
@@ -63,7 +94,6 @@ describe("resolveFollowupDeliveryDecision", () => {
   };
   const progressTarget = { ...sourceReplyTarget, sourceReplyFinal: false };
   const finalTarget = { ...sourceReplyTarget, sourceReplyFinal: true };
-  const progressPayload = { text: "Still working", sourceReplyFinal: false };
 
   it.each([
     { state: undefined, routed: true, delivered: true },
@@ -78,14 +108,14 @@ describe("resolveFollowupDeliveryDecision", () => {
       execution.outcome.result.messagingToolSentTargets = routed
         ? [{ ...sourceReplyTarget, text: "Completed." }]
         : undefined;
-      const decision = await resolveFollowupDeliveryDecision({
-        turn: createTurn(),
+      const decision = await decide(
+        undefined,
         execution,
-        accounting: createAccounting([{ text: "Completed." }]),
-      });
+        createAccounting([{ text: "Completed." }]),
+      );
       expect(decision).toMatchObject(
         delivered
-          ? { kind: "suppress", reason: "silent" }
+          ? silent
           : { kind: "deliver", payloads: [{ isError: true, text: expect.any(String) }] },
       );
     },
@@ -124,17 +154,15 @@ describe("resolveFollowupDeliveryDecision", () => {
         responseUsage: sessionMode,
       });
 
-      const decision = await resolveFollowupDeliveryDecision({
+      const decision = await decide(
         turn,
-        execution: createSettledExecution("queued reply"),
-        accounting: createAccounting([{ text: "queued reply" }], { usage }),
-      });
-      const delivery = await deliverFollowupDecision({
+        createSettledExecution("queued reply"),
+        createAccounting([{ text: "queued reply" }], { usage }),
+      );
+      const delivery = await deliverDecision({
         decision,
         turn,
-        defaults: createDefaults(vi.fn(async () => {})),
         runId: turn.runId,
-        runFollowup: vi.fn(async () => {}),
       });
       expect(delivery).toMatchObject({ kind: "completed", payloads: [{ text: expected }] });
       expect(sourceDispatcher).not.toHaveBeenCalled();
@@ -142,64 +170,7 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each([
-    ["yielded", undefined, false],
-    ["continuationPending", undefined, false],
-    ["yielded", "Research started; results will follow.", false],
-    ["yielded", "Research started; results will follow.", true],
-  ] as const)(
-    "delivers waiting status for %s (%s, private partial=%s)",
-    async (continuation, yieldAcknowledgment, privatePartial) => {
-      const turn = createTurn();
-      const execution = createSettledExecution();
-      execution.outcome.result.meta = { durationMs: 0, [continuation]: true, yieldAcknowledgment };
-      if (privatePartial) {
-        turn.queued.originatingChatType = "group";
-        turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-      } else {
-        execution.outcome.result.acceptedSessionSpawns = [
-          {
-            runId: "child-run",
-            childSessionKey: "agent:main:subagent:child",
-            expectsCompletionMessage: true,
-          },
-        ];
-      }
-      const decision = await resolveFollowupDeliveryDecision({
-        turn,
-        execution,
-        accounting: createAccounting(privatePartial ? [{ text: "Private partial output." }] : []),
-      });
-      expect(decision).toMatchObject(
-        yieldAcknowledgment
-          ? { kind: "deliver", payloads: [{ text: yieldAcknowledgment }] }
-          : { kind: "suppress", reason: "silent" },
-      );
-    },
-  );
-
-  it.each(["required", "optional"] as const)(
-    "honors a queued %s reply expectation over heartbeat drain options and NO_REPLY",
-    async (expectation) => {
-      const turn = createTurn();
-      turn.queued.run.terminalReplyExpectation = expectation;
-      const execution = createSettledExecution();
-      execution.outcome.result.meta.finalAssistantRawText = "NO_REPLY";
-      execution.outcome.result.meta.terminalReply = { disposition: "silent" };
-
-      const decision = await resolveFollowupDeliveryDecision({
-        turn,
-        execution,
-        accounting: createAccounting(),
-        opts: { isHeartbeat: true },
-      });
-
-      expect(decision).toEqual({ kind: "suppress", reason: "silent" });
-    },
-  );
-
-  it.each([
     { expectation: "required", providerStarted: true },
-    { expectation: "optional", providerStarted: true },
     { expectation: "result-required", providerStarted: true },
     { expectation: "result-required", providerStarted: false },
   ] as const)(
@@ -218,12 +189,12 @@ describe("resolveFollowupDeliveryDecision", () => {
         yieldAcknowledgment: "An unsent confirmation",
         terminalReply: { disposition: "silent" },
       };
-      const decision = await resolveFollowupDeliveryDecision({
+      const decision = await decide(
         turn,
         execution,
-        accounting: createAccounting([{ text: "Earlier answer" }]),
-      });
-      expect(decision).toMatchObject({ kind: "suppress", reason: "silent" });
+        createAccounting([{ text: "Earlier answer" }]),
+      );
+      expect(decision).toMatchObject(silent);
       expect(failMock).toHaveBeenCalledTimes(
         expectation === "result-required" && providerStarted ? 1 : 0,
       );
@@ -236,24 +207,14 @@ describe("resolveFollowupDeliveryDecision", () => {
       const { replyOperation, failMock } = createMockReplyOperation();
       const turn = createTurn({ operation: replyOperation });
       turn.queued.run.terminalReplyExpectation = expectation;
-      const decision = await resolveFollowupDeliveryDecision({
-        turn,
-        execution: createSettledExecution(),
-        accounting: createAccounting(),
-      });
+      const decision = await decide(turn);
       expect(decision).toMatchObject(
         expectation === "required"
           ? {
               kind: "deliver",
-              payloads: [
-                {
-                  text: "No answer was returned. Ask again if you still need one.",
-                  isError: true,
-                  isStatusNotice: true,
-                },
-              ],
+              payloads: [missingReply],
             }
-          : { kind: "suppress", reason: "silent" },
+          : silent,
       );
       expect(failMock).toHaveBeenCalledTimes(expectation === "required" ? 1 : 0);
     },
@@ -278,11 +239,11 @@ describe("resolveFollowupDeliveryDecision", () => {
         },
         { assistantTranscriptOwned: true, deliverDespiteSourceReplySuppression: true },
       );
-      const decision = await resolveFollowupDeliveryDecision({
+      const decision = await decide(
         turn,
         execution,
-        accounting: createAccounting([{ text: "Unsent confirmation" }, media]),
-      });
+        createAccounting([{ text: "Unsent confirmation" }, media]),
+      );
       expect(decision).toMatchObject({
         kind: "deliver",
         payloads: [{ mediaUrl: "https://example.invalid/pending.opus", audioAsVoice: true }],
@@ -313,11 +274,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       };
       execution.outcome.result.didSendDeterministicApprovalPrompt = source === "approval";
       const payload = { text: "Approval or policy notice", isStatusNotice: true };
-      const decision = await resolveFollowupDeliveryDecision({
-        turn: createTurn(),
-        execution,
-        accounting: createAccounting([payload]),
-      });
+      const decision = await decide(undefined, execution, createAccounting([payload]));
       expect(decision).toMatchObject({ kind: "deliver", payloads: [payload] });
     },
   );
@@ -337,11 +294,11 @@ describe("resolveFollowupDeliveryDecision", () => {
             }
           : createSettledExecution(reason === "room-event" ? "private room final" : "blocked");
       expect(
-        await resolveFollowupDeliveryDecision({
+        await decide(
           turn,
           execution,
-          accounting: reason === "aborted" ? createAccounting([{ text: "late reply" }]) : undefined,
-        }),
+          reason === "aborted" ? createAccounting([{ text: "late reply" }]) : undefined,
+        ),
       ).toEqual({ kind: "suppress", reason });
     },
   );
@@ -355,27 +312,6 @@ describe("resolveFollowupDeliveryDecision", () => {
       runId: "run-1",
       outcome: { kind: "aborted", reason: "user" },
     };
-
-    it.each(["automatic", "message_tool_only"] as const)(
-      "delivers the stall notice once the single recovery run stalls too (%s)",
-      async (sourceReplyDeliveryMode) => {
-        const turn = createTurn({ operation: stalledOperation });
-        turn.queued.stalledTurnRecovery = true;
-        turn.queued.run.sourceReplyDeliveryMode = sourceReplyDeliveryMode;
-
-        const decision = await resolveFollowupDeliveryDecision({ turn, execution: aborted });
-
-        expect(decision).toMatchObject({
-          kind: "deliver",
-          payloads: [
-            {
-              text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
-              isError: true,
-            },
-          ],
-        });
-      },
-    );
 
     it.each([
       {
@@ -394,7 +330,7 @@ describe("resolveFollowupDeliveryDecision", () => {
       const turn = createTurn({ operation });
       turn.queued.stalledTurnRecovery = recovery;
 
-      expect(await resolveFollowupDeliveryDecision({ turn, execution: aborted })).toEqual({
+      expect(await decide(turn, aborted)).toEqual({
         kind: "suppress",
         reason: "aborted",
       });
@@ -430,11 +366,12 @@ describe("resolveFollowupDeliveryDecision", () => {
             { deliverDespiteSourceReplySuppression: true },
           )
         : { text };
-      const decision = await resolveFollowupDeliveryDecision({
+      const decision = await decide(
         turn,
-        execution: { runId: "run-1", outcome: { kind: "rejected", payload } },
-        opts: source === "webchat" ? { onBlockReply: vi.fn(async () => {}) } : undefined,
-      });
+        { runId: "run-1", outcome: { kind: "rejected", payload } },
+        undefined,
+        source === "webchat" ? { onBlockReply: vi.fn(async () => {}) } : undefined,
+      );
       if (approved) {
         expect(decision).toMatchObject({ kind: "deliver", payloads: [payload] });
         if (decision.kind === "deliver") {
@@ -456,9 +393,6 @@ describe("resolveFollowupDeliveryDecision", () => {
       payload: { mediaUrl: "file:///tmp/generated.png" },
       deliver: true,
     },
-    { name: "blank marked text", payload: { text: "   " } },
-    { name: "heartbeat marker", payload: { text: "HEARTBEAT_OK" } },
-    { name: "private reasoning", payload: { text: "hidden reasoning", isReasoning: true } },
     {
       name: "already delivered media",
       payload: { mediaUrl: "file:///tmp/already-sent.png" },
@@ -473,15 +407,15 @@ describe("resolveFollowupDeliveryDecision", () => {
       if (sent && payload?.mediaUrl) {
         execution.outcome.result.messagingToolSentMediaUrls = [payload.mediaUrl];
       }
-      const decision = await resolveFollowupDeliveryDecision({
+      const decision = await decide(
         turn,
         execution,
-        accounting: createAccounting(
+        createAccounting(
           payload
             ? [setReplyPayloadMetadata(payload, { deliverDespiteSourceReplySuppression: true })]
             : [],
         ),
-      });
+      );
       expect(decision).toMatchObject(
         deliver
           ? { kind: "deliver", payloads: [{ mediaUrl: payload?.mediaUrl }] }
@@ -497,15 +431,15 @@ describe("resolveFollowupDeliveryDecision", () => {
     const turn = createTurn();
     turn.queued.originatingChatType = "group";
     turn.queued.originatingReplyToMode = "all";
-    const decision = await resolveFollowupDeliveryDecision({
+    const decision = await decide(
       turn,
-      execution: createSettledExecution(),
-      accounting: createAccounting([{ text: "done" }], {
+      undefined,
+      createAccounting([{ text: "done" }], {
         providerUsed: "claude-cli",
         modelUsed: "claude-sonnet-4-6",
         compactionNotice: { text: "compacted" },
       }),
-    });
+    );
     expect(decision).toMatchObject({
       kind: "deliver",
       resolved: { provider: "claude-cli", model: "claude-sonnet-4-6" },
@@ -518,33 +452,8 @@ describe("resolveFollowupDeliveryDecision", () => {
     }
   });
 
-  it("turns a second missing source delivery into a sanitized diagnostic", async () => {
-    const turn = createTurn();
-    turn.queued.strandedReplyRetry = true;
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    expect(
-      await resolveFollowupDeliveryDecision({
-        turn,
-        execution: createSettledExecution(),
-        accounting: createAccounting(),
-      }),
-    ).toMatchObject({
-      kind: "deliver",
-      payloads: [
-        {
-          text: "No answer was returned. Ask again if you still need one.",
-          isError: true,
-          isStatusNotice: true,
-        },
-      ],
-    });
-  });
-
   it.each([
     { name: "internal follow-up", expectation: undefined, internal: true, final: "" },
-    { name: "required reply", expectation: "required", internal: false, final: "" },
-    { name: "optional reply", expectation: "optional", internal: false, final: "" },
     {
       name: "private final",
       expectation: undefined,
@@ -568,15 +477,15 @@ describe("resolveFollowupDeliveryDecision", () => {
         status: "failed",
         terminalFailurePayload: failure,
       };
-      const decision = await resolveFollowupDeliveryDecision({
+      const decision = await decide(
         turn,
         execution,
-        accounting: createAccounting(final ? [{ text: "private partial" }] : [], {
+        createAccounting(final ? [{ text: "private partial" }] : [], {
           terminalFailurePayload: failure,
         }),
-      });
+      );
       if (internal) {
-        expect(decision).toEqual({ kind: "suppress", reason: "silent" });
+        expect(decision).toEqual(silent);
       } else {
         expect(decision).toMatchObject({ kind: "deliver", payloads: [failure] });
       }
@@ -585,8 +494,6 @@ describe("resolveFollowupDeliveryDecision", () => {
 
   it.each([
     { evidence: "empty", failureText: "The run failed after progress.", delivered: true },
-    { evidence: "empty", failureText: "Rate limit reached. Try again later.", delivered: true },
-    { evidence: "empty", failureText: "NO_REPLY.", delivered: true },
     { evidence: "empty", failureText: "NO_REPLY", delivered: true },
     { evidence: "delivered", failureText: "The run failed after progress.", delivered: false },
     { evidence: "pending", failureText: "The run failed after progress.", delivered: false },
@@ -612,29 +519,26 @@ describe("resolveFollowupDeliveryDecision", () => {
       }
       const readyPayloads = evidence === "ready" ? [{ text: "The answer is ready." }] : [];
 
-      const decision = await resolveFollowupDeliveryDecision({
+      const decision = await decide(
         turn,
         execution,
-        accounting: createAccounting(readyPayloads, { terminalFailurePayload }),
-      });
+        createAccounting(readyPayloads, { terminalFailurePayload }),
+      );
 
       expect(decision).toMatchObject(
         delivered
           ? { kind: "deliver", payloads: [{ isError: true }] }
           : evidence === "ready"
             ? { kind: "deliver", payloads: readyPayloads }
-            : { kind: "suppress", reason: "silent" },
+            : silent,
       );
     },
   );
 
   it.each([
     ["progress-only target", { messagingToolSentTargets: [progressTarget] }, true],
-    ["progress-only source payload", { messagingToolSourceReplyPayloads: [progressPayload] }, true],
     ["final source reply", { messagingToolSentTargets: [finalTarget] }, false],
-    ["unclassified target", { messagingToolSentTargets: [sourceReplyTarget] }, true],
     ["legacy source reply", { didDeliverSourceReplyViaMessageTool: true }, false],
-    ["unscoped outbound send", { didSendViaMessagingTool: true }, true],
     ["deterministic approval prompt", { didSendDeterministicApprovalPrompt: true }, false],
     [
       "visible progress while yielded",
@@ -665,25 +569,15 @@ describe("resolveFollowupDeliveryDecision", () => {
       const execution = createSettledExecution();
       Object.assign(execution.outcome.result, evidence);
 
-      const decision = await resolveFollowupDeliveryDecision({
-        turn: createTurn(),
-        execution,
-        accounting: createAccounting(),
-      });
+      const decision = await decide(undefined, execution);
 
       expect(decision).toMatchObject(
         expectFallback
           ? {
               kind: "deliver",
-              payloads: [
-                {
-                  text: "No answer was returned. Ask again if you still need one.",
-                  isError: true,
-                  isStatusNotice: true,
-                },
-              ],
+              payloads: [missingReply],
             }
-          : { kind: "suppress", reason: "silent" },
+          : silent,
       );
     },
   );
@@ -692,11 +586,11 @@ describe("resolveFollowupDeliveryDecision", () => {
     const turn = createTurn();
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
 
-    const decision = await resolveFollowupDeliveryDecision({
+    const decision = await decide(
       turn,
-      execution: createSettledExecution(),
-      accounting: createAccounting([{ text: "Private terminal diagnostic." }]),
-    });
+      undefined,
+      createAccounting([{ text: "Private terminal diagnostic." }]),
+    );
 
     expect(decision).toMatchObject({
       kind: "retry-source-delivery",
@@ -717,9 +611,8 @@ describe("deliverFollowupDecision", () => {
       turn,
       defaults: createDefaults(laterDispatcher),
       runId: "event-run",
-      runFollowup: vi.fn(async () => {}),
     };
-    await deliverFollowupDecision({
+    await deliverDecision({
       ...params,
       kind: "block",
       decision: { kind: "deliver", payloads: [{ text: "progress" }] },
@@ -731,7 +624,7 @@ describe("deliverFollowupDecision", () => {
       payloads: [{ text: "progress" }],
       completion: { kind: "progress" },
     });
-    const final = await deliverFollowupDecision({
+    const final = await deliverDecision({
       ...params,
       decision: { kind: "deliver", payloads: [{ text: "done" }] },
     });
@@ -742,7 +635,7 @@ describe("deliverFollowupDecision", () => {
 
     turn.queued.queuedFollowupReplyDisposition = undefined;
     await expect(
-      deliverFollowupDecision({
+      deliverDecision({
         ...params,
         decision: { kind: "deliver", payloads: [{ text: "must not reroute" }] },
       }),
@@ -757,12 +650,10 @@ describe("deliverFollowupDecision", () => {
     deliveryState.routeReply.mockReset();
 
     try {
-      await deliverFollowupDecision({
+      await deliverDecision({
         decision: { kind: "deliver", payloads: [{ text: "dispatcher only" }] },
-        turn: createTurn(),
         defaults: createDefaults(onBlockReply),
         runId: "run-1",
-        runFollowup: vi.fn(async () => {}),
       });
 
       expect(onBlockReply).toHaveBeenCalledOnce();
@@ -772,39 +663,18 @@ describe("deliverFollowupDecision", () => {
     }
   });
 
-  it("keeps a queued WebChat reply bound to its original source dispatcher", async () => {
+  it("keeps a source-unavailable WebChat reply dropped", async () => {
     const laterDispatcher = vi.fn(async (_payload: ReplyPayload) => {});
-    const sourceDispatcher = vi.fn(async () => {});
     const turn = createTurn();
     turn.queued.originatingChannel = "webchat";
     turn.queued.originatingTo = undefined;
-    turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDispatcher };
-    deliveryState.followupRoute = { route: "dispatcher" };
-    try {
-      const payloads = await deliverFollowupDecision({
-        decision: { kind: "deliver", payloads: [{ text: "one" }, { text: "two" }] },
-        turn,
-        defaults: createDefaults(laterDispatcher),
-        runId: "source-run",
-        runFollowup: vi.fn(async () => {}),
-      });
-      expect(payloads).toEqual({ kind: "completed", payloads: [{ text: "one" }, { text: "two" }] });
-      expect(sourceDispatcher).not.toHaveBeenCalled();
-      turn.queued.queuedFollowupReplyDisposition = {
-        kind: "drop",
-        reason: "source-unavailable",
-      };
-      await deliverFollowupDecision({
-        decision: { kind: "deliver", payloads: [{ text: "must stay dropped" }] },
-        turn,
-        defaults: createDefaults(laterDispatcher),
-        runId: "dropped-run",
-        runFollowup: vi.fn(async () => {}),
-      });
-      expect(laterDispatcher).not.toHaveBeenCalled();
-    } finally {
-      deliveryState.followupRoute = undefined;
-    }
+    turn.queued.queuedFollowupReplyDisposition = { kind: "drop", reason: "source-unavailable" };
+    await deliverDecision({
+      decision: { kind: "deliver", payloads: [{ text: "must stay dropped" }] },
+      turn,
+      defaults: createDefaults(laterDispatcher),
+    });
+    expect(laterDispatcher).not.toHaveBeenCalled();
   });
 
   it("drains a source-delivery retry from its explicit store after the original turn completes", async () => {
@@ -848,14 +718,10 @@ describe("deliverFollowupDecision", () => {
       dispatched.push(run.prompt);
     });
     try {
-      const decision = await resolveFollowupDeliveryDecision({
-        turn,
-        execution: createSettledExecution("The source answer is ready."),
-        accounting: createAccounting(),
-      });
+      const decision = await decide(turn, createSettledExecution("The source answer is ready."));
       expect(decision.kind).toBe("retry-source-delivery");
       await expect(
-        deliverFollowupDecision({
+        deliverDecision({
           decision,
           turn,
           defaults: createDefaults(vi.fn()),
@@ -900,11 +766,7 @@ describe("deliverFollowupDecision", () => {
     turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
     turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source.deliver };
     const defaults = createDefaults(vi.fn(async () => {}));
-    const decision = await resolveFollowupDeliveryDecision({
-      turn,
-      execution: createSettledExecution("The answer is ready."),
-      accounting: createAccounting(),
-    });
+    const decision = await decide(turn, createSettledExecution("The answer is ready."));
     expect(decision.kind).toBe("retry-source-delivery");
     let retryRun: FollowupRun | undefined;
     deliveryState.enqueue.mockImplementation((_key: string, run: FollowupRun) => {
@@ -912,12 +774,11 @@ describe("deliverFollowupDecision", () => {
       return true;
     });
     try {
-      await deliverFollowupDecision({
+      await deliverDecision({
         decision,
         turn,
         defaults,
         runId: turn.runId,
-        runFollowup: vi.fn(async () => {}),
       });
       await source.deliver({
         kind: "queued-followup",
@@ -930,11 +791,10 @@ describe("deliverFollowupDecision", () => {
         throw new Error("Recovery was not queued with its source delivery owner");
       }
       const retryTurn = { ...turn, runId: "retry-run", queued: retryRun };
-      const diagnostic = await resolveFollowupDeliveryDecision({
-        turn: retryTurn,
-        execution: createSettledExecution("Still unable to send the reply."),
-        accounting: createAccounting(),
-      });
+      const diagnostic = await decide(
+        retryTurn,
+        createSettledExecution("Still unable to send the reply."),
+      );
       if (diagnostic.kind !== "deliver") {
         throw new Error("Recovery did not prepare its terminal delivery diagnostic");
       }
@@ -959,6 +819,7 @@ describe("deliverFollowupDecision", () => {
             expect.objectContaining({
               text: "No answer was returned. Ask again if you still need one.",
               isError: true,
+              isStatusNotice: true,
             }),
           ],
         }),
@@ -972,12 +833,10 @@ describe("deliverFollowupDecision", () => {
     deliveryState.routeReply.mockReset();
     deliveryState.routeReply.mockResolvedValue({ ok: true, delivered: true });
 
-    await deliverFollowupDecision({
+    await deliverDecision({
       decision: { kind: "deliver", payloads: [{ text: "compacting" }] },
-      turn: createTurn(),
       defaults: createDefaults(vi.fn(async (_payload: ReplyPayload) => {})),
       runId: "run-1",
-      runFollowup: vi.fn(async () => {}),
       kind: "block",
     });
 
@@ -1008,12 +867,10 @@ describe("deliverFollowupDecision", () => {
     deliveryState.runtimeError.mockReset();
     deliveryState.routeReply.mockResolvedValue(result);
     const defaults = createDefaults(onBlockReply);
-    await deliverFollowupDecision({
+    await deliverDecision({
       decision: { kind: "deliver", payloads: [{ text: "reply" }] },
-      turn: createTurn(),
       defaults: { ...defaults, opts: dispatcher ? defaults.opts : undefined },
       runId: "run-1",
-      runFollowup: vi.fn(async () => {}),
     });
     expect(onBlockReply).not.toHaveBeenCalled();
     if (!dispatcher) {

@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, Loading } from "solid-js";
+import { RetryAction } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ConfigProps } from "./view-types.ts";
@@ -17,10 +18,7 @@ export function ConfigReadError(props: { message: string; onRetry: () => void })
   return (
     <div class="config-content-callout">
       <div class="callout danger" role="alert">
-        {props.message}{" "}
-        <button type="button" class="btn btn--sm" onClick={() => props.onRetry()}>
-          {t("common.retry")}
-        </button>
+        {props.message} <RetryAction type="button" onRetry={() => props.onRetry()} />
       </div>
     </div>
   );

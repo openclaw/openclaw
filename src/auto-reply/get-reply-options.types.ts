@@ -74,20 +74,8 @@ export type BlockReplyContext = {
   deliveryIntentId?: string;
 };
 
-/** Context passed to onModelSelected callback with actual model used. */
-type ModelSelectedContext = {
-  provider: string;
-  model: string;
-  thinkLevel: string | undefined;
-};
-
 /** Typing indicator class for channel-owned UX policy. */
-export type TypingPolicy =
-  | "auto"
-  | "user_message"
-  | "system_event"
-  | "internal_webchat"
-  | "heartbeat";
+export type TypingPolicy = "auto" | "user_message" | "system_event" | "internal_webchat";
 
 /** Per-turn policy for source-message reply threading. */
 export type ReplyThreadingPolicy = {
@@ -176,10 +164,6 @@ export type ReasoningStreamPayload = Pick<
   requiresReasoningProgressOptIn?: boolean;
 };
 
-type ReasoningProgressPayload = {
-  progressTokens: number;
-};
-
 /** Return false until the channel has accepted operator-visible progress. */
 type ProgressCallbackResult = boolean | void;
 
@@ -254,15 +238,10 @@ export type GetReplyOptions = {
   onTypingController?: (typing: TypingController) => void;
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
-  isHeartbeat?: boolean;
-  /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
-  useHeartbeatFailureCopy?: boolean;
-  /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
+  /** Policy-level typing control for run classes (user/system/internal). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */
   suppressTyping?: boolean;
-  /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
-  heartbeatModelOverride?: string;
   /** One-shot thinking level override for this run; does not persist to the session. */
   thinkingLevelOverride?: string;
   /** One-shot fast-mode override for this run; does not persist to the session. */
@@ -315,7 +294,7 @@ export type GetReplyOptions = {
   onReasoningStream?: (
     payload: ReasoningStreamPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
-  onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void> | void;
+  onReasoningProgress?: (payload: { progressTokens: number }) => Promise<void> | void;
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<ProgressCallbackResult> | ProgressCallbackResult;
@@ -443,7 +422,12 @@ export type GetReplyOptions = {
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
-  onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Context passed to onModelSelected callback with actual model used. */
+  onModelSelected?: (ctx: {
+    provider: string;
+    model: string;
+    thinkLevel: string | undefined;
+  }) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
    * the source conversation. `message_tool_only` prefers message-tool visible

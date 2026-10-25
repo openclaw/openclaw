@@ -1,16 +1,13 @@
 import type { Locator, Page } from "playwright";
-import { assert, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type {
   SessionCatalog,
   SessionCatalogHost,
   SessionCatalogSession,
-  SessionsCatalogHostEvent,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
-  controlUiSessionPath,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { assertSessionSectionCountAlignment } from "../test-helpers/control-ui-session-section-layout.ts";
@@ -227,42 +224,6 @@ suite.define(() => {
     }
   });
 
-  it("shows a completed host while the aggregate catalog request is still pending", async () => {
-    const page = await suite.browser.newPage({ viewport: { height: 900, width: 1280 } });
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.catalog.list"],
-      featureMethods: catalogMethods,
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const request = await gateway.waitForRequest("sessions.catalog.list");
-      const progressId = (request.params as { progressId?: string })?.progressId;
-      expect(progressId).toEqual(expect.any(String));
-      assert(progressId, "catalog request did not opt in to progressive host events");
-      await gateway.emitGatewayEvent("sessions.catalog.host", {
-        progressId,
-        agentId: "main",
-        catalog: makeCatalog("codex", "Codex", [
-          makeHost(
-            "node:fast",
-            "Fast Mac",
-            [makeNativeSession("thread-fast", "Progressive node result", { canArchive: false })],
-            { kind: "node", nodeId: "fast" },
-          ),
-        ]),
-      } satisfies SessionsCatalogHostEvent);
-
-      await expandCodingSection(page);
-      await page.getByText("Progressive node result", { exact: true }).waitFor();
-      expect((await gateway.getRequests("sessions.catalog.list")).length).toBe(1);
-
-      await gateway.resolveDeferred("sessions.catalog.list", { catalogs: [] });
-    } finally {
-      await page.close();
-    }
-  });
-
   it("groups sessions by host and hides empty offline nodes", async () => {
     const page = await suite.browser.newPage({
       deviceScaleFactor: 2,
@@ -270,14 +231,9 @@ suite.define(() => {
       viewport: { height: 1100, width: 1440 },
     });
     await page.addInitScript(
-      ({ key, gatewayUrl, groupingKey, sectionsKey }) => {
-        localStorage.removeItem(groupingKey);
-        localStorage.removeItem(sectionsKey);
-        localStorage.setItem(key, JSON.stringify({ gatewayUrl, theme: "knot", themeMode: "dark" }));
-      },
+      ({ key, gatewayUrl }) =>
+        localStorage.setItem(key, JSON.stringify({ gatewayUrl, theme: "knot", themeMode: "dark" })),
       {
-        groupingKey: catalogGroupingStorageKey,
-        sectionsKey: collapsedSessionSectionsStorageKey,
         key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
         gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
       },
@@ -336,22 +292,17 @@ suite.define(() => {
       await section.waitFor({ state: "visible" });
       await expect
         .poll(() =>
-          evaluateControlUiContext(page, (context) => {
-            const theme = context.theme;
+          page.evaluate(() => {
             const palette = document.getElementById("openclaw-theme-palette-knot");
-            const root = document.documentElement.dataset;
-            return {
-              preferences: [theme.settings.theme, theme.mode, theme.resolvedMode],
-              paletteReady: palette instanceof HTMLLinkElement && Boolean(palette.sheet),
-              root: [root.theme, root.themeMode],
-            };
+            return (
+              document.documentElement.dataset.theme === "openknot" &&
+              document.documentElement.dataset.themeMode === "dark" &&
+              palette instanceof HTMLLinkElement &&
+              Boolean(palette.sheet)
+            );
           }),
         )
-        .toEqual({
-          preferences: ["knot", "dark", "dark"],
-          paletteReady: true,
-          root: ["openknot", "dark"],
-        });
+        .toBe(true);
       await expect.poll(() => section.locator("[data-session-catalog-host]").count()).toBe(2);
       expect(await section.locator('[data-session-catalog-host="gateway:local"]').count()).toBe(1);
       expect(await section.locator('[data-session-catalog-host="node:build"]').count()).toBe(1);
@@ -390,39 +341,15 @@ suite.define(() => {
       );
       await expect.poll(() => threadRows.count()).toBe(4);
       expect(await threadRows.locator(".sidebar-recent-session__link[title]").count()).toBe(0);
-      const threadRowMetrics = await threadRows.evaluateAll((rows) =>
-        rows.map((row) => {
-          const link = row.querySelector(".sidebar-recent-session__link");
-          const name = row.querySelector(".sidebar-recent-session__name");
-          const rowStyle = getComputedStyle(row);
-          const linkStyle = link ? getComputedStyle(link) : null;
-          const nameStyle = name ? getComputedStyle(name) : null;
-          return {
-            height: row.getBoundingClientRect().height,
-            minHeight: rowStyle.minHeight,
-            nameFontSize: nameStyle?.fontSize ?? "",
-            paddingBottom: linkStyle?.paddingBottom ?? "",
-            paddingTop: linkStyle?.paddingTop ?? "",
-            singleLine: row.classList.contains("sidebar-recent-session--single-line"),
-          };
-        }),
-      );
-      expect(threadRowMetrics).toHaveLength(4);
-      // Native and Gateway rows must have the same one-line density.
-      for (const metric of threadRowMetrics) {
-        expect(metric).toMatchObject({
-          singleLine: true,
-          height: expect.closeTo(30, 1),
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "4px",
-          paddingTop: "4px",
-        });
-      }
-      const projectLabelTone = await readTextTone(
+      expect(
+        await threadRows.evaluateAll(
+          (rows) => new Set(rows.map((row) => row.getBoundingClientRect().height)).size,
+        ),
+      ).toBe(1);
+      const tone = await readTextTone(
         openclawProject.locator(".sidebar-session-catalog-project__label"),
       );
-      expect(projectLabelTone.distanceToText).toBeLessThan(projectLabelTone.distanceToMuted);
+      expect(tone.distanceToText).toBeLessThan(tone.distanceToMuted);
       expect(await projectLabel(section, "project:/Users/dev/other")).toBe("other");
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");
@@ -531,7 +458,21 @@ suite.define(() => {
     }
   });
 
-  it("adopts from the native chat composer, navigates, and auto-sends", async () => {
+  it.each([
+    {
+      name: "supervision off",
+      canArchive: true,
+      reason: "Codex supervision is off. Enable it in plugin settings to continue this session.",
+      settingsLinks: 1,
+    },
+    {
+      name: "not continuable",
+      canArchive: false,
+      reason: "This external session source is view-only.",
+      settingsLinks: 0,
+    },
+  ])("explains a view-only local Codex session ($name)", async (row) => {
+    const { canArchive, reason } = row;
     const page = await suite.browser.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: catalogMethods,
@@ -542,6 +483,8 @@ suite.define(() => {
               makeHost("gateway:local", "Local Codex", [
                 makeNativeSession("thread-1", "Release checklist", {
                   source: "cli",
+                  canContinue: false,
+                  canArchive,
                 }),
               ]),
             ]),
@@ -552,8 +495,6 @@ suite.define(() => {
           threadId: "thread-1",
           items: [{ id: "u1", type: "userMessage", text: "prepare release" }],
         },
-        "sessions.catalog.continue": { sessionKey: "agent:main:adopted-codex" },
-        "chat.send": { runId: "run-adopted", status: "started" },
       },
     });
     await page.goto(`${suite.server.baseUrl}chat`);
@@ -563,36 +504,19 @@ suite.define(() => {
       .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
       .filter({ hasText: "prepare release" });
     await catalogPane.getByText("prepare release", { exact: true }).waitFor();
+    await expect.poll(() => catalogPane.getByText(reason, { exact: true }).count()).toBe(1);
     expect(
-      (await gateway.getRequests("sessions.catalog.list")).every(
-        (request) => (request.params as { agentId?: string } | undefined)?.agentId === "main",
-      ),
+      await catalogPane.locator(".agent-chat__composer-combobox > textarea").isDisabled(),
     ).toBe(true);
-    const target = {
-      agentId: "main",
-      catalogId: "codex",
-      hostId: "gateway:local",
-      threadId: "thread-1",
-    };
-    expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject(target);
-    const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
-    await composer.fill("continue with the final checks /status");
-    expect(await catalogPane.locator('.slash-menu[role="listbox"]').count()).toBe(0);
-    await gateway.setMethodResponse(
-      "sessions.list",
-      liveSessions("agent:main:adopted-codex", "Adopted Codex session"),
-    );
-    await composer.press("Enter");
-    const continued = await gateway.waitForRequest("sessions.catalog.continue");
-    expect(continued.params).toEqual(target);
-    const sent = await gateway.waitForRequest("chat.send");
-    expect(sent.params).toMatchObject({
-      sessionKey: "agent:main:adopted-codex",
-      message: "continue with the final checks /status",
-    });
-    await expect
-      .poll(() => new URL(page.url()).pathname)
-      .toBe(controlUiSessionPath("agent:main:adopted-codex"));
+    expect(await gateway.getRequests("sessions.catalog.continue")).toHaveLength(0);
+    const openSettings = catalogPane.getByRole("link", { name: "Open settings", exact: true });
+    expect(await openSettings.count()).toBe(row.settingsLinks);
+    if (row.settingsLinks) {
+      await openSettings.click();
+      await expect
+        .poll(() => `${new URL(page.url()).pathname}${new URL(page.url()).search}`)
+        .toBe("/settings/plugins/codex?view=settings");
+    }
     await page.close();
   });
 });

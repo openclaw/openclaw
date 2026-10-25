@@ -124,3 +124,21 @@ export function freezeTrustedJsonSnapshot<T>(value: T): T {
   boundFrozenPlainData(value);
   return value;
 }
+
+/** Reuse a pure projection only while its entire source graph is immutable. */
+export function memoizeFrozenPlainDataProjection<T extends object, R>(
+  project: (source: T) => R,
+): (source: T) => R {
+  const projections = new WeakMap<T, R>();
+  return (source) => {
+    if (projections.has(source)) {
+      return projections.get(source)!;
+    }
+    if (!isDeeplyFrozenPlainData(source)) {
+      return project(source);
+    }
+    const projected = freezeJsonSnapshot(project(source));
+    projections.set(source, projected);
+    return projected;
+  };
+}

@@ -24,6 +24,7 @@ const manifests = [
     id: "openai",
     providers: ["openai"],
     activation: { onAgentHarnesses: ["codex"] },
+    providerEndpoints: [{ endpointClass: "openai-public", hosts: ["api.openai.com"] }],
     setup: { providers: [{ id: "openai" }] },
   }),
   owner({
@@ -76,6 +77,7 @@ describe("activation planner", () => {
     [{ kind: "agentHarness", runtime: "codex" }, ["openai"]],
     [{ kind: "route", route: "webhook" }, ["demo-channel"]],
     [{ kind: "provider", provider: "openai" }, ["openai"]],
+    [{ kind: "provider", provider: "openai-public" }, ["openai"]],
     [{ kind: "channel", channel: "telegram" }, ["demo-channel"]],
   ])("selects manifest owners for %j", (trigger, expected) => {
     expect(ids(trigger)).toEqual(expected);

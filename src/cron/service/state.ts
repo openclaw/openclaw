@@ -11,6 +11,7 @@ import type { ReplyOperationObservation } from "../../sessions/reply-operation-s
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
@@ -115,6 +116,12 @@ export type CronServiceDeps = {
     ownSessionKey?: string,
     ownReplyOperation?: ReplyOperationObservation,
   ) => boolean;
+  /**
+   * Loaded plugin instances that can serve requester-command schedules. The claim re-arms a
+   * restartable schedule from an earlier Gateway process onto a matching one; without it, such
+   * schedules retire at their next occurrence.
+   */
+  resolvePluginCommandScheduleHosts?: () => PluginCommandScheduleHost[];
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
   /**
@@ -528,7 +535,10 @@ export type CronAddInput = CronJobCreate;
 export type CronAddOptions = {
   /** Validated host invocation facts; immutable after fresh command-job creation. */
   pluginCommand?: CronStoredJob["pluginCommand"];
+  /** Captured source digest of the admitting plugin instance; enables restart continuity. */
+  pluginCommandSourceDigest?: string;
   operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
+  operatorSourceExecutionRevision?: string;
   inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Logical sandbox target captured from the admitted creator, never public input. */
@@ -561,6 +571,8 @@ export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = Pick<
   CronAddOptions,
+  | "operatorSource"
+  | "operatorSourceExecutionRevision"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"
   | "commitGuard"

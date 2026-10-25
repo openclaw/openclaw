@@ -22,7 +22,6 @@ import {
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 import { MemoryManagerReindexOps } from "./manager-reindex-ops.js";
 import {
-  resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexIdentityState,
 } from "./manager-reindex-state.js";
@@ -100,6 +99,19 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
       ...request,
     });
+  }
+
+  protected resolveConfiguredFallbackProvider() {
+    const currentProviderId = resolveFallbackCurrentProviderId({
+      provider: this.provider,
+      lifecycle: this.providerLifecycle,
+    });
+    const fallbackRequest = resolveMemoryFallbackProviderRequest({
+      cfg: this.cfg,
+      settings: this.settings,
+      currentProviderId,
+    });
+    return { currentProviderId, fallbackRequest };
   }
 
   private createSyncProgress(
@@ -229,11 +241,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
         providerKey: syncProviderKey ?? undefined,
         providerAliases: syncProviderIdentities.slice(1),
         configuredSources: resolveConfiguredSourcesForMeta(this.sources),
-        configuredScopeHash: resolveConfiguredScopeHash({
-          workspaceDir: this.workspaceDir,
-          extraPaths: this.settings.extraPaths,
-          multimodal: this.settings.multimodal,
-        }),
+        configuredScopeHash: this.resolveConfiguredMemoryScopeHash(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
         vectorReady,
@@ -414,7 +422,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
       throw err;
     } finally {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
-      // Full rebuild failures (including forced preflight) leave the primary alone.
+      // Full rebuilds finalize their cache with the shadow; preflight failures have no shadow work.
       if (!needsFullReindex) {
         await this.pruneEmbeddingCacheIfNeeded();
       }
@@ -503,15 +511,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
   }
 
   private async activateFallbackProviderOnce(reason: string): Promise<boolean> {
-    const currentProviderId = resolveFallbackCurrentProviderId({
-      provider: this.provider,
-      lifecycle: this.providerLifecycle,
-    });
-    const fallbackRequest = resolveMemoryFallbackProviderRequest({
-      cfg: this.cfg,
-      settings: this.settings,
-      currentProviderId,
-    });
+    const { currentProviderId, fallbackRequest } = this.resolveConfiguredFallbackProvider();
     if (!fallbackRequest || !currentProviderId) {
       return false;
     }

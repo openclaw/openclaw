@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionGoal } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import { ChatActivityPills } from "./chat-activity-pills.tsx";
@@ -32,11 +33,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   cleanupSolid();
-  if (fontsDescriptor) {
-    Object.defineProperty(document, "fonts", fontsDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "fonts");
-  }
+  restorePropertyDescriptor(document, "fonts", fontsDescriptor);
 });
 
 function mountPills(initial: ChatActivityPillsProps) {
@@ -88,7 +85,6 @@ it("preserves Markdown-only progress refresh outcomes and clears them after reco
       updatedAt: 1,
       markdown: "Release notes preserved",
     },
-    showInChat: true,
     hasActiveRun: false,
     onOpen,
   };

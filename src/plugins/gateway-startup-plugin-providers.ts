@@ -401,8 +401,9 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 export function collectRegisteredEmbeddingProviderIds(
   registry: Partial<Pick<PluginRegistry, "embeddingProviders">>,
 ): Set<string> {
-  return new Set([
-    ...(registry.embeddingProviders ?? []).map((entry) => entry.provider.id),
-    ...listRegisteredEmbeddingProviders().map((entry) => entry.adapter.id),
-  ]);
+  const providers = [
+    ...(registry.embeddingProviders ?? []).map((entry) => entry.provider),
+    ...listRegisteredEmbeddingProviders().map((entry) => entry.adapter),
+  ];
+  return new Set(providers.flatMap(({ id, aliases }) => [id].concat(aliases ?? [])));
 }

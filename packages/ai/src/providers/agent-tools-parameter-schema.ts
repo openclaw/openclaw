@@ -3,7 +3,10 @@
  * Handles local JSON Schema refs, OpenAPI nullable syntax, top-level unions,
  * and provider-specific unsupported keyword stripping.
  */
-import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isRecord as isSchemaRecord,
+  isStringArray,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   filterStringEntries,
@@ -85,10 +88,6 @@ export type ToolParameterSchemaOptions = {
 
 const toolParameterSchemaCache = createToolSchemaNormalizationCache<TSchema>();
 
-function isGeminiModelId(modelId: string): boolean {
-  return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);
-}
-
 function extractEnumValues(schema: unknown, requireAllVariants = false): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
     return undefined;
@@ -158,16 +157,10 @@ function mergePropertySchemas(
     // The caller checks every alternative before allowing a free string to
     // absorb presets, so a later non-string branch cannot discard those presets.
     if (allowUnconstrainedString) {
-      if (
-        existingEnum?.every((value) => typeof value === "string") &&
-        isUnconstrainedStringSchema(incoming)
-      ) {
+      if (isStringArray(existingEnum) && isUnconstrainedStringSchema(incoming)) {
         return { ...incoming, ...merged };
       }
-      if (
-        incomingEnum?.every((value) => typeof value === "string") &&
-        isUnconstrainedStringSchema(existing)
-      ) {
+      if (isStringArray(incomingEnum) && isUnconstrainedStringSchema(existing)) {
         return { ...existing, ...merged };
       }
     }
@@ -294,7 +287,7 @@ export function normalizeToolParameterSchema(
   const isGeminiProvider =
     normalizedProvider.includes("google") ||
     normalizedProvider.includes("gemini") ||
-    isGeminiModelId(normalizedModelId) ||
+    /(?:^|[/:])gemini(?:$|[-/:.])/.test(normalizedModelId) ||
     normalizedToolSchemaProfile === "gemini";
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const isLlamacppGbnfProfile = normalizedToolSchemaProfile === "llamacpp";
@@ -410,8 +403,7 @@ export function normalizeToolParameterSchema(
       alternatives.every(
         (alternative) =>
           isUnconstrainedStringSchema(alternative) ||
-          extractEnumValues(alternative, true)?.every((value) => typeof value === "string") ===
-            true,
+          isStringArray(extractEnumValues(alternative, true)),
       );
     let merged = Object.hasOwn(mergedProperties, key) ? mergedProperties[key] : undefined;
     for (const alternative of alternatives) {

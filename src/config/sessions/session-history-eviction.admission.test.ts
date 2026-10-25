@@ -22,6 +22,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntryReadOnly, loadTranscriptEventsSync } from "./session-accessor.js";
 import { createWorkerSqliteIntegrityGate } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import { observeNativeSqliteIntegrityChecks } from "./session-accessor.sqlite-native-integrity.test-support.js";
 import {
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
@@ -171,27 +172,8 @@ it.each([
     hook.integrityGate = integrityGate;
     releases.push(() => releaseBlocker.resolve(), integrityGate.release);
 
-    vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
-      const opened = realOpen(pathname, openOptions);
-      if (pathname !== database.path || openOptions?.readOnly) {
-        return opened;
-      }
-      const prepare = opened.prepare.bind(opened);
-      opened.prepare = (sql) => {
-        const statement = prepare(sql);
-        if (
-          sql === "PRAGMA integrity_check;" ||
-          sql === "PRAGMA integrity_check('sqlite_schema');"
-        ) {
-          const all = statement.all.bind(statement);
-          statement.all = () => {
-            parentChecks += Number(observingAdmission);
-            return all();
-          };
-        }
-        return statement;
-      };
-      return opened;
+    observeNativeSqliteIntegrityChecks(database.path, () => {
+      parentChecks += Number(observingAdmission);
     });
     const beforePreparation = async () => {
       hook.beforePlan = undefined;

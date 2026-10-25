@@ -13,6 +13,7 @@ import {
   captureRemoteModelCatalogStartupSnapshot as captureStartup,
   prepareRemoteModelCatalogStartupSnapshot as prepareStartup,
   publishRemoteModelCatalogSnapshot as publishSnapshot,
+  readRemoteModelCatalogProviderRecommendations as readRecommendations,
   readRemoteModelCatalogUpdate as readUpdate,
   withRemoteModelCatalogSnapshot as withSnapshot,
   getActiveRemoteModelCatalog as activeCatalog,
@@ -132,6 +133,33 @@ describe("remote model catalog overlay", () => {
       expect(overlay()?.models).toEqual([{ id: "downloaded" }]);
     },
   );
+
+  it("reads stored recommendations even when the catalog is older than the build", async () => {
+    builtAt.mockReturnValue(300);
+    stageBundle({
+      schemaVersion: 2,
+      generatedAt: 200,
+      minVersion: "2026.7.0",
+      sourceCommit: "recommendation-test",
+      providers: { anthropic: { recommendedModels: ["first", "second"] } },
+      models: [
+        {
+          id: "first",
+          provider: "anthropic",
+          pricing: {
+            status: "known",
+            currency: "USD",
+            unit: "million_tokens",
+            input: 1,
+            output: 2,
+          },
+        },
+      ],
+    });
+    expect(await readUpdate({})).toBeUndefined();
+    expect(await readRecommendations({}, "anthropic")).toEqual(["first"]);
+    expect(await readRecommendations(disabledConfig, "anthropic")).toBeUndefined();
+  });
 
   it("does not adopt a stored bundle belonging to another source", async () => {
     const previous = await prepareStartup();

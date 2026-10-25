@@ -9,8 +9,8 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import type { MsgContext } from "../templating.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
+import { buildSessionCommandTestParams } from "./commands-session-params.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-soft-reset-tombstone-");
 
@@ -80,10 +80,8 @@ function buildResetParams(
     ...ctxOverrides,
   } as MsgContext;
 
-  return {
-    ctx,
-    cfg,
-    command: {
+  return buildSessionCommandTestParams(
+    {
       rawBodyNormalized: commandBody.trim(),
       commandBodyNormalized: commandBody.trim(),
       isAuthorizedSender: true,
@@ -97,20 +95,14 @@ function buildResetParams(
       to: ctx.To ?? "bot",
       resetHookTriggered: false,
     },
-    directives: parseInlineSessionDirectives(""),
-    elevated: { enabled: true, allowed: true, failures: [] },
-    sessionKey: "agent:main:main",
-    agentId: "main",
-    workspaceDir: "/tmp/openclaw-commands",
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: "whatsapp",
-    model: "test-model",
-    contextTokens: 0,
-    isGroup: false,
-  };
+    {
+      ctx,
+      cfg,
+      workspaceDir: "/tmp/openclaw-commands",
+      provider: "whatsapp",
+      model: "test-model",
+    },
+  );
 }
 
 function buildAcpResetParams(command: string) {

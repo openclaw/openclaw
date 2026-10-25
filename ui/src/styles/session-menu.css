@@ -123,8 +123,13 @@
   font-size: 10px;
 }
 
+/* Icon templates only carry paths; without an explicit stroke rule the SVGs
+   render as solid black fills (invisible-blob chips in dark mode). */
 .session-menu__icon svg,
-.session-menu__check svg {
+.session-menu__check svg,
+.new-session-page__trigger-chevron svg,
+.new-session-page__target-icon svg,
+.new-session-page__browser-nav svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -232,7 +237,8 @@
   color: var(--text);
 }
 
-.session-menu__communication-choice:focus-visible {
+.session-menu__communication-choice:focus-visible,
+.chat-controls__speed-option:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

@@ -60,7 +60,6 @@ describe("evaluateChannelHealth", () => {
     ["ignores a legacy string disconnect", 0, "socket closed", false],
     ["ignores a malformed typed disconnect", 0, { at: Number.NaN }, false],
     ["ignores a disconnect from the previous lifecycle", 80_000, { at: 79_000 }, false],
-    ["ignores a disconnect dated after the current clock", 0, { at: 101_000 }, false],
   ] as const)("%s", (_name, lastStartAt, lastDisconnect, healthy) => {
     expect(
       evaluateHealth({

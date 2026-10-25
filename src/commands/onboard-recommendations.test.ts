@@ -12,6 +12,7 @@ import {
   onboardRecommendationsCommand,
   refreshOnboardRecommendationsCommand,
 } from "./onboard-recommendations.js";
+import { createTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -30,14 +31,6 @@ vi.mock("../state/onboarding-recommendations.js", async (importOriginal) => {
     createOnboardingRecommendationsStore: vi.fn(actual.createOnboardingRecommendationsStore),
   };
 });
-
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 function chatMatch(): OnboardingRecommendationsRecord["matches"][number] {
   return {

@@ -254,12 +254,7 @@ export async function inspectUnknownListener(params: {
   classifyPortListener.mockReturnValue("unknown");
   return inspectGatewayRestartWithSnapshot({
     runtime: params.runtime,
-    portUsage: {
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 10920, command: "unknown" }],
-      hints: [],
-    },
+    portUsage: portUsage([{ pid: 10920, command: "unknown" }]),
   });
 }
 
@@ -272,12 +267,7 @@ export async function inspectAmbiguousOwnershipWithProbe(error?: Error) {
   }
   return inspectGatewayRestartWithSnapshot({
     runtime: { status: "running", pid: 8000 },
-    portUsage: {
-      port: 18789,
-      status: "busy",
-      listeners: [{ commandLine: "" }],
-      hints: [],
-    },
+    portUsage: portUsage([{ commandLine: "" }]),
   });
 }
 
@@ -288,12 +278,7 @@ export async function waitForStoppedFreeGatewayRestart(
 ) {
   const attempts = process.platform === "win32" ? 360 : 120;
   const service = makeGatewayService({ status: "stopped" });
-  inspectPortUsage.mockResolvedValue({
-    port: 18789,
-    status: "free",
-    listeners: [],
-    hints: [],
-  });
+  inspectPortUsage.mockResolvedValue(portUsage());
 
   const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
   return waitForGatewayHealthyRestart({
@@ -306,44 +291,27 @@ export async function waitForStoppedFreeGatewayRestart(
 }
 
 export function resetRestartHealthMocks() {
-  requestStartupProbe.mockReset();
-  requestStartupProbe.mockResolvedValue(null);
+  requestStartupProbe.mockReset().mockResolvedValue(null);
   requestReadinessProbe.mockReset();
   monotonicClock.nowMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicClock.nowMs);
-  inspectPortUsage.mockReset();
-  readBestEffortConfig.mockReset();
   // These transport-mocked lifecycle tests spoof OS state; they must not load
   // native credential storage under a platform different from the running host.
-  readBestEffortConfig.mockResolvedValue({ gateway: { auth: { mode: "none" } } });
-  createConfigIO.mockReset();
-  createConfigIO.mockReturnValue({
+  readBestEffortConfig.mockReset().mockResolvedValue({ gateway: { auth: { mode: "none" } } });
+  createConfigIO.mockReset().mockReturnValue({
     readBestEffortConfig: () => readBestEffortConfig(),
   });
-  resolveGatewayProbeAuthSafeWithSecretInputs.mockReset();
-  resolveGatewayProbeAuthSafeWithSecretInputs.mockResolvedValue({ auth: {} });
-  inspectPortUsage.mockResolvedValue({
-    port: 0,
-    status: "free",
-    listeners: [],
-    hints: [],
-  });
-  sleep.mockReset();
-  sleep.mockImplementation(async (ms: number) => {
+  resolveGatewayProbeAuthSafeWithSecretInputs.mockReset().mockResolvedValue({ auth: {} });
+  inspectPortUsage.mockReset().mockResolvedValue(portUsage([], { port: 0 }));
+  sleep.mockReset().mockImplementation(async (ms: number) => {
     monotonicClock.nowMs += ms;
   });
-  classifyPortListener.mockReset();
-  classifyPortListener.mockReturnValue("gateway");
-  callGateway.mockReset();
-  callGateway.mockRejectedValue(new Error("connect ECONNREFUSED"));
-  hasActiveStartupMigrationLease.mockReset();
-  hasActiveStartupMigrationLease.mockReturnValue(false);
-  readActiveGatewayLockIdentity.mockReset();
-  readActiveGatewayLockIdentity.mockResolvedValue(undefined);
-  readGatewayOwnerLease.mockReset();
-  readGatewayOwnerLease.mockReturnValue(undefined);
-  resolveGatewayServiceProbeHosts.mockReset();
-  resolveGatewayServiceProbeHosts.mockResolvedValue(["127.0.0.1"]);
+  classifyPortListener.mockReset().mockReturnValue("gateway");
+  callGateway.mockReset().mockRejectedValue(new Error("connect ECONNREFUSED"));
+  hasActiveStartupMigrationLease.mockReset().mockReturnValue(false);
+  readActiveGatewayLockIdentity.mockReset().mockResolvedValue(undefined);
+  readGatewayOwnerLease.mockReset().mockReturnValue(undefined);
+  resolveGatewayServiceProbeHosts.mockReset().mockResolvedValue(["127.0.0.1"]);
 }
 
 export function restoreRestartHealthMocks() {

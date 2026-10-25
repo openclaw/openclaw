@@ -1,11 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createFeishuCardInteractionEnvelope, decodeFeishuCardAction } from "./card-interaction.js";
 
-const decode = (value: unknown, now?: number, chatId = "chat1") =>
-  decodeFeishuCardAction({
-    event: { operator: { open_id: "u123" }, context: { chat_id: chatId }, action: { value } },
-    now,
+const decode = (value: unknown, now?: number, chatId = "chat1") => {
+  using _ = vi.spyOn(Date, "now").mockReturnValue(now ?? Date.now());
+  return decodeFeishuCardAction({
+    operator: { open_id: "u123" },
+    context: { chat_id: chatId },
+    action: { value },
   });
+};
 
 describe("feishu card interaction decoder", () => {
   it("decodes valid structured payloads", () => {

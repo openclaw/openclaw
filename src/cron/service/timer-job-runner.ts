@@ -168,6 +168,7 @@ async function deliverPrimaryWebhook(
         status: result.status,
         error: result.error,
         summary: result.summary,
+        result: result.result,
         diagnostics: result.diagnostics,
         delivered: true,
         deliveryStatus: "delivered",

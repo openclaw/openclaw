@@ -135,6 +135,7 @@ export async function openChatPublication(page: Page | Locator): Promise<Locator
   }
   const branch = environment.locator(".chat-environment__branch");
   await branch.waitFor();
+  await branch.locator(".chat-pr__publication-actions").waitFor();
   const actions = branch.locator(".chat-pr__actions-trigger");
   if (await actions.count()) {
     if ((await actions.getAttribute("aria-expanded")) !== "true") {

@@ -59,7 +59,6 @@ describe("outbound", () => {
     vi.mocked(resolveTwitchAccountContext).mockImplementation((_cfg, accountId) => ({
       accountId: accountId?.trim() || "default",
       account,
-      tokenResolution: { token: account?.accessToken ?? "" },
       configured: account ? (params?.configured ?? true) : false,
       availableAccountIds: ["default"],
     }));
@@ -138,13 +137,19 @@ describe("outbound", () => {
       ["internal channel target", "twitch:channel:TestChannel", "testchannel"],
       ["internal channel target alias", "twitch-chat:channel:TestChannel", "testchannel"],
     ])("resolves %s to the bare channel", (_name, to, expected) => {
-      expectTarget({ to, allowFrom: [] }, expected);
+      expect(twitchOutbound.resolveTarget!({ to, allowFrom: [] })).toEqual({
+        ok: true,
+        to: expected,
+      });
     });
 
     it.each(["user:alice", "dm:alice", "twitch:user:alice", "twitch:dm:alice"])(
       "rejects unsupported direct target %s",
       (to) => {
-        expectTargetError({ to });
+        expect(twitchOutbound.resolveTarget!({ to })).toEqual({
+          ok: false,
+          error: expect.objectContaining({ message: expect.stringContaining("Twitch") }),
+        });
       },
     );
   });

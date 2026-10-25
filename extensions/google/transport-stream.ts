@@ -4,6 +4,7 @@ import {
   resolveProviderContext,
   type Context,
   type Model,
+  type ModelRequestHeaders,
   type ProviderCallStreamOptions,
   type ProviderContext,
   type ProviderModel,
@@ -20,6 +21,7 @@ import {
   providerOperationRetryConfig,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
   buildAssistantMessage,
   buildGoogleGenerationConfig,
@@ -63,7 +65,7 @@ type CanonicalGoogleTransportApi = "google-generative-ai" | "google-vertex";
 type GoogleTransportApi = CanonicalGoogleTransportApi | "openclaw-google-generative-ai-transport";
 
 type GoogleTransportModel = ProviderModel<GoogleTransportApi> & {
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   provider: string;
 };
 
@@ -355,7 +357,7 @@ function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
   );
 }
 
-function hasGoogleAuthHeader(headers: Record<string, string> | undefined): boolean {
+function hasGoogleAuthHeader(headers: ModelRequestHeaders | undefined): boolean {
   return Object.keys(headers ?? {}).some((name) => {
     const normalized = name.trim().toLowerCase();
     return normalized === "authorization" || normalized === "x-goog-api-key";
@@ -567,7 +569,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
         const openSse = async (apiKeyForRequest: string | undefined) => {
           const optionHeaders = options?.headers;
-          let requestHeaders: Record<string, string>;
+          let requestHeaders: ModelRequestHeaders;
           if (kind === "google-vertex") {
             const authHeaders = isGoogleVertexCredentialsMarker(apiKeyForRequest)
               ? await resolveGoogleVertexAuthorizedUserHeaders(fetchImpl)
@@ -615,7 +617,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
             options,
             guardedFetch,
             url: requestUrl,
-            headers: requestHeaders,
+            headers: omitNullRequestHeaders(requestHeaders) ?? {},
             request,
             videoSlots: trustedVideoSlots,
           };

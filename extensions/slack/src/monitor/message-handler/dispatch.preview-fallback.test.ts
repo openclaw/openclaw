@@ -54,6 +54,7 @@ import {
   createSlackPlatformError,
   expectMockCallArgFields,
   requireRecord,
+  type DeliveryParams,
 } from "./dispatch.preview.test-support.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -74,12 +75,6 @@ const HUMAN_THREAD_REPLY = {
 
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const createSlackDraftStreamMock = vi.fn();
-type DeliveryParams = Omit<
-  Parameters<typeof import("../replies.js").deliverReplies>[0],
-  "replies"
-> & {
-  replies: ReplyPayload[];
-};
 const normalDeliveryResult = {
   messageId: "normal-final",
   channelId: "C123",
@@ -990,7 +985,10 @@ it.each([
     const actualReplies = await vi.importActual<typeof import("../replies.js")>("../replies.js");
     const { prepareSlackReply } = await import("../../reply-blocks.js");
     deliverRepliesMock.mockImplementation(async (params) =>
-      actualReplies.deliverReplies({ ...params, replies: params.replies.map(prepareSlackReply) }),
+      actualReplies.deliverReplies({
+        ...params,
+        replies: params.replies.map((reply) => prepareSlackReply(reply)),
+      }),
     );
     sendMessageSlackMock.mockResolvedValue({
       messageId: "sent-1",
@@ -1771,14 +1769,10 @@ it.each<{
     name: "configured command truncation",
     progress: { label: "Shelling", maxLineChars: 12, nativeTaskCards: true, commandText: "raw" },
     events: [
-      {
-        kind: "tool_start",
-        itemId: "exec-call-1",
-        toolCallId: "tool-call-1",
-        name: "bash",
-        phase: "start",
-        args: { command: "1234567890abcdefghijklmnopqrstuvwxyz" },
-      },
+      toolStart(
+        { command: "1234567890abcdefghijklmnopqrstuvwxyz" },
+        { itemId: "exec-call-1", toolCallId: "tool-call-1" },
+      ),
     ],
     updates: [
       planUpdate("Shelling"),

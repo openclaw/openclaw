@@ -29,7 +29,7 @@ import {
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
-import { createMockApp } from "./messenger.test-helpers.js";
+import { createMockApp, createStoredReference } from "./messenger.test-helpers.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const chunkMarkdownText = (text: string, limit: number) => {
@@ -196,14 +196,7 @@ describe("msteams messenger", () => {
   });
 
   describe("sendMSTeamsMessages", () => {
-    const baseRef: StoredConversationReference = {
-      activityId: "activity123",
-      user: { id: "user123", name: "User" },
-      agent: { id: "bot123", name: "Bot" },
-      conversation: { id: "19:abc@thread.tacv2;messageid=deadbeef" },
-      channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
-    };
+    const baseRef = createStoredReference();
 
     async function sendAndCaptureThreadReference(params: {
       conversation: StoredConversationReference["conversation"];
@@ -212,15 +205,11 @@ describe("msteams messenger", () => {
     }) {
       const proactiveSent: string[] = [];
       let capturedConversationId: string | undefined;
-      const conversationRef: StoredConversationReference = {
+      const conversationRef = createStoredReference({
         activityId: params.activityId ?? "activity456",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
         conversation: params.conversation,
-        channelId: "msteams",
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
         ...(params.threadId ? { threadId: params.threadId } : {}),
-      };
+      });
 
       await sendMSTeamsMessages({
         replyStyle: "thread",
@@ -497,18 +486,14 @@ describe("msteams messenger", () => {
       const sent: string[] = [];
       let capturedConversationId: string | undefined;
 
-      const channelRef: StoredConversationReference = {
+      const channelRef = createStoredReference({
         activityId: "current-msg",
-        user: { id: "user123", name: "User" },
-        agent: { id: "bot123", name: "Bot" },
         conversation: {
           id: "19:abc@thread.tacv2",
           conversationType: "channel",
         },
-        channelId: "msteams",
-        serviceUrl: "https://smba.trafficmanager.net/amer/",
         threadId: "thread-root-msg-id",
-      };
+      });
 
       await sendMSTeamsMessages({
         replyStyle: "top-level",
@@ -573,14 +558,9 @@ describe("msteams messenger", () => {
   });
 
   describe("buildActivity AI metadata", () => {
-    const baseRef: StoredConversationReference = {
-      activityId: "activity123",
-      user: { id: "user123", name: "User" },
-      agent: { id: "bot123", name: "Bot" },
+    const baseRef = createStoredReference({
       conversation: { id: "conv123", conversationType: "personal" },
-      channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
-    };
+    });
 
     it("sends decoded attachment filenames over the Bot Framework HTTP transport", async () => {
       const receivedAttachments: Array<{ name: string; contentUrl: string }> = [];
@@ -636,10 +616,9 @@ describe("msteams messenger", () => {
   // when the Bot Framework connector does not see `tenantId` / `aadObjectId`
   // on the outbound conversation reference.
   describe("buildConversationReference tenant/aad forwarding (#58774)", () => {
-    const storedWithChannelDataTenant: StoredConversationReference = {
+    const storedWithChannelDataTenant = createStoredReference({
       activityId: "activity-1",
       user: { id: "user123", name: "User", aadObjectId: "aad-user-123" },
-      agent: { id: "bot123", name: "Bot" },
       conversation: {
         id: "19:abc@thread.tacv2",
         conversationType: "channel",
@@ -647,9 +626,7 @@ describe("msteams messenger", () => {
       // Canonical channelData source captured by message-handler inbound code.
       tenantId: "tenant-abc",
       aadObjectId: "aad-user-123",
-      channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
-    };
+    });
 
     it("accepts a legacy bot-only imported reference and resolves the agent from bot", () => {
       const botOnly: StoredConversationReference = {

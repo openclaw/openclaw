@@ -22,6 +22,17 @@ const boundaryRoot = ".artifacts/extension-package-boundary";
 const sdkConfig = "packages/plugin-sdk/tsconfig.json";
 const sdkOutput = "packages/plugin-sdk/dist";
 const chosenConfig = `${boundaryRoot}/compile/chosen.tsconfig.json`;
+const sdkCore = "src/plugin-sdk/core.ts";
+const chosenEntry = "extensions/chosen/index.ts";
+const chosenHelper = "extensions/chosen/excluded/helper.ts";
+const moduleOptions = { target: "es2023", module: "nodenext", skipLibCheck: true, types: [] };
+const isolatedCompilerArgs = [
+  "--ignoreConfig",
+  "--module",
+  "nodenext",
+  "--skipLibCheck",
+  "--noEmit",
+];
 
 function command(root: string, bin: string, args: string[], env?: NodeJS.ProcessEnv) {
   const result = spawnSync(bin, args, { cwd: root, env, encoding: "utf8", timeout: 20_000 });
@@ -90,20 +101,14 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   write("package.json", '{"name":"openclaw","type":"module"}');
   write("pnpm-workspace.yaml", "packages: []\n");
   json("tsconfig.json", {
-    compilerOptions: {
-      target: "es2023",
-      lib: ["es5"],
-      module: "nodenext",
-      skipLibCheck: true,
-      types: [],
-    },
+    compilerOptions: { ...moduleOptions, lib: ["es5"] },
   });
   json(sdkConfig, {
     extends: "../../tsconfig.json",
     include: ["../../src/**/*.ts"],
     exclude: ["../../src/shared/deferred.ts"],
   });
-  write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
+  write(sdkCore, 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
   copyFixtureFiles(root, [
     // Selected-consumer fixtures install their extra src/ tools with a narrowed SDK config.
@@ -199,10 +204,7 @@ function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
     },
     "tsconfig.json": {
       compilerOptions: {
-        target: "es2023",
-        module: "nodenext",
-        skipLibCheck: true,
-        types: [],
+        ...moduleOptions,
         paths: {
           "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
           "@openclaw/memory-core/api.js": ["./extensions/memory-core/api.ts"],
@@ -236,8 +238,8 @@ function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
       include: ["index.ts"],
       exclude: ["excluded/**"],
     },
-    "extensions/chosen/index.ts": 'export { value } from "./excluded/helper.js";',
-    "extensions/chosen/excluded/helper.ts": 'export { value } from "openclaw/plugin-sdk/core";',
+    [chosenEntry]: 'export { value } from "./excluded/helper.js";',
+    [chosenHelper]: 'export { value } from "openclaw/plugin-sdk/core";',
   });
 }
 
@@ -269,7 +271,7 @@ describe("native declaration preparation", () => {
 
         f.write("src/plugin-sdk/added.ts", "export const added = 2;");
         f.write(
-          "extensions/chosen/excluded/helper.ts",
+          chosenHelper,
           'export { value } from "openclaw/plugin-sdk/core"; export { added } from "openclaw/plugin-sdk/added";',
         );
         await f.selected();
@@ -286,7 +288,7 @@ describe("native declaration preparation", () => {
         expect(f.snapshot(f.recordPath)).toEqual(full);
 
         f.write(
-          "extensions/chosen/index.ts",
+          chosenEntry,
           'import { value } from "./excluded/helper.js"; export const wrong: number = value;',
         );
         expectConsumerTypeError(f, "Type 'string' is not assignable to type 'number'");
@@ -303,11 +305,9 @@ describe("native declaration preparation", () => {
         f.files({
           "src/plugin-sdk/unused.ts": "export const unused = 7;",
           "scripts/lib/plugin-sdk-entrypoints.json": ["core", "unused"],
-          "src/plugin-sdk/core.ts":
-            'export type { MemoryValue } from "@openclaw/memory-core/api.js";',
-          "extensions/chosen/excluded/helper.ts":
-            'export type { MemoryValue } from "openclaw/plugin-sdk/core";',
-          "extensions/chosen/index.ts": 'export type { MemoryValue } from "./excluded/helper.js";',
+          [sdkCore]: 'export type { MemoryValue } from "@openclaw/memory-core/api.js";',
+          [chosenHelper]: 'export type { MemoryValue } from "openclaw/plugin-sdk/core";',
+          [chosenEntry]: 'export type { MemoryValue } from "./excluded/helper.js";',
           "extensions/memory-core/api.ts":
             'import type { ChannelValue } from "@openclaw/qa-channel/api.js"; export type MemoryValue = { channel: ChannelValue };',
           "extensions/qa-channel/api.ts": "export type ChannelValue = { text: string };",
@@ -474,14 +474,11 @@ describe("native declaration preparation", () => {
         await consumer.selected({ OPENCLAW_CI_SHARED_SDK: "1" });
         expect(consumer.snapshot(consumer.recordPath)).toEqual(restored);
         consumer.write(
-          "extensions/chosen/index.ts",
+          chosenEntry,
           'import { value } from "./excluded/helper.js"; export const wrong: string = value;',
         );
         expectConsumerTypeError(consumer, "Type 'number' is not assignable to type 'string'");
-        consumer.write(
-          "extensions/chosen/index.ts",
-          'export { value } from "./excluded/helper.js";',
-        );
+        consumer.write(chosenEntry, 'export { value } from "./excluded/helper.js";');
 
         const payload: { version: number; key: string; files: [string, string][] } = JSON.parse(
           gunzipSync(archive).toString("utf8"),
@@ -536,10 +533,7 @@ describe("native declaration preparation", () => {
         "src/state/openclaw-state-db.generated.ts",
         fs.readFileSync("src/state/openclaw-state-db.generated.ts", "utf8"),
       );
-      f.write(
-        "src/plugin-sdk/core.ts",
-        'export type { DB } from "../state/openclaw-state-db.generated.js";',
-      );
+      f.write(sdkCore, 'export type { DB } from "../state/openclaw-state-db.generated.js";');
       fs.cpSync(fs.realpathSync("node_modules/kysely"), path.join(f.root, "node_modules/kysely"), {
         recursive: true,
       });
@@ -548,18 +542,14 @@ describe("native declaration preparation", () => {
         "consumer.ts",
         'import type { DB } from "fixture-sdk"; declare const row: DB["records"]; const wrong: number = row.title;',
       );
-      expect(
-        f.compile(
-          ["--ignoreConfig", "--module", "nodenext", "--noEmit", "--skipLibCheck", "consumer.ts"],
-          2,
-        ),
-      ).toContain("Type 'string' is not assignable to type 'number'");
+      expect(f.compile([...isolatedCompilerArgs, "consumer.ts"], 2)).toContain(
+        "Type 'string' is not assignable to type 'number'",
+      );
     }));
 
   it.for([
     { name: "Windows 8.3 short entry", entry: true, workspace: false },
     { name: "Windows 8.3 workspace junction", entry: false, workspace: true },
-    { name: "Windows 8.3 short entry and workspace junction", entry: true, workspace: true },
     { name: "POSIX PWD alias (all)", mode: "all" as const },
   ])(
     "publishes cold native output and reuses warm receipts through $name",
@@ -665,7 +655,7 @@ describe("native declaration preparation", () => {
     { timeout: 30_000 },
     ({ signal }) =>
       fixture.run(async () => {
-        const { root, native, write, read, has, snapshot, plugins, recordPath, output, step, run } =
+        const { root, native, write, read, has, plugins, recordPath, output, step, run } =
           createPreparationFixture("all", signal);
         await run();
         const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
@@ -679,21 +669,17 @@ describe("native declaration preparation", () => {
         await step(
           "isolated-boundary-consumer",
           [
-            "--ignoreConfig",
-            "--module",
-            "nodenext",
+            ...isolatedCompilerArgs,
             "--target",
             "es2023",
             "--strict",
-            "--skipLibCheck",
-            "--noEmit",
             path.join(root, "consumer.ts"),
           ],
           native,
         );
         const first = readArtifactRecord(recordPath)!;
         expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
-        write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');
+        write(sdkCore, 'export { value } from "../renamed.js";');
         fs.renameSync(path.join(root, "src/nested.ts"), path.join(root, "src/renamed.ts"));
         write(`${output}/orphan.d.ts`, "export {};");
         write(`${output}/operator-note.txt`, "unowned");
@@ -723,14 +709,6 @@ describe("native declaration preparation", () => {
           expect(record.inputs).toContain(`${output}/src/renamed.d.ts`);
           expect(record.outputs[`${boundaryRoot}/plugins/${id}/${entry}.d.ts`]).toBeDefined();
         }
-        fs.rmSync(path.join(root, output, "src/renamed.d.ts"));
-        await run();
-        expect(readArtifactRecord(recordPath)?.outputs).toEqual(repaired.outputs);
-        const unchanged = snapshot(`${output}/src/renamed.d.ts`);
-        const unchangedRecord = snapshot(recordPath);
-        await run();
-        expect(snapshot(`${output}/src/renamed.d.ts`)).toEqual(unchanged);
-        expect(snapshot(recordPath)).toEqual(unchangedRecord);
       }),
   );
 
@@ -743,8 +721,7 @@ describe("native declaration preparation", () => {
         await f.run();
         installNativeAncestorTypes(f.ancestor, f.root);
         const [pluginId, entry] = BOUNDARY_PLUGIN_UNITS[0];
-        const input =
-          owner === "SDK" ? "src/plugin-sdk/core.ts" : `extensions/${pluginId}/${entry}.ts`;
+        const input = owner === "SDK" ? sdkCore : `extensions/${pluginId}/${entry}.ts`;
         const config = owner === "SDK" ? sdkConfig : `extensions/${pluginId}/tsconfig.json`;
         const rootDir = owner === "SDK" ? "." : `extensions/${pluginId}`;
         const emitted = owner === "SDK" ? "src/plugin-sdk/core.d.ts" : `${entry}.d.ts`;

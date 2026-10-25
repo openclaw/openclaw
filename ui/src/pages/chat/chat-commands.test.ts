@@ -10,17 +10,17 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  invalidateSessionSlashCommands,
+  refreshSlashCommands,
+} from "../../lib/chat/slash-command-catalog.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import {
   gatewayHelloForMethods,
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
-import {
-  applyRemoteSlashCommandsResult,
-  invalidateSessionSlashCommands,
-  dispatchChatSlashCommand,
-  refreshSlashCommands,
-} from "./chat-commands.ts";
+import { dispatchChatSlashCommand } from "./chat-commands.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
 function requireCommandByName(name: string) {
@@ -249,7 +249,7 @@ describe("local command loading", () => {
     const host = makeChatHost({ requestHandlers: {} });
     const pending = dispatchChatSlashCommand(host, "model", "example/model");
     host.connectionEpoch += 1;
-    await expect(pending).resolves.toBe("failed");
+    await expect(pending).resolves.toBe("cancelled");
     expect(host.request).not.toHaveBeenCalled();
     expect(host.chatMessages).toEqual([]);
   });
@@ -327,6 +327,7 @@ describe("conversation reset confirmation", () => {
       const host = resetHost(() => promise);
       host.hello = gatewayHelloForMethods(["sessions.reset"]);
       const pending = dispatchChatSlashCommand(host as never, "clear", "");
+      await vi.waitFor(() => expect(host.confirmConversationReset).toHaveBeenCalledOnce());
       if (change === "run") {
         host.chatRunId = "new-run";
       } else {

@@ -132,7 +132,7 @@ export function useSkillLibraryFixture() {
   return { fixture, tempDirs };
 }
 
-export async function beginZipUpload(
+async function beginZipUpload(
   authority: SkillLibraryAuthority,
   bytes: Buffer,
   slug: string,

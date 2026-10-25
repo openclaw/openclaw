@@ -41,7 +41,6 @@ import {
   captureConversationDeliveryTarget,
   markDurableDeliveryQueued,
 } from "./delivery-completion.js";
-import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
 import {
@@ -49,6 +48,7 @@ import {
   loadPendingDelivery,
   loadUnfinishedDelivery,
 } from "./delivery-queue-storage.js";
+import { holdEnqueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import {
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,

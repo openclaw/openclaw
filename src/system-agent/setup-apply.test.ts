@@ -97,8 +97,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
     await apply({
       expectedConfigHash: "probe",
-      expectedAgentId: "main",
-      expectedAgentDir: "/agents/main",
       expectedInferenceRoute: await projectInferenceRoute(runtimeConfig),
       firstAgent: firstTeam,
     });
@@ -230,7 +228,8 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     ["agent credential location", "openai/gpt-5.5", "main", "/agents/moved"],
   ] as const)(
     "rechecks the probed %s inside the final transform",
-    async (name, model, agentId, agentDir) => {
+    async (_name, model, agentId, agentDir) => {
+      const initial = mocks.state.initialSnapshot;
       const runtimeConfig = {
         agents: {
           defaults: { model: { primary: model } },
@@ -241,15 +240,15 @@ describe("applySystemAgentSetup transaction boundaries", () => {
         mocks.state.commitConfig = runtimeConfig;
       }
       mocks.state.commitSnapshot = snapshot("probe", runtimeConfig);
+      mocks.readVerifiedSnapshot.mockImplementation(
+        snapshotSequence(initial, mocks.state.commitSnapshot),
+      );
       await reject(
         {
           expectedConfigHash: "probe",
-          expectedAgentId: "main",
-          ...(agentDir
-            ? { expectedAgentDir: "/agents/main" }
-            : { expectedModelRef: "openai/gpt-5.5" }),
+          expectedInferenceRoute: await projectInferenceRoute(initial.config),
         },
-        `${name} changed`,
+        routeChanged,
         [],
         true,
       );

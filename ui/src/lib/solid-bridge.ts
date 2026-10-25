@@ -1,5 +1,5 @@
 import { insert, render, spread } from "@solidjs/web";
-import { createRoot, createSignal, onCleanup, runWithOwner } from "solid-js";
+import { createRoot, createSignal, onCleanup } from "solid-js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { registerRouteElement } from "../app/route-elements.ts";
 import { shellLayoutOwnerForHost } from "../app/shell-layout-owner.ts";
@@ -218,7 +218,7 @@ export function defineSolidBridge<Props extends object, Methods extends object =
             this.#connectContext();
           }
           if (!this.#dispose) {
-            runWithOwner(null, () => this.#mount());
+            this.#mount();
           }
         }
         return true;
@@ -241,12 +241,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
       this.#mountedApplication = this.#application;
       const layout = !this.#solidOwned ? shellLayoutOwnerForHost(this) : undefined;
       const view = () => {
-        const props = {
-          ...defaults,
-          get children() {
-            return children ? children() : source;
-          },
-        };
+        // Spreading defaults can let V8 retain old view getters through shared descriptors.
+        const props: Record<string, unknown> = {};
         for (const [key] of properties) {
           // Wrap callable values so Solid treats callbacks as data, not computations.
           const [value, setValue] = createSignal(
@@ -255,14 +251,24 @@ export function defineSolidBridge<Props extends object, Methods extends object =
           );
           this.#publish.set(key, () => setValue({ value: this.#values.get(key) }));
           Object.defineProperty(props, key, {
+            enumerable: true,
+            configurable: true,
             get: () => {
               value();
               return this.#values.get(key);
             },
           });
         }
+        if (!declarations.has("children")) {
+          Object.defineProperty(props, "children", {
+            enumerable: true,
+            configurable: true,
+            get: () => (children ? children() : source),
+          });
+        }
         return renderSolidBridgeView(
-          () => content(props, this.#host),
+          // SAFETY: Each declared property was materialized with its live getter above.
+          () => content(props as Props & { children?: JSX.Element }, this.#host),
           this.#application,
           layout,
           this,

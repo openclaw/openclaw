@@ -55,25 +55,6 @@ export function assignPositiveNumberAttr(
   }
 }
 
-function modelCallPromptTokens(usage: {
-  promptTokens?: number;
-  input?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-}): number | undefined {
-  const promptTokens = asNonNegativeFiniteNumber(usage.promptTokens);
-  if (promptTokens !== undefined) {
-    return promptTokens;
-  }
-  const input = asNonNegativeFiniteNumber(usage.input);
-  const cacheRead = asNonNegativeFiniteNumber(usage.cacheRead);
-  const cacheWrite = asNonNegativeFiniteNumber(usage.cacheWrite);
-  if (input === undefined && cacheRead === undefined && cacheWrite === undefined) {
-    return undefined;
-  }
-  return (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
-}
-
 export function assignModelCallPromptStatsAttrs(
   attrs: Record<string, string | number | boolean>,
   evt: Pick<Extract<DiagnosticEventPayload, { type: "model.call.started" }>, "promptStats">,
@@ -101,7 +82,20 @@ export function assignModelCallUsageAttrs(
   attrs: Record<string, string | number | boolean>,
   evt: Pick<ModelCallLifecycleDiagnosticEvent, "usage">,
 ): void {
-  assignModelUsageAttrs(attrs, evt.usage, evt.usage && modelCallPromptTokens(evt.usage));
+  const usage = evt.usage;
+  if (!usage) {
+    return;
+  }
+  let promptTokens = asNonNegativeFiniteNumber(usage.promptTokens);
+  if (promptTokens === undefined) {
+    const input = asNonNegativeFiniteNumber(usage.input);
+    const cacheRead = asNonNegativeFiniteNumber(usage.cacheRead);
+    const cacheWrite = asNonNegativeFiniteNumber(usage.cacheWrite);
+    if (input !== undefined || cacheRead !== undefined || cacheWrite !== undefined) {
+      promptTokens = (input ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
+    }
+  }
+  assignModelUsageAttrs(attrs, usage, promptTokens);
 }
 
 export function assignModelResponseUsageAttrs(

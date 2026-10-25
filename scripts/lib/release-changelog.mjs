@@ -343,6 +343,18 @@ function versions(reader, state) {
   return [...new Set(result)].toSorted(newestFirst);
 }
 
+/**
+ * Every release changelog artifact with its repository-relative path, for line-level lints.
+ * @param {ChangelogSource} params
+ * @returns {Array<{ path: string, content: string }>}
+ */
+export function readReleaseChangelogFiles(params) {
+  const reader = sourceReader(params);
+  return reader.files
+    .filter((name) => isReleaseChangelogPath(name))
+    .map((name) => ({ path: name, content: reader.read(name) ?? "" }));
+}
+
 /** @param {ChangelogSource & { recordsOnly?: boolean }} params */
 export function loadChangelogCollection(params) {
   const reader = sourceReader(params);

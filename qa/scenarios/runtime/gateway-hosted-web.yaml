@@ -8,14 +8,14 @@ scenario:
       - gateway.admin-api-access
       - gateway.control-ui
       - gateway.plugin-web-routes
-      - gateway.canvas-and-a2ui-routes
-  objective: Prove that one authenticated Gateway listener serves its Control UI, public admin route, and Canvas-owned A2UI renderer assets.
+      - gateway.canvas-routes
+  objective: Prove that one authenticated Gateway listener serves its Control UI, public admin route, and persisted HTML Canvas documents.
   successCriteria:
     - The Gateway serves real Control UI HTML with its security headers.
     - The opt-in admin HTTP RPC route rejects unauthenticated requests and dispatches health through the live Gateway context.
-    - Public admin and Canvas plugin entrypoints register routes that win before the Control UI fallback.
+    - The public admin plugin and core Canvas document routes win before the Control UI fallback.
     - A real operator WebSocket receives a capability-scoped Canvas surface URL.
-    - Both capability-scoped A2UI renderer bundles work, while wrong and expired capabilities are rejected.
+    - Capability-scoped HTML Canvas documents work, while wrong and expired capabilities are rejected.
   docsRefs:
     - docs/gateway/index.md
     - docs/plugins/admin-http-rpc.md
@@ -24,10 +24,11 @@ scenario:
   codeRefs:
     - extensions/admin-http-rpc/index.ts
     - extensions/canvas/index.ts
+    - src/canvas/serve.runtime.ts
     - src/gateway/server-runtime-state.ts
     - src/gateway/server/ws-connection/connect-session.ts
     - test/e2e/qa-lab/runtime/gateway-hosted-web.e2e.test.ts
   execution:
     kind: vitest
     path: test/e2e/qa-lab/runtime/gateway-hosted-web.e2e.test.ts
-    summary: Start a real token-authenticated Gateway and exercise Control UI, admin RPC, and capability-scoped A2UI renderer assets.
+    summary: Start a real token-authenticated Gateway and exercise Control UI, admin RPC, and capability-scoped HTML Canvas documents.

@@ -200,6 +200,7 @@ export async function executeNodeClaudeRun(params: {
             : {}),
           ...(params.nodeEnv ? { env: params.nodeEnv } : {}),
           ...(params.nodeClearEnv ? { clearEnv: params.nodeClearEnv } : {}),
+          ...(contextParams.nativeAuthOnly ? { nativeAuthOnly: true } : {}),
           ...(contextParams.agentId ? { agentId: contextParams.agentId } : {}),
           ...(contextParams.sessionKey ? { sessionKey: contextParams.sessionKey } : {}),
           ...(approval

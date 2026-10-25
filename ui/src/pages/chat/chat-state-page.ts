@@ -315,7 +315,7 @@ export function createPageState(
     async () => {
       let config = currentDisplaySpeechConfig(context.runtimeConfig.state);
       if (!config || !Object.hasOwn(config, "tts")) {
-        await context.runtimeConfig.ensureLoaded();
+        await context.runtimeConfig.ensureDisplayLoaded();
         config = currentDisplaySpeechConfig(context.runtimeConfig.state);
       }
       return resolveSpeechTextLimit(config);
@@ -407,7 +407,7 @@ export function createPageState(
       transientResources.clear();
       transientResourceScope = scope;
     }
-    const normalized = normalizeSidebarLayout(layout);
+    let normalized = normalizeSidebarLayout(layout);
     // New tab is a live layout fact, not a saved resource or settings schema.
     // The persistence normalizer deliberately strips it again below.
     if (layout.newTab && normalized.columns[0]) {
@@ -434,6 +434,12 @@ export function createPageState(
       if (!panel || panel.environmentId !== undefined) {
         transientResources.delete(resource);
       }
+    }
+    const retiringResource = options?.retireAutomaticResource;
+    if (retiringResource && transientResources.has(retiringResource)) {
+      // Discovery can retire only its own transient tab, never an explicit target.
+      normalized = closeSlot(normalized, retiringResource);
+      transientResources.delete(retiringResource);
     }
     if (
       previous.resourceAutoOpenDismissed ||

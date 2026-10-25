@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type {
@@ -7,8 +8,10 @@ import type {
   ModelAuthStatusProfile,
   ModelAuthStatusProvider,
 } from "../../api/types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
+import { ContextNotice } from "./components/chat-composer-context.tsx";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
 
@@ -48,6 +51,53 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer context usage", () => {
+  it("reads provider costs only while the usage popover is open", () => {
+    let costReads = 0;
+    const message = (output: number) => ({
+      role: "assistant",
+      provider: "example",
+      get cost() {
+        costReads += 1;
+        return { output };
+      },
+    });
+    const [messages, setMessages] = createSignal([message(0.01)]);
+    const view = mountSolid(() =>
+      createComponent(ContextNotice, {
+        session: sessionRow({ totalTokens: 1_000, contextTokens: 200_000, estimatedCostUsd: 0.03 }),
+        get messages() {
+          return messages();
+        },
+      }),
+    );
+    flush();
+    const toggle = () => {
+      view.container.querySelector<HTMLElement>(".context-usage summary")!.click();
+      flush();
+    };
+    try {
+      expect(costReads).toBe(0);
+      toggle();
+      expect(view.container.textContent).toContain("$0.03");
+      expect(
+        view.container.querySelector(".context-usage__stats [title]")?.getAttribute("title"),
+      ).toBe("Output $0.01");
+      expect(costReads).toBe(1);
+      toggle();
+      setMessages([message(0.02)]);
+      flush();
+      expect(costReads).toBe(1);
+      toggle();
+      expect(view.container.textContent).toContain("$0.03");
+      expect(
+        view.container.querySelector(".context-usage__stats [title]")?.getAttribute("title"),
+      ).toBe("Output $0.02");
+      expect(costReads).toBe(2);
+    } finally {
+      view.unmount();
+    }
+  });
+
   it("uses the last-run prompt budget with fresh usage", () => {
     const container = renderComposer({
       selectedSession: sessionRow({
@@ -95,7 +145,10 @@ describe("renderChatComposer context usage", () => {
         [
           planProvider("openai", "OpenAI", {
             providerId: "openai",
-            windows: [{ label: "Week", usedPercent: 72 }],
+            windows: [
+              { label: "5h", usedPercent: 34 },
+              { label: "Week", usedPercent: 78 },
+            ],
           }),
         ],
         "/control",
@@ -106,7 +159,9 @@ describe("renderChatComposer context usage", () => {
       "Usage Remaining",
     );
     expect(container.querySelector(".context-usage__bar")).toBeNull();
-    expect(container.querySelector(".context-usage__limit")?.textContent).toContain("72%");
+    expect(
+      [...container.querySelectorAll(".context-usage__limit-value")].map((row) => row.textContent),
+    ).toEqual(["34%", "78%"]);
     expect(
       container
         .querySelector<HTMLAnchorElement>("[data-chat-provider-usage='true']")
@@ -191,18 +246,26 @@ describe("renderChatComposer context usage", () => {
       ]),
     });
 
-    expect(container.querySelectorAll(".context-usage__plan-header")).toHaveLength(1);
+    expect(container.querySelectorAll(".context-usage__tray")).toHaveLength(1);
     expect(container.querySelector(".context-usage__plan-badge")?.textContent).toBe("Max (20x)");
+    const limits = [...container.querySelectorAll(".context-usage__limit")];
     expect(
-      [...container.querySelectorAll(".context-usage__limit")].map((row) =>
-        row.textContent?.replace(/\s+/g, " ").trim(),
-      ),
-    ).toEqual([
-      "5-hour limit Resets 2h 22%",
-      "Weekly 25%",
-      "Fable 92%",
-      "Usage credits $157.85 of $400.00",
-    ]);
+      limits.map((row) => row.querySelector(".context-usage__limit-label")?.textContent),
+    ).toEqual(["5-hour", "Weekly", "Fable", "Usage credits"]);
+    expect(
+      limits.map((row) => row.querySelector(".context-usage__limit-value")?.textContent),
+    ).toEqual(["22%", "25%", "92%", "$157.85 of $400.00"]);
+    expect(
+      limits
+        .slice(0, 3)
+        .every((row) =>
+          row
+            .querySelector(".context-usage__limit-reset")
+            ?.getAttribute("title")
+            ?.startsWith("Resets "),
+        ),
+    ).toBe(true);
+    expect(limits[3]?.querySelector(".context-usage__limit-reset")).toBeNull();
     expect(container.querySelector(".context-usage__stats")).not.toBeNull();
     expect(container.textContent).not.toContain("Est. cost");
   });
@@ -216,6 +279,7 @@ describe("renderChatComposer context usage", () => {
       contextTokens: 200_000,
       model: "gateway-injected",
       modelProvider: "openclaw" as string | undefined,
+      estimatedCostUsd: 0.03,
     };
     const composerProps = {
       messages: [
@@ -250,18 +314,20 @@ describe("renderChatComposer context usage", () => {
       ]),
     };
     const providerNames = (container: HTMLElement) =>
-      [...container.querySelectorAll("[data-chat-usage-provider='true']")].map((row) =>
-        row.textContent?.replace(/\s+/g, " ").trim(),
+      [...container.querySelectorAll(".context-usage__identity .provider-brand-icon")].map((row) =>
+        row.getAttribute("data-provider-icon"),
       );
 
     const container = renderComposer(composerProps as never);
 
     expect(providerNames(container)).toEqual([]);
-    expect(container.textContent).toContain("Cost by Type");
+    expect(container.querySelector(".context-usage__stats [title]")?.getAttribute("title")).toBe(
+      "Input $0.01 · Output $0.02",
+    );
     expect(container.textContent).not.toContain("Model:");
 
     session.modelProvider = undefined;
-    expect(providerNames(renderComposer(composerProps as never))).toEqual(["Provider: OpenAI"]);
+    expect(providerNames(renderComposer(composerProps as never))).toEqual(["codex"]);
   });
 
   it("keeps context, token, and cost details when only unrelated plan usage exists", () => {
@@ -292,15 +358,15 @@ describe("renderChatComposer context usage", () => {
     });
 
     const popoverText = container.querySelector(".context-usage__popover")?.textContent ?? "";
-    expect(container.querySelector(".context-usage__plan-header")).toBeNull();
+    expect(container.querySelector(".context-usage__tray")).toBeNull();
     expect(popoverText).not.toContain("Copilot");
     expect(popoverText).toContain("Context window");
-    expect(popoverText).toContain("Latest run tokens");
-    expect(popoverText).toContain("Est. cost");
+    expect(popoverText).toContain("Latest run");
+    expect(popoverText).toContain("Cost");
     expect(popoverText).toContain("$0.03");
   });
 
-  it("omits the cost-by-type section when every recorded cost is zero", () => {
+  it("omits the cost tooltip when every recorded cost is zero", () => {
     const container = renderComposer({
       messages: [
         { role: "user", content: "hi" },
@@ -321,14 +387,19 @@ describe("renderChatComposer context usage", () => {
           },
         },
       ],
-      selectedSession: sessionRow({ totalTokens: 1_000, contextTokens: 200_000 }),
+      selectedSession: sessionRow({
+        totalTokens: 1_000,
+        contextTokens: 200_000,
+        estimatedCostUsd: 0,
+      }),
       sessions: {
         sessions: [],
         defaults: { contextTokens: 200_000 },
       } as never,
     });
 
-    expect(container.textContent).not.toContain("Cost by Type");
+    expect(container.querySelector(".context-usage__stats [title]")).toBeNull();
+    expect(container.querySelector(".context-usage__stats")?.textContent).toContain("$0.00");
   });
 
   it("warns on fresh high usage but keeps stale usage approximate", () => {

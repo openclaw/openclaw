@@ -8,17 +8,12 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import { removePathValue, setPathValue } from "../config-form-utils.ts";
+import { copyWithPathPatch } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { clearDeviceAuthToken, loadOrCreateDeviceIdentity, storeDeviceAuthToken } from "./index.ts";
 
 type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
-};
-
-type NodesGatewaySnapshot = {
-  client: GatewayRequestClient | null;
-  connected: boolean;
 };
 
 type WireExecApprovalsFile = GatewayExecApprovalsSnapshot["file"];
@@ -32,13 +27,11 @@ export type ExecAsk = ExecApprovalsResolvedDefaults["ask"];
 // Editor choices stay closed even though the wire accepts policy strings for host normalization.
 type ExecApprovalsDefaults = Partial<ExecApprovalsResolvedDefaults>;
 
-type ExecApprovalsAgent = ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">;
-
 export type ExecApprovalsFile = {
   version?: number;
   socket?: Pick<NonNullable<WireExecApprovalsFile["socket"]>, "path">;
   defaults?: ExecApprovalsDefaults;
-  agents?: Record<string, ExecApprovalsAgent>;
+  agents?: Record<string, ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">>;
 };
 
 type FileExecApprovalsSnapshot = Omit<GatewayExecApprovalsSnapshot, "file"> & {
@@ -98,7 +91,7 @@ type ExecApprovalsState = NodesRequestState & {
 export type DevicesPageDataState = InventoryState & ExecApprovalsState;
 
 export function createInitialDevicesState(
-  snapshot: Partial<NodesGatewaySnapshot> = {},
+  snapshot: Partial<{ client: GatewayRequestClient | null; connected: boolean }> = {},
 ): DevicesPageDataState {
   return {
     client: snapshot.client ?? null,
@@ -525,7 +518,8 @@ function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApp
     state.execApprovalsDirty = false;
     return;
   }
-  state.execApprovalsForm = structuredClone(snapshot.file);
+  // Edits copy their path, so the saved receipt can stay shared until the first edit.
+  state.execApprovalsForm = snapshot.file;
 }
 
 export function isNativeExecApprovalsSnapshot(
@@ -581,15 +575,17 @@ export async function saveExecApprovals(
 
 function mutateExecApprovalsForm(
   state: ExecApprovalsState,
-  mutate: (form: ExecApprovalsFile) => void,
+  path: Array<string | number>,
+  value: unknown,
+  mode: "copy-set" | "copy-remove",
 ) {
   if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
     state.lastError = "Host-native node approvals are read-only here.";
     return;
   }
-  const base = structuredClone(state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {});
-  mutate(base);
-  state.execApprovalsForm = base;
+  const base = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
+  const next = copyWithPathPatch(base, path, value, mode);
+  state.execApprovalsForm = (next.ok ? asOptionalRecord(next.value) : undefined) ?? base;
   state.execApprovalsDirty = true;
 }
 
@@ -598,12 +594,12 @@ export function updateExecApprovalsFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  mutateExecApprovalsForm(state, (form) => setPathValue(form, path, value));
+  mutateExecApprovalsForm(state, path, value, "copy-set");
 }
 
 export function removeExecApprovalsFormValue(
   state: ExecApprovalsState,
   path: Array<string | number>,
 ) {
-  mutateExecApprovalsForm(state, (form) => removePathValue(form, path));
+  mutateExecApprovalsForm(state, path, undefined, "copy-remove");
 }

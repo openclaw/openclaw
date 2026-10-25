@@ -9,7 +9,10 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { completePendingPackageLifecycle } from "./package-lifecycle.js";
+import {
+  completePendingPackageLifecycle,
+  type PackageLifecycleScript,
+} from "./package-lifecycle.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -46,10 +49,12 @@ describe("package lifecycle completion", () => {
     await withTestDir({ prefix: "openclaw-package-lifecycle-" }, async (packageRoot) => {
       const markerPath = await markModernLifecyclePending(packageRoot);
       const calls: string[] = [];
+      const scriptPaths: string[] = [];
       const { promise: preinstallBlocked, resolve: releasePreinstall } = createDeferred();
       const { promise: firstPreinstall, resolve: firstPreinstallStarted } = createDeferred();
-      const runScript = vi.fn(async (script: { name: string }) => {
+      const runScript = vi.fn(async (script: PackageLifecycleScript) => {
         calls.push(script.name);
+        scriptPaths.push(script.relativePath);
         if (script.name === "preinstall") {
           firstPreinstallStarted?.();
           await preinstallBlocked;
@@ -77,6 +82,10 @@ describe("package lifecycle completion", () => {
         void startCaller();
         await Promise.all(callers);
         expect(calls).toEqual(["preinstall", "postinstall"]);
+        expect(scriptPaths).toEqual([
+          path.join("scripts", "preinstall-package-manager-warning.mjs"),
+          path.join("scripts", "postinstall-bundled-plugins.mjs"),
+        ]);
       } finally {
         releasePreinstall();
         await Promise.allSettled(callers);

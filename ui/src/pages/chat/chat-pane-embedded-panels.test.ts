@@ -18,6 +18,7 @@ import {
 } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -50,12 +51,12 @@ import {
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
 import { createChatSidebarContainer } from "./components/chat-sidebar.test-support.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
+import "./components/chat-sidebar-region.runtime.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
-import "./components/chat-sidebar-region.runtime.tsx";
 import {
   closeSlot,
   ensureSidebarConversation,
@@ -137,9 +138,11 @@ it("renders and updates the workspace rail inside the Files panel", async () => 
   expect(query(".chat-workspace-rail")).toBe(rail);
   expect(rail.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("notes");
   element(rail, 'button[aria-label="notes.txt"]').click();
-  expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
-    agentId: "main",
-  });
+  await vi.waitFor(() =>
+    expect(sessions.getFile).toHaveBeenCalledExactlyOnceWith(state.sessionKey, "notes.txt", {
+      agentId: "main",
+    }),
+  );
 });
 
 it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {
@@ -150,11 +153,7 @@ it("navigates an existing file tab to an explicit line without resetting its edi
     const descriptor = Object.getOwnPropertyDescriptor(Range.prototype, key);
     Object.defineProperty(Range.prototype, key, { configurable: true, value });
     onTestFinished(() => {
-      if (descriptor) {
-        Object.defineProperty(Range.prototype, key, descriptor);
-      } else {
-        Reflect.deleteProperty(Range.prototype, key);
-      }
+      restorePropertyDescriptor(Range.prototype, key, descriptor);
     });
   }
   const { file, mount, renderPanels, state, sessions, query } = createReviewFixture();
@@ -616,10 +615,12 @@ it("retires a preview across reconnect without refocusing Review over Files", as
 
 it("shows a current preview request failure without leaving Review loading", async () => {
   const { file, mount, preview, renderPanels, state, query } = createReviewFixture();
-  void openSessionWorkspaceFile(state, { path: preview.file.path });
+  const opening = openSessionWorkspaceFile(state, { path: preview.file.path });
   await renderPanels();
+  await vi.waitFor(() => expect(state.sessions.getFile).toHaveBeenCalledOnce());
   file.reject(new Error("Preview unavailable"));
   await expect(file.promise).rejects.toThrow("Preview unavailable");
+  await opening;
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "workspace"));
   await renderPanels();
   expect(mount.textContent).toContain("Preview unavailable");

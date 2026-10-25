@@ -17,7 +17,6 @@ import {
 import { resetGlobalHookRunner } from "../../../../src/plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
-import { PluginApprovalResolutions } from "../../../../src/plugins/types.js";
 
 type BrokerEvent = Parameters<
   NonNullable<ConstructorParameters<typeof EmbeddedPluginApprovalBroker>[0]>
@@ -79,9 +78,8 @@ describe("agent tool safety approvals", () => {
     ];
     setActivePluginRegistry(registry);
 
-    execute = vi.fn(async (_toolCallId: string, params: unknown) => ({
+    execute = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "APPROVED-SENTINEL" }],
-      details: { params },
     }));
     tool = wrapToolWithBeforeToolCallHook(
       { name: "sentinel", execute } as unknown as AnyAgentTool,
@@ -157,9 +155,7 @@ describe("agent tool safety approvals", () => {
       expect(getBeforeToolCallFailureDisposition(denied)).toBe("blocked");
       expect(execute).not.toHaveBeenCalled();
       expect(broker.listPending()).toEqual([]);
-      expect(resolutions).toEqual([
-        { toolCallId: "call-deny", resolution: PluginApprovalResolutions.DENY },
-      ]);
+      expect(resolutions).toEqual([{ toolCallId: "call-deny", resolution: "deny" }]);
       expect(brokerEvents.at(-1)).toMatchObject({
         event: "plugin.approval.resolved",
         payload: { id: pending.id, decision: "deny", request: pending.request },
@@ -185,24 +181,13 @@ describe("agent tool safety approvals", () => {
 
     await expect(first).resolves.toEqual({
       content: [{ type: "text", text: "APPROVED-SENTINEL" }],
-      details: {
-        params: {
-          value: "rewritten:call-allow",
-          marker: "APPROVED-SENTINEL",
-        },
-      },
     });
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(execute).toHaveBeenCalledWith(
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
       "call-allow",
       { value: "rewritten:call-allow", marker: "APPROVED-SENTINEL" },
       undefined,
       undefined,
     );
-    expect(resolutions).toEqual([
-      { toolCallId: "call-allow", resolution: PluginApprovalResolutions.ALLOW_ONCE },
-    ]);
-    expect(broker.listPending()).toEqual([]);
 
     const later = tool.execute("call-later", { value: "second" }, undefined, undefined);
     const laterPending = await pendingApproval("call-later");
@@ -214,8 +199,8 @@ describe("agent tool safety approvals", () => {
     expect(execute).toHaveBeenCalledTimes(1);
     expect(broker.listPending()).toEqual([]);
     expect(resolutions).toEqual([
-      { toolCallId: "call-allow", resolution: PluginApprovalResolutions.ALLOW_ONCE },
-      { toolCallId: "call-later", resolution: PluginApprovalResolutions.DENY },
+      { toolCallId: "call-allow", resolution: "allow-once" },
+      { toolCallId: "call-later", resolution: "deny" },
     ]);
     expect(brokerEvents.map((event) => event.event)).toEqual([
       "plugin.approval.requested",

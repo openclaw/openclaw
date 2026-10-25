@@ -9,13 +9,11 @@ import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.t
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
-import { buildMcpCatalogNotices } from "./tools-effective-mcp-inventory.js";
+import * as mcpTransport from "./mcp-transport.js";
 
-const { resolveTransport, warn } = vi.hoisted(() => ({
-  resolveTransport: vi.fn(),
+const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
-vi.mock("./mcp-transport.js", () => ({ resolveMcpTransport: resolveTransport }));
 vi.mock("../logger.js", () => ({ logWarn: warn }));
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
@@ -42,7 +40,7 @@ beforeEach(() => {
   invalidListing = false;
   listToolsGate = undefined;
   warn.mockClear();
-  resolveTransport.mockImplementation((serverName: string) => {
+  vi.spyOn(mcpTransport, "resolveMcpTransport").mockImplementation((serverName: string) => {
     const transport = new OpenClawStreamableHTTPClientTransport(
       new URL("https://mcp.invalid/mcp"),
       {
@@ -108,6 +106,7 @@ beforeEach(() => {
       transportType: "streamable-http",
       connectionTimeoutMs: 30_000,
       requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: true,
     };
   });
 });
@@ -115,6 +114,7 @@ beforeEach(() => {
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.dispose()));
   await disposeAllSessionMcpRuntimes();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -135,6 +135,7 @@ async function discover(runtime: SessionMcpRuntime) {
   const pending = runtime.getCatalog().finally(() => {
     settled = true;
   });
+  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
   if (!settled) {
     await vi.advanceTimersToNextTimerAsync();
@@ -165,15 +166,18 @@ it("bounds the first connection and never waits for known-failed retries", async
   expect(warn).toHaveBeenCalledTimes(2);
 });
 
-it("keeps one inventory notice per failure episode and publishes recovery next turn", async () => {
+it("keeps one catalog diagnostic per failure episode and publishes recovery next turn", async () => {
   const runtime = makeRuntime();
   const failed = await discover(runtime);
   expect(failed.catalog.tools).toEqual([]);
-  const notices = buildMcpCatalogNotices(failed.catalog);
-  expect(notices).toEqual([
-    expect.objectContaining({ id: "mcp-server-diagnostic:remote", severity: "warning" }),
+  const diagnostics = structuredClone(failed.catalog.diagnostics);
+  expect(diagnostics).toEqual([
+    expect.objectContaining({
+      serverName: "remote",
+      message: expect.stringContaining("server unavailable"),
+    }),
   ]);
-  expect(buildMcpCatalogNotices(await runtime.getCatalog())).toEqual(notices);
+  expect((await runtime.getCatalog()).diagnostics).toEqual(diagnostics);
   reachable = true;
   await vi.advanceTimersByTimeAsync(5_000);
   const listing = Promise.withResolvers<void>();
@@ -181,14 +185,14 @@ it("keeps one inventory notice per failure episode and publishes recovery next t
   const turn = await discover(runtime);
   expect(turn.waitedMs).toBe(0);
   expect(turn.catalog.tools).toEqual([]);
-  expect(buildMcpCatalogNotices(turn.catalog)).toEqual(notices);
+  expect(turn.catalog.diagnostics).toEqual(diagnostics);
   expect(initializes).toBe(2);
 
   listing.resolve();
   await vi.advanceTimersByTimeAsync(0);
   const recovered = await runtime.getCatalog();
   expect(recovered.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
-  expect(buildMcpCatalogNotices(recovered)).toEqual([]);
+  expect(recovered.diagnostics ?? []).toEqual([]);
   expect(turn.catalog.tools).toEqual([]);
 });
 
@@ -209,7 +213,10 @@ it("retries failed listings in the background without stalling healthy siblings"
   });
   runtimes.push(runtime);
   const failed = await runtime.getCatalog();
-  expect(failed.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool"]);
+  expect(
+    failed.tools.map((tool) => tool.toolName),
+    JSON.stringify(failed.diagnostics),
+  ).toEqual(["healthy_tool"]);
   expect(failed.diagnostics?.[0]?.serverName).toBe("remote");
 
   invalidListing = false;

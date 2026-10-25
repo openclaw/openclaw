@@ -8,11 +8,13 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { createMcpAppCatalog } from "../lib/mcp-app-catalog.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { AppsPage } from "../pages/apps/apps-page.tsx";
+import { createInitializationContext } from "../pages/chat/chat-pane.test-support.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import {
   createGatewayRequestMock,
@@ -25,6 +27,19 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
 import { McpAppResources } from "./mcp-app-resources.tsx";
+
+// mock-isolation: Exercise the Apps launch boundary without starting the chat runtime.
+vi.mock("../pages/chat/chat-pane.tsx", async () => {
+  const { defineSolidBridge } = await import("../lib/solid-bridge.ts");
+  const { chatPaneProperties } = await import("../pages/chat/chat-pane-inputs.ts");
+  return {
+    ChatPaneView: defineSolidBridge("openclaw-chat-pane", () => null, {
+      properties: chatPaneProperties,
+    }),
+  };
+});
+// mock-isolation: This suite supplies only the catalog and launch capabilities.
+vi.mock("../pages/chat/route-entry.ts", () => ({}));
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -54,6 +69,19 @@ const result: McpAppDiscoverResult = {
     },
   ],
 };
+
+function createDiscoveryGateway(request: Parameters<typeof createTestGatewayClient>[0]) {
+  return {
+    snapshot: {
+      client: { request },
+      phase: "connected",
+      hello: gatewayHelloForMethods(["mcp.app.discover"]),
+    },
+    connectionRevision: 1,
+    subscribe: () => () => {},
+    subscribeEvents: () => () => {},
+  };
+}
 
 function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator.admin"]) {
   const events = new Set<(event: GatewayEventFrame) => void>();
@@ -309,11 +337,6 @@ describe("app launch catalog", () => {
   );
 
   it("waits for the new session's discovery before retaining an Apps page launch", async () => {
-    // Observe the page-to-conversation contract without loading the conversation runtime.
-    const lookup = customElements.get.bind(customElements);
-    vi.spyOn(customElements, "get").mockImplementation((name) =>
-      name === "openclaw-chat-pane" ? HTMLElement : lookup(name),
-    );
     const first = createDeferred<McpAppDiscoverResult>();
     const second = createDeferred<McpAppDiscoverResult>();
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
@@ -371,14 +394,29 @@ describe("app launch catalog", () => {
   });
 
   it.each([
+    { scope: "operator.admin", discover: true },
+    { scope: "operator.write", discover: true },
     { scope: "operator.read", discover: false },
     { scope: "operator.sessions.read", discover: false },
-    { scope: "operator.sessions.write", discover: true },
+    { scope: "operator.sessions.write", discover: false },
   ])("admits discovery according to granted scope $scope", async ({ scope, discover }) => {
     const request = vi.fn(async () => ({ servers: [] }));
-    const { context } = discoveryContext(request, [scope]);
-    mountCatalog(context, { sessionKey: "agent:main:one" });
-    await waitForSolid(() => expect(request.mock.calls).toHaveLength(discover ? 1 : 0));
+    const context = createInitializationContext(createTestGatewayClient(request));
+    context.gateway.snapshot.hello = gatewayHelloForMethods(["mcp.app.discover"], [scope]);
+    vi.spyOn(context.sessions, "describe").mockResolvedValue({
+      session: { key: "agent:main:one", kind: "direct", updatedAt: 1 },
+    });
+    let catalog!: ReturnType<typeof createMcpAppCatalog>;
+    mountSolid(() => {
+      catalog = createMcpAppCatalog(context, () => ({
+        sessionKey: "agent:main:one",
+      }));
+      return null;
+    });
+    await catalog.refresh();
+    expect(catalog.available()).toBe(discover);
+    expect(catalog.visible()).toBe(discover);
+    expect(request).toHaveBeenCalledTimes(discover ? 1 : 0);
   });
 
   it("shares discovery and retains focused entries through refresh before remounting", async () => {
@@ -438,9 +476,11 @@ describe("app launch catalog", () => {
     };
     current.resolve({ servers: [server] });
     await current.promise;
-    await waitForSolid(() => expect(sidebar.textContent).toContain("Library"));
-    expect(thread.querySelector("button")).not.toBeNull();
-    expect(resources.querySelector("button")).not.toBeNull();
+    await waitForSolid(() => {
+      expect(sidebar.textContent).toContain("Library");
+      expect(thread.querySelector("button")).not.toBeNull();
+      expect(resources.querySelector("button")).not.toBeNull();
+    });
 
     thread.querySelector<HTMLButtonElement>("button")!.click();
     await waitForSolid(() =>
@@ -710,16 +750,7 @@ describe("app launch catalog", () => {
       const navigate = vi.fn();
       const mounted = mountCatalog(
         {
-          gateway: {
-            snapshot: {
-              client: { request },
-              phase: "connected",
-              hello: gatewayHelloForMethods(["mcp.app.discover"]),
-            },
-            connectionRevision: 1,
-            subscribe: () => () => {},
-            subscribeEvents: () => () => {},
-          },
+          gateway: createDiscoveryGateway(request),
           agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
           agents: { state: { agentsList: null } },
           sessions: {
@@ -806,16 +837,7 @@ describe("app launch catalog", () => {
       const read = createDeferred<McpAppDiscoverResult>();
       const { element } = mountCatalog(
         {
-          gateway: {
-            snapshot: {
-              client: { request: () => read.promise },
-              phase: "connected",
-              hello: gatewayHelloForMethods(["mcp.app.discover"]),
-            },
-            connectionRevision: 1,
-            subscribe: () => () => {},
-            subscribeEvents: () => () => {},
-          },
+          gateway: createDiscoveryGateway(() => read.promise),
           agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
         },
         { surface, sessionKey: "agent:main:empty" },
@@ -835,16 +857,7 @@ describe("app launch catalog", () => {
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     const mounted = mountCatalog(
       {
-        gateway: {
-          snapshot: {
-            client: { request },
-            phase: "connected",
-            hello: gatewayHelloForMethods(["mcp.app.discover"]),
-          },
-          connectionRevision: 1,
-          subscribe: () => () => {},
-          subscribeEvents: () => () => {},
-        },
+        gateway: createDiscoveryGateway(request),
         agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
       },
       { surface: "sidebar", sessionKey: "agent:main:one" },
@@ -907,6 +920,7 @@ describe("app launch catalog", () => {
     element.addEventListener(MCP_APP_OPEN_EVENT, launch);
     button.click();
     await waitForSolid(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+    expect(launch.mock.calls[0]![0].target).toBe(element);
     expect((launch.mock.calls[0]![0] as CustomEvent<McpAppOpenDetail>).detail).toMatchObject({
       sessionKey: "agent:main:one",
       agentId: "main",

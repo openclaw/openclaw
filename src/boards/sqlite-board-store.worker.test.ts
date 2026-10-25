@@ -38,11 +38,11 @@ import { BoardValidationError } from "./board-layout.js";
 import {
   boardFixture,
   boardClient,
-  closeBoardDatabases,
   htmlWidget,
   mcpContent,
 } from "./board-store.fixtures.test-support.js";
 import type { BoardSnapshotWithHtmlViewMetadata } from "./board-store.js";
+import { closeBoardDatabases } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
 import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 

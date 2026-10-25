@@ -3,10 +3,7 @@ import { expect, it, vi } from "vitest";
 import * as fileDescriptor from "../infra/file-descriptor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import {
-  retireSessionSqliteRecovery,
-  type RecoveryCleanupProgress,
-} from "./doctor-session-sqlite-retirement.js";
+import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { importManifest, messageEvent } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 
@@ -43,7 +40,9 @@ it("hashes each original three times and reports progress while retiring a large
     }
     return result;
   });
-  const progress: RecoveryCleanupProgress[] = [];
+  const progress: Parameters<
+    NonNullable<Parameters<typeof retireSessionSqliteRecovery>[0]["onProgress"]>
+  >[0][] = [];
   const result = await retireSessionSqliteRecovery({
     env: store.env,
     preview,

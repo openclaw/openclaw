@@ -6,6 +6,7 @@ export type PluginStateOperationInput = {
   exportName: string;
   stores: readonly Omit<PreparedKeyedStoreOptions, "env">[];
   writeStores: readonly number[];
+  ifEmpty?: { store: number; value: unknown };
   command: { type: string; input: unknown };
   receiptId: string;
 };

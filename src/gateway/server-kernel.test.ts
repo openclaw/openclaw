@@ -19,12 +19,13 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import { closeKernelFixture, createKernelFixture } from "./server-kernel.fixture-test-support.js";
-import { createGatewayKernel } from "./server-kernel.js";
+import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import type { GatewayHostLifecycle, GatewayServer } from "./server-public.js";
 import { createMaintenanceHandles } from "./server-runtime-services.test-harness.js";
 import { expectCoreAgentDatabaseReadiness } from "./server-startup-readiness.test-support.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { withPreparedSessionEventRow } from "./session-event-prepared-row.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 function expectCalls(count: number, ...mocks: Array<(...args: never[]) => unknown>) {
@@ -248,24 +249,11 @@ describe("createGatewayKernel", () => {
         expect(getStartup()).toMatchObject({ ok: true, status: "started" });
         expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
         const reader = {
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "web",
-              mode: "webchat",
-            },
-            role: "operator",
-            scopes: ["operator.read"],
-          },
-          authenticatedUserProfile: {
-            profileId: ensureProfileForEmail("mention-reader@example.test").id,
-            displayName: "Reader",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          connect: gatewayConnect(["operator.read"], { platform: "web" }),
+          authenticatedUserProfile: gatewayProfile(
+            ensureProfileForEmail("mention-reader@example.test").id,
+            "Reader",
+          ),
         } satisfies GatewayClient;
         await kernel.gatewayRequestContext.mentionInbox?.listAsync(reader, (result) => {
           expect(result).toMatchObject({
@@ -407,6 +395,12 @@ describe("createGatewayKernel", () => {
       };
 
       const getReadiness = kernel.createHttpTransportOptions().getReadiness;
+      using readyLog = vi.spyOn(gatewayKernelLogs.log, "info");
+      using readyTrace = vi.spyOn(kernel.startupTrace, "mark");
+      expect(kernel.getReadiness).toBe(getReadiness);
+      expect(kernel.gatewayRequestContext.unavailableGatewayMethods).toBe(
+        kernel.unavailableGatewayMethods,
+      );
       const notReady = { ready: false, failing: ["startup-sidecars"] };
       expect(getReadiness()).toMatchObject(notReady);
       await expect(
@@ -418,11 +412,34 @@ describe("createGatewayKernel", () => {
         ok: true,
         payload: { runId, status: "ok" },
       });
-      kernel.kernel.unlockStartupMethods();
+      kernel.kernel.unlockStartupMethods({ keepChatSendUnavailable: true });
       kernel.kernel.markSidecarsReady();
 
       expect(getReadiness()).toMatchObject(notReady);
       kernel.kernel.setDispatchReady(true);
+      expect(kernel.createHttpTransportOptions().getStartup?.()).toMatchObject({
+        ok: true,
+        status: "started",
+      });
+      expect(getReadiness()).toMatchObject({
+        ready: false,
+        coreReady: false,
+        failing: ["chat-recovery"],
+      });
+      await expect(
+        dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
+      ).rejects.toThrow("chat.send unavailable during gateway startup");
+
+      expect(readyLog).not.toHaveBeenCalledWith("gateway ready");
+      expect(readyTrace).not.toHaveBeenCalledWith("ready");
+      kernel.kernel.unlockStartupMethods();
+      expect(readyLog).toHaveBeenCalledWith("gateway ready");
+      expect(readyTrace).toHaveBeenCalledWith("ready");
+      kernel.kernel.unlockStartupMethods();
+      expect(readyLog.mock.calls.filter(([message]) => message === "gateway ready")).toHaveLength(
+        1,
+      );
+      expect(readyTrace.mock.calls.filter(([phase]) => phase === "ready")).toHaveLength(1);
       expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),

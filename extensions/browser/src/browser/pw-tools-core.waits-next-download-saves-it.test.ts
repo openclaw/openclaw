@@ -109,7 +109,6 @@ describe("pw-tools-core", () => {
     const savedPath = requireSaveAsPath(params.saveAs);
     expect(savedPath).not.toBe(params.targetPath);
     await expectPathMissing(path.dirname(savedPath));
-    expect(path.basename(savedPath)).toContain(path.basename(params.targetPath));
     expect(path.basename(savedPath)).toMatch(/\.part$/);
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
     await expectPathMissing(savedPath);
@@ -213,7 +212,9 @@ describe("pw-tools-core", () => {
       const saveAs = writer("report-content");
       const download = downloadEvent(saveAs, "report.pdf");
 
-      const targetPath = path.join(tempDir, "report.pdf");
+      const targetPath = path.join(tempDir, " report.pdf ");
+      const neighborPath = path.join(tempDir, "report.pdf");
+      await fs.writeFile(neighborPath, "existing neighbor");
       const p = mod.downloadViaPlaywright({
         ...target,
         ref: "e12",
@@ -247,6 +248,7 @@ describe("pw-tools-core", () => {
       });
       await expectAtomicDownloadSave({ saveAs, targetPath, content: "report-content" });
       await expect(fs.realpath(res.path)).resolves.toBe(await fs.realpath(targetPath));
+      await expect(fs.readFile(neighborPath, "utf8")).resolves.toBe("existing neighbor");
     }),
   );
 

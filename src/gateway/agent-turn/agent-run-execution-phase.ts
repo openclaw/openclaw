@@ -149,7 +149,7 @@ async function executeAgentRun(
         }
       : undefined;
     const assertSettlementCurrent = () => {
-      params.assertContextCurrent?.();
+      params.assertGatewayLifetimeCurrent?.();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       // Cancellation closes execution, but its retained producer still records the outcome.
       if (
@@ -161,7 +161,7 @@ async function executeAgentRun(
       }
     };
     const assertDispatchCurrent = () => {
-      params.assertContextCurrent?.();
+      params.assertGatewayLifetimeCurrent?.();
       params.executionSource?.();
       prepared.operatorAuthority?.assertCurrent();
       prepared.userTurn.assertRequesterCurrent?.();
@@ -407,7 +407,7 @@ async function executeAgentRun(
           prepared.operatorAuthority?.profileId,
         );
         // Awaited routing can retire this owner before final dispatch.
-        params.assertContextCurrent?.();
+        params.assertGatewayLifetimeCurrent?.();
         const callerContext = resolveChatSendCallerContext(params.client);
         const clientCaps = [...callerContext.GatewayClientCaps];
         const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
@@ -422,7 +422,7 @@ async function executeAgentRun(
                 {
                   client: params.client,
                   context: gatewayContext,
-                  sessionMutationCommitGuard: params.assertContextCurrent,
+                  sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
                 params.resolvedSessionKey,
                 !params.inputProvenance &&
@@ -520,7 +520,7 @@ async function executeAgentRun(
                 cliSessionBindingFacts: params.restoredCronContinuation?.cliSessionBindingFacts,
                 acpTurnSource: params.request.acpTurnSource,
                 internalEvents: params.request.internalEvents,
-                runtimeContextFragments: params.client?.internal?.runtimeContextFragments,
+                runtimeContextFragments: prepared.userTurn.runtimeContextFragments,
                 inputProvenance: params.inputProvenance,
                 privateCompletion: prepared.userTurn.privateCompletion,
                 replyExpectation: prepared.userTurn.replyExpectation,

@@ -85,7 +85,6 @@ describe("Matrix sync admission", () => {
       client: { getCrypto: () => undefined, getUserId: () => null },
       verificationManager: new MatrixVerificationManager(),
       recoveryKeyStore: new MatrixRecoveryKeyStore(),
-      isRoomEncrypted: async () => true,
       downloadContent: async () => Buffer.alloc(0),
     });
     const failed = new MatrixEvent({

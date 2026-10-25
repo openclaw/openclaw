@@ -1,7 +1,7 @@
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -51,7 +51,6 @@ const {
   prepareMock,
   closeSessionMock,
   closeLoopbackMock,
-  retireKeyMock,
   retireMock,
   authStoreMock,
   authFailureMock,
@@ -71,7 +70,6 @@ const {
   prepareMock: vi.fn(),
   closeSessionMock: vi.fn(),
   closeLoopbackMock: vi.fn(),
-  retireKeyMock: vi.fn(),
   retireMock: vi.fn(),
   authStoreMock: vi.fn(),
   authFailureMock: vi.fn(),
@@ -105,8 +103,8 @@ vi.mock("../gateway/mcp-http.js", () => ({
   closeMcpLoopbackServer: closeLoopbackMock,
 }));
 
-vi.mock("./agent-bundle-mcp-tools.js", () => ({
-  retireSessionMcpRuntimeForSessionKey: retireKeyMock,
+vi.mock("./agent-bundle-mcp-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-bundle-mcp-tools.js")>()),
   retireSessionMcpRuntime: retireMock,
 }));
 
@@ -200,7 +198,6 @@ beforeEach(() => {
   prepareMock.mockImplementation(async (params) => await makeStubContext(params));
   closeSessionMock.mockReset();
   closeLoopbackMock.mockReset();
-  retireKeyMock.mockReset().mockResolvedValue(true);
   retireMock.mockReset().mockResolvedValue(true);
   authStoreMock.mockReset();
   authFailureMock.mockReset().mockResolvedValue(undefined);
@@ -227,6 +224,73 @@ afterEach(() => {
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
+  it.each(["run abort", "caller revocation"] as const)(
+    "stops an in-flight reply hook from admitting work after %s",
+    async (reason) => {
+      await withOpenClawTestState({ label: "cli-hook-abort" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionKey: "agent:main:cron:hook-abort",
+          sessionId: "hook-run",
+          storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+        };
+        const entry = {
+          sessionId: target.sessionId,
+          lifecycleRevision: "generation",
+          updatedAt: 1,
+        };
+        replaceSessionEntrySync(target, entry);
+        const entered = createDeferred();
+        const resume = createDeferred();
+        const abort = new AbortController();
+        const failure = new DOMException(reason, "AbortError");
+        let callerCurrent = true;
+        const nextWorkspace = vi.fn();
+        hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
+        replyMock.mockImplementation(async (_event, context) => {
+          const admission = readClaimingHookAdmission(context);
+          admission?.assertCurrent?.();
+          entered.resolve();
+          await resume.promise;
+          admission?.assertCurrent?.();
+          nextWorkspace();
+          return { handled: true, reply: { text: "hook result" } };
+        });
+        const operation = runCliAgent({
+          ...target,
+          sessionTarget: target,
+          sessionEntry: entry,
+          workspaceDir: state.workspaceDir,
+          trigger: "cron",
+          abortSignal: abort.signal,
+          assertCurrent: () => {
+            if (!callerCurrent) {
+              throw failure;
+            }
+          },
+        });
+        const outcome = operation.catch((error: unknown) => error);
+        try {
+          await awaitGateBeforeSettlement(entered.promise, operation, "Hook did not start");
+          if (reason === "run abort") {
+            abort.abort(failure);
+          } else {
+            callerCurrent = false;
+          }
+          resume.resolve();
+          await outcome;
+          expect(nextWorkspace).not.toHaveBeenCalled();
+          await expect(operation).rejects.toBe(failure);
+          expect(prepareMock).not.toHaveBeenCalled();
+          expect(executeMock).not.toHaveBeenCalled();
+        } finally {
+          resume.resolve();
+          await outcome;
+        }
+      });
+    },
+  );
+
   it.each(["current root", "reassigned root", "ordinary session"] as const)(
     "holds early hook authority for %s and releases handled turns",
     async (scenario) => {
@@ -253,15 +317,10 @@ describe("runCliAgent before_agent_reply seam", () => {
         replyMock.mockImplementation(async (_event, context) => {
           heldRequest = captureGuardedFetchRequestAuthority();
           heldClaim = readClaimingHookAdmission(context)?.assertCurrent;
-          if (scenario === "ordinary session") {
-            expect(heldRequest).toBeUndefined();
-            expect(heldClaim).toBeUndefined();
-          } else if (scenario === "current root") {
-            expect(heldRequest).toBeTypeOf("function");
-            expect(heldClaim).toBeTypeOf("function");
-            heldRequest?.();
-            heldClaim?.();
-          }
+          expect(heldRequest).toBeTypeOf("function");
+          expect(heldClaim).toBeTypeOf("function");
+          heldRequest?.();
+          heldClaim?.();
           effect();
           return { handled: true, reply: { text: "hook result" } };
         });
@@ -298,10 +357,8 @@ describe("runCliAgent before_agent_reply seam", () => {
         } else {
           expect((await operation).payloads).toEqual([{ text: "hook result" }]);
           expect(effect).toHaveBeenCalledOnce();
-          if (scenario === "current root") {
-            expect(heldRequest).toThrow("no longer active");
-            expect(heldClaim).toThrow("no longer active");
-          }
+          expect(heldRequest).toThrow("no longer active");
+          expect(heldClaim).toThrow("no longer active");
         }
         expect(prepareMock).not.toHaveBeenCalled();
         expect(executeMock).not.toHaveBeenCalled();
@@ -607,7 +664,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     }
   });
 
-  it("passes the heartbeat queue and clears stateless CLI bindings when its hook claims", async () => {
+  it("clears stateless CLI bindings when a scheduled hook claims", async () => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [
@@ -628,15 +685,13 @@ describe("runCliAgent before_agent_reply seam", () => {
     replyMock.mockResolvedValue({ handled: true });
 
     const result = await runCliAgent({
-      trigger: "heartbeat",
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      trigger: "cron",
+      sessionKey: "agent:main:cron:scheduled",
       config: {},
     });
 
     expect(replyMock.mock.calls[0]?.[1]).toMatchObject({
-      sessionKey: "agent:main:heartbeat:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+      sessionKey: "agent:main:cron:scheduled",
     });
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
@@ -726,7 +781,6 @@ describe("runCliAgent before_agent_reply seam", () => {
       workspaceDir: runParams.workspaceDir,
       cfg: unopenedMcpConfig,
     };
-    retireKeyMock.mockImplementation(mcpTools.retireSessionMcpRuntimeForSessionKey);
     retireMock.mockImplementation(mcpTools.retireSessionMcpRuntime);
     executeMock.mockResolvedValue({ text: "real reply" });
 
@@ -752,7 +806,6 @@ describe("runCliAgent before_agent_reply seam", () => {
         successorRuntime,
       );
       expect(mcpTools.peekSessionMcpRuntime({ sessionKey })).toBe(successorRuntime);
-      expect(retireKeyMock).not.toHaveBeenCalled();
       expect(closeLoopbackMock).not.toHaveBeenCalled();
     } finally {
       await mcpTools.retireSessionMcpRuntime({ sessionId: originalSessionId, reason: "test-end" });

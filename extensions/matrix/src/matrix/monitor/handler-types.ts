@@ -44,7 +44,7 @@ export type MatrixMonitorHandlerParams = {
   directTracker: Pick<ReturnType<typeof createDirectRoomTracker>, "isDirectMessage">;
   getRoomInfo: (
     roomId: string,
-    opts?: { includeAliases?: boolean },
+    opts?: { includeAliases?: boolean; currentName?: boolean },
   ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   needsRoomAliasesForConfig: boolean;

@@ -1,11 +1,7 @@
 import { beforeEach, expect, it } from "vitest";
 import { isChatBubbleMode, setChatBubbleMode } from "../pages/chat/chat-bubble-mode.ts";
-import {
-  loadSettings,
-  normalizeChatMessageMaxWidth,
-  saveSettings,
-  settingsKeyForGateway,
-} from "./settings.ts";
+import { normalizeChatMessageMaxWidth } from "./settings-contract.ts";
+import { loadSettings, saveSettings, settingsKeyForGateway } from "./settings.ts";
 
 beforeEach(({ onTestFinished }) => {
   const stored = Object.keys(localStorage).map((key) => [key, localStorage.getItem(key)!] as const);

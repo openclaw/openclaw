@@ -7,6 +7,7 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { racePromiseWithAbortSignal, sleepWithAbort } from "@openclaw/retry";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -113,7 +114,7 @@ export async function ensureModelProviderLocalService(
       {
         providerId: model.provider,
         baseUrl: model.baseUrl,
-        headers: buildHealthProbeHeaders(model.headers, probeHeaders),
+        headers: buildHealthProbeHeaders(omitNullRequestHeaders(model.headers), probeHeaders),
         service: getModelProviderLocalService(model),
         reconcile: getModelProviderLocalServiceReconciler(model),
       },
@@ -527,7 +528,7 @@ function scheduleIdleStop(
       }
     }, idleStopMs),
   );
-  managed.idleTimer.unref?.();
+  managed.idleTimer.unref();
 }
 
 function clearIdleTimer(managed: ManagedLocalService) {

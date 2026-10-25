@@ -9,6 +9,13 @@ import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 
+// The Gateway context is document-wide; the last observed avatar releases its listener.
+const avatarGatewayContext = projectSource(null, {
+  read: readAvatarGatewayContext,
+  subscribe: (_source, notify) => registerAvatarGatewayReset(notify),
+  equality: "revision",
+});
+
 export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
   const gateway = useAvatarGatewayContext();
   const application = useOptionalApplication();
@@ -28,10 +35,5 @@ export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
 
 /** Reset notification invalidates the projection; reads follow the owner's synchronous publication. */
 export function useAvatarGatewayContext() {
-  const context = projectSource(null, {
-    read: readAvatarGatewayContext,
-    subscribe: (_source, notify) => registerAvatarGatewayReset(notify),
-    equality: "revision",
-  });
-  return context.read;
+  return avatarGatewayContext.read;
 }

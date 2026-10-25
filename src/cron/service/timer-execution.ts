@@ -26,7 +26,7 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
 import { waitForCronExecutionIdle } from "./execution-idle.js";
-import { admitCronOccurrence } from "./occurrence-admission.js";
+import { admitCronOccurrence, resolvePausedOccurrence } from "./occurrence-admission.js";
 import {
   describeCronHostExecutionRestriction,
   type CronServiceState,
@@ -246,6 +246,10 @@ export async function executeJobCore(
     }
     // One admission per occurrence, shared by its trigger and payload executors.
     occurrence = await admitCronOccurrence(state, job, agentId);
+    const paused = resolvePausedOccurrence(job, occurrence);
+    if (paused) {
+      return paused;
+    }
     assertCurrent();
     let effectiveJob = job;
     let triggerEval: CronTriggerEvalOutcome | undefined;
@@ -481,6 +485,7 @@ async function executeDetachedCronJob(
       deliverySuppressionReason: res.deliverySuppressionReason,
       deliveryState: res.deliveryState,
       summary: res.summary,
+      result: res.result,
       delivered: res.delivered,
       deliveryAttempted: res.deliveryAttempted,
       delivery: res.delivery,
@@ -538,6 +543,7 @@ async function executeDetachedCronJob(
     deliveryState: res.deliveryState,
     nextCheck: res.nextCheck,
     summary: res.summary,
+    result: res.result,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
     delivery: res.delivery,

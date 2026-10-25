@@ -37,6 +37,26 @@ describe("restart health", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
+  it("uses the Windows cold-start allowance for Doctor restoration without a caller budget", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    inspectPortUsage.mockImplementation(async () =>
+      portUsage(monotonicClock.nowMs < 90_000 ? [] : [{ pid: 8000 }]),
+    );
+    callGateway.mockImplementation(gatewayHealthResponse());
+
+    const result = await waitForGatewayHealthyRestart({
+      service: makeGatewayService({ status: "running", pid: 8000 }),
+      port: 18789,
+      requireRunningService: true,
+    });
+
+    expect(result).toMatchObject({
+      healthy: true,
+      outcome: "ready",
+      elapsedMs: 90_000,
+    });
+  });
+
   it.each(["refuse-manual-start"] as const)(
     "ends readiness polling immediately for a verified service hold (%s)",
     async (reason) => {

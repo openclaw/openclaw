@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, type WriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -162,15 +162,60 @@ function own(params: Parameters<ReturnType<typeof createQaGatewayChild>["start"]
   return { start: () => owner.start(params), stop: owner.stop };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", () => {
+  it.each(["stdout", "stderr"] as const)(
+    "fails and releases a child when its %s log sink stops draining",
+    async (label) => {
+      const prepare = gatewaySetup.prepareQaGatewayChild;
+      let sink: WriteStream | undefined;
+      let maxQueuedBytes = 0;
+      vi.spyOn(gatewaySetup, "prepareQaGatewayChild").mockImplementation(async (...args) => {
+        const setup = await prepare(...args);
+        sink = label === "stdout" ? setup.stdoutLog : setup.stderrLog;
+        // Cork the real file stream: disk never accepts the child's diagnostic burst.
+        sink.cork();
+        const write = sink.write.bind(sink);
+        vi.spyOn(sink, "write").mockImplementation((chunk: Buffer) => {
+          const accepted = write(chunk);
+          maxQueuedBytes = Math.max(maxQueuedBytes, sink!.writableLength);
+          return accepted;
+        });
+        return setup;
+      });
+      const { params, pids } = await fixture();
+      const cliPath = params.command.argsPrefix[0]!;
+      const cli = await fs.readFile(cliPath, "utf8");
+      await fs.writeFile(
+        cliPath,
+        cli.replace(
+          "http.createServer((request, response) => {",
+          `const chunk = Buffer.alloc(64 * 1024, 120);
+for (let index = 0; index < 128; index++) {
+  if (!process.${label}.write(chunk)) await once(process.${label}, "drain");
+}
+http.createServer((request, response) => {`,
+        ),
+      );
+      const owner = own(params);
+      try {
+        const failure = await owner.start().then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect(maxQueuedBytes).toBeLessThanOrEqual(4 * 1024 * 1024);
+        expect(failure).toMatchObject({
+          message: expect.stringContaining(`${label} log backlog exceeded`),
+        });
+        expect(pids().every((pid) => !isQaPosixProcessGroupAlive(pid))).toBe(true);
+        expect((await owner.stop()).process).toBe("confirmed-stopped");
+        expect(sink?.destroyed).toBe(true);
+      } finally {
+        sink?.destroy();
+        await owner.stop();
+      }
+    },
+  );
+
   it("captures final receipts after process stop and before removing runtime state", async () => {
     const { params, pids } = await fixture();
     const owner = own(params);
@@ -568,8 +613,8 @@ describe.skipIf(process.platform === "win32")("QA gateway lifetime ownership", (
     const owner = own(params);
     const gateway = await owner.start();
     pids();
-    const entered = deferred();
-    const release = deferred();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
     const restarting = gateway.restartAfterStateMutation(async () => {
       entered.resolve();
       await release.promise;

@@ -88,6 +88,10 @@ export type ApplicationGatewayOptions = {
 
 export type ApplicationGatewayDeferredIntent = {
   key: string;
+  /** Related intents that a terminal desired state may supersede. */
+  group?: string;
+  discardGroup?: boolean;
+  preservePosition?: boolean;
   run: (client: GatewayBrowserClient) => Promise<void>;
   discard?: () => void;
 };

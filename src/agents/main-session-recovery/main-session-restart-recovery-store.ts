@@ -62,6 +62,7 @@ import {
   type ExpectedRestartRecoveryTarget,
   mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
+  readInterruptedRunId,
 } from "./main-session-restart-recovery-shared.js";
 import { resolveRestartRecoveryDispatchTarget } from "./main-session-restart-recovery-target.js";
 
@@ -162,6 +163,16 @@ export async function recoverStore(params: {
       }
       const agentId = dispatchTarget.agentId;
       const target = { agentId, sessionKey, storePath: params.storePath };
+      const { getPrivateRequesterSettleRecoveryOwner } =
+        await import("../subagents/registry/subagent-registry.js");
+      const privateRecoveryOwner = await getPrivateRequesterSettleRecoveryOwner(
+        { ...target, canonicalKey: sessionKey, entry },
+        entry.restartRecoveryDeliverySourceRunId ?? readInterruptedRunId(entry),
+      );
+      if (privateRecoveryOwner === "owned") {
+        skip("already_handled");
+        continue;
+      }
       const workStartBlock = resolveSessionWorkStartBlock(
         sessionKey,
         entry,
@@ -397,8 +408,8 @@ export async function recoverStore(params: {
       // historical inputs without it still need the cohort failure settlement.
       if (
         !harnessCompletion &&
-        !entry.restartRecoveryOperatorSource &&
-        !requesterOrigin &&
+        (privateRecoveryOwner === "unrestorable" ||
+          (!entry.restartRecoveryOperatorSource && !requesterOrigin)) &&
         entry.restartRecoverySourceIngress === "internal" &&
         expectedRecoverySourceRunId?.startsWith("announce:requester-settle:")
       ) {
@@ -483,7 +494,7 @@ export async function recoverStore(params: {
         !requesterOrigin &&
         source !== "cron" &&
         expectedRecoverySourceRunId &&
-        requiresDelegatedRecoverySource(entry, source)
+        requiresDelegatedRecoverySource(entry, source, sessionKey)
       ) {
         const { prepareConsumedSessionSendSource } =
           await import("../../gateway/session-send-recovery-source.js");
@@ -510,7 +521,7 @@ export async function recoverStore(params: {
         !recoverableHarnessCompletion &&
         !completionSource &&
         (source === "cron" || !requesterOrigin) &&
-        requiresDelegatedRecoverySource(entry, source)
+        requiresDelegatedRecoverySource(entry, source, sessionKey)
       ) {
         const outcome = await finishDelegatedRestartRecovery({
           ...target,

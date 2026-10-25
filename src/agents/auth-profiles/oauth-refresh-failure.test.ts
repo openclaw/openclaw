@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { FailoverError } from "../failover-error.js";
 import { createOAuthRefreshCredential as credential } from "./credential-fixtures.test-support.js";
 import {
@@ -8,7 +9,6 @@ import {
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
   isTransientOAuthRefreshFailure,
-  formatOAuthRefreshFailureLoginCommandMarkdown,
   OAuthManagerRefreshError,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
@@ -126,7 +126,7 @@ it.each([
   const command = buildOAuthRefreshFailureLoginCommand(provider, { profileId });
   expect(command).toBe(expected);
   if (profileId === "openai:work`slot") {
-    expect(formatOAuthRefreshFailureLoginCommandMarkdown(command)).toBe(
+    expect(formatInlineCodeSpan(command)).toBe(
       "``openclaw models auth login --provider openai --profile-id 'openai:work`slot'``",
     );
   }

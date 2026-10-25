@@ -1,14 +1,17 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   applyLocalPackageOverrides,
   captureLocalPackageOverrides,
+  prepareLocalOverrideRuntime,
 } from "./package-local-overrides.js";
 import { useLocalOverrideTestState } from "./package-local-overrides.test-support.js";
 import { writePackageRoot } from "./package-update-steps.test-support.js";
+import * as processEntrypoints from "./runtime-process-url.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -76,7 +79,7 @@ it.each([
     const preload = `data:text/javascript,${encodeURIComponent(publicationFaultPreload(packageRoot, marker, scenario))}`;
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     vi.mocked(execFile).mockImplementation((file, args, options, callback) => {
-      if (file !== process.execPath || !args?.includes("--eval")) {
+      if (file !== process.execPath || !args) {
         throw new Error("Unexpected child process in replay publication test");
       }
       return actual.execFile(file, ["--import", preload, ...args], options, callback);
@@ -98,3 +101,39 @@ it.each([
     }
   }),
 );
+
+it("publishes with the worker and dependencies captured before its runtime tree moves", () =>
+  withTestDir({ prefix: "openclaw-override-retained-runtime-" }, async (base) => {
+    const packageRoot = path.join(base, "package");
+    await writePackageRoot(packageRoot, "1.0.0");
+    const indexPath = path.join(packageRoot, "dist/index.js");
+    await fs.writeFile(indexPath, "operator override\n");
+    const plan = await captureLocalPackageOverrides({ packageRoot });
+    await writePackageRoot(packageRoot, "2.0.0");
+
+    const requestedRuntimeRoot = path.join(base, "runtime");
+    await fs.mkdir(requestedRuntimeRoot);
+    const runtimeRoot = await fs.realpath(requestedRuntimeRoot);
+    const retainedRoot = path.join(path.dirname(runtimeRoot), "retained-runtime");
+    const worker = path.join(runtimeRoot, "publication.worker.ts");
+    await fs.writeFile(path.join(runtimeRoot, "package.json"), JSON.stringify({ type: "module" }));
+    await fs.copyFile(new URL("./package-local-overrides.worker.ts", import.meta.url), worker);
+    const resolve = processEntrypoints.resolveRuntimeProcessEntrypointUrl;
+    vi.spyOn(processEntrypoints, "resolveRuntimeProcessEntrypointUrl").mockImplementation((name) =>
+      name === "packageLocalOverrides" ? pathToFileURL(worker) : resolve(name),
+    );
+    const runtime = await prepareLocalOverrideRuntime({
+      sourceRoot: runtimeRoot,
+      destinationRoot: retainedRoot,
+    });
+    await fs.rename(runtimeRoot, retainedRoot);
+
+    const result = await applyLocalPackageOverrides({
+      packageRoot,
+      plan,
+      reapply: true,
+      runtime,
+    });
+    expect(result).toMatchObject({ status: "applied", applied: 1 });
+    await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("operator override\n");
+  }));

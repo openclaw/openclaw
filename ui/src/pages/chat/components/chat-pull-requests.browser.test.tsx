@@ -132,18 +132,29 @@ it.each(["props", "owner", "parked"])(
 );
 
 it.each([
-  { viewport: 1440, width: 360, repo: "openclaw" },
-  { viewport: 900, width: 300, repo: "a-very-long-repository-name-that-needs-truncation" },
-  { viewport: 393, width: 360, repo: "openclaw" },
+  { viewport: 1440, width: 360, repo: "openclaw", clipped: false },
+  {
+    viewport: 900,
+    width: 300,
+    repo: "a-very-long-repository-name-that-needs-truncation",
+    clipped: false,
+  },
+  { viewport: 393, width: 360, repo: "openclaw", clipped: false },
+  { viewport: 900, width: 300, repo: "openclaw", clipped: true },
 ])(
-  "keeps the native branch row above aligned diff and publication actions at $viewport/$width",
-  async ({ viewport, width, repo }) => {
+  "keeps the native branch row above aligned diff and publication actions at $viewport/$width (clipped: $clipped)",
+  async ({ viewport, width, repo, clipped }) => {
     await page.viewport(viewport, 700);
     document.body.append(container);
     const onPublish = vi.fn();
     const onSelect = vi.fn();
     const onDismissBranch = vi.fn();
-    const branch = sessionBranch({ repo, branch: "openclaw/custom-snooze-date-time" });
+    const branch = sessionBranch({
+      repo,
+      branch: clipped
+        ? "openclaw/custom-snooze-date-time-with-a-branch-name-that-needs-truncation"
+        : "openclaw/custom-snooze-date-time",
+    });
     const shared = { source: "agent-override" as const, accountId: 1, login: "agent-bot" };
     mounted = mountSolid(
       () => (
@@ -203,7 +214,9 @@ it.each([
       { container },
     );
     await waitForSolid(() =>
-      expect(container.querySelector(".chat-environment__branch")).not.toBeNull(),
+      expect(
+        container.querySelector(".chat-environment__branch .chat-pr__actions-trigger"),
+      ).not.toBeNull(),
     );
     const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
     const branchLabel = row.querySelector<HTMLElement>(".chat-environment__branch-name")!;
@@ -245,9 +258,11 @@ it.each([
       Number.parseFloat(getComputedStyle(branchLabel).lineHeight) + 1,
     );
     expect(getComputedStyle(branchLabel).textOverflow).toBe("clip");
-    await waitForSolid(() =>
-      expect(getComputedStyle(branchLabel).maskImage).toContain("linear-gradient"),
-    );
+    await waitForSolid(() => {
+      expect(branchLabel.scrollWidth > branchLabel.clientWidth + 1).toBe(clipped);
+      expect(getComputedStyle(branchLabel).maskImage !== "none").toBe(clipped);
+    });
+    expect(branchLabel.parentElement?.getAttribute("title")).toBe(branch.branch);
     expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth + 1);
 
     const dismiss = page.getByRole("button", {
@@ -350,7 +365,7 @@ it.each([
     );
     const host = container.querySelector("openclaw-chat-details-session")!;
     await host.updateComplete;
-    await waitForSolid(() => expect(container.querySelector(".chat-pr")).not.toBeNull());
+    await waitForSolid(() => expect(container.querySelector("a.chat-pr__link")).not.toBeNull());
     const group = container.querySelector<HTMLDetailsElement>(
       '[data-details-group="pull-requests"]',
     )!;
@@ -430,6 +445,13 @@ it.each([
     expect(document.activeElement).toBe(trigger);
     await userEvent.keyboard("{Enter}");
     await expect.element(dismiss).toBeVisible();
+
+    for (const id of ["checks", "monitoring"]) {
+      await page.elementLocator(menu.querySelector<HTMLElement>(`[data-value="${id}"]`)!).click();
+      await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe("back");
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe(id);
+    }
     host.presented = false;
     await host.updateComplete;
     await expect.poll(() => menu.matches(":popover-open")).toBe(false);

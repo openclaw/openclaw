@@ -14,6 +14,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import { readTranscriptSessionEntries } from "./store-sqlite-read.js";
 import { appendMeetingTranscriptUtterance, meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
@@ -162,6 +163,30 @@ function session(
 ): TranscriptSessionDescriptor {
   return { sessionId, source: { providerId: "manual-transcript" }, startedAt };
 }
+
+it("lists summary presence by complete session identity in one read", async () => {
+  const first = await admit(session("repeated"));
+  const later = await admit(session("repeated", "2026-07-02T10:00:00.000Z"));
+  const sibling = await admit(session("sibling", later.startedAt));
+  const expected = (hasSummary: boolean) => [
+    { session: later, hasSummary: false },
+    { session: sibling, hasSummary: false },
+    { session: first, hasSummary },
+  ];
+  expect(await store.listSessionEntries()).toMatchObject(expected(false));
+  await store.writeSummary(summarizeTranscripts({ session: first, utterances: [] }), first);
+  expect(await store.listSessionEntries()).toMatchObject(expected(true));
+
+  const database = stateDatabase();
+  const statements: string[] = [];
+  const sql = observeMainThreadSql({ onStatement: (query) => statements.push(query) });
+  try {
+    expect(readTranscriptSessionEntries(database)).toMatchObject(expected(true));
+    expect(statements).toHaveLength(1);
+  } finally {
+    sql.restore();
+  }
+});
 
 it("reuses list pages without worker requests and observes another store's writes", async () => {
   const writer = createStore();
@@ -708,7 +733,7 @@ it("stores summaries in SQLite and materializes artifacts beneath a shared expor
   const artifacts = await store.materializeSessionArtifacts(target, "all");
 
   expect(markdownPath).toBe(path.join(store.sessionDir(target), "summary.md"));
-  expect(JSON.parse(readText(artifacts.summaryJsonPath))).toMatchObject({
+  expect(JSON.parse(readText(path.join(artifacts.sessionDir, "summary.json")))).toMatchObject({
     sessionId: target.sessionId,
   });
   expect(readText(artifacts.transcriptPath)).toContain('"text":"We decided to ship the CLI."');

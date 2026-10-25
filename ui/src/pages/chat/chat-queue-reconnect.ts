@@ -35,7 +35,7 @@ export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSess
     if (chatOutboxOwner(host).hasVolatile(host, item.id)) {
       chatOutboxOwner(host).change(host, item.id, (current) => ({
         ...current,
-        sendState: "unconfirmed",
+        sendState: "waiting-reconnect",
       }));
       continue;
     }

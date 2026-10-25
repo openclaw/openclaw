@@ -99,8 +99,10 @@ async function mountComments(additional: ChatAttachment[] = []) {
   )!;
   document.body.append(card);
   flush();
-  const edit = () =>
+  const edit = async () => {
     composer.querySelector<HTMLButtonElement>('button[aria-label="Edit comment 1"]')!.click();
+    await waitForSolid(() => expect(input()).not.toBeNull());
+  };
   const input = () =>
     document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea");
   const save = () =>
@@ -159,7 +161,7 @@ describe("comment actions outside the transcript", () => {
       action = (event as CustomEvent<ChatCommentAction>).detail;
     });
 
-    fixture.edit();
+    await fixture.edit();
 
     expect(action).toMatchObject({ id: fixture.attachment.id, action: "edit" });
     expect(action?.anchor).toBe(trigger);
@@ -218,7 +220,11 @@ describe("comment actions outside the transcript", () => {
         detail: { action: "edit", id: attachment.id },
       }),
     );
-    const editor = document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea")!;
+    const editor = await waitForSolid(() => {
+      const input = document.querySelector<HTMLTextAreaElement>(".chat-annotation-editor textarea");
+      expect(input).not.toBeNull();
+      return input!;
+    });
     expect(editor.value).toBe("In-progress edit");
     editor.value = "A draft that must survive";
 
@@ -238,7 +244,7 @@ describe("comment actions outside the transcript", () => {
 
   it("edits and deletes staged comments without a built-in transcript, releasing replaced payloads", async () => {
     const fixture = await mountComments();
-    fixture.edit();
+    await fixture.edit();
     expect(fixture.input()?.value).toBe("Original comment");
     fixture.input()!.value = "Revised comment";
     fixture.save().click();
@@ -270,7 +276,7 @@ describe("comment actions outside the transcript", () => {
       },
     });
     flush();
-    fixture.edit();
+    await fixture.edit();
     fixture.input()!.value = "Original comment!";
     fixture.save().click();
     flush();
@@ -306,7 +312,7 @@ describe("comment actions outside the transcript", () => {
     const otherSession = createComment("agent:main:other");
     const ordinaryFile = file("ordinary-file");
     const fixture = await mountComments([second, ordinaryFile, otherSession]);
-    fixture.edit();
+    await fixture.edit();
     fixture.composer
       .querySelector<HTMLButtonElement>('button[aria-label="Remove all comments"]')!
       .click();
@@ -323,7 +329,7 @@ describe("comment actions outside the transcript", () => {
     "retires an open editor and rejects its detached Save control when %s",
     async (reason) => {
       const fixture = await mountComments();
-      fixture.edit();
+      await fixture.edit();
       fixture.input()!.value = "Retired edit";
       const save = fixture.save();
       if (reason === "disabled") {
@@ -352,7 +358,7 @@ describe("comment actions outside the transcript", () => {
     fixture.controller.remove();
     fixture.card.prepend(fixture.controller);
     flush();
-    fixture.edit();
+    await fixture.edit();
     expect(fixture.input()).not.toBeNull();
     fixture.signalOwner.abort();
     expect(fixture.input()).toBeNull();
@@ -360,7 +366,7 @@ describe("comment actions outside the transcript", () => {
 
   it("keeps same-scope editors open and transfers abort ownership when the read signal changes", async () => {
     const fixture = await mountComments();
-    fixture.edit();
+    await fixture.edit();
     fixture.update({ props: { ...fixture.view().props, draft: "A new draft" } });
     flush();
     expect(fixture.input()).not.toBeNull();
@@ -369,7 +375,7 @@ describe("comment actions outside the transcript", () => {
     fixture.update({ props: { ...fixture.view().props, readSignal: nextOwner.signal } });
     flush();
     expect(fixture.input()).toBeNull();
-    fixture.edit();
+    await fixture.edit();
     fixture.signalOwner.abort();
     expect(fixture.input()).not.toBeNull();
     nextOwner.abort();

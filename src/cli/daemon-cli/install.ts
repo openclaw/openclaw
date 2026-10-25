@@ -13,8 +13,6 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
-import type { GatewayBindMode } from "../../config/types.gateway.js";
-import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { isNodeRuntime } from "../../daemon/runtime-binary.js";
 import {
@@ -72,17 +70,12 @@ import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./respo
 import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
-function resolveGatewayInstallBindMode(cfg: OpenClawConfig): GatewayBindMode {
-  return cfg.gateway?.bind ?? defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off");
-}
-
 /** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
-  platform?: NodeJS.Platform;
 }): NodeJS.ProcessEnv {
-  const platform = params.platform ?? process.platform;
+  const platform = process.platform;
   const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
   const currentEnv: NodeJS.ProcessEnv = {};
   for (const [rawKey, rawValue] of Object.entries(
@@ -312,7 +305,8 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     );
     return;
   }
-  const installBind = resolveGatewayInstallBindMode(cfg);
+  const installBind =
+    cfg.gateway?.bind ?? defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off");
   const installBindHost = await resolveGatewayBindHost(installBind, cfg.gateway?.customBindHost);
   function formatNoAuthNonLoopbackInstallBlock(): string | undefined {
     const auth = resolveGatewayAuth({

@@ -87,16 +87,19 @@ export function withLeaseWriteTransaction<T>(
       { ...transactionOptions, schemaSql: leaseSchema },
     );
   }
-  const stateDatabase = database.options?.database ?? openOpenClawStateDatabase(database.options);
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => operation(db),
-    { ...database.options, database: stateDatabase },
-    {
-      ...transactionOptions,
-      singleStatement:
-        singleStatement && !isPostgresSqlConnection(stateDatabase.db) ? true : undefined,
-    },
-  );
+  // Native renewal and release are lock primitives; their callers remain outside admission.
+  return withEngineStoreAdmission(() => {
+    const stateDatabase = database.options?.database ?? openOpenClawStateDatabase(database.options);
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => operation(db),
+      { ...database.options, database: stateDatabase },
+      {
+        ...transactionOptions,
+        singleStatement:
+          singleStatement && !isPostgresSqlConnection(stateDatabase.db) ? true : undefined,
+      },
+    );
+  });
 }
 
 export const STATE_LEASE_WRITE_BACKOFF = {
@@ -159,9 +162,9 @@ export function verifyOpenClawStateLeaseOwnership(
     if (isStatePostgres() && maintenance?.ownsSchemaMaintenance) {
       // Doctor's synchronous lease check remains inside its admitted maintenance lifetime.
       maintenance.assertAdmission();
-      return withEngineStoreAdmission(read);
     }
-    return read();
+    // Admit only the synchronous lease check; protected operations retain their own SQL boundary.
+    return withEngineStoreAdmission(read);
   } catch (error) {
     throw toOpenClawStateLeaseVerificationError(params, error);
   }

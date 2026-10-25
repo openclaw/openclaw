@@ -35,6 +35,7 @@ import {
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
+import { registerCopilotPromptTests } from "./attempt-prompt.test-support.js";
 import type { AttemptParamsLike, CopilotAttemptDeps } from "./attempt-types.js";
 import { registerCopilotWorkspaceTests } from "./attempt-workspace.test-support.js";
 import { runCopilotAttempt as runCopilotAttemptEntry } from "./attempt.js";
@@ -1455,73 +1456,18 @@ describe("runCopilotAttempt", () => {
     },
   );
 
-  describe("workspace bootstrap (systemMessage)", () => {
-    beforeEach(() => {
-      workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockReset();
-      workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockResolvedValue(undefined);
-    });
-
-    it("sends the final appended developer instructions to the SDK and llm_input", async () => {
-      const rendered = "# Project Context\nSoul voice goes here.";
-      workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockResolvedValueOnce(rendered);
-      const { sdk, run } = makeAttempt();
-      const llmInput = vi.fn();
-      installHooks({ llm_input: llmInput });
-      const toolNames = [
-        "message",
-        "sessions_send",
-        "sessions_spawn",
-        "sessions_yield",
-        "skill_workshop",
-        "subagents",
-      ];
-
-      stubToolBridge(() => createStubToolBridge(toolNames.map(makeSdkTool)));
-      await run({
-        agentId: "main",
-        extraSystemPrompt: "Only answer in the current group thread.",
-        disableTools: false,
-        sessionKey: "agent:main:main",
-      });
-      await waitForEventLoopTurn();
-
-      const content = requireSystemMessage(sdk);
-      expect(requireCreateSessionConfig(sdk).systemMessage).toMatchObject({ mode: "append" });
-      expect(content).toContain(
-        `${rendered}\n\n## Conversation Context\nOnly answer in the current group thread.`,
-      );
-      expect(content).toContain("You are a personal agent running inside OpenClaw.");
-      expect(content).toContain("## Skill Workshop");
-      expect(content).toContain("## Delegation");
-      expect(content).toContain("spawn `sessions_spawn` with `visible=true`");
-      expect(content).toContain("automatically to the caller.");
-      expect(llmInput).toHaveBeenCalledWith(
-        expect.objectContaining({ systemPrompt: content }),
-        expect.any(Object),
-      );
-    });
-
-    it.each([{ modelRun: true }, { promptMode: "none" as const }])(
-      "keeps raw model runs outside generic prompt hooks: %j",
-      async (mode) => {
-        const beforePromptBuild = vi.fn(() => ({
-          appendContext: "must not reach raw model probes",
-          prependSystemContext: "must not reach raw model probes",
-        }));
-        installHooks({ before_prompt_build: beforePromptBuild });
-        const { sdk, run } = makeAttempt();
-
-        await run(mode);
-
-        expect(beforePromptBuild).not.toHaveBeenCalled();
-        expect(requireCreateSessionConfig(sdk)).not.toHaveProperty("systemMessage");
-        expect(requireSession(sdk).sendAndWait.mock.calls[0]?.[0]).toMatchObject({
-          prompt: "hello",
-        });
-      },
-    );
+  registerCopilotPromptTests({
+    makeAttempt,
+    makeSdkTool,
+    createStubToolBridge,
+    stubToolBridge,
+    requireCreateSessionConfig,
+    requireSystemMessage,
+    requireSession,
+    installHooks,
+    waitForEventLoopTurn,
+    workspaceBootstrapMock,
   });
-
   it("retains a timed-out session until later compaction reaches session.idle", async () => {
     const afterCompaction = vi.fn();
     const onDeferredCompaction = vi.fn();

@@ -248,6 +248,8 @@ export async function verifyPriorCiSecurity({
   repositoryId,
   pr,
   head,
+  ciRunId,
+  ciRunAttempt,
   main,
   statusId,
 }) {
@@ -331,7 +333,12 @@ export async function verifyPriorCiSecurity({
       ),
     "incomplete Security Review job identities",
   );
-  const matches = jobs.filter((job) => job.name === `review (${pr}, ${head})`);
+  // Comment reviews target a head; completed-CI reviews also name its exact attempt.
+  const matches = jobs.filter(
+    (job) =>
+      job.name === `review (${pr}, ${head})` ||
+      job.name === `review (${pr}, ${head}, ${ciRunId}, ${ciRunAttempt})`,
+  );
   const steps = matches[0]?.steps?.filter((step) => step.name === "Enforce security review");
   requireEvidence(
     matches.length === 1 &&

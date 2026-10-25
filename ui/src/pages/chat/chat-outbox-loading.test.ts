@@ -2,18 +2,17 @@
 import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { makeChatHost, makeRequestMock, expectRequestCounts } from "./chat-host.test-support.ts";
-import { idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
+import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { createTestPageState } from "./chat-page-state.test-support.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { handleSendChat } from "./chat-send-submit.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
 
-afterEach(() => vi.doUnmock("./chat-outbox-receipts.ts"));
+afterEach(() => vi.doUnmock("./chat-outbox-readiness.ts"));
 
 it.each([
   "current",
@@ -35,14 +34,24 @@ it.each([
       sessionKey,
       currentSessionId: "outbox-session",
       chatRunId: "finished-run",
-      chatMessage: "Retained outbox message",
+      chatQueue: [
+        {
+          id: "retained-input",
+          text: "Retained outbox message",
+          createdAt: 1,
+          sessionKey,
+          sendRunId: "next-run",
+          sendState: "waiting-idle",
+          sendAttempts: 0,
+        },
+      ],
       requestHandlers: {
         "chat.history": history,
         "chat.send": { runId: "next-run", status: "started", messageSeq: 1 },
       },
     }),
   );
-  await handleSendChat(host, undefined, { followUpMode: "queue" });
+  admitHostQueueItems(host);
   expect(host.chatQueue).toHaveLength(1);
   const renderedErrors: Array<string | null | undefined> = [];
   const dispose = createRoot((stop) => {
@@ -58,10 +67,12 @@ it.each([
 
   const started = createDeferred();
   const ready = createDeferred();
-  vi.doMock("./chat-outbox-receipts.ts", async () => {
+  vi.doMock("./chat-outbox-readiness.ts", async () => {
     started.resolve();
     await ready.promise;
-    return vi.importActual<typeof import("./chat-outbox-receipts.ts")>("./chat-outbox-receipts.ts");
+    return vi.importActual<typeof import("./chat-outbox-readiness.ts")>(
+      "./chat-outbox-readiness.ts",
+    );
   });
   const draining = resumeStoredChatOutboxes(host);
   try {

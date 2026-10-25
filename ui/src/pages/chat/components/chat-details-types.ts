@@ -7,10 +7,12 @@ import type {
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
-import type { ChatOutputsDesktopProps } from "./chat-outputs.tsx";
+import type { ChatOutputsDesktopProps } from "./chat-outputs-data.ts";
 import type { ChatPanePlacementProps } from "./chat-pane-placement.tsx";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+
+export type ChatProcessShowRequest = { instanceId: string | null; fromDetails: boolean };
 
 type ChatDetailsWorkspace = { root: string | null; label: string | null; branch?: string };
 
@@ -71,10 +73,6 @@ type ChatDetailsEnvironmentData = Pick<
 
 /** Published assistant-artifact/dashboard facts and real destination/icon operations. */
 export type ChatDetailsOutputs = ChatOutputsDesktopProps;
-export type ChatDetailsOutputsIcons = Pick<
-  ChatDetailsOutputs,
-  "renderArtifactIcon" | "renderViewAllIcon"
->;
 
 // Both the composing view and Details consume this contract; child components
 // must not import their parent renderer to recover accepted pane facts.
@@ -115,7 +113,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     onOpenSessionDiff?: () => void;
     onOpenWorkspace?: () => void;
     /** Opens this pane's Processes panel; absent where the pane has none. */
-    onOpenProcesses?: () => void;
+    onOpenProcesses?: (instanceId?: string) => void;
     onCompact?: () => void | Promise<unknown>;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
     onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;

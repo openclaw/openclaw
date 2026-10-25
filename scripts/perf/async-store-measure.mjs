@@ -1,21 +1,24 @@
-// Run on the approved benchmark host with Node 26; no build or dependencies needed.
+// Run on the approved benchmark host with Node 26 and --import ./scripts/tsx.mjs.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
+import { AsyncContext } from "../../src/shared/async-context.ts";
 import { runWithAsyncStore } from "../../src/shared/async-store.ts";
 
-const [variant = "single", countText = "26", iterationsText = "200000"] = process.argv.slice(2);
+const [variant = "single", countText = "26", iterationsText = "200000", profilePath] =
+  process.argv.slice(2);
 const count = Number(countText);
 const iterations = Number(iterationsText);
 if (
-  !["stock", "single", "linked", "slots"].includes(variant) ||
+  !["stock", "single", "consolidated", "linked", "slots"].includes(variant) ||
   !Number.isSafeInteger(count) ||
   count < 1 ||
   !Number.isSafeInteger(iterations) ||
   iterations < 1
 ) {
   throw new Error(
-    "Usage: async-store-measure.mjs <stock|single|linked|slots> <stores> <iterations>",
+    "Usage: async-store-measure.mjs <stock|single|consolidated|linked|slots> <stores> <iterations> [profile-path]",
   );
 }
 
@@ -23,7 +26,9 @@ const values = Array.from({ length: 64 }, (_, index) => Object.freeze({ value: i
 let sink = 0;
 
 function nativeStores() {
-  const stores = Array.from({ length: count + 1 }, () => new AsyncLocalStorage());
+  const stores = Array.from({ length: count + 1 }, () =>
+    variant === "consolidated" ? new AsyncContext(Symbol("measured")) : new AsyncLocalStorage(),
+  );
   const target = stores[count];
   const enter =
     variant === "stock" ? (storage, value, run) => storage.run(value, run) : runWithAsyncStore;
@@ -85,7 +90,9 @@ function persistentStores() {
   };
 }
 
-const stores = variant === "stock" || variant === "single" ? nativeStores() : persistentStores();
+const stores = ["stock", "single", "consolidated"].includes(variant)
+  ? nativeStores()
+  : persistentStores();
 await stores.within(async () => {
   const inspector = new Session();
   inspector.connect();
@@ -103,7 +110,27 @@ await stores.within(async () => {
       stores.run(values[index & 63]);
     }
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
+    if (profilePath) {
+      writeFileSync(profilePath, JSON.stringify(profile));
+    }
     const bytes = profile.samples.reduce((total, sample) => total + sample.size, 0);
+    const nativeFrameNodes = new Set();
+    const visit = (node, inFrame = false) => {
+      const frame =
+        inFrame ||
+        (node.callFrame.url.includes("internal/async_context_frame") &&
+          node.callFrame.functionName === "AsyncContextFrame");
+      if (frame) {
+        nativeFrameNodes.add(node.id);
+      }
+      for (const child of node.children ?? []) {
+        visit(child, frame);
+      }
+    };
+    visit(profile.head);
+    const nativeFrameSamples = profile.samples.filter((sample) =>
+      nativeFrameNodes.has(sample.nodeId),
+    );
     // Timings are separate from the allocation profiler, whose overhead depends on bytes.
     const started = performance.now();
     for (let index = 0; index < iterations; index++) {
@@ -132,6 +159,11 @@ await stores.within(async () => {
         stores: count,
         iterations,
         bytesPerRun: bytes / iterations,
+        allocationSamples: profile.samples.length,
+        nativeFrameBytesPerRun: nativeFrameSamples.length
+          ? nativeFrameSamples.reduce((total, sample) => total + sample.size, 0) / iterations
+          : null,
+        nativeFrameAllocationSamples: nativeFrameSamples.length,
         runNs,
         getStoreNs: lookups,
         sink,

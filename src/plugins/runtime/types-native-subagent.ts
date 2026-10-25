@@ -3,6 +3,8 @@ type NativeSubagentSpawnParams = {
   /** Stable within this parent turn and plugin; replay returns the native accepted child. */
   requestId: string;
   task: string;
+  /** Local id registered by this plugin; cannot select another plugin’s profile. */
+  profile?: string;
   taskName?: string;
   label?: string;
   model?: string;
@@ -44,6 +46,8 @@ type NativeSubagentCollection = {
     sessionKey: string;
     status: "done" | "failed" | "killed" | "timeout";
     result: string;
+    /** The result may be incomplete: its complete answer was unavailable or exceeded 100 KB. */
+    resultTruncated?: true;
     structured?: unknown;
     error?: string;
     schemaError?: string;

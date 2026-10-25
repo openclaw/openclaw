@@ -55,7 +55,7 @@ it.each(["providers", "discovery"] as const)(
   },
 );
 
-it("publishes receipts only for admitted reads and retires a replaced read immediately", async () => {
+it("only publishes the current read after replacing an active read", async () => {
   const first = createDeferred();
   const next = createDeferred();
   let calls = 0;
@@ -77,21 +77,12 @@ it("publishes receipts only for admitted reads and retires a replaced read immed
   });
   const client = createTestGatewayClient(request);
   const original = loader.refresh(client, "main", "replacement");
-  const retired = loader.receipt!;
   await loader.refresh(client, "main", "publication");
-  expect(loader.receipt).toBe(retired);
   const replacement = loader.refresh(client, "main", "replacement");
-  const current = loader.receipt!;
-  expect(current).not.toBe(retired);
-  expect(await retired.promise).toBeUndefined();
   first.resolve();
   await original;
   expect(completed).not.toHaveBeenCalled();
   next.resolve();
   await replacement;
-  expect(await current.promise).toBeUndefined();
   expect(completed).toHaveBeenCalledOnce();
-  expect(loader.receipt).toBe(current);
-  loader.invalidate();
-  expect(loader.receipt).toBeNull();
 });

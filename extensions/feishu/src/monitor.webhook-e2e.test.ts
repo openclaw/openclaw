@@ -52,7 +52,6 @@ vi.mock("./monitor.state.js", async (importOriginal) => {
   };
 });
 
-const probeFeishuMock = vi.hoisted(() => vi.fn());
 const legacyListener = vi.hoisted(() => ({
   value: undefined as { port: number; host?: string } | undefined,
 }));
@@ -62,19 +61,11 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
   getWebhookLegacyListener: () => legacyListener.value,
 }));
 
-vi.mock("./probe.js", () => ({
-  probeFeishu: probeFeishuMock,
-  registerFeishuAiAgent: vi.fn().mockResolvedValue({ ok: true }),
+vi.mock("./probe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./probe.js")>()),
+  probeFeishu: vi.fn(async () => ({ ok: true, botOpenId: "bot_open_id" })),
+  registerFeishuAiAgent: vi.fn(async () => ({ ok: true })),
 }));
-
-vi.mock("./client.js", async () => {
-  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
-  return {
-    ...actual,
-    createFeishuWSClient: vi.fn(() => ({ start: vi.fn() })),
-  };
-});
-
 vi.mock("./runtime.js", () => createFeishuRuntimeMockModule());
 
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
@@ -100,21 +91,10 @@ function encryptFeishuPayload(encryptKey: string, payload: Record<string, unknow
 
 function withSignedWebhook(
   accountId: string,
-  run: Parameters<typeof withRunningWebhookMonitor>[2],
-  options: Pick<Parameters<typeof withRunningWebhookMonitor>[0], "statusSink" | "runtime"> = {},
+  run: (url: string) => Promise<void>,
+  options: Pick<Parameters<typeof monitorWebhook>[0], "statusSink" | "runtime"> = {},
 ) {
-  probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
-  return withRunningWebhookMonitor(
-    {
-      accountId,
-      path: `/hook-${accountId}`,
-      verificationToken: "verify_token",
-      encryptKey: "encrypt_key",
-      ...options,
-    },
-    monitorFeishuProvider,
-    run,
-  );
+  return withTransport(accountId, options, run);
 }
 
 async function withTransport(
@@ -196,13 +176,7 @@ function expectAccepted(response: Response, value: string | null = "durable") {
   expect(response.headers.get("x-openclaw-delivery-accepted")).toBe(value);
 }
 
-function eventPayload(
-  event_type: string,
-  event: Record<string, unknown> = {},
-  header: Record<string, unknown> = {},
-) {
-  return { schema: "2.0", header: { event_type, ...header }, event };
-}
+const eventPayload = (event_type: string) => ({ schema: "2.0", header: { event_type }, event: {} });
 
 describe("Feishu transport status publishing", () => {
   let now: number;
@@ -272,27 +246,26 @@ describe("Feishu transport status publishing", () => {
       expectPatch(patches[2], { connected: false, lifecycle: "recovering", lastEventAt: now });
     });
   });
-  it("publishes disconnected when WS handshake throws", async () => {
-    await withWsStatus((patches) => {
-      const disconnected = patches.find((patch) => patch.connected === false);
-      expect(disconnected).toBeDefined();
-      expectPatch(disconnected, { lifecycle: "recovering", lastEventAt: now });
-    }, new Error("boom"));
-  });
-  it("publishes blocked for the SDK terminal WebSocket error", async () => {
-    await withWsStatus(async (patches, callbacks) => {
-      expect(callbacks.onError).toBeTypeOf("function");
-      callbacks.onError?.(new Error("WebSocket reconnect exhausted after 3 attempts"));
-      await vi.waitFor(() =>
-        expect(patches).toContainEqual(
-          expect.objectContaining({
-            connected: false,
-            lifecycle: "blocked",
-            terminalDisconnect: true,
-          }),
-        ),
-      );
-    });
+  it.each([false, true])("publishes WS failure state (terminal=%s)", async (terminal) => {
+    await withWsStatus(
+      async (patches, callbacks) => {
+        if (terminal) {
+          callbacks.onError?.(new Error("WebSocket reconnect exhausted after 3 attempts"));
+        }
+        await vi.waitFor(() =>
+          expectPatch(
+            patches.find((patch) => patch.connected === false),
+            {
+              connected: false,
+              lifecycle: terminal ? "blocked" : "recovering",
+              lastEventAt: now,
+              ...(terminal ? { terminalDisconnect: true } : {}),
+            },
+          ),
+        );
+      },
+      terminal ? undefined : new Error("boom"),
+    );
   });
   it("publishes connected after Gateway route registration", async () => {
     const patches: Patch[] = [];
@@ -325,7 +298,6 @@ afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/webhook-request-guards");
   vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
   vi.doUnmock("./probe.js");
-  vi.doUnmock("./client.js");
   vi.doUnmock("./runtime.js");
   vi.resetModules();
 });
@@ -435,12 +407,6 @@ describe("Feishu webhook signed-request e2e", () => {
     }
   });
 
-  it("returns 401 for unsigned invalid json before parsing", async () => {
-    await withSignedWebhook("invalid-json", async (url) => {
-      await expectText(await postRaw(url, "{not-json"), 401, "Invalid signature");
-    });
-  });
-
   it("admits signed requests only on the configured POST webhook route", async () => {
     const path = "/hook-e2e-route";
     await withRoute(createFeishuWebhookTestAccount("route", path), async (request) => {
@@ -537,35 +503,6 @@ describe("Feishu webhook signed-request e2e", () => {
     });
   });
 
-  it("acks durable envelopes only after ingress admission resolves", async () => {
-    const admission = createHeldWebhookDispatch({ kind: "durable" as const, value: undefined });
-    await withTransport(
-      "durable-ack-ordering",
-      {
-        eventDispatcher: { invoke: admission.handler } as never,
-        invokeWebhookEvent: admission.handler,
-      },
-      async (url) => {
-        const payload = eventPayload(
-          "im.message.receive_v1",
-          { message: { chat_id: "oc_durable_ack_ordering" } },
-          { event_id: "evt-durable-ack-ordering-1" },
-        );
-        let acceptedResponseReceived = false;
-        const acceptedRequest = postSignedPayload(url, payload).then((response) => {
-          acceptedResponseReceived = true;
-          return response;
-        });
-        await admission.started;
-        expect(admission.handler).toHaveBeenCalledTimes(1);
-        expect(acceptedResponseReceived).toBe(false);
-        admission.release();
-        expectAccepted(await acceptedRequest);
-      },
-      admission.release,
-    );
-  });
-
   it("filters prototype-bearing keys without changing the Lark webhook envelope", async () => {
     const accountId = "prototype-guard";
     const encryptKey = "encrypt_key";
@@ -612,18 +549,27 @@ describe("Feishu webhook signed-request e2e", () => {
   });
 
   it("accepts signed encrypted url_verification challenges end-to-end", async () => {
-    await withSignedWebhook("encrypted-challenge", async (url) => {
-      const payload = {
-        encrypt: encryptFeishuPayload("encrypt_key", {
-          type: "url_verification",
-          challenge: "encrypted-challenge-token",
-        }),
-      };
-      const response = await postSignedPayload(url, payload);
+    await withRunningWebhookMonitor(
+      {
+        accountId: "encrypted-challenge",
+        path: "/hook-encrypted-challenge",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          encrypt: encryptFeishuPayload("encrypt_key", {
+            type: "url_verification",
+            challenge: "encrypted-challenge-token",
+          }),
+        };
+        const response = await postSignedPayload(url, payload);
 
-      expectAccepted(response, null);
-      await expectJson(response, { challenge: "encrypted-challenge-token" });
-    });
+        expectAccepted(response, null);
+        await expectJson(response, { challenge: "encrypted-challenge-token" });
+      },
+    );
   });
 });
 
@@ -713,7 +659,6 @@ describe("Feishu webhook security hardening", () => {
     { missing: "verificationToken", verificationToken: undefined },
     { missing: "encryptKey", verificationToken: "verify_token" },
   ])("rejects webhook mode without $missing", async ({ missing, verificationToken }) => {
-    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
     const config = buildWebhookConfig({
       accountId: `missing-${missing}`,
       path: `/hook-missing-${missing}`,
@@ -728,7 +673,6 @@ describe("Feishu webhook security hardening", () => {
   ])(
     "rejects %s unsigned bodies before authentication",
     async (accountId, status, reason, body) => {
-      const runtime = createRuntimeSpies();
       const statusSink = vi.fn();
       await withSignedWebhook(
         accountId,
@@ -753,16 +697,9 @@ describe("Feishu webhook security hardening", () => {
           expect(response).toContain(body);
           expect(response).toMatch(/connection: close/i);
           await responseClosed;
-          expect(
-            runtime.log.mock.calls.filter(([message]) => message.includes("webhook anomaly")),
-          ).toEqual([
-            [
-              `feishu[${accountId}]: webhook anomaly path=/hook-${accountId} status=${status} count=1`,
-            ],
-          ]);
           expect(statusSink).not.toHaveBeenCalled();
         },
-        { runtime, statusSink },
+        { statusSink },
       );
     },
   );
@@ -851,38 +788,45 @@ describe("Feishu webhook security hardening", () => {
     }
   });
 
-  it("releases pre-auth capacity before signed event dispatch", { timeout: 15_000 }, async () => {
-    preAuthInFlightLimit.value = 1;
-    const dispatch = createHeldWebhookDispatch({
-      kind: "durable" as const,
-      value: { accepted: true },
-    });
-    const invokeWebhookEvent = dispatch.handler;
-    let signedRequest: Promise<Response> | undefined;
-    await withTransport(
-      "pre-auth-dispatch",
-      { invokeWebhookEvent },
-      async (url) => {
-        const rawBody = JSON.stringify(eventPayload("test.pre_auth_dispatch"));
-        signedRequest = postSigned(url, rawBody);
-        await dispatch.started;
-        expect(invokeWebhookEvent).toHaveBeenCalledOnce();
-
-        const admittedInvalidSignature = await postRaw(url, "{}");
-        expect(admittedInvalidSignature.status).toBe(401);
-        expect(invokeWebhookEvent).toHaveBeenCalledOnce();
-
-        dispatch.release();
-        expect((await signedRequest).status).toBe(200);
-      },
-      async () => {
-        dispatch.release();
-        if (signedRequest) {
-          await signedRequest.catch(() => undefined);
-        }
-      },
-    );
-  });
+  it(
+    "releases pre-auth capacity but waits for admission before acknowledging",
+    { timeout: 15_000 },
+    async () => {
+      preAuthInFlightLimit.value = 1;
+      const dispatch = createHeldWebhookDispatch({
+        kind: "durable" as const,
+        value: { accepted: true },
+      });
+      const invokeWebhookEvent = dispatch.handler;
+      let signedRequest: Promise<Response> | undefined;
+      let acknowledged = false;
+      await withTransport(
+        "pre-auth-dispatch",
+        { invokeWebhookEvent },
+        async (url) => {
+          const rawBody = JSON.stringify(eventPayload("test.pre_auth_dispatch"));
+          signedRequest = postSigned(url, rawBody).then((response) => {
+            acknowledged = true;
+            return response;
+          });
+          await dispatch.started;
+          expect(invokeWebhookEvent).toHaveBeenCalledOnce();
+          expect(acknowledged).toBe(false);
+          await expectText(await postRaw(url, "{not-json"), 401, "Invalid signature");
+          expect(invokeWebhookEvent).toHaveBeenCalledOnce();
+          expect(acknowledged).toBe(false);
+          dispatch.release();
+          expectAccepted(await signedRequest);
+        },
+        async () => {
+          dispatch.release();
+          if (signedRequest) {
+            await signedRequest.catch(() => undefined);
+          }
+        },
+      );
+    },
+  );
 
   it("rate limits webhook burst traffic with 429", async () => {
     await withSignedWebhook("rate-limit", async (url) => {

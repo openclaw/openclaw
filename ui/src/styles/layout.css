@@ -1,5 +1,40 @@
 @import "./session-menu.css";
 
+.context-usage__title,
+.palette-session-settings__title,
+.palette-session-settings__machine {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.usage-list-label {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-detail-meta,
+.model-setup__provider-copy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.device-entry__heading,
+.personal-instructions__actions,
+.active-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .shell {
   /* One fixed canvas shared by routes; panels keep their own reading surfaces. */
   background-color: var(--bg-content, var(--bg));
@@ -108,11 +143,6 @@
   /* The collapsed strip shows all three base controls, so unlike the expanded
      safe edge this keeps the complete collapsed width. */
   --shell-chrome-safe-area-left: calc(var(--shell-controls-width) + 18px);
-}
-
-/* Drawer shells keep the nav mounted offscreen; desktop collapse removes it. */
-.shell--nav-collapsed:not(.shell--mobile-nav) .shell-nav {
-  display: none;
 }
 
 /* The collapsed sidebar restores its controls in the content header. On
@@ -555,6 +585,13 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
   background: color-mix(in srgb, var(--card) 88%, transparent);
   box-shadow: var(--focus-ring);
+}
+
+/* Forced colors suppress the normal shadow-only focus indicator. */
+@media (forced-colors: active) {
+  .settings-sidebar__search-input:focus-visible {
+    outline: 2px solid Highlight;
+  }
 }
 
 .settings-sidebar__search-input::-webkit-search-cancel-button {
@@ -1026,7 +1063,7 @@ openclaw-settings-save-indicator:empty {
   min-height: 100%;
   overflow: visible;
   border-inline-end: var(--resize-handle-line-size) solid var(--resize-handle-rest-color);
-  transition: width var(--shell-focus-duration) var(--shell-focus-ease);
+  transition: clip-path var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .shell-nav-backdrop {
@@ -1041,10 +1078,6 @@ openclaw-settings-save-indicator:empty {
   align-self: stretch;
   justify-self: end;
   z-index: 20;
-}
-
-.shell.shell--nav-resizing {
-  transition: grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .sidebar {
@@ -1067,6 +1100,7 @@ openclaw-settings-save-indicator:empty {
   --sidebar-lead: 20px;
   --sidebar-row-gap: 8px;
   --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
+  --sidebar-session-row-inset: 2px;
   --sidebar-pad-x: 10px;
   --sidebar-session-link-padding-block: 4px;
   --sidebar-session-row-floor: 30px;
@@ -1187,6 +1221,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-sessions {
   position: relative;
+  margin-top: var(--sidebar-session-link-padding-block);
 }
 
 .sidebar-session-root-drop {
@@ -1317,35 +1352,40 @@ openclaw-settings-save-indicator:empty {
   cursor: var(--cursor-action);
 }
 
+/* Pinned renders in its own list container above the chip list or agent roster. */
+.sidebar-recent-sessions--pinned {
+  margin-block-end: var(--sidebar-group-gap);
+}
+
 .shell:not(.shell--mobile-nav) .sidebar-recent-sessions {
   margin-inline: -6px;
-}
-
-.sidebar-shell__body--scroll-top {
-  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-out));
-}
-
-.sidebar-shell__body--scroll-middle {
-  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out));
-}
-
-.sidebar-shell__body--scroll-bottom {
-  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in));
 }
 
 .sidebar-shell__body--scroll-top,
 .sidebar-shell__body--scroll-middle,
 .sidebar-shell__body--scroll-bottom {
-  --sidebar-scroll-edge: right;
-
-  /* The second layer keeps the native scrollbar out of the content fade. */
+  /* Keep the scrollbar opaque; changing inherited mask tokens restyles every row. */
   mask:
-    var(--sidebar-body-mask),
-    linear-gradient(black, black) var(--sidebar-scroll-edge) / var(--scrollbar-size) 100% no-repeat;
+    none,
+    linear-gradient(black, black) right / var(--scrollbar-size) 100% no-repeat;
+}
+
+.sidebar-shell__body--scroll-top {
+  mask-image: linear-gradient(to bottom, var(--sidebar-fade-out)), linear-gradient(black, black);
+}
+
+.sidebar-shell__body--scroll-middle {
+  mask-image:
+    linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out)),
+    linear-gradient(black, black);
+}
+
+.sidebar-shell__body--scroll-bottom {
+  mask-image: linear-gradient(to bottom, var(--sidebar-fade-in)), linear-gradient(black, black);
 }
 
 :root[dir="rtl"] .sidebar-shell__body {
-  --sidebar-scroll-edge: left;
+  mask-position: 0% 50%;
 }
 
 .sidebar-recent-sessions__group {
@@ -1655,6 +1695,7 @@ openclaw-settings-save-indicator:empty {
    when rows stream in or grow a second subtitle line after first layout, so a
    grid list keeps a stale height and the next section paints over its rows. */
 .sidebar-recent-sessions__list,
+.sidebar-session-window,
 .sidebar-session-tree,
 .sidebar-session-tree__children,
 .sidebar-session-tree__list,
@@ -1677,7 +1718,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-session-tree__loading {
   min-height: var(--sidebar-session-row-min-height);
-  margin-inline: var(--sidebar-text-offset) 2px;
+  margin-inline: calc(var(--sidebar-text-offset) + var(--sidebar-session-row-inset)) 4px;
   clip-path: inset(calc((100% - 10px) / 2) 0 round var(--radius-sm));
 }
 
@@ -1720,6 +1761,22 @@ openclaw-settings-save-indicator:empty {
 .session-menu__text,
 .sidebar-session-catalog-project__label {
   flex: 1 1 auto;
+}
+
+.sidebar-session-catalog-host__label,
+.session-menu__text,
+.sidebar-session-catalog-project__label,
+.activity-feed__selected-person,
+.activity-feed__git-label,
+.activity-feed__session-headline,
+.activity-feed__session-owner,
+.agent-chat__goal-copy,
+.agent-chat__goal-label,
+.agent-chat__goal-objective,
+.cron-table__name-text,
+.cron-table__cell-value,
+.chat-queue__error-text,
+.multi-select__chip-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1873,13 +1930,13 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   min-width: 0;
   min-height: var(--sidebar-session-row-min-height);
-  padding-right: 2px;
+  padding: 0 calc(4px + var(--sidebar-session-state-reserve, 0px)) 0
+    var(--sidebar-session-row-inset);
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: var(--cursor-action);
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
+  /* Inherited color would restyle every row descendant on each animation frame. */
+  transition: background var(--duration-fast) ease;
 }
 
 /* Inset only the paint: adjacent fills need breathing room without shrinking
@@ -1980,13 +2037,23 @@ openclaw-settings-save-indicator:empty {
   .sidebar-recent-session:not(.sidebar-recent-session--child)
   > .sidebar-recent-session__link
   > .sidebar-session-indicator {
-  order: 1;
-  /* Center the trailing status glyph in the 24px archive action column. */
-  margin-inline-end: calc((24px - var(--sidebar-lead)) / 2);
+  position: absolute;
+  inset-inline-end: calc(6px + (24px - var(--sidebar-lead)) / 2);
+  top: 50%;
+  transform: translateY(-50%);
 
   &:empty {
     display: none;
   }
+}
+
+/* Keep activity at the row edge, after hover actions and the child toggle.
+   Empty indicators leave the full title width available. */
+.sidebar-recent-sessions__group--inline-owner
+  .sidebar-recent-session:not(.sidebar-recent-session--child):has(
+    > .sidebar-recent-session__link > .sidebar-session-indicator:not(:empty)
+  ) {
+  --sidebar-session-state-reserve: 24px;
 }
 
 /* No section header separates the rows from the owner picker. */
@@ -2003,7 +2070,7 @@ openclaw-settings-save-indicator:empty {
 
 /* Row actions overlay the link's trailing edge (on hover, or always on the
    mobile drawer); reserve that space on the link instead of the title so the
-   trailing status slides left of them rather than hiding beneath them. */
+   text and metadata stay clear of them. Status has its own fixed row slot. */
 .shell:not(.shell--mobile-nav)
   .sidebar-recent-sessions__group--inline-owner
   .sidebar-recent-session:not(.sidebar-recent-session--child):is(:hover, :focus-within),
@@ -2193,7 +2260,6 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-recent-session--active .sidebar-recent-session__name {
-  font-weight: 600;
   color: var(--text-strong);
 }
 
@@ -2203,7 +2269,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child) > .sidebar-recent-session__aside {
   position: absolute;
-  inset: 50% 2px auto auto;
+  inset: 50% calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
   transform: translateY(-50%);
   pointer-events: none;
 }
@@ -2215,7 +2281,8 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
   > .sidebar-recent-session__aside {
-  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2) 2px auto auto;
+  inset: calc(1px + max(24px, var(--sidebar-title-line-height)) / 2)
+    calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
 }
 
 .sidebar-recent-session--child > .sidebar-recent-session__aside {
@@ -2232,7 +2299,9 @@ openclaw-settings-save-indicator:empty {
    same link-relative geometry as toggle-less rows, so one mask fits both. */
 .sidebar-recent-session:not(.sidebar-recent-session--child):has(> .sidebar-child-session-toggle)
   > .sidebar-recent-session__aside {
-  right: calc(var(--sidebar-child-session-toggle-width) + 4px);
+  right: calc(
+    var(--sidebar-child-session-toggle-width) + 6px + var(--sidebar-session-state-reserve, 0px)
+  );
 }
 
 .sidebar-recent-session:not(
@@ -3036,13 +3105,12 @@ a:is(
 
   position: relative;
   min-height: max(32px, var(--sidebar-session-row-min-height));
-  padding: 0 8px;
+  padding: 0 10px;
   border: 1px solid transparent;
   color: var(--muted);
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
-    color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
 }
 
@@ -3067,7 +3135,7 @@ a:is(
 
   .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--single-line)
     > .sidebar-recent-session__aside {
-    inset: 50% 2px auto auto;
+    inset: 50% calc(4px + var(--sidebar-session-state-reserve, 0px)) auto auto;
   }
 
   .sidebar-recent-session:not(.sidebar-recent-session--child) .sidebar-recent-session__text {
@@ -3433,7 +3501,11 @@ openclaw-sidebar-attention {
 .sidebar-gateway-name,
 .gateway-status__label,
 .sidebar-identity-menu__name,
-.sidebar-identity-menu__email {
+.sidebar-identity-menu__email,
+.palette-session-settings__label,
+.palette-session-settings__secondary,
+.sidebar-issues-panel__entity,
+.sidebar-issues-panel__state {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4159,7 +4231,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   outline: none;
 }
 
-.content > * + * {
+/* Child position preserves spacing without a universal sibling invalidation set. */
+.content > :where(:not(:first-child)) {
   margin-top: 20px;
 }
 
@@ -4178,8 +4251,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--chat > * + *,
-.content--custodian > * + * {
+.content--chat > :where(:not(:first-child)),
+.content--custodian > :where(:not(:first-child)) {
   margin-top: 0;
 }
 
@@ -4201,7 +4274,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--workboard > * + * {
+.content--workboard > :where(:not(:first-child)) {
   margin-top: 14px;
 }
 
@@ -4522,7 +4595,8 @@ html.openclaw-native-web-chrome
   font-size: 6px;
 }
 
-.sidebar-session-tool {
+.sidebar-session-tool,
+.chat-tool-row__chevron {
   display: inline-flex;
   align-items: center;
   justify-content: center;

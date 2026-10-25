@@ -1,6 +1,15 @@
-import { action, createMemo, createOptimistic, createSignal, Show, untrack } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  onSettled,
+  Show,
+  untrack,
+} from "solid-js";
 import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-questions.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
@@ -20,6 +29,8 @@ import type {
   QuestionPanelViewModel,
 } from "./chat-question-types.ts";
 
+registerEnglishCatalog(registerChatQuestionsEnglish);
+
 registerEnglishCatalog(registerChatSessionEnglish);
 
 type PanelBridgeProps = { props?: QuestionPanelProps };
@@ -35,6 +46,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
   const [pendingKind, setPendingKind] = createOptimistic<"submit" | "skip" | null>(null);
   let resolving = false;
   let panel: HTMLElement | undefined;
+  let expandButton: HTMLButtonElement | undefined;
   let answerControl: HTMLInputElement | HTMLTextAreaElement | undefined;
   let hostsInput: HTMLInputElement | undefined;
   const options = new Set<HTMLButtonElement>();
@@ -73,6 +85,10 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
       props.panel.onCollapsedChange(value);
     } else {
       setUncontrolledCollapsed(value);
+      // Controlled callers own their destination (for example, the chat composer).
+      if (value) {
+        onSettled(() => expandButton?.focus({ preventScroll: true }));
+      }
     }
   };
   const updateDraft = (item: QuestionPanelQuestion, value: QuestionDraft) => {
@@ -316,6 +332,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               aria-label={model().title}
             >
               <button
+                ref={(element) => (expandButton = element)}
                 class="chat-question-panel__collapsed-button"
                 type="button"
                 onClick={() => setCollapsed(false)}
@@ -348,6 +365,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               role="group"
               aria-label={model().title}
               tabindex={0}
+              data-chat-autotype-shortcuts="active"
               onKeyDown={(event) => handleKeyDown(event, item())}
             >
               <div

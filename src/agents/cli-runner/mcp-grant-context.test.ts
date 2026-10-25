@@ -33,6 +33,28 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext", () => {
+  it("snapshots only elevated policy fields and preserves false availability", () => {
+    const elevated = {
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off" as const,
+      fullAccessAvailable: false,
+      privateMetadata: "must not enter the grant",
+    };
+    const grant = buildGrant({ bashElevated: elevated });
+    elevated.enabled = true;
+    expect(grant.bashElevated).toEqual({
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off",
+      fullAccessAvailable: false,
+    });
+    expect(buildGrant()).not.toHaveProperty("bashElevated");
+    expect(
+      buildGrant({ bashElevated: { ...elevated, fullAccessAvailable: undefined } }).bashElevated,
+    ).not.toHaveProperty("fullAccessAvailable");
+  });
+
   it("snapshots only the resolved logical model into the loopback grant", () => {
     const selected = {
       provider: "selected-provider",

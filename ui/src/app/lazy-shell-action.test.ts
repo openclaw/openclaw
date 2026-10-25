@@ -2,27 +2,21 @@
 
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { COMMAND_PALETTE_OPEN_EVENT } from "../components/command-palette-contract.ts";
+import {
+  COMMAND_PALETTE_OPEN_EVENT,
+  type CommandPaletteInputHandoff,
+} from "../components/command-palette-contract.ts";
 import {
   DEBUG_OVERLAY_REQUEST_EVENT,
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
-import {
-  createLazyElementSpec,
-  resetAppHostTestGlobals,
-  type TestOptionalCustomElement,
-  stubRenderedWhenDefined,
-} from "./app-host.test-support.ts";
+import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import type { ShellChromeOwner } from "./app-shell-chrome.ts";
 import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
+import { SHELL_COMPONENT_TAGS } from "./app-shell-components.ts";
 import type { ApplicationGatewaySnapshot } from "./context.ts";
-import {
-  DEBUG_OVERLAY_ELEMENT,
-  KEYBOARD_SHORTCUTS_ELEMENT,
-  type OptionalCustomElement,
-} from "./lazy-custom-element.ts";
 import {
   persistLazyShellAction,
   readLazyShellAction,
@@ -48,13 +42,18 @@ vi.mock("./stale-chunk-reload.ts", async (importOriginal) => {
 });
 
 const storageKey = "openclaw:lazy-event";
-
-type ShellLifecycle = {
-  connect(): void;
-  disconnect(): void;
+type PaletteShell = Omit<ReturnType<typeof createShellOwner>, never> & {
+  shellChrome: ShellChromeOwner;
 };
-
-async function withConnectedShell(shell: ShellLifecycle, run: () => void | Promise<void>) {
+function shellFixture(): PaletteShell {
+  // SAFETY: The fixture retains the real private event owner for direct lifecycle assertions.
+  const shell = createShellOwner() as unknown as PaletteShell;
+  Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
+  document.body.append(shell.element);
+  onTestFinished(() => shell.element.remove());
+  return shell;
+}
+async function withConnectedShell(shell: PaletteShell, run: () => void | Promise<void>) {
   shell.connect();
   try {
     await run();
@@ -62,45 +61,6 @@ async function withConnectedShell(shell: ShellLifecycle, run: () => void | Promi
     shell.disconnect();
   }
 }
-
-afterEach(async () => {
-  await vi.dynamicImportSettled();
-  resetAppHostTestGlobals();
-  vi.restoreAllMocks();
-  recovery.reload.mockClear();
-  recovery.pending.length = 0;
-});
-
-type PaletteShell = Omit<
-  ReturnType<typeof createShellOwner>,
-  "commandPaletteElement" | "execApprovalElement"
-> & {
-  commandPaletteElement: TestOptionalCustomElement;
-  execApprovalElement: TestOptionalCustomElement;
-  shellChrome: ShellChromeOwner;
-};
-function shellFixture(): PaletteShell {
-  const shell = createShellOwner() as unknown as PaletteShell;
-  Object.defineProperty(shell, "updateComplete", { get: () => Promise.resolve(true) });
-  onTestFinished(() => shell.element.remove());
-  return shell;
-}
-beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
-const emit = (event: string) => window.dispatchEvent(new CustomEvent(event));
-
-function paletteShell(element: TestOptionalCustomElement, open: () => void): PaletteShell {
-  const shell = shellFixture();
-  shell.commandPaletteElement = element;
-  Object.defineProperty(shell.elements, "commandPalette", {
-    get: () =>
-      customElements.get(element.tagName)
-        ? { isConnected: true, isOpen: false, openPalette: open, togglePalette: open }
-        : undefined,
-  });
-  stubRenderedWhenDefined(shell);
-  return shell;
-}
-
 function mountOverlay<T extends object>(
   shell: PaletteShell,
   property: string,
@@ -112,25 +72,13 @@ function mountOverlay<T extends object>(
   shell.element.append(element);
   return element;
 }
-
-function coldPalette() {
-  const gate = createDeferred();
-  const element = createLazyElementSpec("cold palette");
-  const load = element.loadModule;
-  element.loadModule = async () => {
-    await gate.promise;
-    await load();
-  };
-  return { element, gate };
-}
-
 function captureInput(state: CommandPaletteLoadingState, value: string) {
   const input = document.createElement("textarea");
   state.inputRef(input);
   input.value = value;
   state.captureInput();
+  return input;
 }
-
 function keydown(key: string, code: string, bubbles = false) {
   return new KeyboardEvent("keydown", {
     key,
@@ -142,11 +90,14 @@ function keydown(key: string, code: string, bubbles = false) {
   });
 }
 
-function stalePalette() {
-  return createLazyElementSpec("command palette", {
-    firstError: new Error("Failed to fetch dynamically imported module: palette-old.js"),
-  });
-}
+beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
+afterEach(async () => {
+  await vi.dynamicImportSettled();
+  resetAppHostTestGlobals();
+  vi.restoreAllMocks();
+  recovery.reload.mockClear();
+  recovery.pending.length = 0;
+});
 
 describe("lazy shell action storage", () => {
   it.each(["{", JSON.stringify({ eventType: COMMAND_PALETTE_OPEN_EVENT, extra: true })])(
@@ -155,7 +106,6 @@ describe("lazy shell action storage", () => {
       const storage = createStorageMock();
       vi.stubGlobal("sessionStorage", storage);
       storage.setItem(storageKey, raw);
-
       expect(readLazyShellAction()).toBeNull();
       expect(storage.getItem(storageKey)).toBeNull();
     },
@@ -166,44 +116,74 @@ describe("shell lazy events", () => {
   it("persists only open intent, never a cold prompt or event payload", async () => {
     const storage = createStorageMock();
     vi.stubGlobal("sessionStorage", storage);
-    const { gate, element } = coldPalette();
-    const shell = paletteShell(element, vi.fn());
-    await withConnectedShell(shell, async () => {
+    const shell = shellFixture();
+    await withConnectedShell(shell, () => {
       window.dispatchEvent(
-        new CustomEvent(COMMAND_PALETTE_OPEN_EVENT, {
-          detail: { value: "private payload" },
-        }),
+        new CustomEvent(COMMAND_PALETTE_OPEN_EVENT, { detail: { value: "private payload" } }),
       );
       captureInput(shell.commandPaletteLoading, "private cold prompt");
       expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
       expect(storage.getItem(storageKey)).not.toContain("private");
-      shell.lazyCustomElements.close();
-      gate.resolve();
+      shell.closePendingPalette();
     });
+  });
+
+  it("keeps composition custody until the mounted palette accepts the final input", async () => {
+    vi.useFakeTimers();
+    const shell = shellFixture();
+    try {
+      shell.connect();
+      shell.openPalette();
+      const state = shell.commandPaletteLoading;
+      const input = captureInput(state, "composing");
+      state.handleCompositionStart();
+      const accepted = vi.fn();
+      mountOverlay(shell, "commandPalette", SHELL_COMPONENT_TAGS.palette, {
+        openPalette: (take?: CommandPaletteInputHandoff) => accepted(take?.()),
+      });
+      shell.restorePendingLazyAction();
+      expect(accepted).not.toHaveBeenCalled();
+      expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+      input.value = "composition finished";
+      input.setSelectionRange(4, 10, "backward");
+      state.handleCompositionEnd();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(accepted).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          value: "composition finished",
+          selectionStart: 4,
+          selectionEnd: 10,
+          selectionDirection: "backward",
+        }),
+      );
+      expect(readLazyShellAction()).toBeNull();
+    } finally {
+      shell.disconnect();
+      vi.useRealTimers();
+    }
   });
 
   it("retires a composing palette on disconnect while the shell owner remains reusable", async () => {
     vi.useFakeTimers();
-    const { gate, element } = coldPalette();
-    const shell = paletteShell(element, vi.fn());
+    const shell = shellFixture();
     try {
       shell.connect();
       shell.openPalette();
       const state = shell.commandPaletteLoading;
       captureInput(state, "retired prompt");
       const file = new File(["image"], "retired.png", { type: "image/png" });
-      const paste = new Event("paste", { cancelable: true }) as ClipboardEvent;
+      const paste = new Event("paste", { cancelable: true });
       Object.defineProperty(paste, "clipboardData", {
         value: { items: [{ getAsFile: () => file }] },
       });
-      state.handlePaste(paste);
+      // SAFETY: This synthetic paste carries the ClipboardEvent data contract above.
+      state.handlePaste(paste as ClipboardEvent);
       expect(paste.defaultPrevented).toBe(true);
       state.handleCompositionStart();
       const retired = vi.fn();
       state.handoff(retired);
       const take = state.captureHandoff();
       state.handleCompositionEnd();
-
       shell.disconnect();
       expect({ active: state.active(), value: state.value() }).toEqual({
         active: false,
@@ -215,7 +195,7 @@ describe("shell lazy events", () => {
       expect(shell.commandPaletteLoading).toBe(state);
       const fresh = state.captureHandoff()();
       expect(fresh).toMatchObject({ value: "" });
-      expect(fresh?.imageFiles).toBeUndefined();
+      expect(fresh?.attachmentFiles).toBeUndefined();
       expect(fresh?.submitRequested).toBeUndefined();
       expect(take()).toBeUndefined();
       await vi.advanceTimersByTimeAsync(20);
@@ -223,17 +203,14 @@ describe("shell lazy events", () => {
     } finally {
       shell.disconnect();
       vi.useRealTimers();
-      gate.resolve();
-      await vi.dynamicImportSettled();
     }
   });
 
   it.each(["connection", "account", "reconnect"] as const)(
     "respects the canonical %s boundary while a cold palette is composing",
     async (change) => {
-      const { gate, element } = coldPalette();
+      const shell = shellFixture();
       const open = vi.fn();
-      const shell = paletteShell(element, open);
       let snapshot: Pick<ApplicationGatewaySnapshot, "client" | "phase" | "hello" | "selfUser"> = {
         client: null,
         phase: "connected",
@@ -266,14 +243,10 @@ describe("shell lazy events", () => {
           active: true,
           value: "old-owner prompt",
         });
-        snapshot = {
-          ...snapshot,
-          phase: "connected",
-          selfUser: { id: "first-user" },
-        };
+        snapshot = { ...snapshot, phase: "connected", selfUser: { id: "first-user" } };
         shell.shellChrome.synchronizeCommandPaletteScope();
         expect(take()?.value).toBe("old-owner prompt");
-        shell.lazyCustomElements.close();
+        shell.closePendingPalette();
       } else {
         expect(state.active()).toBe(false);
         expect(state.value()).toBe("");
@@ -281,8 +254,7 @@ describe("shell lazy events", () => {
         expect(readLazyShellAction()).toBeNull();
       }
       state.handleCompositionEnd();
-      gate.resolve();
-      await vi.dynamicImportSettled();
+      await Promise.resolve();
       expect(open).not.toHaveBeenCalled();
     },
   );
@@ -296,12 +268,9 @@ describe("shell lazy events", () => {
     "disconnected",
     "new-request",
     "reload",
-  ] as const)("owns a stale palette retry through %s", async (mode) => {
+  ] as const)("owns a stale palette reload through %s", async (mode) => {
     const storage = createStorageMock();
-    const inPlace = ["unavailable", "denied", "replacement-write-failed"].includes(mode);
-    if (mode === "replacement-write-failed") {
-      storage.setItem(storageKey, JSON.stringify({ eventType: SHELL_APPROVALS_OPEN_EVENT }));
-    }
+    const denied = ["unavailable", "denied", "replacement-write-failed"].includes(mode);
     vi.stubGlobal("sessionStorage", mode === "unavailable" ? null : storage);
     if (mode === "denied") {
       Object.defineProperty(globalThis, "sessionStorage", {
@@ -312,72 +281,40 @@ describe("shell lazy events", () => {
       });
     }
     const probe = createDeferred<Response>();
-    const head = vi.fn(() =>
-      inPlace ? Promise.resolve(new Response(null, { status: 200 })) : probe.promise,
-    );
+    const head = vi.fn(() => probe.promise);
     vi.stubGlobal("fetch", head);
-    const element = stalePalette();
-    const open = vi.fn();
-    const shell = paletteShell(element, open);
+    const shell = shellFixture();
+    shell.connect();
+    shell.openPalette();
     if (mode === "replacement-write-failed") {
       vi.spyOn(storage, "setItem").mockImplementation(() => {
         throw new DOMException("Storage full", "QuotaExceededError");
       });
     }
     try {
-      if (mode !== "reload") {
-        shell.connect();
-      }
-      shell.openPalette();
-      await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState?.status).toBe("error"));
-      if (mode === "reload") {
-        storage.setItem(storageKey, "{}");
-      }
-      shell.lazyCustomElements.retry();
-      if (inPlace) {
-        await Promise.all(recovery.pending);
-        await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
-        expect(recovery.reload).not.toHaveBeenCalled();
+      const retry = shell.retryPendingLazyAction(() => true);
+      if (denied) {
+        await expect(retry).resolves.toBe(false);
         expect(head).not.toHaveBeenCalled();
-        expect(readLazyShellAction()).toBeNull();
       } else {
         await vi.waitFor(() => expect(head).toHaveBeenCalledOnce());
-        switch (mode) {
-          case "close":
-            shell.lazyCustomElements.close();
-            break;
-          case "context-replaced":
-            shell.shellChrome.abandonPendingLazyActionForContext();
-            break;
-          case "disconnected":
-            shell.disconnect();
-            break;
-          case "new-request":
-            shell.lazyCustomElements.request(createLazyElementSpec("new request"));
-            break;
-          case "denied":
-          case "reload":
-          case "replacement-write-failed":
-          case "unavailable":
-            break;
+        if (mode === "close") {
+          shell.closePendingPalette();
+        } else if (mode === "context-replaced") {
+          shell.shellChrome.abandonPendingLazyActionForContext();
+        } else if (mode === "disconnected") {
+          shell.disconnect();
+        } else if (mode === "new-request") {
+          shell.shellChrome.requestShellComponent("shortcuts", {
+            eventType: KEYBOARD_SHORTCUTS_REQUEST_EVENT,
+          });
         }
         probe.resolve(new Response(null, { status: 200 }));
-        await expect(Promise.all(recovery.pending)).resolves.toEqual([mode === "reload"]);
-        if (mode === "reload") {
-          expect(recovery.reload).toHaveBeenCalledOnce();
-          expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
-          const replacement = paletteShell(element, open);
-          await withConnectedShell(replacement, async () => {
-            replacement.restorePendingLazyAction();
-            await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
-            replacement.restorePendingLazyAction();
-            expect(open).toHaveBeenCalledOnce();
-            expect(readLazyShellAction()).toBeNull();
-          });
-        } else {
-          expect(recovery.reload).not.toHaveBeenCalled();
-          expect(open).not.toHaveBeenCalled();
-        }
+        await expect(retry).resolves.toBe(mode === "reload");
+      }
+      expect(recovery.reload).toHaveBeenCalledTimes(mode === "reload" ? 1 : 0);
+      if (mode === "reload") {
+        expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
       }
     } finally {
       shell.disconnect();
@@ -389,184 +326,106 @@ describe("shell lazy events", () => {
   it.each(["shortcuts", "approvals"] as const)(
     "replays %s after the retained loaded overlay is detached",
     async (surface) => {
-      const spec = createLazyElementSpec(surface);
-      await spec.loadModule();
       const shell = shellFixture();
-      const element =
-        surface === "shortcuts" ? KEYBOARD_SHORTCUTS_ELEMENT : shell.execApprovalElement;
-      const originalTag = element.tagName;
-      element.tagName = spec.tagName;
+      const component = surface === "shortcuts" ? "shortcuts" : "approvals";
       const eventType =
         surface === "shortcuts" ? KEYBOARD_SHORTCUTS_REQUEST_EVENT : SHELL_APPROVALS_OPEN_EVENT;
       const property = surface === "shortcuts" ? "keyboardShortcuts" : "approvalOverlay";
       const opened = vi.fn();
       const createOverlay = () =>
-        mountOverlay(shell, property, spec.tagName, { toggle: opened, show: opened });
-      const detached = createOverlay();
-      document.body.append(shell.element);
-      detached.remove();
-      try {
-        await withConnectedShell(shell, async () => {
-          emit(eventType);
-          expect(opened).not.toHaveBeenCalled();
-          expect(shell.lazyCustomElements.visibleState?.status).toBe("loading");
-          await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState).toBeUndefined());
-          expect(readLazyShellAction()).toEqual({ eventType });
-
-          createOverlay();
-          shell.restorePendingLazyAction();
-          expect(opened).toHaveBeenCalledOnce();
-          expect(readLazyShellAction()).toBeNull();
+        mountOverlay(shell, property, SHELL_COMPONENT_TAGS[component], {
+          toggle: opened,
+          show: opened,
         });
-      } finally {
-        element.tagName = originalTag;
-        shell.element.remove();
-      }
+      createOverlay().remove();
+      await withConnectedShell(shell, () => {
+        window.dispatchEvent(new CustomEvent(eventType));
+        expect(opened).not.toHaveBeenCalled();
+        expect(shell.isShellComponentRequested(component)).toBe(true);
+        expect(readLazyShellAction()).toEqual({ eventType });
+        shell.restorePendingLazyAction();
+        expect(opened).not.toHaveBeenCalled();
+        createOverlay();
+        shell.restorePendingLazyAction();
+        expect(opened).toHaveBeenCalledOnce();
+        expect(readLazyShellAction()).toBeNull();
+      });
     },
   );
 
   it.each(["shortcuts", "debug"] as const)(
     "handles the %s shortcut and its editable-target policy",
     async (surface) => {
-      const requested = vi.fn();
-      const toggled = vi.fn();
       const shell = shellFixture();
-      const isDebug = surface === "debug";
-      const overlay = mountOverlay(
+      const toggled = vi.fn();
+      mountOverlay(
         shell,
-        isDebug ? "debugOverlay" : "keyboardShortcuts",
-        isDebug ? "openclaw-debug-overlay" : KEYBOARD_SHORTCUTS_ELEMENT.tagName,
-        isDebug ? { toggle: toggled, open: toggled } : {},
+        surface === "debug" ? "debugOverlay" : "keyboardShortcuts",
+        SHELL_COMPONENT_TAGS[surface],
+        { toggle: toggled, open: toggled },
       );
       const input = document.body.appendChild(document.createElement("input"));
-      document.body.append(shell.element);
-      const shortcut = isDebug ? keydown("d", "KeyD") : keydown("/", "Slash", true);
-      if (!isDebug) {
-        window.addEventListener(KEYBOARD_SHORTCUTS_REQUEST_EVENT, requested);
-      }
-      try {
-        await withConnectedShell(shell, async () => {
-          if (isDebug) {
-            document.dispatchEvent(shortcut);
-          } else {
-            input.focus();
-            expect(document.activeElement).toBe(input);
-            input.dispatchEvent(shortcut);
-          }
-          expect(shortcut.defaultPrevented).toBe(true);
-          if (!isDebug) {
-            expect(requested).toHaveBeenCalledOnce();
-          }
-          await vi.dynamicImportSettled();
-          if (isDebug) {
-            await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
-            input.dispatchEvent(keydown("d", "KeyD", true));
-            expect(toggled).toHaveBeenCalledOnce();
-          } else {
-            await vi.waitFor(() => expect(overlay).toMatchObject({ isOpen: true }));
-          }
-        });
-      } finally {
-        shell.element.remove();
-        input.remove();
-        window.removeEventListener(KEYBOARD_SHORTCUTS_REQUEST_EVENT, requested);
-      }
+      onTestFinished(() => input.remove());
+      await withConnectedShell(shell, () => {
+        if (surface === "debug") {
+          document.dispatchEvent(keydown("d", "KeyD"));
+          expect(toggled).toHaveBeenCalledOnce();
+          input.dispatchEvent(keydown("d", "KeyD", true));
+          expect(toggled).toHaveBeenCalledOnce();
+        } else {
+          const event = keydown("/", "Slash", true);
+          input.dispatchEvent(event);
+          expect(event.defaultPrevented).toBe(true);
+          expect(toggled).toHaveBeenCalledOnce();
+        }
+      });
     },
   );
 
   it.each(["close", "context", "replacement", "unmounted", "detached"] as const)(
     "keeps the pending debug frame intent owned through %s",
     async (outcome) => {
-      const element: OptionalCustomElement = DEBUG_OVERLAY_ELEMENT;
-      const originalTag = element.tagName;
-      const tagName = createLazyElementSpec("debug frame").tagName;
-      element.tagName = tagName;
-      const opened = vi.fn((_mode: string) => {
-        // The loaded overlay records a separate inner-content reload action.
-        persistLazyShellAction({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
-      });
-      const ready = createDeferred();
       const shell = shellFixture();
-      Object.defineProperty(shell, "queryRenderedElement", {
-        value: (tag: string) => shell.element.querySelector(tag),
-      });
-      document.body.append(shell.element);
-      if (outcome === "detached") {
-        const detached = mountOverlay(shell, "debugOverlay", tagName, {
+      const opened = vi.fn(() =>
+        persistLazyShellAction({ eventType: DEBUG_OVERLAY_REQUEST_EVENT }),
+      );
+      const mount = () =>
+        mountOverlay(shell, "debugOverlay", SHELL_COMPONENT_TAGS.debug, {
           open: opened,
-          toggle: () => opened("expanded"),
+          toggle: opened,
         });
-        detached.remove();
+      if (outcome === "detached") {
+        mount().remove();
       }
-      vi.spyOn(element, "loadModule").mockImplementation(async () => {
-        await ready.promise;
-        customElements.define(
-          tagName,
-          class extends HTMLElement {
-            open = opened;
-            toggle = () => opened("expanded");
-          },
-        );
-        if (outcome !== "unmounted" && outcome !== "detached") {
-          mountOverlay(shell, "debugOverlay", tagName, {});
+      await withConnectedShell(shell, () => {
+        window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_REQUEST_EVENT));
+        shell.togglePendingDebugOverlayMode();
+        expect(shell.pendingDebugOverlayMode).toBe("minimized");
+        expect(readLazyShellAction()).toEqual({
+          eventType: DEBUG_OVERLAY_REQUEST_EVENT,
+          detail: { mode: "minimized" },
+        });
+        if (outcome === "close") {
+          shell.cancelShellComponentRequest("debug");
+        } else if (outcome === "context") {
+          shell.shellChrome.abandonPendingLazyActionForContext();
+        } else if (outcome === "replacement") {
+          shell.openPalette();
+        }
+        shell.restorePendingLazyAction();
+        expect(opened).not.toHaveBeenCalled();
+        mount();
+        shell.restorePendingLazyAction();
+        if (outcome === "unmounted" || outcome === "detached") {
+          expect(opened).toHaveBeenCalledExactlyOnceWith("minimized");
+          expect(readLazyShellAction()).toEqual({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
+          shell.restorePendingLazyAction();
+          expect(opened).toHaveBeenCalledOnce();
+        } else {
+          expect(opened).not.toHaveBeenCalled();
+          expect(readLazyShellAction()?.eventType).not.toBe(DEBUG_OVERLAY_REQUEST_EVENT);
         }
       });
-      try {
-        await withConnectedShell(shell, async () => {
-          emit(DEBUG_OVERLAY_REQUEST_EVENT);
-          expect(shell.lazyCustomElements.visibleState?.status).toBe("loading");
-          shell.togglePendingDebugOverlayMode();
-          expect(shell.pendingDebugOverlayMode).toBe("minimized");
-          expect(readLazyShellAction()).toEqual({
-            eventType: DEBUG_OVERLAY_REQUEST_EVENT,
-            detail: { mode: "minimized" },
-          });
-          if (outcome === "close") {
-            shell.lazyCustomElements.close();
-          } else if (outcome === "context") {
-            shell.shellChrome.abandonPendingLazyActionForContext();
-          } else if (outcome === "replacement") {
-            shell.commandPaletteElement = createLazyElementSpec("replacement palette");
-            shell.openPalette();
-          }
-          ready.resolve();
-          await vi.dynamicImportSettled();
-          await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState).toBeUndefined());
-          if (outcome === "unmounted" || outcome === "detached") {
-            expect(opened).not.toHaveBeenCalled();
-            mountOverlay(shell, "debugOverlay", tagName, {});
-            shell.restorePendingLazyAction();
-            expect(opened).toHaveBeenCalledExactlyOnceWith("minimized");
-            expect(readLazyShellAction()).toEqual({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
-            shell.restorePendingLazyAction();
-            expect(opened).toHaveBeenCalledOnce();
-          } else {
-            expect(opened).not.toHaveBeenCalled();
-            expect(readLazyShellAction()?.eventType).not.toBe(DEBUG_OVERLAY_REQUEST_EVENT);
-          }
-        });
-      } finally {
-        ready.resolve();
-        await vi.dynamicImportSettled();
-        element.tagName = originalTag;
-        shell.element.remove();
-      }
     },
   );
-
-  it("opens approvals after the modal module loads", async () => {
-    const element = createLazyElementSpec("exec approval modal");
-    const show = vi.fn();
-    const shell = shellFixture();
-    shell.execApprovalElement = element;
-    Object.defineProperty(shell.elements, "approvalOverlay", {
-      get: () => (customElements.get(element.tagName) ? { isConnected: true, show } : undefined),
-    });
-    stubRenderedWhenDefined(shell);
-
-    await withConnectedShell(shell, async () => {
-      emit(SHELL_APPROVALS_OPEN_EVENT);
-      await vi.waitFor(() => expect(show).toHaveBeenCalledOnce());
-    });
-  });
 });

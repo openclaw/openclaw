@@ -6,6 +6,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { localDayKey } from "./logbook-state.ts";
 import type { LogbookTimelinePayload } from "./logbook-types.ts";
 import { Logbook } from "./logbook-view.tsx";
+import { logbookTimeline } from "./logbook.test-support.ts";
 
 const day = localDayKey();
 const neverRetired = new Promise<void>(() => {});
@@ -28,6 +29,39 @@ const empty: LogbookTimelinePayload = {
   stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
 };
 afterEach(cleanupSolid);
+
+it("shows both shared keyframes as pending until their one request resolves", async () => {
+  const frame = createDeferred<{ format: string; base64: string }>();
+  const timeline = logbookTimeline(day, [
+    { id: 1, title: "First card", keyframeId: 42 },
+    { id: 2, title: "Shared frame", keyframeId: 42 },
+  ]);
+  const frameRequest = vi.fn(() => frame.promise);
+  const request = (method: string) => {
+    if (method === "logbook.status") {
+      return status;
+    }
+    return method === "logbook.frame" ? frameRequest() : timeline;
+  };
+  const view = mountSolid(() => (
+    <Logbook initialClient={createTestGatewayClient(request)} getRetired={() => neverRetired} />
+  ));
+  await waitForSolid(() =>
+    expect(view.container.querySelectorAll(".logbook-card__header")).toHaveLength(2),
+  );
+  const headers = view.container.querySelectorAll<HTMLButtonElement>(".logbook-card__header");
+  headers[0]!.click();
+  headers[1]!.click();
+  await waitForSolid(() =>
+    expect(view.container.querySelectorAll(".logbook-card__keyframe--loading")).toHaveLength(2),
+  );
+  expect(frameRequest).toHaveBeenCalledTimes(1);
+  frame.resolve({ format: "png", base64: "synthetic-preview" });
+  await waitForSolid(() =>
+    expect(view.container.querySelectorAll("img.logbook-card__keyframe")).toHaveLength(2),
+  );
+  expect(view.container.querySelectorAll(".logbook-card__keyframe--loading")).toHaveLength(0);
+});
 
 it("keeps the side editor usable while a delayed timeline fails and retries", async () => {
   const pending = createDeferred<LogbookTimelinePayload>();

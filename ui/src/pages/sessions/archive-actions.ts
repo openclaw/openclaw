@@ -1,17 +1,24 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { prepareArchiveOutcome } from "./archive-outcome.ts";
+import { showToast } from "../../lib/toast.ts";
 import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 
+registerSessionOrganizationEnglish();
+
 type SessionPageArchiveHost = {
-  captureScope: () => SessionsPageRequestScope | null;
+  captureScope: (
+    options?: Pick<SessionsPageRequestScope, "allowDeferred">,
+  ) => SessionsPageRequestScope | null;
   clearError: () => void;
   isCurrent: (scope: SessionsPageRequestScope) => boolean;
   publishError: (scope: SessionsPageRequestScope, error: unknown) => SessionsPageMutationResult;
@@ -32,7 +39,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
     row: GatewaySessionRow,
     hasDescendants = false,
   ): Promise<SessionsPageMutationResult | void> {
-    const scope = host.captureScope();
+    const scope = host.captureScope({ allowDeferred: true });
     if (!scope) {
       return;
     }
@@ -66,7 +73,7 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
       if (!choice) {
         return;
       }
-      if (choice.kind === "tree") {
+      if (choice.kind === "tree" || scope.gateway.snapshot.phase !== "connected") {
         return await operations.archiveConfirmedSessionsWithUndo(
           {
             sessionData: {
@@ -95,18 +102,65 @@ export function createSessionsArchive(host: SessionPageArchiveHost) {
             },
             sidebarSessionStatusFilter: () => "all",
           },
-          choice.rows,
+          choice.kind === "tree" ? choice.rows : [session],
           mutationScope,
         );
       }
-      const onConfirmed = prepareArchiveOutcome(
-        scope.sessions,
-        row,
-        host.agentId(row.key, scope.context),
-      );
-      if (!onConfirmed) {
+      const archiveSessions = scope.sessions;
+      const archiveAgentId = host.agentId(row.key, scope.context);
+      const { key, sessionId, pinned } = row;
+      const connection = archiveSessions.captureConnectionScope();
+      if (!connection) {
         return;
       }
+      const undoPins = operations.captureSessionArchivePins(mutationScope, [key]);
+      // Confirmation and Undo outlive the page, but keep the admitted connection and incarnation.
+      const onConfirmed = (result: SessionPatchResult) => {
+        if (
+          !archiveSessions.isConnectionScopeCurrent(connection) ||
+          result.entry.sessionId !== sessionId
+        ) {
+          return;
+        }
+        scope.context.navigation.update({
+          sidebarEntries: scope.context.navigation.snapshot.sidebarEntries.filter(
+            (entry) => entry !== "session:" + key,
+          ),
+        });
+        showToast({
+          message: t("sessionsView.sessionArchived"),
+          actionLabel: t("common.undo"),
+          onAction: () => {
+            if (!archiveSessions.isConnectionScopeCurrent(connection)) {
+              return;
+            }
+            void undoPins
+              .restore(async () => {
+                const receipt = Promise.withResolvers<readonly string[]>();
+                const restored = await archiveSessions.patch(
+                  key,
+                  { archived: false, ...(pinned === true ? { pinned: true } : {}) },
+                  {
+                    agentId: archiveAgentId,
+                    expectedSessionId: sessionId,
+                    onConfirmed: (confirmed) =>
+                      receipt.resolve(confirmed.entry.sessionId === sessionId ? [key] : []),
+                    onDeferredSettled: () => receipt.resolve([]),
+                  },
+                );
+                if (restored && "queued" in restored) {
+                  return receipt.promise;
+                }
+                return restored?.entry.sessionId === sessionId ? [key] : [];
+              })
+              .catch((error: unknown) => {
+                if (archiveSessions.isConnectionScopeCurrent(connection)) {
+                  showToast({ message: formatUiError(error) });
+                }
+              });
+          },
+        });
+      };
       const finishArchive = scope.sessions.beginArchive(row.key, row.sessionId);
       if (!finishArchive) {
         return;

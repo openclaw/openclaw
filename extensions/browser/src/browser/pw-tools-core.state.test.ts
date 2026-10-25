@@ -110,10 +110,8 @@ describe("setDeviceViaPlaywright", () => {
   });
 
   it("serializes overlapping descriptor transitions on the same page", async () => {
-    let releaseFirstUserAgent!: () => void;
-    const firstUserAgentBlocked = new Promise<void>((resolve) => {
-      releaseFirstUserAgent = resolve;
-    });
+    const { promise: firstUserAgentBlocked, resolve: releaseFirstUserAgent } =
+      Promise.withResolvers<void>();
     const fixture = createPage();
     fixture.send.mockImplementation(async (method, params) => {
       if (

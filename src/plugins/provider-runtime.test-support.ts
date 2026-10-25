@@ -6,7 +6,9 @@ import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { AnyAgentTool } from "./types.js";
 
 type ProviderRuntime = typeof import("./provider-runtime.js");
-export const PROVIDER_RUNTIME_TEST_MODEL: ProviderRuntimeModel = {
+export const PROVIDER_RUNTIME_TEST_MODEL: ProviderRuntimeModel & {
+  headers?: Record<string, string>;
+} = {
   id: "demo-model",
   name: "Demo Model",
   api: "openai-responses",

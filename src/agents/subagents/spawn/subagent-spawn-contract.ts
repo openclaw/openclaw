@@ -56,6 +56,8 @@ export type SpawnSubagentContext = SpawnedToolContext &
     requesterTurnRunId?: string;
     /** Host-only SDK provenance, never accepted from model/plugin spawn arguments. */
     nativePluginOwner?: import("../registry/subagent-registry.types.js").SubagentRunRecord["nativePluginOwner"];
+    /** Host-captured plugin profile, never read from tool arguments. */
+    subagentProfile?: import("../../../plugins/subagent-profile.types.js").RegisteredSubagentProfile;
     /** Separate key used only for completion routing, not sandbox policy. */
     completionOwnerKey?: string;
     /** Active requester sandbox classification, preserved separately from the durable lineage key.
@@ -76,6 +78,8 @@ export type SpawnSubagentResult = {
   runId?: string;
   mode?: SpawnSubagentMode;
   taskName?: string;
+  label?: string;
+  groupId?: string;
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
   note?: string;

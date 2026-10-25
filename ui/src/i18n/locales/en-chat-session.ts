@@ -1,9 +1,11 @@
 import type { TranslationMap } from "../lib/types.ts";
+import { registerSessionNavigationEnglish } from "./en-session-navigation.ts";
 import { en } from "./en.ts";
 
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
+    savedConversation: "Saved conversation · {status}",
     sessionAutomation: {
       emptyHint: "Automations attached to this session will appear here.",
       scheduleUnavailable: "Schedule unavailable",
@@ -97,73 +99,6 @@ const enChatSession = {
       menu: "Session details",
       title: "Details",
       close: "Close details",
-      session: "Session details",
-      environment: "Environment",
-      context: "Context",
-      contextMessages: "Messages & other",
-      contextFiles: "Workspace files",
-      contextTools: "Tool schemas",
-      contextAgentWorkspace: "Agent workspace",
-      contextProject: "Project",
-      contextPersonal: "Personal instructions",
-      contextOtherFiles: "Other files",
-      contextSystemTools: "System tools",
-      contextMcpTools: "MCP tools",
-      contextClientTools: "Client tools",
-      contextAvailableOnDemand: "Available on demand",
-      contextNotLoaded: "Not loaded",
-      contextDeferredEstimate:
-        "Potential schema sizes, not included in usage above. Discovery descriptions and previously retrieved schemas still use context.",
-      contextSkills: "Skills catalog",
-      contextSystem: "System instructions",
-      contextFree: "Free space",
-      contextUnverified: "Unverified",
-      contextEstimate:
-        "Last saved prompt · token sizes estimated from characters. Messages include other untracked context.",
-      contextLoading: "Loading context breakdown…",
-      contextError: "Couldn't load the context breakdown. Try refreshing.",
-      contextOffline: "Connect to the Gateway to load the context breakdown.",
-      contextUnavailable: "No matching context report. Send a message to capture one.",
-      contextHeadroom: "{tokens} tokens until the last run's prompt budget",
-      contextReserve: "{tokens} tokens reserved outside this prompt budget",
-      contextCompact: "Compact session",
-      contextCompacting: "Compacting…",
-      worktree: "Worktree",
-      changes: "Changes",
-      subagents: "Subagents",
-      processes: "Processes",
-      allSubagents: "All subagents",
-      allProcesses: "All processes",
-      processesError: "Couldn't load processes.",
-      planSteps: "{completed} of {total} steps",
-      showMore: "Show {count} more",
-      showLess: "Show less",
-      stopped: "Stopped",
-      tally: {
-        done: "{count} done",
-        failed: "{count} failed",
-        stopped: "{count} stopped",
-        running: "{count} running",
-        queued: "{count} queued",
-      },
-      createdBy: "Created by",
-      owner: "Owner",
-      participants: "{count} participants",
-      peopleCount: "People: {count}.",
-      moreParticipants: "{count} more participants",
-      workspaceUnavailable: "Workspace unavailable",
-      allChanges: "All changes",
-      changedFile: "1 file",
-      changedFiles: "{count} files",
-      changeSummary: "{files}, +{additions} lines, −{deletions} lines.",
-      changesUnavailable: "Change summary unavailable.",
-      changesUnavailableShort: "Unavailable",
-      changesPartial: "partial",
-      changesPartialDescription: "Partial summary; some changes are not included.",
-      changesStale: "stale",
-      changesStaleDescription: "Last-known changes; the summary could not be refreshed.",
-      pullRequests: "Pull requests",
-      noPullRequests: "No pull requests",
       automations: en.chat.sessionDetails.automations,
       progressOptions: en.chat.sessionDetails.progressOptions,
       hideProgress: "Don't show task progress again",
@@ -179,6 +114,8 @@ const enChatSession = {
       automationEmpty: en.chat.sessionDetails.automationEmpty,
       automationMore: en.chat.sessionDetails.automationMore,
       automationAttention: en.chat.sessionDetails.automationAttention,
+      automationChecked: "Checked",
+      automationCheckFailed: "Check failed",
       automationPaused: en.chat.sessionDetails.automationPaused,
       automationEnabled: en.chat.sessionDetails.automationEnabled,
     },
@@ -224,6 +161,17 @@ const enChatSession = {
       installingBody: "Installing the new worker runtime on this device.",
     },
     subagentsPanel: {
+      nativeTitle: "Live native agents",
+      nativeCoverage: "Current native agent activity. Saved agent history is not included.",
+      nativeEmpty: "No native agents are currently observed.",
+      nativeTruncated: "Only part of the live native roster is shown.",
+      nativeRetry: "Updates retry automatically while this panel is visible.",
+      nativeStatus: {
+        running: "Running",
+        completed: "Completed",
+        failed: "Failed",
+        interrupted: "Interrupted",
+      },
       title: "Subagents",
       desktopFilter: { all: "All", active: "Active", waiting: "Waiting", done: "Done" },
       desktopFilterLabel: "Filter subagents",
@@ -266,10 +214,11 @@ const enChatSession = {
       publicLinkDescription: "Anyone can read without signing in.",
       publicDraftDescription: "The public link stays readable in Draft.",
       linkUnavailable: "Link unavailable",
-      sessionMembers: "Session members",
+      permissions: "Permissions",
       creator: "Creator",
-      member: "Member",
-      visitor: "Visitor",
+      canRead: "Can read",
+      canSuggest: "Can suggest",
+      canSend: "Can send",
       searchPeople: "Search people…",
       closeSearch: "Close search",
       noPeopleFound: "No people found",
@@ -285,11 +234,12 @@ const enChatSession = {
       draft: en.chat.sessionSharing.draft,
       publishDraft: "Publish draft",
       owner: "Owner",
-      members: "Members",
-      selected: "Member",
       noPeople: "No paired people found.",
       readOnlyNotice: "Only the session owner and members can act in this session.",
       scopeReadOnlyNotice: "Sending messages is unavailable with your current access.",
+      guestWelcomePending: "Setting up your welcome session…",
+      guestWelcomeFailed: "We couldn't set up your welcome session.",
+      guestWelcomeRetry: "Try again",
       publicAccess: "Public access",
       publicIndicator: "Public",
       worldReadable: "Public — anyone can read without signing in.",
@@ -693,11 +643,45 @@ const enChatSession = {
       preview: "Preview",
       copyPath: en.chat.workspaceFiles.copyPath,
     },
+    pendingInputs: {
+      agentUpdate: {
+        cancelled: "This agent update was cancelled before delivery.",
+        interrupted: "Delivery interrupted. This saved agent update is not scheduled to retry.",
+      },
+      waitingForWorkspaceSync: "Received · waiting for workspace sync",
+      waitingForWorkerSetup: "Received · waiting for worker setup",
+      cancelled:
+        "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+      interrupted:
+        "Interrupted before the agent started it. If it does not resume, copy it and send again.",
+      earlier: "Show earlier messages",
+      latest: "Show latest messages",
+    },
+    sessionSuggestions: {
+      attachmentsUnsupported: "Remove attachments before submitting a text suggestion.",
+      sendNow: "Send {author}'s suggestion now",
+      queue: "Queue {author}'s suggestion",
+      edit: "Edit {author}'s suggestion",
+      dismiss: "Dismiss {author}'s suggestion",
+      typing: "{name} is typing…",
+      typingMany: "{names} are typing…",
+      typingSeveral: "Several people are typing…",
+      typingOthers: "{count} others",
+      otherCollaborators: "Other collaborators",
+      typingDraftState: "is typing...",
+      pausedDraftState: "Draft",
+      state: {
+        pending: "Pending",
+        accepted: "Accepted",
+        dismissed: "Dismissed",
+      },
+    },
   },
 } satisfies TranslationMap;
 
 export const registerChatSessionEnglish = Object.assign(
   () => {
+    registerSessionNavigationEnglish();
     Object.assign(en.chat.sessionAutomation, enChatSession.chat.sessionAutomation);
     Object.assign(en.chat.activityPills, enChatSession.chat.activityPills);
     Object.assign(en.chat.sessionDetails, enChatSession.chat.sessionDetails);
@@ -721,6 +705,12 @@ export const registerChatSessionEnglish = Object.assign(
     Object.assign(en.chat.sessionDiff, enChatSession.chat.sessionDiff);
     Object.assign(en.chat.sessionDiscussion, enChatSession.chat.sessionDiscussion);
     Object.assign(en.chat.workspaceFiles, enChatSession.chat.workspaceFiles);
+    const { agentUpdate, ...pendingInputs } = enChatSession.chat.pendingInputs;
+    Object.assign(en.chat.pendingInputs, pendingInputs);
+    Object.assign(en.chat.pendingInputs.agentUpdate, agentUpdate);
+    const { state, ...sessionSuggestions } = enChatSession.chat.sessionSuggestions;
+    Object.assign(en.chat.sessionSuggestions, sessionSuggestions);
+    Object.assign(en.chat.sessionSuggestions.state, state);
   },
   { catalog: enChatSession },
 );

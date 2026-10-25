@@ -401,7 +401,6 @@ export function createWorkboardLifecycleService(params: {
   readSessions: (
     options: WorkboardLifecycleSessionReadOptions,
   ) => Promise<WorkboardLifecycleSessionSnapshot>;
-  now?: () => number;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): WorkboardLifecycleService {
   let generation = 0;
@@ -494,7 +493,7 @@ export function createWorkboardLifecycleService(params: {
               return;
             }
             const cardsByKey = new Map<string, WorkboardCard[]>();
-            const now = params.now?.() ?? Date.now();
+            const now = Date.now();
             const sweep: WorkboardLifecycleSweep = {};
             for (const card of cards.filter((candidate) =>
               needsWorkboardLifecycleReconciliation(candidate, now),

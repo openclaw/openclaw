@@ -10,12 +10,12 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
-  agentsCapability,
+  agentsList,
   agentsRouteData,
   createAgentsPage,
   emitGatewaySnapshot,
   gateway,
-  pageContext,
+  ownedAgentsContext,
   snapshot,
 } from "./agents-page.test-support.ts";
 import { createBaseParams } from "./panels-tools-skills.test-support.ts";
@@ -38,26 +38,38 @@ function effective(label: string): ToolsEffectiveResult {
   };
 }
 
-function mountEffective(read: () => Promise<ToolsEffectiveResult>, panel: AgentsPanel = "tools") {
-  const request = vi.fn(async (method: string) =>
-    method === "tools.effective"
-      ? read()
-      : {
-          agentId: "main",
-          profiles: [],
-          groups: [
-            {
-              id: "core",
-              label: "Built-in tools",
-              source: "core",
-              tools: [{ id: "read", label: "Read", description: "Read", source: "core" }],
-            },
-          ],
-        },
-  );
+async function mountEffective(
+  read: () => Promise<ToolsEffectiveResult>,
+  panel: AgentsPanel = "tools",
+) {
+  const request = vi.fn(async (method: string) => {
+    if (method === "agents.list") {
+      return agentsList;
+    }
+    if (method === "agents.files.list") {
+      return { agentId: "main", workspace: "", files: [] };
+    }
+    if (method === "tools.effective") {
+      return read();
+    }
+    if (method === "tools.catalog") {
+      return {
+        agentId: "main",
+        profiles: [],
+        groups: [
+          {
+            id: "core",
+            label: "Built-in tools",
+            source: "core",
+            tools: [{ id: "read", label: "Read", description: "Read", source: "core" }],
+          },
+        ],
+      };
+    }
+    throw new Error(`Unexpected gateway method: ${method}`);
+  });
   const client = createTestGatewayClient(request);
   const currentGateway = gateway(snapshot(client));
-  const agents = agentsCapability(async () => ({ agentId: "main", workspace: "", files: [] }));
   const listeners = new Set<() => void>();
   const modelOverrides: Record<string, string | null> = {};
   // SAFETY: This fixture supplies the session state and subscription consumed by the Agents page.
@@ -70,7 +82,8 @@ function mountEffective(read: () => Promise<ToolsEffectiveResult>, panel: Agents
       };
     },
   } as unknown as ApplicationContext["sessions"];
-  const context = pageContext(currentGateway, agents, { sessions });
+  const context = await ownedAgentsContext(currentGateway, { sessions });
+  const agents = context.agents;
   const save = vi.fn(async () => true);
   Object.assign(context.runtimeConfig, { save, state: {} });
   const route = (next: AgentsPanel) => ({
@@ -120,7 +133,7 @@ const preview = (container: HTMLElement) =>
 describe("Agents effective-tools read", () => {
   it("loads only on demand, joins pending receipts, and retains the accepted result across panel visits", async () => {
     const pending = deferred<ToolsEffectiveResult>();
-    const view = mountEffective(() => pending.promise, "files");
+    const view = await mountEffective(() => pending.promise, "files");
     expect(view.calls()).toHaveLength(0);
     view.setPanel("tools");
     view.context.settingsAgentSelection.set("main");
@@ -154,7 +167,7 @@ describe("Agents effective-tools read", () => {
       .mockResolvedValueOnce(effective("Accepted preview"))
       .mockReturnValueOnce(next.promise)
       .mockReturnValue(recovered.promise);
-    const view = mountEffective(read);
+    const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Accepted preview"));
     const github = view.container.querySelector("openclaw-github-identity");
     const preset = view.container.querySelector<HTMLButtonElement>(".agent-tools-buttons button")!;
@@ -211,7 +224,7 @@ describe("Agents effective-tools read", () => {
         .fn<() => Promise<ToolsEffectiveResult>>()
         .mockReturnValueOnce(stale.promise)
         .mockResolvedValue(effective("Current connection"));
-      const view = mountEffective(read);
+      const view = await mountEffective(read);
       await waitForSolid(() => expect(view.calls()).toHaveLength(1));
       const currentClient =
         change === "client replacement" ? createTestGatewayClient(view.request) : view.client;
@@ -241,7 +254,7 @@ describe("Agents effective-tools read", () => {
       .fn<() => Promise<ToolsEffectiveResult>>()
       .mockResolvedValueOnce(effective("Before save"))
       .mockResolvedValue(effective("After save"));
-    const view = mountEffective(read);
+    const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Before save"));
     await view.page.read().onConfigSave();
     await waitForSolid(() => expect(preview(view.container)).toContain("After save"));
@@ -269,7 +282,7 @@ describe("Agents effective-tools read", () => {
       .fn<() => Promise<ToolsEffectiveResult>>()
       .mockResolvedValueOnce(old)
       .mockReturnValue(next.promise);
-    const view = mountEffective(read);
+    const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Old session preview"));
     expect(view.container.textContent).toContain("Old session notice");
     emitGatewaySnapshot(view.currentGateway, {
@@ -299,7 +312,7 @@ describe("Agents effective-tools read", () => {
       .fn<() => Promise<ToolsEffectiveResult>>()
       .mockResolvedValueOnce(effective("Initial model preview"))
       .mockReturnValue(next.promise);
-    const view = mountEffective(read);
+    const view = await mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Initial model preview"));
     view.modelOverrides.main = "openai/gpt-5-mini";
     view.publishSessions();

@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { WorkboardCard } from "@openclaw/workboard-contract";
+import {
+  createDefaultWorkboardSessionsBoardSpec,
+  type WorkboardCard,
+} from "@openclaw/workboard-contract";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type {
@@ -150,6 +153,77 @@ async function withKernelStores(
 }
 
 describe("workboard sqlite batch card persistence", () => {
+  it("admits conditional writes once and preserves every child on rejection", async () => {
+    await withKernelStores(async (stores) => {
+      const original = fixtureCard(0);
+      const next = fixtureCard(1);
+      next.id = original.id;
+      next.createdAt = original.createdAt;
+      next.metadata!.attachments![0]!.cardId = original.id;
+      const counts: Record<string, number> = {};
+      const write = async (name: string, operation: () => Promise<boolean>) => {
+        const before = sqliteStatements.count;
+        const result = await operation();
+        counts[name] = sqliteStatements.count - before;
+        return result;
+      };
+
+      expect(
+        await write("create", () =>
+          stores.cards.registerIfAbsent(original.id, persisted(original)),
+        ),
+      ).toBe(true);
+      await expect(stores.cards.lookup(original.id)).resolves.toEqual(persisted(original));
+      expect(
+        await write("duplicate", () => stores.cards.registerIfAbsent(original.id, persisted(next))),
+      ).toBe(false);
+      expect(
+        await write("stale", () =>
+          stores.cards.registerIfUpdatedAt(original.id, persisted(next), original.updatedAt - 1),
+        ),
+      ).toBe(false);
+      expect(
+        await write("missing", () =>
+          stores.cards.registerIfUpdatedAt("missing", persisted(next), original.updatedAt),
+        ),
+      ).toBe(false);
+      await expect(stores.cards.lookup(original.id)).resolves.toEqual(persisted(original));
+      await expect(stores.cards.lookup("missing")).resolves.toBeUndefined();
+      expect(
+        await write("update", () =>
+          stores.cards.registerIfUpdatedAt(original.id, persisted(next), original.updatedAt),
+        ),
+      ).toBe(true);
+      await expect(stores.cards.lookup(original.id)).resolves.toEqual(persisted(next));
+
+      await stores.boards.register("sessions", {
+        version: 1,
+        board: {
+          id: "sessions",
+          kind: "sessions",
+          sessions: createDefaultWorkboardSessionsBoardSpec(),
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      });
+      const onSessionsBoard = {
+        ...next,
+        metadata: { ...next.metadata, automation: { boardId: "sessions" } },
+      };
+      await expect(
+        stores.cards.registerIfAbsent(original.id, persisted(onSessionsBoard)),
+      ).resolves.toBe(false);
+      await expect(
+        stores.cards.registerIfUpdatedAt(original.id, persisted(onSessionsBoard), next.updatedAt),
+      ).rejects.toThrow("Sessions boards do not hold cards");
+      await expect(stores.cards.lookup(original.id)).resolves.toEqual(persisted(next));
+      if (!workboardTestDatabaseInput()) {
+        // One admission read, one parent write, and two statements per child collection.
+        expect(counts).toEqual({ create: 26, duplicate: 1, stale: 1, missing: 1, update: 26 });
+      }
+    });
+  });
+
   it("replaces ordered child collections across batches and clears them on a later write", async () => {
     await withKernelStores(async (stores) => {
       const original = fixtureCard(0);
@@ -225,7 +299,7 @@ describe("workboard sqlite batch card persistence", () => {
       const statements = sqliteStatements.executed.slice(before);
       const hydrationReads = statements.filter((sql) => /^SELECT \* FROM workboard_/i.test(sql));
       expect(hydrationReads).toHaveLength(13);
-      expect(statements.filter((sql) => /^select\b/i.test(sql.trimStart()))).toHaveLength(15);
+      expect(statements.filter((sql) => /^select\b/i.test(sql.trimStart()))).toHaveLength(14);
       expect(
         operation === "worker log"
           ? updated.metadata?.workerLogs?.[0]?.message
@@ -691,7 +765,7 @@ describe("Workboard SQLite schema admission", () => {
           created_at, updated_at, archived_at
         FROM workboard_boards_strict;
         DROP TABLE workboard_boards_strict;
-        DELETE FROM workboard_schema_migrations WHERE id = 'schema-3';
+        DELETE FROM workboard_schema_migrations;
         INSERT OR IGNORE INTO workboard_schema_migrations (id, applied_at)
         VALUES ('schema-2', 1);
       `);
@@ -713,7 +787,7 @@ describe("Workboard SQLite schema admission", () => {
       ).toEqual({ strict: 1 });
       expect(
         migrated
-          .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-3'")
+          .prepare("SELECT 1 AS found FROM workboard_schema_migrations WHERE id = 'schema-4'")
           .get(),
       ).toEqual({ found: 1 });
     });

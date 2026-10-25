@@ -5,10 +5,12 @@ import {
   PROJECTS_LIST_MAX_IDENTITY_PROBES,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { projectsHandlers } from "./projects.js";
@@ -27,19 +29,15 @@ function worktree(
   ownerId: string | undefined,
   lastActiveAt: number,
 ): ManagedWorktreeRecord {
-  return {
-    id: name,
-    name,
+  return makeWorktreeRecord(`/repos/${name}`, name, {
     branch: `openclaw/${name}`,
-    baseRef: "HEAD",
     createdAt: lastActiveAt,
     repoFingerprint: name,
-    repoRoot: `/repos/${name}`,
     path: `/worktrees/${name}`,
     ownerKind: ownerId ? "session" : "manual",
     ownerId,
     lastActiveAt,
-  };
+  });
 }
 
 // mock-isolation: Supply observed session rows without opening real session stores.
@@ -66,25 +64,9 @@ vi.mock("../../projects/project-registry.js", () => ({
 
 function authenticatedClient(user: string, scopes = ["operator.write"]): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-      },
-      role: "operator",
-      scopes,
-    },
+    connect: gatewayConnect(scopes),
     authenticatedUserId: user,
-    authenticatedUserProfile: {
-      profileId: user,
-      displayName: user,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile(user, user),
   };
 }
 

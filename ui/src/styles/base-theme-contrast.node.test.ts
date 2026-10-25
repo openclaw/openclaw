@@ -352,6 +352,14 @@ describe("Control UI theme contrast", () => {
   };
 
   const checks = {
+    "native selection text: AA": paletteCases(() => [
+      ["var(--selection-fg)", "var(--selection-bg)", AA_NORMAL_TEXT_MIN],
+    ]),
+    "native selection highlight: distinguishable from page and cards": paletteCases(() => [
+      ["var(--selection-bg)", "var(--bg)", 3],
+      ["var(--selection-bg)", "var(--card)", 3],
+      ["var(--selection-bg)", "var(--panel)", 3],
+    ]),
     "text tokens: AA on every surface, AAA where promised": paletteCases((_theme, _tokens, floor) =>
       TEXT_TOKENS.flatMap((ink) =>
         SURFACE_TOKENS.map((fill) => [`var(${ink})`, `var(${fill})`, floor] as const),

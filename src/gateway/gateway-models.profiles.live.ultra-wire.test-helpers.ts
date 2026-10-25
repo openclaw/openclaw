@@ -12,7 +12,6 @@ export type OpenAIUltraWireObservation = {
     callId: string;
     sessionId?: string;
     sessionKey?: string;
-    isHeartbeat?: boolean;
   } | null;
 };
 
@@ -34,7 +33,6 @@ export function assertOpenAIUltraWireEffort(params: {
     matching.length,
     `expected captured OpenAI requests for ${params.expectedModel}; captured=${params.observations.length}`,
   ).toBeGreaterThan(0);
-  const ultraSessions = new Set(params.ultraRuns.values());
   const expectedEffort = ({ dispatch }: OpenAIUltraWireObservation) => {
     if (!dispatch || params.ultraRuns.has(dispatch.runId)) {
       return "max";
@@ -44,18 +42,8 @@ export function assertOpenAIUltraWireEffort(params: {
     if (dispatch.runId.startsWith("skill-workshop-review:")) {
       return SKILL_WORKSHOP_REVIEW_EFFORT;
     }
-    return dispatch.isHeartbeat === true && !ultraSessions.has(dispatch.sessionKey ?? "")
-      ? OPENAI_ULTRA_NORMAL_EFFORT
-      : "max";
+    return "max";
   };
-  const heartbeats = matching.filter(
-    (entry) => expectedEffort(entry) === OPENAI_ULTRA_NORMAL_EFFORT,
-  );
-  if (heartbeats.length) {
-    logUltraProgress(
-      `[ultra] ${params.expectedModel}: independent_heartbeats=${heartbeats.length} first=${JSON.stringify(heartbeats.slice(0, 3))}`,
-    );
-  }
   const workshopReviews = matching.filter(
     (entry) => expectedEffort(entry) === SKILL_WORKSHOP_REVIEW_EFFORT,
   ).length;
@@ -88,7 +76,7 @@ export function assertOpenAIUltraWireEffort(params: {
     ),
   ];
   logUltraProgress(
-    `[ultra] ${params.expectedModel}: checked=${matching.length} max=${matching.length - heartbeats.length - workshopReviews} medium=${heartbeats.length} workshop_reviews=${workshopReviews} sessions_spawn wire schemas=${spawnSchemas.join(",")}`,
+    `[ultra] ${params.expectedModel}: checked=${matching.length} max=${matching.length - workshopReviews} workshop_reviews=${workshopReviews} sessions_spawn wire schemas=${spawnSchemas.join(",")}`,
   );
   return matching.length;
 }

@@ -286,3 +286,36 @@ it("enrolls an absent agent's inheritance tombstone through its native first-use
     await expect(authority.revalidate()).rejects.toMatchObject(retiredCode);
   });
 });
+
+it.each([undefined, ""])(
+  "retains access-only OAuth until expiry (refresh: %s)",
+  async (refresh) => {
+    await withRoot(async (root) => {
+      const expires = Date.now() + 3_600_000;
+      await persistAuthProfileBatch({
+        profiles: [
+          {
+            profileId: "fixture:access-only",
+            credential: {
+              type: "oauth",
+              provider: "fixture",
+              access: "synthetic-access-only",
+              ...(refresh === undefined ? {} : { refresh }),
+              expires,
+              // Persisted access-only input intentionally lacks the writer type's refresh field.
+            } as OAuthCredential,
+          },
+        ],
+      });
+      const generic = await root.capture("fixture:access-only", root.agentDir, true);
+      const mcp = await root.capture("fixture:access-only");
+      expect(generic.authorizationId).toBe(mcp.authorizationId);
+      expect(generic.assertCurrent).not.toThrow();
+      expect(mcp.assertCurrent).not.toThrow();
+      vi.spyOn(Date, "now").mockReturnValue(expires);
+      expect(generic.assertCurrent).toThrow(retired);
+      expect(mcp.assertCurrent).toThrow(retired);
+      await expect(root.capture("fixture:access-only")).rejects.toMatchObject(retiredCode);
+    });
+  },
+);

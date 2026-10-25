@@ -10,6 +10,7 @@ import type { Model, ProviderContext } from "openclaw/plugin-sdk/llm";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
 
 const {
@@ -824,34 +825,30 @@ describe("google transport stream", () => {
       },
     );
 
-    const streamFn = createGoogleGenerativeAiTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        model,
-        {
-          systemPrompt: "Follow policy.",
-          messages: [{ role: "user", content: "hello", timestamp: 0 }],
-          tools: [
-            {
-              name: "lookup",
-              description: "Look up a value",
-              parameters: {
-                type: "object",
-                properties: { q: { type: "string" } },
-                required: ["q"],
-              },
+    const result = await runGeminiStreamResult({
+      model,
+      context: {
+        systemPrompt: "Follow policy.",
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: {
+              type: "object",
+              properties: { q: { type: "string" } },
+              required: ["q"],
             },
-          ],
-        } as unknown as Parameters<typeof streamFn>[1],
-        {
-          apiKey: "gemini-api-key",
-          cachedContent: " cachedContents/request-cache ",
-          reasoning: "medium",
-          toolChoice: "auto",
-        } as Parameters<typeof streamFn>[2],
-      ),
-    );
-    const result = await stream.result();
+          },
+        ],
+      } as unknown as Parameters<ReturnType<typeof createGoogleGenerativeAiTransportStreamFn>>[1],
+      options: {
+        apiKey: "gemini-api-key",
+        cachedContent: " cachedContents/request-cache ",
+        reasoning: "medium",
+        toolChoice: "auto",
+      },
+    });
 
     expect(buildGuardedModelFetchMock).toHaveBeenCalledWith(model);
     const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
@@ -1035,29 +1032,19 @@ describe("google transport stream", () => {
           })}\n\ndata: [DONE]\n\n`,
         );
       });
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.off("error", reject);
-          resolve();
-        });
-      });
+      const port = await listenOnLoopback(server);
 
       try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Missing Google loopback server address");
-        }
         buildGuardedModelFetchMock.mockReturnValue(fetch);
         const model =
           provider === "google"
             ? buildGeminiModel({
                 id: requested,
-                baseUrl: `http://127.0.0.1:${address.port}/v1beta`,
+                baseUrl: `http://127.0.0.1:${port}/v1beta`,
               })
             : buildGoogleVertexModel({
                 id: requested,
-                baseUrl: `http://127.0.0.1:${address.port}`,
+                baseUrl: `http://127.0.0.1:${port}`,
               });
         const { buildGoogleProvider } = await import("./provider-registration.js");
         const streamFn = buildGoogleProvider().createStreamFn?.({
@@ -1590,17 +1577,11 @@ describe("google transport stream", () => {
           );
         });
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
+      const port = await listenOnLoopback(server);
 
       try {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          throw new Error("Missing Google loopback server address");
-        }
         guardedFetchMock.mockImplementation((_url, init) =>
-          fetch(`http://127.0.0.1:${address.port}/stream`, init),
+          fetch(`http://127.0.0.1:${port}/stream`, init),
         );
         const result = await runGeminiStreamResult({ options: { apiKey: "test-google-key" } });
 
@@ -1745,10 +1726,7 @@ describe("google transport stream", () => {
         onCancel: cancel,
       }),
     );
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
-    });
+    const { promise: hookStarted, resolve: markHookStarted } = Promise.withResolvers<void>();
     const onResponse = vi.fn(() => {
       markHookStarted();
       return new Promise<void>(() => {});
@@ -1790,10 +1768,7 @@ describe("google transport stream", () => {
       }),
     );
     mockGoogleTextResponse("recovered");
-    let markHookStarted!: () => void;
-    const hookStarted = new Promise<void>((resolve) => {
-      markHookStarted = resolve;
-    });
+    const { promise: hookStarted, resolve: markHookStarted } = Promise.withResolvers<void>();
     const onResponse = vi.fn<() => void | Promise<void>>().mockImplementationOnce(() => {
       markHookStarted();
       return new Promise<void>(() => {});
@@ -1860,10 +1835,7 @@ describe("google transport stream", () => {
   it("does not retry when an external abort interrupts a stalled Gemini 3 response body", async () => {
     vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "1000");
     const controller = new AbortController();
-    let resolveBodyRead!: () => void;
-    const bodyRead = new Promise<void>((resolve) => {
-      resolveBodyRead = resolve;
-    });
+    const { promise: bodyRead, resolve: resolveBodyRead } = Promise.withResolvers<void>();
     const cancel = vi.fn();
     guardedFetchMock.mockResolvedValueOnce(
       new Response(
@@ -1937,20 +1909,7 @@ describe("google transport stream", () => {
       guardedFetchMock.mockResolvedValueOnce(
         buildSseResponse([{ candidates: [{ finishReason: "STOP" }] }]),
       );
-      const streamFn = createGoogleVertexTransportStreamFn();
-      const stream = await Promise.resolve(
-        streamFn(
-          buildGoogleVertexModel(),
-          { messages: [{ role: "user", content: "hello", timestamp: 0 }] } as Parameters<
-            typeof streamFn
-          >[1],
-          {
-            apiKey: "gcp-vertex-credentials",
-            fetch: vi.fn(),
-          } as Parameters<typeof streamFn>[2],
-        ),
-      );
-      await stream.result();
+      await runGoogleVertexStreamResult({ fetch: vi.fn() });
 
       const [url] = requireMockCall(guardedFetchMock, 0, "guarded fetch");
       expect(String(url)).toBe(

@@ -18,6 +18,7 @@ import {
   releaseSessionControllerClaim,
 } from "../../sessions/session-controller.mailbox.js";
 import { getRpcSource, registerRpcSource } from "../../sessions/session-controller.rpc-sources.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -93,12 +94,7 @@ async function setup() {
   const respond = vi.fn();
   const stop = () =>
     handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "ui-stop",
-        method: "sessions.abort",
-        params: { key, clearQueued: true },
-      },
+      req: gatewayRequest("ui-stop", "sessions.abort", { key, clearQueued: true }),
       client,
       context,
       respond,
@@ -243,12 +239,10 @@ it.each([true, false])(
     try {
       const respond = vi.fn();
       await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "research-shared-stop",
-          method: "sessions.abort",
-          params: { key: sharedKey, clearQueued: true },
-        },
+        req: gatewayRequest("research-shared-stop", "sessions.abort", {
+          key: sharedKey,
+          clearQueued: true,
+        }),
         client: sharingPolicyClient({ scopes: ["operator.admin"] }),
         context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
         respond,

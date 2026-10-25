@@ -11,7 +11,6 @@ import { resolveSessionEntryResetFreshnessAsync } from "../config/sessions/entry
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createGatewayConfigPath,
@@ -41,7 +40,6 @@ it.each([false, true])(
 async function verifyDashboardRollover(nativeReconnect: boolean) {
   resetGatewayTestState();
   const home = await setupGatewayTempHome({ prefix: "openclaw-dashboard-title-rollover-" });
-  const heartbeatsEnabled = areHeartbeatsEnabled();
   const provider = createServer((request, response) => {
     void (async () => {
       if (request.method !== "POST" || !request.url?.endsWith("/responses")) {
@@ -60,7 +58,6 @@ async function verifyDashboardRollover(nativeReconnect: boolean) {
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
   try {
-    setHeartbeatsEnabled(false);
     const providerUrl = await listenLoopback(provider);
     const model = buildMockOpenAiResponsesProvider(`${providerUrl}/v1`, "rollover-proof");
     const cfg = {
@@ -184,7 +181,6 @@ async function verifyDashboardRollover(nativeReconnect: boolean) {
       await gateway.server.close();
     }
     await closeHttpServer(provider);
-    setHeartbeatsEnabled(heartbeatsEnabled);
     home.envSnapshot.restore();
     await removeGatewayTempHome(home.tempHome);
     resetGatewayTestState();

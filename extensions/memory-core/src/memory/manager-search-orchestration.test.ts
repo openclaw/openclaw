@@ -11,7 +11,10 @@ import { forgetMemoryEntries } from "../memory-forget.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  holdMemoryTestOperation as hold,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const { MemoryIndexManager } = await import("./manager.js");
@@ -79,8 +82,7 @@ describe("memory index", () => {
     });
   }
   function pauseMaintenance(observeReindex = false) {
-    const ready = createDeferred<void>();
-    const release = createDeferred<void>();
+    const operation = hold(() => undefined);
     const state = { closed: false, fields: undefined as MaintenanceFields | undefined };
     const spy = interceptMaintenance((manager) => {
       state.fields = manager as unknown as MaintenanceFields;
@@ -92,12 +94,9 @@ describe("memory index", () => {
         await close();
         state.closed = true;
       });
-      interceptMemorySync(manager, async () => {
-        ready.resolve();
-        await release.promise;
-      });
+      interceptMemorySync(manager, operation.run);
     });
-    return { ready: ready.promise, release: release.resolve, state, spy };
+    return { ready: operation.entered, release: operation.release, state, spy };
   }
 
   it("reuses published facts across searches and observes the next publication", async () => {
@@ -126,14 +125,11 @@ describe("memory index", () => {
   it("invalidates keyword snapshots before changing the fallback provider", async () => {
     const manager = await syncedManager({ fallback: "fallback-provider", minScore: 0 });
     const fallbackGate = createDeferred<void>();
-    const queryEntered = createDeferred<void>();
-    const failQuery = createDeferred<void>();
-    providerFixture.providerInitGate = fallbackGate.promise;
-    const querySpy = vi.spyOn(provider(manager), "embed").mockImplementation(async () => {
-      queryEntered.resolve();
-      await failQuery.promise;
+    const query = hold(() => {
       throw new Error("embedding provider failed");
     });
+    providerFixture.providerInitGate = fallbackGate.promise;
+    const querySpy = vi.spyOn(provider(manager), "embed").mockImplementation(query.run);
     const snapshots: Array<Awaited<ReturnType<typeof manager.search>> | null> = [];
     const search = manager.search("zebra", {
       maxResults: 1,
@@ -141,15 +137,15 @@ describe("memory index", () => {
       onPartialResults: (results) => snapshots.push(results),
     });
     try {
-      await queryEntered.promise;
+      await query.entered;
       expect(snapshots).toEqual([[expect.objectContaining({ path: "memory/2026-01-12.md" })]]);
-      failQuery.resolve();
+      query.release();
       await vi.waitFor(() =>
         expect(providerFixture.providerCalls.at(-1)?.provider).toBe("fallback-provider"),
       );
       expect(snapshots.at(-1)).toBeNull();
     } finally {
-      failQuery.resolve();
+      query.release();
       fallbackGate.resolve();
       await search.catch(() => undefined);
       querySpy.mockRestore();
@@ -572,7 +568,7 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps transient CLI search off the serving manager write path", async () => {
+  it("publishes transient CLI search maintenance before close, off the serving write path", async () => {
     const cfg = keywordConfig();
     const initialManager = await getFreshManager(cfg, "cli");
     await initialManager.sync({ reason: "test", force: true });
@@ -587,6 +583,16 @@ describe("memory index", () => {
     const servingSync = vi.spyOn(servingFields, "syncMemoryFiles");
     let closePromise: Promise<void> | undefined;
     const maintenance = pauseMaintenance();
+    const idleEntered = createDeferred<void>();
+    const awaitIdle = serving(manager).awaitManagerIdle.bind(manager);
+    const idleSettled = vi.fn();
+    using idle = vi.spyOn(serving(manager), "awaitManagerIdle");
+    idle.mockImplementation(() => {
+      const pending = awaitIdle();
+      void pending.then(idleSettled, idleSettled);
+      idleEntered.resolve();
+      return pending;
+    });
 
     try {
       const search = manager.search("zebra", {
@@ -598,32 +604,45 @@ describe("memory index", () => {
       expectFixtureHit(await search);
       expect(servingSync).not.toHaveBeenCalled();
       closePromise = manager.close();
-      let closeSettled = false;
-      void closePromise.then(() => {
-        closeSettled = true;
-      });
-      await vi.waitFor(() => expect(closeSettled).toBe(true));
+      // Teardown must not release the connection the paused maintenance writes through.
+      await idleEntered.promise;
+      expect(idleSettled).not.toHaveBeenCalled();
       expect(maintenance.state.closed).toBe(false);
+      maintenance.release();
+      await closePromise;
+      expect(maintenance.state.closed).toBe(true);
     } finally {
       maintenance.release();
       await closePromise;
       maintenance.spy.mockRestore();
       await manager.close?.();
     }
+
+    // A standalone CLI process exits after close; the refresh it started is published.
+    const next = await getFreshManager(cfg, "cli");
+    try {
+      expect(
+        await next.search("transient", {
+          maxResults: 5,
+          minScore: 0,
+          sessionKey: "agent:main:cli:memory-search",
+        }),
+      ).toEqual(matchingHit({ path: "memory/cli-refresh.md" }));
+      expect(next.status().lastSyncError).toBeUndefined();
+    } finally {
+      await next.close?.();
+    }
   });
 
   it("does not let a no-op sync hide a later detached failure", async () => {
     const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     await manager.sync({ reason: "baseline" });
-    const maintenanceStarted = createDeferred<void>();
-    const releaseMaintenance = createDeferred<void>();
+    const maintenanceWork = hold(() => {
+      throw new Error("older maintenance failed");
+    });
     const maintenance = {
       adoptReindexRetryState: vi.fn(),
-      sync: vi.fn(async () => {
-        maintenanceStarted.resolve();
-        await releaseMaintenance.promise;
-        throw new Error("older maintenance failed");
-      }),
+      sync: vi.fn(maintenanceWork.run),
       close: vi.fn(async () => {}),
     };
     const getSpy = vi.spyOn(MemoryIndexManager, "get").mockResolvedValue(maintenance as never);
@@ -631,10 +650,10 @@ describe("memory index", () => {
     const detachedSync = serving(manager).syncPublishedIndexInBackground({ reason: "search" });
 
     try {
-      await maintenanceStarted.promise;
+      await maintenanceWork.entered;
       expect(manager.status().dirty).toBe(false);
       await manager.sync({ reason: "interval" });
-      releaseMaintenance.resolve();
+      maintenanceWork.release();
       await expect(detachedSync).rejects.toThrow("older maintenance failed");
 
       expect(manager.status()).toMatchObject({
@@ -645,7 +664,7 @@ describe("memory index", () => {
       await manager.sync({ reason: "retry" });
       expect(manager.status().lastSyncError).toBeUndefined();
     } finally {
-      releaseMaintenance.resolve();
+      maintenanceWork.release();
       await detachedSync.catch(() => undefined);
       getSpy.mockRestore();
     }

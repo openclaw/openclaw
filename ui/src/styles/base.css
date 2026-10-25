@@ -1,6 +1,7 @@
 /* Details and the desktop menus share the same block-divider color. Keep the
    token available before lazy menu/Details styles load, without changing other borders. */
 .chat-details-desktop-body,
+.context-usage__popover,
 .chat-dashboard-menu__panel,
 .side-panel-position-menu,
 .chat-pr-menu,
@@ -92,7 +93,7 @@
    *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
    *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
    *   --card/--popover/--secondary foreground pairs: 15.4:1 / 14.9:1 / 15.4:1 ✓
-   *   --selection-fg #ffffff on --selection-bg #005fcc: 6.0:1 AA ✓
+   *   --selection-fg #ffffff on --selection-bg #5a7593: 4.8:1 AA ✓
    */
   --accent: #ff5c5c;
   --accent-hover: #ff7070;
@@ -120,7 +121,7 @@
      feedback that never costs readability. */
   --link: color-mix(in srgb, var(--accent-hover) 85%, var(--text));
   --link-hover: color-mix(in srgb, var(--link) 82%, var(--text));
-  --selection-bg: #005fcc;
+  --selection-bg: #5a7593;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
   /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
@@ -219,6 +220,12 @@
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
   --pr-merged: #a78bfa;
+  /* Categorical chart series: distinct hues validated for color-vision separation on this surface. */
+  --chart-series-1: #3987e5;
+  --chart-series-2: #d95926;
+  --chart-series-3: #199e70;
+  --chart-series-4: #c98500;
+  --chart-series-5: #d55181;
 
   --focus: rgba(255, 92, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
@@ -631,6 +638,11 @@
   --info: #1d4ed8;
   --info-subtle: rgba(29, 78, 216, 0.08);
   --pr-merged: #7c3aed;
+  --chart-series-1: #2a78d6;
+  --chart-series-2: #eb6834;
+  --chart-series-3: #1baf7a;
+  --chart-series-4: #eda100;
+  --chart-series-5: #e87ba4;
 
   --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
@@ -858,7 +870,7 @@ a:where(
     .markdown a,
     .markdown-body a,
     .dreams-diary__para a
-  ):not(:where(.btn, [role="button"])) {
+  ):not(:where(.btn, [role="button"], .chat-assistant-attachment-card__action)) {
   text-decoration: underline;
 }
 
@@ -907,7 +919,9 @@ textarea,
   user-select: text;
 }
 
-::selection {
+/* Highlight styles inherit from the document root; matching every element
+   separately repeats this work whenever a large subtree changes. */
+:root::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
@@ -942,7 +956,7 @@ textarea,
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(var(--rise-start-y, 8px));
   }
   to {
     opacity: 1;

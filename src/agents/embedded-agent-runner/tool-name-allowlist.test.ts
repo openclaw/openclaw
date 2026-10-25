@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { findClientToolNameConflicts } from "../agent-tool-definition-adapter.js";
-import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
+import {
+  createClientToolDefinition as clientTool,
+  createStubTool,
+} from "../test-helpers/agent-tool-stubs.js";
 import { addClientToolsToToolCatalog } from "../tool-search-catalog.js";
 import {
   applyToolSearchCatalog,
@@ -16,10 +19,6 @@ import {
 } from "./tool-name-allowlist.js";
 
 const config = { tools: { toolSearch: true } } as never;
-const clientTool = (name: string): ClientToolDefinition => ({
-  type: "function",
-  function: { name, parameters: { type: "object", properties: {} } },
-});
 const clientTools = [clientTool("client_pick_file")];
 const toolsNamed = (...names: string[]) => names.map((name) => createStubTool(name));
 const compact = (
@@ -76,15 +75,7 @@ describe("tool name allowlists", () => {
     const allowlist = toSessionToolAllowlist(
       collectAllowedToolNames({
         tools: [createStubTool("exec"), createStubTool("read"), createStubTool("exec")],
-        clientTools: [
-          {
-            type: "function",
-            function: {
-              name: "image_generate",
-              parameters: { type: "object", properties: {} },
-            },
-          },
-        ],
+        clientTools: [clientTool("image_generate")],
       }),
     );
 

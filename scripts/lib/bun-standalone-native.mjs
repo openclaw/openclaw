@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { moduleResolve } from "import-meta-resolve";
+import { createStandaloneLexicalBindings } from "./bun-standalone-bindings.mjs";
+import { standaloneDataExpression, standaloneLookupExpression } from "./bun-standalone-data.mjs";
 
 const TABLE_MARKER = "__OPENCLAW_STANDALONE_NATIVE_TABLE__";
 const NATIVE_LIBRARY = /\.(?:dylib|dll|so(?:\.\d+)*)$/;
@@ -173,85 +175,6 @@ function resourceCategory(filename, executable, packageName) {
   return undefined;
 }
 
-// Module pseudo-globals are replaceable only when no lexical binding shadows them.
-function lexicalBindings(ast) {
-  const scopes = new WeakMap();
-  const root = { names: new Set(), callable: true };
-  const bind = (node, scope) => {
-    if (!node) {
-      return;
-    }
-    if (node.type === "Identifier") {
-      scope.names.add(node.name);
-    } else if (node.type === "RestElement") {
-      bind(node.argument, scope);
-    } else if (node.type === "AssignmentPattern") {
-      bind(node.left, scope);
-    } else if (node.type === "ArrayPattern") {
-      node.elements.forEach((entry) => bind(entry, scope));
-    } else if (node.type === "ObjectPattern") {
-      node.properties.forEach((entry) =>
-        bind(entry.type === "RestElement" ? entry.argument : entry.value, scope),
-      );
-    }
-  };
-  function visit(node, parent, parentScope) {
-    let scope = parentScope;
-    if (!node || typeof node !== "object") {
-      return;
-    }
-    const callable = /^(?:FunctionDeclaration|FunctionExpression|ArrowFunctionExpression)$/.test(
-      node.type,
-    );
-    if (node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") {
-      bind(node.id, scope);
-    }
-    if (callable || node.type === "BlockStatement" || node.type === "CatchClause") {
-      scope = { parent: scope, names: new Set(), callable };
-    }
-    scopes.set(node, scope);
-    if (callable) {
-      bind(node.id, scope);
-      node.params.forEach((parameter) => bind(parameter, scope));
-    }
-    if (node.type === "CatchClause") {
-      bind(node.param, scope);
-    }
-    if (node.type === "VariableDeclarator") {
-      let target = scope;
-      if (parent.kind === "var") {
-        while (target.parent && !target.callable) {
-          target = target.parent;
-        }
-      }
-      bind(node.id, target);
-    }
-    if (/^Import(?:Default|Namespace)?Specifier$/.test(node.type)) {
-      bind(node.local, scope);
-    }
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) {
-        value.forEach((child) => visit(child, node, scope));
-      } else if (value && typeof value === "object") {
-        visit(value, node, scope);
-      }
-    }
-  }
-  visit(ast, undefined, root);
-  const bindingScope = (node) => {
-    for (let scope = scopes.get(node); scope; scope = scope.parent) {
-      if (scope.names.has(node.name)) {
-        return scope;
-      }
-    }
-    return undefined;
-  };
-  return {
-    isBound: (node) => Boolean(bindingScope(node)),
-    isModuleBinding: (node) => bindingScope(node) === root,
-  };
-}
-
 /** Capture dependency resources and resolution before removing pnpm's installation topology. */
 export function createStandaloneNativeAdapter({
   runtimeRoot: inputRuntimeRoot,
@@ -298,11 +221,29 @@ export function createStandaloneNativeAdapter({
     const namespace =
       storeMatch?.[1] ??
       `${(manifest.name ?? "root").replaceAll("/", "+")}@${manifest.version ?? "0"}`;
+    let scopeParent;
+    // Nested package scopes retain their installed path; node_modules starts another package.
+    for (
+      let parent = path.dirname(directory);
+      contained(parent) && parent !== runtimeRoot && path.basename(parent) !== "node_modules";
+      parent = path.dirname(parent)
+    ) {
+      if (fs.existsSync(path.join(parent, "package.json"))) {
+        const candidate = register(parent);
+        if (candidate) {
+          scopeParent = candidate.relocate ? candidate : undefined;
+          break;
+        }
+      }
+    }
     const owner = {
       directory,
       manifest,
       original,
-      destination: `native/${namespace}/${manifest.name}`,
+      destination: scopeParent
+        ? `${scopeParent.destination}/${slash(path.relative(scopeParent.directory, directory))}`
+        : `native/${namespace}/${manifest.name}`,
+      scopeParent,
       relocate: /(?:^|\/)node_modules\//.test(original) || original.startsWith("packages/"),
       dependencies: new Map(),
       resources: [],
@@ -338,19 +279,22 @@ export function createStandaloneNativeAdapter({
         if (!entry.isFile() && !entry.isSymbolicLink()) {
           continue;
         }
-        const resolved = fs.realpathSync(source);
+        // Scan parents are canonical; only symlink entries need another resolution.
+        const resolved = entry.isSymbolicLink() ? fs.realpathSync(source) : source;
         if (!contained(resolved)) {
           throw new Error(`Dependency resource escapes runtime: ${source}`);
+        }
+        const mayBeExecutable =
+          !LICENSE.test(name) && !/\.(?:[cm]?[jt]s|map|json|md|sh|ps1|cmd|bat|d\.ts)$/.test(name);
+        if (!mayBeExecutable && !resourceCategory(name, false, manifest.name)) {
+          continue;
         }
         const stat = fs.statSync(resolved);
         if (!stat.isFile()) {
           continue;
         }
         // Executable support programs (pty helper, browser driver, etc.) remain disk assets.
-        const executable =
-          (stat.mode & 0o111) !== 0 &&
-          !LICENSE.test(name) &&
-          !/\.(?:[cm]?[jt]s|map|json|md|sh|ps1|cmd|bat|d\.ts)$/.test(name);
+        const executable = mayBeExecutable && (stat.mode & 0o111) !== 0;
         const category = resourceCategory(name, executable, manifest.name);
         const target =
           category &&
@@ -425,8 +369,11 @@ export function createStandaloneNativeAdapter({
     return found;
   }
 
+  const builtinModules = new Set();
+
   function requireBindings(ast, filename) {
-    const { isBound, isModuleBinding } = lexicalBindings(ast);
+    const lexicalBindings = createStandaloneLexicalBindings(ast);
+    const { isBound, isModuleBinding } = lexicalBindings;
     const origins = new Map();
     const factories = new Set();
     const moduleResolvers = new Set();
@@ -564,7 +511,7 @@ export function createStandaloneNativeAdapter({
         }
       }
     }
-    return { origins, moduleResolvers, isBound, isModuleBinding };
+    return { origins, moduleResolvers, isBound, isModuleBinding, lexicalBindings };
   }
 
   function staticModuleResolution(node, filename, bindings) {
@@ -624,6 +571,10 @@ export function createStandaloneNativeAdapter({
     if (typeof specifier !== "string" || /(?:^|\/)package\.json$/.test(specifier)) {
       return undefined;
     }
+    if (isBuiltin(specifier)) {
+      builtinModules.add(specifier);
+      return undefined;
+    }
     let target;
     try {
       target = createRequire(filename).resolve(specifier);
@@ -677,7 +628,21 @@ export function createStandaloneNativeAdapter({
           "ImportExpression",
         ].includes(node.type)
       ) {
-        retainRuntimeReference(filename, node.source?.value);
+        retainRuntimeReference(
+          filename,
+          node.source?.value ?? bindings.lexicalBindings.constantString(node.source),
+        );
+      }
+      // Opaque loader wrappers hide literal builtin requests from Bun's linker.
+      if (node.type === "CallExpression") {
+        const argument = node.arguments[0];
+        const specifier =
+          argument?.type === "Literal"
+            ? argument.value
+            : bindings.lexicalBindings.constantString(argument);
+        if (typeof specifier === "string" && isBuiltin(specifier)) {
+          builtinModules.add(specifier);
+        }
       }
       const resolveCall =
         node.callee?.type === "MemberExpression" &&
@@ -797,7 +762,7 @@ export function createStandaloneNativeAdapter({
     }
     const key = path.relative(root, target).split(path.sep).join("/");
     return table.files[key] ? path.join(root, table.files[key])
-      : table.embedded[key] ? path.join(root, key) : undefined;
+      : table.embedded(key) ? path.join(root, key) : undefined;
   };
   globalThis.__openclawStandaloneNativeResolvePaths = (parent, specifier) => {
     if (typeof specifier !== "string" || specifier.startsWith(".") || path.isAbsolute(specifier)) return undefined;
@@ -847,6 +812,9 @@ export function createStandaloneNativeAdapter({
           pending.add(additional);
         }
       }
+    },
+    get builtinModules() {
+      return [...builtinModules].toSorted((left, right) => left.localeCompare(right));
     },
     get additionalModuleEntries() {
       return additionalModuleEntries.toSorted((a, b) => a.localeCompare(b));
@@ -982,10 +950,13 @@ export function createStandaloneNativeAdapter({
       }
       return { contents, count: edits.length };
     },
-    finalize({ metafile, embeddedPaths = {} } = {}) {
+    finalize({ metafile, embeddedPaths = {}, resolveFilename = (filename) => filename } = {}) {
       const graph = typeof metafile === "string" ? JSON.parse(metafile) : metafile;
       for (const filename of Object.keys(graph?.inputs ?? {})) {
-        const absolute = path.isAbsolute(filename) ? filename : path.resolve(filename);
+        // Typed dependency mirrors share a sidecar destination with their installed owner.
+        const absolute = resolveFilename(
+          path.isAbsolute(filename) ? filename : path.resolve(filename),
+        );
         if (fs.existsSync(absolute)) {
           const canonical = fs.realpathSync(absolute);
           if (!contained(canonical)) {
@@ -999,6 +970,9 @@ export function createStandaloneNativeAdapter({
       }
       const retained = new Set([...observed, ...runtimeReferenced]);
       for (const owner of retained) {
+        if (owner.scopeParent) {
+          retained.add(owner.scopeParent);
+        }
         if (!owner.relocate) {
           continue;
         }
@@ -1151,13 +1125,16 @@ export function createStandaloneNativeAdapter({
         owners,
         // Hoisted copies share emitted bytes but retain every original resolution path.
         files: Object.fromEntries(files.map((file) => [file.source, file.destination])),
-        embedded: embeddedPaths,
       };
       return {
         files: [...emittedFiles.values()],
         bootstrapReplacement: {
           search: JSON.stringify(TABLE_MARKER),
-          replacement: JSON.stringify(table),
+          replacement: `(() => {
+            const table = ${standaloneDataExpression(table)};
+            table.embedded = ${standaloneLookupExpression(embeddedPaths)};
+            return table;
+          })()`,
         },
       };
     },

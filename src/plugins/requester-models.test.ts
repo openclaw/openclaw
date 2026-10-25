@@ -39,6 +39,7 @@ function registry() {
 it("advertises a version without removing the released string-list capability contract", () => {
   const runtime = createRuntimeBase();
   expect(runtime.capabilities).toContain("requester-model-catalog-v1");
+  expect(runtime.capabilities).toContain("requester-model-family-v1");
   expect(runtime.capabilities).toContain("sender-restricted-hidden-helpers-v1");
 });
 

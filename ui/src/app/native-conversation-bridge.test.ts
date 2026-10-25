@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import { showToast } from "../lib/toast.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createNativeConversationBridge } from "./native-conversation-bridge.ts";
 
@@ -434,12 +435,10 @@ describe("native conversation contract", () => {
     const f = fixture();
     f.data.sessionKey = "global";
     f.data.agentId = "research";
-    f.context.agents.state.agentsList = {
-      defaultId: "main",
-      mainKey: "main",
+    f.context.agents.state.agentsList = makeBootRoster({
       scope: "global",
       agents: [{ id: "main" }, { id: "research" }],
-    };
+    });
     Object.assign(f.row, {
       key: "global",
       agentId: "main",

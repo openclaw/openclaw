@@ -514,6 +514,7 @@ struct GatewayProcessManagerTests {
 
     private nonisolated func gatewayTask(
         healthSucceedsAfter unavailableResponses: Int?,
+        coreReadyAfter pendingResponses: Int? = nil,
         stallsFirstHealthResponse: Bool = false,
         healthResponseGates: [AsyncTestGate] = [],
         firstHealthRequest: AsyncTestGate? = nil) -> GatewayTestWebSocketTask
@@ -545,7 +546,16 @@ struct GatewayProcessManagerTests {
                     task.emitReceiveSuccess(.data(response))
                     return
                 }
-                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                if let pendingResponses {
+                    let response = Data(
+                        """
+                        {"type":"res","id":"\(id)","ok":true,
+                         "payload":{"coreReady":\(healthIndex > pendingResponses)}}
+                        """.utf8)
+                    task.emitReceiveSuccess(.data(response))
+                } else {
+                    task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                }
             })
     }
 
@@ -2383,7 +2393,7 @@ struct GatewayProcessManagerTests {
                     },
                     wait: {
                         await exits[index].wait()
-                        return "fixture startup failed"
+                        return .launch("fixture startup failed")
                     },
                     terminate: { exits[index].open() })
             }
@@ -2687,14 +2697,18 @@ struct GatewayProcessManagerTests {
     }
 
     @Test(arguments: [
-        (Duration.zero, Duration.milliseconds(300), true),
-        (.milliseconds(600), .milliseconds(300), true),
-        (.milliseconds(900), .milliseconds(100), false),
+        (Duration.zero, Duration.milliseconds(300), true, false),
+        (.milliseconds(600), .milliseconds(300), true, false),
+        (.milliseconds(900), .milliseconds(100), false, false),
+        (.zero, .milliseconds(300), true, true),
+        (.milliseconds(600), .milliseconds(300), true, true),
+        (.milliseconds(900), .milliseconds(100), false, true),
     ])
-    func `transient unavailable health response retries within its budget`(
+    func `transient health startup response retries within its budget`(
         responseDelay: Duration,
         retryDelay: Duration,
-        becomesReady: Bool) async throws
+        becomesReady: Bool,
+        coreReadyInPayload: Bool) async throws
     {
         let stateDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-gateway-ready-\(UUID().uuidString)", isDirectory: true)
@@ -2712,7 +2726,8 @@ struct GatewayProcessManagerTests {
                 defer { responseGate.open() }
                 let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url, clock: clock) {
                     self.gatewayTask(
-                        healthSucceedsAfter: 1,
+                        healthSucceedsAfter: coreReadyInPayload ? 0 : 1,
+                        coreReadyAfter: coreReadyInPayload ? 1 : nil,
                         healthResponseGates: [responseGate],
                         firstHealthRequest: firstHealthRequest)
                 }
@@ -2749,6 +2764,8 @@ struct GatewayProcessManagerTests {
                 #expect(session.latestTask()?.snapshotSendCount() == (becomesReady ? 4 : 3))
                 #expect(manager.status == (becomesReady ? .running(details: "pid 4242") : .starting))
                 #expect(!manager._testHasLaunchAgentReadinessFailure())
+                #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .allSatisfy { $0.first != "install" })
 
                 await connection.shutdown()
                 await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)

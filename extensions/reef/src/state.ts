@@ -1,9 +1,12 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateOperationReceipt,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 // Import from defining modules, not the protocol barrel: index.js re-exports
 // guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
 import { fromBase64url } from "../protocol/encoding.js";
-import type { ReviewApproval, ReviewRequest } from "../protocol/pipeline.js";
+import type { ReviewApproval, ReviewDecisionState, ReviewRequest } from "../protocol/pipeline.js";
 import { openReefAuditStore } from "./audit-state.js";
 import {
   REEF_REGISTRATION_NAMESPACE,
@@ -148,16 +151,16 @@ export class ReviewApprovalStore {
     return receipt.value;
   }
 
-  async lookupDecision(
+  async observeDecision(
     approvalDigest: string,
-  ): Promise<"none" | "pending" | { approved: boolean }> {
+  ): Promise<PluginStateOperationReceipt<ReviewDecisionState>> {
     const operation = this.#operation();
     const receipt = await operation.execute(
       { type: "review.lookup", input: { digest: approvalDigest } },
       { writeStores: [], watchStores: [0], missingValue: "none" },
     );
     receipt.assertCurrent();
-    return receipt.value;
+    return receipt;
   }
 
   async decide(

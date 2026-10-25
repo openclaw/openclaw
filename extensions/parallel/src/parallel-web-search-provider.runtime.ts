@@ -37,10 +37,10 @@ const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
 const USER_AGENT = `openclaw-parallel/${PLUGIN_VERSION} (${process.platform})`;
 
-function invalidBaseUrlPayload(value: string) {
+function invalidBaseUrlPayload() {
   return {
     error: "invalid_base_url",
-    message: `plugins.entries.parallel.config.webSearch.baseUrl must be a valid http(s) URL. Got: ${value}`,
+    message: "plugins.entries.parallel.config.webSearch.baseUrl must be a valid http(s) URL.",
     docs: "https://docs.openclaw.ai/tools/parallel-search",
   };
 }
@@ -73,17 +73,17 @@ export async function executeParallelWebSearchProviderTool(
   const configured = normalizeOptionalString(parallelConfig?.baseUrl);
   if (configured) {
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
-      return invalidBaseUrlPayload(configured);
+      return invalidBaseUrlPayload();
     }
     const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
     let parsed: URL;
     try {
       parsed = new URL(candidate);
     } catch {
-      return invalidBaseUrlPayload(configured);
+      return invalidBaseUrlPayload();
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return invalidBaseUrlPayload(configured);
+      return invalidBaseUrlPayload();
     }
     const pathname = parsed.pathname.replace(/\/+$/, "");
     parsed.pathname = pathname.endsWith(PARALLEL_SEARCH_PATHNAME)

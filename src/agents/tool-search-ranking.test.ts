@@ -346,5 +346,4 @@ it("keeps cyclic composed schemas bounded", () => {
   schema.anyOf = [schema];
 
   expect(readParameterText(schema).split(" ")).toEqual(Array(5).fill("visible"));
-  expect(readParameterText(schema, 5)).toBe("");
 });

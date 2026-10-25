@@ -23,8 +23,10 @@ import { MAX_TASK_ARCHIVE_RECORD_BYTES } from "./session-accessor.sqlite-archive
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { listSessionTranscriptArchivesReadOnly } from "./session-history-read.js";
 import * as history from "./session-history.js";
 import * as historyReaders from "./session-transcript-worker-readers.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const jsonLines = (events: readonly unknown[]) =>
@@ -402,7 +404,7 @@ it("reads a pre-archive store without creating its optional archive table", asyn
     };
 
     expect(
-      history.listSessionTranscriptArchivesReadOnly({ ...scope, sessionIds: [scope.sessionId] }),
+      listSessionTranscriptArchivesReadOnly({ ...scope, sessionIds: [scope.sessionId] }),
     ).toEqual([]);
     await expect(
       withoutHostSql(() => history.findSessionTranscriptArchiveEventReadOnly(scope, "absent-run")),
@@ -618,12 +620,10 @@ it("retains exact multiline imported events through deletion and final-answer lo
     };
     const rows = [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "user",
-        parentId: null,
-        message: { role: "user", content: 'Keep braces {}, brackets [] and \\"quotes\\".' },
-      },
+      messageEvent("user", null, {
+        role: "user",
+        content: 'Keep braces {}, brackets [] and \\"quotes\\".',
+      }),
       answer,
     ].map((event, index) => ({
       session_id: sessionId,

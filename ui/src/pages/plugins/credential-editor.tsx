@@ -82,6 +82,11 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     { loadingValue: true },
   );
   const loading = () => isPending(inspectionPending) || latest(inspectionPending);
+  const [operationRequest, setOperationRequest] = createSignal<{ promise: Promise<void> }>();
+  const operationComplete = createMemo(() => operationRequest()?.promise.then(() => null) ?? null, {
+    loadingValue: null,
+  });
+  // Revision and unacknowledged-write outcomes are separate from rejected commands.
   const [error, setError] = createSignal("");
   const [dialogOpen, setDialogOpen] = createSignal(false);
   const [reference, setReference] = createStore<SecretRef>({
@@ -153,6 +158,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       }
       if (sourceChanged || next.epoch !== previous?.epoch) {
         pending = undefined;
+        setOperationRequest(undefined);
       }
       setInspectionRequest(undefined);
       setInspection((current) =>
@@ -254,7 +260,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     ) {
       return;
     }
-    setError("");
     setInspectionRequest(undefined);
     return commitOrDiscardReference(value);
   }
@@ -271,6 +276,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   }
 
   async function commitOrDiscardReference(value: string | SecretRef | undefined) {
+    setError("");
     const gateway = props.context.gateway;
     const retired = props.context.getPresentationLifetime();
     const capturedConnection = connection;
@@ -320,12 +326,15 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         }
       } catch (cause) {
         if (current()) {
-          setError(formatUiError(cause));
+          throw cause;
         }
       }
     })();
-    await Promise.resolve();
-    return presentOperation(admitted, completed, retired);
+    // Publish the completion before the action holds its saving presentation.
+    const result = Promise.resolve().then(() => presentOperation(admitted, completed, retired));
+    setOperationRequest({ promise: result });
+    // Feedback observes rejection; retired event callers only await settlement.
+    return result.catch(() => undefined);
   }
 
   const presentOperation = action(function* (
@@ -341,10 +350,6 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
       yield Promise.race([completed, retired]);
       if (admitted.current()) {
         yield refresh(inspectionComplete);
-      }
-    } catch (cause) {
-      if (admitted.current()) {
-        setError(formatUiError(cause));
       }
     } finally {
       if (pending === admitted) {
@@ -386,23 +391,24 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
     </>
   );
   const Feedback = (feedback: { dialog?: boolean }) => (
-    <Show
-      when={failure()}
-      fallback={
-        <Show when={inspectionRequest()} keyed>
-          {(request) => (
+    <Show when={!saving() && !cancelling()}>
+      <Show
+        when={failure()}
+        fallback={
+          <Loading on={inspectionRequest()}>
             <Errored
               fallback={(cause) => (
                 <Failure message={formatUiError(cause())} dialog={feedback.dialog} />
               )}
             >
-              <Loading on={request}>{inspectionComplete()}</Loading>
+              {operationComplete()}
+              {inspectionComplete()}
             </Errored>
-          )}
-        </Show>
-      }
-    >
-      {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+          </Loading>
+        }
+      >
+        {(message) => <Failure message={message()} dialog={feedback.dialog} />}
+      </Show>
     </Show>
   );
   const configured = () =>

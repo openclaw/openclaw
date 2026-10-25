@@ -3,6 +3,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
 import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
 import {
   groupsOf,
   message,
@@ -13,14 +14,10 @@ import {
   signedText as signed,
   toolResult,
 } from "./chat-thread-fixtures.test-support.ts";
-import {
-  assistantGroupCanOwnActiveRunStatus,
-  collapseCompletedTurnWork,
-  coalesceActivityRuns,
-  groupMessages,
-} from "./chat-thread-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import { buildItems, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
+import { collapseCompletedTurnWork, coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
 const sessionKey = "agent:main:dashboard:answers";
 const cli: MessageClientSource = { id: "cli", mode: "cli", displayName: "Release helper" };

@@ -8,13 +8,15 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
-import type { SearchSchema } from "../infra/database-engine/contract.js";
+import type { SearchSchema, StoreSchema } from "../infra/database-engine/contract.js";
+import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
 import { publishSqliteDatabaseSchemaChange } from "../infra/sqlite-database-admission.js";
 import {
+  agentEngineSchema,
   admitAgentEngineSearchExtensions,
   openAgentEngineStore,
 } from "./openclaw-agent-db-engine.js";
@@ -192,6 +194,141 @@ describe.skipIf(!connection)("PostgreSQL agent-owned memory search admission", (
         });
       } finally {
         next.close();
+      }
+    });
+  });
+});
+
+describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
+  it("preserves populated v31 rows and avoids repeated TOAST reads after migration", () => {
+    withEngineStoreAdmission(() => {
+      using anchor = openNodeSqliteDatabase(
+        path.join(dirs.make("pg-vector-migration-"), "agent.sqlite"),
+      );
+      const opened: PostgresSqlConnection[] = [];
+      const open = (schema: StoreSchema, existingVersion = false) => {
+        const result = openEngineStore({
+          anchor,
+          schema,
+          existingVersion,
+          input: { connection: connection!, schemaPrefix: "vector_migration" },
+          inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+          prepareAnchor() {},
+          openSqlite() {
+            throw new Error("Expected PostgreSQL");
+          },
+        });
+        if (!isPostgresSqlConnection(result)) {
+          throw new Error("Expected PostgreSQL");
+        }
+        opened.push(result);
+        return result;
+      };
+      const predecessor: StoreSchema = {
+        ...agentEngineSchema,
+        ...agentEngineSchema.postgresMigrations!.find((step) => step.version === 32)!.fromSchema,
+        version: 31,
+        postgresVectorDecoderVersion: 1,
+        postgresVectorSearchVersion: 1,
+      };
+      let db = open(predecessor);
+      const namespace = getPostgresPhysicalFacts(db)!.namespace;
+      try {
+        const definition: SearchSchema = {
+          vector: {
+            chunks: {
+              ...vector.vector!.chunks!,
+              postgres: {
+                ...vector.vector!.chunks!.postgres!,
+                dimensions: 1536,
+              },
+            },
+          },
+        };
+        db.runTransaction(() => {
+          db.exec("INSERT INTO schema_meta VALUES ('primary', 'agent', 31, 'main', NULL, 1, 1)");
+          admitStoreSearch(db, definition, { extension: "memory.vector" });
+          // Incompressible, external bytes expose repeated detoasting in the old decoder.
+          db.exec("ALTER TABLE memory_index_chunks ALTER COLUMN embedding SET STORAGE EXTERNAL");
+          const bytes = Buffer.alloc(1536 * 8);
+          for (let i = 0; i < 1536; i++) {
+            bytes.writeDoubleLE(Math.sin(i + 1), i * 8);
+          }
+          db.prepare(`INSERT INTO memory_index_chunks
+            (id, path, start_line, end_line, hash, model, text, embedding, updated_at)
+            VALUES ('retained', 'memory/retained.md', 1, 1, 'hash', 'model', 'retained', ?, 1)`).run(
+            bytes,
+          );
+        });
+        // Storage policy is not sealed; reset it before reopening against generated DDL.
+        db.exec("ALTER TABLE memory_index_chunks ALTER COLUMN embedding SET STORAGE EXTENDED");
+        // v33 backfills derived bits; canonical tuple identities and vector bytes remain stable.
+        const retained = () =>
+          db
+            .prepare(`SELECT c.xmin::text AS chunk_xmin, c.ctid::text AS chunk_ctid,
+          encode(c.embedding, 'hex') AS canonical,
+          encode(public.vector_send(v.embedding), 'hex') AS projection
+          FROM memory_index_chunks c JOIN memory_index_chunks_vec v USING(id)`)
+            .all();
+        const before = retained();
+        const project = (values: readonly number[], dimensions = values.length) => {
+          const bytes = Buffer.alloc(values.length * 8);
+          values.forEach((value, i) => bytes.writeDoubleLE(value, i * 8));
+          try {
+            return db
+              .prepare("SELECT encode(public.vector_send(openclaw_vector(?, ?)), 'hex') AS bytes")
+              .get(bytes, dimensions);
+          } catch (error) {
+            if (!(error instanceof Error) || !("code" in error)) {
+              throw error;
+            }
+            return { name: error.name, code: error.code, message: error.message };
+          }
+        };
+        const edges = [
+          [-0, 0, Number.MIN_VALUE],
+          [-Number.MIN_VALUE, 2 ** -150, -(2 ** -150)],
+          [1 + 2 ** -24, 1 + 3 * 2 ** -24, 3.4028234663852886e38],
+          [Number.NaN, Number.MAX_VALUE],
+          [Number.MAX_VALUE, Number.NaN],
+          [Infinity],
+          [-Infinity],
+          [],
+        ];
+        const edgeResults = edges.map((values) => project(values));
+        const wrongDimension = project([1, 2], 3);
+        const functionOid = () =>
+          db.prepare("SELECT 'openclaw_vector(bytea,integer)'::regprocedure::oid AS oid").get();
+        const oid = functionOid();
+        db.close();
+        publishSqliteDatabaseSchemaChange(anchor);
+        // Inspection by the new build must still render the exact historical decoder.
+        db = open(agentEngineSchema, true);
+        expect(getPostgresPhysicalFacts(db)?.version).toBe(31);
+        db.close();
+        publishSqliteDatabaseSchemaChange(anchor);
+        db = open(agentEngineSchema);
+        expect(getPostgresPhysicalFacts(db)?.version).toBe(agentEngineSchema.version);
+        expect(retained()).toEqual(before);
+        expect(functionOid()).toEqual(oid);
+        expect(edges.map((values) => project(values))).toEqual(edgeResults);
+        expect(project([1, 2], 3)).toEqual(wrongDimension);
+        expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+          schema_version: agentEngineSchema.version,
+        });
+        // Count buffer work, not elapsed time: one stored vector must not be detoasted per byte.
+        const explain = db
+          .prepare(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
+          SELECT public.vector_send(openclaw_vector(embedding, 1536)) FROM memory_index_chunks`)
+          .get();
+        const [plan] = JSON.parse(String(explain?.["QUERY PLAN"]));
+        expect(plan.Plan["Shared Hit Blocks"] + plan.Plan["Shared Read Blocks"]).toBeLessThan(100);
+        expect(retained()).toEqual(before);
+      } finally {
+        if (db.isOpen) {
+          db.exec(`DROP SCHEMA "${namespace}" CASCADE`);
+        }
+        opened.forEach((item) => item.close());
       }
     });
   });

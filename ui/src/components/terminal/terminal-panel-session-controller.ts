@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   TerminalConnection,
@@ -29,6 +30,8 @@ import { createTerminalIntentQueue, terminalIntentQueue } from "./terminal-pendi
 import type { TerminalIntentHost } from "./terminal-pending-actions.ts";
 import { createTerminalTabReadiness } from "./terminal-tab-readiness.ts";
 import { TerminalTaskQueue } from "./terminal-task-queue.ts";
+
+registerTerminalEnglish();
 
 /** Owns gateway PTY sessions and the Ghostty controllers bound to them. */
 export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {

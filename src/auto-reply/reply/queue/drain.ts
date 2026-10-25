@@ -266,7 +266,7 @@ async function executeClaim(
       item.controllerInput!.payload = claim.summary ? "summary" : "ready";
     }
     if (retrySources.length) {
-      queue.lastEnqueuedAt = Date.now();
+      queue.lastEnqueuedAt = performance.now();
     }
     for (const item of sources) {
       queue.activeSummarySources.delete(item);
@@ -368,15 +368,6 @@ export function scheduleFollowupDrain(
   rememberFollowupDrainCallback(key, runFollowup, mailbox, admissionSessionRebind);
   mailbox.dispatchEnabled = true;
   mailbox.wake();
-}
-
-/** Wake the existing controller dispatcher without acquiring another execution owner. */
-export function kickFollowupDrainIfIdle(key: string, owner?: SessionControllerEntry): void {
-  const mailbox = owner ? owner.mailbox : getExistingSessionControllerMailbox(key);
-  if (mailbox?.dispatch) {
-    mailbox.dispatchEnabled = true;
-    mailbox.wake();
-  }
 }
 
 export async function dropAbortedFollowups(

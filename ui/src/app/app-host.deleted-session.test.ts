@@ -22,6 +22,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
+import { createSessionState } from "../lib/sessions/session-capability.ts";
 import { createSessionDeletionHarness } from "../lib/sessions/session-deletion.test-support.ts";
 import {
   clearPaneSessionHandoffs,
@@ -35,6 +36,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { committedRouterState, resetAppHostTestGlobals } from "./app-host.test-support.ts";
+import type { ShellGatewayOwner } from "./app-shell-gateway.ts";
 import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
@@ -43,6 +45,7 @@ import type { ApplicationContext } from "./context.ts";
 type DeletedSessionShell = Omit<ReturnType<typeof createShellOwner>, "runtime"> & {
   runtime: { context: ApplicationContext };
   shellNavigation: ShellNavigationOwner;
+  shellGateway: ShellGatewayOwner;
 };
 
 const mainKey = "agent:main:main";
@@ -142,6 +145,16 @@ function recoveryShell(
   const fixture = createApplicationGateway();
   const { gateway } = fixture;
   const agentsList = { defaultId: "main", mainKey: "main", agents: [{ id: "main" }] };
+  let sessionState = createSessionState();
+  sessionState.deletedSessions = (params.deletedSessionKeys ?? []).map((key) => ({
+    agentId: "main",
+    key,
+    retireBeforeRevision: Date.now(),
+  }));
+  sessionState.result = sessionsResult(
+    (params.sessionKeys ?? [deletedKey]).map((key) => ({ key, kind: "direct" })),
+  );
+  const sessionListeners = new Set<(state: typeof sessionState) => void>();
   gateway.setSessionKey = setSessionKey;
   gateway.snapshot.phase = "connected";
   const shell = createShellOwner() as unknown as DeletedSessionShell;
@@ -157,13 +170,12 @@ function recoveryShell(
       sessions: params.sessions ?? {
         deletionState: (key: string) =>
           params.deletedSessionKeys?.includes(key) ? "confirmed" : undefined,
-        state: {
-          deletedSessions: (params.deletedSessionKeys ?? []).map((key) => ({
-            agentId: "main",
-            key,
-            retireBeforeRevision: Date.now(),
-          })),
-          result: { sessions: (params.sessionKeys ?? [deletedKey]).map((key) => ({ key })) },
+        get state() {
+          return sessionState;
+        },
+        subscribe: (listener: (state: typeof sessionState) => void) => {
+          sessionListeners.add(listener);
+          return () => sessionListeners.delete(listener);
         },
       },
       replace,
@@ -175,7 +187,16 @@ function recoveryShell(
     clearPaneSessionHandoffs(shell.runtime.context, "retained");
     shell.runtime.context.chatAttachmentHandoff.dispose();
   });
-  return { replace, setSessionKey, shell, publishGateway: () => fixture.publish(gateway.snapshot) };
+  return {
+    replace,
+    setSessionKey,
+    shell,
+    publishGateway: () => fixture.publish(gateway.snapshot),
+    publishSessions: (next = sessionState) => {
+      sessionState = next;
+      sessionListeners.forEach((listener) => listener(next));
+    },
+  };
 }
 
 function createDeletionHarness(request: ReturnType<typeof vi.fn>) {
@@ -184,7 +205,9 @@ function createDeletionHarness(request: ReturnType<typeof vi.fn>) {
   cleanups.push(() => sessions.dispose());
   const watch = (sessionKeys = [deletedKey, mainKey]) => {
     const fixture = recoveryShell({ sessionKeys, sessions });
-    cleanups.push(sessions.subscribe(() => fixture.shell.recoverDeletedActiveSession()));
+    cleanups.push(
+      sessions.subscribe(() => fixture.shell.shellNavigation.recoverDeletedActiveSession()),
+    );
     return { ...fixture, toast: toastHost() };
   };
   return { ...harness, sessions, watch };
@@ -218,7 +241,9 @@ describe("OpenClaw shell deleted-session recovery", () => {
       scopeKey: `chat:v3:${scopeKey}`,
     };
     const drafts = outbox(storage, owner);
-    const { shell, publishGateway } = recoveryShell({ deletedSessionKeys: [deletedKey] });
+    const { shell, publishGateway, publishSessions } = recoveryShell({
+      deletedSessionKeys: [deletedKey],
+    });
     const context = shell.runtime.context;
     const client = attachOwner(shell, owner);
     const handoff = { owner: client as GatewayBrowserClient, paneId: "retained", scopeKey };
@@ -248,10 +273,11 @@ describe("OpenClaw shell deleted-session recovery", () => {
       client.recoveryScope = "";
     }
     client.recoveryScopeReady = false;
-    shell.observeDeletedSessions({
+    publishSessions({
       ...context.sessions.state,
       deletedSessions: [{ key: deletedKey, agentId: "main", retireBeforeRevision: Date.now() + 1 }],
     });
+    cleanups.push(shell.shellGateway.observeSessions(context.sessions, () => {}));
     expect.soft(consumePaneSessionHandoff(context, "retained", deletedKey)).toBeNull();
     expect.soft(context.chatAttachmentHandoff.consume(handoff)).toBeNull();
     if (late || stalled) {
@@ -309,7 +335,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       const originalStored = originalDrafts.read();
       const toast = toastHost();
 
-      shell.observeDeletedSessions(context.sessions.state);
+      cleanups.push(shell.shellGateway.observeSessions(context.sessions, () => {}));
       if (change === "principal change") {
         client.recoveryScope = other.recoveryScope;
       } else if (change === "credentials change") {
@@ -348,12 +374,12 @@ describe("OpenClaw shell deleted-session recovery", () => {
       },
       retryable: false,
     });
-    shell.recoverDeletedActiveSession();
+    shell.shellNavigation.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(deletedKey);
     expect(replace).not.toHaveBeenCalled();
     expect(setSessionKey).not.toHaveBeenCalled();
     get.mockReturnValue(null);
-    shell.recoverDeletedActiveSession();
+    shell.shellNavigation.recoverDeletedActiveSession();
     expect(shell.activeSessionKey).toBe(mainKey);
     expect(replace).toHaveBeenCalledOnce();
   });
@@ -362,8 +388,10 @@ describe("OpenClaw shell deleted-session recovery", () => {
     async (failure) => {
       const staleClient = failure === "different-client batch rejection";
       const response = createDeferred<{ deleted: boolean }>();
+      const deleteDispatched = createDeferred();
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.delete") {
+          deleteDispatched.resolve();
           return response.promise;
         }
         if (method === "sessions.subscribe") {
@@ -383,6 +411,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname: "/chat/main" });
       shell.activeSessionKey = "agent:main:another-thread";
       replace.mockClear();
+      await deleteDispatched.promise;
       if (failure === "rejection") {
         response.reject(new Error("delete rejected"));
         await expect(operation).rejects.toThrow("delete rejected");
@@ -419,6 +448,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
 
   it("preserves the replacement when confirmation selected its deleted predecessor", async () => {
     const response = createDeferred<{ deleted: boolean }>();
+    const deleteDispatched = createDeferred();
     const replacement = {
       key: deletedKey,
       sessionId: "replacement",
@@ -426,9 +456,13 @@ describe("OpenClaw shell deleted-session recovery", () => {
       updatedAt: 2,
     };
     let listed = { ...replacement, sessionId: "predecessor" };
-    const request = vi.fn(async (method: string) =>
-      method === "sessions.delete" ? response.promise : sessionsResult([listed], 2),
-    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        deleteDispatched.resolve();
+        return response.promise;
+      }
+      return sessionsResult([listed], 2);
+    });
     const { emitEvent, sessions, watch } = createDeletionHarness(request);
     await sessions.refresh({ force: true });
     emitEvent({
@@ -444,6 +478,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       expect(shell.activeSessionKey).toBe(deletedKey);
       expect(replace).not.toHaveBeenCalled();
       expect(sessions.state.result?.sessions).toEqual([replacement]);
+      await deleteDispatched.promise;
       expect(request).toHaveBeenCalledWith(
         "sessions.delete",
         expect.objectContaining({ key: deletedKey, expectedSessionId: "predecessor" }),
@@ -483,19 +518,15 @@ describe("OpenClaw shell deleted-session recovery", () => {
       h.setRows([h.sibling]);
       if (priorLocalDelete) {
         const deletion = h.sessions.delete(h.alpha.key);
-        h.responses.get(h.alpha.key)!.resolve({ deleted: true });
+        const response = await h.waitForDeleteRequest(h.alpha.key);
+        response.resolve({ deleted: true });
         await deletion;
       }
       h.setRows([replacement, h.sibling]);
       await h.sessions.refresh({ force: true });
       drafts.write("B draft");
       const draft = drafts.read();
-      cleanups.push(
-        h.sessions.subscribe((state) => {
-          shell.observeDeletedSessions(state);
-          shell.recoverDeletedActiveSession();
-        }),
-      );
+      cleanups.push(shell.shellGateway.observeSessions(h.sessions, () => {}));
       const payload = {
         sessionKey: h.alpha.key,
         agentId: "main",
@@ -532,21 +563,22 @@ describe("OpenClaw shell deleted-session recovery", () => {
     vi.stubGlobal("sessionStorage", storage);
     const drafts = outbox(storage);
     drafts.write("retire me");
-    const { shell } = recoveryShell({ sessionKeys: [], deletedSessionKeys: [deletedKey] });
+    const { shell, publishSessions } = recoveryShell({
+      sessionKeys: [],
+      deletedSessionKeys: [deletedKey],
+    });
     attachOwner(shell);
     const state = shell.runtime.context.sessions.state;
     shell.runtime.context.agents.state.agentsList = null;
     shell.runtime.context.gateway.snapshot.assistantAgentId = "main";
     const toast = toastHost();
 
-    shell.observeDeletedSessions({
-      ...state,
-      deletedSessions: [],
-    });
+    publishSessions({ ...state, deletedSessions: [] });
+    cleanups.push(shell.shellGateway.observeSessions(shell.runtime.context.sessions, () => {}));
     await import("../lib/chat/composer-draft-retirement.runtime.ts");
     expect(drafts.read()).toContain("retire me");
-    shell.observeDeletedSessions(state);
-    shell.observeDeletedSessions(state);
+    publishSessions(state);
+    publishSessions(state);
 
     await vi.waitFor(() => {
       expect(
@@ -567,7 +599,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
       sessionKeys: [key],
       deletedSessionKeys: pathname ? [] : [key],
     });
-    shell.recoverNotFoundRoute();
+    shell.shellNavigation.recoverNotFoundRoute();
     expect(setSessionKey).not.toHaveBeenCalled();
     if (pathname) {
       expect(replace).toHaveBeenCalledExactlyOnceWith("chat", { pathname });

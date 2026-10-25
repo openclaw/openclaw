@@ -27,7 +27,7 @@ export type AgentFilesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   requestGeneration: number;
-  agents: Pick<AgentCapability, "recordFile">;
+  agents: Pick<AgentCapability, "recordFile" | "files" | "ensureFiles" | "refreshFiles">;
   agentFilesLoading: boolean;
   agentFileRead: Promise<AgentFileOutcome> | null;
   agentFileOutcome: Promise<AgentFileOutcome> | null;
@@ -49,19 +49,6 @@ export type AgentFilesViewState = Pick<
   agentFilesList: AgentsFilesListResult | null;
   agentFileActive: string | null;
 };
-
-/** Retire the selected agent's file cache and drafts with its request generation. */
-export function resetAgentFiles(state: AgentFilesState & AgentFilesViewState): void {
-  state.agentFilesList = null;
-  state.agentFileRead = null;
-  state.agentFileOutcome = null;
-  state.agentFileActive = null;
-  state.agentFileEditors = {};
-  state.agentFileConflict = null;
-  state.agentFileWriteRevisions.clear();
-  state.agentFilesLoading = false;
-  state.agentFileSaving = false;
-}
 
 export function hasAgentFileContent(
   state: Pick<AgentFilesState, "agentFileEditors">,
@@ -226,22 +213,13 @@ async function requestAgentFile(
   return false;
 }
 
-export function loadAgentFileContent(
+function loadAgentFileContent(
   state: AgentFilesState,
   agentId: string,
   name: string,
   opts?: { force?: boolean },
 ): Promise<boolean> {
   return requestAgentFile(state, agentId, name, { kind: "read", force: opts?.force });
-}
-
-function saveAgentFile(
-  state: AgentFilesState,
-  agentId: string,
-  name: string,
-  content: string,
-): Promise<boolean> {
-  return requestAgentFile(state, agentId, name, { kind: "write", content });
 }
 
 function resetAgentFile(state: AgentFilesState, name: string): void {
@@ -262,14 +240,6 @@ function resetAgentFile(state: AgentFilesState, name: string): void {
     state.agentFileConflict = null;
     state.agentFileOutcome = null;
   }
-}
-
-function reloadAgentFile(state: AgentFilesState, agentId: string, name: string): Promise<boolean> {
-  return requestAgentFile(state, agentId, name, {
-    kind: "read",
-    force: true,
-    resolution: "draft",
-  });
 }
 
 async function overwriteAgentFile(
@@ -299,46 +269,128 @@ async function overwriteAgentFile(
   return await requestAgentFile(state, agentId, name, { kind: "write", content });
 }
 
-export function createAgentFileActions(
-  state: AgentFilesState & { agentsSelectedId: string | null; agentFileActive: string | null },
-  selectedAgentId: string | null,
-  canWrite: () => boolean,
-) {
-  function save(name: string, write = saveAgentFile) {
-    if (!selectedAgentId || selectedAgentId !== state.agentsSelectedId || !canWrite()) {
-      return undefined;
-    }
-    return write(
-      state,
-      selectedAgentId,
-      name,
-      state.agentFileEditors[name]?.draft ?? state.agentFileEditors[name]?.content ?? "",
-    );
-  }
-  return {
-    onSelectFile(this: void, name: string) {
-      state.agentFileActive = name;
-      if (selectedAgentId) {
-        void loadAgentFileContent(state, selectedAgentId, name);
-      }
+/** Owns the selected file editor; the agent capability remains the inventory authority. */
+export function createAgentFilePanel(
+  state: AgentFilesState &
+    AgentFilesViewState & {
+      agentsSelectedId: string | null;
+      agentsPanel: string;
     },
-    onFileDraftChange(name: string, content: string) {
-      if (selectedAgentId !== state.agentsSelectedId) {
-        return;
+  options: {
+    canWrite: () => boolean;
+    isCurrent: (client: GatewayBrowserClient, generation: number, agentId: string) => boolean;
+  },
+) {
+  async function selectDefault(agentId: string, force = false) {
+    const files = state.agentFilesList?.files ?? [];
+    if (!state.agentFileActive || !files.some((file) => file.name === state.agentFileActive)) {
+      state.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
+    }
+    if (state.agentFileActive && !state.agents.files(agentId).loading) {
+      await loadAgentFileContent(state, agentId, state.agentFileActive, { force });
+    }
+  }
+
+  function sync(agents = state.agents) {
+    const agentId = state.agentsSelectedId;
+    if (!agentId || state.agentsPanel !== "files") {
+      return;
+    }
+    const status = agents.files(agentId);
+    if (status.list) {
+      state.agentFilesList = status.list;
+      void selectDefault(agentId);
+    }
+  }
+
+  async function load(agentId: string, force = false) {
+    const { client, agents } = state;
+    const cached = agents.files(agentId);
+    if (!client || !state.connected || state.agentFilesLoading || cached.loading) {
+      return;
+    }
+    if (cached.list && !force) {
+      sync(agents);
+      return;
+    }
+    // Keep an initial failure visible until explicit retry or owner retirement.
+    if (cached.read && !force) {
+      return;
+    }
+    const generation = state.requestGeneration;
+    state.agentFileOutcome = null;
+    const list = force ? await agents.refreshFiles(agentId) : await agents.ensureFiles(agentId);
+    if (state.agents !== agents || !options.isCurrent(client, generation, agentId)) {
+      return;
+    }
+    state.agentFilesList = list ?? agents.files(agentId).list;
+    if (list) {
+      await selectDefault(agentId, force);
+    }
+  }
+
+  function invalidate() {
+    state.agentFilesLoading = false;
+    state.agentFileRead = null;
+    state.agentFileOutcome = null;
+    state.agentFileSaving = false;
+  }
+
+  return {
+    sync,
+    load,
+    invalidate,
+    reset() {
+      invalidate();
+      state.agentFilesList = null;
+      state.agentFileActive = null;
+      state.agentFileEditors = {};
+      state.agentFileConflict = null;
+      state.agentFileWriteRevisions.clear();
+    },
+    forAgent(selectedAgentId: string | null) {
+      function save(name: string, overwrite = false) {
+        if (!selectedAgentId || selectedAgentId !== state.agentsSelectedId || !options.canWrite()) {
+          return undefined;
+        }
+        const content =
+          state.agentFileEditors[name]?.draft ?? state.agentFileEditors[name]?.content ?? "";
+        return overwrite
+          ? overwriteAgentFile(state, selectedAgentId, name, content)
+          : requestAgentFile(state, selectedAgentId, name, { kind: "write", content });
       }
-      state.agentFileEditors = {
-        ...state.agentFileEditors,
-        [name]: { ...state.agentFileEditors[name], draft: content },
+      return {
+        listRead: state.agents.files(selectedAgentId).read,
+        onLoadFiles: (agentId: string) => void load(agentId, true),
+        onSelectFile(this: void, name: string) {
+          state.agentFileActive = name;
+          return selectedAgentId ? loadAgentFileContent(state, selectedAgentId, name) : undefined;
+        },
+        onFileDraftChange(name: string, content: string) {
+          if (selectedAgentId !== state.agentsSelectedId) {
+            return;
+          }
+          state.agentFileEditors = {
+            ...state.agentFileEditors,
+            [name]: { ...state.agentFileEditors[name], draft: content },
+          };
+        },
+        onFileReset(name: string) {
+          if (selectedAgentId === state.agentsSelectedId) {
+            resetAgentFile(state, name);
+          }
+        },
+        onFileSave: (name: string) => save(name),
+        onFileReload: (name: string) =>
+          selectedAgentId
+            ? requestAgentFile(state, selectedAgentId, name, {
+                kind: "read",
+                force: true,
+                resolution: "draft",
+              })
+            : undefined,
+        onFileOverwrite: (name: string) => save(name, true),
       };
     },
-    onFileReset(name: string) {
-      if (selectedAgentId === state.agentsSelectedId) {
-        resetAgentFile(state, name);
-      }
-    },
-    onFileSave: (name: string) => save(name),
-    onFileReload: (name: string) =>
-      selectedAgentId ? reloadAgentFile(state, selectedAgentId, name) : undefined,
-    onFileOverwrite: (name: string) => save(name, overwriteAgentFile),
   };
 }

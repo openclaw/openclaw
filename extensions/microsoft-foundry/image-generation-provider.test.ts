@@ -1,7 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ImageGenerationRequest } from "openclaw/plugin-sdk/image-generation";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import type {
+  ImageGenerationProvider,
+  ImageGenerationRequest,
+} from "openclaw/plugin-sdk/image-generation";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildMicrosoftFoundryImageGenerationProvider } from "./image-generation-provider.js";
+import plugin from "./index.js";
 import { PROVIDER_ID } from "./shared.js";
 
 const { http, isConfigured, refreshAuth, resolveAuth } = vi.hoisted(() => ({
@@ -10,12 +15,8 @@ const { http, isConfigured, refreshAuth, resolveAuth } = vi.hoisted(() => ({
     createProviderOperationDeadline: vi.fn((params: Record<string, unknown>) => params),
     postJsonRequest: vi.fn(),
     postMultipartRequest: vi.fn(),
-    resolveProviderHttpRequestConfig: vi.fn((params: Record<string, unknown>) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: false,
-      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-      dispatcherPolicy: undefined,
-    })),
+    resolveProviderHttpRequestConfig:
+      vi.fn<typeof import("openclaw/plugin-sdk/provider-http").resolveProviderHttpRequestConfig>(),
     resolveProviderOperationTimeoutMs: vi.fn(
       (params: Record<string, unknown>) =>
         (params.deadline as { timeoutMs?: number }).timeoutMs ?? params.defaultTimeoutMs,
@@ -46,6 +47,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
     "openclaw/plugin-sdk/provider-http",
   );
+  http.resolveProviderHttpRequestConfig.mockImplementation(actual.resolveProviderHttpRequestConfig);
   return { ...actual, ...http };
 });
 
@@ -92,8 +94,14 @@ function imageResponse(base64 = Buffer.from("png").toString("base64")) {
   };
 }
 
+function registerImageProvider() {
+  const register = vi.fn<(provider: ImageGenerationProvider) => void>();
+  plugin.register(createTestPluginApi({ registerImageGenerationProvider: register }));
+  return expectDefined(register.mock.calls[0]?.[0], "Microsoft Foundry image provider");
+}
+
 function generateImage(overrides: Partial<ImageGenerationRequest> = {}) {
-  return buildMicrosoftFoundryImageGenerationProvider().generateImage({
+  return registerImageProvider().generateImage({
     provider: PROVIDER_ID,
     model: "image-deployment",
     prompt: "draw it",
@@ -142,7 +150,7 @@ describe("microsoft foundry image generation provider", () => {
   });
 
   it("exposes MAI image provider metadata and capabilities", async () => {
-    const provider = buildMicrosoftFoundryImageGenerationProvider();
+    const provider = registerImageProvider();
     const cfg = buildConfig();
     expect(provider).toMatchObject({
       id: PROVIDER_ID,
@@ -245,17 +253,15 @@ describe("microsoft foundry image generation provider", () => {
       baseUrl: "https://example.services.ai.azure.com/openai/v1",
       expiresAt: Date.now() + 60_000,
     });
-    http.resolveProviderHttpRequestConfig.mockImplementationOnce(
-      (params: Record<string, unknown>) => ({
-        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-        allowPrivateNetwork: false,
-        headers: new Headers({
-          ...(params.defaultHeaders as Record<string, string>),
-          "Content-Type": "application/json",
-        }),
-        dispatcherPolicy: undefined,
+    http.resolveProviderHttpRequestConfig.mockImplementationOnce((params) => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+      allowPrivateNetwork: false,
+      headers: new Headers({
+        ...(params.defaultHeaders as Record<string, string>),
+        "Content-Type": "application/json",
       }),
-    );
+      dispatcherPolicy: undefined,
+    }));
     http.postMultipartRequest.mockResolvedValue(
       imageResponse(Buffer.from("edited").toString("base64")),
     );

@@ -168,7 +168,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       ) {
         return;
       }
-      const port = resolveGatewayPortWithDefault(gateway.port, DEFAULT_GATEWAY_PORT);
+      const port = resolveGatewayPortWithDefault(gateway.port);
       const origins = buildDefaultControlUiAllowedOrigins({
         port,
         bind,

@@ -1,5 +1,6 @@
 import { normalizeInternalTurnContext } from "../../auto-reply/internal-turn-source.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
+import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { runOpenClawAgentWriteWithYieldingAdmission } from "../../state/openclaw-agent-db-transaction.js";
 import {
@@ -631,24 +632,33 @@ async function patchSqliteSessionEntrySnapshot(
 }
 
 export async function recordInboundSessionMeta(
-  params: RecordInboundSessionMetaParams,
+  input: RecordInboundSessionMetaParams,
 ): Promise<SessionEntry | null> {
-  normalizeInternalTurnContext(params.ctx);
-  const createIfMissing = params.createIfMissing ?? true;
+  normalizeInternalTurnContext(input.ctx);
+  const metadata = prepareSessionMetaPatch(input);
   return await applySessionEntryOperation(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
+    { sessionKey: input.sessionKey, storePath: input.storePath },
     {
       kind: "inbound-metadata",
-      sessionKey: params.sessionKey,
-      metadata: prepareSessionMetaPatch(params),
-      creation: buildInboundSessionCreationStamp(params.ctx),
+      sessionKey: input.sessionKey,
+      metadata,
+      creation: buildInboundSessionCreationStamp(input.ctx),
     },
     {
       // Inbound metadata must not refresh activity timestamps; idle reset
       // evaluation relies on updatedAt from actual session turns.
       preserveActivity: true,
-      workerGuard: { assertMutationAllowed: params.assertCommitAllowed },
-      ...(createIfMissing ? { fallbackEntry: mergeSessionEntry(undefined, {}) } : {}),
+      workerGuard: { assertMutationAllowed: input.assertCommitAllowed },
+      onCommittedSource: metadata.privateTelegramTopicName
+        ? (source) =>
+            emitSessionLifecycleEvent({
+              agentId: source.agentId,
+              sessionKey: input.sessionKey,
+              reason: "metadata",
+              scope: "session-entry",
+            })
+        : undefined,
+      fallbackEntry: input.createIfMissing === false ? undefined : mergeSessionEntry(undefined, {}),
     },
   );
 }

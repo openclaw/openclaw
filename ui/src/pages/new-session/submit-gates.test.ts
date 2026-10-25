@@ -7,7 +7,6 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { renderControl } from "./model-control.test-support.ts";
 import { replaceBrowserPreference } from "./preferences.ts";
 
 // Keep the intentional silent gates in sync with submit-gates.ts.
@@ -277,13 +276,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       });
       const modelControl = place.modelControl;
       modelControl.load(context, "main", true, { agent: place.selectedAgent() });
-      await vi.waitFor(() =>
-        expect(
-          renderControl(modelControl, context, "main", place.selectedAgent()).querySelectorAll(
-            "[data-chat-model-option]",
-          ),
-        ).toHaveLength(1),
-      );
+      await modelControl.metadataRead;
       expectGate(flow, message ? "model-unavailable" : undefined, message);
     },
   );
@@ -390,6 +383,47 @@ describe("DraftSubmissionFlow submit gates", () => {
     expectGate(flow);
   });
 
+  it("keeps an attempted-submit notice across gates and retires it when ready", async () => {
+    const { flow, context } = withMessage();
+    const snapshot = context.gateway.snapshot;
+    const scopes = snapshot.hello!.auth!.scopes;
+    snapshot.phase = "connecting";
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+    await flow.submit();
+    const firstReason = flow.submitDisabledReason();
+    expect(flow.blockedSubmitNotice()).toBe(firstReason);
+
+    snapshot.phase = "connected";
+    snapshot.hello!.auth!.scopes = [];
+    expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
+    expect(flow.blockedSubmitNotice()).not.toBe(firstReason);
+
+    snapshot.hello!.auth!.scopes = scopes;
+    flow.synchronizeSubmission();
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+    snapshot.phase = "connecting";
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+  });
+
+  it("retires attempted-submit feedback when the draft is cleared before readiness", async () => {
+    const { flow, context } = withMessage();
+    const snapshot = context.gateway.snapshot;
+    snapshot.phase = "connecting";
+    await flow.submit();
+    expect(flow.blockedSubmitNotice()).toBeTruthy();
+
+    flow.setMessage("");
+    snapshot.phase = "connected";
+    flow.synchronizeSubmission();
+    expectGate(flow, "empty-draft");
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+
+    snapshot.phase = "connecting";
+    flow.synchronizeSubmission();
+    expect(flow.blockedSubmitNotice()).toBeUndefined();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+  });
+
   it.each(["unavailable", "rejected", "write-denied", "admin-denied", "forbidden"] as const)(
     "keeps saved worktree submission gated until discovery succeeds (%s)",
     async (result) => {
@@ -453,6 +487,7 @@ describe("DraftSubmissionFlow submit gates", () => {
             ? "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access."
             : "Couldn't verify Git for this folder. Choose it again to retry.",
       });
+      expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
       await flow.submit();
       await flow.submit(undefined, true);
       expect(flow.message).toBe("hello");

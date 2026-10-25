@@ -4,6 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
@@ -17,16 +18,19 @@ import {
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import { replaceSqliteTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
 import * as rewrite from "./session-message-rewrite-domain.js";
+import { readFinalSessionTranscriptProjection } from "./session-transcript-authority.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
 import * as reconcile from "./session-transcript-reconcile.js";
-import { createManualCompactRecords } from "./transcript-message.test-support.js";
+import { createManualCompactRecords, messageEvent } from "./transcript-message.test-support.js";
 
 const metadataFault = useSqliteWorkerFault([
   {
@@ -43,23 +47,28 @@ afterEach(() => vi.restoreAllMocks());
 it("commits a bounded next-turn projection after trimming a large compressed transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = createSessionCompoundWorkerFixture();
-    // Hold background maintenance so success must include the retained projection.
     const background = vi
       .spyOn(reconcile, "startSessionTranscriptIndexReconcile")
       .mockImplementation(() => {});
-    replaceTranscriptEventsSync(f.scope, [
-      createManualCompactRecords(f.scope.sessionId)[0]!,
-      ...Array.from({ length: 4_100 }, (_, index) => ({
-        type: "message",
-        id: `entry-${index + 1}`,
-        parentId: index === 0 ? null : `entry-${index}`,
-        message: {
-          role: "user",
-          content: index === 0 ? "old payload ".repeat(130_000) : `message ${index + 1}`,
-          timestamp: index + 1,
-        },
-      })),
-    ]);
+    runOpenClawAgentWriteTransaction(
+      (database) =>
+        replaceSqliteTranscriptEventsInTransaction(
+          database,
+          resolveSqliteTranscriptScope(f.scope),
+          [
+            createManualCompactRecords(f.scope.sessionId)[0]!,
+            ...Array.from({ length: 4_100 }, (_, index) =>
+              messageEvent(`entry-${index + 1}`, index === 0 ? null : `entry-${index}`, {
+                role: "user",
+                content: index === 0 ? "old payload ".repeat(130_000) : `message ${index + 1}`,
+                timestamp: index + 1,
+              }),
+            ),
+          ],
+          { scheduleProjectionReconcile: false },
+        ),
+      { agentId: f.scope.agentId, path: f.database.path },
+    );
     runOpenClawAgentWriteTransaction(
       (database) => reconcileSessionTranscriptIndexInTransaction(database.db, f.scope.sessionId),
       { agentId: f.scope.agentId, path: f.database.path },
@@ -71,13 +80,25 @@ it("commits a bounded next-turn projection after trimming a large compressed tra
     ).toEqual({ count: 1 });
     background.mockClear();
 
+    const ready: string[] = [];
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if (!("sessionKey" in change) || change.sessionKey !== f.scope.sessionKey) {
+        return;
+      }
+      const projection = readFinalSessionTranscriptProjection(change);
+      if (projection) {
+        ready.push(projection.sessionId);
+      }
+    });
     const sql = observeHostDataSql();
     try {
       await expect(
         trimSessionTranscriptForManualCompact(f.scope, { maxLines: 3 }),
       ).resolves.toEqual({ compacted: true, kept: 3 });
       expect(sql.queries).toEqual([]);
+      expect(ready).toEqual([f.scope.sessionId]);
     } finally {
+      stop();
       sql.restore();
     }
     expect(background).not.toHaveBeenCalled();

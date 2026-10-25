@@ -527,7 +527,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       ) {
         return;
       }
-      const previousOwner = owner;
+      const previousOwner = { owner, sessionKey: currentSessionKey };
       const capturedTarget = mailboxClaim?.mailbox.owner.target ?? owner.target;
       const target = capturedTarget
         ? captureSessionTarget({

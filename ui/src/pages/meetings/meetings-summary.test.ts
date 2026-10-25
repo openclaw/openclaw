@@ -31,10 +31,9 @@ afterEach(() => {
 it("generates on open, holds failures without retry loops, and retries explicitly", async () => {
   vi.useFakeTimers();
   const pending = deferred<typeof meetingPage>();
+  const retry = deferred<typeof meetingPage>();
   detail.session = { ...meetingEntry, hasSummary: false };
-  summarize
-    .mockReturnValueOnce(pending.promise)
-    .mockImplementation(async () => (detail = meetingPage));
+  summarize.mockReturnValueOnce(pending.promise).mockReturnValueOnce(retry.promise);
   const { page } = mount(request, "?selector=meeting");
   await waitForText(page, "Generating meeting summary");
   await vi.advanceTimersByTimeAsync(9_000);
@@ -44,6 +43,11 @@ it("generates on open, holds failures without retry loops, and retries explicitl
   await vi.advanceTimersByTimeAsync(9_000);
   expect(summarize).toHaveBeenCalledTimes(1);
   button(page.querySelector(".transcripts-summary")!, "Retry").click();
+  await waitForText(page, "Generating meeting summary");
+  expect(page.textContent).not.toContain("Summary provider unavailable");
+  expect(button(page, "Transcript").disabled).toBe(false);
+  detail = meetingPage;
+  retry.resolve(meetingPage);
   await waitForText(page, "Reader layout discussed.");
   await vi.advanceTimersByTimeAsync(15_000);
   expect(summarize).toHaveBeenCalledTimes(2);

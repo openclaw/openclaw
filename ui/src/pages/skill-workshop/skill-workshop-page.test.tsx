@@ -335,13 +335,13 @@ it("optimistically selects a learning mode and restores the owner value after re
   button(page, "Off")!.click();
   await waitForSolid(() => {
     expect(button(page, "Off")?.getAttribute("aria-pressed")).toBe("true");
-    expect(button(page, "Off")?.disabled).toBe(true);
+    expect(button(page, "Off")?.getAttribute("aria-disabled")).toBe("true");
   });
   expect(runtimeConfig.patch).toHaveBeenCalledOnce();
   patch.resolve(false);
   await waitForSolid(() => {
     expect(button(page, "Auto")?.getAttribute("aria-pressed")).toBe("true");
-    expect(button(page, "Auto")?.disabled).toBe(false);
+    expect(button(page, "Auto")?.getAttribute("aria-disabled")).toBeNull();
     expect(page.textContent).toContain("Mode update refused");
   });
 });

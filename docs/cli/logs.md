@@ -22,6 +22,9 @@ Tail Gateway file logs over RPC. Works in remote mode.
 - `--local-time`: render timestamps in your local timezone (default)
 - `--utc`: render timestamps in UTC
 
+`--local-time` and `--utc` are mutually exclusive. Passing both fails before a log
+query; omitting both keeps local timestamps.
+
 Polling intervals larger than 2,147,000,000 ms are capped at that value to avoid timer overflow.
 
 ## Shared Gateway RPC options

@@ -1,6 +1,7 @@
 import * as embeddingSdk from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
@@ -133,32 +134,6 @@ function captureRejection(promise: Promise<unknown>): Promise<unknown> {
   return promise.catch((error: unknown) => error);
 }
 
-function makeOversizedResponse(status = 200) {
-  let readCount = 0;
-  let canceled = false;
-  return {
-    response: new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (readCount >= 20) {
-            // 20 MiB — over 16 MiB cap
-            controller.close();
-            return;
-          }
-          readCount += 1;
-          controller.enqueue(new Uint8Array(1024 * 1024));
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status, headers: { "Content-Type": "application/json" } },
-    ),
-    getReadCount: () => readCount,
-    wasCanceled: () => canceled,
-  };
-}
-
 describe("Google embedding-batch bounded JSON reads", () => {
   it.each([
     { label: "missing", valuesJson: undefined, reason: "empty" },
@@ -233,7 +208,13 @@ describe("Google embedding-batch bounded JSON reads", () => {
       fields: { name: "ProviderHttpError", status: 503, statusCode: 503 },
     },
   ] as const)("bounds oversized $stage responses", async ({ stage, status, label, fields }) => {
-    const streamed = makeOversizedResponse(status);
+    const streamed = createStreamingResponse({
+      status,
+      chunkCount: 20,
+      chunkSize: 1024 * 1024,
+      byte: 0,
+      headers: { "Content-Type": "application/json" },
+    });
     stubStage(stage, streamed.response);
     const error = await captureRejection(runBatch());
     expect(error).toBeInstanceOf(Error);

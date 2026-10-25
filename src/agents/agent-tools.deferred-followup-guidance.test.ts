@@ -12,7 +12,7 @@ import {
   describeSessionsSpawnTool,
 } from "./tool-description-presets.js";
 import { createAgentsWaitTool } from "./tools/agents-wait-tool.js";
-import { createConversationsSendTool } from "./tools/conversation-tools.js";
+import { createHostedConversationTools } from "./tools/conversation-tools.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
@@ -100,7 +100,17 @@ it("inserts history guidance before the preserved session URL", () => {
 });
 
 it("names authorized conversation lookup", () => {
-  expect(describeFirst(createConversationsSendTool(), ["conversations_list"]).description).toBe(
+  expect(
+    describeFirst(
+      expectDefined(
+        createHostedConversationTools(undefined, "main", {}).find(
+          (entry) => entry.name === "conversations_send",
+        ),
+        "conversation send tool",
+      ),
+      ["conversations_list"],
+    ).description,
+  ).toBe(
     "Send directly through a conversationRef from conversations_list. This performs channel delivery; it does not run the local agent in the backing session.",
   );
 });

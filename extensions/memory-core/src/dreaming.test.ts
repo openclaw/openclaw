@@ -217,7 +217,6 @@ function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>) {
       trigger?: string;
       workspaceDir?: string;
       sessionKey?: string;
-      heartbeatEventQueueSessionKey?: string;
     },
   ) => Promise<unknown>;
 }
@@ -556,58 +555,6 @@ describe("dreaming service reconciliation", () => {
     await beforeAgentReply({ cleanedBody: "" }, { trigger: "cron", workspaceDir: "." });
 
     expect(harness.listCalls).toBe(1);
-  });
-
-  it("only triggers managed dreaming when the queued cron event is still pending", async () => {
-    const { api, harness, reply } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
-    });
-
-    await startDreaming(api, harness);
-
-    const sessionKey = "agent:main:main";
-    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
-      sessionKey,
-      contextKey: "cron:memory-dreaming",
-    });
-
-    const first = await reply({ trigger: "heartbeat", workspaceDir: ".", sessionKey });
-
-    expect(first).toEqual({
-      handled: true,
-      reason: "memory-core: short-term dreaming disabled by limit",
-    });
-
-    resetSystemEventsForTest();
-
-    const second = await reply({ trigger: "heartbeat", workspaceDir: ".", sessionKey });
-
-    expect(second).toBeUndefined();
-  });
-
-  it("resolves queued managed dreaming cron events from the base session for isolated heartbeats", async () => {
-    const { api, harness, reply } = createDreamingTestContext({
-      config: createDreamingConfig({ enabled: true, phases: { deep: { limit: 0 } } }),
-    });
-
-    await startDreaming(api, harness);
-
-    enqueueSystemEvent(constants.DREAMING_SYSTEM_EVENT_TEXT, {
-      sessionKey: "agent:main:main",
-      contextKey: "cron:memory-dreaming",
-    });
-
-    const result = await reply({
-      trigger: "heartbeat",
-      workspaceDir: ".",
-      sessionKey: "agent:main:main:heartbeat",
-      heartbeatEventQueueSessionKey: "agent:main:main",
-    });
-
-    expect(result).toEqual({
-      handled: true,
-      reason: "memory-core: short-term dreaming disabled by limit",
-    });
   });
 
   it("does not start background reconciliation in a host without Gateway cron access", async () => {

@@ -11,6 +11,7 @@ import {
   validateWorktreesBranchesParams as listBranches,
   validateWorktreesCreateParams as createWorktree,
   validateWorktreesGcParams as gc,
+  validateWorktreesRecoverFileParams as recoverFile,
   validateWorktreesRecoverRemovalParams as recoverRemoval,
   validateWorktreesRemoveParams as remove,
   validateWorktreesRestoreParams as restore,
@@ -60,6 +61,15 @@ describe("managed worktree protocol schemas", () => {
     expect(restore({ ...owned, recoverExactState: exactState })).toBe(true);
     expect(remove({ id: "id", exactState: { ...exactState, head: "main" } })).toBe(false);
     expect(recoverRemoval({ ...owned, snapshot: "a".repeat(64) })).toBe(true);
+    const recovery = {
+      sessionKey: "agent:main:dashboard:recovery",
+      path: ".openclaw/tmp/archive.tgz",
+      recoveryId: "4efcb376-a2d2-482e-98fe-9f5a79bbf466",
+      expectedOwnerId: "owner",
+    };
+    expect(recoverFile(recovery)).toBe(true);
+    expect(recoverFile({ ...recovery, expectedOwnerId: undefined })).toBe(false);
+    expect(recoverFile({ ...recovery, recoveryId: "../../outside" })).toBe(false);
     expect(
       retireSnapshot({
         ...owned,

@@ -7,7 +7,7 @@ import type {
   ActivityRunRenderItem,
   StreamRunRenderItem,
   WorkGroupRenderItem,
-} from "./chat-thread-grouping.ts";
+} from "./chat-turn-presentation.ts";
 
 function group(
   role: "assistant" | "tool" | "user",

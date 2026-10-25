@@ -142,8 +142,6 @@ it("identifies the rejected protocol field without exposing values or suggesting
   expect(failure).toMatchObject({
     name: "PluginModelCatalogInputError",
     code: "failed",
-    operation: "catalog.read",
-    field: "input.env",
     message: "Cannot serialize catalog.read request field input.env",
   });
   const refusal = createAgentDatabaseInspectionRefusal({

@@ -731,10 +731,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
               session: { store: "/tmp/owned-shared.sqlite" },
             }
           : {};
-      let releaseFirstCount: (value: number) => void = () => undefined;
-      const firstRead = new Promise<number>((resolve) => {
-        releaseFirstCount = resolve;
-      });
+      const { promise: firstRead, resolve: releaseFirstCount } = createDeferred<number>();
       readSessionMessageCountAsyncMock.mockImplementationOnce(() => firstRead);
       readSessionMessageByIdAsyncMock.mockImplementationOnce(async (_scope, id: string) =>
         storedMessage(id, await firstRead),

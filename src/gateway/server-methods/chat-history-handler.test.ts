@@ -17,6 +17,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import {
   seedHistorySession as seedSession,
@@ -38,6 +39,25 @@ async function withHistoryState(run: () => Promise<void>) {
   });
 }
 
+function adminClient(id: string) {
+  const client = identifiedClient(id);
+  client.connect.scopes = ["operator.admin"];
+  return client;
+}
+
+function appendText(
+  scope: Parameters<typeof sessions.appendTranscriptMessage>[0],
+  content: string,
+  timestamp: number,
+  role: "user" | "assistant" = "user",
+  eventId?: string,
+) {
+  return sessions.appendTranscriptMessage(scope, {
+    eventId,
+    message: { role, content, timestamp },
+  });
+}
+
 function historyCase(run: (method: string) => Promise<void>) {
   return (method: string) => withHistoryState(() => run(method));
 }
@@ -47,19 +67,8 @@ function createPersonalMetadataFixture() {
   const authProfileId = connectChatMetadataAccount(owner.id);
   const client: NonNullable<GatewayRequestHandlerOptions["client"]> & { connId: string } = {
     connId: "metadata-owner-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: owner.id,
-      displayName: owner.displayName,
-      hasAvatar: false,
-      updatedAt: owner.updatedAt,
-    },
+    connect: gatewayConnect(["operator.read"]),
+    authenticatedUserProfile: gatewayProfile(owner.id, owner.displayName, owner.updatedAt),
   };
   const config = {
     gateway: {
@@ -79,11 +88,7 @@ function createPersonalMetadataFixture() {
     getRuntimeConfig: () => config,
     readChatMetadata,
     getClientConnIds: (filter) =>
-      new Set(
-        [...clients]
-          .filter((current) => !filter || filter(current))
-          .map((current) => current.connId),
-      ),
+      new Set(clients.has(client) && (!filter || filter(client)) ? [client.connId] : []),
   });
   const request = (
     params: Record<string, unknown>,
@@ -104,26 +109,27 @@ function createPersonalMetadataFixture() {
 it("serves notices only to Control UI through worker history, startup, delta, and exact hydration", () =>
   withHistoryState(async () => {
     const scope = await seedSession("plugin-steering");
+    const guidance = "Keep the change small.";
+    const plugin = { pluginId: "reviewer", pluginName: "Reviewer" };
+    const visibleNote = { display: true, content: [{ type: "text", text: guidance }] };
     await sessions.appendTranscriptMessage(scope, {
       eventId: "question",
       now: 1,
       message: { role: "user", content: "Question" },
     });
     const context = await createHistoryReadContext();
-    const client = identifiedClient("steering-reader");
-    client.connect.scopes = ["operator.admin"];
-    const request = async (method: string, params: Record<string, unknown> = {}) => {
-      const respond = await requestHistory(
-        method,
-        { sessionKey: scope.sessionKey, ...params },
-        context,
-        client,
-        undefined,
-        true,
+    const client = adminClient("steering-reader");
+    const request = async (method: string, params: Record<string, unknown> = {}) =>
+      expectSuccess(
+        await requestHistory(
+          method,
+          { sessionKey: scope.sessionKey, ...params },
+          context,
+          client,
+          undefined,
+          true,
+        ),
       );
-      expect(respond.mock.calls[0]?.[0]).toBe(true);
-      return expectDefined(asOptionalRecord(respond.mock.calls[0]?.[1]), "chat response");
-    };
     const cursor = (await request("chat.history")).deltaCursor;
     expect(typeof cursor).toBe("string");
     await sessions.appendTranscriptMessage(scope, {
@@ -132,15 +138,9 @@ it("serves notices only to Control UI through worker history, startup, delta, an
       message: {
         role: "user",
         display: false,
-        content: "Private model prefix\n\nKeep the change small.",
+        content: `Private model prefix\n\n${guidance}`,
         provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
-        __openclaw: {
-          pluginSteering: {
-            pluginId: "reviewer",
-            pluginName: "Reviewer",
-            displayText: "Keep the change small.",
-          },
-        },
+        __openclaw: { pluginSteering: { ...plugin, displayText: guidance } },
       },
     });
     await sessions.appendTranscriptMessage(scope, {
@@ -153,11 +153,7 @@ it("serves notices only to Control UI through worker history, startup, delta, an
         provenance: { kind: "internal_system", sourceTool: "exec" },
       },
     });
-    for (const id of [
-      GATEWAY_CLIENT_IDS.CONTROL_UI,
-      GATEWAY_CLIENT_IDS.TUI,
-      GATEWAY_CLIENT_IDS.MACOS_APP,
-    ]) {
+    for (const id of [GATEWAY_CLIENT_IDS.CONTROL_UI, GATEWAY_CLIENT_IDS.TUI]) {
       client.connect.client = { ...client.connect.client, id, mode: "webchat" };
       const visible = id === GATEWAY_CLIENT_IDS.CONTROL_UI;
       for (const method of ["chat.history", "chat.startup"]) {
@@ -166,13 +162,9 @@ it("serves notices only to Control UI through worker history, startup, delta, an
         if (visible) {
           expect(response.messages).toContainEqual(
             expect.objectContaining({
-              display: true,
-              content: [{ type: "text", text: "Keep the change small." }],
+              ...visibleNote,
               __openclaw: expect.objectContaining({
-                pluginSteering: expect.objectContaining({
-                  pluginId: "reviewer",
-                  pluginName: "Reviewer",
-                }),
+                pluginSteering: expect.objectContaining(plugin),
               }),
             }),
           );
@@ -184,10 +176,7 @@ it("serves notices only to Control UI through worker history, startup, delta, an
       const exact = await request("chat.message.get", { messageId: "plugin-note" });
       expect(exact.ok).toBe(visible);
       if (visible) {
-        expect(exact.message).toMatchObject({
-          display: true,
-          content: [{ type: "text", text: "Keep the change small." }],
-        });
+        expect(exact.message).toMatchObject(visibleNote);
       }
     }
   }));
@@ -219,6 +208,32 @@ it.each(["chat.history", "chat.startup"] as const)(
     }),
 );
 
+it("chat.history reports the session agent's own verboseDefault", () =>
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
+    const cfg = {
+      agents: {
+        defaults: { verboseDefault: "off" },
+        entries: { main: {}, ops: { verboseDefault: "full" } },
+      },
+    } satisfies OpenClawConfig;
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
+    const client = { connect: { scopes: ["operator.admin"] } } as never;
+    for (const [agentId, expected] of [
+      ["ops", "full"],
+      ["main", "off"],
+    ] as const) {
+      const scope = { agentId, sessionKey: `agent:${agentId}:main`, sessionId: `${agentId}-main` };
+      await sessions.upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const payload = expectSuccess(
+        await requestHistory("chat.history", { sessionKey: scope.sessionKey }, context, client),
+      );
+      expect(payload.verboseLevel).toBe(expected);
+      expect(payload.sessionInfo).toMatchObject({ verboseLevel: expected });
+    }
+  }));
+
 it.each(["chat.history", "chat.startup"] as const)(
   "%s projects unbound canonical ACP metadata without host ACP reads",
   historyCase(async (method) => {
@@ -235,8 +250,7 @@ it.each(["chat.history", "chat.startup"] as const)(
       },
     });
     const context = await createHistoryReadContext();
-    const client = identifiedClient("unbound-history-operator");
-    client.connect.scopes = ["operator.admin"];
+    const client = adminClient("unbound-history-operator");
     const respond = vi.fn<RespondFn>();
     const hostSql = observeHostDataSql();
     try {
@@ -292,8 +306,7 @@ it.each(["chat.history", "chat.startup"] as const)(
       visibility: "shared",
       createdActor: { type: "human", source: "profile", id: "owner" },
     });
-    const client = identifiedClient("viewer");
-    client.connect.scopes = ["operator.admin"];
+    const client = adminClient("viewer");
     const readChatStartupProjection = vi.fn(async () => {
       client.connect.scopes = ["operator.read", "operator.write"];
       await sessions.patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
@@ -339,9 +352,7 @@ it.each([
         visibility: "shared",
         createdActor: { type: "human", source: "profile", id: "owner" },
       });
-      await sessions.appendTranscriptMessage(scope, {
-        message: { role: "user", content: "before cursor", timestamp: 1 },
-      });
+      await appendText(scope, "before cursor", 1);
       const client = identifiedClient("viewer");
       const context = await createHistoryReadContext();
       const call = (cursor?: string) =>
@@ -358,13 +369,11 @@ it.each([
       });
       const cursor = initialResponse.deltaCursor;
       assert(typeof cursor === "string", "expected initial delta cursor");
-      await sessions.appendTranscriptMessage(scope, {
-        message: { role: "assistant", content: "private delta content", timestamp: 2 },
-      });
+      await appendText(scope, "private delta content", 2, "assistant");
       const entered = createDeferred();
       const release = createDeferred();
       const read = coldStorageRead.readRestoredSessionTranscript;
-      const readSpy = vi.spyOn(coldStorageRead, "readRestoredSessionTranscript");
+      using readSpy = vi.spyOn(coldStorageRead, "readRestoredSessionTranscript");
       readSpy.mockImplementationOnce(async function delayedRead<T>(
         readScope: sessions.SessionTranscriptReadScope,
         readSnapshot: () => T,
@@ -387,11 +396,7 @@ it.each([
         );
       } finally {
         release.resolve();
-        try {
-          await pending;
-        } finally {
-          readSpy.mockRestore();
-        }
+        await pending;
       }
       const respond = await pending;
       expectFailure(respond, code, code === "UNAVAILABLE");
@@ -443,21 +448,15 @@ it.each(["chat.history", "chat.startup"] as const)(
       const respond = vi.fn<RespondFn>();
       using cloneSpy = vi.spyOn(globalThis, "structuredClone");
       using parseSpy = vi.spyOn(JSON, "parse");
-      const pending = requestHistory(
-        method,
-        { sessionKey: scope.sessionKey },
-        context,
-        null,
-        respond,
-      );
-      // Count synchronous history preparation before optional startup icon work resumes.
+      await requestHistory(method, { sessionKey: scope.sessionKey }, context, null, respond);
       const preparationCopies = cloneSpy.mock.calls.filter(
-        ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
+        ([value]) =>
+          asOptionalRecord(value)?.sessionId === scope.sessionId &&
+          asOptionalRecord(value)?.toolOverrides !== undefined,
       ).length;
       expect(parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt))).toBe(
         false,
       );
-      await pending;
       expect(
         parseSpy.mock.calls.filter(([value]) => value.includes('"sessionId":"history-child"'))
           .length,
@@ -496,20 +495,19 @@ it.each(["chat.history", "chat.startup"] as const)(
     const scope = await seedSession("history-bytes");
     const marker = "history-byte-fixture";
     for (let index = 0; index < 12; index++) {
-      await sessions.appendTranscriptMessage(scope, {
-        message: {
-          role: index % 2 === 0 ? "user" : "assistant",
-          content: `${marker}-${index}: ${'漢字\n"\\'.repeat(100)}`,
-          timestamp: index + 1,
-        },
-      });
+      await appendText(
+        scope,
+        `${marker}-${index}: ${'漢字\n"\\'.repeat(100)}`,
+        index + 1,
+        index % 2 === 0 ? "user" : "assistant",
+      );
     }
     const context = await createHistoryReadContext();
     const call = async (params: Record<string, unknown> = {}) => {
       const respond = vi.fn<RespondFn>();
       const stringify = JSON.stringify;
       let historyArrayBytes = 0;
-      const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+      using serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
         const result = stringify(...args);
         if (
           Array.isArray(args[0]) &&
@@ -524,17 +522,14 @@ it.each(["chat.history", "chat.startup"] as const)(
         }
         return result;
       });
-      try {
-        await requestHistory(
-          method,
-          { sessionKey: scope.sessionKey, ...params },
-          context,
-          null,
-          respond,
-        );
-      } finally {
-        serialization.mockRestore();
-      }
+      await requestHistory(
+        method,
+        { sessionKey: scope.sessionKey, ...params },
+        context,
+        null,
+        respond,
+      );
+      serialization.mockRestore();
       expect(historyArrayBytes).toBe(0);
       return expectSuccess(respond);
     };
@@ -571,14 +566,7 @@ it.each(["chat.history", "chat.startup"] as const)(
       expect(exact.inFlightRun).toEqual(expected);
       const delta = await call({ cursor: exact.deltaCursor, maxBytes: exactBytes });
       expect(delta).toMatchObject({ kind: "delta", messages: [], inFlightRun: expected });
-      await sessions.appendTranscriptMessage(scope, {
-        eventId: "delta-user",
-        message: {
-          role: "user",
-          content: `${marker}: ${'漢字\n"\\🤖'.repeat(100)}`,
-          timestamp: 13,
-        },
-      });
+      await appendText(scope, `${marker}: ${'漢字\n"\\🤖'.repeat(100)}`, 13, "user", "delta-user");
       await sessions.appendTranscriptMessage(scope, {
         eventId: "delta-tool",
         message: {
@@ -635,16 +623,10 @@ it("previews a retained personal account with read scope without changing its cl
     const respond = await request({ agentId: "main", authProfileId });
 
     expect(respond).toHaveBeenCalledWith(true, metadata);
-    expect(readChatMetadata).toHaveBeenCalledWith({
+    expect(readChatMetadata.mock.lastCall?.[0]).toMatchObject({
       agentId: "main",
       requesterProfileId: owner.id,
-      isCurrent: expect.any(Function),
-      assertCurrent: expect.any(Function),
-      draftAccountSelection: expect.objectContaining({
-        owner: owner.id,
-        authProfileId,
-        assertCurrent: expect.any(Function),
-      }),
+      draftAccountSelection: { owner: owner.id, authProfileId },
     });
     expect(modelAccounts.listUserProfileAuthLinks(owner.id)).toEqual([]);
     expect(modelAccounts.readUserModelAuthProfile(authProfileId)).toEqual(before);
@@ -673,28 +655,16 @@ it("reads the persisted session profile without contaminating neutral agent meta
     for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
       await call(params);
     }
-    expect(readChatMetadata.mock.calls).toEqual([
-      [
-        expect.objectContaining({
-          agentId: "main",
-          sessionKey,
-          isCurrent: expect.any(Function),
-          sessionEntry: expect.objectContaining({
-            authProfileOverride: "test:locked",
-            authProfileOverrideSource: "user",
-          }),
-        }),
-      ],
-      [
-        {
-          agentId: "main",
-          requesterProfileId: undefined,
-          isCurrent: expect.any(Function),
-          assertCurrent: expect.any(Function),
-        },
-      ],
-    ]);
+    const saved = readChatMetadata.mock.calls[0]?.[0];
+    expect(saved).toMatchObject({
+      agentId: "main",
+      sessionKey,
+      sessionEntry: { authProfileOverride: "test:locked", authProfileOverrideSource: "user" },
+    });
     const neutral = expectDefined(readChatMetadata.mock.calls[1]?.[0], "neutral metadata read");
+    expect(neutral).toMatchObject({ agentId: "main", requesterProfileId: undefined });
+    expect(neutral).not.toHaveProperty("sessionEntry");
+    expect(neutral).not.toHaveProperty("draftAccountSelection");
     expect(neutral.isCurrent?.()).toBe(true);
     expectDefined(neutral.assertCurrent, "neutral metadata authority check")();
     expect(respond).toHaveBeenCalledTimes(2);

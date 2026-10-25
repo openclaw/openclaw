@@ -51,6 +51,7 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import {
@@ -154,19 +155,8 @@ beforeEach(async () => {
   const profile = ensureProfileForEmail("talk-history@example.test");
   client = {
     connId: connectionId,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-    },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"]),
+    authenticatedUserProfile: gatewayProfile(profile.id),
   };
   // Admission, the recorder, and publication stay real; only model execution is held.
   gatewayReplyMock.mockImplementation(getReplyFromConfig);
@@ -362,22 +352,17 @@ function expectNoGeneratedInput(messages: unknown[], surface: string) {
   }
 }
 function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer: boolean) {
+  const check = (value: unknown, label: string) => expect.soft(value, `${surface} ${label}`);
   const users = messages.filter((message) => asOptionalRecord(message)?.role === "user");
   expect.soft(users.map(extractText), surface).toEqual([spoken]);
   const markdown = buildChatMarkdown(messages, "Voice test assistant");
-  expect.soft(markdown, `${surface} Markdown`).toContain(spoken);
-  expect
-    .soft(markdown?.match(/^## Message(?: \(|$)/gm), `${surface} input headings`)
-    .toHaveLength(1);
+  check(markdown, "Markdown").toContain(spoken);
+  check(markdown?.match(/^## Message(?: \(|$)/gm), "input headings").toHaveLength(1);
   expectNoGeneratedInput(messages, surface);
-  expect
-    .soft(matchingTexts(messages, answer), `${surface} spoken answer`)
-    .toHaveLength(hasAnswer ? 1 : 0);
-  expect
-    .soft(markdown?.split(answer).length, `${surface} spoken answer in Markdown`)
-    .toBe(hasAnswer ? 2 : 1);
-  expect.soft(JSON.stringify(messages), `${surface} internal final`).not.toContain(consultAnswer);
-  expect.soft(markdown, `${surface} internal final in Markdown`).not.toContain(consultAnswer);
+  check(matchingTexts(messages, answer), "spoken answer").toHaveLength(hasAnswer ? 1 : 0);
+  check(markdown?.split(answer).length, "spoken answer in Markdown").toBe(hasAnswer ? 2 : 1);
+  check(JSON.stringify(messages), "internal final").not.toContain(consultAnswer);
+  check(markdown, "internal final in Markdown").not.toContain(consultAnswer);
 }
 async function historyMessages() {
   const result = await rpc("chat.history", { sessionKey: canonicalKey, agentId });

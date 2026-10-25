@@ -4,7 +4,7 @@ import type { Transferable } from "node:worker_threads";
 import { constants as zlibConstants, inflateRawSync } from "node:zlib";
 import { expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
+import { prepareChatHistoryResponsePage } from "../../gateway/chat-history-response-page.js";
 import type { SessionArtifactReadQuery } from "../../gateway/session-artifact-read.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
@@ -95,7 +95,6 @@ it("sheds isolate-local caches at eighty percent of the actual worker heap limit
       kind: "prewarm" as const,
       database: { agentId: opened.agentId, path: opened.path },
       env: {},
-      history: false,
     };
     try {
       worker.heap = { used_heap_size: 799, heap_size_limit: 1000 };
@@ -306,9 +305,7 @@ it.for([
       vi.useFakeTimers({ toFake: ["setImmediate"] });
       let pending: Promise<unknown> | undefined;
       try {
-        await expect(
-          worker.read({ kind: "prewarm", database, env: state.env, history: false }),
-        ).resolves.toEqual({
+        await expect(worker.read({ kind: "prewarm", database, env: state.env })).resolves.toEqual({
           ok: true,
           value: { kind: "prewarm" },
         });

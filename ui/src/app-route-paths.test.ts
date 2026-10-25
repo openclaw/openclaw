@@ -31,6 +31,7 @@ import {
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import { createAgentSelectionCapability } from "./app/agent-selection.ts";
 import type { ApplicationContext } from "./app/context.ts";
+import { createApplicationGatewaySnapshot } from "./test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "./test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "./test-helpers/gateway-methods.ts";
 
@@ -84,17 +85,11 @@ function createTestRouter(routeId: RouteId) {
 }
 
 function createStartupContext(basePath = ""): ApplicationContext {
-  const { gateway } = createApplicationGateway({
-    phase: "stopped",
-    client: null,
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      sessionKey: "agent:main:main",
+    }),
+  );
   return {
     basePath,
     gateway,

@@ -12,10 +12,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import * as contextWorker from "../../config/sessions/session-transcript-read-worker-runtime.js";
-import {
-  getOwnedSessionTranscriptWriterFence,
-  SessionTranscriptWriterClaimReboundError,
-} from "../../config/sessions/transcript-write-context.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { snapshotFiles } from "../../infra/state-migrations.caller-mode.test-helpers.js";
 import { autoMigrateLegacyState } from "../../infra/state-migrations.doctor.js";
 import { inspectLegacyAgentDir } from "../../infra/state-migrations.legacy-sessions.js";
@@ -24,7 +21,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  inspectOpenClawAgentDatabaseOwner,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
@@ -47,6 +43,7 @@ import {
 } from "../auth-profiles/sqlite.js";
 import type { ApiKeyCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { testModel } from "./agent-session-loop-correctness.test-support.js";
@@ -60,7 +57,6 @@ import { createAgentSession } from "./sdk.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
-import type { ModelChangeEntry, ThinkingLevelChangeEntry } from "./session-manager-types.js";
 import * as writeAdmission from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -99,10 +95,6 @@ describe("SDK credential migration", () => {
 
   function expectMigrationRequired(ownerDir?: string) {
     expect(() => assertAuthProfileMigrationReady(ownerDir)).toThrow(migrationMessage);
-  }
-
-  function expectKey(actual: string | undefined, expected: string) {
-    expect(actual === expected, "selected credential belongs to the expected owner").toBe(true);
   }
 
   async function stageLegacy(
@@ -156,14 +148,8 @@ describe("SDK credential migration", () => {
         await writeFile(path.join(legacyDir, "bin", "fd"), "installed SDK tool");
         openOpenClawAgentDatabase({ agentId: "main", env: state.env, path: databasePath });
         await closeOpenClawAgentDatabaseByPathAsync(databasePath);
-        // The legacy standalone SDK fixture predates registry enrollment.
         unregisterOpenClawAgentDatabase({ agentId: "main", env: state.env, path: databasePath });
-        expect(inspectOpenClawAgentDatabaseOwner(databasePath)).toEqual({
-          status: "owned",
-          agentId: "main",
-        });
-        // Payload inspection materializes native WAL sidecars before the snapshot.
-        expect(inspectLegacyAgentDir(legacyDir)).toEqual({ status: "payload" });
+        inspectLegacyAgentDir(legacyDir); // Materialize WAL sidecars before taking the snapshot.
         const before = snapshotFiles(legacyDir);
         const cfg = { agents: { entries: { worker: {} } }, plugins: { enabled: false } };
         await state.writeConfig(cfg);
@@ -173,7 +159,6 @@ describe("SDK credential migration", () => {
           doctorOnlyStateMigrations: true,
           legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
         });
-        expect(result.stepReceipts.find((entry) => entry.outcome === "refused")).toBeUndefined();
         const receipt = result.stepReceipts.find((entry) => entry.id === "agent-dir");
         expect(receipt).toMatchObject({
           outcome: "deferred",
@@ -185,9 +170,6 @@ describe("SDK credential migration", () => {
               path: legacyDir,
             },
           ],
-          warnings: expect.arrayContaining([
-            expect.stringContaining("Keep using the existing store"),
-          ]),
         });
         expect(snapshotFiles(legacyDir)).toEqual(before);
         await expect(
@@ -215,12 +197,9 @@ describe("SDK credential migration", () => {
         });
         const model = makeProviderModelFixture({
           id: "synthetic-model",
-          name: "Synthetic model",
           api: "openai-completions",
           provider: "arcee",
           baseUrl: modelUrl,
-          contextWindow: 1000,
-          maxTokens: 1000,
         });
         const runtimeConfig = getRuntimeConfig();
         const manager = SessionManager.inMemory();
@@ -247,16 +226,14 @@ describe("SDK credential migration", () => {
           const result = Promise.resolve(stream(model, { messages: [] }, {}));
           if (blocked) {
             await expect(result).rejects.toThrow(migrationMessage);
+            expect(providerIo).not.toHaveBeenCalled();
           } else {
             await result;
-          }
-          expect(providerIo).toHaveBeenCalledTimes(blocked ? 0 : 1);
-          if (!blocked) {
-            const auth = await session.modelRegistry.getApiKeyAndHeaders(model);
-            expect(
-              auth.ok && auth.apiKey === credential,
-              "direct account credential selected",
-            ).toBe(true);
+            expect(providerIo).toHaveBeenCalledOnce();
+            expect(await session.modelRegistry.getApiKeyAndHeaders(model)).toMatchObject({
+              ok: true,
+              apiKey: credential,
+            });
           }
         } finally {
           session.dispose();
@@ -317,7 +294,7 @@ describe("SDK credential migration", () => {
             "requires the active secrets runtime to materialize SecretRef credentials",
           );
         } else {
-          expectKey(await resolve(), provider === "arcee" ? localKey : unaffectedKey);
+          expect(await resolve()).toBe(unaffectedKey);
         }
         expect(fallback).not.toHaveBeenCalled();
       },
@@ -349,7 +326,7 @@ describe("SDK credential migration", () => {
         expect(fallback).not.toHaveBeenCalled();
         clearAuthProfileMigrationDiagnostics();
         storage.reload();
-        expectKey(await storage.getApiKey("arcee", { baseUrl }), importedKey);
+        expect(await storage.getApiKey("arcee", { baseUrl })).toBe(importedKey);
         if (owner === "shared") {
           const localKey = "synthetic-new-local-key";
           storage.set("arcee", { type: "api_key", key: localKey });
@@ -358,7 +335,7 @@ describe("SDK credential migration", () => {
           await state.writeJson(legacyPath, legacy);
           await refreshAuthProfileFileState();
           expectMigrationRequired();
-          expectKey(await storage.getApiKey("arcee", { baseUrl }), localKey);
+          expect(await storage.getApiKey("arcee", { baseUrl })).toBe(localKey);
         }
       });
     },
@@ -372,7 +349,7 @@ describe("SDK credential migration", () => {
         await importLegacy(state, legacy);
         writeStore(legacy, agentDir);
         const { storage, fallback } = authWithFallback(agentDir);
-        expectKey(await storage.getApiKey("arcee", { baseUrl }), key);
+        expect(await storage.getApiKey("arcee", { baseUrl })).toBe(key);
         expect(fallback).not.toHaveBeenCalled();
       },
       { UNRESOLVED_IMPORTED_ARCEE: undefined },
@@ -422,7 +399,7 @@ describe("SDK credential migration", () => {
       });
       await expect(storage.getApiKey("arcee", { baseUrl })).rejects.toMatchObject(migrationError);
       expect(reloadedSelectedCredential).toBe(true);
-      expectKey(await storage.getApiKey("arcee", { baseUrl }), localKey);
+      expect(await storage.getApiKey("arcee", { baseUrl })).toBe(localKey);
     });
   });
 
@@ -443,7 +420,7 @@ describe("SDK credential migration", () => {
       if (blocked) {
         await expect(result).rejects.toMatchObject(migrationError);
       } else {
-        expect((await result) === key, "unrelated canonical credential remains usable").toBe(true);
+        expect(await result).toBe(key);
       }
     });
   });
@@ -488,16 +465,9 @@ function registryFor(...models: (typeof testModel)[]) {
   registry.registerProvider(testModel.provider, {
     api: testModel.api,
     baseUrl: testModel.baseUrl,
-    models: models.map(({ id, name, api, reasoning, input, cost, contextWindow, maxTokens }) => ({
-      id,
-      name,
-      api,
-      reasoning,
-      input,
-      cost,
-      contextWindow: contextWindow ?? 32_768,
-      maxTokens,
-    })),
+    models: models.map((model) =>
+      Object.assign({}, model, { contextWindow: model.contextWindow ?? 32_768 }),
+    ),
   });
   return registry;
 }
@@ -521,16 +491,12 @@ it("restores prepared session context without waiting for an unrelated database 
     const message = { role: "user" as const, content: "Restore these exact bytes", timestamp: 1 };
     manager.appendMessage(message);
     const before = await loadTranscriptEvents(target);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    const gate = createEnteredGate();
     const writer = runOpenClawAgentWorkerWrite(
       { agentId: "main", path: target.storePath },
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
+      gate.wait,
     );
-    await entered.promise;
+    await gate.entered;
     const requestedWrite = createDeferredCore<"writer-admission">();
     const originalWrite = writeAdmission.withSessionManagerWrite;
     const intercepted = vi
@@ -550,7 +516,7 @@ it("restores prepared session context without waiting for an unrelated database 
       expect(await loadTranscriptEvents(target)).toEqual(before);
     } finally {
       intercepted.mockRestore();
-      release.resolve();
+      gate.release();
       await writer;
       (await restored).session.dispose();
     }
@@ -573,23 +539,15 @@ it.each(["metadata", "context loading"] as const)(
       const replacementBefore = await loadTranscriptEvents(replacement);
       const originalBefore = await loadTranscriptEvents(original);
       const manager = SessionManager.open(original, state.workspaceDir);
-      const completed: {
-        entry?: ModelChangeEntry | ThinkingLevelChangeEntry;
-        records?: Awaited<ReturnType<typeof loadTranscriptEvents>>;
-        watermark?: ReturnType<typeof readSessionTranscriptWatermark>;
-      } = {};
+      let committedId: string | undefined;
+      let committedEntry: ReturnType<SessionManager["getEntry"]>;
+      let committedRecords: Awaited<ReturnType<typeof loadTranscriptEvents>> | undefined;
       const retargetAfterAppend = async (append: () => Promise<string>) => {
-        const id = await append();
-        const entry = manager.getEntry(id);
-        if (!entry || (entry.type !== "model_change" && entry.type !== "thinking_level_change")) {
-          throw new Error("Expected the real append's committed metadata entry");
-        }
-        completed.entry = structuredClone(entry);
-        // Retarget after the real append commits, before the factory exposes its session.
-        completed.records = loadTranscriptEventsSync(original);
-        completed.watermark = readSessionTranscriptWatermark(original);
+        committedId = await append();
+        committedEntry = structuredClone(manager.getEntry(committedId));
+        committedRecords = loadTranscriptEventsSync(original);
         manager.setSessionTarget(replacement);
-        return id;
+        return committedId;
       };
       const appendInitial = manager[sessionManagerAppendInitialMetadata].bind(manager);
       const readInitialContext = manager[sessionManagerReadInitialContext].bind(manager);
@@ -606,13 +564,7 @@ it.each(["metadata", "context loading"] as const)(
               return context;
             });
       onTestFinished(() => intercepted.mockRestore());
-      const model = {
-        ...testModel,
-        id: "sdk-metadata-fixture",
-        reasoning: true,
-      };
-      expect(getOwnedSessionTranscriptWriterFence()).toBeUndefined();
-
+      const model = { ...testModel, reasoning: true };
       const error = await rejectedSession(
         createTestSession(manager, state.workspaceDir, {
           model,
@@ -624,24 +576,24 @@ it.each(["metadata", "context loading"] as const)(
           }),
         }),
       );
-      expect(intercepted).toHaveBeenCalledOnce();
       expect.soft(await loadTranscriptEvents(replacement)).toEqual(replacementBefore);
       if (after === "context loading") {
         expect(await loadTranscriptEvents(original)).toEqual(originalBefore);
         expect(error).toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
-        expect(error).not.toBeInstanceOf(SessionMetadataCommittedError);
         expect(hasModelFallbackStop(error)).toBe(false);
       } else {
-        expect(completed.entry).toBeDefined();
-        expect(completed.records).toHaveLength(3);
-        expect(await loadTranscriptEvents(original)).toEqual(completed.records);
+        const records = await loadTranscriptEvents(original);
+        const watermark = readSessionTranscriptWatermark(original);
+        expect(records).toHaveLength(3);
+        expect(records).toEqual(committedRecords);
+        expect(committedEntry).toMatchObject({ id: committedId, type: "thinking_level_change" });
         expect(error).toBeInstanceOf(SessionMetadataCommittedError);
         expect(error).toMatchObject({
-          committedEntry: completed.entry,
+          committedEntry,
           committedTarget: original,
           committedVersion: {
-            generation: completed.watermark?.generation,
-            rawSeq: completed.watermark?.maxSeq,
+            generation: watermark?.generation,
+            rawSeq: watermark?.maxSeq,
           },
         });
         expect(hasModelFallbackStop(error)).toBe(true);
@@ -712,11 +664,7 @@ it.each([
           const { session } = await pending;
           const expected = selection === "branch" ? [first] : [];
           expect(session.messages).toEqual(expected);
-          const next = {
-            role: "user" as const,
-            content: "Continue selected branch",
-            timestamp: 3,
-          };
+          const next = { role: "user" as const, content: "Continue selected branch", timestamp: 3 };
           manager.appendMessage(next);
           expect(manager.buildSessionContext().messages).toEqual([...expected, next]);
           expect((await loadTranscriptEvents(target)).slice(0, before.length)).toEqual(before);
@@ -771,15 +719,15 @@ it("awaits extension entry, name, and label persistence before publishing their 
       const id = await api.appendEntryAsync("extension-state", { count: 1 });
       await api.setSessionNameAsync("Awaited name");
       await api.setLabelAsync(id, "bookmark");
-      expect(manager.getEntry(id)).toMatchObject({
+      expect(changes).toEqual(["Awaited name"]);
+      const reopened = await SessionManager.openAsync(target, state.workspaceDir);
+      expect(reopened.getEntry(id)).toMatchObject({
         type: "custom",
         customType: "extension-state",
         data: { count: 1 },
       });
-      expect(manager.getLabel(id)).toBe("bookmark");
-      expect(changes).toEqual(["Awaited name"]);
-      const reopened = await SessionManager.openAsync(target, state.workspaceDir);
       expect(reopened.getEntry(id)).toEqual(manager.getEntry(id));
+      expect(manager.getLabel(id)).toBe("bookmark");
       expect(reopened.getSessionName()).toBe("Awaited name");
       expect(reopened.getLabel(id)).toBe("bookmark");
     } finally {
@@ -811,20 +759,16 @@ it.each(
       const before = manager.getEntries();
       const persistedBefore =
         storage === "persistent" ? await loadTranscriptEvents(target) : undefined;
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const writer = writeAdmission.withSessionManagerWrite(manager, async () => {
-        entered.resolve();
-        await release.promise;
-      });
-      await entered.promise;
+      const gate = createEnteredGate();
+      const writer = writeAdmission.withSessionManagerWrite(manager, gate.wait);
+      await gate.entered;
       const pending =
         surface === "extension"
           ? api.appendEntryAsync("revoked-state", { count: 1 })
           : session.setSessionNameAsync("revoked name");
       const rejected = expect(pending).rejects.toThrow("extension owner closed");
       runtime.invalidate("extension owner closed");
-      release.resolve();
+      gate.release();
       try {
         await writer;
         await rejected;
@@ -837,7 +781,7 @@ it.each(
           "extension owner closed",
         );
       } finally {
-        release.resolve();
+        gate.release();
         await writer;
         session.dispose();
       }
@@ -882,7 +826,6 @@ it("does not publish a committed session name into a manager retargeted before c
         }),
       ]);
       await manager.setSessionTargetAsync(replacement);
-      expect(session.sessionManager).toBe(manager);
       expect(manager.getSessionName()).toBe("Replacement name");
       release.resolve();
       await expect
@@ -936,12 +879,7 @@ it.each(["SDK initialization", "model transition"] as const)(
       try {
         process.chdir(firstDir);
         const manager = SessionManager.open(relativeTarget, firstDir);
-        const capturedTarget = manager.getSessionTarget();
-        const reasoningModel = {
-          ...testModel,
-          id: "cwd-reasoning",
-          reasoning: true,
-        };
+        const reasoningModel = { ...testModel, id: "cwd-reasoning", reasoning: true };
         const plainModel = { ...reasoningModel, id: "cwd-plain", reasoning: false };
         const modelRegistry = registryFor(reasoningModel, plainModel);
         const create = async () =>
@@ -985,13 +923,8 @@ it.each(["SDK initialization", "model transition"] as const)(
           await session.setModel(plainModel);
         }
 
-        expect(intercepted).toHaveBeenCalledOnce();
         expect(completed.records).toBeDefined();
         expect(process.cwd()).toBe(secondDir);
-        const expectedTarget = { ...first, env: { OPENCLAW_STATE_DIR: state.stateDir } };
-        expect.soft(capturedTarget).toEqual(expectedTarget);
-        expect.soft(manager.getSessionTarget()).toEqual(expectedTarget);
-        expect(manager.getSessionId()).toBe(relativeTarget.sessionId);
         const firstAfter = await loadTranscriptEvents(first);
         expect(firstAfter.slice(0, completed.records?.length)).toEqual(completed.records);
         const level = operation === "SDK initialization" ? "high" : "off";

@@ -18,6 +18,7 @@ const target = { provider: source.channel, to: source.to };
 const scopedPolicy = {
   restartRecoveryDisableMessageTool: true,
   restartRecoverySourceIngress: "internal",
+  restartRecoverySourceMessageChannel: null,
   restartRecoverySourceReplyDeliveryMode: "automatic",
   restartRecoveryForceSafeTools: true,
 } as const;
@@ -33,6 +34,7 @@ it("persists a scoped restart-safe policy and clears retired media constraints",
     forceRestartSafeTools: true,
     runId: "scoped-run",
     sourceIngress: "internal",
+    sourceMessageChannel: null,
     sourceRunId: "scoped-run",
     sourceReplyDeliveryMode: "automatic",
   });
@@ -55,6 +57,7 @@ it("preserves the claimed route when delivery preparation resolves an alias", ()
       restartRecoveryDeliveryContext: { channel: "telegram", to: "-100123", threadId: 1 },
     },
     runId: "recovery-run",
+    sourceMessageChannel: "webchat",
   });
   expect(claimed).toMatchObject({
     ...scopedPolicy,
@@ -122,7 +125,7 @@ it.each<[string, TerminalDeliveryInput, boolean]>([
   ["aborted silent run", { meta: { ...silent, aborted: true } }, false],
   ["failed silent run", { meta: { ...silent, error: privateError } }, false],
   ["settled yield", { meta: { yielded: true }, requesterContinuationSettled: true }, true],
-  ["legacy empty receipt", { payloads: [] }, false],
+  ["legacy empty optional receipt", { payloads: [] }, true],
 ])("replays %s without inventing visible delivery", async (_name, result, delivered) => {
   const stored = project(result);
   const classified = await delivery(stored);

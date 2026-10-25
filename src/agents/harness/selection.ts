@@ -1,3 +1,4 @@
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
@@ -21,12 +22,15 @@ import {
   isHostScopedAgentToolActive,
   runWithAgentRingZeroTools,
 } from "../agent-tools.ring-zero-context.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../embedded-agent-runner/run/types.js";
+import {
+  unwrapModelHeaderSentinelsForProviderEgress,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../provider-secret-egress.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness, isBuiltInOpenClawAgentHarness } from "./builtin-openclaw.js";
@@ -50,10 +54,6 @@ import {
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
 import { preparePluginHarnessParams } from "./plugin-attempt-params.js";
-import {
-  prepareHarnessFinalizationParams,
-  withoutPluginHarnessPrivateState,
-} from "./plugin-private-state.js";
 import { resolveAgentHarnessQueueInputAdapter } from "./registry.js";
 import {
   buildAgentHarnessSelectionDecision,
@@ -171,6 +171,8 @@ export async function runAgentHarnessSettledTurnFinalization(
       {
         ...internalParams,
         operation: "settled-tool-finalization",
+        // This tool-free projection must not replace the conversation's cache or history baseline.
+        promptCacheKey: `finalization:${sha256HexPrefixCore(params.runId, 32)}`,
         abortSignal: modelExecution
           ? params.abortSignal
             ? AbortSignal.any([params.abortSignal, modelExecution.signal])
@@ -310,7 +312,6 @@ export async function runAgentHarnessAttempt(
         capabilities: harness.contextEngineHostCapabilities ?? [],
       },
       recorder: internalParams.userTurnTranscriptRecorder,
-      isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
       sessionTarget: internalParams.sessionTarget,
     });
     internalParams = {
@@ -338,8 +339,6 @@ export async function runAgentHarnessAttempt(
     (awaitBaseline &&
       (!selection.builtIn ||
         WORKSPACE_EFFECT_HOOKS.some((hook) => hasGlobalHooks(hook)) ||
-        (internalParams.trigger === "heartbeat" &&
-          hasGlobalHooks("heartbeat_prompt_contribution")) ||
         hasInternalHookListeners("agent", "bootstrap")))
   ) {
     const assertCurrent = resolveAdmittedRunActiveAssertion(
@@ -468,7 +467,6 @@ export async function runAgentHarnessAttempt(
           result.terminal.aborted === true),
       yieldAborted:
         result.terminal.kind === "aborted" && result.terminal.source === "yield_cleanup",
-      isHeartbeat: isHeartbeatLifecycleRunKind(internalParams.bootstrapContextRunKind),
       runtimeContext: resolveContextEngineCompletionRuntimeContext(
         internalParams,
         result,
@@ -542,6 +540,62 @@ async function runAgentHarnessOperation<T>(
     }
     throw error;
   }
+}
+
+function withoutPluginHarnessPrivateState(
+  params: EmbeddedRunAttemptInternalParams & { __openclawSourceReplyDeliveryRuntime?: unknown },
+): Omit<import("./types.js").AgentHarnessAttemptParamsV2, "hostCapabilities"> {
+  // Keep host admission and preparation state behind one projection for every handoff.
+  // The released replyOperation reference delegates to the same controller owner.
+  const {
+    admittedRunContext: _admittedRunContext,
+    thinkingExplicit: _thinkingExplicit,
+    runtimePluginToolGrant: _runtimePluginToolGrant,
+    assistantErrorTranscript: _assistantErrorTranscript,
+    compactionCountOwner: _compactionCountOwner,
+    completionCheck: _completionCheck,
+    preparedSessionTarget: _preparedSessionTarget,
+    bindWatchdogAttempt: _bindWatchdogAttempt,
+    onContextAccountingEvent: _onContextAccountingEvent,
+    onCompactionRequestBudget: _onCompactionRequestBudget,
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    hostCapabilities: _hostCapabilities,
+    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
+    trajectoryRecorder: _trajectoryRecorder,
+    inputAttachmentMedia: _inputAttachmentMedia,
+    supportsTurnScopedToolRestrictions: _supportsTurnScopedToolRestrictions,
+    prepareContinuationRetryCount: _prepareContinuationRetryCount,
+    __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
+    ...pluginParams
+  } = params;
+  return pluginParams;
+}
+
+function prepareHarnessFinalizationParams(
+  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+  builtIn: boolean,
+): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
+  import("./types.js").AgentHarnessAttemptParamsV2
+> {
+  const {
+    hostCapabilities: _hostCapabilities,
+    systemAgentTool: _systemAgentTool,
+    ...withoutCapabilities
+  } = params;
+  const { onSettledTurn: _onSettledTurn, ...finalizationParams } = builtIn
+    ? withoutCapabilities
+    : withoutPluginHarnessPrivateState(withoutCapabilities);
+  if (builtIn) {
+    return finalizationParams;
+  }
+  const boundary = "plugin harness finalization handoff";
+  return {
+    ...finalizationParams,
+    model: unwrapModelHeaderSentinelsForProviderEgress(finalizationParams.model, boundary),
+    resolvedApiKey: finalizationParams.resolvedApiKey
+      ? unwrapSecretSentinelsForProviderEgress(finalizationParams.resolvedApiKey, boundary)
+      : finalizationParams.resolvedApiKey,
+  };
 }
 
 function withoutInternalHarnessAuthority(

@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
 import type { JsonObject } from "./protocol.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
@@ -165,14 +166,7 @@ describe("Codex channel tool progress", () => {
         await harness.handleServerRequest({
           id: "request-dynamic-1",
           method: "item/tool/call",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            callId: testCase.toolCallId,
-            namespace: null,
-            tool: testCase.name,
-            arguments: {},
-          },
+          params: createDynamicToolCall(testCase.name, {}, testCase.toolCallId),
         });
       }
       await Promise.all([toolEnded.promise, progressReceived.promise]);

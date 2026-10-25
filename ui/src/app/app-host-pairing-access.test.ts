@@ -14,10 +14,8 @@ import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projectio
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  persistChatComposerState,
-} from "../pages/chat/composer-persistence.ts";
+import { persistChatComposerState } from "../pages/chat/composer-draft-storage.ts";
+import { admitStoredChatComposerQueueItemResult } from "../pages/chat/composer-queue-persistence.ts";
 import * as pairingView from "../pages/devices/view-pairing.tsx";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
@@ -29,6 +27,7 @@ import {
   createApplicationContextProvider,
   createNavigationPreferencesFixture,
 } from "../test-helpers/application-context.ts";
+import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
 import "../components/app-sidebar.tsx";
 // A preceding shard file can register the palette before the pairing shell mounts.
@@ -188,6 +187,7 @@ function createPairingShell(params: {
 
   const renderSidebar = async () => {
     await refresh();
+    await vi.dynamicImportSettled();
     return expectDefined(
       container.querySelector<AppSidebarElement>("openclaw-app-sidebar"),
       "shell sidebar",
@@ -245,13 +245,17 @@ describe("application shell pairing access", () => {
     };
     expect(persistChatComposerState(host)).toBe(true);
     expect(
-      admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, host.sessionKey), {
-        id: "failed",
-        text: "private queued input",
-        createdAt: 1,
-        sendState: "failed",
-      }),
-    ).toBe(true);
+      admitStoredChatComposerQueueItemResult(
+        host,
+        captureChatOutboxAdmission(host, host.sessionKey),
+        {
+          id: "failed",
+          text: "private queued input",
+          createdAt: 1,
+          sendState: "failed",
+        },
+      ),
+    ).toBe("admitted");
     shell.outboxStoreRuntime = createStoredChatOutboxReader();
     const first = (await renderSidebar()).storedOutboxes!;
     expect(first.total).toBe(1);
@@ -318,12 +322,7 @@ describe("application shell pairing access", () => {
       const topbarText = topbar.textContent;
       const sidebarUpdates: MutationRecord[] = [];
       const observer = new MutationObserver((records) => sidebarUpdates.push(...records));
-      observer.observe(sidebar, {
-        subtree: true,
-        childList: true,
-        attributes: true,
-        characterData: true,
-      });
+      observer.observe(sidebar, allMutationObserverOptions());
       onTestFinished(() => observer.disconnect());
       const topbarFrame = topbar.querySelector(".topbar");
       const topbarToggle = topbar.querySelector(".topbar-nav-toggle");
@@ -384,7 +383,9 @@ describe("application shell pairing access", () => {
     replacement.context.navigation.update = update;
     replacement.context.overlays.subscribe = vi.fn(() => stopOverlays);
     shell.runtime = { ...shell.runtime!, context: replacement.context };
-    const openNewSession = vi.spyOn(shell, "openNewSession").mockImplementation(() => undefined);
+    const openNewSession = vi
+      .spyOn(shell.shellNavigation, "openNewSession")
+      .mockImplementation(() => undefined);
 
     onPairMobile?.();
     onRetryConnect?.();

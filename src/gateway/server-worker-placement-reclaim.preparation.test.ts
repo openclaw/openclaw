@@ -32,6 +32,7 @@ import {
   sessionIdentity,
 } from "./worker-environments/placement-suite.test-support.js";
 import { prepareSessionWorkerPlacementStop } from "./worker-environments/session-placement-lifecycle.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./worker-environments/workspace-recovery.test-support.js";
 
 const fixtures = useReclaimFixtures();
 async function cancellationLoadFixture(
@@ -531,15 +532,23 @@ it.each([
   async ({ advance, targetKind }) => {
     const reconciling = createPlacementTestHold();
     const cleaning = createPlacementTestHold();
+    let workspacePath = "";
+    const recovery = createWorkerWorkspaceRecoveryFixture({
+      resolveWorkspace: async () => ({ kind: "local", path: workspacePath }),
+    });
     const f = await cancellationLoadFixture({
       runMoveBarrier: async (request) => await barrier(request),
       afterReconcile: async () => {
         await reconciling.wait();
       },
-      afterStopTunnel: async () => {
+      withPreparedRecovery: async (identity, assertCurrent, run) => {
+        const result = await recovery.withPreparedRecovery(identity, assertCurrent, run);
+        // Recovery releases its source after publishing the local placement.
         await cleaning.wait();
+        return result;
       },
     });
+    workspacePath = path.dirname(f.storePath);
     const barrier = createGatewayWorkerPlacementMoveBarrier({
       placements: f.placements,
       loadSessionRuntime: async () => f.runtime,

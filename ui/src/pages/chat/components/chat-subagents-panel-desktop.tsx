@@ -1,10 +1,11 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createStore, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
@@ -14,10 +15,13 @@ import { endedWithoutFinishing, isUnfinishedSubagent } from "../chat-spawned-sub
 import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
 import "./chat-subagents-panel-desktop.css";
-import type { SubagentsPanelRow } from "../subagents-panel-data.ts";
+import type { SubagentsPanelData, SubagentsPanelRow } from "../subagents-panel-data.ts";
+import { SubagentDesktopAvatar } from "./chat-subagent-avatar.tsx";
+import { ChatSubagentsNative } from "./chat-subagents-native.tsx";
 import type { createSubagentsPresentation } from "./chat-subagents-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Group = "active" | "waiting" | "done" | "stopped" | "failed";
 const groups: readonly Group[] = ["active", "waiting", "done", "stopped", "failed"];
@@ -37,8 +41,11 @@ export type ChatSubagentsPanelDesktopProps = {
   agentId: string;
   rows: readonly SubagentsPanelRow[];
   loading: boolean;
+  emptyLoading?: boolean;
   error: string | null;
   hasResult: boolean;
+  nativeSnapshot?: SubagentsPanelData["nativeSnapshot"];
+  nativeError?: SubagentsPanelData["nativeError"];
   active: boolean;
   /** Whether Show more has revealed the complete Done list, not its disclosure. */
   doneExpanded?: boolean;
@@ -58,21 +65,6 @@ function groupFor(row: SubagentsPanelRow): Group {
     : isUnfinishedSubagent(row.session)
       ? "waiting"
       : (endedWithoutFinishing(row.session) ?? "done");
-}
-
-export function SubagentDesktopAvatar(props: { sessionKey: string; working?: boolean }) {
-  return (
-    <span
-      class="subagents-desktop__avatar"
-      style={{ "--subagent-hue": fnv1aUtf16(props.sessionKey) % 360 }}
-      aria-hidden="true"
-    >
-      <Icon name="bot" />
-      <Show when={props.working}>
-        <span class="subagents-desktop__spinner" />
-      </Show>
-    </span>
-  );
 }
 
 function DesktopRow(props: {
@@ -258,6 +250,7 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
           content = element;
         }}
         class="subagents-desktop__content"
+        style={{ padding: props.emptyLoading ? "0" : undefined }}
         tabindex="-1"
       >
         <Show when={props.error}>
@@ -268,19 +261,25 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
             </button>
           </div>
         </Show>
+        <ChatSubagentsNative snapshot={props.nativeSnapshot} error={props.nativeError ?? null} />
         <Show
           when={props.rows.length}
           fallback={
+            !props.nativeSnapshot &&
+            !props.nativeError &&
             (props.loading || (props.hasResult && !props.error)) && (
               <Show
                 when={props.loading}
                 fallback={
-                  <div class="chat-subagents__empty" role="status">
-                    {t("chat.subagentsPanel.empty")}
-                  </div>
+                  <PanelEmptyState
+                    presentation="desktop"
+                    icon={<Icon name="bot" />}
+                    heading={t("chat.sidePanel.subagents")}
+                    description={t("chat.subagentsPanel.empty")}
+                  />
                 }
               >
-                <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+                <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} />
               </Show>
             )
           }

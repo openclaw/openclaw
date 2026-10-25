@@ -1,7 +1,7 @@
 import { normalizeOptionalString as normalized } from "@openclaw/normalization-core/string-coerce";
 import type { PresenceEntry } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 
-export type PresenceUserGroup = NonNullable<PresenceEntry["user"]> & {
+type PresenceUserGroup = NonNullable<PresenceEntry["user"]> & {
   watchedSessions: readonly string[];
   entries: readonly PresenceEntry[];
 };

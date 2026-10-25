@@ -44,6 +44,7 @@ const sourceUrl = (relative: string) =>
 const doctorDeadline = scenario === "doctor-hang" || scenario === "doctor-progress";
 // Keep native/HTTP observations and their full budgets; only recovery polling advances time.
 const recoveryClockUrl = `data:text/javascript,${encodeURIComponent(`
+export * from ${JSON.stringify(sourceUrl("../utils.ts"))};
 const realMonotonicNow = performance.now.bind(performance);
 const realWallNow = Date.now;
 export let elapsed = 0;

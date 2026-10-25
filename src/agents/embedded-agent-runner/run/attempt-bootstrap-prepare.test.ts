@@ -62,7 +62,6 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     ["always", true, true, "default", "full", "full", true, true],
     ["continuation-skip", false, true, "default", "full", "none", true, true],
     ["continuation-skip", false, true, "cron", "full", "none", false, true],
-    ["continuation-skip", false, true, "heartbeat", "full", "none", false, true],
     ["continuation-skip", false, true, "default", "lightweight", "none", false, false],
     ["continuation-skip", true, false, "default", "full", "limited", false, true],
     ["never", true, true, "default", "full", "full", false, false],

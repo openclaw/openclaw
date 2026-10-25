@@ -1,6 +1,8 @@
 // Status JSON tests cover command output and runtime JSON writes.
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { statusJsonCommand } from "./status-json.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -155,6 +157,70 @@ describe("statusJsonCommand", () => {
     expect(payload).not.toHaveProperty("pluginCompatibility");
   });
 
+  it("builds remote gateway JSON payloads consistently", async () => {
+    const { runtime, logs } = createRuntimeCapture();
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayMode: "remote",
+      gatewayConnection: { url: "wss://gateway.example.com", urlSource: "config" },
+      gatewayReachable: true,
+      gatewayProbe: { connectLatencyMs: 123, error: null },
+      gatewaySelf: { host: "gateway", version: "1.2.3" },
+      gatewayProbeAuthWarning: "warn",
+    });
+
+    await statusJsonCommand({}, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}");
+    expect(payload.gateway).toEqual({
+      mode: "remote",
+      url: "wss://gateway.example.com",
+      urlSource: "config",
+      misconfigured: false,
+      reachable: true,
+      connectLatencyMs: 123,
+      self: { host: "gateway", version: "1.2.3" },
+      error: null,
+      authWarning: "warn",
+    });
+  });
+
+  it("redacts credential-bearing Gateway URLs from JSON status", async () => {
+    const { runtime, logs } = createRuntimeCapture();
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayMode: "remote",
+      gatewayConnection: {
+        url: "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed",
+        urlSource: "cli --url",
+      },
+      gatewayProbe: { error: "unreachable" },
+    });
+
+    await statusJsonCommand({}, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}");
+    expect(payload.gateway.url).toContain("gateway.example/ws");
+    expect(JSON.stringify(payload.gateway)).not.toMatch(/password|secret|api-key|signed/);
+  });
+
+  it("reports startup phase without an unreachable error in JSON", async () => {
+    const { runtime, logs } = createRuntimeCapture();
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayProbe: { startupPhase: "plugins", error: null },
+    });
+
+    await statusJsonCommand({}, runtime);
+
+    const payload = JSON.parse(logs[0] ?? "{}");
+    expect(payload.gateway).toMatchObject({
+      readiness: "still-starting",
+      startupPhase: "plugins",
+      error: null,
+    });
+  });
+
   it.each([
     { engine: "postgres" },
     { engine: "sqlite", families: { agent: { engine: "postgres" } } },
@@ -198,7 +264,6 @@ describe("statusJsonCommand", () => {
       sourceConfig: {},
       deep: false,
       includeFilesystem: true,
-      includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
     });
     expect(logs).toStrictEqual([expect.any(String)]);
@@ -240,5 +305,24 @@ describe("statusJsonCommand", () => {
     };
     expect(payload.health).toEqual({ error: "Error: gateway health probe timed out" });
     expect(payload.securityAudit?.summary?.critical).toBe(1);
+  });
+});
+
+it("includes local recovery copy bytes in status --json without retiring them", async () => {
+  await withOpenClawTestState({ label: "status-recovery-json", applyEnv: true }, async (state) => {
+    fs.mkdirSync(state.statePath("state"), { recursive: true });
+    const file = state.statePath("state", "openclaw.sqlite.pre-startup-migration-old.bak");
+    fs.writeFileSync(file, "original");
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({ ...createScanResult(), env: state.env });
+    const { runtime, logs } = createRuntimeCapture();
+    await statusJsonCommand({}, runtime);
+    const payload = JSON.parse(logs[0] ?? "{}");
+    expect(payload.recoveryCopies).toMatchObject({
+      scope: "local",
+      incomplete: false,
+      total: { count: 1, logicalBytes: 8, unmanifestedOrOrphan: { count: 1, logicalBytes: 8 } },
+      byKind: { migrationOriginals: { count: 1, logicalBytes: 8 } },
+    });
+    expect(fs.readFileSync(file, "utf8")).toBe("original");
   });
 });

@@ -271,6 +271,9 @@ describe("call delivery runtime", () => {
           withSessionFacts: async () => {
             throw new Error("Unexpected session facts request");
           },
+          appendAgentMessage: async () => {
+            throw new Error("Unexpected agent message");
+          },
           subscribeSessionChanges: () => () => {},
         };
     const delivery = createCallDeliveryRuntime({
@@ -470,6 +473,9 @@ describe("call delivery runtime", () => {
           readSessionFacts: async () => ({ sessions: [] }),
           withSessionFacts: async () => {
             throw new Error("Unexpected session facts request");
+          },
+          appendAgentMessage: async () => {
+            throw new Error("Unexpected agent message");
           },
           subscribeSessionChanges: () => () => {},
         },

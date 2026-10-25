@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsRoot } from "../infra/fs-safe.js";
+import { gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
 import { GITHUB_PUBLICATION_CONFIG_GUARD } from "./github-publication-base.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
@@ -38,7 +39,7 @@ const objectPattern = /^[a-f0-9]{40}$/;
 const gitNullPath = process.platform === "win32" ? "NUL" : "/dev/null";
 const env = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_ATTR_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: gitNullPath, GIT_CONFIG_SYSTEM: gitNullPath,
-  GIT_CONFIG_COUNT: "0" };
+  ...${JSON.stringify(gitMaintenanceEnvironment())} };
 function git(args, options = {}) {
   const result = spawnSync("git", ["-c", "core.hooksPath=" + gitNullPath, "-c",
     "core.fsmonitor=false", "-c", "core.attributesFile=" + gitNullPath, ...args], {

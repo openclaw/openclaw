@@ -575,7 +575,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
           hasBaselineTools: () => false,
           applyPromptBuildToolsAllow: () => [],
           setActiveSessionSystemPrompt: vi.fn(),
-          setLeasedSteering: vi.fn(),
         });
         await submitEmbeddedAttemptPrompt({
           ...input,
@@ -621,12 +620,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
         ...buildRuntimeContextCustomMessage("runtime context")!,
         timestamp: 2,
       };
-      const steering = { leaseId: "lease-1", runIds: ["missing-run"], isCurrent: () => true };
       const submitting = submitEmbeddedAttemptPrompt({
         ...input,
         activeSession,
         images: [image],
-        leasedSteering: runtimeOnly ? steering : undefined,
         runtimeContextMessage: runtimeOnly ? undefined : runtimeContextMessage,
         runtimeOnly,
         promptActiveSession: async (prompt, options) => {
@@ -648,10 +645,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
       });
       if (runtimeOnly) {
         await submitting;
-        expect(input.onSteeringAcknowledged).toHaveBeenCalledOnce();
       } else {
         await expect(submitting).rejects.toThrow("provider failed");
-        expect(input.onSteeringAcknowledged).not.toHaveBeenCalled();
         expect(activeSession.messages).not.toContain(runtimeContextMessage);
       }
       expect(activeSession.agent).toMatchObject({

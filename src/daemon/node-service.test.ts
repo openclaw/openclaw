@@ -10,6 +10,7 @@ import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { resolveNodeService } from "./node-service.js";
 import { withDaemonRuntimePinMigration } from "./runtime-pin-state.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import * as systemd from "./systemd.js";
 
 vi.mock("./systemd.js", async (original) => ({
@@ -28,12 +29,7 @@ vi.mock("./launchd-system.js", async (original) => ({
 }));
 vi.mock("./launchd-exec.js", async (original) => ({
   ...(await original<typeof import("./launchd-exec.js")>()),
-  execLaunchctl: async () => ({
-    code: 113,
-    stdout: "",
-    stderr: "Could not find service",
-    termination: "exit" as const,
-  }),
+  execLaunchctl: async () => nativeExit("", "Could not find service", 113),
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);

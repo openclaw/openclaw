@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { requireLastRespondCall } from "../../../gateway/server-methods/chat.abort-authorization.test-helpers.js";
 import { withExecRequestTurn } from "../../../infra/exec-request-context.js";
 import { consumeSelectedSystemEventEntries } from "../../../infra/system-events.js";
@@ -8,10 +7,11 @@ import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spaw
 import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import { killSubagentRunAdmin } from "../registry/subagent-control-kill.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { collectFailure } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createBoundSpawnInvocation,
+  holdSpawnCapacity,
   type RequestCustodySpawnCaseOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 import {
@@ -35,16 +35,7 @@ export function registerRequestCustodySpawnCases(options: RequestCustodySpawnCas
       );
       const groupId = "routed-native-request";
       const capacity = "routed-native-capacity";
-      const started = createDeferred();
-      enqueueSwarmRun({
-        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-        runId: capacity,
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: async () => started.resolve(),
-        onStartFailure: () => true,
-      });
-      await started.promise;
+      await holdSpawnCapacity(JSON.stringify(["main", parentSessionKey, groupId]), capacity);
       let childRunId: string | undefined;
       let childSessionKey: string | undefined;
       const failures: unknown[] = [];
