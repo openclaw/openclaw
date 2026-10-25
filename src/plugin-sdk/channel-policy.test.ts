@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
-import type { GroupPolicy } from "../config/types.base.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMutableAllowEntryDetector,
   collectStandardAllowlistLists,
@@ -96,13 +94,17 @@ it("createRestrictSendersChannelSecurity builds DM policy and warnings from one 
     resolveDmScope: () => "per-peer" as const,
     resolveDmRoute: () => ({ kind: "core" as const }),
   };
-  type Account = {
-    accountId: string;
-    allowFrom?: string[];
-    dmPolicy?: string;
-    groupPolicy?: GroupPolicy;
+  const scope = {
+    cfg: { channels: { line: {} } },
+    accountId: "default",
+    account: {
+      accountId: "default",
+      allowFrom: ["line:user:abc"],
+      dmPolicy: "allowlist",
+      groupPolicy: "open" as const,
+    },
   };
-  const security = createRestrictSendersChannelSecurity<Account>({
+  const security = createRestrictSendersChannelSecurity<typeof scope.account>({
     channelKey: "line",
     resolveDmPolicy: (account) => account.dmPolicy,
     resolveDmAllowFrom: (account) => account.allowFrom,
@@ -117,19 +119,9 @@ it("createRestrictSendersChannelSecurity builds DM policy and warnings from one 
     classifyEntryAuthentication: () => "asserted",
     dmRouting,
   });
-  const scope = (account: Omit<Account, "accountId"> = {}, cfg: OpenClawConfig = {}) => ({
-    cfg,
-    accountId: "default",
-    account: { accountId: "default", ...account },
-  });
-
   expect(security.dmRouting).toBe(dmRouting);
-
-  expect(
-    security.resolveDmPolicy?.(
-      scope({ dmPolicy: "allowlist", allowFrom: ["line:user:abc"] }, { channels: {} }),
-    ),
-  ).toEqual({
+  const policy = security.resolveDmPolicy?.(scope);
+  expect(policy).toEqual({
     policy: "allowlist",
     allowFrom: ["line:user:abc"],
     policyPath: "channels.line.dmPolicy",
@@ -139,13 +131,8 @@ it("createRestrictSendersChannelSecurity builds DM policy and warnings from one 
     classifyEntryAuthentication: expect.any(Function),
   });
 
-  expect(security.resolveDmPolicy?.(scope())?.classifyEntryAuthentication?.("line:user:abc")).toBe(
-    "asserted",
-  );
-
-  expect(
-    security.collectWarnings?.(scope({ groupPolicy: "open" }, { channels: { line: {} } })),
-  ).toEqual([
+  expect(policy?.classifyEntryAuthentication?.("line:user:abc")).toBe("asserted");
+  expect(security.collectWarnings?.(scope)).toEqual([
     {
       checkId: "channels.line.groups.open",
       severity: "warn",
@@ -168,27 +155,22 @@ describe("createDangerousNameMatchingMutableAllowlistWarningCollector", () => {
     ],
   });
 
-  it("collects mutable entries while dangerous matching is disabled", () => {
-    expect(
-      collectWarnings({
-        cfg: { channels: { irc: { allowFrom: ["charlie"] } } } as never,
-      }),
-    ).toEqual([
-      "- Found 1 mutable allowlist entry across irc while name matching is disabled by default.",
-      "- channels.irc.allowFrom: charlie",
-      "- Option A (break-glass): enable channels.irc.dangerouslyAllowNameMatching=true to keep name/email/nick matching.",
-      "- Option B (recommended): resolve names/emails/nicks to stable sender IDs and rewrite the allowlist entries.",
-    ]);
-  });
-
-  it("skips scopes that explicitly allow dangerous name matching", () => {
-    expect(
-      collectWarnings({
-        cfg: {
-          channels: { irc: { dangerouslyAllowNameMatching: true, allowFrom: ["charlie"] } },
-        } as never,
-      }),
-    ).toStrictEqual([]);
+  it.each([false, true])("collects mutable entries unless dangerous matching=%s", (enabled) => {
+    const warnings = collectWarnings({
+      cfg: {
+        channels: { irc: { allowFrom: ["charlie"], dangerouslyAllowNameMatching: enabled } },
+      } as never,
+    });
+    expect(warnings).toEqual(
+      enabled
+        ? []
+        : [
+            "- Found 1 mutable allowlist entry across irc while name matching is disabled by default.",
+            "- channels.irc.allowFrom: charlie",
+            "- Option A (break-glass): enable channels.irc.dangerouslyAllowNameMatching=true to keep name/email/nick matching.",
+            "- Option B (recommended): resolve names/emails/nicks to stable sender IDs and rewrite the allowlist entries.",
+          ],
+    );
   });
 });
 

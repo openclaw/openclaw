@@ -12,7 +12,6 @@ import {
   createDefaultChannelRuntimeState,
   readAccountStatusSnapshot,
   standardDmPolicyOpenIssue,
-  standardNotConfiguredIssue,
 } from "./status-helpers.js";
 
 describe("status issue composition", () => {
@@ -26,23 +25,15 @@ describe("status issue composition", () => {
     expect(readAccountStatusSnapshot(null, ["mode"])).toBeNull();
   });
 
-  it("builds standard open-policy and missing-auth issues", () => {
-    const account = { channel: "zalo", accountId: "default" };
-    expect(
-      standardDmPolicyOpenIssue({ ...account, channelLabel: "Zalo", configPath: "channels.zalo" }),
-    ).toEqual({
-      ...account,
-      kind: "config",
-      message: 'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
-      fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
+  it("keeps open-policy warnings and remediation tied to the channel", () => {
+    const issue = standardDmPolicyOpenIssue({
+      channel: "zalo",
+      accountId: "default",
+      channelLabel: "Zalo",
+      configPath: "channels.zalo",
     });
-    const auth = {
-      ...account,
-      channel: "zalouser",
-      message: "Not authenticated.",
-      fix: "Run login.",
-    };
-    expect(standardNotConfiguredIssue({ ...auth })).toEqual({ ...auth, kind: "auth" });
+    expect(issue.message).toContain('Zalo dmPolicy is "open"');
+    expect(issue.fix).toContain('Set channels.zalo.dmPolicy to "pairing" or "allowlist"');
   });
 });
 

@@ -1,11 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createCapturedPluginRegistration } from "../plugins/captured-registration.js";
-import type {
-  PluginCommandContext,
-  OpenClawPluginCommandDefinition,
-} from "../plugins/plugin-command.types.js";
+import type { PluginCommandContext } from "../plugins/plugin-command.types.js";
 import { startPluginServices } from "../plugins/services.test-support.js";
 import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -41,37 +38,35 @@ const contract = defineFeatureContract({
 const definition = { contract, name: "Feature fixture", description: "Fixture operations." };
 
 describe("typed feature plugins", () => {
-  let captured: ReturnType<typeof createCapturedPluginRegistration>;
-  let factory: OpenClawPluginToolFactory | undefined;
-  let command: OpenClawPluginCommandDefinition | undefined;
-  beforeEach(() => {
-    captured = createCapturedPluginRegistration({ id: contract.pluginId });
-    factory = undefined;
-    command = undefined;
-    captured.api.registerTool = (tool) => {
-      if (typeof tool === "function") {
-        factory = tool;
-      }
+  function register(
+    options: Pick<DefineFeaturePluginOptions<typeof contract>, "setup" | "commands">,
+  ) {
+    const captured = createCapturedPluginRegistration({ id: contract.pluginId });
+    const tools = vi.spyOn(captured.api, "registerTool");
+    const commands = vi.spyOn(captured.api, "registerCommand").mockImplementation(() => {});
+    const entry = defineFeaturePlugin({ ...definition, ...options });
+    entry.register(captured.api);
+    return {
+      captured,
+      entry,
+      action: expectDefined(captured.sessionActions[0], "registered feature action"),
+      command: () => expectDefined(commands.mock.calls[0]?.[0], "registered feature command"),
+      createTool(context: Parameters<OpenClawPluginToolFactory>[0] = {}) {
+        const factory = tools.mock.calls[0]?.[0];
+        if (typeof factory !== "function") {
+          throw new Error("Expected feature tool factory");
+        }
+        const tool = factory(context);
+        if (!tool || Array.isArray(tool)) {
+          throw new Error("Expected one feature tool");
+        }
+        return tool;
+      },
     };
-    captured.api.registerCommand = (value) => {
-      command = value;
-    };
-  });
-  function register(setup: DefineFeaturePluginOptions<typeof contract>["setup"]) {
-    defineFeaturePlugin({ ...definition, setup }).register(captured.api);
-    return expectDefined(captured.sessionActions[0], "registered feature action");
-  }
-  function createTool(context: Parameters<OpenClawPluginToolFactory>[0] = {}) {
-    const tool = expectDefined(factory, "registered feature tool factory")(context);
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("Expected one feature tool");
-    }
-    return tool;
   }
   it("shares typed handlers without losing action, tool, or command invocation context", async () => {
     const contexts: FeatureInvocationContext[] = [];
-    const entry = defineFeaturePlugin({
-      ...definition,
+    const { captured, entry, action, command, createTool } = register({
       setup: () => ({
         inspect(input, context) {
           expectTypeOf(input.value).toEqualTypeOf<string>();
@@ -90,8 +85,6 @@ describe("typed feature plugins", () => {
     expect(getToolPluginMetadata(entry)?.tools).toMatchObject([
       { name: "fixture_inspect", outputSchema: contract.operations.inspect.output },
     ]);
-    entry.register(captured.api);
-    const action = expectDefined(captured.sessionActions[0], "registered feature action");
     const actionContext = {
       pluginId: contract.pluginId,
       actionId: "inspect",
@@ -114,9 +107,7 @@ describe("typed feature plugins", () => {
       isAuthorizedSender: true,
       sessionKey: "agent:fixture:chat",
     } as PluginCommandContext;
-    expect(
-      await expectDefined(command, "registered feature command").handler(commandContext),
-    ).toEqual({ text: "command" });
+    expect(await command().handler(commandContext)).toEqual({ text: "command" });
     expect(contexts).toEqual([
       { source: "session-action", action: actionContext, api: captured.api },
       {
@@ -134,7 +125,7 @@ describe("typed feature plugins", () => {
 
   it("rejects invalid inputs before execution and invalid outputs before returning success", async () => {
     const execute = vi.fn(() => ({ value: "" }));
-    const action = register(() => ({ inspect: execute }));
+    const { action } = register({ setup: () => ({ inspect: execute }) });
     const invoke = (value: number | string) =>
       action.handler({
         pluginId: contract.pluginId,
@@ -148,12 +139,14 @@ describe("typed feature plugins", () => {
 
   it("propagates tool cancellation across awaited feature handlers", async () => {
     const { promise: pending, resolve: finish } = createDeferredCore();
-    register(() => ({
-      inspect: async (input) => {
-        await pending;
-        return input;
-      },
-    }));
+    const { createTool } = register({
+      setup: () => ({
+        inspect: async (input) => {
+          await pending;
+          return input;
+        },
+      }),
+    });
     const tool = createTool();
     const controller = new AbortController();
     const result = tool.execute("cancelled-call", { value: "pending" }, controller.signal);
