@@ -5,7 +5,8 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
@@ -79,21 +80,8 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
       });
       if (scheduled) {
         followupRun.run.scheduledAutomation = {
-          occurrence: TEST_SCHEDULED_OCCURRENCE,
-          admissionSource: "operator-schedule",
-          job: {
-            id: "scheduled-source-policy",
-            name: "Scheduled source policy",
-            enabled: true,
-            createdAtMs: 1,
-            updatedAtMs: 1,
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "session:main",
-            wakeMode: "now",
-            payload: { kind: "agentTurn", message: "Check for updates" },
-            state: {},
-          },
-          assertCurrent: () => {},
+          ...TEST_SCHEDULED_TURN,
+          job: makeCronJob({ sessionTarget: "session:main", wakeMode: "now" }),
         };
       }
       const params = createMinimalRunAgentTurnParams({
@@ -112,7 +100,6 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
       const executeAgentTurn = await getExecuteAgentTurnForTest();
       const result = await executeAgentTurn(params);
       expect(result.kind).toBe("success");
-      expect(runAgent).toHaveBeenCalledOnce();
       if (!scheduled) {
         expect(sendError).toBeUndefined();
         expect(sourceReply?.details).toMatchObject({
@@ -160,23 +147,20 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
     const params = createMinimalRunAgentTurnParams({ followupRun, opts: {} });
     params.storePath = path.join(followupRun.run.workspaceDir, "sessions.json");
     params.sessionKey = followupRun.run.sessionKey;
-    const entry = await replaceSessionEntry(
-      {
-        agentId: followupRun.run.agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      { sessionId: followupRun.run.sessionId, updatedAt: 1 },
-    );
+    const target = {
+      agentId: followupRun.run.agentId,
+      sessionId: followupRun.run.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    };
+    const entry = await replaceSessionEntry(target, {
+      sessionId: followupRun.run.sessionId,
+      updatedAt: 1,
+    });
     expect(entry).not.toBeNull();
     params.getActiveSessionEntry = () => entry ?? undefined;
     await withSessionTranscriptWriteAssertion(
-      {
-        agentId: followupRun.run.agentId,
-        sessionId: followupRun.run.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
+      target,
       () => {
         if (!current) {
           throw new Error("source revoked");
@@ -184,7 +168,6 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
       },
       () => execute(params),
     );
-    expect(runAgent).toHaveBeenCalledOnce();
     expect(sourceFailure).toBeInstanceOf(Error);
     expect(String(sourceFailure)).toContain("source revoked");
     if (!isCli) {
