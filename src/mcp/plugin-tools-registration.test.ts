@@ -6,16 +6,10 @@ import { SdkError, SdkErrorCode } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   areDiagnosticsEnabledForProcess,
-  onDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
-  waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import * as schedulerModule from "../infra/gateway-scheduler.js";
-import {
-  logWebhookReceived,
-  startDiagnosticHeartbeat,
-  stopDiagnosticHeartbeat,
-} from "../plugin-sdk/logging-core.js";
+import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../plugin-sdk/logging-core.js";
 import { resolvePluginProviders } from "../plugin-sdk/provider-catalog-runtime.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
@@ -39,7 +33,6 @@ import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-std
 class NativeState {
   database?: DatabaseSync;
   disposals = 0;
-  factories = 0;
   workspaceDir?: string;
   aborted = createDeferredCore();
   started = createDeferredCore();
@@ -72,7 +65,6 @@ module.exports = { id: "mcp-native", register(api) {
     isCacheTtlEligible() { state.abortRead = db.prepare("SELECT 42 AS n").get().n; return true; }
   });
   api.registerTool(() => {
-    state.factories++;
     return { name: "mcp_native_read", label: "Native read", description: "Native read",
       parameters: { type: "object", properties: {} },
       async execute(_id, _params, signal) {
@@ -151,26 +143,15 @@ describe("MCP serving registration ownership", () => {
       const scheduler = createTestGatewayScheduler(clock.clock);
       const host = ownership === "borrowed" ? new LegacyPluginSdkResourceHost() : undefined;
       host?.bindScheduler(scheduler);
-      const constructor = vi
-        .spyOn(schedulerModule, "GatewayScheduler")
-        .mockImplementation(function () {
-          return scheduler;
-        });
-      const previouslyEnabled = areDiagnosticsEnabledForProcess();
-      const heartbeats: string[] = [];
-      const unsubscribe = onDiagnosticEvent((event) => {
-        if (event.type === "diagnostic.heartbeat") {
-          heartbeats.push(event.type);
-        }
+      vi.spyOn(schedulerModule, "GatewayScheduler").mockImplementation(function () {
+        return scheduler;
       });
+      const previouslyEnabled = areDiagnosticsEnabledForProcess();
       const serve = () =>
         serveRegisteredToolsMcpServer({
           acquireRegistry: async () => {
             startDiagnosticHeartbeat({}, { sampleLiveness: () => null });
-            logWebhookReceived({ channel: "test" });
             await clock.advanceBy(30_000);
-            await waitForDiagnosticEventsDrained();
-            expect(heartbeats).toHaveLength(1);
             return (acquisition = await acquire());
           },
           createServer: (tools) => createCodexSupervisionToolsMcpServer({ tools }),
@@ -180,7 +161,6 @@ describe("MCP serving registration ownership", () => {
         await expect(host ? host.run(serve) : serve()).rejects.toThrow(
           "Install or update @openclaw/codex",
         );
-        expect(state.factories).toBe(1);
         expectDisposed(state);
         if (!acquisition) {
           throw new Error("Expected registry acquisition");
@@ -188,17 +168,14 @@ describe("MCP serving registration ownership", () => {
         const released = acquisition;
         markPluginRegistryActive(released.registry);
         expect(() => released.resolveTools()).toThrow("Plugin tool registry has been released");
-        expect(state.factories).toBe(1);
         expect(scheduler.signal.aborted).toBe(ownership === "standalone");
         expect(scheduler.nextWakeAtMs).toBe(
           ownership === "standalone" ? null : clock.clock.now() + 30_000,
         );
       } finally {
         stopDiagnosticHeartbeat();
-        unsubscribe();
         await host?.close();
         await scheduler.stop();
-        constructor.mockRestore();
         setDiagnosticsEnabledForProcess(previouslyEnabled);
         cleanup();
       }

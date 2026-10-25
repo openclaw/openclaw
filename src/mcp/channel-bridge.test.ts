@@ -55,7 +55,6 @@ type BridgeInternals = Pick<
   queue: QueueEvent[];
   pendingClaudePermissions: Map<string, unknown>;
   pendingApprovals: Map<string, unknown>;
-  pendingSweepInterval: NodeJS.Timeout | null;
   handleGatewayEvent: (event: GatewayEvent) => Promise<void>;
   dispatchGatewayEvent: (event: GatewayEvent) => Promise<void>;
   handleSessionMessageEvent: (payload: SessionMessagePayload) => Promise<void>;
@@ -92,7 +91,7 @@ function permissionReply(senderIsOwner = true, role = "user") {
 function expectDrained(bridge: BridgeInternals) {
   expect(bridge.pendingClaudePermissions.size).toBe(0);
   expect(bridge.pendingApprovals.size).toBe(0);
-  expect(bridge.pendingSweepInterval).toBeNull();
+  expect(vi.getTimerCount()).toBe(0);
 }
 
 function requestApproval(bridge: BridgeInternals, payload: Record<string, unknown>, kind = "exec") {
@@ -172,7 +171,7 @@ describe("OpenClawChannelBridge", () => {
     ["exec", APPROVAL_DEFAULT_TTL_MS],
     ["early", ONE_MINUTE_MS],
   ] as const)("expires %s state and restarts the idle sweeper", async (kind, ttl) => {
-    expect(subject.pendingSweepInterval).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(SWEEP_INTERVAL_MS * 4);
     expect(vi.getTimerCount()).toBe(0);
     if (kind === "permission") {
@@ -189,7 +188,7 @@ describe("OpenClawChannelBridge", () => {
     const pending =
       kind === "permission" ? subject.pendingClaudePermissions : subject.pendingApprovals;
     expect(pending.size).toBe(1);
-    expect(subject.pendingSweepInterval).not.toBeNull();
+    expect(vi.getTimerCount()).toBe(1);
     vi.advanceTimersByTime(ttl - ONE_MINUTE_MS);
     expect(pending.size).toBe(1);
     vi.advanceTimersByTime(
@@ -199,21 +198,19 @@ describe("OpenClawChannelBridge", () => {
       expect(subject.listPendingApprovals()).toHaveLength(0);
     }
     expectDrained(subject);
-    expect(vi.getTimerCount()).toBe(0);
     await subject.handleClaudePermissionRequest({ ...permissionRequest, requestId: "fghij" });
-    expect(subject.pendingSweepInterval).not.toBeNull();
+    expect(vi.getTimerCount()).toBe(1);
   });
   test("close drains pending state and prevents new requests from restarting it", async () => {
     await subject.handleClaudePermissionRequest(permissionRequest);
     await requestApproval(subject, { id: "approval-1", createdAtMs: 0, expiresAtMs: ONE_HOUR_MS });
     expect(subject.pendingClaudePermissions.size).toBe(1);
     expect(subject.pendingApprovals.size).toBe(1);
-    expect(subject.pendingSweepInterval).not.toBeNull();
+    expect(vi.getTimerCount()).toBe(1);
 
     await subject.close();
 
     expectDrained(subject);
-    expect(vi.getTimerCount()).toBe(0);
     await subject.handleClaudePermissionRequest({ ...permissionRequest, requestId: "fghij" });
     await requestApproval(subject, { id: "approval-after-close" });
     expectDrained(subject);
