@@ -32,7 +32,7 @@ export function bindingEntriesGate(runtime: PluginRuntime) {
   return {
     entered,
     release,
-    arm() {
+    arm: () => {
       armed = true;
     },
   };

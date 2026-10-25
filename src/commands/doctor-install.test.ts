@@ -6,7 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
 import { MACOS_APP_INSTALL_OWNER_MARKER } from "./test-runtime-config-helpers.js";
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
+vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
+  note: vi.fn(),
+}));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
 async function write(relative: string, content = "") {
