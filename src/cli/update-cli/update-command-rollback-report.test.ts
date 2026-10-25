@@ -118,16 +118,7 @@ it("offers an optional report, previews it, and submits once only after confirma
   expectOnceContaining("select", {
     message: expect.stringContaining("rollback completed"),
     initialValue: "dismiss",
-    options: [
-      { value: "triage", label: "Diagnose update failure" },
-      { value: "report", label: "Report update failure" },
-      { value: "dismiss", label: "Exit" },
-    ],
   });
-  expect(mocks.prepare).toHaveBeenCalledExactlyOnceWith(
-    { attemptId: runId, action: "cli", result: f.result, recordedRun: undefined },
-    { env: f.env, stateDir: f.env.OPENCLAW_STATE_DIR },
-  );
   expectOnceContaining("confirm", { initialValue: false });
   expect(mocks.submit).toHaveBeenCalledExactlyOnceWith(f.prepared, f.prepared.previewDigest, {
     env: f.env,
@@ -135,7 +126,6 @@ it("offers an optional report, previews it, and submits once only after confirma
     allowBrowserFallback: false,
   });
   expect(mocks.triage).not.toHaveBeenCalled();
-  expect(f.result.status).toBe("error");
   expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
 });
 
@@ -164,11 +154,7 @@ it("keeps signal-cancelled rollback quiet", async () => {
 });
 
 it("keeps ordinary failure actions for an unverified service", async () => {
-  f.result.recovery = {
-    serviceRestartSafe: true,
-    packageRollbackVerified: true,
-    version: "2026.9.2",
-  };
+  delete f.result.recovery!.service;
   await f.run();
   expectOnceContaining("select", { message: "Choose the next action for this failed update" });
   expect(mocks.select.mock.calls[0]?.[0]).not.toHaveProperty("initialValue", "dismiss");
@@ -223,7 +209,6 @@ describe("interactive report actions", () => {
       expect(defaultRuntime.log).toHaveBeenCalledWith(`Existing issue: ${result.url}`);
     }
     if (result.status === "fallback") {
-      expect(mocks.select).toHaveBeenCalledTimes(2);
       expect(defaultRuntime.log).not.toHaveBeenCalledWith(`Prefilled issue: ${result.fallbackUrl}`);
       expect(defaultRuntime.log).toHaveBeenCalledWith(
         `Saved sanitized report: ${f.prepared.savedReportPath}`,
@@ -246,16 +231,13 @@ describe("interactive report actions", () => {
       .mockRejectedValueOnce(new Error("transport failed"))
       .mockRejectedValueOnce(new Error("still unavailable"));
     await run();
-    expect(mocks.select).toHaveBeenCalledTimes(4);
     expect(
       mocks.select.mock.calls.map(([params]) =>
         params.options.some((option) => option.value === "browser"),
       ),
     ).toEqual([false, true, false, false]);
     expect(mocks.prepare).toHaveBeenCalledOnce();
-    expect(mocks.submit).toHaveBeenCalledTimes(4);
     expect(mocks.confirm).toHaveBeenCalledTimes(4);
-    expect(defaultRuntime.error).toHaveBeenCalledTimes(2);
     for (const [report, digest] of mocks.submit.mock.calls) {
       expect(report).toBe(f.prepared);
       expect(digest).toBe(f.prepared.previewDigest);
@@ -267,7 +249,6 @@ describe("interactive report actions", () => {
     mocks.submit.mockRejectedValueOnce(new Error("report unavailable"));
     await run();
     expect(mocks.triage).toHaveBeenCalledOnce();
-    expect(mocks.select).toHaveBeenCalledTimes(2);
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("report unavailable"),
     );

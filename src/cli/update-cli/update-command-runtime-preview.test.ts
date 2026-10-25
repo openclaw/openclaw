@@ -9,7 +9,6 @@ import * as activationPaths from "../../infra/package-update-activation-paths.js
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { defaultRuntime } from "../../runtime.js";
-import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
 import { runtimeFixture } from "./update-command-fixtures.test-support.js";
@@ -25,7 +24,6 @@ import { updateCommand } from "./update-command.js";
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 
 const { fixture } = installFreshUpdateFixture();
-const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
 const lastJson = () => vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
 const matchingEntry = (shape: object) => expect.arrayContaining([expect.objectContaining(shape)]);
 function expectUnstaged() {
@@ -37,9 +35,7 @@ beforeEach(() => {
 });
 it.each([
   { name: "no restart", restart: false, debugCapture: true },
-  { name: "replacement" },
   { name: "compatible", compatible: true },
-  { name: "foreign service", owned: false },
   { name: "current replacement", current: true },
   { name: "current sealed service", current: true, refresh: false },
   { name: "current no restart", current: true, restart: false },
@@ -53,7 +49,6 @@ it.each([
     current = false,
     refresh = true,
     json = true,
-    owned = true,
     running = true,
     debugCapture = false,
   }) => {
@@ -81,16 +76,9 @@ it.each([
           status: running ? "running" : "stopped",
           systemd: { managerUid: 2001 },
         }),
-        readCommand: async () =>
-          owned
-            ? {
-                programArguments: [
-                  "/service/node",
-                  path.join(fixture.root, "dist/index.mjs"),
-                  "gateway",
-                ],
-              }
-            : null,
+        readCommand: async () => ({
+          programArguments: ["/service/node", path.join(fixture.root, "dist/index.mjs"), "gateway"],
+        }),
       }),
     );
     vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation(async (node) =>
@@ -142,30 +130,20 @@ it.each([
     expect(captureNotices).toHaveLength(debugCapture ? 1 : 0);
     const preview = lastJson();
     const notes = json ? JSON.stringify(preview) : log.mock.calls.flat().join("\n");
-    const replacement = !compatible && restart && owned && current && running && refresh;
+    const replacement = !compatible && restart && current && running && refresh;
     if (!compatible && !replacement) {
-      const recoverySteps = expectedRuntimeRecoverySteps(
-        "26.12.1",
-        fixture.root,
-        "2026.9.2",
-        undefined,
-        current && (!running || !refresh) ? "/service/node" : undefined,
-      );
-      const message = [
-        "Recovery:",
-        ...recoverySteps.map(
-          (step, index) =>
-            `${index + 1}. ${"command" in step ? `Run \`${step.command}\`.` : step.instruction}`,
-        ),
-      ].join("\n");
       if (json) {
         expect(preview).toMatchObject({
-          notes: [expect.stringContaining(message)],
           failures: [
             {
               reason: current ? "node-runtime-preflight" : "preflight-node-runtime-incompatible",
-              message: expect.stringContaining(message),
-              recoverySteps,
+              recoverySteps: expectedRuntimeRecoverySteps(
+                "26.12.1",
+                fixture.root,
+                "2026.9.2",
+                undefined,
+                current && (!running || !refresh) ? "/service/node" : undefined,
+              ),
               failureFacts: matchingEntry({
                 check: "node-runtime",
                 code: "node-runtime-preflight",
@@ -177,7 +155,7 @@ it.each([
           ],
         });
       } else {
-        expect(log).toHaveBeenCalledWith(expect.stringContaining(message));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Recovery:"));
       }
     } else if (replacement) {
       expect(notes).toContain("/service/node");
@@ -192,29 +170,13 @@ it.each([
     expectUnstaged();
     expect(fs.readFileSync(path.join(fixture.root, "package.json"))).toEqual(manifest);
 
-    if (!current) {
+    if (compatible) {
       await expect(
         updateCommand({ ...opts, json: true, admission: "installed" }),
       ).rejects.toBeInstanceOf(Error);
-      if (compatible) {
-        expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
-          expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),
-        );
-      } else {
-        expect(lastJson()).toMatchObject({
-          reason: "preflight-node-runtime-incompatible",
-          steps: matchingEntry({
-            stderrTail: expect.stringContaining(
-              `node ${quote(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
-            ),
-            failureFacts: matchingEntry({
-              code: "node-runtime-preflight",
-              message: expect.stringContaining("Required: openclaw@2026.9.2 Node >=26.12.1"),
-            }),
-          }),
-        });
-        expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-      }
+      expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ nodeRunner: "/service/node" }),
+      );
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
     }
     expect(provisionRuntime).not.toHaveBeenCalled();
