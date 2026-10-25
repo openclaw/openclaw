@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
-import { resolveProfile, type ResolvedBrowserConfig } from "../config.js";
+import { resolveBrowserConfig, resolveProfile } from "../config.js";
 import { refreshResolvedBrowserConfigFromDisk } from "../resolved-config-refresh.js";
 import {
   beginProfileTransition,
@@ -37,19 +37,13 @@ const RELAY_PORT = 18_123;
 
 function createState(token: string, existing?: ExtensionRelayHandle) {
   const resolved = {
+    ...resolveBrowserConfig({
+      profiles: { [PROFILE_NAME]: { driver: "extension", cdpPort: RELAY_PORT } },
+      extensionRelay: { allowLegacyAuth: true },
+    }),
     extensionRelayToken: token,
-    extensionRelayDefaultPort: 18_799,
-    extensionRelayPorts: { [PROFILE_NAME]: RELAY_PORT },
-    extensionRelay: { allowLegacyAuth: true },
     extensionRelayInternalTokens: existing ? { [PROFILE_NAME]: existing.internalToken } : {},
-    profiles: {
-      [PROFILE_NAME]: {
-        cdpPort: RELAY_PORT,
-        color: "#FF4500",
-        driver: "extension",
-      },
-    },
-  } as unknown as ResolvedBrowserConfig;
+  };
   const state: BrowserServerState = {
     server: null,
     port: 0,
@@ -76,7 +70,10 @@ function createHandle(token: string, port = RELAY_PORT): ExtensionRelayHandle {
   };
 }
 
-function mockPendingRelayStart() {
+function pendingRebind() {
+  const oldRelay = createHandle(OLD_TOKEN);
+  const { profile, state } = createState(OLD_TOKEN, oldRelay);
+  const runtime = getOrCreateProfileRuntime(state, profile);
   const startEntered = Promise.withResolvers<void>();
   const releaseStart = Promise.withResolvers<void>();
   const replacement = createHandle(ROTATED_TOKEN);
@@ -85,13 +82,6 @@ function mockPendingRelayStart() {
     await releaseStart.promise;
     return replacement;
   });
-  return { startEntered, releaseStart, replacement };
-}
-
-function pendingRebind() {
-  const oldRelay = createHandle(OLD_TOKEN);
-  const { profile, state } = createState(OLD_TOKEN, oldRelay);
-  const runtime = getOrCreateProfileRuntime(state, profile);
   const ensure = (signal?: AbortSignal) =>
     withProfileOperationLease({
       state,
@@ -99,18 +89,18 @@ function pendingRebind() {
       signal,
       run: (leaseSignal) => ensureExtensionRelayForProfile(state, profile, leaseSignal),
     });
-  return { oldRelay, state, runtime, ensure, ...mockPendingRelayStart() };
+  return { oldRelay, state, runtime, ensure, startEntered, releaseStart, replacement };
 }
 
-function expectRebound(
-  oldRelay: ExtensionRelayHandle,
-  replacement: ExtensionRelayHandle,
-  runtime: ReturnType<typeof getOrCreateProfileRuntime>,
-) {
-  expect(oldRelay.close).toHaveBeenCalledOnce();
+function expectRebound(f: ReturnType<typeof pendingRebind>) {
+  expect(f.oldRelay.close).toHaveBeenCalledOnce();
   expect(startExtensionRelayServerMock).toHaveBeenCalledOnce();
-  expect(replacement.close).not.toHaveBeenCalled();
-  expect(getProfileLifecycle(runtime).leases.size).toBe(0);
+  expect(f.replacement.close).not.toHaveBeenCalled();
+  expect(getProfileLifecycle(f.runtime).leases.size).toBe(0);
+  expect(f.state.extensionRelays?.get(PROFILE_NAME)).toBe(f.replacement);
+  expect(f.state.resolved.extensionRelayInternalTokens[PROFILE_NAME]).toBe(
+    f.replacement.internalToken,
+  );
 }
 
 describe("extension relay lifecycle", () => {
@@ -161,75 +151,58 @@ describe("extension relay lifecycle", () => {
     expect(replacement.close).not.toHaveBeenCalled();
   });
 
-  it("keeps a shared HMAC-rotation rebind alive when its first caller is cancelled", async () => {
-    const { oldRelay, state, runtime, ensure, startEntered, releaseStart, replacement } =
-      pendingRebind();
-    const firstController = new AbortController();
-    const first = ensure(firstController.signal);
-    void first.catch(() => {});
-    await startEntered.promise;
-
-    const sibling = ensure();
-    void sibling.catch(() => {});
-    await expect.poll(() => ensureExtensionRelayTokenMock.mock.calls.length).toBe(2);
-    firstController.abort(new Error("first browser request cancelled"));
-    releaseStart.resolve();
-
-    await expect(first).rejects.toThrow("first browser request cancelled");
-    await expect(sibling).resolves.toBe(replacement);
-    expectRebound(oldRelay, replacement, runtime);
-    expect(state.extensionRelays?.get(PROFILE_NAME)).toBe(replacement);
-    expect(state.resolved.extensionRelayInternalTokens[PROFILE_NAME]).toBe(
-      replacement.internalToken,
-    );
-  });
-
-  it("releases a cancelled sibling without waiting for another caller's pending rebind", async () => {
-    const { oldRelay, runtime, ensure, startEntered, releaseStart, replacement } = pendingRebind();
-    const owner = ensure();
-    void owner.catch(() => {});
-    await startEntered.promise;
-
-    const siblingController = new AbortController();
-    const sibling = ensure(siblingController.signal);
-    let siblingError: unknown;
-    void sibling.catch((error: unknown) => {
-      siblingError = error;
-    });
-    await expect.poll(() => ensureExtensionRelayTokenMock.mock.calls.length).toBe(2);
-    siblingController.abort(new Error("sibling browser request cancelled"));
-    try {
-      await expect
-        .poll(() => siblingError, { timeout: 200 })
-        .toEqual(expect.objectContaining({ message: "sibling browser request cancelled" }));
-    } finally {
-      releaseStart.resolve();
-    }
-    await expect(owner).resolves.toBe(replacement);
-    expectRebound(oldRelay, replacement, runtime);
-  });
+  it.each(["first", "sibling"])(
+    "keeps a shared rebind alive after cancelling its %s caller",
+    async (cancelled) => {
+      const f = pendingRebind();
+      const controller = new AbortController();
+      const first = f.ensure(cancelled === "first" ? controller.signal : undefined);
+      void first.catch(() => {});
+      await f.startEntered.promise;
+      const sibling = f.ensure(cancelled === "sibling" ? controller.signal : undefined);
+      const rejected = cancelled === "first" ? first : sibling;
+      const survivor = cancelled === "first" ? sibling : first;
+      void survivor.catch(() => {});
+      let rejection: unknown;
+      void rejected.catch((error: unknown) => {
+        rejection = error;
+      });
+      await expect.poll(() => ensureExtensionRelayTokenMock.mock.calls.length).toBe(2);
+      const message = `${cancelled} browser request cancelled`;
+      controller.abort(new Error(message));
+      try {
+        await expect
+          .poll(() => rejection, { timeout: 200 })
+          .toEqual(expect.objectContaining({ message }));
+      } finally {
+        f.releaseStart.resolve();
+      }
+      await expect(rejected).rejects.toThrow(message);
+      await expect(survivor).resolves.toBe(f.replacement);
+      expectRebound(f);
+    },
+  );
 
   it("fences and drains a lifecycle-owned rebind when its profile transitions", async () => {
-    const { oldRelay, state, runtime, ensure, startEntered, releaseStart, replacement } =
-      pendingRebind();
-    const pending = ensure();
+    const f = pendingRebind();
+    const pending = f.ensure();
     void pending.catch(() => {});
-    await startEntered.promise;
+    await f.startEntered.promise;
 
     const transition = beginProfileTransition({
-      state,
-      runtime,
+      state: f.state,
+      runtime: f.runtime,
       reason: "profile configuration changed",
       closeRelay: true,
     });
     await expect(pending).rejects.toThrow("profile configuration changed");
-    releaseStart.resolve();
+    f.releaseStart.resolve();
     await expect(transition).resolves.toEqual(expect.objectContaining({ stopped: true }));
 
-    expect(oldRelay.close).toHaveBeenCalledOnce();
-    expect(replacement.close).toHaveBeenCalledOnce();
-    expect(state.extensionRelays?.has(PROFILE_NAME)).toBe(false);
-    expect(state.resolved.extensionRelayInternalTokens[PROFILE_NAME]).toBeUndefined();
-    expect(getProfileLifecycle(runtime).leases.size).toBe(0);
+    expect(f.oldRelay.close).toHaveBeenCalledOnce();
+    expect(f.replacement.close).toHaveBeenCalledOnce();
+    expect(f.state.extensionRelays?.has(PROFILE_NAME)).toBe(false);
+    expect(f.state.resolved.extensionRelayInternalTokens[PROFILE_NAME]).toBeUndefined();
+    expect(getProfileLifecycle(f.runtime).leases.size).toBe(0);
   });
 });

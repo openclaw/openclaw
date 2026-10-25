@@ -25,6 +25,8 @@ function frames(socket: FakeSocket, type: string) {
 }
 
 const attached = (socket: FakeSocket) => events(socket, "Target.attachedToTarget");
+const attachedSession = (socket: FakeSocket) =>
+  asOptionalRecord(attached(socket).at(-1)?.params)?.sessionId;
 
 function deliver(receiver: { onMessage(raw: string): void }, message: unknown) {
   receiver.onMessage(JSON.stringify(message));
@@ -135,9 +137,7 @@ async function holdCdpCommand(method: string, params: Record<string, unknown> = 
   const { client, cdp } = connectClient(bridge);
   sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
   await vi.advanceTimersByTimeAsync(0);
-  const sessionId = asOptionalRecord(
-    client.frames().find((frame) => frame.method === "Target.attachedToTarget")?.params,
-  )?.sessionId;
+  const sessionId = attachedSession(client);
   sendCommand(cdp, 2, method, params, sessionId);
   return { bridge, extension, client, cdp, sessionId };
 }
@@ -400,34 +400,24 @@ it("rejects an older candidate when a newer candidate promotes first", () => {
   expect(secondSocket.closed).toBe(false);
 });
 
-it("answers the Puppeteer connect bootstrap without protocol errors", async () => {
+it.each([
+  [
+    "Browser.getVersion",
+    expect.objectContaining({ protocolVersion: "1.3", product: "Chrome/144.0.0.0" }),
+  ],
+  ["Target.getBrowserContexts", { browserContextIds: [] }],
+  ["Target.setDiscoverTargets", {}],
+] as const)("answers bootstrap %s", async (method, result) => {
   const { bridge } = readyBridge();
   const { client, cdp } = connectClient(bridge);
-  const bootstrap: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [
-    { id: 1, method: "Browser.getVersion" },
-    { id: 2, method: "Target.setDiscoverTargets", params: { discover: true } },
-    {
-      id: 3,
-      method: "Target.setAutoAttach",
-      params: { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
-    },
-    { id: 4, method: "Target.getBrowserContexts" },
-  ];
-  for (const message of bootstrap) {
-    deliver(cdp, message);
-  }
-  await flush();
-  for (const message of bootstrap) {
-    const reply = response(client, message.id);
-    expect(reply, `response for ${message.method}`).toBeTruthy();
-    expect(reply?.error, `error for ${message.method}`).toBeUndefined();
-  }
-  expect(response(client, 1)?.result).toMatchObject({
-    protocolVersion: "1.3",
-    product: "Chrome/144.0.0.0",
-  });
-  const contexts = response(client, 4);
-  expect(contexts?.result).toEqual({ browserContextIds: [] });
+  await dispatch(
+    cdp,
+    1,
+    method,
+    method === "Target.setDiscoverTargets" ? { discover: true } : undefined,
+  );
+  expect(response(client, 1)?.result).toEqual(result);
+  expect(response(client, 1)?.error).toBeUndefined();
 });
 
 it("invalidates captured operation identity when another extension reconnects", async () => {
@@ -449,8 +439,7 @@ it.each(["target_closed", "canceled_by_user"])("honors native %s recovery", asyn
       : replyFor(message),
   );
   const { first, firstCdp, second, secondCdp } = await attachClients(bridge);
-  const original = attached(first)[0];
-  const sessionId = (original?.params as { sessionId?: string } | undefined)?.sessionId;
+  const sessionId = attachedSession(first);
   expect(typeof sessionId).toBe("string");
   await dispatch(firstCdp, 2, "Target.detachFromTarget", { sessionId });
   targetId = "replacement-target";
@@ -559,8 +548,7 @@ it("repairs reconnect attach without undoing a later explicit detach", async () 
   expect(response(client, 2)?.result).toMatchObject(targetInfos("target-1").result);
   const { client: peer, cdp: peerCdp } = connectClient(bridge);
   await dispatch(peerCdp, 1, "Target.setAutoAttach", { autoAttach: true });
-  const sessionId = (attached(client).at(-1)?.params as { sessionId?: string } | undefined)
-    ?.sessionId;
+  const sessionId = attachedSession(client);
   expect(typeof sessionId).toBe("string");
   await dispatch(cdp, 3, "Target.detachFromTarget", { sessionId });
   const attachedEventCount = attached(client).length;
