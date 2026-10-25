@@ -1,5 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
 
+const jsonFields = (column: string, fields: string) =>
+  fields
+    .split(/\s+/u)
+    .map((field) => `json_extract(${column}, '$.${field}')`)
+    .join(", ");
+
 // Historical readers compare complete column definitions, so ALTER ADD defaults
 // cannot restore v12's NOT NULL columns; rebuild both exact original contracts.
 export const STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL = `
@@ -70,13 +76,7 @@ INSERT INTO cron_jobs_migration_v12 (
 )
 SELECT
   store_key, job_id,
-  json_extract(job_json, '$.declarationKey'), json_extract(job_json, '$.displayName'),
-  json_extract(job_json, '$.owner.agentId'), json_extract(job_json, '$.owner.sessionKey'),
-  json_extract(job_json, '$.name'), json_extract(job_json, '$.description'),
-  json_extract(job_json, '$.enabled'), json_extract(job_json, '$.deleteAfterRun'),
-  json_extract(job_json, '$.createdAtMs'),
-  json_extract(job_json, '$.agentId'), json_extract(job_json, '$.sessionKey'),
-  json_extract(job_json, '$.schedule.kind'),
+  ${jsonFields("job_json", "declarationKey displayName owner.agentId owner.sessionKey name description enabled deleteAfterRun createdAtMs agentId sessionKey schedule.kind")},
   CASE json_extract(job_json, '$.schedule.kind')
     WHEN 'cron' THEN json_extract(job_json, '$.schedule.expr')
     WHEN 'on-exit' THEN json_extract(job_json, '$.schedule.command')
@@ -85,11 +85,7 @@ SELECT
     WHEN 'cron' THEN json_extract(job_json, '$.schedule.tz')
     WHEN 'on-exit' THEN json_extract(job_json, '$.schedule.cwd')
   END,
-  json_extract(job_json, '$.schedule.everyMs'), json_extract(job_json, '$.schedule.anchorMs'),
-  json_extract(job_json, '$.schedule.at'), json_extract(job_json, '$.schedule.staggerMs'),
-  json_extract(job_json, '$.sessionTarget'), json_extract(job_json, '$.wakeMode'),
-  json_extract(job_json, '$.trigger.script'), json_extract(job_json, '$.trigger.once'),
-  json_extract(job_json, '$.payload.kind'),
+  ${jsonFields("job_json", "schedule.everyMs schedule.anchorMs schedule.at schedule.staggerMs sessionTarget wakeMode trigger.script trigger.once payload.kind")},
   CASE json_extract(job_json, '$.payload.kind')
     WHEN 'systemEvent' THEN json_extract(job_json, '$.payload.text')
     WHEN 'agentTurn' THEN json_extract(job_json, '$.payload.message')
@@ -106,8 +102,7 @@ SELECT
   CASE WHEN json_type(job_json, '$.payload.fallbacks') = 'array'
     THEN json_extract(job_json, '$.payload.fallbacks')
   END,
-  json_extract(job_json, '$.payload.thinking'), json_extract(job_json, '$.payload.timeoutSeconds'),
-  json_extract(job_json, '$.payload.allowUnsafeExternalContent'),
+  ${jsonFields("job_json", "payload.thinking payload.timeoutSeconds payload.allowUnsafeExternalContent")},
   CASE WHEN json_type(job_json, '$.payload.externalContentSource') IS NOT NULL
     THEN json_quote(json_extract(job_json, '$.payload.externalContentSource'))
   END,
@@ -118,8 +113,7 @@ SELECT
   CASE WHEN json_type(job_json, '$.payload.toolsAllow') = 'array'
     THEN json_extract(job_json, '$.payload.toolsAllowIsDefault')
   END,
-  json_extract(job_json, '$.delivery.mode'), json_extract(job_json, '$.delivery.channel'),
-  json_extract(job_json, '$.delivery.to'),
+  ${jsonFields("job_json", "delivery.mode delivery.channel delivery.to")},
   CASE WHEN json_type(job_json, '$.delivery.threadId') IN ('integer', 'real', 'text')
     THEN CAST(json_extract(job_json, '$.delivery.threadId') AS TEXT)
   END,
@@ -128,45 +122,19 @@ SELECT
     WHEN 'real' THEN 'number'
     WHEN 'text' THEN 'string'
   END,
-  json_extract(job_json, '$.delivery.accountId'), json_extract(job_json, '$.delivery.bestEffort'),
-  json_extract(job_json, '$.delivery.completionDestination.mode'),
-  json_extract(job_json, '$.delivery.completionDestination.to'),
-  CASE json_type(job_json, '$.delivery.failureDestination.mode')
-    WHEN 'null' THEN ''
-    WHEN 'text' THEN json_extract(job_json, '$.delivery.failureDestination.mode')
-  END,
-  CASE json_type(job_json, '$.delivery.failureDestination.channel')
-    WHEN 'null' THEN ''
-    WHEN 'text' THEN json_extract(job_json, '$.delivery.failureDestination.channel')
-  END,
-  CASE json_type(job_json, '$.delivery.failureDestination.to')
-    WHEN 'null' THEN ''
-    WHEN 'text' THEN json_extract(job_json, '$.delivery.failureDestination.to')
-  END,
-  CASE json_type(job_json, '$.delivery.failureDestination.accountId')
-    WHEN 'null' THEN ''
-    WHEN 'text' THEN json_extract(job_json, '$.delivery.failureDestination.accountId')
-  END,
+  ${jsonFields("job_json", "delivery.accountId delivery.bestEffort delivery.completionDestination.mode delivery.completionDestination.to")},
+  ${["mode", "channel", "to", "accountId"].map((field) => `CASE json_type(job_json, '$.delivery.failureDestination.${field}') WHEN 'null' THEN '' WHEN 'text' THEN json_extract(job_json, '$.delivery.failureDestination.${field}') END`).join(", ")},
   CASE json_type(job_json, '$.failureAlert')
     WHEN 'false' THEN 1
     WHEN 'object' THEN 0
   END,
-  json_extract(job_json, '$.failureAlert.after'), json_extract(job_json, '$.failureAlert.channel'),
-  json_extract(job_json, '$.failureAlert.to'), json_extract(job_json, '$.failureAlert.cooldownMs'),
-  json_extract(job_json, '$.failureAlert.includeSkipped'),
-  json_extract(job_json, '$.failureAlert.mode'), json_extract(job_json, '$.failureAlert.accountId'),
-  json_extract(state_json, '$.nextRunAtMs'), json_extract(state_json, '$.runningAtMs'),
-  json_extract(state_json, '$.lastRunAtMs'),
+  ${jsonFields("job_json", "failureAlert.after failureAlert.channel failureAlert.to failureAlert.cooldownMs failureAlert.includeSkipped failureAlert.mode failureAlert.accountId")},
+  ${jsonFields("state_json", "nextRunAtMs runningAtMs lastRunAtMs")},
   COALESCE(
     json_extract(state_json, '$.lastRunStatus'),
     json_extract(state_json, '$.lastStatus')
   ),
-  json_extract(state_json, '$.lastError'), json_extract(state_json, '$.lastDurationMs'),
-  json_extract(state_json, '$.consecutiveErrors'), json_extract(state_json, '$.consecutiveSkipped'),
-  json_extract(state_json, '$.scheduleErrorCount'),
-  json_extract(state_json, '$.lastDeliveryStatus'), json_extract(state_json, '$.lastDeliveryError'),
-  json_extract(state_json, '$.lastDelivered'),
-  json_extract(state_json, '$.lastFailureAlertAtMs'),
+  ${jsonFields("state_json", "lastError lastDurationMs consecutiveErrors consecutiveSkipped scheduleErrorCount lastDeliveryStatus lastDeliveryError lastDelivered lastFailureAlertAtMs")},
   job_json, state_json, runtime_updated_at_ms, schedule_identity, sort_order, updated_at
 FROM cron_jobs;
 
@@ -296,19 +264,7 @@ INSERT INTO installed_plugin_index (
   install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
 )
 SELECT 'installed-plugin-index',
-       json_extract(value_json, '$.index.version'),
-       json_extract(value_json, '$.index.hostContractVersion'),
-       json_extract(value_json, '$.index.compatRegistryVersion'),
-       json_extract(value_json, '$.index.migrationVersion'),
-       json_extract(value_json, '$.index.policyHash'),
-       json_extract(value_json, '$.index.generatedAtMs'),
-       json_extract(value_json, '$.index.workspaceDir'),
-       json_extract(value_json, '$.index.refreshReason'),
-       json_extract(value_json, '$.index.installRecords'),
-       json_extract(value_json, '$.index.plugins'),
-       json_extract(value_json, '$.index.diagnostics'),
-       json_extract(value_json, '$.index.warning'),
-       json_extract(value_json, '$.revision')
+       ${jsonFields("value_json", "index.version index.hostContractVersion index.compatRegistryVersion index.migrationVersion index.policyHash index.generatedAtMs index.workspaceDir index.refreshReason index.installRecords index.plugins index.diagnostics index.warning revision")}
   FROM config_machine_state
  WHERE state_key = 'plugins.installedIndex';
 DELETE FROM config_machine_state WHERE state_key = 'plugins.installedIndex';
