@@ -274,85 +274,72 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     expect(toolCalls(endpoint, "list_windows")).toHaveLength(1);
   });
 
-  it("preserves UTF-8 and routes multiple out-of-order responses", async () => {
-    const held: RpcRequest[] = [];
-    const endpoint = await createSessionEndpoint((request) => {
-      if (request.method === "tools/call" && request.params?.name === "list_windows") {
-        held.push(request);
-        if (held.length !== 2) {
-          return;
-        }
-        const firstRequest = held.find((call) => call.params?.arguments?.marker === "first");
-        const secondRequest = held.find((call) => call.params?.arguments?.marker === "second");
-        if (!firstRequest || !secondRequest) {
-          throw new Error("fixture did not receive both tagged requests");
-        }
-        const framed = Buffer.from(
-          frame(secondRequest.id, toolResult({ marker: "second", text: "β雪" })) +
-            "\n" +
-            frame(firstRequest.id, toolResult({ marker: "first" })),
-        );
-        const split = framed.indexOf(Buffer.from("雪")) + 1;
-        expect(split).toBeGreaterThan(0);
-        // Receiving both requests owns the response; cold proxy startup is not a polling deadline.
-        secondRequest.write(framed.subarray(0, split));
-        setImmediate(() => secondRequest.write(framed.subarray(split)));
-      } else if (request.method === "tools/call" && request.params?.name === "end_session") {
-        request.reply(toolResult({ session: "openclaw-test", active: false }));
-      }
-    });
-    const driver = managedDriver(endpoint);
-    const settlement: string[] = [];
-    const results = await Promise.all(
-      ["first", "second"].map(async (marker) => {
-        const result = await driver.callTool("list_windows", { marker });
-        settlement.push(marker);
-        return projectedToolDetails(result, "list_windows");
-      }),
-    );
-    expect(results).toEqual([{ marker: "first" }, { marker: "second", text: "β雪" }]);
-    expect(settlement).toEqual(["second", "first"]);
-    await driver.dispose();
-  });
-
-  it("retains completed responses before a later fatal frame and ignores unknown numeric IDs", async () => {
-    const held: RpcRequest[] = [];
-    const endpoint = await createSessionEndpoint((request) => {
-      if (request.params?.name === "list_windows") {
-        held.push(request);
-        if (held.length === 2) {
-          const [first, second] = held;
-          if (!first || !second) {
-            throw new Error("expected both requests");
+  it.each(["out-of-order", "fatal-frame"] as const)(
+    "settles multiplexed responses across %s",
+    async (mode) => {
+      const held: RpcRequest[] = [];
+      const endpoint = await createSessionEndpoint((request) => {
+        if (request.params?.name === "end_session" && mode === "out-of-order") {
+          request.reply(toolResult({ active: false }));
+        } else if (request.params?.name === "list_windows") {
+          held.push(request);
+          if (held.length !== 2) {
+            return;
           }
-          first.write(
-            frame(-5, {}) +
-              "\n" +
-              frame(first.id, toolResult({ marker: "completed" })) +
-              "not-json\n" +
-              frame(second.id, toolResult({ marker: "too-late" })),
-          );
+          const first = held.find((call) => call.params?.arguments?.marker === "first")!;
+          const second = held.find((call) => call.params?.arguments?.marker === "second")!;
+          if (mode === "fatal-frame") {
+            first.write(
+              frame(-5, {}) +
+                "\n" +
+                frame(first.id, toolResult({ marker: "completed" })) +
+                "not-json\n" +
+                frame(second.id, toolResult({ marker: "too-late" })),
+            );
+          } else {
+            const bytes = Buffer.from(
+              frame(second.id, toolResult({ marker: "second", text: "β雪" })) +
+                "\n" +
+                frame(first.id, toolResult({ marker: "first" })),
+            );
+            const split = bytes.indexOf(Buffer.from("雪")) + 1;
+            expect(split).toBeGreaterThan(0);
+            second.write(bytes.subarray(0, split));
+            setImmediate(() => second.write(bytes.subarray(split)));
+          }
+        }
+      });
+      const driver = managedDriver(endpoint);
+      const settlement: string[] = [];
+      const results = await Promise.allSettled(
+        ["first", "second"].map(async (marker) => {
+          const result = await driver.callTool("list_windows", { marker });
+          settlement.push(marker);
+          return projectedToolDetails(result, "list_windows");
+        }),
+      );
+      if (mode === "out-of-order") {
+        expect(results).toEqual([
+          { status: "fulfilled", value: { marker: "first" } },
+          { status: "fulfilled", value: { marker: "second", text: "β雪" } },
+        ]);
+        expect(settlement).toEqual(["second", "first"]);
+      } else {
+        expect(results).toMatchObject([
+          { status: "fulfilled", value: { marker: "completed" } },
+          { status: "rejected", reason: { message: expect.stringContaining("invalid JSON") } },
+        ]);
+        expect(driver.isAvailable()).toBe(false);
+        await driver.dispose();
+        const probe = net.createConnection(endpoint.socketPath);
+        try {
+          await once(probe, "connect");
+        } finally {
+          probe.destroy();
         }
       }
-    });
-    const driver = managedDriver(endpoint);
-    const results = await Promise.allSettled([
-      driver.callTool("list_windows", {}),
-      driver.callTool("list_windows", {}),
-    ]);
-    expect(results).toMatchObject([
-      { status: "fulfilled", value: { structuredContent: { marker: "completed" } } },
-      { status: "rejected", reason: { message: expect.stringContaining("invalid JSON") } },
-    ]);
-    expect(driver.isAvailable()).toBe(false);
-    await driver.dispose();
-    const probe = net.createConnection(endpoint.socketPath);
-    try {
-      await once(probe, "connect");
-    } finally {
-      probe.destroy();
-    }
-  });
+    },
+  );
 
   it("keeps JSON-RPC request errors local and preserves their CUA error text", async () => {
     const endpoint = await createSessionEndpoint((request) => {
