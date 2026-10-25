@@ -189,6 +189,37 @@ it("reports live WAL capacity without retrying or retaining an incomplete backup
   expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
 });
 
+// Windows EFS-encrypted profile directories fail same-directory renames with
+// EXDEV; publication must fall back to a private copy instead of aborting.
+it("publishes a private snapshot when same-directory renames fail with EXDEV", async () => {
+  const databasePath = createTempDatabasePath(`
+      PRAGMA journal_mode = WAL;
+      CREATE TABLE probe (value TEXT);
+      INSERT INTO probe VALUES ('committed');
+      PRAGMA wal_checkpoint(TRUNCATE);
+    `);
+  fs.rmSync(`${databasePath}-wal`, { force: true });
+  fs.writeFileSync(`${databasePath}-shm`, Buffer.alloc(32 * 1024, 0x5a), { mode: 0o600 });
+  vi.spyOn(fs, "renameSync").mockImplementation(() => {
+    throw Object.assign(new Error("EXDEV: cross-device link not permitted"), { code: "EXDEV" });
+  });
+
+  const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+  expect(prepared.location.endsWith(`${path.sep}database.sqlite`)).toBe(true);
+  inspectSnapshot(prepared, (snapshot) => {
+    expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "committed" }]);
+  });
+});
+
+it("keeps non-EXDEV rename failures fatal during snapshot publication", async () => {
+  const databasePath = createTempDatabasePath("CREATE TABLE probe (value TEXT);");
+  vi.spyOn(fs, "renameSync").mockImplementation(() => {
+    throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+  });
+
+  await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toThrow(/EPERM/);
+});
+
 it.each([
   ["async backup", prepareSqliteReadOnlyLocationInProcess, false, "EDQUOT"],
   ["async copy", prepareSqliteReadOnlyLocationInProcess, true, "EACCES"],

@@ -31,6 +31,7 @@ import {
 } from "./sqlite-schema-header.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
 import { MAX_SNAPSHOT_ATTEMPTS, waitForSnapshotRetrySync } from "./sqlite-snapshot-policy.js";
+import { renameStagedSnapshotFile } from "./sqlite-snapshot-rename.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -372,7 +373,7 @@ function* createStableReadOnlyCopyInTempDirectory(
         );
       }
       fs.rmSync(snapshotPath, { force: true });
-      fs.renameSync(firstPath, snapshotPath);
+      renameStagedSnapshotFile(firstPath, snapshotPath);
     }
 
     if (readSourceJournalMode(pathname, expectedSourceIdentity) !== journalMode) {

@@ -27,6 +27,7 @@ import {
   hashPublishedFileSync,
   type SqliteFileContent,
 } from "./sqlite-snapshot-file.js";
+import { renameStagedSnapshotFile } from "./sqlite-snapshot-rename.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import { SQLITE_STAGING_TOKEN_FILES, type SqliteStagingToken } from "./sqlite-staging-token.js";
 
@@ -481,7 +482,7 @@ export function publishPreparedCopy(
   for (const suffix of ["-wal", "-shm", "-journal", ""]) {
     const staged = `${location}.partial${suffix}`;
     if (fs.existsSync(staged)) {
-      fs.renameSync(staged, `${location}${suffix}`);
+      renameStagedSnapshotFile(staged, `${location}${suffix}`);
     }
   }
   let journalFreeContent: PreparedSqliteReadOnlyLocation["journalFreeContent"];
