@@ -16,14 +16,41 @@ import { coreGatewayHandlers } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
+const READ = "operator.read";
+const WRITE = "operator.write";
+const ADMIN = "operator.admin";
+const OWN_READ = "operator.sessions.read";
+const OWN_WRITE = "operator.sessions.write";
+const APPROVALS = "operator.approvals";
+const QUESTIONS = "operator.questions";
+const PAIRING = "operator.pairing";
+const TALK = "operator.talk";
+const SECRETS = "operator.talk.secrets";
+
 const required = (...args: Parameters<typeof resolveLeastPrivilegeOperatorScopesForMethod>) =>
   expect(resolveLeastPrivilegeOperatorScopesForMethod(...args));
 const admission = (...args: Parameters<typeof authorizeOperatorScopesForMethod>) =>
   expect(authorizeOperatorScopesForMethod(...args));
 const scopeAdmission = (...args: Parameters<typeof authorizeOperatorScopesForRequiredScope>) =>
   expect(authorizeOperatorScopesForRequiredScope(...args));
-const projection = (...args: Parameters<typeof projectOperatorScopesForMethod>) =>
-  expect(projectOperatorScopesForMethod(...args));
+function expectProjection(
+  method: string,
+  requestParams: unknown,
+  requestedScopes: string[],
+  allowedScopes: string[],
+  expected: string[],
+  requiredScope?: Parameters<typeof projectOperatorScopesForMethod>[0]["requiredScope"],
+) {
+  expect(
+    projectOperatorScopesForMethod({
+      method,
+      requestParams,
+      requestedScopes,
+      allowedScopes,
+      requiredScope,
+    }),
+  ).toEqual(expected);
+}
 
 function allow(...args: Parameters<typeof authorizeOperatorScopesForMethod>) {
   admission(...args).toEqual({ allowed: true });
@@ -58,7 +85,7 @@ const ownSession = { sessionKey: ownKey.key };
 
 function setPluginGatewayMethodScope(
   method: string,
-  scope: "operator.read" | "operator.write" | "operator.admin",
+  scope: typeof READ | typeof WRITE | typeof ADMIN,
 ) {
   const registry = createEmptyPluginRegistry();
   registry.gatewayHandlers[method] = pluginHandler;
@@ -88,16 +115,14 @@ describe("method scope resolution and authorization", () => {
       "ready",
       "upload_evidence",
     ]) {
-      allow("sessions.github.action", ["operator.sessions.write"], { action });
+      allow("sessions.github.action", [OWN_WRITE], { action });
     }
-    deny("operator.write", "sessions.github.action", ["operator.sessions.write"], {
+    deny(WRITE, "sessions.github.action", [OWN_WRITE], {
       action: "ready",
       publishingSessionKey: "agent:main:child",
     });
     for (const action of ["inspect", "merge", "close", "unknown"]) {
-      deny("operator.write", "sessions.github.action", ["operator.sessions.write"], {
-        action,
-      });
+      deny(WRITE, "sessions.github.action", [OWN_WRITE], { action });
     }
   });
   const incognitoKey = "agent:main:dashboard:incognito-parent";
@@ -112,59 +137,53 @@ describe("method scope resolution and authorization", () => {
     target,
   });
   it.each([
-    ["users.background.get", undefined, "operator.read"],
-    ["users.background.upload", undefined, "operator.write", "operator.read"],
-    ["users.background.remove", undefined, "operator.write", "operator.read"],
-    ["environments.list", { runtimeId: "openclaw" }, "operator.write", "operator.read"],
-    ["talk.config", {}, "operator.read"],
-    [
-      "talk.config",
-      { includeSecrets: true },
-      ["operator.read", "operator.talk.secrets"],
-      "operator.read",
-    ],
-    ["channels.pairing.approve", {}, "operator.pairing"],
-    [
-      "channels.pairing.approve",
-      { bootstrapCommandOwner: true },
-      ["operator.pairing", "operator.admin"],
-      "operator.pairing",
-    ],
-    ["agent", { message: "hello" }, "operator.write"],
-    ["agent", { message: "/reset" }, "operator.admin", "operator.write"],
-    ["agent", { message: "/new follow up" }, "operator.admin"],
-    ["node.invoke", { command: "device.info" }, "operator.write"],
-    ["node.invoke", { command: "browser.proxy" }, "operator.admin"],
-    ["node.invoke", { command: "browser.proxy.upload.v1" }, "operator.admin"],
-    ["node.invoke", { command: "fs.listDir" }, "operator.admin", "operator.write"],
+    ["users.background.get", undefined, READ],
+    ["users.background.upload", undefined, WRITE, READ],
+    ["users.background.remove", undefined, WRITE, READ],
+    ["environments.list", { runtimeId: "openclaw" }, WRITE, READ],
+    ["talk.config", {}, READ],
+    ["talk.config", { includeSecrets: true }, [READ, SECRETS], READ],
+    ["channels.pairing.approve", {}, PAIRING],
+    ["channels.pairing.approve", { bootstrapCommandOwner: true }, [PAIRING, ADMIN], PAIRING],
+    ["agent", { message: "hello" }, WRITE],
+    ["agent", { message: "/reset" }, ADMIN, WRITE],
+    ["agent", { message: "/new follow up" }, ADMIN],
+    ["node.invoke", { command: "device.info" }, WRITE],
+    ["node.invoke", { command: "browser.proxy" }, ADMIN],
+    ["node.invoke", { command: "browser.proxy.upload.v1" }, ADMIN],
+    ["node.invoke", { command: "fs.listDir" }, ADMIN, WRITE],
     [
       "node.invoke",
       { command: "browser.proxy.upload.v1", params: { method: "POST", path: "/profiles/create" } },
-      "operator.write",
+      WRITE,
     ],
-    ["sessions.create", { worktree: true, cwd: "/other/repo" }, "operator.write"],
-    ["sessions.create", { execNode: "macbook", cwd: "/other/repo" }, "operator.admin"],
+    ["sessions.create", { worktree: true, cwd: "/other/repo" }, WRITE],
+    ["sessions.create", { execNode: "macbook", cwd: "/other/repo" }, ADMIN],
     [
       "sessions.create",
       { deviceFolder: { deviceId: "paired-device", path: "~/project" } },
-      "operator.write",
-      "operator.sessions.write",
+      WRITE,
+      OWN_WRITE,
     ],
-    ["sessions.create", { agentId: "main", incognito: true }, "operator.admin", "operator.write"],
-    ["sessions.create", { key: incognitoKey }, "operator.admin", "operator.write"],
-    ["sessions.create", { parentSessionKey: incognitoKey }, "operator.admin", "operator.write"],
+    ["sessions.create", { agentId: "main", incognito: true }, ADMIN, WRITE],
+    ["sessions.create", { key: incognitoKey }, ADMIN, WRITE],
+    ["sessions.create", { parentSessionKey: incognitoKey }, ADMIN, WRITE],
     [
       "sessions.create",
       { agentId: "main", toolOverrides: { skills: { release: false } } },
-      "operator.admin",
-      "operator.write",
+      ADMIN,
+      WRITE,
     ],
-    ["fs.listDir", {}, "operator.write"],
-    ["fs.listDir", { nodeId: "macbook" }, "operator.admin", "operator.write"],
-    ["node.pair.approve", undefined, "operator.pairing", "operator.write"],
-    ["approval.resolve", undefined, "operator.approvals", "operator.write"],
-    ["sessions.patch", guarded, "operator.write"],
-    ["sessions.patch", { ...guarded, permissionMode: "full" }, "operator.admin", "operator.write"],
+    ["fs.listDir", {}, WRITE],
+    ["fs.listDir", { nodeId: "macbook" }, ADMIN, WRITE],
+    ["node.pair.approve", undefined, PAIRING, WRITE],
+    ["approval.resolve", undefined, APPROVALS, WRITE],
+    ["sessions.patch", guarded, WRITE],
+    ["sessions.patch", { ...guarded, permissionMode: "full" }, ADMIN, WRITE],
+    ["sessions.dispatch", { ...ownKey, deviceId: "device-1" }, WRITE],
+    ["sessions.dispatch", { ...ownKey, profileId: "development" }, ADMIN, WRITE],
+    ["sessions.move", move({ kind: "gateway" }), WRITE],
+    ["sessions.move", move({ kind: "profile", profileId: "development" }), ADMIN, WRITE],
   ] satisfies [string, unknown, string | string[], string?][])(
     "%s (%j) requires %s",
     (method, params, scope, denied?: string) => expectAccess(scope, method, params, denied),
@@ -176,15 +195,15 @@ describe("method scope resolution and authorization", () => {
   });
 
   it("accepts dedicated Talk access and preserves operator.write compatibility", () => {
-    allow("talk.client.create", ["operator.talk"]);
-    allow("talk.client.create", ["operator.write"]);
-    deny("operator.talk", "talk.client.create", ["operator.read"]);
+    allow("talk.client.create", [TALK]);
+    allow("talk.client.create", [WRITE]);
+    deny(TALK, "talk.client.create", [READ]);
   });
 
   it("classifies plugin session actions with a CLI-safe default operator scope", () => {
-    expectScope("operator.write", "plugins.sessionAction");
+    expectScope(WRITE, "plugins.sessionAction");
     expect(isGatewayMethodClassified("plugins.sessionAction")).toBe(true);
-    deny("operator.write", "plugins.sessionAction", ["operator.read"]);
+    deny(WRITE, "plugins.sessionAction", [READ]);
   });
 
   it("derives least-privilege scopes from registered plugin session action params", () => {
@@ -196,8 +215,8 @@ describe("method scope resolution and authorization", () => {
       handler: () => ({ result: { ok: true } }),
     });
     registry.sessionActions = [
-      makeAction("approve", ["operator.approvals"]),
-      makeAction("view", ["operator.read"]),
+      makeAction("approve", [APPROVALS]),
+      makeAction("view", [READ]),
       makeAction("default-write"),
     ].map((action) => ({
       pluginId: "scope-plugin",
@@ -207,108 +226,70 @@ describe("method scope resolution and authorization", () => {
     }));
     setActivePluginRegistry(registry);
 
-    const approve = { pluginId: "scope-plugin", actionId: "approve" };
-    expectAccess("operator.approvals", "plugins.sessionAction", approve, "operator.write");
-    expectScope("operator.read", "plugins.sessionAction", {
-      pluginId: " scope-plugin ",
-      actionId: " view ",
-    });
-    expectScope("operator.write", "plugins.sessionAction", {
-      pluginId: "scope-plugin",
-      actionId: "default-write",
-    });
-    required("plugins.sessionAction", {
-      pluginId: "scope-plugin",
-      actionId: "missing",
-    }).toEqual(createExpectedBroadOperatorScopes());
+    const actionParams = (actionId: string, pluginId = "scope-plugin") => ({ pluginId, actionId });
+    expectAccess(APPROVALS, "plugins.sessionAction", actionParams("approve"), WRITE);
+    expectScope(READ, "plugins.sessionAction", actionParams(" view ", " scope-plugin "));
+    expectScope(WRITE, "plugins.sessionAction", actionParams("default-write"));
+    required("plugins.sessionAction", actionParams("missing")).toEqual(
+      createExpectedBroadOperatorScopes(),
+    );
   });
 
-  it.each([
-    ["device dispatch", "sessions.dispatch", { ...ownKey, deviceId: "device-1" }, "operator.write"],
-    [
-      "profile dispatch",
-      "sessions.dispatch",
-      { ...ownKey, profileId: "development" },
-      "operator.admin",
-    ],
-    ["gateway move", "sessions.move", move({ kind: "gateway" }), "operator.write"],
-    [
-      "profile move",
-      "sessions.move",
-      move({ kind: "profile", profileId: "development" }),
-      "operator.admin",
-    ],
-  ] as const)(
-    "derives %s authorization from its placement target",
-    (_name, method, params, scope) => {
-      expectAccess(
-        scope,
-        method,
-        params,
-        scope === "operator.admin" ? "operator.write" : undefined,
-      );
-    },
-  );
-
   it("grants write-scope sessions.delete only with the archivedOnly opt-in", () => {
-    expectScope("operator.admin", "sessions.delete");
-    expectScope("operator.admin", "sessions.delete", {
+    expectScope(ADMIN, "sessions.delete");
+    expectScope(ADMIN, "sessions.delete", {
       key: "agent:main:old",
       deleteTranscript: true,
     });
     const archivedParams = { key: "agent:main:old", archivedOnly: true };
-    expectAccess("operator.write", "sessions.delete", archivedParams, "operator.read");
+    expectAccess(WRITE, "sessions.delete", archivedParams, READ);
     for (const params of [
       { key: archivedParams.key },
       { ...archivedParams, archivedOnly: "yes" },
       { ...archivedParams, emitLifecycleHooks: false },
       { ...archivedParams, expectedSessionId: "sess-1", futureField: true },
     ]) {
-      deny("operator.admin", "sessions.delete", ["operator.write"], params);
+      deny(ADMIN, "sessions.delete", [WRITE], params);
     }
-    expectAccess("operator.write", "sessions.delete", {
+    expectAccess(WRITE, "sessions.delete", {
       ...archivedParams,
       expectedSessionId: "sess-1",
     });
-    expectScope("operator.admin", "sessions.delete", {
+    expectScope(ADMIN, "sessions.delete", {
       ...archivedParams,
       emitLifecycleHooks: false,
     });
-    allow("sessions.delete", ["operator.admin"]);
+    allow("sessions.delete", [ADMIN]);
   });
 
   it("requires admin for browser.request", () => {
-    setPluginGatewayMethodScope("browser.request", "operator.admin");
+    setPluginGatewayMethodScope("browser.request", ADMIN);
 
-    expectAccess("operator.admin", "browser.request", undefined, "operator.write");
+    expectAccess(ADMIN, "browser.request", undefined, WRITE);
   });
 
   it("keeps broad question authority distinct from own-run admission", () => {
-    const method = "question.resolve";
-    admission(method, ["operator.write"]).toEqual({
-      allowed: true,
-      sessionScope: "operator.sessions.write",
-    });
-    allow(method, ["operator.questions"]);
+    admission("question.resolve", [WRITE]).toEqual({ allowed: true, sessionScope: OWN_WRITE });
+    allow("question.resolve", [QUESTIONS]);
   });
 
   it("requires admin for unknown methods", () => {
     required("unknown.method").toStrictEqual([]);
-    deny("operator.admin", "unknown.method", ["operator.read"]);
+    deny(ADMIN, "unknown.method", [READ]);
   });
 
   it("requires admin for reserved admin namespaces even if a plugin registered a narrower scope", () => {
-    setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, "operator.read");
+    setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, READ);
 
-    expectScope("operator.admin", RESERVED_ADMIN_PLUGIN_METHOD);
-    deny("operator.admin", RESERVED_ADMIN_PLUGIN_METHOD, ["operator.read"]);
+    expectScope(ADMIN, RESERVED_ADMIN_PLUGIN_METHOD);
+    deny(ADMIN, RESERVED_ADMIN_PLUGIN_METHOD, [READ]);
   });
 
   it("exposes skill proposal methods through the core gateway registry", () => {
     for (const [scope, names] of [
-      ["operator.read", ["list", "events.list", "inspect", "historyStatus"]],
+      [READ, ["list", "events.list", "inspect", "historyStatus"]],
       [
-        "operator.admin",
+        ADMIN,
         ["create", "update", "revise", "evaluate", "historyScan", "apply", "reject", "quarantine"],
       ],
     ] as const) {
@@ -316,12 +297,7 @@ describe("method scope resolution and authorization", () => {
         const method = `skills.proposals.${name}`;
         expect(listGatewayMethods()).toContain(method);
         expect(coreGatewayHandlers).toHaveProperty(method);
-        expectAccess(
-          scope,
-          method,
-          undefined,
-          scope === "operator.admin" ? "operator.write" : undefined,
-        );
+        expectAccess(scope, method, undefined, scope === ADMIN ? WRITE : undefined);
       }
     }
   });
@@ -334,7 +310,7 @@ describe("session-scoped method admission", () => {
     [
       "chat.inject",
       { sessionKey: "agent:main:requester" },
-      { allowed: false, missingScope: "operator.admin" },
+      { allowed: false, missingScope: ADMIN },
     ],
   ] as const)(
     "checks requester delivery method %s against the real plugin client grant",
@@ -355,57 +331,39 @@ describe("session-scoped method admission", () => {
   ] as const)(
     "restricts the narrow read alternative to session and bootstrap methods: %s",
     (method, params, narrow) => {
-      for (const scopes of [
-        ["operator.sessions.read"],
-        ["operator.sessions.write"],
-        ["operator.sessions.read", "operator.sessions.write"],
-      ]) {
+      for (const scopes of [[OWN_READ], [OWN_WRITE], [OWN_READ, OWN_WRITE]]) {
         admission(method, scopes, params).toEqual(
           narrow
-            ? { allowed: true, sessionScope: "operator.sessions.read" }
-            : { allowed: false, missingScope: "operator.read" },
+            ? { allowed: true, sessionScope: OWN_READ }
+            : { allowed: false, missingScope: READ },
         );
       }
       if (!narrow) {
         return;
       }
-      for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
-        allow(method, [scope, "operator.sessions.read"], params);
+      for (const scope of [READ, WRITE, ADMIN]) {
+        allow(method, [scope, OWN_READ], params);
       }
-      for (const allowed of ["operator.sessions.read", "operator.sessions.write"]) {
-        projection({
-          method,
-          requestParams: params,
-          requestedScopes: ["operator.read", "operator.admin"],
-          allowedScopes: [allowed],
-        }).toEqual(["operator.sessions.read"]);
+      for (const allowed of [OWN_READ, OWN_WRITE]) {
+        expectProjection(method, params, [READ, ADMIN], [allowed], [OWN_READ]);
       }
     },
   );
 
   it.each([
-    ["chat.send", { ...ownSession, message: "hello" }, "operator.write"],
-    ["question.resolve", {}, "operator.questions"],
+    ["chat.send", { ...ownSession, message: "hello" }, WRITE],
+    ["question.resolve", {}, QUESTIONS],
   ] as const)("requires the narrow write grant for %s", (method, params, broad) => {
-    admission(method, ["operator.sessions.write"], params).toEqual({
-      allowed: true,
-      sessionScope: "operator.sessions.write",
-    });
-    admission(method, ["operator.sessions.read"], params).toEqual({
-      allowed: false,
-      missingScope: broad,
-    });
+    admission(method, [OWN_WRITE], params).toEqual({ allowed: true, sessionScope: OWN_WRITE });
+    admission(method, [OWN_READ], params).toEqual({ allowed: false, missingScope: broad });
     allow(method, [broad], params);
-    projection({
+    expectProjection(
       method,
-      requestParams: params,
-      requestedScopes: [
-        broad,
-        "operator.approvals",
-        ...(broad === "operator.questions" ? ["operator.admin"] : []),
-      ],
-      allowedScopes: ["operator.sessions.write"],
-    }).toEqual(["operator.sessions.write"]);
+      params,
+      [broad, APPROVALS, ...(broad === QUESTIONS ? [ADMIN] : [])],
+      [OWN_WRITE],
+      [OWN_WRITE],
+    );
   });
 
   it.each([
@@ -419,45 +377,36 @@ describe("session-scoped method admission", () => {
     ["tools.invoke", {}],
     ["plugins.sessionAction", { pluginId: "custom", actionId: "protected" }],
   ] as const)("does not turn the session grant into broader authority for %s", (method, params) => {
-    admission(method, ["operator.sessions.write"], params).toMatchObject({ allowed: false });
-    projection({
-      method,
-      requestParams: params,
-      requestedScopes: ["operator.write", "operator.admin", "operator.questions"],
-      allowedScopes: ["operator.sessions.write"],
-    }).toEqual([]);
+    admission(method, [OWN_WRITE], params).toMatchObject({ allowed: false });
+    expectProjection(method, params, [WRITE, ADMIN, QUESTIONS], [OWN_WRITE], []);
     if (method === "sessions.delete" && "archivedOnly" in params) {
-      allow(method, ["operator.write"], params);
+      allow(method, [WRITE], params);
     }
   });
 
   it("preserves a dispatch registry's stronger scope and does not borrow broad read for a write", () => {
-    for (const requiredScope of [
-      "operator.admin",
-      "operator.approvals",
-      "operator.questions",
-    ] as const) {
-      projection({
-        method: "sessions.patch",
-        requestParams: { label: "updated" },
-        requestedScopes: ["operator.write"],
-        allowedScopes: ["operator.sessions.write"],
+    for (const requiredScope of [ADMIN, APPROVALS, QUESTIONS] as const) {
+      expectProjection(
+        "sessions.patch",
+        { label: "updated" },
+        [WRITE],
+        [OWN_WRITE],
+        [],
         requiredScope,
-      }).toEqual([]);
+      );
     }
-    for (const scope of ["operator.read", "operator.approvals"] as const) {
-      scopeAdmission(scope, [scope, "operator.sessions.write"]).toEqual({ allowed: true });
+    for (const scope of [READ, APPROVALS] as const) {
+      scopeAdmission(scope, [scope, OWN_WRITE]).toEqual({ allowed: true });
     }
     scopeAdmission(
-      "operator.admin",
-      ["operator.sessions.write"],
+      ADMIN,
+      [OWN_WRITE],
       resolveSessionMethodScope("sessions.patch", { label: "updated" }),
-    ).toEqual({ allowed: false, missingScope: "operator.admin" });
-    scopeAdmission(
-      "operator.write",
-      ["operator.sessions.read"],
-      resolveSessionMethodScope("sessions.list"),
-    ).toEqual({ allowed: false, missingScope: "operator.write" });
-    deny("operator.write", "sessions.patch", ["operator.read"], { label: "updated" });
+    ).toEqual({ allowed: false, missingScope: ADMIN });
+    scopeAdmission(WRITE, [OWN_READ], resolveSessionMethodScope("sessions.list")).toEqual({
+      allowed: false,
+      missingScope: WRITE,
+    });
+    deny(WRITE, "sessions.patch", [READ], { label: "updated" });
   });
 });

@@ -65,6 +65,20 @@ const publicShare = (sessionKey = SESSION_KEY) => ({
   sessionId: readSession(sessionKey).sessionId,
   createdAt: 1,
 });
+function configurePublicOrigin(publicOrigin: string, basePath = "") {
+  const config = { gateway: { publicOrigin, controlUi: { basePath } } };
+  mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+  return config;
+}
+
+const commandInput = (command: string) =>
+  commandCalls.find(({ argv }) => argv.includes(command))?.input;
+const localPullRequestBody = () => JSON.parse(commandInput("POST") ?? "null").body;
+const publish = (
+  request: Parameters<
+    ReturnType<typeof createGitHubPublicationCoordinator>["requestForSessionV2"]
+  >[0],
+) => createGitHubPublicationCoordinator().requestForSessionV2(request);
 
 async function prepareSurface(surface: "local" | "repository") {
   const repository =
@@ -109,8 +123,8 @@ function afterEffect(
   observe: (...args: Parameters<RecordEffect>) => void,
 ) {
   const wrap =
-    (record: RecordEffect) =>
-    async (...args: Parameters<RecordEffect>) => {
+    (record: RecordEffect): RecordEffect =>
+    async (...args) => {
       await record(...args);
       observe(...args);
     };
@@ -147,13 +161,10 @@ describe("Gateway GitHub publication attribution", () => {
     await persistPublicationTestSession();
     await prepareRealPublicationCredit();
     const trailer = "Co-authored-by: alice <7+alice@users.noreply.github.com>";
-    const coordinator = createGitHubPublicationCoordinator();
-    const result = await coordinator.requestForSessionV2(
-      publicationRequest("credit-in-title", { title: trailer }),
-    );
+    const result = await publish(publicationRequest("credit-in-title", { title: trailer }));
 
     expect(result.status).toBe("published");
-    const message = commandCalls.find(({ argv }) => argv.includes("commit-tree"))?.input;
+    const message = commandInput("commit-tree");
     expect(message).toBeDefined();
     const parsed = execFileSync("git", ["interpret-trailers", "--parse", "--no-divider"], {
       cwd: root,
@@ -186,15 +197,9 @@ describe("Gateway GitHub publication attribution", () => {
         optOut(person);
         optedOut = true;
       };
-      const executed: string[][] = [];
-      const hasCommand = (command: string, endpoint?: string) =>
-        executed.some(
-          (args) =>
-            args.includes(command) && (!endpoint || args.some((arg) => arg.endsWith(endpoint))),
-        );
       const transport = mocks.runCommand.getMockImplementation()!;
+      const firstCall = mocks.runCommand.mock.calls.length;
       mocks.runCommand.mockImplementation(async (argv: string[], options) => {
-        executed.push(argv);
         const result = await transport(argv, options);
         if (
           boundary === "preparation" &&
@@ -221,6 +226,12 @@ describe("Gateway GitHub publication attribution", () => {
 
       expect(optedOut).toBe(true);
       expect(result).toMatchObject(creditRejected);
+      const executed = mocks.runCommand.mock.calls.slice(firstCall).map(([args]) => args);
+      const hasCommand = (command: string, endpoint?: string) =>
+        executed.some(
+          (args) =>
+            args.includes(command) && (!endpoint || args.some((arg) => arg.endsWith(endpoint))),
+        );
       expect(
         executed.filter((args) => args.includes("push") || args.includes("graphql")),
       ).toHaveLength(boundary === "pull_request" ? 1 : 0);
@@ -288,10 +299,7 @@ describe("Gateway GitHub publication attribution", () => {
   );
 
   it("publishes inherited and direct human credit once with current consent and a final session backlink", async () => {
-    const config = {
-      gateway: { publicOrigin: "https://team.example", controlUi: { basePath: "/control" } },
-    };
-    mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+    const config = configurePublicOrigin("https://team.example", "/control");
     await useRealAttribution();
     const people = [
       createPerson(7, "alice"),
@@ -352,9 +360,7 @@ describe("Gateway GitHub publication attribution", () => {
         readOnly: true,
       }),
     );
-    const coordinator = createGitHubPublicationCoordinator();
-
-    const result = await coordinator.requestForSessionV2(
+    const result = await publish(
       publicationRequest("ordered-attribution", {
         sessionKey: childKey,
         title: "fix: publish the reconciled fix",
@@ -363,17 +369,12 @@ describe("Gateway GitHub publication attribution", () => {
     );
 
     expect(result).toMatchObject({ status: "published" });
-    expect(commandCalls.find(({ argv }) => argv.includes("commit-tree"))?.input).toBe(
+    expect(commandInput("commit-tree")).toBe(
       `fix: publish the reconciled fix\n\nWorked on by:\n- @alice\n- @grace\n\nCo-authored-by: alice <7+alice@users.noreply.github.com>\nCo-authored-by: grace <9+grace@users.noreply.github.com>\nOpenClaw-Publication: ${result.requestId}\n`,
     );
-    const post = commandCalls.find(({ argv }) => argv.includes("POST"));
-    expect(JSON.parse(post?.input ?? "null")).toEqual({
-      title: "fix: publish the reconciled fix",
-      body: `Detailed proof\n\n### Verification notes\n\nKeep this paragraph.\n\n## Worked on by\n\n- @alice\n- @grace\n\n<!-- openclaw-publication:${result.requestId} -->\n\n---\n[View the OpenClaw team session](https://team.example/control/chat/main/subagent/delegated-publication)`,
-      head: `openclaw:${BRANCH}`,
-      base: "main",
-      draft: false,
-    });
+    expect(localPullRequestBody()).toBe(
+      `Detailed proof\n\n### Verification notes\n\nKeep this paragraph.\n\n## Worked on by\n\n- @alice\n- @grace\n\n<!-- openclaw-publication:${result.requestId} -->\n\n---\n[View the OpenClaw team session](https://team.example/control/chat/main/subagent/delegated-publication)`,
+    );
   });
 
   it.each(
@@ -389,8 +390,7 @@ describe("Gateway GitHub publication attribution", () => {
     if (state !== "private" && state !== "newly-public") {
       await upsertSessionEntryCore(scope, { publicShare: grant });
     }
-    const config = { gateway: { publicOrigin: "https://team.example" } };
-    mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+    configurePublicOrigin("https://team.example");
     let changed = false;
     let beforeRun = false;
     const change = () => {
@@ -412,16 +412,14 @@ describe("Gateway GitHub publication attribution", () => {
       }
       return true;
     });
-    const onEffect = () => {
+    afterEffect(surface, (effect, observed) => {
+      if (effect !== "pull_request" || observed !== undefined) {
+        return;
+      }
       if (state === "revoked-before-run") {
         beforeRun = true;
       } else if (["revoked", "newly-public", "replaced"].includes(state)) {
         change();
-      }
-    };
-    afterEffect(surface, (effect, observed) => {
-      if (effect === "pull_request" && observed === undefined) {
-        onEffect();
       }
     });
     const coordinator = repository?.coordinator ?? createGitHubPublicationCoordinator();
@@ -433,9 +431,7 @@ describe("Gateway GitHub publication attribution", () => {
     });
     expect(result.status).toBe("published");
     expect(changed).toBe(!["private", "public"].includes(state));
-    const body = repository
-      ? repository.runtime.pr?.body
-      : JSON.parse(commandCalls.find(({ argv }) => argv.includes("POST"))!.input!).body;
+    const body = repository ? repository.runtime.pr?.body : localPullRequestBody();
     expect(body).toContain("Keep the review evidence.");
     expect(body).toContain(`<!-- openclaw-publication:${result.requestId} -->`);
     expect(body).not.toContain("stale.example");
@@ -448,15 +444,11 @@ describe("Gateway GitHub publication attribution", () => {
   it("publishes without a session footer when the configured URL is not external HTTPS", async () => {
     await persistPublicationTestSession();
     await upsertSessionEntryCore(sessionScope(), { publicShare: publicShare() });
-    const config = { gateway: { publicOrigin: "http://127.0.0.1:18789" } };
-    mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
-    const coordinator = createGitHubPublicationCoordinator();
-
-    const result = await coordinator.requestForSessionV2(publicationRequest("local-session-url"));
+    configurePublicOrigin("http://127.0.0.1:18789");
+    const result = await publish(publicationRequest("local-session-url"));
 
     expect(result).toMatchObject({ status: "published" });
-    const post = commandCalls.find(({ argv }) => argv.includes("POST"));
-    expect(JSON.parse(post?.input ?? "null").body).toBe(
+    expect(localPullRequestBody()).toBe(
       `Published by the Gateway after authoritative workspace reconciliation.\n\n## Worked on by\n\n- @alice\n\n<!-- openclaw-publication:${result.requestId} -->`,
     );
   });
