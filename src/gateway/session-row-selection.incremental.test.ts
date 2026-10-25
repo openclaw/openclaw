@@ -47,7 +47,9 @@ function row(index: number, fields: Partial<SessionEntry> = {}) {
 it("filters only the changed key and ignores unchanged selection publications", () => {
   const selection = createSessionRowSelection(cfg, scope, false, () => context);
   const rows = Array.from({ length: 1200 }, (_, index) => row(index));
-  for (const target of rows) selection.add(target);
+  for (const target of rows) {
+    selection.add(target);
+  }
   const retained = new WeakMap<object, SessionListFilteredEntries>();
   const entryFilter = vi.fn(() => true);
   const read = () => {
@@ -80,7 +82,9 @@ it("filters only the changed key and ignores unchanged selection publications", 
 it("matches fresh selection across churn, archive toggles, filters, and page windows", () => {
   const selection = createSessionRowSelection(cfg, scope, false, () => context);
   const targets = new Map(Array.from({ length: 96 }, (_, index) => [index, row(index)]));
-  for (const target of targets.values()) selection.add(target);
+  for (const target of targets.values()) {
+    selection.add(target);
+  }
   const queries = [
     { opts: { limit: 4 } },
     { opts: { limit: 3, offset: 7, archived: "all" as const, sortBy: "activity" as const } },
@@ -91,7 +95,9 @@ it("matches fresh selection across churn, archive toggles, filters, and page win
       involvingActorId: "profile-a",
       ownerFirstActorId: "profile-a",
     },
-  ].map((query) => ({ ...query, retained: new WeakMap<object, SessionListFilteredEntries>() }));
+  ].map((query) =>
+    Object.assign(query, { retained: new WeakMap<object, SessionListFilteredEntries>() }),
+  );
   const read = (owner: typeof selection, query: (typeof queries)[number], cached: boolean) => {
     const prepared = owner.read(query.opts.sortBy ?? "updatedAt");
     return selectSessionEntries({
@@ -116,7 +122,9 @@ it("matches fresh selection across churn, archive toggles, filters, and page win
   };
   for (let step = 0; step < 160; step++) {
     const fresh = createSessionRowSelection(cfg, scope, false, () => context);
-    for (const target of targets.values()) fresh.add(target);
+    for (const target of targets.values()) {
+      fresh.add(target);
+    }
     for (const query of queries) {
       expect(read(selection, query, true), `step ${step}: ${JSON.stringify(query.opts)}`).toEqual(
         read(fresh, query, false),
