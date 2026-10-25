@@ -23,7 +23,7 @@ import { AgentTools } from "./panels-tools-skills.tsx";
 type Kind = "catalog" | "effective";
 type Result = ToolsCatalogResult | ToolsEffectiveResult;
 function result(kind: Kind, label: string): Result {
-  const groups = [
+  const groups: ToolsEffectiveResult["groups"] = [
     {
       id: "core",
       label: "Built-in tools",
@@ -180,7 +180,7 @@ describe("Agents tool reads", () => {
       expect(view.container.textContent).toContain(fallback);
       expect(view.calls()).toHaveLength(1);
     });
-    const retry = view.getByRole("button", { name: "Retry", exact: true });
+    const retry = view.getByRole("button", { name: /^Retry$/ });
     retry.click();
     await waitForSolid(() => {
       expect(view.calls()).toHaveLength(2);

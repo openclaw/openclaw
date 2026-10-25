@@ -166,7 +166,9 @@ describe("MCP OAuth provider", () => {
       expect(authMock).toHaveBeenCalledOnce();
       await logout;
       expect(
-        await withMcpOAuthProviderForTest({ identity: IDENTITY }, (provider) => provider.tokens()),
+        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) =>
+          provider.tokens(),
+        ),
       ).toBeUndefined();
     }, "openclaw-mcp-oauth-refresh-logout-");
   });

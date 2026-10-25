@@ -78,11 +78,11 @@ it.each([target.sessionId, "replacement"])(
     const merge = job("autoMerge", { enabled: false });
     const ignored = [
       job("autoMerge", {
-        ...recipe("autoMerge", { number: 43 }),
+        ...jobSpec({ ...target, number: 43 }, "autoMerge"),
         id: "other-pr",
       }),
       job("autoArchive", {
-        ...recipe("autoArchive", { sessionId: "old-incarnation" }),
+        ...jobSpec({ ...target, sessionId: "old-incarnation" }, "autoArchive"),
       }),
       job("autoFix", { declarationKey: "daily-briefing" }),
     ];

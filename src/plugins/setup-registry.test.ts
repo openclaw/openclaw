@@ -187,11 +187,13 @@ describe("setup registry", () => {
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["anthropic"]);
     expect(registry.cliBackends.map((entry) => entry.backend.id)).toEqual(["claude-cli"]);
     expect(registry.diagnostics).toMatchObject(
-      [
-        ["provider-runtime-undeclared", "runtimeId", "anthropic"],
-        ["cli-backend-missing-runtime", "declaredId", "codex-cli"],
-        ["cli-backend-runtime-undeclared", "runtimeId", "claude-cli"],
-      ].map(([code, key, value]) =>
+      (
+        [
+          ["provider-runtime-undeclared", "runtimeId", "anthropic"],
+          ["cli-backend-missing-runtime", "declaredId", "codex-cli"],
+          ["cli-backend-runtime-undeclared", "runtimeId", "claude-cli"],
+        ] as const
+      ).map(([code, key, value]) =>
         diagnostic(`setup-descriptor-${code}`, "openai", { [key]: value }),
       ),
     );

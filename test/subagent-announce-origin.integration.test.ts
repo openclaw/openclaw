@@ -43,7 +43,7 @@ function makeBinding(
     parentConversationId,
   };
 }
-const destination = (channel: string, to: string, threadId?: string | number) => ({
+const destination = (channel: string, to: string, threadId?: string) => ({
   channel,
   to,
   ...(threadId === undefined ? {} : { threadId }),
