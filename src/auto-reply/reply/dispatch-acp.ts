@@ -224,6 +224,7 @@ export async function tryDispatchAcpReplyCore(
   try {
     if (
       pendingAnswerText &&
+      params.ctx.SenderIsBot !== true &&
       !params.images?.length &&
       !params.extractedFileImages?.length &&
       !hasInboundMediaForUnderstanding(params.ctx) &&
@@ -573,6 +574,7 @@ export async function tryDispatchAcpReplyCore(
       agentId: acpAgentId,
       runId: auditRunId,
       delivery,
+      senderIsBot: params.ctx.SenderIsBot === true,
       isActive: () =>
         params.abortSignal?.aborted !== true &&
         admittedRunContext === turnAdmission &&

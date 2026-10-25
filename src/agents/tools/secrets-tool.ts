@@ -167,9 +167,12 @@ export function createSecretsTool(params: {
   const storeProvider = resolveDefaultSecretProviderAlias(params.config ?? {}, "store");
   // Native credential cards arrive through question.requested, not a public link, so a
   // channel that cannot carry a Control UI link gets no chat prompt here either.
+  const questionPrompt = params.questionPrompt;
   const publishOwnPrompt =
-    params.questionPrompt && isDeliverableMessageChannel(params.questionPrompt.messageChannel ?? "")
-      ? params.questionPrompt.send
+    questionPrompt &&
+    (questionPrompt.audience === "owner" ||
+      isDeliverableMessageChannel(questionPrompt.messageChannel ?? ""))
+      ? questionPrompt
       : undefined;
   return {
     label: "Secrets",
@@ -229,7 +232,7 @@ export function createSecretsTool(params: {
                   questionId,
                   questions: request.questions,
                   config: params.config,
-                  send: publishOwnPrompt,
+                  delivery: publishOwnPrompt,
                   signal: prompt.signal,
                 }),
             }

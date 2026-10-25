@@ -633,6 +633,18 @@ describe("gateway harness questions", () => {
     expect(cancelAttempts).toBe(1);
   });
 
+  it("sends a bot sender's question to the owner, never its conversation", async () => {
+    const gatewayCall = answerGateway(() => ({ status: "cancelled" }));
+    const onBlockReply = vi.fn();
+
+    await expect(
+      startQuestion("agent:main:bot-sender", gatewayCall, onBlockReply, {
+        delivery: { senderIsBot: true },
+      }),
+    ).rejects.toThrow("harness question prompt delivery failed");
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("returns a gateway answer without waiting for stalled prompt delivery", async () => {
     const gatewayCall = answerGateway(() => ({ status: "cancelled" }));
     let deliverySignal: AbortSignal | undefined;

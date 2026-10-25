@@ -41,6 +41,8 @@ export type QueuedAgentRunParams = {
   channelContext?: PluginHookChannelContext;
   /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
+  /** The inbound sender is a bot, so questions this run asks go to the agent's owner. */
+  senderIsBot?: boolean;
   /** Verified current requester for Git credit only; grants no tool authority. */
   gitContributorProfileId?: string;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */

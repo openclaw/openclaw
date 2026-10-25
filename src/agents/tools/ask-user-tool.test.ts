@@ -14,10 +14,9 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./ask-user-tool.js";
+import type { QuestionPromptSend } from "./question-prompt-send.js";
 
-type SentPrompt = Parameters<
-  NonNullable<Parameters<typeof createAskUserTool>[0]["questionPrompt"]>["send"]
->[0];
+type SentPrompt = Parameters<QuestionPromptSend>[0];
 
 const replyDispatchOutcomeModuleUrl = new URL(
   "../../auto-reply/reply/reply-dispatch-outcome.ts",

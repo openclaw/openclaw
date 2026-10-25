@@ -20,6 +20,7 @@ import {
   readQuestionRejection,
   type GatewayQuestionCall,
 } from "../tools/gateway-question-lifecycle.js";
+import { publishOwnerQuestionPrompt } from "../tools/question-prompt-send.js";
 import {
   buildAgentQuestionAnswers,
   buildAgentQuestionRequestQuestions,
@@ -489,6 +490,11 @@ function runAgentHarnessSecretInput(
   if (pendingAgentQuestions.has(sessionKey)) {
     throw new Error(`session already has a pending agent input request: ${sessionKey}`);
   }
+  if (params.delivery.senderIsBot === true) {
+    // A secret is typed into the conversation that asked; nobody there can answer for a person.
+    log.info("Secret input was not requested because the turn's sender is a bot.");
+    return Promise.resolve(undefined);
+  }
   return new Promise((resolve) => {
     const finish = (text?: string): boolean => {
       if (pendingAgentQuestions.get(sessionKey) !== state) {
@@ -668,13 +674,21 @@ async function runScopedAgentHarnessQuestion(
         : terminal;
     };
     // A registration-time answer may briefly race the prompt; its terminal signal closes delivery.
-    const delivery = deliverAgentHarnessQuestionPrompt(
-      params.delivery,
-      questionId,
-      params.questions,
-      params.promptOptions,
-      prompt.signal,
-    );
+    const delivery =
+      params.delivery.senderIsBot === true
+        ? publishOwnerQuestionPrompt({
+            agentId: params.agentId,
+            questionId,
+            questions: params.questions,
+            signal: prompt.signal,
+          })
+        : deliverAgentHarnessQuestionPrompt(
+            params.delivery,
+            questionId,
+            params.questions,
+            params.promptOptions,
+            prompt.signal,
+          );
     const deliveryOutcome = delivery.then(
       () => ({ kind: "delivery" as const }),
       (error: unknown) => ({ kind: "delivery-error" as const, error }),

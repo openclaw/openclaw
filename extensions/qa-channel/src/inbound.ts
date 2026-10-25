@@ -370,7 +370,7 @@ export async function handleQaInbound(params: {
     messageIdFull: inbound.id,
     timestamp: inbound.timestamp,
     from: target,
-    sender: { id: inbound.senderId, name: inbound.senderName },
+    sender: { id: inbound.senderId, name: inbound.senderName, isBot: inbound.senderIsBot },
     conversation: {
       kind: inbound.conversation.kind === "direct" ? "direct" : "group",
       id: inbound.conversation.id,

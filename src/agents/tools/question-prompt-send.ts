@@ -5,14 +5,18 @@ import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
 } from "../../channels/message/runtime.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionLinkBase } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveProactiveDeliveryTarget } from "../../infra/outbound/targets.js";
 import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel-normalize.js";
+import { resolveConversationQuestionInputMode } from "../conversation-capability-profile.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../harness/user-input-bridge.js";
+import type { AgentHarnessUserInputQuestion } from "../harness/user-input-types.js";
 
 /** Tools whose call opens a question a person must answer before the turn continues. */
 export type QuestionPromptToolName = "ask_user" | "secrets";
@@ -23,14 +27,47 @@ export type QuestionPromptSend = (
   options?: { signal?: AbortSignal },
 ) => void | Promise<void>;
 
-/** A run's own way to show a question prompt, plus the channel it would appear in. */
-export type QuestionPromptDelivery = {
+/** A run's own way to show a question prompt. */
+export type QuestionPromptDelivery =
+  | ConversationQuestionPromptDelivery
+  | OwnerQuestionPromptDelivery;
+
+/** Publishes into the conversation the turn came from, shown in `messageChannel`. */
+export type ConversationQuestionPromptDelivery = {
+  audience?: "conversation";
   send: QuestionPromptSend;
   messageChannel?: string;
 };
 
 /** Host-generated capability guidance that is safe to return to the model. */
 export class QuestionPromptUnavailableError extends Error {}
+
+/**
+ * The turn's sender is a bot, so nobody in its conversation can answer: the
+ * prompt goes to the agent's owner on the route proactive delivery uses,
+ * `commands.ownerAllowFrom` and then a channel's own `allowFrom`, read from
+ * the live config when the prompt is sent.
+ */
+export type OwnerQuestionPromptDelivery = {
+  audience: "owner";
+  agentId?: string;
+};
+
+/**
+ * The prompt delivery for a turn: the owner route when its sender is a bot,
+ * otherwise the conversation's own delivery.
+ */
+export function resolveQuestionPromptDelivery<
+  T extends QuestionPromptDelivery | undefined,
+>(params: {
+  senderIsBot?: boolean;
+  agentId?: string;
+  conversation: () => T;
+}): T | OwnerQuestionPromptDelivery {
+  return params.senderIsBot === true
+    ? { audience: "owner", agentId: params.agentId }
+    : params.conversation();
+}
 
 /** Builds a portable prompt sender for Gateway-scoped / loopback tool construction. */
 export function createChannelQuestionPromptDelivery(params: {
@@ -39,7 +76,7 @@ export function createChannelQuestionPromptDelivery(params: {
   to?: string | number | null;
   accountId?: string;
   threadId?: string | number | null;
-}): QuestionPromptDelivery | undefined {
+}): ConversationQuestionPromptDelivery | undefined {
   const cfg = params.cfg;
   const channel = normalizeMessageChannel(params.channel);
   const to = params.to?.toString().trim();
@@ -48,34 +85,61 @@ export function createChannelQuestionPromptDelivery(params: {
   }
   return {
     messageChannel: channel,
-    send: async (payload, options) => {
-      const send = await sendDurableMessageBatchCore({
+    send: (payload, options) =>
+      sendQuestionPromptToRoute({
         cfg,
         channel,
         to,
         accountId: params.accountId,
         threadId: params.threadId ?? undefined,
-        payloads: [payload],
-        bestEffort: false,
-        durability: "required",
-        deliveryRetryOwner: "caller",
+        payload,
         signal: options?.signal,
-      });
-      // Fail closed when the durable batch did not reach the chat. ask_user then
-      // cancels instead of waiting on Control UI after a suppressed or failed send.
-      if (durableMessageBatchMayHaveReachedRecipient(send)) {
-        return;
-      }
-      if (send.status === "failed") {
-        throw send.error;
-      }
-      throw new Error(
-        send.status === "suppressed"
-          ? `question prompt delivery was suppressed: ${send.reason}`
-          : "question prompt delivery did not reach the conversation",
-      );
-    },
+      }),
   };
+}
+
+async function sendQuestionPromptToRoute(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+  payload: ReplyPayload;
+  signal?: AbortSignal;
+  /** Fences the final adapter call and the platform dispatch on the sender's authority. */
+  handoff?: { assertCurrent: () => void; confirmCurrent: () => Promise<void> };
+}): Promise<void> {
+  const send = await sendDurableMessageBatchCore({
+    cfg: params.cfg,
+    channel: params.channel,
+    to: params.to,
+    accountId: params.accountId,
+    threadId: params.threadId,
+    payloads: [params.payload],
+    bestEffort: false,
+    durability: "required",
+    deliveryRetryOwner: "caller",
+    signal: params.signal,
+    ...(params.handoff
+      ? {
+          assertDirectAdapterHandoff: params.handoff.assertCurrent,
+          onPlatformSendDispatch: params.handoff.confirmCurrent,
+        }
+      : {}),
+  });
+  // Fail closed when the durable batch did not reach the chat. ask_user then
+  // cancels instead of waiting on Control UI after a suppressed or failed send.
+  if (durableMessageBatchMayHaveReachedRecipient(send)) {
+    return;
+  }
+  if (send.status === "failed") {
+    throw send.error;
+  }
+  throw new Error(
+    send.status === "suppressed"
+      ? `question prompt delivery was suppressed: ${send.reason}`
+      : "question prompt delivery did not reach the conversation",
+  );
 }
 
 /**
@@ -89,14 +153,43 @@ export async function sendQuestionToolPrompt(params: {
   questionId: string;
   questions: readonly QuestionRequestQuestion[];
   config?: OpenClawConfig;
-  send: QuestionPromptSend;
+  delivery: QuestionPromptDelivery;
   signal?: AbortSignal;
+  /** Rechecked before an owner prompt is sent, so a question that ended is never published. */
+  isCurrent?: () => boolean | Promise<boolean>;
 }): Promise<void> {
-  const { questionId, questions } = params;
+  const { questionId, questions, delivery } = params;
+  const harnessQuestions = questions.map(({ questionId: id, ...question }) =>
+    Object.assign(question, { id }),
+  );
+  if (delivery.audience === "owner" && params.toolName === "ask_user") {
+    await publishOwnerQuestionPrompt({
+      agentId: delivery.agentId,
+      questionId,
+      questions: harnessQuestions,
+      signal: params.signal,
+      isCurrent: params.isCurrent,
+    });
+    return;
+  }
+  const publish: QuestionPromptSend =
+    delivery.audience === "owner"
+      ? async (payload) => {
+          const owner = await resolveCurrentOwnerRoute(delivery.agentId);
+          owner.assertCurrent();
+          await sendQuestionPromptToRoute({
+            ...owner.route,
+            payload,
+            signal: params.signal,
+            handoff: owner.handoff(params.isCurrent),
+          });
+        }
+      : (payload) =>
+          params.signal
+            ? delivery.send(payload, { signal: params.signal })
+            : delivery.send(payload);
   const send: QuestionPromptSend = (payload) =>
-    runWithQuestionChannelDeliveries([questionId], () =>
-      params.signal ? params.send(payload, { signal: params.signal }) : params.send(payload),
-    );
+    runWithQuestionChannelDeliveries([questionId], () => publish(payload));
   if (params.toolName === "secrets") {
     const binding = questions[0]?.secretStore;
     if (!binding) {
@@ -117,10 +210,115 @@ export async function sendQuestionToolPrompt(params: {
   await send(
     buildAgentHarnessQuestionPromptPayload({
       questionId,
-      questions: questions.map(({ questionId: id, ...question }) =>
-        Object.assign(question, { id }),
-      ),
+      questions: harnessQuestions,
       options: { intro: "Question for you:" },
     }),
   );
+}
+
+/**
+ * Publishes a question asked on a bot sender's turn to the agent's owner. The
+ * owner's typed reply cannot answer it, so the prompt links to the question's
+ * Control UI page, where every answer form works, and keeps the option
+ * buttons the owner's channel renders. Without a reachable Control UI page or
+ * an owner route it rejects, and the question is cancelled. Right before the
+ * send it confirms the question is still current and the owner route still
+ * comes from the live config, so a question that ended, or an owner who was
+ * removed, is never sent the prompt.
+ */
+export async function publishOwnerQuestionPrompt(params: {
+  agentId?: string;
+  questionId: string;
+  questions: readonly AgentHarnessUserInputQuestion[];
+  signal?: AbortSignal;
+  isCurrent?: () => boolean | Promise<boolean>;
+}): Promise<void> {
+  const owner = await resolveCurrentOwnerRoute(params.agentId);
+  const controlUiBase = resolveControlUiSessionLinkBase(owner.route.cfg);
+  if (!controlUiBase) {
+    throw new Error(
+      "a question for the owner needs its Control UI answer page: configure gateway.publicOrigin",
+    );
+  }
+  if (params.isCurrent && !(await params.isCurrent())) {
+    return;
+  }
+  params.signal?.throwIfAborted();
+  owner.assertCurrent();
+  const payload = buildAgentHarnessQuestionPromptPayload({
+    questionId: params.questionId,
+    questions: params.questions,
+    options: {
+      intro: "Question for you:",
+      ownerAnswer: {
+        buttons:
+          resolveConversationQuestionInputMode({ messageChannel: owner.route.channel }) ===
+          "buttons",
+        url: `${controlUiBase}/ask/${encodeURIComponent(params.questionId)}`,
+      },
+    },
+  });
+  await runWithQuestionChannelDeliveries([params.questionId], () =>
+    sendQuestionPromptToRoute({
+      ...owner.route,
+      payload,
+      signal: params.signal,
+      handoff: owner.handoff(params.isCurrent),
+    }),
+  );
+}
+
+/**
+ * The agent owner's direct route under the live config, with a check that the
+ * config is unchanged since: a change after the route resolved may have
+ * removed that owner, so the send is rejected and the question cancelled.
+ * The check runs before delivery and again at its final handoff, together
+ * with the question's own currency, so neither a replaced owner nor an ended
+ * question reaches the channel.
+ */
+async function resolveCurrentOwnerRoute(agentId: string | undefined) {
+  const cfg = getRuntimeConfig();
+  const route = await resolveOwnerQuestionRoute(cfg, agentId);
+  const assertCurrent = () => {
+    if (getRuntimeConfig() !== cfg) {
+      throw new Error("the owner configuration changed before the question was sent");
+    }
+  };
+  return {
+    route,
+    assertCurrent,
+    handoff: (isCurrent?: () => boolean | Promise<boolean>) => ({
+      assertCurrent,
+      confirmCurrent: async () => {
+        if (isCurrent && !(await isCurrent())) {
+          throw new Error("the question ended before its prompt was sent");
+        }
+        assertCurrent();
+      },
+    }),
+  };
+}
+
+/** The agent owner's direct route, or a rejection that cancels the question. */
+async function resolveOwnerQuestionRoute(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+): Promise<Omit<Parameters<typeof sendQuestionPromptToRoute>[0], "payload" | "signal">> {
+  const target = await resolveProactiveDeliveryTarget({
+    cfg,
+    agentId,
+    policy: { target: "owner" },
+  });
+  if (target.channel === "none" || !target.to) {
+    throw new Error(
+      "a question asked while answering a bot has no owner route: set commands.ownerAllowFrom",
+    );
+  }
+  return {
+    cfg,
+    channel: target.channel,
+    to: target.to,
+    accountId: target.accountId,
+    threadId: target.threadId,
+  };
 }

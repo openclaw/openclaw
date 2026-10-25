@@ -83,6 +83,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
     stableStringify(execution.conversationToolPolicy ?? null),
     execution.senderE164 ?? "",
     execution.senderIsOwner === true,
+    execution.senderIsBot === true,
     Boolean(run.createChannelCronAuthority),
     execution.execOverrides?.host ?? "",
     execution.execOverrides?.security ?? "",
