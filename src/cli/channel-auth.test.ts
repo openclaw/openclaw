@@ -81,10 +81,12 @@ vi.mock("../plugins/install-record-commit.js", () => ({
   commitConfigWithPendingPluginInstalls: mocks.commitConfigWithPendingPluginInstalls,
 }));
 
+// mock-isolation: Channel-auth fixtures must not open interactive terminal prompts.
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: vi.fn(),
 }));
 
+// mock-isolation: Fixture registries replace package installation and host plugin discovery.
 vi.mock("../commands/channel-setup/plugin-install.js", () => ({
   ensureChannelSetupPluginInstalled: vi.fn(),
   loadChannelSetupPluginRegistrySnapshotForChannel:

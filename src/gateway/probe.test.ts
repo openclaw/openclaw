@@ -138,6 +138,7 @@ vi.mock("../infra/device-auth-store.js", () => ({
   loadOriginDeviceTokenReadOnly: () => null,
 }));
 
+// mock-isolation: Probe readiness comes from the fixture, not host timer drift.
 vi.mock("../../packages/gateway-client/src/event-loop-ready.js", () => ({
   waitForEventLoopReady: async () => eventLoopReadyState,
 }));
