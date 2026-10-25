@@ -4,7 +4,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopComposition } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
@@ -89,7 +89,9 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   expect(outputs.querySelector("summary")?.getAttribute("aria-expanded")).toBe("false");
   outputs.querySelector("summary")!.click();
   await vi.advanceTimersByTimeAsync(0);
-  expect(view.group("outputs")?.textContent).toContain("Cannot load files");
+  await waitForSolid(() =>
+    expect(view.group("outputs")?.textContent).toContain("Cannot load files"),
+  );
   view.update({
     outputs: { ...view.initial.outputs!, dashboard: { title: "Build report", onOpen() {} } },
     progressCard: {
@@ -103,7 +105,7 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   expect(view.container.textContent).toContain("Review the layout");
 });
 
-it("keeps an empty Environment absent while its owner reads, and admits each real content source", () => {
+it("keeps an empty Environment absent while its owner reads, and admits each real content source", async () => {
   const view = mountDetails();
   expect(view.group("environment")).toBeNull();
   const release = vi.fn();
@@ -138,7 +140,7 @@ it("keeps an empty Environment absent while its owner reads, and admits each rea
   expect(release).toHaveBeenCalledTimes(1);
   environmentGroup.querySelector("summary")!.click();
   flush();
-  expect(view.group("environment")?.textContent).toContain("Changes");
+  await waitForSolid(() => expect(view.group("environment")?.textContent).toContain("Changes"));
 
   view.update({ environment });
   expect(view.group("environment")).toBeNull();

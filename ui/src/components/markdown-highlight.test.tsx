@@ -9,6 +9,7 @@ import { LinkReaderMarkdown } from "./link-reader-markdown.tsx";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { parseMarkdownJson } from "./markdown-json.ts";
+import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import corpus from "./markdown-transcript-corpus.json" with { type: "json" };
 import { toStreamingMarkdownParts } from "./markdown.test-support.ts";
@@ -56,6 +57,8 @@ it("preserves readable code and node state across lazy highlighting", async () =
         props.history ? "lazy-history" : "lazy-stream",
         { role: "assistant", isStreaming: props.streaming },
         { codeBlockInteraction: "interactive" },
+        undefined,
+        props.streaming ? toStreamingMarkdownDomParts : undefined,
       ),
     }));
     return <div class="retained-fixture" ref={ref} onClick={handleMarkdownCodeBlockClick} />;
