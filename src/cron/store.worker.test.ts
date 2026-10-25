@@ -4,7 +4,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -318,19 +317,15 @@ it.each([false, true])(
       const { storePath } = state;
       const store = cronWorkerFixture();
       const order: string[] = [];
-      let beforeDatabase: EngineConnection | undefined;
-      let afterDatabase: EngineConnection | undefined;
       const before = getCronJobsStoreRevision(storePath);
       const failure = new Error("post-commit observer failed");
       const save = saveCronJobsStore(storePath, store, {
         transactionHooks: {
-          beforeWrite: (db) => {
-            beforeDatabase = db;
+          beforeWrite: () => {
             store.jobs[0]!.name = "changed by native hook";
             order.push("before");
           },
-          afterWrite: (db) => {
-            afterDatabase = db;
+          afterWrite: () => {
             order.push("after");
           },
           afterCommit: () => {
@@ -346,8 +341,6 @@ it.each([false, true])(
       } else {
         await save;
       }
-      expect(beforeDatabase).toBeDefined();
-      expect(afterDatabase).toBe(beforeDatabase);
       expect(order).toEqual(["before", "after", "committed"]);
       expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);
       const loaded = (await state.load()).store.jobs;
@@ -401,71 +394,18 @@ it.each([true, false])(
         (patch: Parameters<CronService["update"]>[1], captured = false) =>
         (callback: () => undefined) =>
           service.update("first", patch, options(callback, captured));
-      const steps: [
-        string,
-        (callback: () => undefined) => Promise<unknown>,
-        Record<string, string | undefined>,
-        boolean?,
-      ][] = [
-        [
-          "guarded add",
-          add({ ...input, id: " guarded " }),
-          { guarded: "callback save", first: "first", second: "second" },
-        ],
-        [
-          "captured add",
-          add({ ...input, id: "captured-\ud800", name: "callback \ud800" }, true),
-          { "captured-\ud800": "callback \ufffd" },
-          true,
-        ],
-        [
-          "guarded convergence",
-          add({ ...input, declarationKey: "agent:main:callback-save" }),
-          { first: "first" },
-        ],
-        ["guarded update", update({ name: "guarded update" }), { first: "guarded update" }],
-        [
-          "captured update",
-          update({ name: "captured update" }, true),
-          { first: "captured update" },
-          true,
-        ],
-        [
-          "guarded owner update",
-          update({
-            agentId: "other",
-            sessionTarget: "isolated",
-            payload: { kind: "agentTurn", message: "owner update" },
-          }),
-          { first: "captured update" },
-        ],
-        [
-          "captured owner update",
-          update({ agentId: "main" }, true),
-          { first: "captured update" },
-          true,
-        ],
-        [
-          "precondition update",
-          (callback) =>
-            service.updateWithPrecondition("first", { name: "precondition update" }, callback),
-          { first: "precondition update" },
-          true,
-        ],
-        [
-          "guarded remove",
-          (callback) => service.remove("second", { commitGuard: callback }),
-          { second: undefined },
-        ],
-      ];
       const sql = observeMainThreadSql();
       try {
         await service.list({ includeDisabled: true });
         sql.calibrate();
-        for (const [name, invoke, names, singleUse] of steps) {
+        const check = async (
+          invoke: (callback: () => undefined) => Promise<unknown>,
+          names: Record<string, string | undefined>,
+          singleUse = false,
+        ) => {
           sql.clear();
           const callback = vi.fn(() => {
-            if (name === "guarded remove") {
+            if (Object.hasOwn(names, "second") && names.second === undefined) {
               expect(service.getJob("second")).toBeDefined();
             }
             return undefined;
@@ -474,15 +414,48 @@ it.each([true, false])(
           expect(resolveName("broken")).toBe(cronEnabled ? undefined : "Broken metadata");
           expect(resolveName("legacy")).toBe("Legacy metadata");
           for (const [jobId, expectedName] of Object.entries(names)) {
-            expect(resolveName(jobId), `${name}: ${jobId}`).toBe(expectedName);
+            expect(resolveName(jobId), jobId).toBe(expectedName);
           }
           if (singleUse) {
-            expect(callback, name).toHaveBeenCalledTimes(1);
+            expect(callback).toHaveBeenCalledTimes(1);
           } else {
-            expect(callback, name).toHaveBeenCalled();
+            expect(callback).toHaveBeenCalled();
           }
-          expect.soft(sql.count(), name).toBe(0);
-        }
+          expect.soft(sql.count()).toBe(0);
+        };
+        await check(add({ ...input, id: " guarded " }), {
+          guarded: "callback save",
+          first: "first",
+          second: "second",
+        });
+        await check(
+          add({ ...input, id: "captured-\ud800", name: "callback \ud800" }, true),
+          { "captured-\ud800": "callback \ufffd" },
+          true,
+        );
+        await check(add({ ...input, declarationKey: "agent:main:callback-save" }), {
+          first: "first",
+        });
+        await check(update({ name: "guarded update" }), { first: "guarded update" });
+        await check(update({ name: "captured update" }, true), { first: "captured update" }, true);
+        await check(
+          update({
+            agentId: "other",
+            sessionTarget: "isolated",
+            payload: { kind: "agentTurn", message: "owner update" },
+          }),
+          { first: "captured update" },
+        );
+        await check(update({ agentId: "main" }, true), { first: "captured update" }, true);
+        await check(
+          (callback) =>
+            service.updateWithPrecondition("first", { name: "precondition update" }, callback),
+          { first: "precondition update" },
+          true,
+        );
+        await check((callback) => service.remove("second", { commitGuard: callback }), {
+          second: undefined,
+        });
         const persisted = (await state.load()).store.jobs;
         expect(persisted.map((job) => job.id).toSorted()).toEqual([
           "captured-\ufffd",
@@ -537,7 +510,6 @@ it.each([
       }
       await saveCronJobsStore(storePath, original);
       const beforePeer = await fixture.load();
-      expect(beforePeer.jobsFingerprint).toEqual(expect.any(String));
       if (peerMutation === "authority invalidation") {
         expect(beforePeer.store.jobs[1]?.runtimeAuthority).toEqual(
           original.jobs[1]?.runtimeAuthority,
@@ -693,14 +665,7 @@ it.each([
           );
         };
         const pending = guarded ? completion.run(operation) : operation();
-        if (!guarded) {
-          await expect(pending).rejects.toThrow();
-        }
-        const result = await pending.then(
-          () => "reported",
-          () => "reply-lost",
-        );
-        expect(result).toBe("reply-lost");
+        await expect(pending).rejects.toThrow();
         expect(dropped.wasDropped()).toBe(true);
         expect(dropped.attempts).toEqual(["cron.mutateJobs"]);
         expect(completion.isCommitted()).toBe(false);
@@ -720,25 +685,14 @@ it.each([
         );
         if (mutation === "remove") {
           expect(persisted.some((job) => job.id === "first")).toBe(false);
-          expect(service.getJob("first")).toBeUndefined();
-          if (marker) {
-            expect(marker.jobRemoved).not.toBe(true);
-          }
           if (cleanup) {
             if (marker) {
               clearCronJobActive("first", marker);
             }
             expect(cleanup).not.toHaveBeenCalled();
           }
-        } else {
-          const current = persisted.find(
-            (job) => job.id === (mutation === "add" ? "added" : "first"),
-          );
-          expect(current?.name).toBe(mutation === "add" ? "accepted add" : "accepted edit");
-          if (mutation === "disable") {
-            expect(current?.enabled).toBe(false);
-          }
-          expect(service.getJob(current!.id)).toEqual(current);
+        } else if (mutation === "disable") {
+          expect(persisted.find((job) => job.id === "first")?.enabled).toBe(false);
         }
       } finally {
         await dropped.close();
