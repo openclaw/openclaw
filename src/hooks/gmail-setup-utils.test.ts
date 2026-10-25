@@ -48,13 +48,6 @@ const pythonProbe = (executable: string, version = "3.12") => ({
   stdout: `${executable}\n${version}\n`,
 });
 
-function expectGcloudPython(python?: string) {
-  expect(runCommand).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
-    timeoutMs: 120_000,
-    env: { CLOUDSDK_PYTHON: python, CLOUDSDK_PYTHON_ARGS: undefined },
-  });
-}
-
 it.each([true, false])("checks the installed binary (created=%s)", async (createsBinary) => {
   await withTestDir({ prefix: "openclaw-dependency-probe-" }, async (root) => {
     const binDir = path.join(root, "bin");
@@ -128,7 +121,13 @@ async function checkPython(versions: readonly string[]) {
       },
       async () => {
         await utils.runGcloud(["config", "list"]);
-        expectGcloudPython(versions.length ? python : undefined);
+        expect(runCommand).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
+          timeoutMs: 120_000,
+          env: {
+            CLOUDSDK_PYTHON: versions.length ? python : undefined,
+            CLOUDSDK_PYTHON_ARGS: undefined,
+          },
+        });
         if (!versions.length) {
           expect(runCommand).toHaveBeenCalledTimes(1);
         }
@@ -139,9 +138,7 @@ async function checkPython(versions: readonly string[]) {
 
 itUnix(
   "skips unsupported Python versions and overrides inherited controls",
-  async () => {
-    await checkPython(["3.9", "3.15", "3.12"]);
-  },
+  async () => checkPython(["3.9", "3.15", "3.12"]),
   60_000,
 );
 itUnix("unsets inherited controls without an interpreter", async () => checkPython([]));
@@ -167,12 +164,12 @@ describe("Gmail setup diagnostics and decisions", () => {
     vi.spyOn(configEval, "hasBinary").mockImplementation(hasBinaryMock);
   });
 
-  it.each(["gcloud", "brew", "tailscale serve"])(
+  it.each(["gcloud command", "brew install for gog", "tailscale serve"])(
     "%s reports its operation and stream tails without exposing arguments",
     async (boundary) => {
       runCommand.mockResolvedValue(noisy);
       const run = async () => {
-        if (boundary === "brew") {
+        if (boundary === "brew install for gog") {
           hasBinaryMock.mockImplementation((bin: string) => bin === "brew");
           return withMockedPlatform("darwin", () => utils.ensureDependency("gog", ["gogcli"]));
         }
@@ -183,13 +180,7 @@ describe("Gmail setup diagnostics and decisions", () => {
         return utils.runGcloud(["--push-endpoint", "https://example.com/?token=do-not-echo-argv"]);
       };
       const { message } = await rejection(run);
-      expect(message).toContain(
-        boundary === "brew"
-          ? "brew install for gog"
-          : boundary === "gcloud"
-            ? "gcloud command"
-            : boundary,
-      );
+      expect(message).toContain(boundary);
       expect(message).toContain("stdout final detail 🦞");
       expect(message).toContain("stderr final detail");
       expect(message).not.toContain("do-not-echo-argv");

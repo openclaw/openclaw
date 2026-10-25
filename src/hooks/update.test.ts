@@ -147,91 +147,77 @@ describe("updateNpmInstalledHookPacks", () => {
     ]);
   });
 
-  it("preserves hook pack update selector and records npm resolution metadata after update", async () => {
-    installNpm.mockResolvedValue({
-      ...installedPack("1.2.3"),
-      npmResolution: {
-        name: "@openclaw/demo-hooks",
-        version: "1.2.3",
-        resolvedSpec: "@openclaw/demo-hooks@1.2.3",
-        integrity: "sha512-new",
-        shasum: "abc123",
-        resolvedAt: "2026-05-11T20:00:00.000Z",
-      },
-    });
-
-    const config = configFor();
-    const result = await update({ config, hookIds: ["demo-hooks"] });
-
-    expect(installNpm).toHaveBeenCalledWith(
-      expect.objectContaining({ config, expectedHookPackId: "demo-hooks", mode: "update" }),
-    );
-    expect(result.changed).toBe(true);
-    expect(readHookInstalls()["demo-hooks"]).toEqual({
-      source: "npm",
-      spec: "@openclaw/demo-hooks",
-      installPath: "/tmp/hooks/demo-hooks",
-      version: "1.2.3",
-      resolvedName: "@openclaw/demo-hooks",
-      resolvedVersion: "1.2.3",
-      resolvedSpec: "@openclaw/demo-hooks@1.2.3",
+  it.each([
+    ["1.0.0", "1.2.3", false, "commit", "Updated"],
+    ["1.2.3", "1.2.2", false, "commit", "Downgraded"],
+    ["1.2.3", "1.2.2", true, "commit", "Would downgrade"],
+    ["1.0.0", "2.0.0", false, "rollback", "Updated"],
+  ] as const)("updates %s to %s (dry=%s, %s)", async (current, next, dryRun, action, verb) => {
+    const installPath = await packDir(current);
+    const sourceDir = await packDir(next);
+    const config = configFor({ installPath });
+    const previous = readHookInstalls();
+    const resolution = {
+      name: "@openclaw/demo-hooks",
+      version: next,
+      resolvedSpec: `@openclaw/demo-hooks@${next}`,
       integrity: "sha512-new",
       shasum: "abc123",
       resolvedAt: "2026-05-11T20:00:00.000Z",
-      hooks: ["demo"],
-      installedAt: expect.any(String),
-    });
-  });
-
-  it.each([
-    { dryRun: false, message: 'Downgraded hook pack "demo-hooks": 1.2.3 -> 1.2.2.' },
-    { dryRun: true, message: 'Would downgrade hook pack "demo-hooks": 1.2.3 -> 1.2.2.' },
-  ])(
-    "reports hook pack installs that move backwards as downgrades (dryRun: $dryRun)",
-    async ({ dryRun, message }) => {
-      const installPath = await packDir("1.2.3");
-      installNpm.mockResolvedValue(installedPack("1.2.2", installPath));
-      const config = configFor({ installPath });
-      const result = await update({ config, hookIds: ["demo-hooks"], dryRun });
-
-      expect(result.outcomes).toEqual([
-        {
-          hookId: "demo-hooks",
-          status: "updated",
-          currentVersion: "1.2.3",
-          nextVersion: "1.2.2",
-          message,
-        },
-      ]);
-    },
-  );
-
-  it("restores the payload and record when the caller rolls back its config update", async () => {
-    const installPath = await packDir("1.0.0");
-    const sourceDir = await packDir("2.0.0");
-    const config = configFor({ installPath });
-    const previousInstalls = readHookInstalls();
+    };
     installNpm.mockImplementation(async (params: Parameters<typeof installHooksFromNpmSpec>[0]) => {
-      const result = await installPackageDir(
-        copyPackageDirInstallTransactionRequest(params, {
-          sourceDir,
-          targetDir: installPath,
-          mode: "update",
-          timeoutMs: 30_000,
-          copyErrorPrefix: "hook fixture install failed",
-          hasDeps: false,
-          depsLogMessage: "",
-          beforePersistentApply: params.beforePersistentApply,
-        }),
-      );
-      return result.ok ? { ...result, ...installedPack("2.0.0", installPath) } : result;
+      const result = params.dryRun
+        ? { ok: true as const }
+        : await installPackageDir(
+            copyPackageDirInstallTransactionRequest(params, {
+              sourceDir,
+              targetDir: installPath,
+              mode: "update",
+              timeoutMs: 30_000,
+              copyErrorPrefix: "hook fixture install failed",
+              hasDeps: false,
+              depsLogMessage: "",
+              beforePersistentApply: params.beforePersistentApply,
+            }),
+          );
+      return result.ok
+        ? { ...result, ...installedPack(next, installPath), npmResolution: resolution }
+        : result;
     });
-
-    await update({ config, hookIds: ["demo-hooks"] }, "rollback");
-
+    const result = await update({ config, hookIds: ["demo-hooks"], dryRun }, action);
+    expect(installNpm).toHaveBeenCalledWith(
+      expect.objectContaining({ config, expectedHookPackId: "demo-hooks", mode: "update" }),
+    );
+    expect(result.changed).toBe(!dryRun);
+    expect(result.outcomes).toEqual([
+      {
+        hookId: "demo-hooks",
+        status: "updated",
+        currentVersion: current,
+        nextVersion: next,
+        message: `${verb} hook pack "demo-hooks": ${current} -> ${next}.`,
+      },
+    ]);
+    if (dryRun || action === "rollback") {
+      expect(readHookInstalls()).toEqual(previous);
+    } else {
+      expect(readHookInstalls()["demo-hooks"]).toEqual({
+        source: "npm",
+        spec: "@openclaw/demo-hooks",
+        installPath,
+        version: next,
+        resolvedName: resolution.name,
+        resolvedVersion: next,
+        resolvedSpec: resolution.resolvedSpec,
+        integrity: "sha512-new",
+        shasum: "abc123",
+        resolvedAt: resolution.resolvedAt,
+        hooks: ["demo"],
+        installedAt: expect.any(String),
+      });
+    }
     expect(
       JSON.parse(await fs.readFile(path.join(installPath, "package.json"), "utf8")),
-    ).toMatchObject({ version: "1.0.0" });
-    expect(readHookInstalls()).toEqual(previousInstalls);
+    ).toMatchObject({ version: dryRun || action === "rollback" ? current : next });
   });
 });

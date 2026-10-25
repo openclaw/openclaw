@@ -60,29 +60,24 @@ describe("loader", () => {
   });
 
   function writeHook(
-    hookName: string,
-    params: {
+    name: string,
+    {
+      sourceDir = managedHooksDir,
+      handlerCode,
+      message = name,
+      ...metadata
+    }: Partial<OpenClawHookMetadata> & {
       sourceDir?: string;
       handlerCode?: string;
       message?: string;
-      events?: string[];
-      exportName?: string;
-      hookKey?: string;
-      requires?: OpenClawHookMetadata["requires"];
     } = {},
-  ): string {
-    const hookDir = path.join(params.sourceDir ?? managedHooksDir, hookName);
-    const metadata = {
-      events: params.events ?? ["command:new"],
-      ...(params.exportName ? { export: params.exportName } : {}),
-      ...(params.hookKey ? { hookKey: params.hookKey } : {}),
-      ...(params.requires ? { requires: params.requires } : {}),
-    };
+  ) {
+    const hookDir = path.join(sourceDir, name);
     writeHookFixture(
       hookDir,
-      `---\nname: ${hookName}\ndescription: ${hookName} test hook\nmetadata: ${JSON.stringify({ openclaw: metadata })}\n---\n\n# ${hookName}`,
-      params.handlerCode ??
-        `export default async function(event) { event.messages.push(${JSON.stringify(params.message ?? hookName)}); }\n`,
+      `---\nname: ${name}\nmetadata: ${JSON.stringify({ openclaw: { events: ["command:new"], ...metadata } })}\n---\n`,
+      handlerCode ??
+        `export default async function(event) { event.messages.push(${JSON.stringify(message)}); }\n`,
       "handler.js",
     );
     return hookDir;
@@ -219,56 +214,20 @@ describe("loader", () => {
     await expectMessages(["valid"]);
   });
 
-  it("does not activate a shadowed hook when its ineligible override loses its handler", async () => {
-    const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
-    vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", bundledHooksDir);
-    writeHook("overridden", {
-      sourceDir: bundledHooksDir,
-      hookKey: "bundled-selection",
-      message: "bundled",
-    });
-    const overriding = writeHook("overridden", {
-      hookKey: "managed-selection",
-      requires: { config: ["browser.enabled"] },
-    });
-    const entries = {
-      "bundled-selection": { enabled: true },
-      "managed-selection": { enabled: true },
-    };
-    const config: OpenClawConfig = {
-      browser: { enabled: false },
-      hooks: { internal: { entries } },
-    };
-    await expect(load(config)).resolves.toBe(0);
-    await expectMessages([]);
-
-    await fs.unlink(path.join(overriding, "handler.js"));
-    writeHook("sibling");
-    await load({
-      ...config,
-      hooks: { internal: { entries: { ...entries, sibling: { enabled: true } } } },
-    });
-    await expectMessages(["sibling"]);
-  });
-
-  it.each(["disable", "install removal"])(
-    "accepts intentional %s after a winning source disappears",
+  it.each(["ineligible", "disable", "install removal"])(
+    "preserves source precedence through %s of a missing winning hook",
     async (removal) => {
-      const bundledHooksDir = path.join(tmpDir, "bundled-hooks");
-      const extraDir = path.join(tmpDir, "extra-hooks");
-      vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", bundledHooksDir);
-      writeHook("original", {
-        sourceDir: bundledHooksDir,
-        hookKey: "lower-name",
-        message: "lower",
-      });
+      const bundled = path.join(tmpDir, "bundled");
+      const extraDir = path.join(tmpDir, "extra");
+      vi.stubEnv("OPENCLAW_BUNDLED_HOOKS_DIR", bundled);
+      writeHook("original", { sourceDir: bundled, hookKey: "lower-name", message: "lower" });
       const original = writeHook("original", {
         sourceDir: extraDir,
         hookKey: "selected-name",
         requires: { config: ["browser.enabled"] },
       });
       const config: OpenClawConfig = {
-        browser: { enabled: true },
+        browser: { enabled: removal !== "ineligible" },
         ...hookConfig(
           removal === "install removal" ? ["lower-name"] : ["lower-name", "selected-name"],
           undefined,
@@ -276,52 +235,42 @@ describe("loader", () => {
         ),
       };
       const state = await import("./installs.js");
-      const installed = vi.spyOn(state, "readHookInstallsAsync");
-      installed.mockResolvedValue(
-        removal === "install removal" ? { pack: { source: "path", hooks: ["selected-name"] } } : {},
-      );
-      try {
-        await load(config);
+      const installed =
+        removal === "install removal"
+          ? vi.spyOn(state, "readHookInstallsAsync").mockResolvedValue({
+              pack: { source: "path", hooks: ["selected-name"] },
+            })
+          : undefined;
+      await expect(load(config)).resolves.toBe(removal === "ineligible" ? 0 : 1);
+      await expectMessages(removal === "ineligible" ? [] : ["original"]);
+      if (removal === "ineligible") {
+        await fs.unlink(path.join(original, "handler.js"));
+      } else {
         await fs.rm(original, { recursive: true });
-        writeHook("sibling");
-        const entries: Record<string, { enabled?: boolean }> = {
-          ...config.hooks?.internal?.entries,
-          sibling: { enabled: true },
-        };
-        if (removal === "disable") {
-          entries["selected-name"] = { enabled: false };
-        }
-        if (removal === "install removal") {
-          installed.mockResolvedValue({});
-        }
-        const next: OpenClawConfig = {
-          ...config,
-          hooks: { internal: { ...config.hooks?.internal, entries } },
-        };
-        await load(next);
-        await expectMessages(removal === "disable" ? ["sibling"] : ["lower", "sibling"]);
-      } finally {
-        installed.mockRestore();
       }
+      writeHook("sibling");
+      installed?.mockResolvedValue({});
+      const entries = {
+        ...config.hooks?.internal?.entries,
+        ...(removal === "disable" ? { "selected-name": { enabled: false } } : {}),
+        sibling: { enabled: true },
+      };
+      await load({ ...config, hooks: { internal: { ...config.hooks?.internal, entries } } });
+      await expectMessages(removal === "install removal" ? ["lower", "sibling"] : ["sibling"]);
     },
   );
 
   it("commits disable and re-enable for registered internal hook listeners", async () => {
     const handler = vi.fn();
     registerInternalHook("command:new", handler);
-    const disabled = await prepare(hookConfig([], false));
-    await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-    expect(handler).toHaveBeenCalledTimes(1);
-    disabled.commit();
-    await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-    expect(handler).toHaveBeenCalledTimes(1);
-
-    const enabled = await prepare(hookConfig([], true));
-    await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-    expect(handler).toHaveBeenCalledTimes(1);
-    enabled.commit();
-    await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
-    expect(handler).toHaveBeenCalledTimes(2);
+    for (const enabled of [false, true]) {
+      const prepared = await prepare(hookConfig([], enabled));
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
+      expect(handler).toHaveBeenCalledTimes(1);
+      prepared.commit();
+      await triggerInternalHook(createInternalHookEvent("command", "new", "test-session"));
+      expect(handler).toHaveBeenCalledTimes(enabled ? 2 : 1);
+    }
   });
 
   it.each(["before preparation", "after preparation", "after shutdown"])(
@@ -395,7 +344,7 @@ describe("loader", () => {
     });
 
     writeHook("valid", {
-      exportName: "myHandler",
+      export: "myHandler",
       handlerCode: 'export const myHandler = async (event) => { event.messages.push("valid"); };\n',
     });
     const count = await load(hookConfig(["bad-export", "valid"], true), {
