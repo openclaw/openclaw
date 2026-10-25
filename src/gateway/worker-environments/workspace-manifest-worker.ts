@@ -15,6 +15,7 @@ import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { joinStagedWorkspaceManifestRead } from "./workspace-result-git.js";
 import {
   resolveStagedWorkspaceReadEntry,
   stagedWorkspaceEntryBytes,
@@ -279,10 +280,12 @@ export async function loadStagedWorkspaceManifest(
   signal?: AbortSignal,
   buildCacheInputs?: string[],
 ) {
-  return await computeWorkspaceManifest(
-    { type: "workspace.manifest.staged", input: { root, ref, buildCacheInputs } },
-    signal,
-  );
+  const input = { root, ref, buildCacheInputs };
+  const read = () => computeWorkspaceManifest({ type: "workspace.manifest.staged", input }, signal);
+  // A worker's host exchange context owns its policy and authority independently.
+  return hasGitWorkerContext()
+    ? await read()
+    : await joinStagedWorkspaceManifestRead(input, signal, read);
 }
 
 export async function* readStagedWorkspaceManifestEntries(input: {
