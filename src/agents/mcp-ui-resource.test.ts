@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import {
   getMcpAppModelContext as getContext,
@@ -19,22 +20,18 @@ const APP_MIME = "text/html;profile=mcp-app";
 const MAX_BYTES = 2 * 1024 * 1024;
 
 function runtime(overrides: Partial<SessionMcpRuntime> = {}): SessionMcpRuntime {
-  return {
+  return staticRuntime({
     sessionId: "session-1",
     sessionKey: "agent:main:main",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
-    createdAt: 0,
-    lastUsedAt: 0,
     acquireLease: vi.fn(() => vi.fn()),
-    markUsed: () => {},
     getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
     peekCatalog: () => null,
     callTool: vi.fn(),
     readResource: async () => html(),
-    dispose: async () => {},
     ...overrides,
-  };
+  });
 }
 
 type ViewParams = Parameters<typeof fetchMcpAppView>[0];
