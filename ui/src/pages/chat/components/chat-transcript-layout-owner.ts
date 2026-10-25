@@ -1,4 +1,6 @@
+import { CONTROL_UI_BUILD_INFO } from "../../../build-info.ts";
 import { i18n } from "../../../i18n/index.ts";
+import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { getExpandedToolCards, getExpandedUserMessages } from "../chat-thread.ts";
 import type { ChatWidgetLayout } from "../session-message-cache.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -39,21 +41,25 @@ export class TranscriptLayoutOwner {
   private rowPresentation = "";
   rowWidth = 0;
 
-  configureRows(props: ChatThreadProps, avatarPlacement: string): void {
+  configureRows(props: ChatThreadProps, avatarPlacement: string, recoveryRevision: number): void {
     this.ready = !props.loading;
     this.rowLayout = props.widgetLayout;
-    const font = props.applicationContext?.theme.settings;
-    this.rowPresentation = JSON.stringify([
+    const theme = props.applicationContext?.theme;
+    const font = theme?.settings;
+    const presentation = JSON.stringify([
+      CONTROL_UI_BUILD_INFO.buildId,
+      recoveryRevision,
       avatarPlacement,
       props.chatBubbleMode,
       i18n.getLocale(),
       font?.fontChat,
       font?.fontUi,
+      font?.terminalFontFamily,
+      font?.textScale,
+      font?.chatMessageMaxWidth,
+      theme?.resolvedMode,
       font?.theme,
-      font?.customTheme?.light["font-body"],
-      font?.customTheme?.dark["font-body"],
-      font?.customTheme?.light.mono,
-      font?.customTheme?.dark.mono,
+      font?.customTheme,
       props.showThinking,
       props.showToolCalls,
       props.persistCommentary,
@@ -61,6 +67,7 @@ export class TranscriptLayoutOwner {
       ...getExpandedToolCards(props.sessionKey),
       ...getExpandedUserMessages(props.sessionKey),
     ]);
+    this.rowPresentation = `${presentation.length}:${fnv1aUtf16(presentation)}`;
   }
 
   private rowLayoutKey(index: number, width = this.rowWidth): string | undefined {

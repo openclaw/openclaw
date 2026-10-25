@@ -133,7 +133,7 @@ export function projectChatTranscript(
       searchFiltering && props.loadFullAssistantMessage
         ? {
             messages: expandedAssistantMessages,
-            revision: getExpansionStateVersion(expandedAssistantMessages),
+            revision: recovery.revision,
             agentId: props.fullMessageAgentId,
           }
         : undefined,
@@ -212,7 +212,7 @@ export function projectChatTranscript(
     !hasLiveContent &&
     (!props.historyPagination?.hasMore || search.open);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
-  transcript.layout.configureRows(props, avatarPlacement);
+  transcript.layout.configureRows(props, avatarPlacement, recovery.revision);
   const showLoadingSkeleton = props.loading && transcriptItems.length === 0 && !hasTypingActors;
   const presented =
     typeof props.presented === "object" ? props.presented.isPresented() : (props.presented ?? true);
@@ -452,7 +452,7 @@ export function projectChatTranscript(
     expandedUserMessages,
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
-    getExpansionStateVersion(expandedAssistantMessages),
+    recovery.revision,
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
     props.latestBrowserTabs,
