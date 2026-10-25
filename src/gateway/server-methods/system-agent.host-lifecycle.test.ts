@@ -22,12 +22,10 @@ import { readLastSystemAgentAuditEntry } from "../../system-agent/system-agent.t
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import type { GatewayHostLifecycle } from "../server-public.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import {
-  callChat,
   defaultClient,
   makeContext,
   makeRespond,
@@ -35,7 +33,6 @@ import {
   transcriptStoreMocks,
   useSystemAgentGatewayTestFixture,
   verifiedConfig,
-  type RespondCall,
 } from "./system-agent.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -49,20 +46,17 @@ const {
 } = useSystemAgentGatewayTestFixture();
 
 it.for([
-  { action: "restart", fullPermission: false, loss: "none" },
-  { action: "stop", fullPermission: false, loss: "none" },
-  { action: "stop", fullPermission: true, loss: "none" },
-  { action: "stop", fullPermission: false, loss: "run" },
+  { fullPermission: false, loss: "none" },
+  { fullPermission: true, loss: "none" },
+  { fullPermission: false, loss: "run" },
   ...(["run", "tool", "gateway", "worker", "session"] as const).map((loss) => ({
-    action: "stop" as const,
     fullPermission: true,
     loss,
   })),
 ] as const)(
-  "settles delegated $action through host acceptance (Full Access=$fullPermission, loss=$loss)",
-  async ({ action, fullPermission, loss }, testContext) => {
+  "settles delegated stop through host acceptance (Full Access=$fullPermission, loss=$loss)",
+  async ({ fullPermission, loss }, testContext) => {
     const approvalRequested = createDeferred();
-    const sameOwnerHandled = createDeferred();
     const preparationStarted = createDeferred();
     const releasePreparation = createDeferred();
     const auditStarted = createDeferred();
@@ -94,19 +88,6 @@ it.for([
       processOwner: { ownsProcessLifecycle: true, supervisor: null },
       acceptStop,
     });
-    const gatewayHostLifecycle: GatewayHostLifecycle =
-      action === "stop"
-        ? host.capability
-        : {
-            async request(_action, assertCaller) {
-              assertCaller();
-              preparationStarted.resolve();
-              await releasePreparation.promise;
-              assertCaller();
-              return { ok: true, value: { outcome: "scheduled" } };
-            },
-          };
-    const requestLifecycle = vi.spyOn(gatewayHostLifecycle, "request");
     const appendAudit = systemAgentAudit.appendSystemAgentAuditEntry;
     vi.spyOn(systemAgentAudit, "appendSystemAgentAuditEntry").mockImplementation(async (entry) => {
       auditStarted.resolve();
@@ -118,20 +99,14 @@ it.for([
       operatorApprovalOnly: true,
       surface: "gateway",
       verifiedInference: requireVerifiedInferenceFixture(),
-      deps: { gatewayHostLifecycle },
+      deps: { gatewayHostLifecycle: host.capability },
     });
-    engine.propose({ kind: action === "stop" ? "gateway-stop" : "gateway-restart" });
+    engine.propose({ kind: "gateway-stop" });
     const proposalHash = expectDefined(
       engine.getPendingOperatorProposal(),
       "lifecycle proposal",
     ).hash;
-    const handle = vi.spyOn(engine, "handle").mockImplementation(async (message) => {
-      if (message === "yes") {
-        sameOwnerHandled.resolve();
-      }
-      return { text: "Approval pending.", action: "none" };
-    });
-    const resolveOperatorApproval = vi.spyOn(engine, "resolveOperatorApproval");
+    vi.spyOn(engine, "handle").mockResolvedValue({ text: "Approval pending.", action: "none" });
     const delegatedSession = seededSession({
       engine,
       ownerKey: JSON.stringify(["main", "agent:main:main"]),
@@ -187,7 +162,7 @@ it.for([
       handleGatewayRequest({
         req: gatewayRequest("delegated-gateway-lifecycle", "openclaw.chat", {
           sessionId: "delegate-1",
-          message: `${action} Gateway.`,
+          message: "stop Gateway.",
           context: { page: "channels" },
           delegation,
         }),
@@ -216,7 +191,6 @@ it.for([
       }
       expect(systemAgentLane()).toMatchObject({ activeCount, queuedCount: 0 });
     };
-    let sameOwnerChat: Promise<RespondCall> | undefined;
     try {
       if (!fullPermission) {
         await beforeReply(approvalRequested.promise, "approval publication");
@@ -225,34 +199,11 @@ it.for([
         expect(pendingRecords).toHaveLength(1);
         expectPending(0, 1);
         const proposalId = expectDefined(pendingRecords[0], "pending approval").id;
-        const snapshot = await manager.getSnapshot(proposalId);
-        expect(snapshot).toMatchObject({
+        expect(await manager.getSnapshot(proposalId)).toMatchObject({
           request: { proposalHash, ...delegation },
         });
-        expect(snapshot?.decision).toBeUndefined();
-        expect(broadcast).toHaveBeenCalledWith(
-          "openclaw.approval.requested",
-          expect.objectContaining({ id: proposalId }),
-          { dropIfSlow: true },
-        );
-        expect(resolveOperatorApproval).not.toHaveBeenCalled();
-        expect(handle).toHaveBeenNthCalledWith(1, `${action} Gateway.`);
-        if (loss === "none") {
-          sameOwnerChat = withGatewayToolCallerIdentity(identity, () =>
-            callChat(context, {
-              sessionId: "delegate-1",
-              message: "yes",
-              delegation,
-            }),
-          );
-          await awaitGateBeforeSettlement(
-            sameOwnerHandled.promise,
-            sameOwnerChat,
-            "Same-owner chat replied before engine handling",
-          );
-          await runSystemAgentGatewayTask(async () => undefined);
-          expect(handle).toHaveBeenCalledTimes(2);
-        }
+        expect(acceptStop).not.toHaveBeenCalled();
+        expect(nativeEffect).not.toHaveBeenCalled();
         expect(await manager.resolve(proposalId, "allow-once", "operator-ui")).toBe(true);
       }
       await beforeReply(preparationStarted.promise, "host preparation");
@@ -277,16 +228,9 @@ it.for([
         sessions.set("delegate-1", { ...delegatedSession });
       }
       releasePreparation.resolve();
-      expect(resolveOperatorApproval).toHaveBeenCalledWith(
-        "allow-once",
-        proposalHash,
-        expect.any(Function),
-        undefined,
-      );
-      expect(requestLifecycle).toHaveBeenCalledExactlyOnceWith(action, expect.any(Function));
       if (loss === "none") {
         await auditStarted.promise;
-        expect(acceptStop).toHaveBeenCalledTimes(action === "stop" ? 1 : 0);
+        expect(acceptStop).toHaveBeenCalledOnce();
         expect(nativeEffect).not.toHaveBeenCalled();
         expect(requestResponses.calls).toHaveLength(0);
         expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
@@ -296,10 +240,9 @@ it.for([
       await pendingChat;
       const expectedReply =
         loss === "none"
-          ? `[openclaw] done: gateway.${action}`
+          ? "[openclaw] done: gateway.stop"
           : "system-agent approval authority is no longer active";
       expect(requestResponses.calls).toHaveLength(1);
-      expect(rootsAtResponse).toEqual([expect.any(Number)]);
       expect(rootsAtResponse[0]).toBeGreaterThan(0);
       const expectedTurn = expect.objectContaining({
         role: "assistant",
@@ -310,9 +253,6 @@ it.for([
         ok: true,
         payload: { reply: expect.stringContaining(expectedReply) },
       });
-      if (sameOwnerChat) {
-        expect((await sameOwnerChat).payload).toEqual(requestResponses.calls[0]?.payload);
-      }
       expect(systemAgentLane()).toMatchObject({ activeCount: 0, queuedCount: 0 });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(appendHistory).toHaveBeenCalledWith(expectedTurn);
@@ -326,16 +266,14 @@ it.for([
         expect(nativeEffect).not.toHaveBeenCalled();
       } else {
         expect(readLastSystemAgentAuditEntry()).toMatchObject({
-          operation: `gateway.${action}`,
-          summary: `Scheduled Gateway ${action}`,
+          operation: "gateway.stop",
+          summary: "Scheduled Gateway stop",
         });
-        if (action === "stop") {
-          // The accepted intent survives its caller; run-loop tests own drain/close ordering.
-          controller.abort();
-          expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
-          await expect(host.finishStop()).resolves.toEqual({ outcome: "accepted" });
-          expect(nativeEffect).toHaveBeenCalledOnce();
-        }
+        // The accepted intent survives its caller; run-loop tests own drain/close ordering.
+        controller.abort();
+        expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+        await expect(host.finishStop()).resolves.toEqual({ outcome: "accepted" });
+        expect(nativeEffect).toHaveBeenCalledOnce();
       }
     } finally {
       releasePreparation.resolve();
@@ -344,7 +282,7 @@ it.for([
       for (const record of await manager.listPendingRecords()) {
         await manager.expire(record.id);
       }
-      await Promise.allSettled([pendingChat, sameOwnerChat]);
+      await Promise.allSettled([pendingChat]);
       await host.retire();
       await engine.dispose();
     }

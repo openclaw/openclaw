@@ -119,15 +119,16 @@ describe("prepareChatSendUserTurn audio", () => {
       const prepared = prepareTranscript("transcribed voice", {
         text: "raw message",
         clientInfo,
+        agentId: "support",
+        sessionKey: "agent:support:main",
         cfg: {
-          tools: {
-            media: {
-              audio: {
-                ...echoAudio,
-                scope,
-              },
+          agents: {
+            entries: {
+              main: { agentDir: "/state/agents/main", workspace: "/work/main" },
+              support: { agentDir: "/state/agents/support", workspace: "/work/support" },
             },
           },
+          tools: { media: { audio: { ...echoAudio, scope } } },
         },
         attachments: voiceAttachments(),
       });
@@ -145,6 +146,11 @@ describe("prepareChatSendUserTurn audio", () => {
       expect(prepared.ctx.BodyForAgent).not.toContain("Heard: transcribed voice");
 
       expect(transcribeAudioAttachments).toHaveBeenCalledOnce();
+      expect(transcribeAudioAttachments.mock.calls[0]?.[0]).toMatchObject({
+        agentDir: "/state/agents/support",
+        workspaceDir: "/work/support",
+      });
+      expect(prepared.ctx.AgentId).toBe("support");
       expect(
         transcribeAudioAttachments.mock.calls[0]?.[0].cfg.tools.media.audio.echoTranscript,
       ).toBe(false);
@@ -155,46 +161,6 @@ describe("prepareChatSendUserTurn audio", () => {
       );
     },
   );
-
-  it("resolves transcript credentials and workspace from the selected agent", async () => {
-    mockPersistence();
-    let selectedPaths: { agentDir?: string; workspaceDir?: string } | undefined;
-    transcribeAudioAttachments.mockImplementationOnce(async ({ ctx, agentDir, workspaceDir }) => {
-      selectedPaths = { agentDir, workspaceDir };
-      if (ctx.media?.[0]) {
-        ctx.media[0] = { ...ctx.media[0], transcribed: true };
-      }
-      return "support transcript";
-    });
-    const prepared = prepareVoice({
-      agentId: "support",
-      sessionKey: "agent:support:main",
-      cfg: {
-        agents: {
-          entries: {
-            main: {
-              agentDir: "/state/agents/main",
-              workspace: "/work/main",
-            },
-            support: {
-              agentDir: "/state/agents/support",
-              workspace: "/work/support",
-            },
-          },
-        },
-        tools: { media: { audio: echoAudio } },
-      },
-      attachments: voiceAttachments("support-voice.ogg"),
-    });
-
-    const input = await prepared.readInput();
-    expect(input.text).toBe("caption\nHeard: support transcript");
-    expect(prepared.ctx.AgentId).toBe("support");
-    expect(selectedPaths).toEqual({
-      agentDir: "/state/agents/support",
-      workspaceDir: "/work/support",
-    });
-  });
 
   it("does not reintroduce a transcript removed by the approval hook", async () => {
     const prepared = prepareTranscript("private transcript");
@@ -247,20 +213,30 @@ describe("prepareChatSendUserTurn audio", () => {
     },
   );
 
-  it.each(["", null, undefined])(
-    "keeps transcript echo out of command parsing after approval with base text %s",
-    async (baseText) => {
+  it.each([
+    ["", "Heard: {transcript}", "Heard: /reset"],
+    [null, "Heard: {transcript}", "Heard: /reset"],
+    [undefined, "Heard: {transcript}", "Heard: /reset"],
+    ["", "{transcript}", "/reset"],
+  ] as const)(
+    "keeps transcript echo out of command dispatch with base text %s and format %s",
+    async (baseText, echoFormat, echo) => {
+      const sessionEntry = { sessionId: "voice-session", updatedAt: 1 };
       const inputController = createUserTurnInputController("");
       inputController.controller.baseInput.text = baseText;
       const prepared = prepareTranscript("/reset", {
         input: inputController,
         text: "",
+        cfg: {
+          commands: { text: true },
+          tools: { media: { audio: { echoTranscript: true, echoFormat } } },
+        },
         attachments: { offloadedRefs: [voiceRef()] },
       });
       const input = await prepared.readInput();
-      expect(input.text).toBe("Heard: /reset");
+      expect(input.text).toBe(echo);
       prepared.applyApprovedText(requireInputText(input));
-      expect(prepared.ctx.Body).toBe("Heard: /reset");
+      expect(prepared.ctx.Body).toBe(echo);
       expect(prepared.ctx.BodyForAgent).toBe(
         '[Audio transcript (machine-generated, untrusted)]: "/reset"',
       );
@@ -269,43 +245,17 @@ describe("prepareChatSendUserTurn audio", () => {
       expect(prepared.ctx.CommandSource).toBeUndefined();
       expect(prepared.isInternalTextSlashCommandTurn).toBe(false);
       expect(prepared.ctx.media?.[0]?.transcribed).toBe(true);
+      const commandParams = buildCommandTestParams(
+        prepared.ctx.CommandBody ?? "",
+        { commands: { text: true } },
+        prepared.ctx,
+      );
+      commandParams.sessionEntry = sessionEntry;
+      commandParams.sessionStore = { [commandParams.sessionKey]: sessionEntry };
+      expect(await maybeHandleResetCommand(commandParams)).toBeNull();
+      expect(sessionEntry).toEqual({ sessionId: "voice-session", updatedAt: 1 });
     },
   );
-
-  it("does not dispatch a raw slash command from a transcript-only echo", async () => {
-    const sessionEntry = { sessionId: "voice-session", updatedAt: 1 };
-    const prepared = prepareTranscript("/reset", {
-      text: "",
-      cfg: {
-        commands: { text: true },
-        tools: { media: { audio: { echoTranscript: true, echoFormat: "{transcript}" } } },
-      },
-      attachments: { offloadedRefs: [voiceRef()] },
-    });
-
-    const input = await prepared.readInput();
-    expect(input.text).toBe("/reset");
-    prepared.applyApprovedText(requireInputText(input));
-    expect(prepared.ctx.Body).toBe("/reset");
-    expect(prepared.ctx.BodyForAgent).toContain(
-      '[Audio transcript (machine-generated, untrusted)]: "/reset"',
-    );
-    expect(prepared.ctx.CommandTurn).toMatchObject({ kind: "normal", body: "" });
-    expectCommandText(prepared, "");
-
-    const commandParams = buildCommandTestParams(
-      prepared.ctx.CommandBody ?? "",
-      {
-        commands: { text: true },
-      },
-      prepared.ctx,
-    );
-    commandParams.sessionEntry = sessionEntry;
-    commandParams.sessionStore = { [commandParams.sessionKey]: sessionEntry };
-    const result = await maybeHandleResetCommand(commandParams);
-    expect(result).toBeNull();
-    expect(sessionEntry).toEqual({ sessionId: "voice-session", updatedAt: 1 });
-  });
 
   it("refuses a transcript when UI media admission expires during preflight", async () => {
     mockPersistence();

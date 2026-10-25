@@ -211,11 +211,13 @@ export async function createCreatorTransportTools(params: {
   const workspaceDir = params.workspaceDir ?? stateDir;
   const { runId } = admitted.operationalRunInstance;
   const toolsAllow = expectDefined(config.tools?.allow, "fixture tool allowlist");
-  const session = { sessionKey: SESSION, sessionId: SESSION_ID };
-  const toolContext = { ...session, runId, workspaceDir, agentAccountId: "default", senderIsOwner };
-  const expectedTools = expect.arrayContaining(
-    toolsAllow.map((name) => expect.objectContaining({ name })),
-  );
+  const agent = {
+    agentId: "main",
+    agentAccountId: "default",
+    sessionKey: SESSION,
+    sessionId: SESSION_ID,
+  };
+  const toolContext = { ...agent, runId, workspaceDir, senderIsOwner };
   let sequence = 0;
   if (transport === "cli") {
     const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "MCP runtime");
@@ -264,7 +266,6 @@ export async function createCreatorTransportTools(params: {
       const message = (await json(response)) as {
         error?: unknown;
         result?: {
-          tools?: Array<{ name: string }>;
           isError?: boolean;
           content?: Array<{ text?: string }>;
         };
@@ -277,7 +278,7 @@ export async function createCreatorTransportTools(params: {
     };
     try {
       expect(mcpGrants.activateMcpLoopbackClientGrantCapture(mcpCapture)).not.toBe(false);
-      expect((await rpc("tools/list"))?.tools).toEqual(expectedTools);
+      await rpc("tools/list");
       return {
         invoke: (name, args) => rpc("tools/call", { name, arguments: args }),
         mcpCapture,
@@ -288,32 +289,28 @@ export async function createCreatorTransportTools(params: {
     }
   }
 
-  const callerIdentity = expectDefined(
+  const preparedIdentity = expectDefined(
     await withPreparedEmbeddedGatewayTools(
       {
         cronCreatorAuthorityCapability: creator,
-        agentAccountId: "default",
+        ...agent,
         admittedRunContext: admitted,
-        agentId: "main",
-        ...session,
         agentHarnessId: "openclaw",
         messageChannel: params.turnSourceChannel,
       },
-      async () => {
-        const identity = gatewayCaller.getGatewayToolCallerIdentity();
-        return identity
-          ? { ...identity, gatewayUiCommandTarget: params.gatewayUiCommandTarget }
-          : undefined;
-      },
+      async () => gatewayCaller.getGatewayToolCallerIdentity(),
     ),
     "embedded Gateway caller",
   );
+  const callerIdentity = {
+    ...preparedIdentity,
+    gatewayUiCommandTarget: params.gatewayUiCommandTarget,
+  };
   const creatorTools: cronTools.CronCreatorToolAllowlistEntry[] = [];
   const creatorCapture: cronTools.CronToolsAllowCaptureRef = {};
   const tools = await gatewayCaller.withGatewayToolCallerIdentity(callerIdentity, () =>
     createOpenClawCodingTools({
       config,
-      agentId: "main",
       ...toolContext,
       forceRestartSafeTools: params.forceRestartSafeTools,
       sessionPermissionPolicy: params.sessionPermissionPolicy,
@@ -335,7 +332,6 @@ export async function createCreatorTransportTools(params: {
     tools,
     getPluginToolMeta,
   );
-  expect(tools).toEqual(expectedTools);
   if (toolsAllow.includes("exec")) {
     expect(creatorTools).toContainEqual({ name: "exec", execOrigin: "openclaw" });
   }

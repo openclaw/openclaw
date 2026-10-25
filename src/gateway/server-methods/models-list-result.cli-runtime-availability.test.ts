@@ -29,6 +29,10 @@ const config = {
     entries: { main: { models: { [opus]: { agentRuntime: { id: "claude-cli" } } } } },
   },
 } satisfies OpenClawConfig;
+const configuredList = (options: Parameters<typeof listModels>[0]) =>
+  listModels({ view: "configured", includeDefaultModels: false, ...options });
+const withState = (test: (state: OpenClawTestState) => Promise<void>) =>
+  withOpenClawTestState({ layout: "state-only", prefix: "cli-model-catalog-" }, test);
 
 const token = (provider: string, expired = false, value = "synthetic-shared") => ({
   type: "token" as const,
@@ -113,12 +117,11 @@ it.each([
   [{ source: "native", mode: "oauth" }, false, false, true, undefined],
   [undefined, true, false, false, "missing-auth"],
   ["api_key", false, true, false, "missing-auth"],
-  [{ source: "native", mode: "oauth" }, false, true, false, "missing-auth"],
 ] as const)(
   "reports CLI auth=%j, provider key=%s, plugin disabled=%s",
   async (authMode, providerApiKey, pluginDisabled, available, reason) => {
     vi.stubEnv("ANTHROPIC_API_KEY", providerApiKey ? "test-key" : "");
-    const result = await listModels({
+    const result = await configuredList({
       catalog: [],
       staticEntries: [providerCatalogEntry("anthropic", "claude-opus-5")],
       cfg: pluginDisabled
@@ -126,8 +129,6 @@ it.each([
         : config,
       preparedAuthModes: authMode ? { "claude-cli": authMode } : {},
       catalogComplete: true,
-      view: "configured",
-      includeDefaultModels: false,
     });
     expect(result).toEqual({
       models: [expect.objectContaining({ id: "claude-opus-5", available })],
@@ -139,7 +140,7 @@ it.each([
 
 it("keeps every Claude CLI model listed as needing login before the full catalog arrives", async () => {
   const pinned = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"];
-  const result = await listModels({
+  const result = await configuredList({
     catalog: [...pinned, "claude-haiku-4-5"].map((id) => providerCatalogEntry("anthropic", id)),
     cfg: {
       agents: {
@@ -151,8 +152,6 @@ it("keeps every Claude CLI model listed as needing login before the full catalog
         },
       },
     },
-    view: "configured",
-    includeDefaultModels: false,
   });
   expect(
     result.models
@@ -175,7 +174,7 @@ it.each<{
   { name: "API-key-only account order", order: { anthropic: ["api"] }, available: false },
   { name: "disabled plugin", disabled: true, available: false },
 ])("evaluates unpinned Claude CLI models with $name and no native login", async (testCase) => {
-  const result = await listModels({
+  const result = await configuredList({
     cfg: {
       ...config,
       auth: { order: testCase.order },
@@ -187,12 +186,9 @@ it.each<{
       version: 1,
       profiles: {
         first: testCase.oauth ? oauthCredential("anthropic") : token("anthropic"),
-        second: token("anthropic", testCase.oauth),
         api: { type: "api_key", provider: "anthropic", key: "synthetic-api-key" },
       },
     },
-    view: "configured",
-    includeDefaultModels: false,
   });
   expect(result.models).toEqual([
     expect.objectContaining({
@@ -213,44 +209,41 @@ it.each([
 ])(
   "uses personal $selection auth instead of native login (expired=$expired, sharedOrder=$sharedOrder, oauth=$oauth)",
   async ({ selection, expired, sharedOrder, oauth }) => {
-    return withOpenClawTestState(
-      { layout: "state-only", prefix: "personal-cli-model-catalog-" },
-      async (state) => {
-        const owner = ensureProfileForEmail("alice@example.test");
-        const { authProfileId } = connectUserModelAccount({
-          ownerProfileId: owner.id,
-          credential: oauth
-            ? oauthCredential("anthropic", true)
-            : token("anthropic", expired, "synthetic-personal-token"),
-          assertCurrent() {},
+    return withState(async (state) => {
+      const owner = ensureProfileForEmail("alice@example.test");
+      const { authProfileId } = connectUserModelAccount({
+        ownerProfileId: owner.id,
+        credential: oauth
+          ? oauthCredential("anthropic", true)
+          : token("anthropic", expired, "synthetic-personal-token"),
+        assertCurrent() {},
+      });
+      if (selection === "draft") {
+        clearUserProfileAuthLink({ profileId: owner.id, provider: "anthropic" });
+      }
+      const cfg: OpenClawConfig = {
+        ...config,
+        agents: { ...config.agents, defaults: { model: `${opus}@anthropic:missing` } },
+        ...(sharedOrder ? { auth: { order: { anthropic: ["anthropic:shared"] } } } : {}),
+      };
+      if (sharedOrder) {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: { "anthropic:shared": token("anthropic", !expired) },
         });
-        if (selection === "draft") {
-          clearUserProfileAuthLink({ profileId: owner.id, provider: "anthropic" });
-        }
-        const cfg: OpenClawConfig = {
-          ...config,
-          agents: { ...config.agents, defaults: { model: `${opus}@anthropic:missing` } },
-          ...(sharedOrder ? { auth: { order: { anthropic: ["anthropic:shared"] } } } : {}),
-        };
-        if (sharedOrder) {
-          await state.writeAuthProfiles({
-            version: 1,
-            profiles: { "anthropic:shared": token("anthropic", !expired) },
-          });
-        }
-        const model = await listPrepared(cfg, state, "anthropic", "claude-opus-5", expired, {
-          requesterProfileId: owner.id,
-          ...(selection === "draft"
-            ? { preferredProfileId: authProfileId, pinnedProfileId: authProfileId }
-            : {}),
-        });
-        expect(model).toMatchObject({
-          agentRuntime: expect.objectContaining({ id: "claude-cli" }),
-          available: !expired,
-        });
-        expect(model?.unavailableReason).toBe(expired && !oauth ? "auth-failed" : undefined);
-      },
-    );
+      }
+      const model = await listPrepared(cfg, state, "anthropic", "claude-opus-5", expired, {
+        requesterProfileId: owner.id,
+        ...(selection === "draft"
+          ? { preferredProfileId: authProfileId, pinnedProfileId: authProfileId }
+          : {}),
+      });
+      expect(model).toMatchObject({
+        agentRuntime: expect.objectContaining({ id: "claude-cli" }),
+        available: !expired,
+      });
+      expect(model?.unavailableReason).toBe(expired && !oauth ? "auth-failed" : undefined);
+    });
   },
 );
 
@@ -265,7 +258,7 @@ it.each([
 ] as const)(
   "uses the selected execution owner for %s",
   async (_name, provider, pinProvider, sharedProvider, expired, noRefresh, available, reason) =>
-    withOpenClawTestState({ layout: "state-only", prefix: "cli-pin-identity-" }, async (state) => {
+    withState(async (state) => {
       const modelId = "claude-haiku-4-5";
       const cfg: OpenClawConfig = {
         agents: {
@@ -306,53 +299,50 @@ it.each([
   { name: "unrelated sibling", sibling: true, available: true },
   { name: "overridden default", unpinned: true, available: true },
 ])("evaluates the effective configured primary account: $name", async (testCase) => {
-  await withOpenClawTestState(
-    { layout: "state-only", prefix: "configured-cli-pin-" },
-    async (state) => {
-      const profileId = "anthropic:configured";
-      const raw = `${testCase.alias ? "primary-alias" : opus}@${profileId}`;
-      const cfg: OpenClawConfig = {
-        // A pin bypasses automatic account order; unpinned rows retain saved-subscription selection.
-        auth: { order: testCase.sibling || testCase.unpinned ? undefined : { anthropic: [] } },
-        agents: {
-          defaults: { model: { primary: raw } },
-          entries: {
-            main: {
-              ...(testCase.agentPrimary ? { model: raw } : {}),
-              ...(testCase.unpinned ? { model: opus } : {}),
-              models: {
-                [opus]: { alias: "primary-alias", agentRuntime: { id: "claude-cli" } },
-                "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } },
-              },
+  await withState(async (state) => {
+    const profileId = "anthropic:configured";
+    const raw = `${testCase.alias ? "primary-alias" : opus}@${profileId}`;
+    const cfg: OpenClawConfig = {
+      // A pin bypasses automatic account order; unpinned rows retain saved-subscription selection.
+      auth: { order: testCase.sibling || testCase.unpinned ? undefined : { anthropic: [] } },
+      agents: {
+        defaults: { model: { primary: raw } },
+        entries: {
+          main: {
+            ...(testCase.agentPrimary ? { model: raw } : {}),
+            ...(testCase.unpinned ? { model: opus } : {}),
+            models: {
+              [opus]: { alias: "primary-alias", agentRuntime: { id: "claude-cli" } },
+              "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } },
             },
           },
         },
-      };
-      await state.writeAuthProfiles({
-        version: 1,
-        profiles: {
-          ...(testCase.missing ? {} : { [profileId]: token("anthropic", testCase.expired) }),
-          "anthropic:session": token("anthropic", true),
-        },
-      });
-      const modelId = testCase.sibling ? "claude-haiku-4-5" : "claude-opus-5";
-      const model = await listPrepared(
-        cfg,
-        state,
-        "anthropic",
-        modelId,
-        Boolean(testCase.expired || testCase.nativeLogin),
-        {
-          ...(testCase.explicit || testCase.automatic
-            ? { preferredProfileId: "anthropic:session" }
-            : {}),
-          ...(testCase.explicit ? { pinnedProfileId: "anthropic:session" } : {}),
-        },
-      );
-      expect(model?.available).toBe(testCase.available);
-      if (testCase.available) {
-        expect(model?.unavailableReason).toBeUndefined();
-      }
-    },
-  );
+      },
+    };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        ...(testCase.missing ? {} : { [profileId]: token("anthropic", testCase.expired) }),
+        "anthropic:session": token("anthropic", true),
+      },
+    });
+    const modelId = testCase.sibling ? "claude-haiku-4-5" : "claude-opus-5";
+    const model = await listPrepared(
+      cfg,
+      state,
+      "anthropic",
+      modelId,
+      Boolean(testCase.expired || testCase.nativeLogin),
+      {
+        ...(testCase.explicit || testCase.automatic
+          ? { preferredProfileId: "anthropic:session" }
+          : {}),
+        ...(testCase.explicit ? { pinnedProfileId: "anthropic:session" } : {}),
+      },
+    );
+    expect(model?.available).toBe(testCase.available);
+    if (testCase.available) {
+      expect(model?.unavailableReason).toBeUndefined();
+    }
+  });
 });

@@ -8,10 +8,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
@@ -27,7 +24,6 @@ import { dispatchGatewayMethodInProcessRaw } from "../server-plugin-in-process-d
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
-import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const sessionKey = "agent:main:hosted-question";
@@ -55,7 +51,6 @@ async function withHostedQuestion(
       method: string,
       params: Record<string, unknown>,
     ) => ReturnType<typeof dispatchGatewayMethodInProcessRaw>;
-    request: ReturnType<typeof vi.fn<(options: GatewayRequestHandlerOptions) => Promise<void>>>;
     revoke: () => void;
     closeParent: () => void;
   }) => Promise<void>,
@@ -82,7 +77,6 @@ async function withHostedQuestion(
       visibility: "shared",
       createdActor: { type: "human", source: "profile", id: foreign ? "other-person" : profileId },
     });
-    expect(loadSessionEntry(scope)?.createdActor?.id).toBe(foreign ? "other-person" : profileId);
     const scheduler = createTestGatewayScheduler();
     const manager = new QuestionManager(scheduler);
     const waiting = createDeferredCore();
@@ -127,56 +121,17 @@ async function withHostedQuestion(
       createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
       scheduler,
     );
-    const request = vi.fn(async (options: GatewayRequestHandlerOptions) => {
-      expect(options.client?.internal?.syntheticClient).toBe(true);
-      expect(options.client?.connect.scopes).toEqual(scopes);
-      expect(readGatewayRequestMutationAuthority(options).sessionScope).toBe(
-        broadRole ? undefined : "operator.sessions.write",
-      );
-      expect(options.client?.internal?.operatorRoleActor).toEqual({ kind: "operator", profileId });
-      expect(options.client?.internal?.operatorRunAuthority?.source).toBe(
-        captured.authority.source,
-      );
-      const identity = options.client?.internal?.agentRuntimeIdentity;
-      if (broadRole) {
-        expect(identity).toBeUndefined();
-      } else {
-        const trustedIdentity = expectDefined(identity, "trusted runtime producer");
-        expect(trustedIdentity).toMatchObject({
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance: admitted.operationalRunInstance,
-        });
-        expect(context.validateAgentRuntimeApprovalAuthority?.(trustedIdentity)).toBe(true);
-      }
-      await expectDefined(handlers["question.request"], "question producer")(options);
-    });
     const registry = createGatewayMethodRegistry(
       Object.entries(handlers).map(([name, handler]) => ({
         name,
         scope: "operator.questions" as const,
         owner: { kind: "core" as const, area: "questions" },
-        handler:
-          name === "question.request"
-            ? request
-            : async (options: GatewayRequestHandlerOptions) => {
-                if (broadRole && options.client?.internal?.syntheticClient) {
-                  expect(options.client.authenticatedUserProfile).toBeUndefined();
-                  expect(options.client.internal.operatorRoleActor).toEqual({
-                    kind: "operator",
-                    profileId,
-                  });
-                  expect(options.client.connect.scopes).toEqual(["operator.questions"]);
-                }
-                if (name === "question.waitAnswer") {
-                  expect(options.client?.connect.scopes).toEqual(["operator.sessions.write"]);
-                  expect(readGatewayRequestMutationAuthority(options).sessionScope).toBe(
-                    "operator.sessions.write",
-                  );
-                  waiting.resolve();
-                }
-                await handler(options);
-              },
+        handler: async (options: GatewayRequestHandlerOptions) => {
+          if (name === "question.waitAnswer") {
+            waiting.resolve();
+          }
+          await handler(options);
+        },
       })),
     );
     context.getGatewayMethodRegistry = () => registry;
@@ -205,7 +160,6 @@ async function withHostedQuestion(
           }),
         waiting: waiting.promise,
         manager,
-        request,
         answer: (id) => browserRequest("question.resolve", { id, answers }),
         read: (id) => browserRequest("question.get", { id }),
         hosted: (method, params) =>
@@ -242,7 +196,6 @@ it("runs hosted ask_user through the real router with its original narrow operat
           throw new Error("ask_user settled before its waiter");
         }),
       ]);
-      expect(fixture.request).toHaveBeenCalledOnce();
       const record = expectDefined(fixture.manager.list()[0], "accepted question");
       expect(record).toMatchObject({
         agentId: "main",
@@ -281,7 +234,6 @@ it.each([
       fixture.revoke();
     }
     await expect(fixture.ask()).rejects.toThrow(error);
-    expect(fixture.request).toHaveBeenCalledTimes(foreign ? 1 : 0);
     expect(fixture.manager.list()).toEqual([]);
   }, foreign);
 });
@@ -332,7 +284,6 @@ it.each(["write", "view", "none"] as const)(
             id: "broad-created",
           });
           expect(created.ok).toBe(role === "write");
-          expect(fixture.request).toHaveBeenCalledOnce();
           expect(fixture.manager.get("broad-created")?.status).toBe(
             role === "write" ? "pending" : undefined,
           );

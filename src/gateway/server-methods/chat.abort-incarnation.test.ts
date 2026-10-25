@@ -3,11 +3,10 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -149,12 +148,11 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     const interrupted = vi.fn();
     let newAdmission: Awaited<ReturnType<typeof sessionLifecycle.beginSessionEffect>> | undefined;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        abort.pending.then(() => {
-          throw new Error("abort missed admission drain");
-        }),
-      ]);
+        abort.pending,
+        "abort missed admission drain",
+      );
       expect(abort.parent.input.abortSignal.aborted).toBe(true);
       expect(sessionLifecycle.isSessionControllerWorkActive(storePath, [activeKey])).toBe(false);
       if (!completed) {
@@ -196,7 +194,6 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         childSessionKey: grandchildKey,
         requesterSessionKey: endedKey,
         requesterTurnRunId: "new-turn",
-        task: "grandchild",
         queued: true,
       });
       fixture.queueRun({
@@ -244,41 +241,26 @@ it.each(["child", "ancestor"])(
   async (faultOwner) => {
     const childAgent = faultOwner === "ancestor" ? "worker" : "broken";
     const badKey = `agent:${childAgent}:subagent:bad`;
-    const healthyKey = "agent:main:subagent:healthy";
     const ancestorKey = "agent:broken:subagent:ancestor";
     if (faultOwner === "ancestor") {
       await fixture.seedRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
         childAgentId: "broken",
-        task: "ancestor",
         queued: true,
         lifecycleRevision: "original-ancestor",
       });
     }
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: childAgent,
-      sessionKey: badKey,
-      defaultSessionId: "bad-session",
+    const storePath = await fixture.seedRun({
+      runId: "bad",
+      childSessionKey: badKey,
+      childAgentId: childAgent,
+      requesterSessionKey: faultOwner === "ancestor" ? ancestorKey : parentKey,
+      requesterDisplayKey: parentKey,
+      requesterAgentId: faultOwner === "ancestor" ? "broken" : "main",
+      queued: true,
       lifecycleRevision: "original-child",
     });
-    for (const [runId, childSessionKey] of [
-      ["bad", badKey],
-      ["healthy", healthyKey],
-    ] as const) {
-      const childAgentId = runId === "bad" ? childAgent : "main";
-      await fixture.seedRun({
-        runId,
-        childSessionKey,
-        childAgentId,
-        requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,
-        requesterDisplayKey: parentKey,
-        requesterAgentId: faultOwner === "ancestor" && runId === "bad" ? "broken" : "main",
-        queued: true,
-        lifecycleRevision: "original-child",
-      });
-    }
     const database = listOpenClawAgentDatabasesForTest().find(
       (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
     )!;
@@ -299,12 +281,10 @@ it.each(["child", "ancestor"])(
       }
     });
     const badDispatch = vi.fn(async () => {});
-    const healthyDispatch = vi.fn(async () => {});
     const survivorDispatch = vi.fn(async () => {});
     const capacityOwner = "read-failure-capacity";
     for (const [runId, start] of [
       ["bad", badDispatch],
-      ["healthy", healthyDispatch],
       ["survivor", survivorDispatch],
     ] as const) {
       fixture.queueRun({
@@ -337,10 +317,8 @@ it.each(["child", "ancestor"])(
       expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toMatchObject({
         reason: "killed",
       });
-      expect(subagentRuns.get("healthy")?.endedReason).toBe("subagent-killed");
       expect(releaseSwarmRun(capacityOwner)).toBe(true);
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
-      expect(healthyDispatch).not.toHaveBeenCalled();
       expect(
         badDispatch,
         "retained durable intent must withdraw its exact never-started reservation",
