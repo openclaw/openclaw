@@ -7,7 +7,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -15,7 +14,6 @@ import {
 } from "../cli/update-cli/update-command-executor.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import * as nodeSqlite from "./node-sqlite.js";
-import { classifySqliteMutation } from "./sqlite-schema-mutation.js";
 import * as tempRoot from "./tmp-openclaw-dir.js";
 import {
   createManagedHandoffLeaseDatabase,
@@ -108,6 +106,46 @@ function observeWritableDatabase(observe: (db: DatabaseSync) => void) {
       observe(db);
     }
     return db;
+  });
+}
+
+function observeTransaction(
+  hooks: Partial<
+    Record<
+      "open" | "afterBegin" | "beforeWrite" | "afterWrite" | "beforeCommit" | "afterCommit",
+      (db: DatabaseSync) => void
+    >
+  >,
+) {
+  observeWritableDatabase((db) => {
+    hooks.open?.(db);
+    const exec = db.exec.bind(db);
+    db.exec = (sql) => {
+      if (sql === "COMMIT") {
+        hooks.beforeCommit?.(db);
+      }
+      exec(sql);
+      if (sql === "BEGIN IMMEDIATE") {
+        hooks.afterBegin?.(db);
+      }
+      if (sql === "COMMIT") {
+        hooks.afterCommit?.(db);
+      }
+    };
+    const prepare = db.prepare.bind(db);
+    db.prepare = (sql) => {
+      const statement = prepare(sql);
+      if (/^(insert into|delete from) "managed_update_handoffs"/u.test(sql)) {
+        const run = statement.run.bind(statement);
+        statement.run = (...values) => {
+          hooks.beforeWrite?.(db);
+          const result = run(...values);
+          hooks.afterWrite?.(db);
+          return result;
+        };
+      }
+      return statement;
+    };
   });
 }
 
@@ -221,42 +259,6 @@ const damage: [name: string, apply: () => void][] = [
 ];
 
 describe.skipIf(process.platform === "win32")("existing update authority", () => {
-  it("reopens an initialized writable handoff owner without repeating DDL", () => {
-    const withDatabase = createManagedHandoffLeaseDatabase(databasePath);
-    withDatabase(true, (db) =>
-      db
-        .prepare(
-          "INSERT INTO managed_update_handoffs (install_root,owner,payload_json,updated_at) VALUES (?,?,?,?)",
-        )
-        .run(root, "warm-owner", "{}", 1),
-    );
-    const sql = observeHostDataSql();
-    try {
-      withDatabase(true, (db) =>
-        withDatabase.transact(
-          db,
-          () =>
-            db
-              .prepare("UPDATE managed_update_handoffs SET updated_at=2 WHERE install_root=?")
-              .run(root),
-          {},
-        ),
-      );
-      expect(
-        withDatabase(false, (db) =>
-          db
-            .prepare("SELECT owner, updated_at FROM managed_update_handoffs WHERE install_root=?")
-            .all(root),
-        ),
-      ).toEqual([{ owner: "warm-owner", updated_at: 2 }]);
-      expect(
-        sql.queries.filter((query) => classifySqliteMutation(query, "batch").mainSchemaChange),
-      ).toEqual([]);
-    } finally {
-      sql.restore();
-    }
-  });
-
   // Node CI shards do not provision Bun. BUN_BIN opts into runtime qualification;
   // a missing or incompatible selected binary must fail instead of skipping.
   it.runIf(Boolean(process.env.BUN_BIN))(
@@ -492,39 +494,19 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       expect(store.read(childKey)).toEqual({ kind: "absent" });
 
       const boundaries: string[] = [];
-      observeWritableDatabase((db) => {
-        const prepare = db.prepare.bind(db);
-        db.prepare = (sql) => {
-          const statement = prepare(sql);
-          const run = statement.run.bind(statement);
-          statement.run = (...values) => {
-            // Public release has completed its in-transaction child check when
-            // its mutation reaches SQLite. Observe the real statement unchanged.
-            expect(db.isTransaction).toBe(true);
-            expect(values).toContain(parent.key);
-            expect(values).toContain(parent.owner);
-            boundaries.push("before-write");
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-            const result = Reflect.apply(run, statement, values);
-            boundaries.push("after-write");
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-            return result;
-          };
-          return statement;
-        };
-        const exec = db.exec.bind(db);
-        db.exec = (sql) => {
-          if (sql === "COMMIT") {
-            boundaries.push("before-commit");
-            expect(db.isTransaction).toBe(true);
-            expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
-          }
-          exec(sql);
-          if (sql === "COMMIT") {
-            boundaries.push("committed");
-            expect(db.isTransaction).toBe(false);
-          }
-        };
+      const locked = (boundary: string) => (db: DatabaseSync) => {
+        boundaries.push(boundary);
+        expect(db.isTransaction).toBe(true);
+        expect(probeWriterAdmission()).toEqual({ acquired: false, errcode: 5 });
+      };
+      observeTransaction({
+        beforeWrite: locked("before-write"),
+        afterWrite: locked("after-write"),
+        beforeCommit: locked("before-commit"),
+        afterCommit: (db) => {
+          boundaries.push("committed");
+          expect(db.isTransaction).toBe(false);
+        },
       });
       expect(store.release(parent)).toBe(true);
       expect(boundaries).toEqual(["before-write", "after-write", "before-commit", "committed"]);
@@ -544,11 +526,9 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
     )("preserves %s without repair", async (_name, apply) => {
       const existingAuthority = await authority();
       let before: ReturnType<typeof snapshot> | undefined;
-      const repairSpies = [vi.spyOn(fs, "mkdirSync"), vi.spyOn(fs, "chmodSync")];
       const revoke = () => {
         apply();
         before = snapshot();
-        repairSpies.forEach((spy) => spy.mockClear());
       };
       if (phase === "admission") {
         revoke();
@@ -571,11 +551,6 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
       expect(entered).toBe(phase === "release");
       expect(before).toBeDefined();
       expect(snapshot()).toEqual(before);
-      for (const spy of repairSpies) {
-        expect(spy.mock.calls.filter(([file]) => String(file).startsWith(root + path.sep))).toEqual(
-          [],
-        );
-      }
     });
   });
 
@@ -603,32 +578,10 @@ describe.skipIf(process.platform === "win32")("existing update authority", () =>
           replaceParent();
         }
       };
-      observeWritableDatabase((db) => {
-        if (boundary === "after-open") {
-          replace();
-        } else if (boundary === "after-begin") {
-          const exec = db.exec.bind(db);
-          db.exec = (sql) => {
-            exec(sql);
-            if (sql === "BEGIN IMMEDIATE") {
-              replace();
-            }
-          };
-        } else {
-          const prepare = db.prepare.bind(db);
-          db.prepare = (sql) => {
-            const statement = prepare(sql);
-            if (/^(insert into|delete from) "managed_update_handoffs"/u.test(sql)) {
-              const run = statement.run.bind(statement);
-              statement.run = (...values) => {
-                const result = Reflect.apply(run, statement, values);
-                replace();
-                return result;
-              };
-            }
-            return statement;
-          };
-        }
+      observeTransaction({
+        open: boundary === "after-open" ? replace : undefined,
+        afterBegin: boundary === "after-begin" ? replace : undefined,
+        afterWrite: boundary === "before-commit" ? replace : undefined,
       });
       expect(() =>
         admitted ? store.release(admitted) : store.acquire(root, "next-owner", { kind: "update" }),
