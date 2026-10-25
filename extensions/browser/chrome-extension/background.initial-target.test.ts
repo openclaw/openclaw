@@ -572,7 +572,7 @@ async function setupTarget(operation = continueRequest) {
 
 async function setup(operation = continueRequest) {
   const rig = await setupTarget(operation);
-  const { harness, owner, session } = rig;
+  const { harness, owner, observer, session, observerSession, target } = rig;
   expect(await owner.request("Fetch.enable", { handleAuthRequests: true }, session)).toMatchObject({
     result: {},
   });
@@ -584,7 +584,14 @@ async function setup(operation = continueRequest) {
   const requestId = owner.events(event).at(-1)?.params?.requestId;
   assert(typeof requestId === "string");
   assert.notEqual(requestId, "native-navigation-request");
+  expect(observer.events(event)).toEqual([]);
   const params: Record<string, unknown> = { ...operation.params, requestId };
+  const beforeForeign = harness.debuggerSendCommand.mock.calls.length;
+  expect(await observer.request(operation.method, params, observerSession)).toMatchObject({
+    error: { message: expect.stringContaining("another session") },
+  });
+  expect(harness.debuggerSendCommand.mock.calls).toHaveLength(beforeForeign);
+  expect(target()).toBe(targetId);
   return { ...rig, params };
 }
 
@@ -604,6 +611,11 @@ async function holdNativeCompletion(rig: Awaited<ReturnType<typeof setup>>) {
     if (method !== rig.operation.method) {
       return await native(source, method, params);
     }
+    expect(params).toEqual(
+      Object.hasOwn(rig.params, "requestId")
+        ? { ...rig.params, requestId: "native-navigation-request" }
+        : rig.params,
+    );
     started.resolve();
     await completed.promise;
     return rig.operation.result ?? {};
