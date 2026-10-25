@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273125,
-  "reason": "Streaming cold-runtime prefix retention removes repeated completed-content parsing. Same-host production builds measure startup 272893 to 273125 B gzip (+232 B), unchanged raw startup bytes and seven JS/one CSS requests. Interleaved renderer CPU measurements show a substantial streaming win; accept the small compression/hash change under the approved CPU/bytes tradeoff.",
+  "startupJsGzipBytes": 273565,
+  "reason": "Streaming cold-runtime prefix retention cuts standard script CPU 47.1% and burst 37.7% over 20 interleaved base/A-A/head triplets per workload. After merging main b3ba4d62263, same-host builds measure startup 273582 to 273565 B gzip, unchanged raw startup bytes and seven JS/one CSS requests. Chat is 347 B smaller and New Session 56 B smaller. Ratchet to the measured integrated head.",
   "updatedAt": "2026-10-25"
 }

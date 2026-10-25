@@ -46,9 +46,11 @@ vi.mock("../logging/subsystem.js", () => ({
 
 type RuntimeOwner = typeof import("./child-runtime-viability.js");
 type RecoveryOwner = typeof import("./process-respawn.js");
+type NativeWorkerRecoveryOwner = typeof import("./gateway-native-worker-recovery.js");
 type RecoveryDecision = Parameters<RecoveryOwner["registerGatewayRuntimeRecovery"]>[0]["decision"];
 let runtime: RuntimeOwner;
 let recovery: RecoveryOwner;
+let nativeWorkerRecovery: NativeWorkerRecoveryOwner;
 let finished: ReturnType<typeof createDeferredCore<void>>;
 let release: (() => void) | undefined;
 const environment = captureEnv(["OPENCLAW_STATE_DIR", "NODE_OPTIONS"]);
@@ -104,6 +106,7 @@ beforeEach(async () => {
   io.restart.mockReturnValue({ status: "emitted" });
   io.probe.mockReturnValue(probeResult("v24.20.0\n"));
   runtime = await import("./child-runtime-viability.js");
+  nativeWorkerRecovery = await import("./gateway-native-worker-recovery.js");
   recovery = await import("./process-respawn.js");
 });
 
@@ -277,13 +280,15 @@ it("coalesces unsettled native workers into one forced fresh-process request", a
   io.service.mockReturnValueOnce(service.promise);
   register();
   let firstUnsettled = true;
-  const first = recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => firstUnsettled });
-  const second = recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true });
+  const first = nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({
+    isCurrent: () => firstUnsettled,
+  });
+  const second = nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true });
   firstUnsettled = false;
   service.resolve(serviceState);
   await expect(first).resolves.toMatchObject({ status: "restart-requested" });
   await expect(second).resolves.toMatchObject({ status: "restart-requested" });
-  await recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true });
+  await nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true });
   expect(io.service).toHaveBeenCalledOnce();
   expect(io.restart).toHaveBeenCalledExactlyOnceWith("gateway.native-worker-unsettled", {
     force: true,
@@ -301,7 +306,7 @@ it("prepares native systemd inspection before a worker can require recovery", as
     throw new Error("late native initialization would wait for the unsettled worker");
   });
   await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
+    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
   ).resolves.toMatchObject({ status: "restart-requested" });
   expect(io.systemdSupported).toHaveBeenCalledOnce();
   expect(io.service).toHaveBeenCalledOnce();
@@ -311,7 +316,7 @@ it("keeps recovery report-only when native systemd inspection was unavailable at
   io.systemdSupported.mockReturnValueOnce(false);
   register();
   await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
+    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
   ).resolves.toMatchObject({
     status: "report-only",
     reason: expect.stringContaining("native systemd inspection was unavailable at Gateway startup"),
@@ -330,12 +335,12 @@ it("does not restart for a native worker that settles during service verificatio
   });
   register();
   await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => unsettled }),
+    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => unsettled }),
   ).resolves.toMatchObject({ status: "report-only", reason: expect.stringContaining("settled") });
   expect(io.restart).not.toHaveBeenCalled();
   // A later distinct worker can still request recovery in this lifecycle.
   await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
+    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
   ).resolves.toMatchObject({ status: "restart-requested" });
 });
 
@@ -346,10 +351,10 @@ it("refuses native recovery after the registering lifecycle retires during verif
   });
   register();
   await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
+    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
   ).resolves.toMatchObject({ status: "report-only", reason: expect.stringContaining("stopping") });
   await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
+    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
   ).resolves.toMatchObject({
     status: "report-only",
     reason: expect.stringContaining("no Gateway"),
@@ -366,7 +371,7 @@ it.each([
   register(decision, owns);
   expect(io.systemdSupported).not.toHaveBeenCalled();
   await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
+    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
   ).resolves.toMatchObject({
     status: "report-only",
     reason: expect.stringContaining("no verified native service"),
@@ -379,7 +384,7 @@ it("does not claim an unrelated coalesced restart acquired fresh-process authori
   io.restart.mockReturnValueOnce({ status: "coalesced" });
   register();
   await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
+    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
   ).resolves.toMatchObject({ status: "report-only", reason: expect.stringContaining("coalesced") });
 });
 
@@ -387,7 +392,7 @@ it("reports a failed native service probe instead of rejecting the worker's clea
   io.service.mockRejectedValueOnce(new Error("fixture service unavailable"));
   register();
   await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
+    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
   ).resolves.toMatchObject({
     status: "report-only",
     reason: expect.stringContaining("preparation failed"),

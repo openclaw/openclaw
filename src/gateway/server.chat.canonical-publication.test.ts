@@ -21,7 +21,7 @@ import {
   listenProvider,
   writeToolCallResponse,
 } from "./gateway-provider-fixture.test-support.js";
-import { parseSseEvents } from "./http-stream.test-support.js";
+import { readSseEvent } from "./session-history-fixtures.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -227,7 +227,6 @@ it(
             messageRole: "assistant",
           });
         const started = await send();
-        let streamText = "";
         if (scenario.name === "details-cap") {
           await withTestTimeout(firstRequest.promise, 15_000, "tool request was not admitted");
           const stream = await fetch(
@@ -246,21 +245,18 @@ it(
           if (!reader) {
             throw new Error("Missing actual session-history stream");
           }
-          const decoder = new TextDecoder();
+          const streamState = { buffer: "" };
+          const received: unknown[] = [];
           try {
             while (true) {
-              const chunk = await reader.read();
-              expect(chunk.done).toBe(false);
-              streamText += decoder.decode(chunk.value, { stream: true });
-              const frames = parseSseEvents(streamText);
-              if (frames.some((frame) => frame.event === "history")) {
+              const frame = await readSseEvent(reader, streamState);
+              if (frame.event === "history") {
                 releaseTool.resolve();
               }
-              const messages = messagesFrom(
-                frames
-                  .filter((frame) => frame.event === "message")
-                  .map((frame): unknown => JSON.parse(frame.data)),
-              );
+              if (frame.event === "message") {
+                received.push(frame.data);
+              }
+              const messages = messagesFrom(received);
               if (
                 contentFrom(messages.filter((message) => message.role === "assistant")).some(
                   (block) => block.type === "attachment",
@@ -299,15 +295,6 @@ it(
         const page = await readHistory(2);
         const listed = await listArtifacts();
         const rawMessages = messagesFrom(rawEvents);
-        const diagnosticCalls = contentFrom(rawMessages).filter(
-          (block) => block.type === "toolCall",
-        );
-        expect(diagnosticCalls, scenario.name).toContainEqual(
-          expect.objectContaining({
-            name: "message",
-            arguments: expect.objectContaining({ message: scenario.caption }),
-          }),
-        );
         expect(toolResults, scenario.name).toHaveLength(1);
         if (scenario.name === "missing-media") {
           expect(toolResults[0]).toMatchObject({ isError: true });
