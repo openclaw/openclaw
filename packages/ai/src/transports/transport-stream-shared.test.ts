@@ -15,7 +15,11 @@ import {
 const REPAIR = { repairStringLiterals: true } as const;
 const initialHost = getAiTransportHost();
 const model = { provider: "openai", id: "fixture-model", api: "openai-responses" } as Model;
-afterEach(() => configureAiTransportHost(initialHost));
+afterEach(() => {
+  configureAiTransportHost(initialHost);
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 it.each(["error", "data"] as const)(
   "logs failure metadata without response.%s prose or generated content",
@@ -227,22 +231,18 @@ it.each([false, true])(
         received.push(event);
       }
     });
-    try {
-      if (holdHooks) {
-        await vi.runAllTimersAsync();
-      }
-      setTimeout(() => {
-        startsBeforeTimer = starts;
-      }, 0);
-      hooks.resolve();
+    if (holdHooks) {
       await vi.runAllTimersAsync();
-      await Promise.all(streams);
-      expect(startsBeforeTimer).toBeGreaterThan(0);
-      expect(startsBeforeTimer).toBeLessThan(80);
-      expect(events).toEqual(Array.from({ length: 80 }, () => ["start", "first", "last"]));
-    } finally {
-      vi.useRealTimers();
     }
+    setTimeout(() => {
+      startsBeforeTimer = starts;
+    }, 0);
+    hooks.resolve();
+    await vi.runAllTimersAsync();
+    await Promise.all(streams);
+    expect(startsBeforeTimer).toBeGreaterThan(0);
+    expect(startsBeforeTimer).toBeLessThan(80);
+    expect(events).toEqual(Array.from({ length: 80 }, () => ["start", "first", "last"]));
   },
 );
 
@@ -271,14 +271,9 @@ it("lets a pair of cheap utility responses finish without an extra loop turn", a
     expect(received).toEqual([1, 2, 3, 4, 5]);
     completed++;
   });
-  try {
-    await vi.runAllTimersAsync();
-    await Promise.all(streams);
-    expect(completedBeforeTimer).toBe(2);
-  } finally {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  }
+  await vi.runAllTimersAsync();
+  await Promise.all(streams);
+  expect(completedBeforeTimer).toBe(2);
 });
 
 it("shares the body-event budget across streams without readiness hooks", async () => {
@@ -294,15 +289,11 @@ it("shares the body-event budget across streams without readiness hooks", async 
       delivered++;
     }
   });
-  try {
-    await vi.runAllTimersAsync();
-    await Promise.all(streams);
-    expect(deliveredBeforeTimer).toBeGreaterThan(0);
-    expect(deliveredBeforeTimer).toBeLessThan(80);
-    expect(delivered).toBe(80);
-  } finally {
-    vi.useRealTimers();
-  }
+  await vi.runAllTimersAsync();
+  await Promise.all(streams);
+  expect(deliveredBeforeTimer).toBeGreaterThan(0);
+  expect(deliveredBeforeTimer).toBeLessThan(80);
+  expect(delivered).toBe(80);
 });
 
 describe("model stream cooperative scheduler", { concurrent: false }, () => {

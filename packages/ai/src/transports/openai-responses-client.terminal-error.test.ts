@@ -88,6 +88,15 @@ function terminalEvent(
 function probe(id: string, args = "", status = "in_progress") {
   return { ...wireCall(id, "probe", args), status };
 }
+
+function expectWarning(detail: string) {
+  expect(logWarn).toHaveBeenCalledWith(
+    "openai-transport",
+    expect.stringContaining(detail),
+    undefined,
+  );
+}
+
 beforeEach(() => {
   for (const log of [logWarn, logDebug, logInfo]) {
     log.mockClear();
@@ -100,6 +109,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   sseState.signal = undefined;
   configureAiTransportHost(initialHost);
 });
@@ -131,11 +141,7 @@ it("aborts whitespace argument churn and recovers through the same-model retry o
     reason: { code: "degenerate_output" },
   });
   expect(events).not.toContain("toolcall_end");
-  expect(logWarn).toHaveBeenCalledWith(
-    "openai-transport",
-    expect.stringContaining("abortReason=degenerate_output"),
-    undefined,
-  );
+  expectWarning("abortReason=degenerate_output");
   expect(JSON.stringify(logWarn.mock.calls)).not.toContain("return 1;");
 
   vi.useFakeTimers();
@@ -190,7 +196,7 @@ it("accepts 200 KiB of arguments with whitespace runs interrupted by code", asyn
 it("logs the actual output budget, served tier, and usage after a long incomplete stream", async () => {
   vi.stubEnv("OPENCLAW_DEBUG_SSE", "peek");
   let now = 1_000;
-  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  vi.spyOn(Date, "now").mockImplementation(() => now);
   queueStream(async function* () {
     yield { type: "response.created", response: { id: "resp_long", service_tier: "default" } };
     yield {
@@ -213,24 +219,20 @@ it("logs the actual output budget, served tier, and usage after a long incomplet
       },
     });
   });
-  try {
-    const stream = await run({ maxTokens: 4096, serviceTier: "priority" });
-    expect((await stream.result()).stopReason).toBe("length");
-    const messages = [
-      ...logDebug.mock.calls.map(([, build]) => build()?.message),
-      ...logInfo.mock.calls.map(([, message]) => message),
-    ];
-    const done = messages.find((message) => message?.startsWith("[responses] stream_done "));
-    expect(done).toContain("requestedTier=priority max_output_tokens=4096");
-    expect(done).toContain("responseId=resp_long servedTier=default");
-    expect(done).toContain("outputTokens=4096 reasoningTokens=4000");
-    expect(done).toContain("streamDurationMs=1095000 elapsedMs=1095000");
-    expect(done).toContain("terminal=response.incomplete incompleteReason=max_output_tokens");
-    expect(done).not.toContain("test-key");
-    expect(messages.join(" ")).not.toContain("private-response-content");
-  } finally {
-    clock.mockRestore();
-  }
+  const stream = await run({ maxTokens: 4096, serviceTier: "priority" });
+  expect((await stream.result()).stopReason).toBe("length");
+  const messages = [
+    ...logDebug.mock.calls.map(([, build]) => build()?.message),
+    ...logInfo.mock.calls.map(([, message]) => message),
+  ];
+  const done = messages.find((message) => message?.startsWith("[responses] stream_done "));
+  expect(done).toContain("requestedTier=priority max_output_tokens=4096");
+  expect(done).toContain("responseId=resp_long servedTier=default");
+  expect(done).toContain("outputTokens=4096 reasoningTokens=4000");
+  expect(done).toContain("streamDurationMs=1095000 elapsedMs=1095000");
+  expect(done).toContain("terminal=response.incomplete incompleteReason=max_output_tokens");
+  expect(done).not.toContain("test-key");
+  expect(messages.join(" ")).not.toContain("private-response-content");
 });
 
 it.each(["filtered", "failed", "eof", "aborted"])(
@@ -334,11 +336,7 @@ it("logs the idle-timeout reason at warning level when the stream throws a gener
   const result = stream.result();
   await vi.advanceTimersByTimeAsync(50);
   expect((await result).stopReason).toBe("aborted");
-  expect(logWarn).toHaveBeenCalledWith(
-    "openai-transport",
-    expect.stringContaining("abortReason=idle_timeout"),
-    undefined,
-  );
+  expectWarning("abortReason=idle_timeout");
   const line = logWarn.mock.calls.find(([, message]) =>
     message.startsWith("[responses] error "),
   )?.[1];
@@ -449,11 +447,7 @@ it.each([
     );
     expect(JSON.stringify(result.diagnostics)).not.toContain("provider-private-reason");
     if (result.stopReason === "error") {
-      expect(logWarn).toHaveBeenCalledWith(
-        "openai-transport",
-        expect.stringContaining(`incompleteReason=${incompleteReason}`),
-        undefined,
-      );
+      expectWarning(`incompleteReason=${incompleteReason}`);
       expect(JSON.stringify(logWarn.mock.calls)).not.toContain("provider-private-reason");
     }
   },
