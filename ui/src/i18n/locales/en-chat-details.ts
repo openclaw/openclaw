@@ -27,7 +27,6 @@ const enChatDetails = {
       contextLoading: "Loading context breakdown…",
       contextError: "Couldn't load the context breakdown. Try refreshing.",
       contextOffline: "Connect to the Gateway to load the context breakdown.",
-      contextBreakdownUnavailable: "Detailed breakdown unavailable.",
       contextUnavailable: "No matching context report. Send a message to capture one.",
       contextReserve: "{tokens} tokens reserved outside this budget",
       contextCompactDescription: "Replaces older context with a summary.",
