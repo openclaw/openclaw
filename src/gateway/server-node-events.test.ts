@@ -16,6 +16,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { NodeRegistry } from "./node-registry.js";
 import * as nodeEventSource from "./server-node-event-source.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
@@ -60,12 +61,6 @@ function eventResult(event: string, reason: string, handled = false) {
 
 function waitForFast<T>(callback: () => T | Promise<T>) {
   return vi.waitFor(callback, { interval: 1 });
-}
-
-function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 beforeEach(() => {
