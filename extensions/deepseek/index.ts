@@ -11,6 +11,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
+import { createDeepSeekWebFetchProvider } from "./web-fetch-provider.js";
 import { createDeepSeekWebSearchProvider } from "./web-search-provider.js";
 
 const PROVIDER_ID = "deepseek";
@@ -21,9 +22,10 @@ export default defineSingleProviderPluginEntry({
   description: "Bundled DeepSeek provider plugin",
   manifest,
   register(api) {
-    // Search reads the prepared credential from each request, not registration config.
+    // Search and Fetch read the prepared credential per request, not at registration.
     api.registerReload({ hotPrefixes: ["plugins.entries.deepseek.config.webSearch.apiKey"] });
     api.registerWebSearchProvider(createDeepSeekWebSearchProvider());
+    api.registerWebFetchProvider(createDeepSeekWebFetchProvider());
   },
   provider: {
     label: "DeepSeek",

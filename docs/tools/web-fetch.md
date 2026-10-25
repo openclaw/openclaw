@@ -208,13 +208,23 @@ Current runtime behavior:
 - If `provider` is omitted, OpenClaw auto-detects the first ready web-fetch
   provider from configured credentials. Non-sandboxed `web_fetch` can use
   installed plugins that declare `contracts.webFetchProviders` and register a
-  matching provider at runtime. The official Firecrawl plugin provides this
-  fallback today.
+  matching provider at runtime. The official Firecrawl and DeepSeek plugins
+  provide fetch fallbacks. DeepSeek requires explicit selection rather than
+  automatically opting inference/search credentials into paid fetching.
 - Sandboxed `web_fetch` calls allow bundled providers plus installed providers
   whose official npm or ClawHub provenance is verified. Today that permits the
-  official Firecrawl plugin; third-party external fetch plugins stay excluded.
+  official Firecrawl and DeepSeek plugins; third-party external fetch plugins stay excluded.
 - If Readability is disabled, `web_fetch` skips straight to the selected
   provider fallback. If no provider is available, the request fails.
+
+## DeepSeek fallback
+
+Select `tools.web.fetch.provider: "deepseek"` to use the DeepSeek plugin's
+standalone Fetch API on the existing fallback path. It reuses the DeepSeek search
+credential, sends the requested URL to DeepSeek, and may incur per-request fees.
+Enabling DeepSeek for models or search alone does not activate this fetch
+provider. See [DeepSeek Web Fetch](/providers/deepseek#web-fetch) for setup and
+privacy details.
 
 ## Custom request headers
 

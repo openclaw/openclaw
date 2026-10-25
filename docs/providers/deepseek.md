@@ -268,5 +268,33 @@ retried by the DeepSeek adapter.
 DeepSeek documents a limit of 5 search requests per second per account and a
 price of $0.75 per 1,000 successful non-empty search requests. Empty results and
 failed requests are not billed. See [DeepSeek Search & Fetch](https://api-docs.deepseek.com/guides/search/)
-for current pricing and account limits. This plugin integration adds search only;
-`web_fetch` continues to use its existing local extraction and configured fallbacks.
+for current pricing and account limits.
+
+## Web fetch
+
+The same plugin can provide an optional fallback for `web_fetch` through
+DeepSeek's standalone Fetch API. Select it explicitly:
+
+```json5
+{
+  tools: { web: { fetch: { provider: "deepseek" } } },
+}
+```
+
+Local fetching and extraction remain first. Only the existing fallback path calls
+DeepSeek; enabling DeepSeek models or search alone does not enable this paid
+fetch provider. See [Web Fetch](/tools/web-fetch) for fallback behavior, output
+limits, caching, and cancellation.
+
+Fetch reuses the existing search credential:
+`plugins.entries.deepseek.config.webSearch.apiKey`, then `DEEPSEEK_API_KEY`, then
+`models.providers.deepseek.apiKey`. Configured SecretRefs use standard secret
+preparation; keys stored only in model auth profiles are not reused.
+
+Requests go to `https://api.deepseek.com/v1/tools/fetch`, regardless of the chat
+base URL. The target URL is disclosed to DeepSeek, which retrieves the page on its
+servers and charges according to its [Search & Fetch pricing](https://api-docs.deepseek.com/guides/search/).
+OpenClaw does not send local fetch headers, browser cookies, or conversation
+history. Private/internal targets and credential-bearing URLs are not delegated.
+Provider Markdown is normalized, bounded, and wrapped as untrusted external
+content by the existing `web_fetch` output boundary.

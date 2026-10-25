@@ -9,7 +9,8 @@
   "providers": ["deepseek"],
   "contracts": {
     "usageProviders": ["deepseek"],
-    "webSearchProviders": ["deepseek"]
+    "webSearchProviders": ["deepseek"],
+    "webFetchProviders": ["deepseek"]
   },
   "providerEndpoints": [
     {
