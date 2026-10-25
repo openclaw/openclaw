@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 268862,
-  "reason": "Consolidate existing eager/shared/route partitions: same-host startup JS 272893 to 268862 B and 7 to 5 requests; Chat 26 to 20 requests and all 17 navigation closures shrink. Eager/lazy membership and Gateway transport, auth, and CSP are unchanged.",
+  "startupJsGzipBytes": 269706,
+  "reason": "Asset-delivery integration after #183367: same-host current-main/head builds consolidate unchanged eager/shared/Chat partitions and preserve the route-readiness changes. Startup remains five JS requests and one CSS request. Ratchet to the measured integrated head.",
   "updatedAt": "2026-10-25"
 }

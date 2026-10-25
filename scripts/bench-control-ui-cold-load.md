@@ -87,6 +87,18 @@ not Gateway RPC or provider latency. The default Vite preview server does not
 activate Gateway route preload hints or serve the shipped compression sidecars;
 retain that mode for renderer diagnostics rather than network-readiness claims.
 
+Add `--critical-path-intent-ms 150` to hover and focus the destination for a
+150 ms dwell before activation. Settings uses its real identity-menu item in
+this mode; without the option it retains the keyboard-shortcut entry point.
+`elapsedMs` remains activation-to-ready. `intentElapsedMs` includes hover/focus,
+the dwell, and activation-to-ready, while `intentDwellMs` records the actual
+pre-activation interval. The `critical-path:<route>:intent` mark and interval
+RPC/resource records retain work started during intent, including requests that
+finish before activation; `carryInRpcCount` counts requests begun before
+activation. CPU collection also starts before intent. Each destination still
+starts from a separately settled chat boot, so this measures first route visits,
+not direct cold route loads or retained return visits.
+
 For code-splitting evidence, add `--coverage` to capture executed and unused raw
 source bytes. `javaScriptResources` separately counts completed JavaScript
 fetches from Resource Timing: decoded body bytes, encoded body bytes, and transfer

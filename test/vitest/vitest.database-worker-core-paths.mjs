@@ -92,6 +92,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/transcript-identity-insert.conformance.test.ts",
   "src/infra/database-engine/session-entry-write.conformance.test.ts",
   "src/infra/database-engine/nullable-ordering.conformance.test.ts",
+  "src/infra/database-engine/string-set.conformance.test.ts",
   "src/infra/database-engine/physical-facts.test.ts",
   "src/infra/database-engine/bridge-prestart.test.ts",
   "src/infra/database-engine/port.test.ts",

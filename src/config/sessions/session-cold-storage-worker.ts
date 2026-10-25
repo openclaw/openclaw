@@ -58,6 +58,7 @@ import {
 import type {
   SessionColdExternalization,
   SessionColdMutationResult,
+  SessionColdOversized,
   SessionColdPlan,
   SessionColdPrepared,
 } from "./session-cold-storage.types.js";
@@ -93,7 +94,7 @@ export type SessionColdBatchPrepared = {
   protectionKeys: string[];
   prepared: SessionColdPrepared[];
   externalizations: SessionColdExternalization[];
-  oversizedSessionIds: string[];
+  oversizedTranscripts: SessionColdOversized[];
   envelopeBytes: number;
 };
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
@@ -356,7 +357,7 @@ export async function prepareSessionColdBatchInWorker(
     protectionKeys: [],
     prepared: [],
     externalizations: [],
-    oversizedSessionIds: [],
+    oversizedTranscripts: [],
     envelopeBytes: 0,
   };
   const selection = selectSessionColdBatch(input);
@@ -364,6 +365,7 @@ export async function prepareSessionColdBatchInWorker(
     return result;
   }
   result.freePages = selection.value.freePages;
+  result.oversizedTranscripts = selection.value.oversizedTranscripts;
   const maxBytes = Math.min(input.maxBytes, MAX_COLD_ARCHIVE_BYTES);
   const candidates = [
     ...selection.value.externalizations.map((archive) => ({
@@ -394,9 +396,11 @@ export async function prepareSessionColdBatchInWorker(
         throw error;
       }
       if (remaining === MAX_COLD_ARCHIVE_BYTES) {
-        result.oversizedSessionIds.push(
-          candidate.kind === "archive" ? candidate.plan.sessionId : candidate.archive.session_id,
-        );
+        result.oversizedTranscripts.push({
+          sessionId:
+            candidate.kind === "archive" ? candidate.plan.sessionId : candidate.archive.session_id,
+          lowerBoundBytes: remaining + 1,
+        });
       }
       // A rejected partial envelope consumed the remaining preparation budget too.
       result.envelopeBytes = maxBytes;

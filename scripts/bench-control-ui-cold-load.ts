@@ -18,6 +18,7 @@
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
+// --critical-path-intent-ms 150 includes hover/focus prefetch before route activation.
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -269,6 +270,7 @@ const { values } = parseArgs({
     "session-switch": { type: "boolean", default: false },
     "critical-path": { type: "boolean", default: false },
     "critical-path-route": { type: "string", multiple: true, default: [] },
+    "critical-path-intent-ms": { type: "string" },
     "init-script": { type: "string", multiple: true, default: [] },
     "sidebar-list-churn": { type: "boolean", default: false },
     "sidebar-live-churn": { type: "boolean", default: false },
@@ -403,6 +405,13 @@ for (const route of values["critical-path-route"]) {
 }
 if (navigationRoutes.length && !values["critical-path"]) {
   throw new Error("critical-path-route requires critical-path");
+}
+const criticalPathIntentMs = Number(values["critical-path-intent-ms"] ?? 0);
+if (!Number.isFinite(criticalPathIntentMs) || criticalPathIntentMs < 0) {
+  throw new Error("critical-path-intent-ms must be a nonnegative number");
+}
+if (values["critical-path-intent-ms"] !== undefined && !values["critical-path"]) {
+  throw new Error("critical-path-intent-ms requires critical-path");
 }
 if (values["critical-path"] && !navigationRoutes.length && bootRoute !== "new") {
   navigationRoutes.push(...criticalPathRoutes);
@@ -2537,6 +2546,7 @@ try {
                   });
                 }
               : undefined,
+            criticalPathIntentMs,
           ),
         );
         if (cpuProfile) {
@@ -2697,6 +2707,7 @@ try {
         streamingAllocations: values["streaming-allocations"],
         sessionSwitch: values["session-switch"],
         criticalPathRoutes: values["critical-path"] ? navigationRoutes : undefined,
+        criticalPathIntentMs: values["critical-path"] ? criticalPathIntentMs : undefined,
         sidebarListChurn: values["sidebar-list-churn"],
         sidebarLiveChurn: fixture.sidebarLiveChurn,
         duplicateBootReads: values["duplicate-boot-reads"],

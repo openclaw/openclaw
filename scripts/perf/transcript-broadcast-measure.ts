@@ -1629,6 +1629,11 @@ const trustedProxyScenario =
   values["presence-deltas"];
 const clientConnection = {
   url: `ws://127.0.0.1:${port}`,
+  // Long streamed replies plus allocation sampling can queue admission beyond the
+  // helper's interactive default. Keep the full delay in measured connect latency.
+  handshakeTimeoutMs: 60_000,
+  openTimeoutMs: 60_000,
+  openTimeoutMessage: "benchmark WebSocket admission exceeded 60s",
   ...(trustedProxyScenario
     ? {
         origin: authorityOrigin,
