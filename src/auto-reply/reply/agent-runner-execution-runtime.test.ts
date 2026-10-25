@@ -36,8 +36,7 @@ function opaqueCliTurn(chatType: "group" | "direct", currentChatType?: string) {
   state.isCliProviderMock.mockReturnValue(true);
   selectFallback("codex-cli", "gpt-5.4");
   state.runCliAgentMock.mockResolvedValueOnce(createRunResult("final"));
-  const followupRun = createFollowupRun();
-  Object.assign(followupRun.run, {
+  const followupRun = createFollowupRun({
     agentId: "main",
     provider: "codex-cli",
     model: "gpt-5.4",
@@ -83,15 +82,13 @@ it("prepares OpenAI thinking and forwards turn context for the concrete Codex ru
   const followupRun = createFollowupRun({
     extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
     extraSystemPromptTurnContext: turnContext,
+    provider,
+    model,
+    thinkLevel,
+    skipProviderRuntimeHints: true,
+    thinkingCatalog: [catalogEntry],
+    config: { models: { providers: { [provider]: { api, baseUrl, models: [] } } } },
   });
-  followupRun.run.provider = provider;
-  followupRun.run.model = model;
-  followupRun.run.thinkLevel = thinkLevel;
-  followupRun.run.skipProviderRuntimeHints = true;
-  followupRun.run.thinkingCatalog = [catalogEntry];
-  followupRun.run.config = {
-    models: { providers: { [provider]: { api, baseUrl, models: [] } } },
-  };
 
   const result = await runTurn({
     followupRun,
@@ -147,16 +144,17 @@ it("does not pass CLI runtime overrides as embedded harness ids for fallback pro
   selectFallback("openai", "gpt-5.4");
   state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("fallback"));
 
-  const followupRun = createFollowupRun();
-  followupRun.run.provider = "anthropic";
-  followupRun.run.model = "claude-opus-4-7";
-  followupRun.run.config = {
-    agents: {
-      defaults: {
-        models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
+  const followupRun = createFollowupRun({
+    provider: "anthropic",
+    model: "claude-opus-4-7",
+    config: {
+      agents: {
+        defaults: {
+          models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
+        },
       },
     },
-  };
+  });
 
   const result = await runTurn({
     followupRun,
@@ -184,14 +182,13 @@ it("keeps plugin-owned CLI turns on the CLI path after observing that runtime", 
   state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
   selectFallback("anthropic", "claude-sonnet-4-6");
   state.runCliAgentMock.mockResolvedValueOnce(createRunResult("continued"));
-  const followupRun = createFollowupRun();
-  followupRun.run.provider = "anthropic";
-  followupRun.run.model = "claude-sonnet-4-6";
-  followupRun.run.modelSelectionLocked = true;
-  // Modality preparation looks up the canonical model, not the CLI backend alias.
-  followupRun.run.thinkingCatalog = [
-    { provider: "anthropic", id: "claude-sonnet-4-6", input: ["text", "image"] },
-  ];
+  const followupRun = createFollowupRun({
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    modelSelectionLocked: true,
+    // Modality preparation looks up the canonical model, not the CLI backend alias.
+    thinkingCatalog: [{ provider: "anthropic", id: "claude-sonnet-4-6", input: ["text", "image"] }],
+  });
 
   await runTurn({
     followupRun,

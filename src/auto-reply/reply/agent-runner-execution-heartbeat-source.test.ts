@@ -18,29 +18,32 @@ import {
 
 const state = await setupAgentRunnerExecutionTestState();
 
+async function prepareRuntime(runtime: "cli" | "embedded", sessionKey: string) {
+  const isCli = runtime === "cli";
+  const provider = isCli ? "claude-cli" : "anthropic";
+  const model = isCli ? "sonnet-4.6" : "claude";
+  state.isCliProviderMock.mockReturnValue(isCli);
+  await useProductionEmbeddedRunExecutionParamsForTest();
+  state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+    runFallbackCandidate(params, provider, model),
+  );
+  return {
+    followupRun: createFollowupRun({ sessionKey, provider, model }),
+    runAgent: isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock,
+  };
+}
+
 describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
   it.each([false, true])(
     "requires an explicit message target only for scheduled execution (%s)",
     async (scheduled) => {
       const sessionKey = "agent:main:dashboard:completion";
-      const followupRun = createFollowupRun();
-      followupRun.run.sessionKey = sessionKey;
+      const { followupRun, runAgent } = await prepareRuntime(runtime, sessionKey);
       followupRun.run.messageProvider = "webchat";
       followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
       followupRun.originatingChannel = "webchat";
       followupRun.originatingTo = sessionKey;
       followupRun.originatingChatType = "direct";
-      const isCli = runtime === "cli";
-      const provider = isCli ? "claude-cli" : "anthropic";
-      const model = isCli ? "sonnet-4.6" : "claude";
-      followupRun.run.provider = provider;
-      followupRun.run.model = model;
-      state.isCliProviderMock.mockReturnValue(isCli);
-      await useProductionEmbeddedRunExecutionParamsForTest();
-      state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
-        runFallbackCandidate(params, provider, model),
-      );
-      const runAgent = isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock;
       let sourceReply:
         | Awaited<
             ReturnType<Awaited<ReturnType<typeof createOpenClawToolsAsync>>[number]["execute"]>
@@ -127,20 +130,12 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
     },
   );
   it("retains revoked source authority at runtime admission", async () => {
-    const followupRun = createFollowupRun();
-    followupRun.run.sessionKey = "agent:main:dashboard:source-authority";
-    const isCli = runtime === "cli";
-    const provider = isCli ? "claude-cli" : "anthropic";
-    const model = isCli ? "sonnet-4.6" : "claude";
-    followupRun.run.provider = provider;
-    followupRun.run.model = model;
-    state.isCliProviderMock.mockReturnValue(isCli);
-    await useProductionEmbeddedRunExecutionParamsForTest();
-    let current = true;
-    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
-      runFallbackCandidate(params, provider, model),
+    const { followupRun, runAgent } = await prepareRuntime(
+      runtime,
+      "agent:main:dashboard:source-authority",
     );
-    const runAgent = isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock;
+    const isCli = runtime === "cli";
+    let current = true;
     let sourceFailure: unknown;
     let admissionFailure: unknown;
     runAgent.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
@@ -162,10 +157,7 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
       return { payloads: [], meta: {} };
     });
     const execute = await getExecuteAgentTurnForTest();
-    const params = createMinimalRunAgentTurnParams({
-      followupRun,
-      opts: {},
-    });
+    const params = createMinimalRunAgentTurnParams({ followupRun, opts: {} });
     params.storePath = path.join(followupRun.run.workspaceDir, "sessions.json");
     params.sessionKey = followupRun.run.sessionKey;
     const entry = await replaceSessionEntry(
