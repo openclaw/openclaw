@@ -148,7 +148,7 @@ async function expectTokenValidation(
 ) {
   const registeredCommand = params.registeredCommand ?? createRegisteredCommand();
   clientMocks.createMattermostClient.mockReturnValue(client);
-  const authenticated = Symbol("authenticated");
+  const authenticated = new Error("synthetic authenticated hook");
   const result = await runSlashRequest({
     registeredCommands: [registeredCommand],
     accountId: `${slashTestAccountId}:${params.accountId ?? "default"}`,

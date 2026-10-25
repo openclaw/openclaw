@@ -372,8 +372,6 @@
 ["extensions/feishu/src/bot-name.test.ts","./client.js","ff27174858b2c07e15fd9b3bef290d331a463a9423878601adf5e9f6ede198e8",1]
 ["extensions/feishu/src/bot-sender-name.test.ts","./client.js","a766f99084fc866bc01bc95c92ea86833c7054111e419c674ca435a652c9f1e0",1]
 ["extensions/feishu/src/bot.bot-threads.test.ts","./bot-group-name.js","2e3486ce1aa446fa86a26a8c623583ccf89641fa06ea62ef0555520179118da9",1]
-["extensions/feishu/src/bot.bot-threads.test.ts","./reply-dispatcher.js","47a8764acd2368a64fc18fa444380d642915b8fbd7018f7d8d2d55377e9d2a2a",1]
-["extensions/feishu/src/bot.bot-threads.test.ts","./send.js","759bf86df0f162cdf7eb4afcbf02da151e82460173045269fa8ac37087ddc70a",1]
 ["extensions/feishu/src/bot.card-action.test.ts","./bot.js","ba6e2f59189e0e1ccc79761af9e99bf4ed1f8e9b700d32fd59c63cb9508b202a",1]
 ["extensions/feishu/src/card-ux-launcher.test.ts","./send.js","7c01bfcbaa4c5711594f084919d75b429c8a9f1528aee48d9dd0b481ba762e48",1]
 ["extensions/feishu/src/channel.outbound.test.ts","./channel.runtime.js","95011d45608c43961f32fdeff94f517007737660ee1773175eeba41e638629d9",1]
