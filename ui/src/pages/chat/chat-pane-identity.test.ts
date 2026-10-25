@@ -37,7 +37,11 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
+import {
+  cacheChatSessionSnapshot,
+  readChatSessionSnapshot,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 
 function createLiveSessionContext(client: GatewayBrowserClient, sessions?: SessionCapability) {
   const initial = createInitializationContext();
@@ -80,7 +84,7 @@ describe("chat pane assistant identity snapshots", () => {
     const state = pane.initialize(createInitializationContext());
     state.currentSessionId = "row-footprint-session";
     const target = { sessionKey: state.sessionKey };
-    const snapshot = {
+    const snapshot: ChatSessionSnapshot = {
       messages: [],
       pagination: { hasMore: false },
       sessionId: state.currentSessionId,
