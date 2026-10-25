@@ -20,7 +20,7 @@ import {
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
-import { withEngineStoreAdmission } from "./admission-scope.js";
+import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
 function projection(db: EngineConnection, sessionId: string) {
@@ -79,6 +79,20 @@ function observePgTrips(db: EngineConnection) {
   return { statements, restore: () => spy.mockRestore() };
 }
 
+function expectTrips(db: EngineConnection, run: () => void, count: number) {
+  const trips = observePgTrips(db);
+  try {
+    run();
+  } finally {
+    trips.restore();
+  }
+  if (isPostgresSqlConnection(db)) {
+    expect(trips.statements).toHaveLength(count);
+  } else {
+    expect(trips.statements).toEqual([]);
+  }
+}
+
 function message(
   id: string,
   parentId: string | null,
@@ -114,7 +128,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     }
 
     it("uses one projection trip per accepted input, tool result, and final without changing persisted content", async () => {
-      const seed = withEngineStoreAdmission(() => {
+      const seed = admit(() => {
         const fixtureState = fixture("turn");
         runSqliteImmediateTransactionSync(fixtureState.database.db, () =>
           appendTranscriptEventsInTransaction(fixtureState.database, fixtureState.scope, [
@@ -125,7 +139,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         return fixtureState;
       });
       const f = createSessionActorWorkerFixture(seed, (options) =>
-        withEngineStoreAdmission(() => openOpenClawAgentDatabase(options)),
+        admit(() => openOpenClawAgentDatabase(options)),
       );
       const plan = (id: string, role: string, content: string, now: number): SessionTurnPlan => ({
         agentId: "main",
@@ -140,10 +154,17 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       });
       const execute = async (command: Mutation) => {
         await f.prepare(command);
-        return withEngineStoreAdmission(() => f.mutate(command));
+        return admit(() => f.mutate(command));
       };
+      const readPersisted = () =>
+        admit(() => ({
+          transcript: readTranscriptEventRows(f.database, f.scope.sessionId),
+          projection: projection(f.database.db, f.scope.sessionId),
+          window: transcriptWindow(f.database.db, f.scope.sessionId),
+          identities: transcriptIdentities(f.database.db, f.scope.sessionId),
+        }));
       try {
-        const before = withEngineStoreAdmission(() => f.read());
+        const before = admit(() => f.read());
         const commands: Mutation[] = [
           {
             type: "session.actor.acceptInput",
@@ -212,19 +233,14 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             trips.statements.filter((sql) => /pg_advisory_xact_lock/iu.test(sql)),
           ).toHaveLength(3);
         }
-        const persisted = withEngineStoreAdmission(() => ({
-          transcript: readTranscriptEventRows(f.database, f.scope.sessionId).map((row) =>
-            JSON.parse(row.eventJson),
-          ),
-          projection: projection(f.database.db, f.scope.sessionId),
-          window: transcriptWindow(f.database.db, f.scope.sessionId),
-          identities: transcriptIdentities(f.database.db, f.scope.sessionId),
-          search: searchSessionTranscriptsReadOnlySync(
+        const persisted = readPersisted();
+        const search = admit(() =>
+          searchSessionTranscriptsReadOnlySync(
             { agentId: "main", sessionId: f.scope.sessionId, query: "Needle", order: "recent" },
             { agentId: "main", path: f.database.path },
           ),
-        }));
-        expect(persisted.transcript).toEqual([
+        );
+        expect(persisted.transcript.map((row) => JSON.parse(row.eventJson))).toEqual([
           { type: "session", id: f.scope.sessionId, version: 3 },
           message("previous", null, "assistant", "Previous answer", 1),
           message("input", "previous", "user", "Needle question", 10, "input"),
@@ -260,7 +276,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         });
         const retry = plan("final", "assistant", "Needle answer", 30);
         expect(
-          persisted.search.hits.map(({ messageId, role, timestamp }) => ({
+          search.hits.map(({ messageId, role, timestamp }) => ({
             messageId,
             role,
             timestamp,
@@ -281,18 +297,14 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             },
           }),
         ).toMatchObject({ kind: "committed" });
-        const stable = withEngineStoreAdmission(() => ({
-          transcript: readTranscriptEventRows(f.database, f.scope.sessionId),
-          projection: projection(f.database.db, f.scope.sessionId),
-          window: transcriptWindow(f.database.db, f.scope.sessionId),
-          identities: transcriptIdentities(f.database.db, f.scope.sessionId),
-        }));
-        expect(stable.projection).toEqual(persisted.projection);
-        expect(stable.window).toEqual(persisted.window);
-        expect(stable.identities).toEqual(persisted.identities);
-        expect(stable.transcript.map((row) => JSON.parse(row.eventJson))).toEqual(
-          persisted.transcript,
-        );
+        const stable = readPersisted();
+        expect({
+          ...stable,
+          transcript: stable.transcript.map((row) => JSON.parse(row.eventJson)),
+        }).toEqual({
+          ...persisted,
+          transcript: persisted.transcript.map((row) => JSON.parse(row.eventJson)),
+        });
         // Both failure points run after the projection statement, before durable commit.
         for (const refusal of ["rollback", "revoked grant"] as const) {
           if (refusal === "rollback") {
@@ -318,14 +330,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           expect(outcome).toMatchObject({ kind: "rolled-back", error: { message: refusal } });
           delete f.hooks.withCommit;
           delete f.hooks.admit;
-          expect(
-            withEngineStoreAdmission(() => ({
-              transcript: readTranscriptEventRows(f.database, f.scope.sessionId),
-              projection: projection(f.database.db, f.scope.sessionId),
-              window: transcriptWindow(f.database.db, f.scope.sessionId),
-              identities: transcriptIdentities(f.database.db, f.scope.sessionId),
-            })),
-          ).toEqual(stable);
+          expect(readPersisted()).toEqual(stable);
         }
       } finally {
         f.close();
@@ -333,19 +338,19 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     });
 
     it("keeps row-only batches below the chunk bound without advancing the watermark", () =>
-      withEngineStoreAdmission(() => {
+      admit(() => {
         const { database, scope } = fixture("batch");
         const db = database.db;
         runSqliteImmediateTransactionSync(db, () => {
           const empty = createTranscriptIndexAppenderInTransaction(db, scope.sessionId);
-          const trips = observePgTrips(db);
-          try {
-            empty.flushRows();
-            empty.flush();
-          } finally {
-            trips.restore();
-          }
-          expect(trips.statements).toEqual([]);
+          expectTrips(
+            db,
+            () => {
+              empty.flushRows();
+              empty.flush();
+            },
+            0,
+          );
           expect(projection(db, scope.sessionId)).toEqual({
             active: [],
             state: undefined,
@@ -376,15 +381,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
               false,
             );
           }
-          const batchTrips = observePgTrips(db);
-          try {
-            append.flushRows();
-          } finally {
-            batchTrips.restore();
-          }
-          if (engine === "postgres") {
-            expect(batchTrips.statements).toHaveLength(2);
-          }
+          expectTrips(db, () => append.flushRows(), 2);
           const rowsOnly = projection(db, scope.sessionId);
           expect(rowsOnly.state).toBeUndefined();
           expect(rowsOnly.active).toHaveLength(count);
@@ -399,23 +396,9 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
               timestamp: seq + 1,
             })),
           );
-          const repeatedTrips = observePgTrips(db);
-          try {
-            append.flushRows();
-          } finally {
-            repeatedTrips.restore();
-          }
-          expect(repeatedTrips.statements).toEqual([]);
+          expectTrips(db, () => append.flushRows(), 0);
           expect(projection(db, scope.sessionId)).toEqual(rowsOnly);
-          const watermarkTrips = observePgTrips(db);
-          try {
-            append.flush();
-          } finally {
-            watermarkTrips.restore();
-          }
-          if (engine === "postgres") {
-            expect(watermarkTrips.statements).toHaveLength(1);
-          }
+          expectTrips(db, () => append.flush(), 1);
           expect(projection(db, scope.sessionId)).toEqual({
             ...rowsOnly,
             state: {
@@ -430,7 +413,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       }));
 
     it("retains branch and compaction rebuilds when a pending flush becomes dirty", () =>
-      withEngineStoreAdmission(() => {
+      admit(() => {
         const { database, scope } = fixture("branch");
         const db = database.db;
         runSqliteImmediateTransactionSync(db, () => {
