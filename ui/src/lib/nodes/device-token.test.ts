@@ -132,8 +132,11 @@ describe("device token request lifecycle", () => {
       if (stage === "before RPC success") {
         state.requestGeneration += 1;
       }
-      const tokenDelivery = stage === "before RPC success" ? "in-band" : undefined;
-      response.resolve({ token: "rotated-token", tokenDelivery, ...grant });
+      response.resolve({
+        token: "rotated-token",
+        ...(stage === "before RPC success" ? { tokenDelivery: "in-band" } : {}),
+        ...grant,
+      });
       await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
       if (stage === "during fingerprinting") {
         state.requestGeneration += 1;
@@ -150,7 +153,7 @@ describe("device token request lifecycle", () => {
         ...grant,
         deviceId: " 00 ",
         role: "operator ",
-        tokenDelivery,
+        ...(tokenDelivery === undefined ? {} : { tokenDelivery }),
       }));
       expect(await rotateDeviceToken(state, tokenParams)).toEqual({
         delivery: "withheld-cross-device",
