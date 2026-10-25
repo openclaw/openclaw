@@ -158,66 +158,31 @@ it.each(["code", "nested errors"])(
   },
 );
 
+const uncertainWrite = () => new SqliteWorkerError("Unconfirmed write", "outcome-unknown");
+const diskFailure = Object.assign(new Error("Disk full"), { code: "SQLITE_FULL" });
+const unreadableAggregate = new AggregateError([new Error("Sibling"), uncertainWrite()], "Failure");
+Object.defineProperty(unreadableAggregate.errors, Symbol.iterator, {
+  get() {
+    throw new Error("Unreadable diagnostic");
+  },
+});
 it.each([
-  {
-    name: "unknown outcome",
-    failure: new SqliteWorkerError("Synthetic unacknowledged write", "outcome-unknown"),
-    local: true,
-  },
-  {
-    name: "database cancellation",
-    failure: decodePostgresError({
-      name: "error",
-      code: "57014",
-      message: "Synthetic cancellation",
-    }),
-    local: true,
-  },
-  {
-    name: "primary disk failure with uncertain cleanup",
-    failure: (() => {
-      const primary = Object.assign(new Error("Synthetic disk failure"), { code: "SQLITE_FULL" });
-      return new AggregateError(
-        [primary, new SqliteWorkerError("Synthetic unconfirmed cleanup", "outcome-unknown")],
-        "Synthetic operation and cleanup failure",
-        { cause: primary },
-      );
-    })(),
-    local: true,
-  },
-  {
-    name: "unknown outcome with unreadable aggregate diagnostics",
-    failure: (() => {
-      const failure = new AggregateError(
-        [
-          new Error("Synthetic sibling"),
-          new SqliteWorkerError("Unconfirmed write", "outcome-unknown"),
-        ],
-        "Synthetic operation failure",
-      );
-      Object.defineProperty(failure.errors, Symbol.iterator, {
-        get() {
-          throw new Error("Diagnostic access must not replace the original tool failure");
-        },
-      });
-      return failure;
-    })(),
-    local: true,
-  },
-  { name: "ordinary tool failure", failure: new Error("Synthetic tool failure"), local: false },
-  {
-    name: "ordinary SQLite tool contention",
-    failure: Object.assign(new Error("Synthetic plugin database contention"), {
-      code: "SQLITE_BUSY",
-    }),
-    local: false,
-  },
-  {
-    name: "ordinary AbortError tool failure",
-    failure: Object.assign(new Error("Synthetic tool abort"), { name: "AbortError" }),
-    local: false,
-  },
-])("settles accepted tools before reporting $name", async ({ failure, local }) => {
+  ["unknown outcome", uncertainWrite(), true],
+  [
+    "database cancellation",
+    decodePostgresError({ name: "error", code: "57014", message: "Cancelled" }),
+    true,
+  ],
+  [
+    "disk failure with uncertain cleanup",
+    new AggregateError([diskFailure, uncertainWrite()], "Cleanup", { cause: diskFailure }),
+    true,
+  ],
+  ["unreadable aggregate diagnostics", unreadableAggregate, true],
+  ["ordinary failure", new Error("Tool failed"), false],
+  ["SQLite contention", Object.assign(new Error("Busy"), { code: "SQLITE_BUSY" }), false],
+  ["ordinary AbortError", Object.assign(new Error("Aborted"), { name: "AbortError" }), false],
+] as const)("settles accepted tools before reporting %s", async (_name, failure, local) => {
   const siblingStarted = Promise.withResolvers<void>();
   const failureThrown = Promise.withResolvers<void>();
   const releaseSibling = Promise.withResolvers<void>();
