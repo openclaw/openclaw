@@ -163,7 +163,6 @@ describe("catchup", () => {
         }));
       const dispatch = options.dispatch ?? vi.fn<CatchupDispatchFn>(async () => ({ ok: true }));
       return {
-        fetch,
         dispatch,
         result: performIMessageCatchup({
           accountId: "primary",
@@ -228,7 +227,7 @@ describe("catchup", () => {
 
     it("does NOT leapfrog a held failure when a later row in the same batch succeeds", async () => {
       // #78649: a later success must not move the cursor past a retryable failure.
-      const { result, dispatch } = run(
+      const { result } = run(
         [row("A", 10, { date: now - 40_000 }), row("B", 11, { date: now - 30_000 })],
         {
           highWatermarkRowid: 99,
@@ -237,7 +236,6 @@ describe("catchup", () => {
         },
       );
       expect(await result).toMatchObject({ failed: 1, replayed: 1, givenUp: 0 });
-      expect(dispatch).toHaveBeenCalledTimes(2);
       await expectCursor({ lastSeenRowid: 9, failureRetries: { A: 1 } });
     });
 

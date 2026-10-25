@@ -243,38 +243,30 @@ describe("iMessage durable ingress", () => {
   });
 
   it.each([
-    ["GUID-bad", { guid: "GUID-bad", text: 123 }],
-    ["GUID-missing", { guid: undefined }],
-  ] as const)(
-    "dead-letters malformed persisted payload %s without retry",
-    async (id, overrides) => {
+    ["GUID-bad", { guid: "GUID-bad", text: 123 }, false],
+    ["GUID-missing", { guid: undefined }, false],
+    ["GUID-101", {}, true],
+  ] as const)("dead-letters permanent failure %s", async (id, overrides, denied) => {
+    const dispatch = vi.fn(async () => {
+      if (denied) {
+        throw new Error("Full Disk Access denied for Messages chat.db");
+      }
+    });
+    const ingress = createIngress({ dispatch });
+    if (denied) {
+      await ingress.receive(rawRow());
+    } else {
       await queue.enqueue(
         id,
-        {
-          version: 1,
-          receivedAt: Date.now(),
-          raw: rawRow(overrides),
-        },
+        { version: 1, receivedAt: Date.now(), raw: rawRow(overrides) },
         { laneKey: "chat:42" },
       );
-      const dispatch = vi.fn();
-      const ingress = createIngress({ dispatch });
-      ingress.start();
-      await ingress.waitForIdle();
-      await expectDeadLetter(id);
-      expect(dispatch).not.toHaveBeenCalled();
-    },
-  );
-
-  it("dead-letters permanent Full Disk Access failures", async () => {
-    const ingress = createIngress({
-      dispatch: vi.fn(async () => {
-        throw new Error("Full Disk Access denied for Messages chat.db");
-      }),
-    });
+    }
     ingress.start();
-    await ingress.receive(rawRow());
     await ingress.waitForIdle();
-    await expectDeadLetter("GUID-101");
+    await expectDeadLetter(id);
+    if (!denied) {
+      expect(dispatch).not.toHaveBeenCalled();
+    }
   });
 });

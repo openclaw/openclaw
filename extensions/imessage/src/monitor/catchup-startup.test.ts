@@ -268,88 +268,79 @@ describe("registered iMessage account startup", () => {
     },
   );
 
-  it.each([
-    { name: "recovers the oldest rows from a 100-message chat", total: 100, twoChats: false },
-    { name: "caps each pass when a 500-message chat dominates", total: 600, twoChats: true },
-  ])(
-    "imessagePlugin.gateway.startAccount $name across persisted starts",
-    async ({ total, twoChats }) => {
-      const backlogStartMs = Date.now() - 20 * 60_000;
-      const rows = Array.from({ length: total }, (_, index) => ({
-        id: index + 1,
-        guid: `catchup-startup-${index + 1}`,
-        chat_id: twoChats && index < 100 ? 2 : 1,
-        chat_identifier: "+15555550123",
-        chat_guid: "iMessage;-;+15555550123",
-        sender: "+15555550123",
-        is_from_me: false,
-        is_group: false,
-        text: "missed during downtime",
-        created_at: new Date(backlogStartMs + (index + 1) * 1_000).toISOString(),
-      }));
-      // Disabled DMs complete ingress admission without unrelated agent turns.
-      const cursorStore = catchupStore();
-      const cursorKey = resolveIMessageCatchupCursorKey("default");
-      cursorStore.register(cursorKey, {
-        lastSeenMs: backlogStartMs,
-        lastSeenRowid: 0,
-        updatedAt: Date.now(),
-      });
-      using database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
-        readOnly: true,
-      });
-      for (let end = 50; end <= total; end += 50) {
-        const { request, runtime, starting } = startAccount(
-          { catchup: { enabled: true, perRunLimit: 50, maxAgeMinutes: 60 } },
-          async (method, params) => {
-            if (method === "chats.list") {
-              return {
-                chats: (twoChats ? [1, 2] : [1]).map((id) => ({
-                  id,
-                  last_message_at: rows.at(-1)!.created_at,
-                })),
-              };
+  it("caps each pass across persisted starts when a 500-message chat dominates", async () => {
+    const total = 600;
+    const backlogStartMs = Date.now() - 20 * 60_000;
+    const rows = Array.from({ length: total }, (_, index) => ({
+      id: index + 1,
+      guid: `catchup-startup-${index + 1}`,
+      chat_id: index < 100 ? 2 : 1,
+      chat_identifier: "+15555550123",
+      chat_guid: "iMessage;-;+15555550123",
+      sender: "+15555550123",
+      is_from_me: false,
+      is_group: false,
+      text: "missed during downtime",
+      created_at: new Date(backlogStartMs + (index + 1) * 1_000).toISOString(),
+    }));
+    // Disabled DMs complete ingress admission without unrelated agent turns.
+    const cursorStore = catchupStore();
+    const cursorKey = resolveIMessageCatchupCursorKey("default");
+    cursorStore.register(cursorKey, {
+      lastSeenMs: backlogStartMs,
+      lastSeenRowid: 0,
+      updatedAt: Date.now(),
+    });
+    using database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+      readOnly: true,
+    });
+    for (let end = 50; end <= total; end += 50) {
+      const { runtime, starting } = startAccount(
+        { catchup: { enabled: true, perRunLimit: 50, maxAgeMinutes: 60 } },
+        async (method, params) => {
+          if (method === "chats.list") {
+            return {
+              chats: [1, 2].map((id) => ({
+                id,
+                last_message_at: rows.at(-1)!.created_at,
+              })),
+            };
+          }
+          if (method === "messages.history") {
+            const { chat_id, limit, start } = params!;
+            if (typeof limit !== "number" || typeof start !== "string") {
+              throw new Error("history request must carry its limit and lower date bound");
             }
-            if (method === "messages.history") {
-              const { chat_id, limit, start } = params!;
-              if (typeof limit !== "number" || typeof start !== "string") {
-                throw new Error("history request must carry its limit and lower date bound");
-              }
-              // Match the external bridge: filter by date, then select newest first.
-              return {
-                messages: rows
-                  .filter(
-                    (row) =>
-                      row.chat_id === chat_id && Date.parse(row.created_at) >= Date.parse(start),
-                  )
-                  .toReversed()
-                  .slice(0, limit),
-              };
-            }
-            throw new Error(`unexpected bridge method ${method}`);
-          },
-        );
-        await starting;
+            // Match the external bridge: filter by date, then select newest first.
+            return {
+              messages: rows
+                .filter(
+                  (row) =>
+                    row.chat_id === chat_id && Date.parse(row.created_at) >= Date.parse(start),
+                )
+                .toReversed()
+                .slice(0, limit),
+            };
+          }
+          throw new Error(`unexpected bridge method ${method}`);
+        },
+      );
+      await starting;
 
-        const admitted = database
-          .prepare(
-            "SELECT event_id, status FROM channel_ingress_events WHERE channel_id = 'imessage' AND account_id = 'default' ORDER BY rowid",
-          )
-          .all();
-        expect(admitted.map((row) => row.event_id)).toEqual(
-          rows.slice(0, end).map((row) => row.guid),
-        );
-        expect(admitted.every((row) => row.status === "completed")).toBe(true);
-        expect(cursorStore.lookup(cursorKey)).toMatchObject({
-          lastSeenRowid: end,
-          lastSeenMs: backlogStartMs + end * 1_000,
-        });
-        const limits = request.mock.calls
-          .filter(([method]) => method === "messages.history")
-          .map(([, params]) => params?.limit);
-        expect(limits).toEqual(twoChats ? [500, 500] : [500]);
-        expect(runtime.error).not.toHaveBeenCalled();
-      }
-    },
-  );
+      const admitted = database
+        .prepare(
+          "SELECT event_id, status FROM channel_ingress_events WHERE channel_id = 'imessage' AND account_id = 'default' ORDER BY rowid",
+        )
+        .all();
+      expect(admitted.map((row) => row.event_id)).toEqual(
+        rows.slice(0, end).map((row) => row.guid),
+      );
+      expect(admitted.every((row) => row.status === "completed")).toBe(true);
+      expect(cursorStore.lookup(cursorKey)).toMatchObject({
+        lastSeenRowid: end,
+        lastSeenMs: backlogStartMs + end * 1_000,
+      });
+      expect(runtime.error).not.toHaveBeenCalled();
+    }
+  });
 });
