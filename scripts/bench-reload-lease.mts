@@ -20,6 +20,8 @@ import {
 } from "./lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 
+type GatewayResponse = Awaited<ReturnType<ReturnType<typeof createGatewayWsClient>["request"]>>;
+
 const { values } = parseArgs({
   options: {
     out: { type: "string" },
@@ -199,8 +201,7 @@ try {
           ? "plugin-enable"
           : "plugin-disable";
     setPhase(actionPhase);
-    const observed: Awaited<ReturnType<ReturnType<typeof createGatewayWsClient>["request"]>> =
-      await client.request("config.get", {}, 120_000);
+    const observed: GatewayResponse = await client.request("config.get", {}, 120_000);
     assert.ok(observed.ok, "Config observation failed");
     result.observations++;
     const payload = observed.payload as { hash: string };
@@ -213,7 +214,7 @@ try {
         entries: { ...next.plugins?.entries, diffs: { enabled: sample === samples } },
       };
     }
-    const written = await client.request(
+    const written: GatewayResponse = await client.request(
       "config.set",
       { raw: JSON.stringify(next), baseHash: payload.hash },
       120_000,
@@ -225,7 +226,7 @@ try {
     // config.set acknowledges persistence; the applied revision proves the reload completed.
     const deadline = Date.now() + 120_000;
     for (;;) {
-      const current = await client.request("config.get", {}, 120_000);
+      const current: GatewayResponse = await client.request("config.get", {}, 120_000);
       assert.ok(current.ok, "Reload observation failed");
       result.observations++;
       const snapshot = current.payload as {

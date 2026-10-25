@@ -176,7 +176,7 @@ async function runStateLeaseOwnerInScope<T>(
     }
   };
   const assertOwnerCurrent = () => {
-    operationSignal.throwIfAborted();
+    assertActive();
     // Timer delivery can lag the persisted expiry; never admit an effect in that gap.
     if (closed || confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
       abortLost();
