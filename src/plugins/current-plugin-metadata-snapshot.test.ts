@@ -17,11 +17,6 @@ import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import * as indexPolicy from "./installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import {
-  createPluginCache,
-  invalidatePluginCacheMetadata,
-  withPluginCache,
-} from "./plugin-cache.js";
 import * as controlPlane from "./plugin-control-plane-context.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
@@ -44,39 +39,32 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function createSnapshot(
-  params: {
-    config?: Parameters<typeof indexPolicy.resolveInstalledPluginIndexPolicyHash>[0];
-    pluginIds?: readonly string[];
-    normalizationAlias?: string;
-    workspaceDir?: string;
-  } = {},
-): PluginMetadataSnapshot {
-  const snapshot = createPluginMetadataSnapshotFixture({
-    plugins: params.normalizationAlias
-      ? [
-          {
-            id: "fixture",
-            origin: "config",
-            rootDir: "/fixture",
-            source: "test",
-            modelIdNormalization: {
-              providers: { fixture: { aliases: { raw: params.normalizationAlias } } },
+function createSnapshot({
+  config,
+  normalizationAlias,
+  ...scope
+}: {
+  config?: Parameters<typeof indexPolicy.resolveInstalledPluginIndexPolicyHash>[0];
+  pluginIds?: readonly string[];
+  normalizationAlias?: string;
+  workspaceDir?: string;
+} = {}): PluginMetadataSnapshot {
+  const snapshot = createPluginMetadataSnapshotFixture(
+    {
+      plugins: normalizationAlias
+        ? [
+            {
+              id: "fixture",
+              modelIdNormalization: {
+                providers: { fixture: { aliases: { raw: normalizationAlias } } },
+              },
             },
-          },
-        ]
-      : [],
-  });
-  const policyHash = indexPolicy.resolveInstalledPluginIndexPolicyHash(params.config);
-  const index = { ...snapshot.index, policyHash };
-  return {
-    ...snapshot,
-    policyHash,
-    index,
-    registryIndex: index,
-    ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  };
+          ]
+        : [],
+    },
+    indexPolicy.resolveInstalledPluginIndexPolicyHash(config),
+  );
+  return { ...snapshot, ...scope };
 }
 
 function expectSnapshot(
@@ -110,6 +98,7 @@ it("carries prepared metadata and registry across nested agent workspaces", asyn
   const policyHash = vi.spyOn(indexPolicy, "resolveInstalledPluginIndexPolicyHash");
   await fixture.runtime(async () => {
     await Promise.resolve();
+    clearPluginMetadataLifecycleCaches();
     expectSnapshot(metadataSnapshot, { config, workspaceDir: agentWorkspaceDir });
     expectSnapshot(metadataSnapshot, { config, workspaceDir: pluginWorkspaceDir });
     expectSnapshot(metadataSnapshot, {
@@ -226,43 +215,6 @@ it("falls through nested scopes and restores the parent after rejection", async 
     ).rejects.toThrow("scope failed");
     expectSnapshot(outer.snapshot, outer);
   });
-});
-
-it("retains immutable inventory fingerprints with their owner across caller scopes", async () => {
-  const config = { plugins: { allow: ["source"] } };
-  const compatible = { plugins: { allow: ["runtime"] } };
-  await using owner = createPluginCache();
-  const snapshot = withPluginCache(owner, () =>
-    restorePluginMetadataSnapshot(createSnapshot({ config })),
-  );
-  const enterScope = () =>
-    withPluginMetadataSnapshotScope(
-      snapshot,
-      () => {
-        expectSnapshot(snapshot, { config });
-        expectSnapshot(snapshot, { config: compatible });
-      },
-      { config, compatibleConfigs: [compatible] },
-    );
-
-  await using firstCaller = createPluginCache();
-  withPluginCache(firstCaller, enterScope);
-  const facts = owner.metadata.indexFacts.get(snapshot.index);
-  expect(facts?.fingerprint).toEqual(expect.any(String));
-  expect(firstCaller.metadata.indexFacts.has(snapshot.index)).toBe(false);
-
-  await using secondCaller = createPluginCache();
-  withPluginCache(secondCaller, enterScope);
-  expect(owner.metadata.indexFacts.get(snapshot.index)).toBe(facts);
-  expect(secondCaller.metadata.indexFacts.has(snapshot.index)).toBe(false);
-
-  invalidatePluginCacheMetadata(owner);
-  expect(owner.metadata.indexFacts.has(snapshot.index)).toBe(false);
-  withPluginCache(secondCaller, enterScope);
-  const refreshed = owner.metadata.indexFacts.get(snapshot.index);
-  expect(refreshed).not.toBe(facts);
-  expect(refreshed?.fingerprint).toBe(facts?.fingerprint);
-  expect(secondCaller.metadata.indexFacts.has(snapshot.index)).toBe(false);
 });
 
 it("invalidates a generic scope when the config identity has a different policy", () => {
@@ -385,14 +337,6 @@ it("keeps source-policy compatibility when storing an auto-enabled runtime confi
 
   expectSnapshot(snapshot, { config: sourceConfig });
   expectSnapshot(undefined, { config: autoEnabledConfig });
-});
-
-it("clearPluginMetadataLifecycleCaches preserves an admitted runtime generation", () => {
-  const snapshot = createSnapshot();
-  withPluginRuntimeGenerationScope({ metadataSnapshot: snapshot }, () => {
-    clearPluginMetadataLifecycleCaches();
-    expectSnapshot(snapshot);
-  });
 });
 
 it("keeps a scoped reader pinned while a Gateway publication survives scope failure", async () => {

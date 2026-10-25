@@ -18,6 +18,7 @@ export function mockClaudeManagedSettings(directory: string) {
   vi.spyOn(fs, "realpathSync").mockImplementation(((target: fs.PathLike, options?: never) =>
     realpathSync(fixturePath(target) ?? target, options)) as typeof fs.realpathSync);
   vi.spyOn(fs, "readdirSync").mockImplementation(((target: fs.PathLike, options?: never) =>
+    // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Forward caller options unchanged; recursion is governed at the original call sites.
     readdirSync(fixturePath(target) ?? target, options)) as typeof fs.readdirSync);
   return fixturePath;
 }

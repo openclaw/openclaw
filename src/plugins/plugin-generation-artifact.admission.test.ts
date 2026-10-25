@@ -19,7 +19,6 @@ import {
   observeFileIo,
   expectBytes,
   readText,
-  writeTree,
   type Artifact,
   type Cache,
 } from "./plugin-generation-capture.test-support.js";
@@ -36,6 +35,7 @@ import {
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.types.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
