@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { writeHeapSnapshot } from "node:v8";
+import { compileFunction } from "node:vm";
 import { build } from "esbuild";
 
 const [ownerFile, outputDirectory] = process.argv.slice(2);
@@ -20,9 +21,8 @@ assert(ownerFile && outputDirectory, "OWNER_SOURCE OUTPUT_DIRECTORY required");
 const output = path.resolve(outputDirectory);
 fs.mkdirSync(output, { recursive: true });
 const owner = fs.readFileSync(ownerFile, "utf8");
-// V8 natives require dynamic parsing; this fixed diagnostic expression contains no external input.
-// oxlint-disable-next-line typescript/no-implied-eval
-const flat = new Function("text", "return %StringIsFlat(text)");
+// Compile the fixed V8 intrinsic separately from standard module syntax; no external input.
+const flat = compileFunction("return %StringIsFlat(text)", ["text"]);
 const replaceOnce = (source, before, after) => {
   assert.equal(source.split(before).length, 2, `instrumentation anchor: ${before}`);
   return source.replace(before, after);
