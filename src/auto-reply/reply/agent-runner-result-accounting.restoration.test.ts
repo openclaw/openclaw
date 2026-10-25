@@ -163,3 +163,38 @@ it.each(["session", "lifecycle", "writer", "cancellation"] as const)(
     expect(f.read()?.fallbackNotice).toEqual(f.activeNotice);
   },
 );
+
+it.each(["selection", "active fallback"] as const)(
+  "preserves a concurrent %s change at the restoration write boundary",
+  async (change) => {
+    const f = await fixture();
+    const append = transcript.appendAssistantMessageToSessionTranscript;
+    const replacementNotice = {
+      kind: "active" as const,
+      selectedModel: change === "selection" ? "new-fixture/selected" : f.activeNotice.selectedModel,
+      activeModel: change === "selection" ? f.activeNotice.activeModel : "new-fixture/fallback",
+    };
+    let replaced = false;
+    vi.spyOn(transcript, "appendAssistantMessageToSessionTranscript").mockImplementationOnce(
+      async (params) => {
+        replaced = true;
+        await f.replace({
+          ...f.read()!,
+          ...(change === "selection"
+            ? {
+                providerOverride: "new-fixture",
+                modelOverride: "selected",
+                modelOverrideSource: "user" as const,
+              }
+            : {}),
+          fallbackNotice: replacementNotice,
+        });
+        return append(params);
+      },
+    );
+    await f.account("ordinary", primary);
+    expect(replaced).toBe(true);
+    expect(await f.notices()).toEqual([]);
+    expect(f.read()?.fallbackNotice).toEqual(replacementNotice);
+  },
+);
