@@ -106,13 +106,9 @@ function challenge(socket: ProbeWebSocket, nonce: string) {
   socket.emit("message", JSON.stringify({ type: "event", event: "connect.challenge", payload }));
 }
 
-async function captureProbeConnectFrame(params: {
-  url: string;
-  env: NodeJS.ProcessEnv;
-  auth?: { token?: string; password?: string };
-  originScopedDeviceAuth?: boolean;
-  suppressStoredDeviceAuth?: boolean;
-}): Promise<ConnectFrame> {
+async function captureProbeConnectFrame(
+  params: Omit<Parameters<typeof probeGateway>[0], "timeoutMs">,
+): Promise<ConnectFrame> {
   return captureConnectFrame(() =>
     probeGateway({ ...params, timeoutMs: 2_000, includeDetails: false }),
   );
@@ -155,20 +151,11 @@ afterEach(() => {
 
 describe("probeGateway device auth scope", () => {
   it("does not send a connect frame to an unverified unmanaged restart listener", async () => {
-    await withTempDir("openclaw-restart-probe-scope-", async (stateDir) => {
-      const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST_FAST: "1" };
+    await withAuth({ origin: "local-origin-token" }, async ({ stateDir, env }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", `${stateDir}/openclaw.json`);
       vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
       vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
-      const { deviceId } = loadOrCreateDeviceIdentity({ env });
-      seedOriginDeviceToken({
-        deviceId,
-        role: "operator",
-        gatewayScope: loopbackUrl,
-        token: "local-origin-token",
-        env,
-      });
       let connect: ConnectFrame | undefined;
       onSocketCreated = (socket) =>
         queueMicrotask(() => {

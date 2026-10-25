@@ -95,6 +95,15 @@ function expectUnavailable(f: ReturnType<typeof openReader>) {
   expect(f.replace).not.toHaveBeenCalled();
 }
 
+function expectPending(f: ReturnType<typeof openReader>) {
+  expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(true);
+  expect(f.document.title).not.toContain("unavailable");
+  expect(f.loginVisibility()).toBe("hidden");
+  expect(f.replace).not.toHaveBeenCalled();
+}
+
+const storedDevice = (storedScope: string) => ({ device, storedScope });
+
 describe("public reader operator handoff", () => {
   it("resizes only the sending widget frame and ignores unrelated or invalid messages", () => {
     const f = openReader({
@@ -132,23 +141,18 @@ describe("public reader operator handoff", () => {
     async (status) => {
       const probe = createDeferred<{ status: number }>();
       const f = openReader({ probe: probe.promise, token: "synthetic-token" });
-      const main = f.document.querySelector("main")!;
-      expect(main.hasAttribute("data-entry-pending")).toBe(true);
-      expect(f.document.title).not.toContain("unavailable");
-      expect(f.loginVisibility()).toBe("hidden");
-      expect(f.replace).not.toHaveBeenCalled();
+      expectPending(f);
       probe.resolve({ status });
       await probe.promise;
       expect(f.replace).toHaveBeenCalledWith(entry);
-      expect(main.hasAttribute("data-entry-pending")).toBe(true);
+      expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(true);
     },
   );
 
   it("reveals confirmed unavailability after a delayed 401 response", async () => {
     const probe = createDeferred<{ status: number }>();
     const f = openReader({ probe: probe.promise });
-    const main = f.document.querySelector("main")!;
-    expect(main.hasAttribute("data-entry-pending")).toBe(true);
+    expectPending(f);
     probe.resolve({ status: 401 });
     await probe.promise;
     expectUnavailable(f);
@@ -190,18 +194,14 @@ describe("public reader operator handoff", () => {
     expect(f.document.querySelector(".entry-status")).toBeNull();
   });
 
-  it.each([
-    { name: "paired token/password device in a new tab", device },
-    {
-      name: "paired device with an existing Gateway query scope",
-      device,
-      storedScope: "wss://gateway.test/control?account=work",
-    },
-    {
-      name: "explicit token fragment",
-      url: "https://gateway.test/control/chat/main/private#token=synthetic-token",
-    },
-  ])("opens the app automatically with $name", async (options) => {
+  it.each<[string, NonNullable<Parameters<typeof openReader>[0]>]>([
+    ["paired device in a new tab", { device }],
+    ["paired device with query scope", storedDevice("wss://gateway.test/control?account=work")],
+    [
+      "explicit token fragment",
+      { url: "https://gateway.test/control/chat/main/private#token=synthetic-token" },
+    ],
+  ])("opens the app automatically with %s", async (_name, options) => {
     const f = openReader(options);
     await Promise.resolve();
     expect(f.replace).toHaveBeenCalledWith(entry + (options.url ? "#token=synthetic-token" : ""));
@@ -227,42 +227,23 @@ describe("public reader operator handoff", () => {
     );
   });
 
-  it.each([
-    { name: "empty token", token: " " },
-    {
-      name: "another gateway",
-      token: "synthetic-token",
-      device,
-      storedScope: "wss://other.test/control",
-    },
-    {
-      name: "another mount with a Gateway query scope",
-      device,
-      storedScope: "wss://gateway.test/control-other?account=work",
-    },
-    {
-      name: "another scheme",
-      token: "synthetic-token",
-      device,
-      storedScope: "ws://gateway.test/control",
-    },
-    { name: "malformed storage", device: "not-json" },
-    { name: "cleared device token", device: '{"tokens":{}}' },
-    { name: "blocked storage", blockedStorage: true },
-    {
-      name: "denied HTTP identity in token mode",
-      token: "synthetic-token",
-      device,
-      probeStatus: 403,
-    },
-    {
-      name: "denied proxy identity with stale local credentials",
-      clientAuth: false,
-      token: "synthetic-token",
-      device,
-      probeStatus: 403,
-    },
-  ])("keeps $name on the reader", async (options) => {
+  it.each<[string, Parameters<typeof openReader>[0]]>([
+    ["empty token", { token: " " }],
+    ["another gateway", { ...storedDevice("wss://other.test/control"), token: "synthetic-token" }],
+    [
+      "another mount with query scope",
+      storedDevice("wss://gateway.test/control-other?account=work"),
+    ],
+    ["another scheme", { ...storedDevice("ws://gateway.test/control"), token: "synthetic-token" }],
+    ["malformed storage", { device: "not-json" }],
+    ["cleared device token", { device: '{"tokens":{}}' }],
+    ["blocked storage", { blockedStorage: true }],
+    ["denied HTTP identity", { token: "synthetic-token", device, probeStatus: 403 }],
+    [
+      "denied proxy identity",
+      { clientAuth: false, token: "synthetic-token", device, probeStatus: 403 },
+    ],
+  ])("keeps %s on the reader", async (_name, options) => {
     const f = openReader(options);
     await Promise.resolve();
     expectUnavailable(f);
