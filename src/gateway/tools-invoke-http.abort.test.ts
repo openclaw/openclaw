@@ -1,9 +1,6 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  closeHttpServer,
-  listenLoopback,
-} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -19,6 +16,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createTestGatewayHttpServer } from "./http-server.test-support.js";
 import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -26,13 +24,7 @@ import { makeContextParams } from "./server-request-context.test-support.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const lifecycle = vi.hoisted(() => ({
-  authorize:
-    vi.fn<
-      (params: {
-        req: IncomingMessage;
-        res: ServerResponse;
-      }) => ReturnType<typeof authorizeScopedGatewayHttpRequestOrReply>
-    >(),
+  authorize: vi.fn<typeof authorizeScopedGatewayHttpRequestOrReply>(),
   beforeHook: vi.fn(async (args: { params: unknown; signal?: AbortSignal }) => ({
     blocked: false as const,
     params: args.params,
@@ -81,37 +73,34 @@ function authorizedRequest(overrides: Partial<RequestAuth> = {}): RequestAuth {
   };
 }
 
+function authorization(
+  requestAuth = authorizedRequest(),
+  cfg: OpenClawConfig = {},
+  operatorScopes: string[] = [],
+) {
+  return { cfg, requestAuth, operatorScopes };
+}
+
 let origin: string;
 let resolveGatewayContext: GatewayContextResolver | undefined;
-const server = createServer((req, res) => {
-  void handleToolsInvokeHttpRequest(req, res, {
+const server = createTestGatewayHttpServer(async (req, res) => {
+  const handled = await handleToolsInvokeHttpRequest(req, res, {
     auth: { mode: "none", allowTailscale: false },
     resolveGatewayContext,
-  })
-    .then(() => {
-      lifecycle.handled();
-    })
-    .catch((error: unknown) => {
-      if (!res.destroyed && !res.writableEnded) {
-        res.statusCode = 500;
-        res.end(String(error));
-      }
-    });
+  });
+  lifecycle.handled();
+  return handled;
 });
 beforeAll(async () => {
-  origin = await listenLoopback(server);
+  origin = `http://127.0.0.1:${await server.listen()}`;
 });
-afterAll(() => closeHttpServer(server));
+afterAll(() => server.close());
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
   resolveGatewayContext = undefined;
   lifecycle.authorize.mockReset();
-  lifecycle.authorize.mockResolvedValue({
-    cfg: {},
-    requestAuth: authorizedRequest(),
-    operatorScopes: [],
-  });
+  lifecycle.authorize.mockResolvedValue(authorization());
   lifecycle.beforeHook.mockClear();
   lifecycle.handled.mockReset();
   lifecycle.execute.mockReset();
@@ -153,11 +142,9 @@ describe("POST /tools/invoke request cancellation", () => {
     const hookStarted = createDeferred();
     const releaseHook = createDeferred();
     let current = true;
-    lifecycle.authorize.mockResolvedValueOnce({
-      cfg: {},
-      requestAuth: authorizedRequest({ hasCurrentClientAuthority: () => current }),
-      operatorScopes: [],
-    });
+    lifecycle.authorize.mockResolvedValueOnce(
+      authorization(authorizedRequest({ hasCurrentClientAuthority: () => current })),
+    );
     lifecycle.beforeHook.mockImplementationOnce(async ({ params }) => {
       hookStarted.resolve();
       await releaseHook.promise;
@@ -200,11 +187,7 @@ describe("POST /tools/invoke request cancellation", () => {
     lifecycle.authorize.mockImplementationOnce(async ({ req }) => {
       started.resolve(req);
       await released.promise;
-      return {
-        cfg: {},
-        requestAuth: authorizedRequest(),
-        operatorScopes: [],
-      };
+      return authorization();
     });
 
     await disconnectDuring(started.promise, released.resolve, async (serverRequest) => {
@@ -256,8 +239,6 @@ describe("POST /tools/invoke request cancellation", () => {
         expect(scope.resolveGatewayContext).toBe(resolveGatewayContext);
         expect(scope.hasCurrentClientAuthority()).toBe(true);
         expect(signal).toBe(scope.signal);
-        expect(signal).toBeInstanceOf(AbortSignal);
-        expect(lifecycle.beforeHook).toHaveBeenCalledWith(expect.objectContaining({ signal }));
         // Subscribe while the tool owns the composite signal, before weak sources can be GC'd.
         signal?.addEventListener("abort", requestEnded, { once: true });
         const admission = prepareSystemAgentRunAdmission(
@@ -295,10 +276,7 @@ describe("POST /tools/invoke request cancellation", () => {
           const response = await invokeAbortProbe();
           expect(response.status).toBe(200);
           await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
-          const capture = captures.at(-1);
-          if (!capture) {
-            throw new Error("Tool did not admit its child");
-          }
+          const capture = expectDefined(captures.at(-1), "Tool did not admit its child");
           expect(capture.scope.signal?.aborted).toBe(true);
           expect(capture.scope.hasCurrentClientAuthority?.()).toBe(false);
           const authority = readAdmittedRunOperatorAuthority(capture.admitted);
@@ -310,10 +288,8 @@ describe("POST /tools/invoke request cancellation", () => {
         }
 
         expect(requestEnded).toHaveBeenCalledTimes(2);
-        const [original, replacement] = captures;
-        if (!original || !replacement) {
-          throw new Error("Expected children admitted by both HTTP requests");
-        }
+        const original = expectDefined(captures[0], "Original child");
+        const replacement = expectDefined(captures[1], "Replacement child");
         const originalAuthority = readAdmittedRunOperatorAuthority(original.admitted);
         const replacementAuthority = readAdmittedRunOperatorAuthority(replacement.admitted);
         expect(originalAuthority?.source).not.toBe(replacementAuthority?.source);

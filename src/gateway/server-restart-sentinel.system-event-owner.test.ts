@@ -385,12 +385,7 @@ it(
     });
     let settled = false;
     queueContext = captureOpenClawStateWorkerContext();
-    const {
-      id: _id,
-      enqueuedAt: _enqueuedAt,
-      retryCount: _retryCount,
-      ...payload
-    } = createGeneratedMediaDeliveryEntry({
+    const payload = createGeneratedMediaDeliveryEntry({
       id: "unused",
       sessionKey,
       messageId: "image:media-completion:agent-loop",

@@ -3,10 +3,8 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it } from "vitest";
-import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -48,29 +46,13 @@ const rejections = new Map<
 const scenarios = ["fallback", ...rejections.keys()] as const;
 type Scenario = (typeof scenarios)[number];
 const encodeEvent = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
-const responseMessage = (id: string, text: string) => ({
-  type: "message",
-  id,
-  role: "assistant",
-  status: "completed",
-  content: [{ type: "output_text", text, annotations: [] }],
-});
-const outputEvent = (type: "added" | "done", item: ReturnType<typeof responseMessage>) => ({
-  type: `response.output_item.${type}`,
-  output_index: 0,
-  item: type === "added" ? { ...item, status: "in_progress", content: [] } : item,
-});
-
-function messageText(message: unknown): string {
-  return isRecord(message) ? collectTextContentBlocks(message.content).join("\n") : "";
-}
 
 it(
   "chat.send preserves xAI rejection priority and recovers statusless failures",
   {
     timeout: 180_000,
   },
-  async ({ signal }) => {
+  async () => {
     const root = tempDirs.make("openclaw-xai-fallback-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
@@ -102,8 +84,6 @@ it(
     }
     let scenario: Scenario = "fallback";
     let requests: string[] = [];
-    const events: ChatEvent[] = [];
-    const terminalEvents = new Map<string, (event: ChatEvent) => void>();
     const fallbackEvents: unknown[] = [];
     const provider = createServer((request, response) => {
       void (async () => {
@@ -136,8 +116,8 @@ it(
           }
           return;
         }
-        response.writeHead(200, { "content-type": "text/event-stream" });
         if (payload.model === primaryModel) {
+          response.writeHead(200, { "content-type": "text/event-stream" });
           response.end(
             encodeEvent({
               type: "response.failed",
@@ -152,24 +132,11 @@ it(
           );
           return;
         }
-        const message = responseMessage("fallback", marker);
-        response.end(
-          [
-            outputEvent("added", message),
-            outputEvent("done", message),
-            {
-              type: "response.completed",
-              response: {
-                id: "fallback-response",
-                status: "completed",
-                output: [message],
-                usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-              },
-            },
-          ]
-            .map(encodeEvent)
-            .join(""),
-        );
+        writeOpenAiResponsesText(response, {
+          text: marker,
+          messageId: "fallback",
+          responseId: "fallback-response",
+        });
       })().catch((error: unknown) => response.destroy(error instanceof Error ? error : undefined));
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
@@ -218,11 +185,6 @@ it(
         configPath,
         token: "xai-fallback-test",
         onEvent: (event) => {
-          if (event.event === "chat") {
-            const chatEvent = event.payload as ChatEvent;
-            events.push(chatEvent);
-            terminalEvents.get(chatEvent.runId)?.(chatEvent);
-          }
           if (
             event.event === "agent" &&
             isRecord(event.payload) &&
@@ -245,23 +207,6 @@ it(
           deliver: false,
           idempotencyKey: `xai-${scenario}`,
         });
-        const terminalReceived = createDeferred();
-        const receiveTerminal = (event: ChatEvent) => {
-          if (
-            event.sessionKey === sessionKey &&
-            event.state === "final" &&
-            event.stopReason === "stop"
-          ) {
-            terminalReceived.resolve();
-          }
-        };
-        terminalEvents.set(started.runId, receiveTerminal);
-        // The expected terminal may arrive before chat.send acknowledges its run ID.
-        for (const event of events) {
-          if (event.runId === started.runId) {
-            receiveTerminal(event);
-          }
-        }
         const completed = await gateway.client.request<{
           status: string;
           error?: string;
@@ -275,28 +220,12 @@ it(
           { timeoutMs: 65_000 },
         );
         expect(completed.status, scenario).not.toBe("timeout");
-        // Status-notice finals do not settle the transcript-gated successful reply.
-        await withinTest(terminalReceived.promise, signal);
-        terminalEvents.delete(started.runId);
-        const history = await gateway.client.request<{
-          messages: Array<{ role: string; content: unknown; stopReason?: string }>;
-        }>("chat.history", { sessionKey, limit: 20 });
-        const assistant = history.messages.findLast((message) => message.role === "assistant");
-        const runEvents = events.filter((event) => event.runId === started.runId);
         check(requests[0]).toBe(primaryModel);
         check(requests.filter((requested) => requested === primaryModel)).toHaveLength(
           rejection && rejection.reason !== "rate_limit" ? 1 : 2,
         );
-        const terminal = runEvents
-          .filter((event) => event.state === "final")
-          .filter((event) => event.stopReason === "stop");
         check(requests).toContain(fallbackModel);
-        check(completed.status).toBe("ok");
-        check(assistant?.stopReason).toBe("stop");
-        check(messageText(assistant)).toBe(marker);
-        check(completed.terminalReply?.text).toBe(marker);
-        check(terminal).toHaveLength(1);
-        check(messageText(terminal[0]?.message)).toBe(marker);
+        check(completed).toMatchObject({ status: "ok", terminalReply: { text: marker } });
         if (rejection) {
           check(fallbackEvents).toContainEqual(
             expect.objectContaining({

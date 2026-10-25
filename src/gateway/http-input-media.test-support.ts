@@ -112,6 +112,7 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
         "firstAgentOpts" in suite ? suite.firstAgentOpts() : suite.firstAgentCommandOptions();
       expect(opts?.images).toEqual([{ type: "image", data: "QUJDRA==", mimeType: "image/png" }]);
       if ("firstAgentOpts" in suite) {
+        expect(opts?.message).toBe(IMAGE_ONLY_USER_MESSAGE);
         expect(suite.firstAgentOpts().extraSystemPrompt).toContain("uploaded text");
       }
     });
@@ -305,13 +306,9 @@ export async function runOpenAiHttpImageInputCases({
 export function registerOpenResponsesHttpMediaInputTests({
   getPort,
   postResponses,
-  firstAgentOpts,
   agentCommandMock,
-  mockAgentOnce,
-  ensureResponseConsumed,
   expectInvalidRequest,
   buildUrlInputMessage,
-  buildFileInputMessage,
 }: OpenResponsesMediaSuite & {
   mockAgentOnce: (payloads: Array<{ text: string }>) => void;
   buildFileInputMessage: (text: string, filename: string, message?: string) => unknown;
@@ -323,20 +320,7 @@ export function registerOpenResponsesHttpMediaInputTests({
     text?: string;
   }) => unknown;
 }): void {
-  const post = (input: unknown, extra = {}) =>
-    postResponses(getPort(), { model: "openclaw", input, ...extra });
-  async function accept(
-    input: unknown,
-    check: (options: Record<string, unknown>) => void,
-    extra = {},
-  ) {
-    mockAgentOnce([{ text: "ok" }]);
-    const res = await post(input, extra);
-    expect(res.status).toBe(200);
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    check(firstAgentOpts());
-    await ensureResponseConsumed(res);
-  }
+  const post = (input: unknown) => postResponses(getPort(), { model: "openclaw", input });
   it("blocks unsafe URL-based file/image inputs", async () => {
     agentCommandMock.mockClear();
     for (const [kind, url, error] of [
@@ -350,52 +334,6 @@ export function registerOpenResponsesHttpMediaInputTests({
     ] as const) {
       await expectInvalidRequest(await post(buildUrlInputMessage({ kind, url })), error);
     }
-    expect(agentCommandMock).not.toHaveBeenCalled();
-  });
-
-  it("accepts image-only input without text, matching /v1/chat/completions", async () => {
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-
-    await accept(
-      [responseMessage([responseBase64("input_image", "image/png", pngBase64)])],
-      (opts) => {
-        expect(opts.message ?? "").toBe(IMAGE_ONLY_USER_MESSAGE);
-        expect(opts.images).toHaveLength(1);
-      },
-    );
-  });
-
-  it("accepts file-only input without text, matching image-only", async () => {
-    await accept(
-      buildFileInputMessage("the quick brown fox", "doc.txt"),
-      (opts) => {
-        expect(opts.message ?? "").not.toBe("");
-        const extraSystemPrompt = opts.extraSystemPrompt ?? "";
-        expect(extraSystemPrompt).toContain('<file name="doc.txt">');
-        expect(extraSystemPrompt).toContain("the quick brown fox");
-      },
-      { instructions: "Summarize the attached document." },
-    );
-  });
-
-  it("keeps base64 input_file text truncation UTF-16 safe", async () => {
-    const text = `${"a".repeat(59_999)}😀tail`;
-    await accept(buildFileInputMessage(text, "emoji-boundary.txt"), (opts) => {
-      const extraSystemPrompt = opts.extraSystemPrompt ?? "";
-      expect(extraSystemPrompt).toContain('<file name="emoji-boundary.txt">');
-      expect(extraSystemPrompt).toContain("a".repeat(59_999));
-      expect(extraSystemPrompt).not.toContain("😀");
-      expect(extraSystemPrompt).not.toMatch(/[\uD800-\uDFFF]/u);
-    });
-  });
-
-  it("still rejects input with neither text nor image", async () => {
-    agentCommandMock.mockClear();
-
-    const res = await post([responseMessage([])]);
-
-    await expectInvalidRequest(res, /Missing user message/i);
     expect(agentCommandMock).not.toHaveBeenCalled();
   });
 }

@@ -185,27 +185,6 @@ describe("plugin node capability helpers", () => {
     ).toBe(false);
   });
 
-  test("stores independent capabilities for different owners of the same surface", () => {
-    const client = makeClient();
-    setClientPluginNodeCapability({
-      client,
-      surface: { surface: "canvas", scopeKey: "canvas-plugin:canvas" },
-      capability: "canvas-token",
-      expiresAtMs: 100,
-    });
-    setClientPluginNodeCapability({
-      client,
-      surface: { surface: "canvas", scopeKey: "other-plugin:canvas" },
-      capability: "other-token",
-      expiresAtMs: 200,
-    });
-
-    expect(client.pluginNodeCapabilities).toEqual({
-      "canvas\0canvas-plugin:canvas": { capability: "canvas-token", expiresAtMs: 100 },
-      "canvas\0other-plugin:canvas": { capability: "other-token", expiresAtMs: 200 },
-    });
-  });
-
   test("indexes plugin capability surfaces with shortest ttl per surface", () => {
     expect(
       indexPluginNodeCapabilitySurfaces([
@@ -337,17 +316,28 @@ describe("plugin node capability helpers", () => {
     expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(expiresAtMs);
   });
 
-  test("does not authorize the same surface token for a different plugin scope", () => {
-    const client = makeTokenClient(1_500, "canvas\0canvas-plugin:canvas");
-    expect(
-      authorizeCapability(client, { surface: "canvas", scopeKey: "other-plugin:canvas" }),
-    ).toBe(false);
-    expect(
-      authorizeCapability(client, {
-        surface: "canvas",
-        scopeKey: "canvas-plugin:canvas",
-        ttlMs: 100,
-      }),
-    ).toBe(true);
+  test("stores independent same-surface credentials and authorizes only their plugin scope", () => {
+    const client = makeClient();
+    const first = { surface: "canvas", scopeKey: "canvas-plugin:canvas", ttlMs: 100 };
+    const second = { surface: "canvas", scopeKey: "other-plugin:canvas", ttlMs: 100 };
+    setClientPluginNodeCapability({
+      client,
+      surface: first,
+      capability: "canvas-token",
+      expiresAtMs: 1500,
+    });
+    setClientPluginNodeCapability({
+      client,
+      surface: second,
+      capability: "other-token",
+      expiresAtMs: 1500,
+    });
+    expect(authorizeCapability(client, second)).toBe(false);
+    expect(authorizeCapability(client, first)).toBe(true);
+    expect(authorizeCapability(client, second, "other-token")).toBe(true);
+    expect(client.pluginNodeCapabilities).toEqual({
+      "canvas\0canvas-plugin:canvas": { capability: "canvas-token", expiresAtMs: 1100 },
+      "canvas\0other-plugin:canvas": { capability: "other-token", expiresAtMs: 1100 },
+    });
   });
 });
