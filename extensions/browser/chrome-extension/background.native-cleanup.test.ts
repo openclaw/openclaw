@@ -5,7 +5,6 @@ import {
   deferredScope,
   relayConfig,
   loadConfiguredBackground,
-  relayFrames,
   relayReply,
   runtime,
   waitCalled,
@@ -237,14 +236,11 @@ describe("native debugger cleanup debt", () => {
     const socket = h.relaySockets.at(-1)!;
     await h.authenticate(socket);
     h.debuggerGetTargetInfo.mockResolvedValue({ targetInfo: { targetId: "fresh-native" } });
-    socket.receive({ type: "attach", tabId: 7, seq: 91 });
-    await vi.waitFor(() =>
-      expect(relayFrames(socket)).toContainEqual({
-        type: "result",
-        seq: 91,
-        result: { targetId: "fresh-native" },
-      }),
-    );
+    expect(await relayReply(socket, { type: "attach", tabId: 7, seq: 91 })).toEqual({
+      type: "result",
+      seq: 91,
+      result: { targetId: "fresh-native" },
+    });
     gate.resolve([{ tabId: 7, id: "fresh-native", attached: true }]);
     expect(await status).toMatchObject({ ok: false, error: expect.stringContaining("superseded") });
     expect(h.debuggerAttach).toHaveBeenCalledOnce();

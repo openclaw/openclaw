@@ -177,9 +177,8 @@ describe("native extension bootstrap", () => {
     h.startupListener();
     h.installedListener();
     await Promise.resolve();
-    expectUnused(h.sendNativeMessage);
+    expectUnused(h.sendNativeMessage, h.debuggerAttach);
     expect(h.relaySockets).toHaveLength(0);
-    expectUnused(h.debuggerAttach);
     h.releaseRetiredStatePreparation();
     await waitCalled(h.debuggerDetach, { targetId: "tab-17" });
     expectUnused(h.sendNativeMessage);
@@ -327,37 +326,35 @@ describe("standalone relay wake-up", () => {
     vi.useFakeTimers();
     vi.setSystemTime(100_000);
   });
-  it.each([20123])(
-    "wakes the paired port %i on reconnect, at most once per minute",
-    async (relayPort) => {
-      const h = await loadBackground({
-        storedConfig: { relayUrl: `ws://127.0.0.1:${relayPort}/extension`, token: TEST_RELAY_KEY },
-        nativeMessage: async (request) => ({
-          v: 1,
-          ok: true,
-          nonce: (request as { nonce: string }).nonce,
-          relay: "spawned",
-        }),
-      });
-      expectUnused(h.sendNativeMessage);
-      h.relaySockets.at(-1)?.close();
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(h.sendNativeMessage).toHaveBeenCalledExactlyOnceWith("ai.openclaw.browser_bootstrap", {
+  it("wakes the paired port on reconnect, at most once per minute", async () => {
+    const relayPort = 20123;
+    const h = await loadBackground({
+      storedConfig: { relayUrl: `ws://127.0.0.1:${relayPort}/extension`, token: TEST_RELAY_KEY },
+      nativeMessage: async (request) => ({
         v: 1,
-        op: "ensure_relay",
-        nonce: expect.any(String),
-        relayPort,
-      });
-      h.relaySockets.at(-1)?.close();
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(h.relaySockets).toHaveLength(3);
-      expect(h.sendNativeMessage).toHaveBeenCalledOnce();
-      vi.setSystemTime(Date.now() + 60_000);
-      h.relaySockets.at(-1)?.close();
-      await vi.advanceTimersByTimeAsync(4000);
-      expect(h.sendNativeMessage).toHaveBeenCalledTimes(2);
-    },
-  );
+        ok: true,
+        nonce: (request as { nonce: string }).nonce,
+        relay: "spawned",
+      }),
+    });
+    expectUnused(h.sendNativeMessage);
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.sendNativeMessage).toHaveBeenCalledExactlyOnceWith("ai.openclaw.browser_bootstrap", {
+      v: 1,
+      op: "ensure_relay",
+      nonce: expect.any(String),
+      relayPort,
+    });
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(h.relaySockets).toHaveLength(3);
+    expect(h.sendNativeMessage).toHaveBeenCalledOnce();
+    vi.setSystemTime(Date.now() + 60_000);
+    h.relaySockets.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.sendNativeMessage).toHaveBeenCalledTimes(2);
+  });
   it.each([
     ["remote Gateway", "wss://gateway.example.com/browser/extension", false],
     ["automatic setup opt-out", "ws://127.0.0.1:18798/extension", true],

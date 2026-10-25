@@ -254,17 +254,11 @@ describe("relay command authorization", () => {
     socket.receive({ type: "attach", seq: 30, tabId: 81 });
     await waitCalled(harness.debuggerAttach);
     harness.debuggerDetachListener({ tabId: 81 }, "canceled_by_user");
-    await vi.waitFor(() => {
-      expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]);
-    });
-    socket.receive({ type: "attach", seq: 31, tabId: 81 });
-    await vi.waitFor(() => {
-      const frames = harness.frames();
-      expect(frames).toContainEqual({
-        type: "error",
-        seq: 31,
-        message: "tab 81 is paused for OpenClaw",
-      });
+    await vi.waitFor(() => expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]));
+    expect(await harness.request({ type: "attach", tabId: 81 })).toEqual({
+      type: "error",
+      seq: expect.any(Number),
+      message: "tab 81 is paused for OpenClaw",
     });
     expect(await toggle(harness, 81, "all", true)).toMatchObject({
       ok: true,
@@ -273,13 +267,11 @@ describe("relay command authorization", () => {
     });
     expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
     harness.debuggerDetachListener({ tabId: 81 }, "canceled_by_user");
-    await vi.waitFor(() => {
-      expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]);
-    });
+    await vi.waitFor(() => expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]));
     harness.tabsRemovedListener(81);
-    await vi.waitFor(() => {
-      expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
-    });
+    await vi.waitFor(() =>
+      expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1"),
+    );
   });
   it("revokes selected access on group removal", async () => {
     const harness = await ready("selected", [{ id: 111, groupId: 7 }]);
