@@ -433,11 +433,7 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const text = await renderStatus({
-      sessionEntry: {
-        sessionId: "sess-status-kimi-k3",
-        updatedAt: 0,
-        thinkingLevel: "off",
-      },
+      sessionEntry: { sessionId: "sess-status-kimi-k3", updatedAt: 0, thinkingLevel: "off" },
       provider: "moonshot",
       model: "kimi-k3",
       contextTokens: 262_144,
@@ -492,9 +488,7 @@ it("shows per-agent thinkingDefault in the status card", async () => {
     ...kiraConfig,
     agents: {
       ...kiraConfig.agents,
-      entries: {
-        kira: { model: "openai/gpt-5.4", thinkingDefault: "xhigh" },
-      },
+      entries: { kira: { model: "openai/gpt-5.4", thinkingDefault: "xhigh" } },
     },
   } satisfies OpenClawConfig;
 

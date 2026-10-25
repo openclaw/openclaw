@@ -360,7 +360,8 @@ describe("OpenAI realtime voice provider routing", () => {
     const oauthToken = accountToken("account-123");
     mockOAuth(oauthToken);
     mockAuthTypes("oauth");
-    const { provider, session, ready, createBrowserSession } = browserFixture("broker-token");
+    const { provider, session, ready, createBrowserSession, expectAuth } =
+      browserFixture("broker-token");
     const cfg = { agents: { defaults: {} } } as never;
     const request = {
       cfg,
@@ -387,41 +388,26 @@ describe("OpenAI realtime voice provider routing", () => {
       clientSecret: "broker-token",
       offerUrl: "/plugins/openai/realtime/calls",
     });
-    expect(createBrowserSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: GA_MODEL,
-        voice: "cedar",
-        gaSession: {
-          type: "realtime",
-          model: GA_MODEL,
-          instructions: "Use the configured tools when needed.",
-          audio: {
-            input: {
-              noise_reduction: { type: "near_field" },
-              turn_detection: {
-                type: "server_vad",
-                create_response: true,
-                interrupt_response: true,
-                threshold: 0.42,
-                prefix_padding_ms: 240,
-                silence_duration_ms: 620,
-              },
-              transcription: { model: "gpt-4o-mini-transcribe" },
-            },
-            output: { voice: "cedar" },
-          },
-          tools: [createRealtimeTool("openclaw_agent_consult")],
-          tool_choice: "auto",
-          reasoning: { effort: "low" },
-        },
-      }),
-      { type: "oauth", token: oauthToken, accountId: "account-123" },
-    );
+    expectAuth(oauth(oauthToken, "account-123"));
     const brokerRequest = requireRecord(
       createBrowserSession.mock.calls[0]?.[0],
       "OAuth broker request",
     );
+    expect(brokerRequest).toMatchObject({ model: GA_MODEL, voice: "cedar" });
     const gaSession = requireRecord(brokerRequest.gaSession, "OAuth GA session");
+    expect(gaSession).toMatchObject({
+      model: GA_MODEL,
+      instructions: request.instructions,
+      audio: {
+        input: {
+          turn_detection: { threshold: 0.42, prefix_padding_ms: 240, silence_duration_ms: 620 },
+        },
+        output: { voice: "cedar" },
+      },
+      tools: request.tools,
+      tool_choice: "auto",
+      reasoning: { effort: "low" },
+    });
     expect(gaSession).not.toHaveProperty("output_modalities");
     expect(gaSession).not.toHaveProperty("initial_items");
     const audio = requireRecord(gaSession.audio, "OAuth GA audio");

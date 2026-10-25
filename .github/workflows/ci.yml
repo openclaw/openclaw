@@ -1034,8 +1034,10 @@ jobs:
             /test/vitest/
             /config/ci-test-timings.json
             /node-runtime-env.mjs
+            /runtime-process-scripts.generated.mjs
             /packages/normalization-core/src/stable-stringify.ts
             /src/infra/node-runtime-executable.ts
+            /src/infra/runtime-process-manifest.ts
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

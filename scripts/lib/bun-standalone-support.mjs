@@ -166,10 +166,11 @@ function stageSupportRuntime({ runtimeRoot, outputRoot, bunExecutable, omittedDi
 /**
  * Compile both flavors from one frozen module graph before publishing either.
  * @param {{runtimeRoot: string, outputRoot: string, destination: string, supportDestination?: string, mode: BuildInfo["mode"], compileFlags: string[],
+ * aotCompileOptions?: import("./bun-standalone-contract.mjs").StandaloneAotCompileOptions,
  * compileRoot: string, compileCwd: string, mainEntry: string, compiledEntries: string[], compileEntries: Set<string>, external: string[],
  * bunExecutable: string, bun: BuildInfo["bun"], openclaw: BuildInfo["openclaw"], plugins: NonNullable<BuildInfo["plugins"]> & {omittedDirs: string[]},
  * nativeModules: NativeModules, sqlite: {path?: string},
- * resourcePlan: {files: {source: string, destination: string}[], directories: Iterable<string>},
+ * resourcePlan: {files: {source: string, destination: string}[], directories: Iterable<string>}, sourceGraphSha256?: string,
  * compileAot?: (options: {outfile: string, buildInfo: object}) => Promise<void>}} options
  * @returns {Promise<CompiledArtifact[]>}
  */
@@ -180,6 +181,7 @@ export async function compileStandaloneArtifacts({
   supportDestination,
   mode,
   compileFlags,
+  aotCompileOptions,
   compileRoot,
   compileCwd,
   mainEntry,
@@ -193,6 +195,7 @@ export async function compileStandaloneArtifacts({
   nativeModules,
   sqlite,
   resourcePlan,
+  sourceGraphSha256,
   compileAot,
 }) {
   const provenance = {
@@ -215,6 +218,7 @@ export async function compileStandaloneArtifacts({
     .update(
       JSON.stringify({
         ...provenance,
+        ...(sourceGraphSha256 ? { sourceGraphSha256 } : {}),
         bun,
         openclaw,
         target: { platform: process.platform, arch: process.arch },
@@ -276,6 +280,48 @@ export async function compileStandaloneArtifacts({
     try {
       if (artifact.mode === "aot" && compileAot) {
         await compileAot({ outfile: path.join(artifact.outputRoot, "openclaw"), buildInfo });
+      } else if (artifact.mode === "aot") {
+        // Trim feature retention is API-only; keep native compilation in a child process.
+        const driver = path.join(artifact.outputRoot, "compile-aot.mjs");
+        const options = {
+          entrypoints: [
+            mainEntry,
+            ...compiledEntries.filter((entry) => entry !== mainEntry && compileEntries.has(entry)),
+          ].map((entry) => path.relative(compileCwd, entry)),
+          root: compileRoot,
+          target: "bun",
+          splitting: true,
+          format: "esm",
+          external,
+          compile: {
+            outfile: path.join(artifact.outputRoot, "openclaw"),
+            aot: true,
+            ...aotCompileOptions,
+            autoloadPackageJson: true,
+            autoloadDotenv: false,
+            autoloadBunfig: false,
+          },
+        };
+        fs.writeFileSync(
+          driver,
+          `const result = await Bun.build(${JSON.stringify(options)});\nfor (const log of result.logs) console.error(log);\nif (!result.success) process.exit(1);\n`,
+        );
+        try {
+          const compiled = spawnSync(bunExecutable, [driver], {
+            stdio: "inherit",
+            cwd: compileCwd,
+          });
+          if (compiled.error) {
+            throw compiled.error;
+          }
+          if (compiled.status !== 0) {
+            throw new Error(
+              `Standalone ${artifact.flavor} compilation failed (${compiled.status})`,
+            );
+          }
+        } finally {
+          fs.unlinkSync(driver);
+        }
       } else {
         const compiled = spawnSync(
           bunExecutable,

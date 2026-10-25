@@ -29,7 +29,7 @@ import {
 const { observedDirectories, releasedDirectories } = vi.hoisted(() => ({
   observedDirectories: [] as Array<{
     directory: string;
-    notify: (filename?: string) => void;
+    notify: (filename?: string, event?: string) => void;
     active: boolean;
   }>,
   // The shared owner closes a native watch when a directory's last observation leaves.
@@ -37,7 +37,7 @@ const { observedDirectories, releasedDirectories } = vi.hoisted(() => ({
 }));
 // mock-isolation: Deliver directory changes deterministically without native watcher timing.
 vi.mock("../infra/owned-directory-observation.js", () => ({
-  observeOwnedDirectory(directory: string, notify: (filename?: string) => void) {
+  observeOwnedDirectory(directory: string, notify: (filename?: string, event?: string) => void) {
     const observation = { directory, notify, active: true };
     observedDirectories.push(observation);
     return {
@@ -348,6 +348,11 @@ it("retains source preparation until directory or registry ownership changes", a
     );
     expect(directory).toBeDefined();
     directory!.notify("unrelated.txt");
+    for (let index = 0; index < 100; index++) {
+      directory!.notify(path.basename(main.path), "change");
+      directory!.notify(`${path.basename(main.path)}-wal`, "change");
+    }
+    expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
     directory!.notify(path.basename(main.path));
     const revalidationReads = realpath.mock.calls.length;
     for (const entry of observedDirectories) {

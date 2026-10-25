@@ -820,6 +820,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-prompt-phase.admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-session-recovery.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-execution-settle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-prepare.test.ts",
@@ -873,6 +874,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.projections.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.pasted-text.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-session-boundary.live-input.test.ts",
+  "src/agents/sessions/session-manager-async-message-custody.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.orphan.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.sessions-yield.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
@@ -1159,6 +1162,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/node-pairing-migration.test.ts",
   "src/infra/push-apns.store.test.ts",
   "src/infra/outbound/delivery-queue-platform-lease.worker.test.ts",
+  "src/media-understanding/echo-transcript.integration.test.ts",
   "src/infra/sqlite-worker-existing-schema.test.ts",
   "src/state/openclaw-state-read.existing-schema.test.ts",
   "src/state/openclaw-state-db-readonly.warm-source.test.ts",
@@ -1397,6 +1401,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/message-progress-retention.conformance.test.ts",
   "src/infra/database-engine/session-archive-alias.conformance.test.ts",
   "src/infra/database-engine/outcome-surfaces.postgres.test.ts",
+  "src/node-host/node-worker-launch-claim.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

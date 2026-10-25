@@ -53,6 +53,41 @@ async function expectCollectionRejected(bridge: ReturnType<typeof createBridge>)
 }
 
 describe("Codex collector availability", () => {
+  it("rejects a prepared schema mutated in place without a description change", async () => {
+    const initial = createBridge(createCollectorTools());
+    const spawn = initial.availableTools.find((tool) => tool.name === "sessions_spawn")!;
+    const schema = structuredClone(spawn.parameters);
+    const description = spawn.description;
+    // A preparer can replace a mutable owner's contents without changing its identity.
+    Object.defineProperties(spawn, {
+      parameters: {
+        get: () => schema,
+        set: (prepared: typeof schema) => Object.assign(schema, prepared),
+      },
+      description: { get: () => description, set: () => {} },
+    });
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    spawn.execute = execute;
+    const bridge = createBridge([spawn], {
+      registeredSpecs: initial.specs,
+      requireExactRegisteredDefinitions: true,
+    });
+    expect(spawn.parameters).toBe(schema);
+    expect(schema).not.toHaveProperty("properties.collect");
+    expect(spawn.description).toBe(description);
+    await expect(
+      bridge.handleToolCall({
+        threadId: "synthetic-parent",
+        turnId: "synthetic-turn",
+        callId: "mutated-in-place",
+        tool: spawn.name,
+        arguments: { task: "Inspect the synthetic collector source." },
+      }),
+    ).resolves.toMatchObject({ success: false, executionStarted: false });
+    expect(execute).not.toHaveBeenCalled();
+    expect(bridge.specs).toEqual(initial.specs);
+  });
+
   it("retains a genuine restored discovery control without admitting a same-name tool", async () => {
     const config = {
       tools: {

@@ -8,6 +8,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WIDGET_PROMPT_EVENT } from "../mcp-app-security.ts";
 import { boardWidget, gatewayContext } from "./board-view.test-support.ts";
 import {
+  acknowledgeWidgetHostInit,
   createFrameOwner,
   dispatchFrameMessage,
   mountBoardWidgetFrame,
@@ -333,15 +334,7 @@ describe("board widget frame message confirmation", () => {
       dispatchFrameMessage(frame, { origin: "https://sandbox.example", data, ports });
     const channel = new MessageChannel();
     const initialized = createDeferred();
-    channel.port2.addEventListener("message", (event) => {
-      if (event.data.type === "openclaw:widget-host-init") {
-        channel.port2.postMessage({
-          type: "openclaw:widget-host-init-ack",
-          ticket: event.data.ticket,
-        });
-        initialized.resolve();
-      }
-    });
+    acknowledgeWidgetHostInit(channel.port2, initialized);
     channel.port2.start();
     const send = (id: string, text: string) => {
       const response = createDeferred<Record<string, unknown>>();

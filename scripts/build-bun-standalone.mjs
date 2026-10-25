@@ -51,6 +51,7 @@ import { writeStandaloneSourceDeclarations } from "./lib/bun-standalone-source-d
 import { loadStandaloneSourceEntries } from "./lib/bun-standalone-source-entries.mjs";
 import { createStandaloneSourceGlobals } from "./lib/bun-standalone-source-globals.mjs";
 import { createStandaloneSourceGraph } from "./lib/bun-standalone-source-graph.mjs";
+import { standaloneSourceGraphSha256 } from "./lib/bun-standalone-source-identity.mjs";
 import {
   createStandaloneSourceParser,
   standaloneSourceLoader,
@@ -813,6 +814,7 @@ if (sourceGraph) {
 if (!result.success) {
   throw new AggregateError(result.logs, "Standalone bundle failed");
 }
+workers.validateOutputs(result.outputs.map((output) => output.path));
 fs.writeFileSync(path.join(outputRoot, "metafile.json"), JSON.stringify(result.metafile, null, 2));
 fs.writeFileSync(
   path.join(outputRoot, "transformed.json"),
@@ -1006,6 +1008,7 @@ const artifactsToPublish = await compileStandaloneArtifacts({
   supportDestination,
   mode,
   compileFlags,
+  aotCompileOptions: options.aotCompileOptions,
   compileRoot,
   compileCwd,
   mainEntry,
@@ -1021,6 +1024,7 @@ const artifactsToPublish = await compileStandaloneArtifacts({
   resourcePlan,
   ...(sourceGraph
     ? {
+        sourceGraphSha256: standaloneSourceGraphSha256(sourceRoot, sourceGraph.manifest()),
         async compileAot({ outfile, buildInfo }) {
           const discoveredFileCount = sourceGraph.files.size;
           const sourceBootstrap = fs.readFileSync(runtimeBootstrap, "utf8");

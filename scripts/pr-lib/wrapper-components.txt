@@ -8,8 +8,11 @@ gateway-prewarm.mjs
 gateway-shutdown-budget.mjs
 worker-heap-flag.mjs
 node-runtime-env.mjs
+node-sqlite-capabilities.mjs
 node-sqlite.mjs
 node-version.mjs
+runtime-process-bootstrap.generated.mjs
+runtime-process-scripts.generated.mjs
 standalone-runtime-profile.mjs
 package.json
 packages/acp-core/package.json
@@ -226,6 +229,7 @@ scripts/lib/release-changelog.mjs
 scripts/lib/repo-root.mjs
 scripts/lib/test-runtime.mts
 scripts/lib/test-selector-source-facts.mts
+scripts/lib/test-selector-source-facts.worker.mts
 scripts/lib/test-source-term-matcher.mts
 scripts/lib/tsdown-declaration-boundary.mts
 scripts/lib/tsgo-core-test-shards.mts
@@ -1121,6 +1125,7 @@ src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-capabilities.ts
 src/infra/runtime-dependency-ownership.ts
+src/infra/runtime-process-dependency-url.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts

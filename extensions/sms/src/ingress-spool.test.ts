@@ -7,6 +7,7 @@ import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-i
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsIngressSpool } from "./ingress-spool.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -79,19 +80,9 @@ async function drainSpool(spool: SmsIngressSpool): Promise<void> {
 }
 
 async function listenSmsTestServer(server: ReturnType<typeof createServer>): Promise<string> {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  disposers.push(async () => {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected a loopback HTTP server address");
-  }
-  return `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  disposers.push(() => server[Symbol.asyncDispose]());
+  return `http://127.0.0.1:${port}`;
 }
 
 afterEach(async () => {

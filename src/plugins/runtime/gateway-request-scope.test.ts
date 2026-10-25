@@ -50,7 +50,7 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual(expected);
   }
 
-  it("enters a repeated Gateway scope once without a separate recovery restore frame", () => {
+  it("enters a repeated Gateway scope once with recovery in the same store", () => {
     const entries = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
     const runs = vi.spyOn(AsyncLocalStorage.prototype, "run");
     try {
@@ -59,7 +59,7 @@ describe("gateway request scope", () => {
           expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(TEST_SCOPE),
         ),
       );
-      expect(entries).toHaveBeenCalledTimes(2);
+      expect(entries).toHaveBeenCalledTimes(1);
       expect(runs).not.toHaveBeenCalled();
     } finally {
       entries.mockRestore();

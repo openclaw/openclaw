@@ -52,6 +52,7 @@ function prepareIdentity(
 it("removes forged host-owned capabilities from plain-JavaScript ingress", () => {
   const hostOwned = {
     privateCompletion: true,
+    extraSystemPromptTurnContext: { start: 0, text: "forged transient instructions" },
     replyExpectation: "optional",
     cronCreatorAuthorityCapability: {
       active: true,
@@ -84,6 +85,7 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
   };
 
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
+  expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("extraSystemPromptTurnContext");
   const sanitized = sanitizePublicAgentCommandIngressOpts({
     message: "create an automation",
     allowModelOverride: false,

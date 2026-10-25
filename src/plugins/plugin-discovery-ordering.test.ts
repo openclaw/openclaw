@@ -5,8 +5,8 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 const temp = createTempDirTracker();

@@ -633,7 +633,9 @@ class NodeRuntimeAgentSelectionTest {
         assertTrue(withTimeout(2_000) { history.await() }.orEmpty().contains("agent:agent-b:"))
         assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.mainSessionKey.value))
         assertEquals(runtime.mainSessionKey.value, runtime.chat.sessionKey.value)
-        assertFalse(requests.any { (_, params) -> params.orEmpty().contains("agent:agent-a:") })
+        synchronized(requests) {
+          assertFalse(requests.any { (_, params) -> params.orEmpty().contains("agent:agent-a:") })
+        }
       } finally {
         releaseRoster.complete(Unit)
         closeNodeRuntimeTestFixture(runtime)

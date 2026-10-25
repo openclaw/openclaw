@@ -282,6 +282,11 @@ the existing cache cap.
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact. The embedding cache
+can miss vectors that are still in the published index. With embedding caching
+enabled, full rebuilds reuse those
+vectors in bounded source batches when provider, model, provider settings, input
+format, chunk hash, and dimensions match. Invalid vectors are embedded again.
+The embedding cache
 may temporarily hold up to twice its configured row cap during a full rebuild,
 so new embeddings do not evict cached vectors that later batches still need.
 It is pruned to the configured cap after publication or abort. A suspended

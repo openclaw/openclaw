@@ -14,6 +14,7 @@ export type PluginStateOperationInput = {
 export type PluginStateOperationResult = {
   value: unknown;
   validUntil: number | undefined;
+  emptyShortcut?: true;
 };
 
 export type PluginStateOperationCommit = {

@@ -76,16 +76,10 @@ afterEach(async () => {
     socket.destroy();
   }
   runningSockets.clear();
-  await Promise.all(runningServers.splice(0).map(closeServer));
+  await Promise.all(runningServers.splice(0).map((server) => server[Symbol.asyncDispose]()));
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
-
-function closeServer(server: Server) {
-  return new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
 
 function mockFetchGuard(response: Response, release: () => Promise<void> = async () => undefined) {
   return vi

@@ -5,20 +5,20 @@ import {
   createInboundDecisionParams,
   type InboundDecisionParams,
 } from "./inbound-decision.test-support.js";
+import { resolveIMessageReactionContext } from "./reaction-context.js";
 import { SelfChatCache } from "./self-chat-cache.js";
 
 type ReplyCacheModule = typeof import("../monitor-reply-cache.js");
 type InboundProcessingModule = typeof import("./inbound-processing.js");
 let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
 let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
-let resolveIMessageReactionContext: InboundProcessingModule["resolveIMessageReactionContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
 const cfg = {} as OpenClawConfig;
 type EchoHas = NonNullable<InboundDecisionParams["echoCache"]>["has"];
 
 beforeAll(async () => {
   ({ rememberIMessageReplyCache } = await loadFreshIMessageReplyCacheForTest());
-  ({ buildIMessageInboundContext, resolveIMessageReactionContext, resolveIMessageInboundDecision } =
+  ({ buildIMessageInboundContext, resolveIMessageInboundDecision } =
     await import("./inbound-processing.js"));
 });
 

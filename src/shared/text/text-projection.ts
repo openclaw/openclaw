@@ -61,11 +61,7 @@ function findTextCheckpoint(
   text: string,
   referenceLength: number,
   resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
-): {
-  offset: number;
-  context: string;
-  definitions?: ReturnType<typeof findCodeOwnership>["definitions"];
-} {
+) {
   const state = createProtectionScanState();
   let cursor = referenceLength;
   let lastLineStart = cursor;

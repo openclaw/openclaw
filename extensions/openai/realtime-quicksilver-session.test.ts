@@ -580,6 +580,7 @@ describe("GPT-Live browser session lifecycle", () => {
           "before answering each new request: it must be fresh and for this voice call, even if shared history appears to answer it",
           "Shared conversation history may describe other calls or completed work; it does not establish this call's live ownership or status",
           "a delegation or task receipt is not evidence of progress",
+          "When the host explicitly requests a natural launch acknowledgment, keep it brief and provisional",
           "Current host-provided task receipts and control results are not new requests: speak them exactly as instructed, without delegating them",
         ]) {
           expect(session.instructions).toContain(instruction);
