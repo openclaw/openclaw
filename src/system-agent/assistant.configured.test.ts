@@ -164,12 +164,7 @@ describe("OpenClaw configured-model planner", () => {
         });
         expect(result).toEqual({ reply: "Ready.", modelLabel: `${provider}/${model}` });
         expect(runEmbeddedAgent).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs }));
-        const metadataParams = resolveMetadata.mock.calls[0]?.[0];
-        expect({
-          config: metadataParams?.config,
-          workspaceDir: metadataParams?.workspaceDir,
-          allowWorkspaceScopedCurrent: metadataParams?.allowWorkspaceScopedCurrent,
-        }).toEqual({
+        expect(resolveMetadata.mock.calls[0]?.[0]).toMatchObject({
           config: binding.execution.runConfig,
           workspaceDir,
           allowWorkspaceScopedCurrent: true,

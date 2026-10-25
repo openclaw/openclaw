@@ -7,6 +7,7 @@ import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import * as cliRunner from "../agents/cli-runner.js";
 import { prepareEmbeddedSkills } from "../agents/embedded-agent-runner/skill-runtime.js";
+import { extractToolResultText } from "../agents/embedded-agent-tool-results.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import * as configModule from "../config/config.js";
@@ -116,7 +117,7 @@ function configSnapshot(config: OpenClawConfig) {
   };
 }
 
-async function createVerifiedSession(config: OpenClawConfig) {
+async function createVerifiedSession(config: OpenClawConfig = defaultConfig()) {
   const fixture = await pluginMetadataSnapshot!.run(
     () => createSystemAgentVerifiedInferenceTestFixture(config),
     config,
@@ -165,6 +166,8 @@ function mockEmbeddedRunner(text?: string) {
   vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(run);
   return run;
 }
+
+const cliIsolation = { disableCliLiveSession: true, cleanupCliLiveSessionOnRunEnd: true };
 
 beforeAll(() => {
   pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
@@ -289,14 +292,8 @@ describe("runSystemAgentTurn", () => {
         ),
       ).toBe(role === "utility");
 
-      const firstPath = expectDefined(
-        mocks.runEmbeddedAgent.mock.calls[0]?.[0]?.sessionFile,
-        "missing first embedded transcript path",
-      );
-      const secondPath = expectDefined(
-        mocks.runEmbeddedAgent.mock.calls[1]?.[0]?.sessionFile,
-        "missing second embedded transcript path",
-      );
+      const firstPath = expectDefined(firstCall?.sessionFile, "missing first transcript path");
+      const secondPath = expectDefined(secondCall?.sessionFile, "missing second transcript path");
       expect(firstPath).toBe(`in-memory:${first.sessionId}`);
       expect(secondPath).toBe(`in-memory:${second.sessionId}`);
       expect(firstPath).not.toBe(secondPath);
@@ -314,8 +311,7 @@ describe("runSystemAgentTurn", () => {
       path.join(skillDir, "SKILL.md"),
       "---\nname: workspace-only-task\ndescription: Requires the read tool.\n---\nRead task files.\n",
     );
-    const config = defaultConfig();
-    const { session } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession();
     const runEmbeddedAgent = vi.fn(async (params: RunEmbeddedAgentParams) => {
       const prepared = await prepareEmbeddedSkills({
         attempt: params,
@@ -366,16 +362,15 @@ describe("runSystemAgentTurn", () => {
       authProfileId: "claude-cli:ops",
       agentId: "openclaw",
       sessionKey: `agent:openclaw:${session.sessionId}`,
-      runtimePolicySessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
       sessionFile: `in-memory:${session.sessionId}`,
       messageChannel: "openclaw",
       messageProvider: "openclaw",
+      runtimePolicySessionKey: "agent:openclaw:main",
       timeoutMs: 900_000,
+      ...cliIsolation,
     });
-    expect(call.disableCliLiveSession).toBe(true);
-    expect(call.cleanupCliLiveSessionOnRunEnd).toBe(true);
     expect(call.cliToolAvailability).toEqual({
       native: [],
       openClaw: ["openclaw"],
@@ -446,14 +441,8 @@ describe("runSystemAgentTurn", () => {
       const secondCall = expectDefined(runCliAgent.mock.calls[1]?.[0], "missing second CLI call");
       expect(firstCall.cliSessionBinding).toBeUndefined();
       expect(secondCall.cliSessionBinding).toEqual(binding);
-      expect(firstCall).toMatchObject({
-        disableCliLiveSession: true,
-        cleanupCliLiveSessionOnRunEnd: true,
-      });
-      expect(secondCall).toMatchObject({
-        disableCliLiveSession: true,
-        cleanupCliLiveSessionOnRunEnd: true,
-      });
+      expect(firstCall).toMatchObject(cliIsolation);
+      expect(secondCall).toMatchObject(cliIsolation);
       runCliAgent.mockImplementationOnce(async () => {
         session.proposalRef.current = "unfinished-proposal";
         session.proposalRef.operation = { kind: "setup" };
@@ -534,8 +523,7 @@ describe("runSystemAgentTurn", () => {
     expect(firstCall.cliSessionBinding).toBeUndefined();
     expect(secondCall).toMatchObject({
       cliSessionBinding: binding,
-      disableCliLiveSession: true,
-      cleanupCliLiveSessionOnRunEnd: true,
+      ...cliIsolation,
       systemAgentTool: {
         approvalArmed: true,
         proposalRef: { current: "proposal-sha256" },
@@ -646,12 +634,12 @@ describe("runSystemAgentTurn", () => {
       agentHarnessRuntimeOverride: "codex",
       agentId: "openclaw",
       sessionKey: `agent:openclaw:${session.sessionId}`,
-      sandboxSessionKey: "agent:openclaw:main",
       sessionId: session.sessionId,
       workspaceDir: path.join(stateDir, "openclaw", "workspace"),
       sessionFile: `in-memory:${session.sessionId}`,
       messageChannel: "openclaw",
       messageProvider: "openclaw",
+      sandboxSessionKey: "agent:openclaw:main",
       toolsAllow: ["openclaw"],
       disableMessageTool: true,
     });
@@ -667,24 +655,16 @@ describe("runSystemAgentTurn", () => {
   });
 
   it("threads operator-approval-only into the real ring-zero tool and stages the delegated proposal", async () => {
-    const config = defaultConfig();
-    const { session } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession();
     const runEmbeddedAgent = vi.fn(async (params: RunEmbeddedAgentParams) => {
-      const options = params.systemAgentTool;
-      if (!options) {
-        throw new Error("missing system agent tool options");
-      }
-      const tool = createSystemAgentTool(options);
+      const tool = createSystemAgentTool(expectDefined(params.systemAgentTool, "missing tool"));
       const result = await tool.execute("delegated-turn", {
         action: "config_set",
         path: "agents.defaults.subagents.thinking",
         value: "high",
         approved: true,
       });
-      const text = (result as { content: Array<{ type: string; text?: string }> }).content
-        .map((block) => block.text ?? "")
-        .filter(Boolean)
-        .join("\n");
+      const text = extractToolResultText(result);
       return { meta: { durationMs: 0, finalAssistantVisibleText: text } };
     });
 
@@ -729,8 +709,7 @@ describe("runSystemAgentTurn", () => {
   });
 
   it("converts route-planning failures to a typed error and clears session state", async () => {
-    const config = defaultConfig();
-    const { session } = await createVerifiedSession(config);
+    const { session } = await createVerifiedSession();
     session.proposalRef.current = "partial-proposal";
     session.cliSession = {
       routeKey: "stale-route",

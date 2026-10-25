@@ -39,6 +39,10 @@ function mockApprovedOperation(execute: typeof nativeExecuteOperation) {
   );
 }
 
+function repairRunner() {
+  return vi.fn<SystemAgentTurnRunner>(async () => ({ text: "Proposed correction." }));
+}
+
 describe("SystemAgentChatEngine operations", () => {
   it("keeps a utility-only agent handoff in setup", async () => {
     const agentId = "helper";
@@ -418,9 +422,9 @@ describe("SystemAgentChatEngine operations", () => {
       },
     );
     mockApprovedOperation(executeOperation);
-    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async (params) => {
-      return { text: `using ${params.session.verifiedInference.execution.modelLabel}` };
-    });
+    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async ({ session }) => ({
+      text: `using ${session.verifiedInference.execution.modelLabel}`,
+    }));
     const engine = createChatEngine({
       verifiedInference,
       runAgentTurn,
@@ -446,9 +450,7 @@ describe("SystemAgentChatEngine operations", () => {
 
   it("returns a failed operator config unset to one repair turn", async () => {
     useTempStateDir();
-    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({
-      text: "Proposed correction.",
-    }));
+    const runAgentTurn = repairRunner();
     const runConfigUnset = operationMocks.runConfigUnset.mockImplementation(async () => {
       throw new Error("fixture schema error");
     });
@@ -475,9 +477,7 @@ describe("SystemAgentChatEngine operations", () => {
   it("preserves the captured CLI error while proposing a repair", async () => {
     const validationError =
       "Config validation failed: gateway.port: Invalid input: expected number, received string";
-    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({
-      text: "Proposed correction.",
-    }));
+    const runAgentTurn = repairRunner();
     mockApprovedOperation(async (_operation, runtime) => {
       runtime.error(validationError);
       throw new SystemAgentOperationExitError(1);
@@ -493,9 +493,7 @@ describe("SystemAgentChatEngine operations", () => {
 
   it("reports a config write's post-publication failure without claiming no write occurred", async () => {
     useTempStateDir();
-    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({
-      text: "Proposed correction.",
-    }));
+    const runAgentTurn = repairRunner();
     const writerError = new ConfigWritePostCommitError({
       configPath: "/tmp/fixture-openclaw.json",
       rollbackStatus: "not-restored",
@@ -568,38 +566,18 @@ describe("SystemAgentChatEngine operations", () => {
     expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("[config-verify]");
   });
 
-  it("warns when invalid written config prevents repair inference", async () => {
-    useTempStateDir();
-    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({ text: "unused" }));
-    const executeOperation = vi.fn<typeof nativeExecuteOperation>(async () => {
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        ...configSnapshot({}),
-        valid: false,
-        issues: [{ path: "gateway.port", message: "Expected number, received string" }],
-      });
-      return { applied: true };
-    });
-    mockApprovedOperation(executeOperation);
-    const engine = createEngine({ yes: true, runAgentTurn });
-
-    const reply = await engine.handle("config set gateway.port 18789");
-
-    expect(reply.applied).toBe(true);
-    expect(reply.text).toContain("openclaw doctor --fix");
-    expect(reply.text).toContain("failed validation");
-    expect(reply.text).toContain("gateway.port: Expected number, received string");
-    expect(reply.text).toContain("The write was applied");
-    expect(reply.text).toContain("could not propose a repair");
-    expect(executeOperation).toHaveBeenCalledOnce();
-    expect(runAgentTurn).not.toHaveBeenCalled();
-  });
-
-  it.each(["missing", "unreadable"] as const)(
+  it.each(["invalid", "missing", "unreadable"] as const)(
     "warns when written config is %s",
     async (failure) => {
       useTempStateDir();
       const executeOperation = vi.fn<typeof nativeExecuteOperation>(async () => {
-        if (failure === "missing") {
+        if (failure === "invalid") {
+          mocks.readConfigFileSnapshot.mockResolvedValue({
+            ...configSnapshot({}),
+            valid: false,
+            issues: [{ path: "gateway.port", message: "Expected number, received string" }],
+          });
+        } else if (failure === "missing") {
           mocks.readConfigFileSnapshot.mockResolvedValue({
             ...configSnapshot({}),
             exists: false,
@@ -620,10 +598,16 @@ describe("SystemAgentChatEngine operations", () => {
       expect(executeOperation).toHaveBeenCalledOnce();
       expect(runAgentTurn).not.toHaveBeenCalled();
       expect(reply.text).toContain("The write was applied");
-      expect(reply.text).toContain("post-write verification is unavailable");
-      expect(reply.text).toContain(
-        failure === "missing" ? "openclaw.json was not found" : "openclaw.json could not be read",
-      );
+      if (failure === "invalid") {
+        expect(reply.text).toContain("failed validation");
+        expect(reply.text).toContain("gateway.port: Expected number, received string");
+        expect(reply.text).toContain("could not propose a repair");
+      } else {
+        expect(reply.text).toContain("post-write verification is unavailable");
+        expect(reply.text).toContain(
+          failure === "missing" ? "openclaw.json was not found" : "openclaw.json could not be read",
+        );
+      }
       expect(reply.text).toContain("openclaw doctor --fix");
     },
   );
