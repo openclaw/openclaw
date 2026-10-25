@@ -351,7 +351,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             storePath: resolvedSessionTarget.storePath,
           }),
           assertCurrent: () => {
-            assertActiveRun();
             if (
               !attemptControls.isCurrent() ||
               sessionPromptState.sessionId !== sessionId ||
@@ -362,6 +361,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             ) {
               throw new Error("Session target preparation outlived its attempt");
             }
+            // Attempt controls check the source; retain its exact binding after that callback.
+            assertActiveRun.assertScopeCurrent();
           },
         }
       : undefined;

@@ -566,7 +566,7 @@ export const startSubagentAnnounceCleanupFlow = (
       abortDelivery();
     } else {
       deadlineTimer = setTimeout(abortDelivery, remainingMs);
-      deadlineTimer.unref?.();
+      deadlineTimer.unref();
     }
     try {
       if (entry.expectsCompletionMessage === true && !requesterOwnsCompletion()) {
