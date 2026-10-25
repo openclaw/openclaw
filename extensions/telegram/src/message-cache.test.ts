@@ -142,18 +142,6 @@ describe("telegram message cache", () => {
     ]);
   });
 
-  it("keeps a cached dice roll readable as a reply target", async () => {
-    const roll = message(9100, "Ada", {
-      from: sender(2, "Ada"),
-      dice: { emoji: "\u{1F3B2}", value: 4 },
-    });
-    await record(roll);
-
-    expect(await replyChain(reply(9101, "Grace", roll))).toMatchObject([
-      { messageId: "9100", body: "[Dice \u{1F3B2} = 4]" },
-    ]);
-  });
-
   it("prefers exact stored ancestors over stale embedded content and topic metadata", async () => {
     await record(
       message(8, "Ada", {

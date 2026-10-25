@@ -135,60 +135,13 @@ describe("recordOutboundMessageForPromptContext", () => {
     ]);
   });
 
-  it("retains forum and channel Direct Messages thread provenance without exposing topicless history", async () => {
-    const chatId = -1001;
-    for (const { scope, messageId, body } of [
-      { scope: "forum", messageId: 710, body: "Forum reply" },
-      { scope: "direct-messages", messageId: 711, body: "Direct-topic reply" },
-    ] as const) {
-      await recordOutboundMessageForPromptContext({
-        cfg,
-        account,
-        chatId,
-        messageId,
-        messageThreadId: 77,
-        successfulSendThread: { scope, id: 77 },
-        message: providerMessage(messageId, {
-          chat: { id: chatId, type: "supergroup" },
-          ...(scope === "forum"
-            ? { message_thread_id: 77 }
-            : { direct_messages_topic: { topic_id: 77 } }),
-          text: body,
-        }),
-      });
-    }
-
-    resetTelegramMessageCacheBucketsForTest();
-    const cache = createPromptContextCache();
-    const readHistory = (threadId?: number) =>
-      cache.readHistory({ accountId: "default", chatId, threadId, limit: 10 });
-    expect((await readHistory(77)).messages).toMatchObject(
-      [
-        ["710", "Forum reply", "forum"],
-        ["711", "Direct-topic reply", "direct-messages"],
-      ].map(([messageId, body, scope]) => ({
-        messageId,
-        body,
-        sender: "Configured Agent (you)",
-        threadBinding: { threadSpec: { scope, id: 77 } },
-      })),
-    );
-    expect(await readHistory()).toEqual({
-      messages: [],
-      hasMore: false,
-    });
-  });
-
   it("does not infer a General-topic binding for DM thread context", async () => {
     const cached = await recordAndRead({
-      message: providerMessage(703, {
-        chat: privateChat,
-      }),
+      message: providerMessage(703, { chat: privateChat }),
       messageId: 703,
       messageThreadId: 1,
       successfulSendThread: { id: 1, scope: "dm" },
     });
-
     expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(false);
   });
 

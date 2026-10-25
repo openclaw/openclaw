@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 let menu: typeof import("./bot-native-commands.menu-test-support.js");
@@ -141,26 +141,21 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
   ] as const)(
     "executes the normalized owner with %s discovery",
     async (_label, names, sameChannel) => {
-      const handlers = new Map<string, ReturnType<typeof vi.fn>>();
+      const invoked: string[] = [];
       const owner = sameChannel ? "foo_bar" : "foo-bar";
-      const reply = sameChannel ? "Exact owner ran" : "telegram-owner";
       for (const name of names) {
-        const handler = vi.fn(async () => ({
-          text: name === owner ? reply : sameChannel ? "Other owner ran" : "discord-owner",
-        }));
-        handlers.set(name, handler);
-        registerCommand(
-          sameChannel ? `plugin-${name}` : name === owner ? "telegram-owner" : "discord-owner",
-          {
-            name,
-            description: name,
-            ...(sameChannel
-              ? { descriptionLocalizations: { ko: name === "foo_bar" ? "정확함" : "다른 명령" } }
-              : {}),
-            channels: [sameChannel || name === owner ? "telegram" : "discord"],
-            handler,
+        registerCommand(`plugin-${name}`, {
+          name,
+          description: name,
+          descriptionLocalizations: sameChannel
+            ? { ko: name === "foo_bar" ? "정확함" : "다른 명령" }
+            : undefined,
+          channels: [sameChannel || name === owner ? "telegram" : "discord"],
+          handler: async () => {
+            invoked.push(name);
+            return { text: name };
           },
-        );
+        });
       }
       const { commandHandlers, setMyCommands } = await registerMenu();
       const registered = await menu.waitForRegisteredCommands(setMyCommands);
@@ -178,9 +173,8 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
         expect(namesInMenu.indexOf("zeta")).toBeGreaterThan(namesInMenu.indexOf("foo_bar"));
         expect(namesInMenu.indexOf("side")).toBeGreaterThan(namesInMenu.indexOf("zeta"));
       }
-      await expectCommandReply(commandHandlers, "foo_bar", reply);
-      expect(handlers.get(owner)).toHaveBeenCalledOnce();
-      expect(handlers.get(sameChannel ? "foo-bar" : "foo_bar")).not.toHaveBeenCalled();
+      await expectCommandReply(commandHandlers, "foo_bar", owner);
+      expect(invoked).toEqual([owner]);
     },
   );
 
