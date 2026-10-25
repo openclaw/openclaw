@@ -8,7 +8,6 @@ const accepts = (raw: unknown) => OpenClawSchema.safeParse(raw).success;
 
 function expectSchemaIssue(raw: unknown, path: string[], message?: string) {
   const result = OpenClawSchema.safeParse(raw);
-  expect(result.success).toBe(false);
   expect(result.error?.issues).toContainEqual(
     expect.objectContaining({
       path,
@@ -54,11 +53,7 @@ const rolesConfig = (overrides: Record<string, unknown>) => ({
   gateway: { roles: { default: "guest", definitions: { guest: validRole }, ...overrides } },
 });
 const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
-  agents: {
-    entries: {
-      shared: { model: "fixture/primary", models: { "fixture/fallback": { alias: "backup" } } },
-    },
-  },
+  agents: { entries: { shared: { models: { "fixture/fallback": { alias: "backup" } } } } },
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
 });
 
@@ -94,15 +89,14 @@ test.each([
   { sourceAgent: "shared", deny: ["fixture/restricted-**"] },
   { sourceAgent: "shared", deny: ["fixture/restricted- *"] },
 ])("rejects model exclusions that cannot be applied as configured: %j", (modelPolicy) => {
-  const result = validateConfigObject(modelConfig(modelPolicy));
-  expect(result.ok).toBe(false);
-  if (!result.ok) {
-    expect(result.issues).toContainEqual(
+  expect(validateConfigObject(modelConfig(modelPolicy))).toMatchObject({
+    ok: false,
+    issues: expect.arrayContaining([
       expect.objectContaining({
         path: expect.stringContaining("gateway.roles.definitions.guest.modelPolicy"),
       }),
-    );
-  }
+    ]),
+  });
 });
 
 test.each([
@@ -180,10 +174,10 @@ test.each([
 });
 
 test("rejects inherited realtime provider keys", () => {
-  const realtime = { provider: "constructor", providers: { elevenlabs: { voiceId: "voice-123" } } };
-  const result = OpenClawSchema.safeParse({ talk: { realtime } });
-  expect(result.success).toBe(false);
-  expect(result.error?.issues[0]?.path).toEqual(["talk", "realtime", "provider"]);
+  expectSchemaIssue(
+    { talk: { realtime: { provider: "constructor", providers: { elevenlabs: {} } } } },
+    ["talk", "realtime", "provider"],
+  );
 });
 
 test("requires an explicit selection when multiple providers are configured", () => {

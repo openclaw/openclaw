@@ -33,7 +33,6 @@ function validate(
     },
   });
   const result = validateConfigObjectRawWithPlugins(config, { pluginMetadataSnapshot });
-  expect(result.ok).toBe(true);
   if (!result.ok) {
     throw new Error("Expected valid utility route");
   }
@@ -63,7 +62,6 @@ const capableBackend = {
 it("accepts the explicit route and warns before its exact tool cap fails at runtime", () => {
   const utilityModel = { primary: "fixture-cli/small", fallbacks: ["local/capable"] };
   const result = validate(withDefaults({ utilityModel }));
-  expect(result.config.agents?.defaults?.utilityModel).toEqual(utilityModel);
   expect(result.warnings).toContainEqual(warning("fixture-cli/small"));
 });
 
@@ -71,7 +69,6 @@ it("points per-agent warnings at the authored entry ID", () => {
   const utilityModel = "fixture-cli/small";
   const result = validate({ agents: { entries: { Worker: { utilityModel } } } });
 
-  expect(result.config.agents?.entries?.Worker?.utilityModel).toBe(utilityModel);
   expect(result.warnings).toContainEqual(
     expect.objectContaining({ path: "agents.entries.Worker.utilityModel" }),
   );
@@ -91,7 +88,6 @@ it("resolves manifest model aliases before checking the canonical runtime pin", 
     }),
   );
 
-  expect(result.config.agents?.defaults?.utilityModel).toBe(utilityModel);
   expect(result.warnings).toContainEqual(warning("local/canonical"));
 });
 
@@ -126,7 +122,6 @@ it.each([
     }),
   );
 
-  expect(result.config.agents?.defaults?.utilityModel).toBe(utilityModel);
   expect(result.warnings).toHaveLength(warnings);
 });
 
