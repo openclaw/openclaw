@@ -1,10 +1,14 @@
+/* oxlint-disable unicorn/no-array-sort -- Vitest's sequencer API is named sort. */
+/* oxlint-disable no-underscore-dangle -- Vitest exposes its result cache as _results. */
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { BaseSequencer, createVitest, resolveConfig } from "vitest/node";
+import { uiNodeDrivenBrowserTestFiles } from "../vitest/vitest.ui-paths.mjs";
 
-const [output, selectionsPath, includeFile] = process.argv.slice(2);
-if (!output || !selectionsPath || !includeFile) {
-  throw new Error("Expected runtime partition report, selections, and include paths");
+const [fixtureRoot, selectionsPath, includeFile] = process.argv.slice(2);
+if (!fixtureRoot || !selectionsPath || !includeFile) {
+  throw new Error("Expected fixture root, selections, and include paths");
 }
 const selections = JSON.parse(fs.readFileSync(selectionsPath, "utf8"));
 delete process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
@@ -18,7 +22,7 @@ const ctx = await createVitest({
   cache: false,
 });
 try {
-  const emptyDiscoveryAllowed = Boolean(ctx.config.passWithNoTests);
+  assert.equal(Boolean(ctx.config.passWithNoTests), false);
   const specifications = await ctx.globTestSpecifications();
   const paths = (files) =>
     files.map((file) => path.relative(process.cwd(), file.moduleId).replaceAll("\\", "/")).sort();
@@ -33,14 +37,27 @@ try {
     api: false,
     cache: false,
   });
-  let rootNodeFiles;
   try {
-    rootNodeFiles = paths(await rootCtx.globTestSpecifications());
+    const rootNodeFiles = paths(await rootCtx.globTestSpecifications());
+    assert.deepEqual(rootNodeFiles, packageNodeFiles);
+    assert(rootNodeFiles.includes("ui/src/pages/chat/talk/shared.browser-import.test.ts"));
+    for (const file of uiNodeDrivenBrowserTestFiles) {
+      assert(rootNodeFiles.includes(file));
+    }
   } finally {
     await rootCtx.close();
   }
   process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = includeFile;
-  const rows = [];
+  const discovered = paths(specifications);
+  assert(discovered.includes("ui/src/solid-smoke/solid-smoke.test.tsx"));
+  const nodeRequired = new Set([
+    "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+    "ui/src/pages/chat/chat-pane-retention.test.ts",
+    "ui/src/pages/chat/chat-thread-retention.test.ts",
+    "ui/src/pages/chat/session-snapshot-store.test.ts",
+    "ui/src/pages/usage/usage-page-retention.test.ts",
+  ]);
+  const shardFiles = [];
   for (const index of [undefined, 1, 2, 3]) {
     ctx.config.shard = index ? { index, count: 3 } : undefined;
     const native = new BaseSequencer(ctx);
@@ -61,8 +78,23 @@ try {
         });
       }
     }
-    rows.push({ index, original: paths(original), selected });
+    const files = paths(original);
+    if (index) {
+      shardFiles.push(...files);
+    }
+    const nodeFiles = files.filter((file) => nodeRequired.has(file));
+    const bunFiles = files.filter((file) => !nodeRequired.has(file));
+    for (const [policy, expected] of [
+      ["bun-all", nodeFiles],
+      ["dual-all", files],
+    ]) {
+      assert.deepEqual(selected[policy], [
+        { runtime: "node", files: expected },
+        { runtime: "bun", files: bunFiles },
+      ]);
+    }
   }
+  assert.deepEqual(shardFiles.toSorted(), discovered);
 
   // Exercise the registered sequencer with interleaved environment pragmas,
   // without running a second Vitest process or executing synthetic test bodies.
@@ -85,7 +117,7 @@ try {
     ["other-url", '// @jest-environment-options {"url":"https://different.test/"}'],
   ];
   const schedulingSpecs = schedulingCases.map(([name, pragma], index) => {
-    const file = path.join(path.dirname(output), `${name}.test.ts`);
+    const file = path.join(fixtureRoot, `${name}.test.ts`);
     fs.writeFileSync(
       file,
       `${pragma}\n// ${"padding".repeat((schedulingCases.length - index) * 100)}\n`,
@@ -95,13 +127,18 @@ try {
   const names = (files) => files.map((file) => path.basename(file.moduleId, ".test.ts"));
   const native = new BaseSequencer(ctx);
   const sequencer = new ctx.config.sequence.sequencer(ctx);
-  const scheduling = {
-    native: names(await native.sort(schedulingSpecs)),
-    cold: names(await sequencer.sort(schedulingSpecs)),
-    cached: [],
-    preserved: [],
-    shuffled: [],
-    partitionedShuffled: [],
+  const nativeOrder = names(await native.sort(schedulingSpecs));
+  assert.deepEqual(
+    nativeOrder,
+    "default-a node-a url-a default-b node-b url-b default-false other-url".split(" "),
+  );
+  assert.deepEqual(
+    names(await sequencer.sort(schedulingSpecs)),
+    "default-a default-b default-false node-a node-b url-a url-b other-url".split(" "),
+  );
+  const assertNativeOrder = async (specs) => {
+    const expected = names(await native.sort(specs));
+    assert.deepEqual(names(await sequencer.sort(specs)), expected);
   };
   for (const populateAll of [false, true]) {
     for (const [index, spec] of schedulingSpecs.entries()) {
@@ -124,18 +161,12 @@ try {
         );
       }
     }
-    scheduling.cached.push({
-      native: names(await native.sort(schedulingSpecs)),
-      actual: names(await sequencer.sort(schedulingSpecs)),
-    });
+    await assertNativeOrder(schedulingSpecs);
     // Native Vitest caches keep portable keys even when node:path uses Windows separators.
     const relative = path.relative;
     try {
       path.relative = (...args) => relative(...args).replaceAll("/", "\\");
-      scheduling.cached.push({
-        native: names(await native.sort(schedulingSpecs)),
-        actual: names(await sequencer.sort(schedulingSpecs)),
-      });
+      await assertNativeOrder(schedulingSpecs);
     } finally {
       path.relative = relative;
     }
@@ -158,24 +189,36 @@ try {
   });
   const selectionIds = (files) =>
     files.map((file) => `${path.basename(file.moduleId, ".test.ts")}:${file.testLines.join(",")}`);
-  scheduling.bounded = {
-    native: selectionIds(await native.sort(boundedSpecs)),
-    actual: selectionIds(await sequencer.sort(boundedSpecs)),
-  };
+  const boundedNative = selectionIds(await native.sort(boundedSpecs));
+  const boundedActual = selectionIds(await sequencer.sort(boundedSpecs));
+  assert.equal(boundedActual.length, 405);
+  assert.deepEqual(boundedActual.toSorted(), boundedNative.toSorted());
+  for (const prefix of ["default-", "node-"]) {
+    assert.deepEqual(
+      boundedActual.filter((id) => id.startsWith(prefix)),
+      boundedNative.filter((id) => id.startsWith(prefix)),
+    );
+  }
+  let previousEnvironment;
+  let consecutive = 0;
+  for (const selection of boundedActual) {
+    const environment = selection.startsWith("node-") ? "node" : "jsdom";
+    consecutive = environment === previousEnvironment ? consecutive + 1 : 1;
+    assert(consecutive <= 128);
+    previousEnvironment = environment;
+  }
   const mixed = [...schedulingSpecs];
   for (const name of ["unit-mock-registry", "chromium", "unit-timing"]) {
     const project = ctx.getProjectByName(name);
     const specs = schedulingSpecs.map((spec) => project.createSpecification(spec.moduleId));
-    scheduling.preserved.push({
-      native: names(await native.sort(specs)),
-      actual: names(await sequencer.sort(specs)),
-    });
+    await assertNativeOrder(specs);
     mixed.push(...specs);
   }
-  scheduling.projectOrder = {
-    native: (await native.sort(mixed)).map((spec) => spec.project.name),
-    actual: (await sequencer.sort(mixed)).map((spec) => spec.project.name),
-  };
+  const projectOrder = (await native.sort(mixed)).map((spec) => spec.project.name);
+  assert.deepEqual(
+    (await sequencer.sort(mixed)).map((spec) => spec.project.name),
+    projectOrder,
+  );
   const originalSeed = ctx.config.sequence.seed;
   ctx.config.sequence.seed = 37;
   ctx.config.shard = { index: 1, count: 2 };
@@ -191,10 +234,14 @@ try {
         configLoader: "runner",
       }),
     ]);
-    scheduling.shuffled.push({
-      native: names(await new nativeConfig.test.sequence.sequencer(ctx).sort([...schedulingSpecs])),
-      actual: names(await new uiConfig.test.sequence.sequencer(ctx).sort([...schedulingSpecs])),
-    });
+    const nativeShuffled = names(
+      await new nativeConfig.test.sequence.sequencer(ctx).sort([...schedulingSpecs]),
+    );
+    const shuffled = names(
+      await new uiConfig.test.sequence.sequencer(ctx).sort([...schedulingSpecs]),
+    );
+    assert.deepEqual(shuffled, nativeShuffled);
+    assert.notDeepEqual(shuffled, nativeOrder);
     process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = includeFile;
     fs.writeFileSync(includeFile, JSON.stringify(paths(shuffleMembers)));
     const shuffledCtx = await createVitest({
@@ -208,14 +255,11 @@ try {
     try {
       const partitioned = new shuffledCtx.config.sequence.sequencer(shuffledCtx);
       const sharded = await partitioned.shard(schedulingSpecs);
-      scheduling.partitionedShuffled.push({
-        native: names(
-          await new nativeConfig.test.sequence.sequencer(ctx).sort([...shuffleMembers]),
-        ),
-        actual: names(await partitioned.sort(sharded)),
-        shardNative: paths(shuffleShard),
-        shardActual: paths(sharded),
-      });
+      const nativeMembers = names(
+        await new nativeConfig.test.sequence.sequencer(ctx).sort([...shuffleMembers]),
+      );
+      assert.deepEqual(names(await partitioned.sort(sharded)), nativeMembers);
+      assert.deepEqual(paths(sharded), paths(shuffleShard));
     } finally {
       await shuffledCtx.close();
       delete process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE;
@@ -227,18 +271,8 @@ try {
   fs.writeFileSync(includeFile, "[]");
   ctx.config.shard = { index: 1, count: 3 };
   const empty = await ctx.runTestSpecifications(specifications);
-  fs.writeFileSync(
-    output,
-    JSON.stringify({
-      discovered: paths(specifications),
-      packageNodeFiles,
-      rootNodeFiles,
-      rows,
-      scheduling,
-      empty: { modules: empty.testModules.length, errors: empty.unhandledErrors.length },
-      emptyDiscoveryAllowed,
-    }),
-  );
+  assert.equal(empty.testModules.length, 0);
+  assert.equal(empty.unhandledErrors.length, 0);
 } finally {
   await ctx.close();
 }

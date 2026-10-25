@@ -20,6 +20,11 @@ import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { defaultRuntime } from "../src/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { createMessageReadAuthority } from "./message-read-authority.test-support.js";
 
@@ -159,24 +164,14 @@ async function createHarness(origin: RegistrationOrigin) {
     onRequest?.(path);
     const body =
       request.method === "GET" && Object.hasOwn(responses, path) ? responses[path] : undefined;
-    response.writeHead(body === undefined ? 404 : 200, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify(body ?? { errcode: "M_NOT_FOUND", error: "Unexpected fixture request" }),
+    respondJson(
+      response,
+      body ?? { errcode: "M_NOT_FOUND", error: "Unexpected fixture request" },
+      body === undefined ? 404 : 200,
     );
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const closeServer = () =>
-    new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    await closeServer();
-    throw new Error("Expected loopback TCP address");
-  }
-  const cfg = createConfig(`http://127.0.0.1:${address.port}`);
+  const closeServer = () => closeHttpServer(server);
+  const cfg = createConfig(await listenLoopback(server));
   const owner = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: createPluginRuntime(),
