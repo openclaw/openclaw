@@ -142,16 +142,25 @@ function isExclusiveCreate(flags: string | number | undefined): boolean {
   );
 }
 
-it.each(["absent", "replacement-pending", "replacement-complete"])(
-  "refuses %s root after observation-time disposal",
-  async (state) => {
+it.each([
+  ["observation", "absent"],
+  ["observation", "replacement-pending"],
+  ["observation", "replacement-complete"],
+  ["script", "absent"],
+  ["script", "replacement-pending"],
+  ["script", "replacement-empty"],
+])("refuses a displaced root during %s (%s)", async (phase, state) => {
+  const displaced = displacedRoot();
+  const cooperativeDiscard = vi.fn();
+  let originalLock: Buffer | undefined;
+  let replaced = false;
+  vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+  if (phase === "observation") {
     const originalIdentity = await identity(packageRoot);
     // Allocate while the original exists: deletion may immediately recycle its inode.
     const replacementRoot = tempDirs.make("openclaw-lifecycle-replacement-");
     const replacementIdentity = await identity(replacementRoot);
     expect(replacementIdentity).not.toEqual(originalIdentity);
-    let replaced = false;
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
     onPendingAccess(async () => {
       replaced = true;
       await dispose(() => fs.rm(packageRoot, { recursive: true, force: true }));
@@ -164,27 +173,7 @@ it.each(["absent", "replacement-pending", "replacement-complete"])(
         }
       }
     });
-    await expect(finish()).rejects.toMatchObject({ name: "PackageLifecycleOwnershipError" });
-    expect({ replaced, dispatches: runScript.mock.calls.length }).toEqual({
-      replaced: true,
-      dispatches: 0,
-    });
-    await missing(lock);
-    if (state === "absent") {
-      await missing(packageRoot);
-    } else if (state === "replacement-pending") {
-      expect(await read(pending)).toBe("replacement pending\n");
-    }
-  },
-);
-
-it.each(["absent", "replacement-empty", "replacement-pending"])(
-  "does not arm %s root displaced during a script",
-  async (state) => {
-    const displaced = displacedRoot();
-    const cooperativeDiscard = vi.fn();
-    let originalLock: Buffer | undefined;
-    vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
+  } else {
     runScript.mockImplementation(async () => {
       await expect(dispose(cooperativeDiscard)).rejects.toBeInstanceOf(OwnershipError);
       expect(cooperativeDiscard).not.toHaveBeenCalled();
@@ -198,26 +187,27 @@ it.each(["absent", "replacement-empty", "replacement-pending"])(
         }
       }
     });
-    await expect(finish()).rejects.toBeInstanceOf(OwnershipError);
-    expect(runScript).toHaveBeenCalledTimes(1);
+  }
+  await expect(finish()).rejects.toBeInstanceOf(OwnershipError);
+  expect(runScript).toHaveBeenCalledTimes(phase === "script" ? 1 : 0);
+  if (phase === "script") {
     expect(await fs.readFile(path.join(displaced, path.basename(lock)))).toEqual(originalLock);
-    await missing(lock);
-    if (state === "absent") {
-      await missing(packageRoot);
-      return;
-    }
-    const markerBeforeReplay = await optionalPending();
-    if (state === "replacement-pending") {
-      // The failed generation does not authorize recovery of its replacement.
-      expect(markerBeforeReplay).toBe("replacement pending\n");
-      return;
-    }
+  } else {
+    expect(replaced).toBe(true);
+  }
+  await missing(lock);
+  if (state === "absent") {
+    await missing(packageRoot);
+  } else if (state === "replacement-pending") {
+    // The failed generation does not authorize recovery of its replacement.
+    expect(await read(pending)).toBe("replacement pending\n");
+  } else if (phase === "script") {
+    expect(await optionalPending()).toBeNull();
     const replay = vi.fn();
     await finish(replay);
-    expect(markerBeforeReplay).toBeNull();
     expect(replay).not.toHaveBeenCalled();
-  },
-);
+  }
+});
 
 it.each([
   ["callback", "absent"],

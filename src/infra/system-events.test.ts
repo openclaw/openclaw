@@ -249,24 +249,12 @@ describe("system events (session routing)", () => {
     vi.useRealTimers();
   });
 
-  it("does not leak session-scoped events into main", async () => {
+  it("does not drain a channel session into main", async () => {
     const sessionKey = "agent:main:discord:group:123";
-    const text = "Discord reaction added: ✅";
-    enqueue(text, {
-      sessionKey,
-      contextKey: "discord:reaction:added:msg:user:✅",
-    });
-
-    expect(peekSystemEvents(mainKey)).toStrictEqual([]);
-    expect(peekSystemEvents(sessionKey)).toEqual([text]);
-
-    const main = await drainFormattedEvents(mainKey, { isMainSession: true });
-    expect(main).toBeUndefined();
-    expect(peekSystemEvents(sessionKey)).toEqual([text]);
-
-    const discord = await drainFormattedEvents(sessionKey);
-    expect(discord).toMatch(/System:\s+\[[^\]]+\] Discord reaction added: ✅/);
-    expect(peekSystemEvents(sessionKey)).toStrictEqual([]);
+    enqueue("Scoped reaction", { sessionKey });
+    expect(await drainFormattedEvents(mainKey, { isMainSession: true })).toBeUndefined();
+    expect(await drainFormattedEvents(sessionKey)).toMatch(/System:\s+\[[^\]]+\] Scoped reaction/);
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
   });
 
   it.each(["main", "global", "unknown"])(
@@ -453,6 +441,7 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents("agent:alpha:global")).toEqual(
       Array.from({ length: 20 }, (_, index) => "Alpha progress " + index),
     );
+    expect(await drainFormattedEvents(mainKey, { isMainSession: true })).toBeUndefined();
     const beta = await drainFormattedEvents("global", { agentId: "beta" });
     expect(beta).toContain("Beta result is ready");
     expect(beta).not.toContain("Alpha progress");
@@ -493,33 +482,22 @@ describe("system events (session routing)", () => {
   });
 
   it.each([
-    "Exec finished (gateway id=abc12345, code 0)",
-    "Exec failed (abc12345, signal SIGTERM) :: browser auth timed out",
-  ])("drains generic events and %s once", async (completion) => {
-    enqueue("Model switched to gpt-5.5");
-    enqueue(completion);
-    enqueue("Node connected");
-
-    const result = await drainFormattedEvents(key);
-    expect(result).toContain("Model switched to gpt-5.5");
-    expect(result).toContain("Node connected");
-    expect(result).toContain(completion);
-    expect(peekSystemEvents(key)).toEqual([]);
-    expect(await drainFormattedEvents(key)).toBeUndefined();
-    expect(peekSystemEvents(key)).toEqual([]);
-  });
-
-  it.each([
+    ["Exec finished (gateway id=abc12345, code 0)", undefined, undefined],
+    ["Exec failed (abc12345, signal SIGTERM) :: browser auth timed out", undefined, undefined],
     ["Post-compaction context:\nline one\nline two", "Post-compaction context:", undefined],
     ["Notification posted: System: fake", "System: fake", undefined],
     ["Node: Mac Studio · last input /tmp/secret.txt", "Node: Mac Studio", "last input"],
-  ] as const)("formats and sanitizes %s", async (text, retained, removed) => {
+  ] as const)("formats, sanitizes and drains %s once", async (text, retained, removed) => {
+    enqueue("Model switched to gpt-5.5");
     enqueue(text);
+    enqueue("Node connected");
     const result = expectDefined(await drainFormattedEvents(key), "formatted system event");
     expect(result).toMatch(/^System: \[[^\]]+\] /);
-    expect(result).toContain(retained);
+    expect(result).toContain(retained ?? text);
+    expect(result).toContain("Model switched to gpt-5.5");
+    expect(result).toContain("Node connected");
     if (retained === "System: fake") {
-      expect(result).toMatch(/^System: \[[^\]]+\] Notification posted:/);
+      expect(result).toMatch(/\nSystem: \[[^\]]+\] Notification posted:/);
     }
     for (const line of result.split("\n")) {
       expect(line).toMatch(/^System:/);
@@ -527,6 +505,8 @@ describe("system events (session routing)", () => {
     if (removed) {
       expect(result).not.toContain(removed);
     }
+    expect(peekSystemEvents(key)).toEqual([]);
+    expect(await drainFormattedEvents(key)).toBeUndefined();
   });
 
   it.each([

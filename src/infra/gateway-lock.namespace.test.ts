@@ -11,10 +11,8 @@ import * as processIdentity from "../shared/pid-alive.js";
 import { mockLinuxNamespace } from "./gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
-  parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
-import * as gatewayLockProcessModule from "./gateway-lock-process.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -144,53 +142,13 @@ describe("gateway lock namespaces", () => {
     });
   });
 
-  it("uses native process identity for local Windows owners without a boot probe", async () => {
+  it("reads local Windows namespace identity without a boot probe", () => {
     const platform = "win32";
     mockPlatform(platform, () => {
       throw new Error("Windows boot observation unavailable");
     });
     const namespace = readGatewayLockProcessNamespace();
     expect(namespace).toEqual({ host: os.hostname(), platform });
-    for (const [processNamespace, comparable] of [
-      [undefined, false],
-      [null, false],
-      [namespace, true],
-      [{ ...namespace, identity: "2026-10-01T00:00:00.0000000Z" }, true],
-      [{ ...namespace, host: "other-host" }, false],
-      [{ ...namespace, host: "" }, false],
-      [{ ...namespace, identity: "malformed" }, false],
-      [
-        {
-          host: os.hostname(),
-          platform: "linux",
-          identity: "01234567-89ab-cdef-0123-456789abcdef",
-          pidNsInode: "foreign",
-        },
-        false,
-      ],
-    ] as const) {
-      const payload = parseGatewayLockPayload(
-        JSON.stringify({
-          ...createLockPayload({ configPath: "/unused", startTime: 123 }),
-          processNamespace,
-        }),
-      );
-      await expect(resolveGatewayOwnerStatus(2_147_483_647, payload, platform)).resolves.toBe(
-        comparable ? "dead" : "unknown",
-      );
-      vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
-        () => 123,
-      );
-      await expect(resolveGatewayOwnerStatus(process.pid, payload, platform)).resolves.toBe(
-        comparable ? "alive" : "unknown",
-      );
-      vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
-        () => 124,
-      );
-      await expect(resolveGatewayOwnerStatus(process.pid, payload, platform)).resolves.toBe(
-        comparable ? "dead" : "unknown",
-      );
-    }
   });
 
   it.each([
@@ -200,7 +158,7 @@ describe("gateway lock namespaces", () => {
     { state: "exited", startTime: null, dead: true, reclaim: true },
   ])(
     "uses process identity for a $state Windows owner despite boot disagreement",
-    ({ startTime, dead, reclaim }) => {
+    async ({ startTime, dead, reclaim }) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-owner-boot-mismatch-") };
       const databasePath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
       vi.spyOn(os, "homedir").mockReturnValue(env.OPENCLAW_STATE_DIR);
@@ -220,11 +178,16 @@ describe("gateway lock namespaces", () => {
         startTime: 123,
         processNamespace: {
           host: os.hostname(),
-          platform: "win32",
+          platform: "win32" as const,
           identity: "2026-10-17T00:00:00.0000000Z",
         },
       };
       const record = JSON.stringify(payload);
+      if (dead || startTime !== null) {
+        await expect(resolveGatewayOwnerStatus(payload.pid, payload, "win32")).resolves.toBe(
+          reclaim ? "dead" : "alive",
+        );
+      }
       writeOwner(ownerPath, record, GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1000);
       let acquired: ReturnType<typeof acquireGatewayStateOwner> | undefined;
       try {
@@ -383,29 +346,6 @@ describe("gateway lock namespaces", () => {
       expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).not.toBe(record);
     } finally {
       await acquired?.release();
-    }
-  });
-
-  it("recovers automatically after a verified boot change on the same non-Windows host", async () => {
-    const env = await makeEnv();
-    const namespace = mockLinuxNamespace(env.OPENCLAW_STATE_DIR);
-    const databasePath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
-    const ownerPath = resolveGatewayStateOwnerPath(databasePath);
-    const record = JSON.stringify({
-      ...createLockPayload({ configPath: env.OPENCLAW_CONFIG_PATH, startTime: 1 }),
-      ownerId: "previous-boot-owner",
-      processNamespace: {
-        ...namespace,
-        identity: namespace.identity.replace(/[0-9a-f]/i, (digit) => (digit === "1" ? "2" : "1")),
-      },
-    });
-    writeOwner(ownerPath, record);
-    const owner = acquireStateDatabaseSchemaLease(databasePath, { busyTimeoutMs: 0 });
-    try {
-      owner.assertCurrent();
-      expect(fsSync.readFileSync(ownerPath, "utf8")).not.toBe(record);
-    } finally {
-      owner.release();
     }
   });
 

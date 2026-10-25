@@ -355,48 +355,30 @@ describe("allow-always pattern persistence", () => {
   });
 
   it.each([
-    [
-      "busybox shell",
-      "busybox",
-      "echo",
-      "{wrapper} sh -c 'echo warmup-ok'",
-      "{wrapper} sh -c 'id > marker'",
-      false,
-      true,
-    ],
-    [
-      "command carrier",
-      "command",
-      "echo",
-      "command echo warmup-ok",
-      "command id > marker",
-      true,
-      false,
-    ],
-    [
-      "comment-tailed payload",
-      "payload",
-      "benign",
-      "{approved} warmup # && payload",
-      "payload",
-      true,
-      false,
-    ],
-  ] as const)(
-    "blocks persisted %s bypasses",
-    async (_name, wrapper, approved, first, second, persists, inheritPath) => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const f = fixture(inheritPath);
-      const wrapperPath = f.exe(wrapper);
-      const approvedPath = f.exe(approved);
-      f.exe("id");
-      const command = (value: string) =>
-        value.replace("{wrapper}", wrapperPath).replace("{approved}", approvedPath);
-      await f.bypass(command(first), command(second), persists ? approvedPath : null, approvedPath);
-    },
-  );
+    { wrapper: "busybox", shell: true },
+    { wrapper: "command", shell: false },
+  ])("blocks persisted $wrapper bypasses", async ({ wrapper, shell }) => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const f = fixture(shell);
+    const wrapperPath = f.exe(wrapper);
+    const echo = f.exe("echo");
+    f.exe("id");
+    const command = (payload: string) =>
+      shell ? `${wrapperPath} sh -c '${payload}'` : `${wrapper} ${payload}`;
+    await f.bypass(command("echo warmup-ok"), command("id > marker"), shell ? null : echo, echo);
+  });
+
+  it("blocks persisted comment-tailed payload bypasses", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const f = fixture();
+    f.exe("payload");
+    const benign = f.exe("benign");
+    await f.bypass(`${benign} warmup # && payload`, "payload", benign);
+  });
 
   it("prevents Windows fallback from allowlisting opaque shell inline payloads", () => {
     const f = fixture();
