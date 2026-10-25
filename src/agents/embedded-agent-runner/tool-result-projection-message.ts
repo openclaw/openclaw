@@ -2,16 +2,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ToolResultMessage } from "../../llm/types.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import type { AgentMessage } from "../runtime/index.js";
+import type { ToolResultPromptProjection } from "./cache-ttl-checkpoint.js";
 import {
   getToolResultTextBlocks,
   hashToolResultText,
   TOOL_RESULT_PROJECTION_KEY,
 } from "./tool-result-projection-key.js";
-
-export type ToolResultPromptProjection = {
-  content: ToolResultMessage["content"];
-  cacheTtl?: "soft" | "hard";
-};
 
 function mergeProjectedToolResultMessage(
   message: AgentMessage,

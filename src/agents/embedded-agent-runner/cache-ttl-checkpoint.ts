@@ -1,6 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import type { ToolResultPromptProjection } from "./tool-result-projection-message.js";
+import type { ToolResultMessage } from "../../llm/types.js";
+
+export type ToolResultPromptProjection = {
+  content: ToolResultMessage["content"];
+  cacheTtl?: "soft" | "hard";
+};
 
 export type CacheTtlProjectionInput = {
   replacements: Map<string, ToolResultPromptProjection>;
