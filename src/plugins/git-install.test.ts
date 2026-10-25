@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
-import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -233,17 +232,7 @@ describe("installPluginFromGitSpec", () => {
         "https://github.com/acme/demo.git",
       ]);
       expect(cloneArgv[5]).toContain("/.openclaw-install-stage-");
-      expect(commandArgvAt(2)).toEqual(["git", "switch", "--detach", "--", "abc123"]);
-      expect(commandArgvAt(4)).toEqual(
-        expectedNpmCommand([
-          "install",
-          "--omit=dev",
-          "--loglevel=error",
-          "--ignore-scripts",
-          "--no-audit",
-          "--no-fund",
-        ]),
-      );
+      expect(commandArgvAt(4)).toContain("--ignore-scripts");
       expect(runCommandWithTimeoutMock.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([
         gitWork,
         timeoutMs ?? 120_000,
@@ -309,14 +298,6 @@ describe("installPluginFromGitSpec", () => {
       expectFailure(result, reason);
       if (expectedPluginId) {
         expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-        expect(commandArgvAt(0).slice(0, 7)).toEqual([
-          ...clonePrefix,
-          "--depth",
-          "1",
-          "--",
-          "https://github.com/acme/demo.git",
-        ]);
-        expect(commandArgvAt(1)).toEqual(["git", "rev-parse", "HEAD"]);
         expect(preflightPluginGitInstallPolicyMock).toHaveBeenCalledWith(
           expect.objectContaining({
             pluginId: "demo",

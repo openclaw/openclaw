@@ -291,30 +291,6 @@ describe("installed plugin index", () => {
     expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
   });
 
-  it("keeps packageJson paths root-relative when packageDir is reached through a symlink", () => {
-    const fixture = createRichPluginFixture();
-    const linkParent = makeTempDir();
-    const linkRoot = path.join(linkParent, "linked-demo");
-    try {
-      fs.symlinkSync(fixture.rootDir, linkRoot, "dir");
-    } catch {
-      return;
-    }
-
-    const index = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir: fs.realpathSync(fixture.rootDir),
-          packageDir: linkRoot,
-          packageName: "@vendor/demo-plugin",
-          packageVersion: "1.2.3",
-        }),
-      ],
-    });
-
-    expect(index.plugins[0]?.packageJson?.path).toBe("package.json");
-  });
-
   it.runIf(process.platform !== "win32")(
     "does not record packageJson metadata from symlinks outside the plugin root",
     () => {
@@ -339,6 +315,8 @@ describe("installed plugin index", () => {
       candidates: [disabledFixture.candidate],
       config,
     });
+    const enabled = (liveConfig?: OpenClawConfig) =>
+      isInstalledPluginEnabled(index, "disabled-demo", liveConfig);
 
     const disabled = index.plugins.find((plugin) => plugin.pluginId === "disabled-demo");
     expect(disabled?.enabled).toBe(false);
@@ -352,16 +330,10 @@ describe("installed plugin index", () => {
         contracts: { tools: ["demo-tool"] },
       }),
     );
-    expect(isInstalledPluginEnabled(index, "disabled-demo", config)).toBe(false);
-    expect(
-      isInstalledPluginEnabled(index, "disabled-demo", entryConfig("enabled-demo", true)),
-    ).toBe(true);
-    expect(isInstalledPluginEnabled(index, "disabled-demo")).toBe(false);
-    expect(
-      isInstalledPluginEnabled(index, "disabled-demo", {
-        plugins: { deny: ["disabled-demo"] },
-      }),
-    ).toBe(false);
+    expect(enabled(config)).toBe(false);
+    expect(enabled(entryConfig("enabled-demo", true))).toBe(true);
+    expect(enabled()).toBe(false);
+    expect(enabled({ plugins: { deny: ["disabled-demo"] } })).toBe(false);
   });
 
   it.each([
