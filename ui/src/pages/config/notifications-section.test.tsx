@@ -79,6 +79,12 @@ describe("native notification test outcome", () => {
     expect(container.querySelector(".settings-status--accent")?.textContent).toContain(
       "Sending test",
     );
+    expect(
+      container
+        .querySelector(".settings-status--accent")
+        ?.closest(".settings-row")
+        ?.hasAttribute("role"),
+    ).toBe(false);
     expect(container.textContent).toContain("Test notification");
     button.click();
     expect(onSend).toHaveBeenCalledTimes(1);
@@ -113,6 +119,9 @@ describe("native notification test outcome", () => {
     expect(container.textContent).toContain(message);
     if (state === "error") {
       expect(container.querySelector(".settings-status--danger")).not.toBeNull();
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(message);
+    } else {
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(message);
     }
   });
 

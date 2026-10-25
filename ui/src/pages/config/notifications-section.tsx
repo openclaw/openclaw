@@ -104,6 +104,7 @@ const NativeTestStatus = (props: { state: "pending" | "sent" | "error"; message?
   <SettingsRow
     title={t("configView.notifications.testOutcome")}
     description={props.message}
+    role={props.state === "error" ? "alert" : props.state === "sent" ? "status" : undefined}
     control={
       <SettingsStatus
         kind={props.state === "pending" ? "accent" : props.state === "sent" ? "ok" : "danger"}
