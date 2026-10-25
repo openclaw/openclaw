@@ -358,7 +358,19 @@ describe("integrity gate attribution", () => {
       }
       return statement;
     });
-    return { database, advance };
+    const diagnostics: SqliteIntegrityDiagnostics = {};
+    const steps = () => sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
+    return {
+      database,
+      advance,
+      diagnostics,
+      steps,
+      sync() {
+        runSqliteIntegrityOperationSync(steps());
+        expect(diagnostics).toEqual(syncDiagnostics);
+      },
+      [Symbol.dispose]: () => database.close(),
+    };
   }
 
   it.each([
@@ -367,11 +379,11 @@ describe("integrity gate attribution", () => {
   ])(
     "splits a $label without changing the gate outcome or error",
     ({ checkMs, foreignKeyViolation, gateMs, syncMs }) => {
-      const { database, advance } = createTimedDatabase(checkMs, foreignKeyViolation);
-      const diagnostics: SqliteIntegrityDiagnostics = {};
+      using fixture = createTimedDatabase(checkMs, foreignKeyViolation);
+      const { advance, diagnostics, steps } = fixture;
       let suppliedError: unknown;
       function* operation(): SqliteIntegrityOperation<void> {
-        const gate = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
+        const gate = steps();
         const step = gate.next();
         if (step.done) {
           throw new Error("Integrity check did not yield");
@@ -389,27 +401,23 @@ describe("integrity gate attribution", () => {
         gate.next();
       }
 
-      try {
-        const failure = caught(() => runSqliteIntegrityOperationSync(operation()));
-        if (foreignKeyViolation) {
-          expect(failure).toMatchObject({
-            name: "SqliteIntegrityError",
-            message: expect.stringContaining("foreign_key_check failed for timed database"),
-          });
-          expect(failure).toBe(suppliedError);
-        } else {
-          expect(failure).toBeUndefined();
-        }
-        expect(diagnostics).toEqual({
-          integrityGateMode: "full",
-          integrityGateMs: gateMs,
-          integrityGateOutcome: foreignKeyViolation ? "failed" : "healthy",
-          integrityCheckSyncMs: syncMs,
-          integrityOutsideCheckMs: gateMs - syncMs,
+      const failure = caught(() => runSqliteIntegrityOperationSync(operation()));
+      if (foreignKeyViolation) {
+        expect(failure).toMatchObject({
+          name: "SqliteIntegrityError",
+          message: expect.stringContaining("foreign_key_check failed for timed database"),
         });
-      } finally {
-        database.close();
+        expect(failure).toBe(suppliedError);
+      } else {
+        expect(failure).toBeUndefined();
       }
+      expect(diagnostics).toEqual({
+        integrityGateMode: "full",
+        integrityGateMs: gateMs,
+        integrityGateOutcome: foreignKeyViolation ? "failed" : "healthy",
+        integrityCheckSyncMs: syncMs,
+        integrityOutsideCheckMs: gateMs - syncMs,
+      });
     },
   );
 
@@ -420,65 +428,52 @@ describe("integrity gate attribution", () => {
   ] as const)(
     "attributes $label worker time without leaking measurements into later gates",
     ({ checkMs, lifetimeMs, outcome }) => {
-      const { database, advance } = createTimedDatabase(4.75);
-      const diagnostics: SqliteIntegrityDiagnostics = {};
+      using fixture = createTimedDatabase(4.75);
+      const { advance, diagnostics, steps } = fixture;
       const failure = new Error("external integrity driver failed");
-      try {
-        for (const nextDriver of ["sync", "unmeasured"] as const) {
-          runSqliteIntegrityOperationSync(
-            sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
-          );
-          expect(diagnostics).toEqual(syncDiagnostics);
-
-          const worker = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
-          const step = worker.next();
-          if (step.done || !step.value.timing) {
-            throw new Error("Integrity check did not yield a timing owner");
-          }
-          step.value.timing.workerLifetimeElapsedMs = lifetimeMs;
-          if (checkMs !== undefined) {
-            step.value.timing.workerCheckElapsedMs = checkMs;
-          }
-          advance(lifetimeMs + 4.5);
-          if (outcome === "failed") {
-            expect(caught(() => worker.throw(failure))).toBe(failure);
-          } else {
-            expect(worker.next().done).toBe(true);
-          }
-          expect(diagnostics).toEqual({
-            integrityGateMode: "full",
-            integrityGateMs: Math.floor(lifetimeMs + 4.5),
-            integrityGateOutcome: outcome,
-            ...(checkMs === undefined ? {} : { integrityWorkerCheckMs: Math.floor(checkMs) }),
-            integrityWorkerLifetimeMs: Math.floor(lifetimeMs),
-            integrityOutsideWorkerMs: Math.floor(lifetimeMs + 4.5) - Math.floor(lifetimeMs),
-          });
-
-          if (nextDriver === "sync") {
-            runSqliteIntegrityOperationSync(
-              sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
-            );
-            expect(diagnostics).toEqual(syncDiagnostics);
-            continue;
-          }
-          const manual = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
-          expect(manual.next().done).toBe(false);
-          advance(12.5);
-          if (outcome === "failed") {
-            expect(caught(() => manual.throw(failure))).toBe(failure);
-          } else {
-            expect(manual.next().done).toBe(true);
-          }
-          expect(diagnostics).toEqual({
-            integrityGateMode: "full",
-            integrityGateMs: 12,
-            integrityGateOutcome: outcome,
-          });
-          expect(diagnostics).not.toHaveProperty("integrityCheckSyncMs");
-          expect(diagnostics).not.toHaveProperty("integrityOutsideCheckMs");
+      const finish = (operation: SqliteIntegrityOperation<void>) => {
+        if (outcome === "failed") {
+          expect(caught(() => operation.throw(failure))).toBe(failure);
+        } else {
+          expect(operation.next().done).toBe(true);
         }
-      } finally {
-        database.close();
+      };
+      for (const nextDriver of ["sync", "unmeasured"] as const) {
+        fixture.sync();
+
+        const worker = steps();
+        const step = worker.next();
+        if (step.done || !step.value.timing) {
+          throw new Error("Integrity check did not yield a timing owner");
+        }
+        step.value.timing.workerLifetimeElapsedMs = lifetimeMs;
+        if (checkMs !== undefined) {
+          step.value.timing.workerCheckElapsedMs = checkMs;
+        }
+        advance(lifetimeMs + 4.5);
+        finish(worker);
+        expect(diagnostics).toEqual({
+          integrityGateMode: "full",
+          integrityGateMs: Math.floor(lifetimeMs + 4.5),
+          integrityGateOutcome: outcome,
+          ...(checkMs === undefined ? {} : { integrityWorkerCheckMs: Math.floor(checkMs) }),
+          integrityWorkerLifetimeMs: Math.floor(lifetimeMs),
+          integrityOutsideWorkerMs: Math.floor(lifetimeMs + 4.5) - Math.floor(lifetimeMs),
+        });
+
+        if (nextDriver === "sync") {
+          fixture.sync();
+          continue;
+        }
+        const manual = steps();
+        expect(manual.next().done).toBe(false);
+        advance(12.5);
+        finish(manual);
+        expect(diagnostics).toEqual({
+          integrityGateMode: "full",
+          integrityGateMs: 12,
+          integrityGateOutcome: outcome,
+        });
       }
     },
   );

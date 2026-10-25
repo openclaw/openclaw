@@ -42,11 +42,16 @@ import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.tes
 
 const dirs = useStateDatabaseTempDirs();
 
-function fixture() {
+function fixture(sessionId = "worker", overrides: Partial<TranscriptSessionDescriptor> = {}) {
   const stateDir = dirs.make("transcript-worker-");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const exportRoot = path.join(stateDir, "transcripts");
-  return { env, exportRoot, store: new TranscriptsStore(exportRoot, { env }) };
+  return {
+    env,
+    exportRoot,
+    store: new TranscriptsStore(exportRoot, { env }),
+    session: sessionFixture(sessionId, overrides),
+  };
 }
 
 function sessionFixture(
@@ -260,8 +265,7 @@ it("reads cold and warm public pages off thread with tied dates and private sour
 });
 
 it("appends immutable speech on the canonical worker with exact-id deduplication and sequence order", async () => {
-  const { store } = fixture();
-  const session = sessionFixture("append-worker", {
+  const { store, session } = fixture("append-worker", {
     metadata: { hostOnly: () => undefined },
   });
   await seed(store, session);
@@ -296,8 +300,7 @@ it("appends immutable speech on the canonical worker with exact-id deduplication
 });
 
 it("persists session metadata off thread with typed conflicts and durable ID origin", async () => {
-  const { store } = fixture();
-  const session = sessionFixture("session-worker", {
+  const { store, session } = fixture("session-worker", {
     metadata: { sessionIdOrigin: "generated", ignored: () => "host-only", label: "雪" },
   });
   await withoutParentTranscriptSql(async () => {
@@ -336,8 +339,7 @@ it("persists session metadata off thread with typed conflicts and durable ID ori
 });
 
 it("returns SQLite-normalized text in the committed session receipt", async () => {
-  const { store } = fixture();
-  const session = sessionFixture("normalized-receipt", {
+  const { store, session } = fixture("normalized-receipt", {
     startedAt: "2026-10-04T12:00:00.000Z",
     stoppedAt: "2026-10-04T12:00:01.000Z",
     title: "Unpaired \ud800",
@@ -357,14 +359,13 @@ it("returns SQLite-normalized text in the committed session receipt", async () =
 });
 
 it("retains the captured session input and database through export preparation", async () => {
-  const { env, exportRoot, store } = fixture();
-  const originalStateDir = env.OPENCLAW_STATE_DIR;
-  const otherStateDir = dirs.make("transcript-other-worker-");
-  const session = sessionFixture("captured-session", {
+  const { env, exportRoot, store, session } = fixture("captured-session", {
     title: "Captured title",
     source: { providerId: "manual-transcript", accountId: "original" },
     metadata: { label: "original" },
   });
+  const originalStateDir = env.OPENCLAW_STATE_DIR;
+  const otherStateDir = dirs.make("transcript-other-worker-");
   const selected = createDeferred();
   const resume = createDeferred();
   const ownership = exportOwnership.hasAliasedCanonicalTranscriptExportPathOwner;
@@ -401,8 +402,7 @@ it("retains the captured session input and database through export preparation",
 });
 
 it("publishes captured summary notes without caller-thread transcript SQL", async () => {
-  const { env, store } = fixture();
-  const session = sessionFixture("summary-worker");
+  const { env, store, session } = fixture("summary-worker");
   await seed(store, session, [{ text: "We agreed to simplify setup." }]);
   await withoutParentTranscriptSql(async () => {
     const result = await persist(store, session, env);
@@ -421,8 +421,7 @@ it.each(
 )(
   "retains prior $operation data when its owner retires at the worker $stage grant",
   async ({ operation, stage }) => {
-    const { env, store } = fixture();
-    const session = sessionFixture(`${operation}-revoked-${stage}`, {
+    const { env, store, session } = fixture(`${operation}-revoked-${stage}`, {
       startedAt: "2026-09-20T12:00:00.000Z",
       ...(operation === "discard" ? { stoppedAt: "2026-09-20T12:00:01.000Z" } : {}),
       title: "Original",
@@ -573,10 +572,7 @@ it("returns complete stored reads and typed errors after existing-only status an
 });
 
 it("exports cold and warm library rows and notes without caller-thread SQLite", async () => {
-  const { store } = fixture();
-  const session = sessionFixture("export-worker", {
-    title: "Export meeting",
-  });
+  const { store, session } = fixture("export-worker", { title: "Export meeting" });
   const utterance = {
     text: "Saved speech",
     speaker: { label: "Sam" },

@@ -50,6 +50,21 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
 );
 const receipts = useStateReceipts();
 
+async function writeWorker(root: string, source: string) {
+  const worker = path.join(
+    root,
+    "dist",
+    runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
+  );
+  await fs.mkdir(path.dirname(worker), { recursive: true });
+  await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
+  await fs.writeFile(worker, source);
+}
+
+async function rehearsalScratch(root: string) {
+  return (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-"));
+}
+
 // Receipts and command settlement travel independently. The fixture publishes the
 // complete marker before it can reply, so that record decides a settlement race.
 async function fixtureEventBeforeSettlement(
@@ -228,26 +243,18 @@ it.for([undefined, 600_000])(
       }
       // Keep the default worker blocked until the deferred timeout decision settles.
       if (timeoutMs === undefined) {
-        expect(await operation).toMatchObject({
-          error: expect.objectContaining({
-            message: expect.stringContaining("inventory failed (timeout"),
-          }),
-        });
-        expect.soft(await operation).toMatchObject({
-          error: {
-            message: expect.stringContaining(file),
-          },
-        });
-        expect.soft(await operation).toMatchObject({
-          error: {
-            message: expect.stringMatching(/after \d+(?:\.\d+)? seconds during metadata inventory/),
-          },
-        });
-        expect.soft(await operation).toMatchObject({
-          error: {
-            message: expect.stringContaining("then retry the update"),
-          },
-        });
+        const outcome = await operation;
+        expect(outcome).toHaveProperty(
+          "error.message",
+          expect.stringContaining("inventory failed (timeout"),
+        );
+        for (const message of [
+          expect.stringContaining(file),
+          expect.stringMatching(/after \d+(?:\.\d+)? seconds during metadata inventory/),
+          expect.stringContaining("then retry the update"),
+        ]) {
+          expect.soft(outcome).toHaveProperty("error.message", message);
+        }
       } else {
         expect(await operation).toEqual({ sizes: [{ path: file, sizeBytes: 8n }] });
       }
@@ -297,19 +304,12 @@ it.for([
     const file = await fs.open(database, "w");
     await file.truncate(bytes);
     await file.close();
-    const worker = path.join(
-      root,
-      "dist",
-      runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
-    );
     const ready = path.join(root, "ready");
     const release = path.join(root, "release");
     const cache = path.join(root, "configured-cache");
     await fs.mkdir(cache);
-    await fs.mkdir(path.dirname(worker), { recursive: true });
-    await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
-    await fs.writeFile(
-      worker,
+    await writeWorker(
+      root,
       `
       import fs from "node:fs/promises";
       import path from "node:path";
@@ -427,9 +427,7 @@ it.each([false, true])(
     const operation = snapshotFixture(root, stateDir, controller.signal);
     try {
       await expect(operation).rejects.toThrow(/cleanup.*confirmed|settlement.*uncertain/);
-      const retained = (await fs.readdir(root)).filter((name) =>
-        name.startsWith("openclaw-update-canary-"),
-      );
+      const retained = await rehearsalScratch(root);
       expect(retained).toHaveLength(1);
       expect((await fs.stat(path.join(root, retained[0]!))).isDirectory()).toBe(true);
     } finally {
@@ -493,9 +491,7 @@ it.each(["stdout", "stderr"] as const)(
       // Snapshot rejection follows the command owner's process-tree settlement.
       const pid = Number(await fs.readFile(pidPath, "utf8"));
       expect(isProcessAlive(pid)).toBe(false);
-      expect(
-        (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-")),
-      ).toEqual([]);
+      expect(await rehearsalScratch(root)).toEqual([]);
     } finally {
       clearTimeout(deadline);
       controller.abort();
@@ -507,15 +503,8 @@ it.for([false, true])(
   "reports a real inspection output limit through the public report (warnings=%s)",
   async (warnings, { signal }) => {
     const root = await fs.realpath(tempDirs.make("inspection-output-limit-"));
-    const worker = path.join(
+    await writeWorker(
       root,
-      "dist",
-      runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
-    );
-    await fs.mkdir(path.dirname(worker), { recursive: true });
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
-    await fs.writeFile(
-      worker,
       `
     for await (const chunk of process.stdin) {}
     setInterval(() => {}, 1000);
@@ -670,9 +659,7 @@ it("refuses a grown WAL family at the post-inventory capacity gate", async () =>
       });
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(db.prepare("SELECT length(bytes) AS n FROM payload").get()).toEqual({ n: 2097152 });
-      expect(
-        (await fs.readdir(root)).filter((name) => name.startsWith("openclaw-update-canary-")),
-      ).toEqual([]);
+      expect(await rehearsalScratch(root)).toEqual([]);
     } finally {
       controller.abort();
       await outcome;

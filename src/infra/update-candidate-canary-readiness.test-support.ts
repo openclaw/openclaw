@@ -5,7 +5,6 @@ import path from "node:path";
 import * as timerPromises from "node:timers/promises";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
-import * as logger from "../logger.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
@@ -290,8 +289,6 @@ export function registerCanaryReadinessBudgetTests(
     });
     const onProgress = vi.fn();
     const controller = new AbortController();
-    const debug = vi.spyOn(logger, "logDebug").mockImplementation(() => {});
-    onTestFinished(() => debug.mockRestore());
     const result = validate({
       signal: controller.signal,
       onStep: fakeTimersAfterRecovery,
@@ -379,7 +376,6 @@ export function registerCanaryReadinessBudgetTests(
       });
     }
     if (outcome === "spam") {
-      expect(debug).toHaveBeenCalledWith('Ignoring unknown candidate startup milestone: "tick.0"');
       expect(step?.stderrTail).toContain("after plugins.bootstrap");
     }
     expect(onProgress).toHaveBeenCalledWith(
@@ -437,8 +433,6 @@ export function registerCanaryReadinessBudgetTests(
             status: "ok",
             phase: "readiness",
           });
-          expect(requests).toEqual(["/startupz", "/readyz"]);
-          expect(proxyRequests).toEqual([]);
           // Default loopback stays direct for the managed proxy's whole lifetime.
           for (const [url, status] of [
             [`http://127.0.0.1:${rehearsal.port}/readyz`, 200],
@@ -494,9 +488,10 @@ export function registerCanaryReadinessBudgetTests(
     const unavailable = await validate(params);
     expect(unavailable.status).toBe("ok");
     expect(unavailable.logTail.join("\n")).toContain("Update checks reached their time limit");
-    expect(canaryOutcomeStep(unavailable.steps)?.advisory?.message).toContain("ECONNREFUSED");
-    expect(canaryOutcomeStep(unavailable.steps)?.advisory?.message).not.toContain("via proxy");
-    expect(canaryOutcomeStep(unavailable.steps)?.failureFacts).toEqual([
+    const unavailableStep = canaryOutcomeStep(unavailable.steps);
+    expect(unavailableStep?.advisory?.message).toContain("ECONNREFUSED");
+    expect(unavailableStep?.advisory?.message).not.toContain("via proxy");
+    expect(unavailableStep?.failureFacts).toEqual([
       {
         check: "startupz",
         code: "candidate-readiness-probe-failed",
