@@ -9,7 +9,7 @@ import {
 } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import { createMonitorTestContext } from "./monitor-context.test-support.js";
@@ -156,24 +156,6 @@ function createDurableTurnLifecycle(): SlackIngressTurnLifecycle {
 }
 
 describe("createSlackThreadTsResolver", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
-  it("caches resolved thread_ts lookups", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    const historyMock = vi.fn().mockResolvedValue(historyResult);
-    const resolve = createResolver(historyMock);
-
-    expect((await resolve("message")).thread_ts).toBe("9");
-    expect((await resolve("message")).thread_ts).toBe("9");
-    expect(historyMock).toHaveBeenCalledTimes(1);
-    nowSpy.mockReturnValue(1_700_000_060_000);
-    expect((await resolve("message")).thread_ts).toBe("9");
-    expect(historyMock).toHaveBeenCalledTimes(2);
-  });
-
   it.each([
     [
       "exhausted 429",

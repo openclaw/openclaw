@@ -106,51 +106,45 @@ describe("resolveSlackSystemEventRoute", () => {
 });
 
 describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
-  it("repeats disabled-channel warnings on a fixed interval despite steady traffic", () => {
-    vi.useFakeTimers();
-    try {
-      const ctx = createContext({
-        groupPolicy: "open",
-        channelsConfig: { C_DENIED: { enabled: false } },
-      });
-      const warnSpy = vi.spyOn(ctx.logger, "warn").mockImplementation(() => undefined);
+  it.each([
+    ["open", "C_DENIED", "direct"],
+    ["allowlist", "*", "wildcard"],
+  ] as const)(
+    "repeats %s disabled-channel warnings on a fixed interval",
+    (groupPolicy, key, source) => {
+      vi.useFakeTimers();
+      try {
+        const ctx = createContext({
+          groupPolicy,
+          channelsConfig: { [key]: { enabled: false } },
+        });
+        const warnSpy = vi.spyOn(ctx.logger, "warn").mockImplementation(() => undefined);
 
-      expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
-      vi.advanceTimersByTime(4 * 60_000);
-      expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
-      expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+        vi.advanceTimersByTime(4 * 60_000);
+        expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+        expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
+          {
+            provider: "slack",
+            accountId: "default",
+            channelId: "C_DENIED",
+            reason: "channel_not_allowed",
+            cause: "channel_disabled",
+            groupPolicy,
+            matchSource: source,
+            matchKey: key,
+          },
+          "Slack channel denied by configuration",
+        );
 
-      vi.advanceTimersByTime(60_000);
-      expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
-      expect(warnSpy).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("warns for wildcard disablement under allowlist policy", () => {
-    const ctx = createContext({
-      groupPolicy: "allowlist",
-      channelsConfig: { "*": { enabled: false } },
-    });
-    const warnSpy = vi.spyOn(ctx.logger, "warn").mockImplementation(() => undefined);
-
-    expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
-
-    expect(warnSpy).toHaveBeenCalledExactlyOnceWith(
-      {
-        provider: "slack",
-        accountId: "default",
-        channelId: "C_DENIED",
-        reason: "channel_not_allowed",
-        cause: "channel_disabled",
-        groupPolicy: "allowlist",
-        matchSource: "wildcard",
-        matchKey: "*",
-      },
-      "Slack channel denied by configuration",
-    );
-  });
+        vi.advanceTimersByTime(60_000);
+        expect(ctx.isChannelAllowed({ channelId: "C_DENIED", channelType: "channel" })).toBe(false);
+        expect(warnSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     ["allowlist", { C_LISTED: { requireMention: true } }],
