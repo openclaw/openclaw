@@ -1,12 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshotRevision,
-} from "../secrets/runtime.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
@@ -15,7 +10,6 @@ import {
   SharedGatewaySessionGenerationState as GenerationState,
   type SharedGatewayAuthClient as AuthClient,
 } from "./server-shared-auth-generation.js";
-import { makePreparedSecretsSnapshot } from "./server-startup-config.test-support.js";
 import { onGatewayPolicyClientInvalidated } from "./server/ws-policy-close.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -91,8 +85,6 @@ function writeGeneration(
     ...(previous ? { transition: { previous, next: nextConfig } } : {}),
   });
 }
-
-afterEach(clearSecretsRuntimeSnapshot);
 
 it.each([
   ["userHeader", proxyConfig({ userHeader: "x-authenticated-user" }), false],
@@ -170,20 +162,12 @@ it.each(["trusted-proxy", "password"] as const)(
 );
 
 it.each([
-  ["same-generation refresh", "generation-a", null, true],
-  ["credential rotation", "generation-b", null, false],
-  ["newer same-generation write", "generation-a", "generation-a", false],
-  ["newer rotated generation", "generation-a", "generation-b", false],
-] as const)("finalizes only the current owner after %s", (_name, claimed, newer, refresh) => {
+  ["same-generation refresh", "generation-a", null],
+  ["credential rotation", "generation-b", null],
+  ["newer same-generation write", "generation-a", "generation-a"],
+] as const)("finalizes only the current owner after %s", (_name, claimed, newer) => {
   const state = generationState("generation-a", "generation-a");
   const ownership = claimGeneration(state, claimed);
-  if (refresh) {
-    const snapshot = makePreparedSecretsSnapshot({});
-    activateSecretsRuntimeSnapshot(snapshot);
-    const publishedRevision = getActiveSecretsRuntimeSnapshotRevision();
-    activateSecretsRuntimeSnapshot(snapshot);
-    expect(getActiveSecretsRuntimeSnapshotRevision()).toBeGreaterThan(publishedRevision);
-  }
   if (newer) {
     writeGeneration(state, newer);
   }

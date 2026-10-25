@@ -156,15 +156,13 @@ export async function createPublicationActionFixture(backend: "local" | "reposit
     }
     return response;
   });
-  const invoke = createPublicationActionInvoker(f, writerSource);
-  const expected = { requestId: publication.requestId, expectedHeadCommit: publication.headCommit };
   return {
     ...f,
     publication,
     state,
     writes,
-    invoke,
-    expected,
+    invoke: createPublicationActionInvoker(f, writerSource),
+    expected: { requestId: publication.requestId, expectedHeadCommit: publication.headCommit },
     onRead: (callback: () => Promise<void>) => void (beforeRead = callback),
     rejectMerge(
       result: ReturnType<typeof commandResult> | Error = commandResult(
