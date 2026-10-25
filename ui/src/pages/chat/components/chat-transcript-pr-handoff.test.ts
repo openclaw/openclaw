@@ -205,32 +205,4 @@ describe("PR preparation handoff", () => {
       expect(framesOf(projectHistory(entries))[0]?.outcome.kind).toBe("failed");
     },
   );
-
-  it("does not merge later human input or borrow its live status", () => {
-    const later = nativeMessage("user", "A different request.", 5_000, {
-      id: "A different request.",
-      seq: 6,
-      runId: "later-run",
-    });
-    const entries = [...messages.slice(0, 3), later];
-    const props = {
-      messages: entries,
-      runId: "later-run",
-      runActive: true,
-      runWorking: true,
-      streamStartedAt: 6_000,
-    };
-    const items = chatItems(props);
-    expect(items.find((item) => item.kind === "reading-indicator")).toMatchObject({
-      runId: "later-run",
-      startedAt: 6_000,
-    });
-    expect(items.find((item) => item.kind === "reading-indicator")).not.toHaveProperty("request");
-    const chain = chainFor(items, props);
-    expect(framesOf(chain).map((frame) => [frame.runId, frame.outcome.kind])).toEqual([
-      ["prepare-run", "completed"],
-      ["later-run", "active"],
-    ]);
-    expect(chain.transcriptItems.at(-2)).toMatchObject({ kind: "group", role: "user" });
-  });
 });

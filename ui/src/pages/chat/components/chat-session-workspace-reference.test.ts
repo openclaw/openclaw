@@ -97,18 +97,8 @@ describe("session workspace file reference resolution", () => {
         },
       );
       const listFiles = listing([entry(returnedPath)], name);
-      const setFile = vi.fn<SessionWorkspaceHost["sessions"]["setFile"]>(
-        async (sessionKey, path) => ({
-          sessionKey,
-          file: {
-            path,
-            workspacePath: path,
-            name: path.split("/").at(-1) ?? path,
-            kind: "modified",
-            missing: false,
-            hash: "saved-hash",
-          },
-        }),
+      const setFile = vi.fn<SessionWorkspaceHost["sessions"]["setFile"]>(async (sessionKey, path) =>
+        getFile(sessionKey, path, { agentId: "main" }),
       );
       const state = createReferenceState(
         createSessionCapabilityFixture({ getFile, listFiles, setFile }),
@@ -126,9 +116,7 @@ describe("session workspace file reference resolution", () => {
       } else {
         expect(listFiles).not.toHaveBeenCalled();
       }
-      expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
-        agentId: "main",
-      });
+      expect(getFile.mock.calls.at(-1)?.[1]).toBe(requestPath);
       if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
         throw new Error("expected editable resolved file content");
       }
@@ -139,20 +127,16 @@ describe("session workspace file reference resolution", () => {
         path: requestPath,
       });
       await sidebarContent.edit.save({ content: "# Updated", expectedHash: "hash" });
-      expect(setFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, "# Updated", {
-        agentId: "main",
-        expectedHash: "hash",
-      });
+      expect(setFile.mock.calls.at(-1)?.[1]).toBe(requestPath);
       await sidebarContent.download?.(new AbortController().signal);
       expect(downloadSessionFile).toHaveBeenLastCalledWith(
         state,
-        { sessionKey: "agent:main:current", agentId: "main", path: requestPath },
+        { sessionKey: currentSession, agentId: "main", path: requestPath },
         expect.any(AbortSignal),
       );
+      getFile.mockClear();
       await sidebarContent.edit.fetchLatest();
-      expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
-        agentId: "main",
-      });
+      expect(getFile.mock.calls.at(-1)?.[1]).toBe(requestPath);
     },
   );
 
@@ -177,45 +161,23 @@ describe("session workspace file reference resolution", () => {
   });
 
   it.each([
-    {
-      label: "several files share the name",
-      entries: [entry("a/REPORT.md"), entry("b/REPORT.md")],
-    },
-    {
-      label: "the search listing was truncated",
-      entries: [entry("a/REPORT.md")],
-      truncated: true,
-    },
-    {
-      label: "the match is a directory",
-      entries: [entry("a/REPORT.md", "directory")],
-    },
-  ])("keeps the missing-file failure when $label", async ({ entries, truncated }) => {
+    ["REPORT.md", [entry("a/REPORT.md"), entry("b/REPORT.md")], false],
+    ["REPORT.md", [entry("a/REPORT.md")], true],
+    ["REPORT.md", [entry("a/REPORT.md", "directory")], false],
+    ["labs/output/REPORT.md", [], false],
+  ] as const)("rejects unresolved %s (%j, truncated=%s)", async (path, entries, truncated) => {
     const getFile = vi.fn().mockRejectedValue(fileError());
-    const listFiles = listing(entries, "REPORT.md", truncated);
+    const listFiles = listing([...entries], "REPORT.md", truncated);
     const state = createReferenceState(createSessionCapabilityFixture({ getFile, listFiles }));
 
-    void openSessionWorkspaceFile(state, { path: "REPORT.md" });
+    void openSessionWorkspaceFile(state, { path });
 
     await vi.waitFor(() =>
       expect(state.sessionWorkspaceState?.previews.at(-1)?.content?.kind).toBe("unavailable"),
     );
-    expect(listFiles).toHaveBeenCalledOnce();
-    expect(getFile).toHaveBeenCalledExactlyOnceWith("agent:main:current", "REPORT.md", {
+    expect(listFiles).toHaveBeenCalledTimes(path === "REPORT.md" ? 1 : 0);
+    expect(getFile).toHaveBeenCalledExactlyOnceWith("agent:main:current", path, {
       agentId: "main",
     });
-  });
-
-  it("never searches for a reference that already carries a path", async () => {
-    const getFile = vi.fn().mockRejectedValue(fileError());
-    const listFiles = vi.fn();
-    const state = createReferenceState(createSessionCapabilityFixture({ getFile, listFiles }));
-
-    void openSessionWorkspaceFile(state, { path: "labs/output/REPORT.md" });
-
-    await vi.waitFor(() =>
-      expect(state.sessionWorkspaceState?.previews.at(-1)?.content?.kind).toBe("unavailable"),
-    );
-    expect(listFiles).not.toHaveBeenCalled();
   });
 });

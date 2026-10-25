@@ -86,65 +86,75 @@ describe("session discussion panel", () => {
     expect(loadInfo).toHaveBeenCalledTimes(1);
   });
 
-  it("replaces source-owned content when the gateway generation changes", async () => {
-    const loadInfo = vi
-      .fn<SessionDiscussionInfoLoader>()
-      .mockResolvedValueOnce(openInfo("https://old.example/embed/thread"))
-      .mockResolvedValueOnce(openInfo("https://new.example/embed/thread"));
-    const panel = mount({ loadInfo, openDiscussion: vi.fn() });
-    await expectFrame(panel, "https://old.example/embed/thread");
+  it.each([false, true])(
+    "replaces source-owned content after a failed read: %s",
+    async (failed) => {
+      const loadInfo = vi
+        .fn<SessionDiscussionInfoLoader>()
+        .mockImplementationOnce(async () => {
+          if (failed) {
+            throw new Error("Discussion provider unavailable");
+          }
+          return openInfo("https://old.example/embed/thread");
+        })
+        .mockResolvedValueOnce(openInfo("https://new.example/embed/thread"));
+      const panel = mount({ loadInfo, openDiscussion: vi.fn() });
+      if (failed) {
+        await vi.waitFor(() =>
+          expect(panel.querySelector(".callout.danger")?.textContent).toContain(
+            "Discussion provider unavailable",
+          ),
+        );
+      } else {
+        await expectFrame(panel, "https://old.example/embed/thread");
+      }
 
-    panel.sourceGeneration += 1;
+      panel.sourceGeneration += 1;
 
-    await expectFrame(panel, "https://new.example/embed/thread");
-    expect(loadInfo).toHaveBeenCalledTimes(2);
-  });
+      await expectFrame(panel, "https://new.example/embed/thread");
+      expect(panel.querySelector(".callout.danger")).toBeNull();
+      expect(loadInfo).toHaveBeenCalledTimes(2);
+    },
+  );
 
-  it("ignores an in-flight open result after the session changes", async () => {
-    const firstOpen = Promise.withResolvers<ReturnType<typeof openInfo>>();
-    const loadInfo = vi
-      .fn<SessionDiscussionInfoLoader>()
-      .mockResolvedValueOnce({ state: "available" })
-      .mockResolvedValueOnce({ state: "none" });
-    const openDiscussion = vi.fn<SessionDiscussionOpener>().mockReturnValueOnce(firstOpen.promise);
-    const onStateChange = vi.fn<SessionDiscussionStateListener>();
-    const panel = mount({ loadInfo, openDiscussion, onStateChange });
-    await vi.waitFor(() => expect(openDiscussion).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() =>
-      expect(skeleton(panel)?.getAttribute("aria-label")).toBe("Opening discussion…"),
-    );
-    panel.sessionKey = "agent:main:second";
+  it.each(["read", "open"] as const)(
+    "retires a held %s when the session changes",
+    async (phase) => {
+      const pending = Promise.withResolvers<Awaited<ReturnType<SessionDiscussionInfoLoader>>>();
+      const loadInfo = vi
+        .fn<SessionDiscussionInfoLoader>()
+        .mockImplementationOnce(() =>
+          phase === "read" ? pending.promise : Promise.resolve({ state: "available" }),
+        )
+        .mockResolvedValueOnce({ state: "none" });
+      const openDiscussion = vi.fn<SessionDiscussionOpener>().mockReturnValueOnce(pending.promise);
+      const onStateChange = vi.fn<SessionDiscussionStateListener>();
+      const panel = mount({ loadInfo, openDiscussion, onStateChange });
+      await vi.waitFor(() =>
+        expect(phase === "open" ? openDiscussion : loadInfo).toHaveBeenCalledTimes(1),
+      );
+      if (phase === "open") {
+        await vi.waitFor(() =>
+          expect(skeleton(panel)?.getAttribute("aria-label")).toBe("Opening discussion…"),
+        );
+      }
+      panel.sessionKey = "agent:main:second";
 
-    await vi.waitFor(() => {
-      expect(loadInfo).toHaveBeenNthCalledWith(2, "agent:main:second");
-      expect(onStateChange).toHaveBeenLastCalledWith("agent:main:second", "none", null);
-    });
-    firstOpen.resolve(openInfo("https://discussion.example/stale"));
-    await panel.updateComplete;
+      await vi.waitFor(() => {
+        expect(loadInfo).toHaveBeenNthCalledWith(2, "agent:main:second");
+        expect(onStateChange).toHaveBeenLastCalledWith("agent:main:second", "none", null);
+      });
+      pending.resolve(
+        phase === "read" ? { state: "available" } : openInfo("https://discussion.example/stale"),
+      );
+      await panel.updateComplete;
 
-    expect(openDiscussion).toHaveBeenCalledTimes(1);
-    expect(panel.querySelector("button")).toBeNull();
-    expect(panel.querySelector("iframe")).toBeNull();
-    expect(skeleton(panel)).toBeNull();
-  });
-
-  it("does not auto-open a superseded available resolution", async () => {
-    const firstLoad = Promise.withResolvers<{ state: "available" }>();
-    const loadInfo = vi
-      .fn<SessionDiscussionInfoLoader>()
-      .mockReturnValueOnce(firstLoad.promise)
-      .mockResolvedValueOnce({ state: "none" });
-    const openDiscussion = vi.fn<SessionDiscussionOpener>();
-    const panel = mount({ loadInfo, openDiscussion });
-    await vi.waitFor(() => expect(loadInfo).toHaveBeenCalledTimes(1));
-
-    panel.sessionKey = "agent:main:second";
-    await vi.waitFor(() => expect(loadInfo).toHaveBeenCalledTimes(2));
-    firstLoad.resolve({ state: "available" });
-    await panel.updateComplete;
-
-    expect(openDiscussion).not.toHaveBeenCalled();
-  });
+      expect(openDiscussion).toHaveBeenCalledTimes(phase === "open" ? 1 : 0);
+      expect(panel.querySelector("button")).toBeNull();
+      expect(panel.querySelector("iframe")).toBeNull();
+      expect(skeleton(panel)).toBeNull();
+    },
+  );
 
   it("does not open after the available-state callback revokes write access", async () => {
     const openDiscussion = vi.fn<SessionDiscussionOpener>();
@@ -175,24 +185,5 @@ describe("session discussion panel", () => {
     });
     expect(panel.querySelector("iframe")).toBeNull();
     expect(panel.querySelector("a")).toBeNull();
-  });
-
-  it("recovers a failed discussion read when its source is replaced", async () => {
-    const loadInfo = vi
-      .fn<SessionDiscussionInfoLoader>()
-      .mockRejectedValueOnce(new Error("Discussion provider unavailable"))
-      .mockResolvedValueOnce(openInfo("https://discussion.example/recovered"));
-    const panel = mount({ loadInfo, openDiscussion: vi.fn() });
-    await vi.waitFor(() => {
-      expect(panel.querySelector(".callout.danger")?.textContent).toContain(
-        "Discussion provider unavailable",
-      );
-    });
-
-    panel.sourceGeneration += 1;
-
-    await expectFrame(panel, "https://discussion.example/recovered");
-    expect(panel.querySelector(".callout.danger")).toBeNull();
-    expect(loadInfo).toHaveBeenCalledTimes(2);
   });
 });
