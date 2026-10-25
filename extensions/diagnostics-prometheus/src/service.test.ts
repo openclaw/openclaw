@@ -425,7 +425,7 @@ openclaw_diagnostic_async_queue_length 0`,
           errorCategory: "Bearer sk-secret-token-value",
         },
       ],
-      `openclaw_tool_execution_total{error_category="other",outcome="error",params_kind="unknown",tool="tool",tool_owner="none",tool_source="core"} 1`,
+      `openclaw_tool_execution_total{agent="unknown",error_category="other",outcome="error",params_kind="unknown",tool="tool",tool_owner="none",tool_source="core"} 1`,
       ["Bearer", "sk-secret"],
     ));
 
@@ -485,7 +485,7 @@ openclaw_diagnostic_async_queue_length 0`,
     const rendered = metrics.render();
     expectMetrics(
       rendered,
-    )(`openclaw_tool_execution_blocked_total{denied_reason="tools.deny",params_kind="object",tool="browser",tool_owner="browser-tools",tool_source="mcp"} 1
+    )(`openclaw_tool_execution_blocked_total{agent="unknown",denied_reason="tools.deny",params_kind="object",tool="browser",tool_owner="browser-tools",tool_source="mcp"} 1
 openclaw_model_failover_total{from_model="claude-opus-4-6",from_provider="anthropic",lane="session",reason="overloaded",suspended="true",to_model="gpt-5.4",to_provider="openai"} 1
 openclaw_session_stuck_total{reason="startup-sweep",state="processing"} 1
 openclaw_session_stuck_age_seconds_sum{reason="startup-sweep",state="processing"} 12
@@ -575,6 +575,45 @@ openclaw_liveness_cpu_core_ratio_sum{reason="event_loop_delay:cpu"} 1.4`,
       `# TYPE openclaw_skill_used_total counter
 openclaw_skill_used_total{activation="read",agent="main",skill="tiny-llm-brainstorm",source="workspace"} 1`,
       ["run-should-not-export", "session-should-not-export", "SKILL.md"],
+    ));
+
+  it("splits tool execution metrics by agent without exporting session-shaped agent ids", () =>
+    expectRecordedMetrics(
+      [
+        {
+          type: "tool.execution.completed",
+          agentId: "main",
+          sessionKey: "session-should-not-export",
+          toolName: "exec",
+          durationMs: 1000,
+        },
+        {
+          type: "tool.execution.error",
+          agentId: "ops",
+          toolName: "exec",
+          durationMs: 500,
+          errorCategory: "timeout",
+        },
+        {
+          type: "tool.execution.blocked",
+          agentId: "ops",
+          toolName: "exec",
+          deniedReason: "tools.deny",
+          reason: "matched exec",
+        },
+        {
+          type: "tool.execution.completed",
+          agentId: "Agent:qa:otel-trace-smoke",
+          toolName: "exec",
+          durationMs: 250,
+        },
+      ],
+      `openclaw_tool_execution_total{agent="main",error_category="none",outcome="completed",params_kind="unknown",tool="exec",tool_owner="none",tool_source="core"} 1
+openclaw_tool_execution_total{agent="ops",error_category="timeout",outcome="error",params_kind="unknown",tool="exec",tool_owner="none",tool_source="core"} 1
+openclaw_tool_execution_total{agent="unknown",error_category="none",outcome="completed",params_kind="unknown",tool="exec",tool_owner="none",tool_source="core"} 1
+openclaw_tool_execution_duration_seconds_sum{agent="main",error_category="none",outcome="completed",params_kind="unknown",tool="exec",tool_owner="none",tool_source="core"} 1
+openclaw_tool_execution_blocked_total{agent="ops",denied_reason="tools.deny",params_kind="unknown",tool="exec",tool_owner="none",tool_source="core"} 1`,
+      ["session-should-not-export", "Agent:qa:otel-trace-smoke"],
     ));
 
   it("bounds messaging labels without exporting raw chat identifiers", () => {

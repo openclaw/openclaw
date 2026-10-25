@@ -376,7 +376,7 @@ it("records terminal metrics without reading logs or private diagnostic content"
     );
     await waitForDiagnosticEventsDrained();
     expect(scrapeMetrics(exporter.handler)).toContain(
-      'openclaw_tool_execution_total{error_category="none",outcome="completed",params_kind="unknown",tool="synthetic",tool_owner="none",tool_source="core"} 1',
+      'openclaw_tool_execution_total{agent="unknown",error_category="none",outcome="completed",params_kind="unknown",tool="synthetic",tool_owner="none",tool_source="core"} 1',
     );
     expect(readPrivateContent).not.toHaveBeenCalled();
     expect(readLogAttribute).not.toHaveBeenCalled();

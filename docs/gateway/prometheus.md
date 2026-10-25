@@ -148,9 +148,9 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_model_cost_usd_total`                           | counter   | `agent`, `channel`, `model`, `provider`                                                   |
 | `openclaw_model_usage_duration_seconds`                   | histogram | `agent`, `channel`, `model`, `provider`                                                   |
 | `openclaw_skill_used_total`                               | counter   | `activation`, `agent`, `skill`, `source`                                                  |
-| `openclaw_tool_execution_total`                           | counter   | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
-| `openclaw_tool_execution_duration_seconds`                | histogram | `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`           |
-| `openclaw_tool_execution_blocked_total`                   | counter   | `denied_reason`, `params_kind`, `tool`, `tool_owner`, `tool_source`                       |
+| `openclaw_tool_execution_total`                           | counter   | `agent`, `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`  |
+| `openclaw_tool_execution_duration_seconds`                | histogram | `agent`, `error_category`, `outcome`, `params_kind`, `tool`, `tool_owner`, `tool_source`  |
+| `openclaw_tool_execution_blocked_total`                   | counter   | `agent`, `denied_reason`, `params_kind`, `tool`, `tool_owner`, `tool_source`              |
 | `openclaw_harness_run_total`                              | counter   | `channel`, `error_category`, `harness`, `model`, `outcome`, `phase`, `plugin`, `provider` |
 | `openclaw_harness_run_duration_seconds`                   | histogram | `channel`, `error_category`, `harness`, `model`, `outcome`, `phase`, `plugin`, `provider` |
 | `openclaw_webhook_received_total`                         | counter   | `channel`, `webhook`                                                                      |

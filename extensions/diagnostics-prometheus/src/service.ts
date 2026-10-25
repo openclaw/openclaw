@@ -169,6 +169,7 @@ function recordDiagnosticEvent(
     case "tool.execution.completed":
     case "tool.execution.error": {
       const labels = {
+        agent: normalizeDiagnosticValue(evt.agentId),
         error_category:
           evt.type === "tool.execution.error"
             ? normalizeDiagnosticValue(evt.errorCategory, "other")
@@ -194,6 +195,7 @@ function recordDiagnosticEvent(
     }
     case "tool.execution.blocked": {
       const labels = {
+        agent: normalizeDiagnosticValue(evt.agentId),
         denied_reason: normalizeDiagnosticValue(evt.deniedReason, "other"),
         params_kind: normalizeDiagnosticValue(evt.paramsSummary?.kind),
         tool: normalizeDiagnosticValue(evt.toolName, "tool"),
