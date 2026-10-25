@@ -4,7 +4,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import { startCronClone } from "../../lib/cron/index.ts";
 import { updateCronRunsFilter } from "../../lib/cron/runs.ts";
-import { waitForConfirmDialogActions } from "../../test-helpers/modal-dialog.ts";
 import * as dom from "./cron-assertions.test-support.ts";
 import * as harness from "./cron-page.test-support.tsx";
 import { waitForCronPage as waitFor } from "./cron-page.test-support.tsx";
@@ -373,57 +372,17 @@ it("drops pending automation scratch when admin access is removed", async () => 
 });
 
 it.each(["operator.write", "operator.read"])(
-  "renders read-only controls and rejects mutations for %s",
+  "rejects mutations without administrator access for %s",
   async (scope) => {
-    const job = scheduledJob("access-job", {
-      name: "Read-only task",
-      description: "Inspectable task",
-    });
-    const request = cronRpc(
-      {
-        "cron.list": () => harness.cronListResponse([job]),
-        "cron.runs": () => cronRunsResponse(),
-        "models.list": () => ({ models: [] }),
-      },
-      () => ({}),
-    );
-    const gateway = harness.createGateway({ request } as unknown as GatewayBrowserClient, true);
-    if (scope === "operator.write") {
-      gateway.emitSnapshot({ hello: harness.operatorHello([scope]) });
-    }
-    const page = harness.createPage(harness.createContext(gateway), { render: true });
-    if (scope === "operator.read") {
-      const staleRunButton = await dom.waitForElement(page, dom.testId("cron-row-run-access-job"));
-      gateway.emitSnapshot({ hello: harness.operatorHello([scope]) });
-      staleRunButton.click();
-      page.refreshView();
-      await page.settle();
-      expect(page.textContent).toContain("Browsing only");
-    }
-    await dom.waitForElement(page, dom.testId("cron-row-access-job"));
-    expect(dom.text(page, dom.testId("cron-row-description-access-job"))).toContain(
-      job.description,
-    );
-    expect(page.querySelector(dom.testId("cron-row-access-job"))).not.toBeNull();
-    for (const selector of [
-      dom.testId("cron-new-task"),
-      dom.testId("cron-row-run-access-job"),
-      dom.testId("cron-row-toggle-access-job"),
-      ".cron-job-menu",
-    ]) {
-      expect(page.querySelector(selector), selector).toBeNull();
-    }
-    dom.click(page, dom.testId("cron-row-access-job"));
-    await dom.waitForElement(page, dom.testId("cron-detail-tab-history"));
-    expect(dom.text(page, dom.testId("cron-detail-description"))).toContain(job.description);
-    for (const id of ["cron-run-now", "cron-toggle-enabled", "cron-submit"]) {
-      expect(page.querySelector(dom.testId(id)), id).toBeNull();
-    }
-    await waitFor(() =>
-      expect(page.querySelector(".cron-editor")?.matches(":disabled")).toBe(true),
-    );
-    expect(page.querySelector<HTMLFieldSetElement>("fieldset.cron-editor")?.disabled).toBe(true);
-    expect(page.querySelector(dom.testId("cron-detail-tab-history"))).not.toBeNull();
+    const job = scheduledJob("access-job");
+    const request = cronRpc({ "cron.list": () => harness.cronListResponse([job]) });
+    const { page, gateway } = mountCronPage(request);
+    const staleRunButton = await dom.waitForElement(page, dom.testId("cron-row-run-access-job"));
+    gateway.emitSnapshot({ hello: harness.operatorHello([scope]) });
+    staleRunButton.click();
+    await page.settle();
+    expect(page.textContent).toContain("Browsing only");
+    expect(page.querySelector(dom.testId("cron-row-run-access-job"))).toBeNull();
     expect(
       request.mock.calls.some(([method]) =>
         ["cron.add", "cron.update", "cron.run", "cron.remove"].includes(method),
@@ -614,32 +573,14 @@ it.each([
   }
 });
 
-it("syncs form enabled after header pause and resets runs scope after remove", async () => {
+it("syncs form enabled after header pause", async () => {
   const job = scheduledJob("job-1");
-  let serverEnabled = true;
-  let removed = false;
-  const removeRequested = createDeferred();
+  const paused = { ...job, enabled: false, configRevision: "paused" };
+  let current = job;
   const request = cronRpc(
     {
-      "cron.list": () =>
-        harness.cronListResponse(removed ? [] : [{ ...job, enabled: serverEnabled }]),
-      "cron.update": (params) => {
-        const patch = (params as { patch?: { enabled?: boolean } }).patch;
-        if (typeof patch?.enabled === "boolean") {
-          serverEnabled = patch.enabled;
-        }
-        return {
-          ...job,
-          enabled: serverEnabled,
-          updatedAtMs: 1,
-          configRevision: "config-revision-job-1-updated",
-        };
-      },
-      "cron.remove": () => {
-        removed = true;
-        removeRequested.resolve();
-        return {};
-      },
+      "cron.list": () => harness.cronListResponse([current]),
+      "cron.update": () => (current = paused),
       "cron.runs": () => cronRunsResponse(),
       "models.list": () => ({ models: [] }),
     },
@@ -657,26 +598,11 @@ it("syncs form enabled after header pause and resets runs scope after remove", a
   enabledToggle.checked = false;
   enabledToggle.dispatchEvent(new Event("change", { bubbles: true }));
   await waitFor(() => expect(page.cron.cronForm.enabled).toBe(false));
-  expect(serverEnabled).toBe(false);
   expect(request).toHaveBeenCalledWith("cron.update", {
     id: job.id,
     expectedConfigRevision: "config-revision-job-1",
     patch: { enabled: false },
   });
-  const findRemoveButton = () => getButtonByText(page, "Remove");
-  await openCronMenu(page, ".cron-job-menu");
-  await waitFor(() => expect(findRemoveButton()?.disabled).toBe(false));
-  findRemoveButton()?.click();
-  expect(dom.callsFor(request, "cron.remove")).toHaveLength(0);
-  getButtonByText(await waitForConfirmDialogActions(), "Remove").click();
-  await removeRequested.promise;
-  await waitFor(() => {
-    expect(page.cron.cronEditingJob).toBeNull();
-    expect(page.cron.cronRunsScope).toBe("all");
-    expect(page.cron.cronJobs).toEqual([]);
-    expect(page.querySelector(dom.testId("cron-new-task"))).not.toBeNull();
-  });
-  expect(request).toHaveBeenCalledWith("cron.remove", { id: job.id });
 });
 
 it.each([

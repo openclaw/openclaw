@@ -1,17 +1,16 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronScratchGetResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { fillInput } from "./cron-assertions.test-support.ts";
 import { createGateway, operatorHello } from "./cron-page.test-support.tsx";
 import { CronScratchEditor } from "./scratch-editor.tsx";
-
-type ScratchEditor = HTMLElement;
+import { getButtonByText } from "./view.test-support.ts";
 
 async function settle() {
   await Promise.resolve();
@@ -67,7 +66,7 @@ async function mount(request: (method: string, params?: unknown) => Promise<unkn
   };
 }
 
-async function click(editor: ScratchEditor, label: string) {
+async function click(editor: HTMLElement, label: string) {
   const button = getButtonByText(editor, label);
   await waitForSolid(() => expect(button.disabled).toBe(false));
   button.click();
@@ -89,41 +88,57 @@ function savedRequest() {
   return vi.fn<GatewayBrowserClient["request"]>().mockResolvedValueOnce(snapshot("Saved notes", 1));
 }
 
-function getButtonByText(editor: Element, label: string): HTMLButtonElement {
-  const button = [...editor.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === label,
-  );
-  if (!button) {
-    throw new Error(`Missing scratch action: ${label}`);
-  }
-  return button;
-}
-
-afterEach(() => {
-  cleanupSolid();
-  document.body.replaceChildren();
-});
-
 describe("ordinary automation scratch editor", () => {
-  it.each([false, true])("retains a pending save draft after rejected=%s", async (rejected) => {
-    const pending = Promise.withResolvers<CronScratchGetResult>();
-    onTestFinished(() => pending.resolve(snapshot("Draft notes", 2)));
-    const request = savedRequest().mockImplementationOnce(() => pending.promise);
-    const { editor, textarea, save } = await loadDraft(request, "Draft notes");
-    save.click();
-    await waitForSolid(() => expect(save.disabled).toBe(true));
-    expect(textarea.value).toBe("Draft notes");
-    expect(textarea.readOnly).toBe(true);
-    if (rejected) {
-      pending.reject(new Error("Synthetic save unavailable"));
-    } else {
-      pending.resolve(snapshot("Draft notes", 2));
-    }
-    await waitForSolid(() => expect(save.disabled).toBe(false));
-    expect(editor.querySelector("textarea")).toBe(textarea);
-    expect(textarea.value).toBe("Draft notes");
-    expect(editor.textContent).toContain(rejected ? "Synthetic save unavailable" : "Scratch saved");
-  });
+  it.each(["Save scratch", "Reload scratch"])(
+    "preserves the draft through a pending %s failure and retry",
+    async (action) => {
+      const pending = createDeferred<CronScratchGetResult>();
+      const retry = createDeferred<CronScratchGetResult>();
+      onTestFinished(() => {
+        pending.resolve(snapshot("Updated notes", 2));
+        retry.resolve(snapshot("Updated notes", 2));
+      });
+      const request = savedRequest()
+        .mockImplementationOnce(() => pending.promise)
+        .mockImplementationOnce(() => retry.promise);
+      const { editor, textarea } = await loadDraft(request, "Draft notes");
+      const button = getButtonByText(editor, action);
+      await click(editor, action);
+      await waitForSolid(() => expect(button.disabled).toBe(true));
+      expect(textarea.value).toBe("Draft notes");
+      expect(textarea.readOnly).toBe(true);
+      pending.reject(new Error("Synthetic request unavailable"));
+      await waitForSolid(() => {
+        expect(button.disabled).toBe(false);
+        expect(editor.querySelector('[role="status"]')?.textContent).toBe(
+          "Synthetic request unavailable",
+        );
+      });
+      expect(editor.querySelector("textarea")).toBe(textarea);
+      expect(textarea.value).toBe("Draft notes");
+      await click(editor, action);
+      await waitForSolid(() => {
+        expect(editor.textContent).not.toContain("Synthetic request unavailable");
+        expect(button.disabled).toBe(true);
+        expect(editor.querySelector("textarea")).toBe(textarea);
+        expect(textarea.value).toBe("Draft notes");
+      });
+      getButtonByText(editor, "Reload scratch").click();
+      expect(request).toHaveBeenCalledTimes(3);
+      const content = action === "Save scratch" ? "Draft notes" : "Updated notes";
+      retry.resolve(snapshot(content, 2));
+      await waitForSolid(() => {
+        expect(button.disabled).toBe(false);
+        expect(textarea.value).toBe(content);
+        expect(editor.querySelector("textarea")).toBe(textarea);
+      });
+      if (action === "Save scratch") {
+        expect(editor.textContent).toContain("Scratch saved");
+      } else {
+        expect(editor.querySelector('[role="status"]')).toBeNull();
+      }
+    },
+  );
 
   it("releases a held save when selecting another job", async () => {
     const pending = Promise.withResolvers<CronScratchGetResult>();
@@ -139,33 +154,6 @@ describe("ordinary automation scratch editor", () => {
     await pending.promise.catch(() => {});
     await settle();
     expect(editor.textContent).not.toContain("Retired save failed");
-  });
-
-  it("clears save failure for a held retry without replacing the draft", async () => {
-    const retry = createDeferred<CronScratchGetResult>();
-    onTestFinished(() => retry.resolve(snapshot("Draft notes", 2)));
-    const request = savedRequest()
-      .mockRejectedValueOnce(new Error("Synthetic save unavailable"))
-      .mockImplementationOnce(() => retry.promise);
-    const { editor, textarea, save } = await loadDraft(request, "Draft notes");
-    await click(editor, "Save scratch");
-    await waitForSolid(() => expect(editor.textContent).toContain("Synthetic save unavailable"));
-
-    await click(editor, "Save scratch");
-    await waitForSolid(() => {
-      expect(editor.textContent).not.toContain("Synthetic save unavailable");
-      expect(save.disabled).toBe(true);
-      expect(editor.querySelector("textarea")).toBe(textarea);
-      expect(textarea.value).toBe("Draft notes");
-    });
-    getButtonByText(editor, "Reload scratch").click();
-    expect(request).toHaveBeenCalledTimes(3);
-    retry.resolve(snapshot("Draft notes", 2));
-    await waitForSolid(() => {
-      expect(save.disabled).toBe(false);
-      expect(editor.textContent).toContain("Scratch saved");
-      expect(editor.querySelector("textarea")).toBe(textarea);
-    });
   });
 
   it("loads on demand and admits only one read while it is pending", async () => {
@@ -184,32 +172,6 @@ describe("ordinary automation scratch editor", () => {
     await settle();
     expect(editor.querySelector("textarea")?.value).toBe("Saved notes");
     await waitForSolid(() => expect(load.disabled).toBe(false));
-  });
-
-  it("keeps the draft on a failed reload and allows another read", async () => {
-    const reload = createDeferred<CronScratchGetResult>();
-    const request = savedRequest()
-      .mockImplementationOnce(() => reload.promise)
-      .mockResolvedValueOnce(snapshot("Updated notes", 2));
-    const { editor, textarea } = await loadDraft(request, "Unsaved draft");
-    const button = getButtonByText(editor, "Reload scratch");
-    button.click();
-    await waitForSolid(() => expect(button.disabled).toBe(true));
-    expect(textarea.value).toBe("Unsaved draft");
-    reload.reject(new Error("Synthetic read unavailable"));
-    await waitForSolid(() => {
-      expect(editor.querySelector('[role="status"]')?.textContent).toBe(
-        "Synthetic read unavailable",
-      );
-      expect(button.disabled).toBe(false);
-    });
-    expect(editor.querySelector("textarea")).toBe(textarea);
-    expect(textarea.value).toBe("Unsaved draft");
-    button.click();
-    await waitForSolid(() => {
-      expect(textarea.value).toBe("Updated notes");
-      expect(editor.querySelector('[role="status"]')).toBeNull();
-    });
   });
 
   it.each([

@@ -109,6 +109,9 @@ it.each([true, false])(
         expect(attribute(page, selector, "aria-disabled")).toBe("true");
       });
       expect(toggle.disabled).toBe(false);
+      expect(
+        page.querySelector<HTMLButtonElement>(testId("cron-row-run-optimistic"))?.disabled,
+      ).toBe(true);
       expect(document.activeElement).toBe(toggle);
       expect(rowToggle(page, "other")?.disabled).toBe(true);
       toggle.click();
