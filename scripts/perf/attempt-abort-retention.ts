@@ -123,7 +123,7 @@ async function measure(factories: typeof baseline, arm: "base" | "candidate", pa
     await completedAttempt(index);
   }
   await collect();
-  const beforeManagers = queryObjects(SessionManager);
+  const beforeManagers = queryObjects(SessionManager, { format: "count" });
   const beforeHeap = process.memoryUsage().heapUsed;
   const collections: Array<{ kind: number; duration: number }> = [];
   const observer = new PerformanceObserver((list) => {
@@ -170,7 +170,7 @@ async function measure(factories: typeof baseline, arm: "base" | "candidate", pa
   observer.disconnect();
   await collect();
   const retainedBytes = process.memoryUsage().heapUsed - beforeHeap;
-  const retainedManagers = queryObjects(SessionManager) - beforeManagers;
+  const retainedManagers = queryObjects(SessionManager, { format: "count" }) - beforeManagers;
   if (values.snapshot) {
     writeHeapSnapshot(
       values.pairs ? `${values.snapshot}.${arm}-${pair}.heapsnapshot` : values.snapshot,
