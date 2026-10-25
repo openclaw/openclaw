@@ -17,6 +17,7 @@ const htmlGrid = (input: string) =>
     ?.split("\n") ?? [];
 
 const htmlText = (input: string) => renderTelegramHtmlText(input, { textMode: "html" });
+const table = (cell: string) => `<table><tr><td>${cell}</td></tr></table>`;
 const expectBounded = (chunks: string[], limit: number) => {
   expect(chunks.length).toBeGreaterThan(1);
   expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
@@ -127,18 +128,14 @@ describe("Telegram formatting", () => {
     expect(withInvisible?.replace("\u200B", "")).toBe(reference);
   });
 
-  it.each([
-    ["code", "<code>", "</code>"],
-    ["pre", "<pre>", "</pre>"],
-  ])("keeps only the table inside %s escaped between rendered tables", (_name, open, close) => {
-    expect(
-      htmlText(
-        `<table><tr><td>A</td></tr></table>${open}<table><tr><td>B</td></tr></table>${close}<table><tr><td>C</td></tr></table>`,
-      ),
-    ).toBe(
-      `<pre><code>| A   |</code></pre>\n\n${open}&lt;table&gt;&lt;tr&gt;&lt;td&gt;B&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;${close}<pre><code>| C   |</code></pre>\n\n`,
-    );
-  });
+  it.each(["code", "pre"])(
+    "keeps only the table inside %s escaped between rendered tables",
+    (tag) => {
+      expect(htmlText(`${table("A")}<${tag}>${table("B")}</${tag}>${table("C")}`)).toBe(
+        `<pre><code>| A   |</code></pre>\n\n<${tag}>&lt;table&gt;&lt;tr&gt;&lt;td&gt;B&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;</${tag}><pre><code>| C   |</code></pre>\n\n`,
+      );
+    },
+  );
 
   it("drops a file:// href but keeps the label instead of leaking raw markdown", () => {
     const res = markdownToTelegramHtml("[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)");
@@ -200,11 +197,7 @@ describe("Telegram formatting", () => {
     const chunks = splitTelegramHtmlChunks(text, 13);
 
     expectBounded(chunks, 13);
-    for (const chunk of chunks) {
-      for (const token of chunk.trim().split(/\s+/)) {
-        expect(token).toBe("abcde");
-      }
-    }
+    expect(chunks.flatMap((chunk) => chunk.trim().split(/\s+/))).toEqual(Array(12).fill("abcde"));
     expect(chunks.join("")).toBe(text);
   });
 
@@ -314,12 +307,9 @@ describe("Telegram formatting", () => {
 });
 
 describe("file references", () => {
-  it("wraps file references in markdown mode", () => {
-    expect(renderTelegramHtmlText("Check README.md")).toContain("<code>README.md</code>");
-  });
-
   it("does not wrap in HTML mode (trusts caller markup)", () => {
     expect(htmlText("Check README.md")).toBe("Check README.md");
+    expect(renderTelegramHtmlText("Check README.md")).toContain("<code>README.md</code>");
   });
 
   it("preserves authored file-style links in chunked output", () => {
@@ -370,17 +360,13 @@ describe("file references", () => {
     );
   });
 
-  it("does not wrap orphaned TLD fragments inside protected HTML contexts", () => {
-    const cases = [
-      "<code>R&D.md</code>",
-      '<a href="https://example.com">R&D.md</a>',
-      '<a href="http://example.com/R&D.md">link</a>',
-      '<img src="logo/R&D.md" alt="R&D.md">',
-    ] as const;
-    for (const input of cases) {
-      const result = wrapFileReferencesInHtml(input);
-      expect(result, input).toBe(input);
-    }
+  it.each([
+    "<code>R&D.md</code>",
+    '<a href="https://example.com">R&D.md</a>',
+    '<a href="http://example.com/R&D.md">link</a>',
+    '<img src="logo/R&D.md" alt="R&D.md">',
+  ])("does not wrap orphaned TLD fragments in protected HTML: %s", (input) => {
+    expect(wrapFileReferencesInHtml(input)).toBe(input);
   });
 
   it("handles multiple orphaned TLDs with HTML tags (offset stability)", () => {

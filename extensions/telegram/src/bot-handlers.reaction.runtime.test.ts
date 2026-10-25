@@ -403,30 +403,35 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
   );
 
   it.each([
-    { isTopicMessage: true, sessionKey: "agent:topicbot:telegram:direct:5678:thread:5678:77" },
-    { isTopicMessage: false, sessionKey: "agent:topicbot:telegram:direct:5678" },
-  ])(
-    "routes a cached private-chat thread like its messages (topic: $isTopicMessage)",
-    async ({ isTopicMessage, sessionKey }) => {
-      cacheThread("dm", isTopicMessage);
+    [true, true, true, "topicbot", ":thread:5678:77"],
+    [false, true, true, "topicbot", ""],
+    [true, false, true, undefined, ""],
+    [undefined, true, true, undefined, ""],
+    [undefined, true, false, "main", ""],
+  ] as const)(
+    "routes private reactions with cached topic=%s, enabled=%s, required=%s",
+    async (isTopicMessage, topicEnabled, requireTopic, agent, suffix) => {
+      if (isTopicMessage !== undefined) {
+        cacheThread("dm", isTopicMessage);
+      }
       enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
-      await registerHandler(buildPrivateTopicConfig())(privateTopicReaction());
-
-      expect(resolveCachedMessageThreadSpec).toHaveBeenCalledWith({
-        chatId: 5678,
-        messageId: REACTED_MESSAGE_ID,
-      });
-      expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
-      expect(peekSystemEventEntries(sessionKey)).toEqual([privateTopicEvent()]);
+      await registerHandler(buildPrivateTopicConfig({ topicEnabled, requireTopic }))(
+        privateTopicReaction(),
+      );
+      expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(agent ? 1 : 0);
+      if (agent) {
+        expect(peekSystemEventEntries(`agent:${agent}:telegram:direct:5678${suffix}`)).toEqual([
+          privateTopicEvent(),
+        ]);
+      }
+      if (isTopicMessage !== undefined && topicEnabled) {
+        expect(resolveCachedMessageThreadSpec).toHaveBeenCalledWith({
+          chatId: 5678,
+          messageId: REACTED_MESSAGE_ID,
+        });
+      }
     },
   );
-
-  it("drops a cached private-topic reaction when that topic is disabled", async () => {
-    cacheThread("dm", true);
-    await registerHandler(buildPrivateTopicConfig({ topicEnabled: false }))(privateTopicReaction());
-
-    expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
-  });
 
   it("rechecks DM access after the private-topic message was cached", async () => {
     cacheThread("dm", true);
@@ -448,21 +453,6 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     )(privateTopicReaction());
     expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
   });
-
-  it.each([true, false])(
-    "handles a private cache miss with requireTopic=%s",
-    async (requireTopic) => {
-      enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
-      await registerHandler(buildPrivateTopicConfig({ requireTopic }))(privateTopicReaction());
-
-      expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(requireTopic ? 0 : 1);
-      if (!requireTopic) {
-        expect(peekSystemEventEntries("agent:main:telegram:direct:5678")).toEqual([
-          privateTopicEvent(),
-        ]);
-      }
-    },
-  );
 
   it.each([false, true])(
     "awaits own-message lookup before reaction delivery: %s",

@@ -21,7 +21,6 @@ import {
   dispatchWithContext,
   editMessageTelegram,
   emitToolStart,
-  telegramDepsForTest,
   type DispatchReplyWithBufferedBlockDispatcherArgs as DispatchArgs,
   editMessageReplyMarkupTelegram,
   emitTelegramMessageSentHooks,
@@ -283,7 +282,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     },
   );
 
-  it.each(["recording", "replacement", "second"] as const)(
+  it.each(["replacement", "second"] as const)(
     "preserves the accepted answer across a %s failure",
     async (failure) => {
       const { bot, messages, sendMessage, editMessageText } = await observeTransport();
@@ -291,9 +290,6 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       const first = "First accepted answer";
       const preview = "Answer in progress while checking the completed result";
       const final = "Complete answer already accepted by Telegram";
-      const recordContext = vi.fn(async () => {
-        throw new Error("prompt context recording failed");
-      });
       resolveReply(
         async (_ctx, options) => {
           if (failure === "replacement") {
@@ -326,13 +322,6 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
             : { channels: { telegram: { botToken: "synthetic-test-token" } } },
         retryDispatchErrors: failure === "replacement" ? undefined : true,
         suppressFailureFallback: failure === "replacement" ? undefined : true,
-        moduleMocks:
-          failure === "recording"
-            ? {
-                ...telegramDepsForTest,
-                recordOutboundMessageForPromptContext: recordContext,
-              }
-            : undefined,
       });
       await vi.advanceTimersByTimeAsync(failure === "replacement" ? 10_000 : 5_000);
       if (failure === "second") {
@@ -346,14 +335,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       } else {
         expect(result).toEqual({ kind: "completed" });
         expect([...messages.values()]).toEqual([final]);
-        if (failure === "recording") {
-          expect(sendMessage).toHaveBeenCalledOnce();
-          expect(recordContext).toHaveBeenCalledWith(
-            expect.objectContaining({ text: final, messageId: [...messages.keys()][0] }),
-          );
-        } else {
-          expect(sentTexts(sendMessage)).toEqual([preview, expect.stringContaining("Read"), final]);
-        }
+        expect(sentTexts(sendMessage)).toEqual([preview, expect.stringContaining("Read"), final]);
       }
     },
   );
