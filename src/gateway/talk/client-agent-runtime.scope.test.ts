@@ -15,7 +15,7 @@ import type { GatewayContextResolver } from "../server-methods/types.js";
 import { createTalkClientAgentRuntime } from "./client-agent-runtime.js";
 
 const model = vi.hoisted(() => ({ run: vi.fn() }));
-// Only model execution is replaced: registration, runtime admission and selector are real.
+// mock-isolation: Replace model execution while keeping registration, runtime admission and selector real.
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.run }));
 afterEach(() => {
   testing.resetSessionControllerForTest();

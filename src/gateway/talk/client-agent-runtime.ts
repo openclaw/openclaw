@@ -78,7 +78,6 @@ export function createTalkClientAgentRuntime(params: {
     }
     const lifecycleGeneration = source && getRpcSourceLifecycleGeneration(source);
     const assertSourceCurrent = () => {
-      params.assertCurrent?.();
       if (!source) {
         return;
       }
@@ -103,6 +102,7 @@ export function createTalkClientAgentRuntime(params: {
       }
       source.adapter.authority?.assertCurrent();
     };
+    params.assertCurrent?.();
     assertSourceCurrent();
     // One execution consumes this consultation's registration, never a later retry.
     sourceAcquired = params.getRegisteredSource !== undefined;
@@ -119,6 +119,7 @@ export function createTalkClientAgentRuntime(params: {
         const runParams = { ...requestedParams, abortSignal };
         runParams.abortSignal?.throwIfAborted();
         const config = runParams.config ?? params.config;
+        params.assertCurrent?.();
         assertSourceCurrent();
         const retained = await params.runAuthority?.retainRun(runParams.runId);
         try {
