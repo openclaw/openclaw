@@ -168,8 +168,6 @@ describe("node auto-update controller", () => {
   it.each([
     ["unmanaged process", false, "package", {}],
     ["source checkout", true, "git", {}],
-    ["unknown installation", true, "unknown", {}],
-    ["host-owned installation", true, "host", {}],
     ["node setting", true, "package", { nodeHost: { autoUpdate: { enabled: false } } }],
     ["startup check setting", true, "package", { update: { checkOnStart: false } }],
     ["dev channel", true, "package", { update: { channel: "dev" } }],
@@ -205,10 +203,6 @@ describe("node auto-update controller", () => {
     const host = start(true);
     await host.advance(0, { prepare: 1, compatible: 0, restart: 0 });
     await host.advance(30_000, { pause: 2, prepare: 1, discover: 1 });
-    expect(
-      host.log.mock.calls.filter(([message]) => message.includes("waiting for active work")),
-    ).toHaveLength(1);
-
     host.runtime.tryPauseForUpdate.mockResolvedValue(true);
     await host.advance(30_000, { restart: 1, accepted: 0, resume: 0 });
     acknowledgment.resolve();

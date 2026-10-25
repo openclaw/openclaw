@@ -9,6 +9,10 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { runCommand } from "./invoke-run-command.js";
 
+function runNode(source: string, cwd?: string, signal?: AbortSignal) {
+  return runCommand([process.execPath, "-e", source], cwd, undefined, undefined, signal);
+}
+
 describe("runCommand", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => {
@@ -72,12 +76,7 @@ describe("runCommand", () => {
   );
 
   it.runIf(process.platform !== "win32")("preserves signal termination diagnostics", async () => {
-    const result = await runCommand(
-      [process.execPath, "-e", "process.kill(process.pid, 'SIGTERM')"],
-      undefined,
-      undefined,
-      undefined,
-    );
+    const result = await runNode("process.kill(process.pid, 'SIGTERM')");
 
     expect(result).toMatchObject({
       exitCode: undefined,
@@ -99,14 +98,8 @@ describe("runCommand", () => {
         onOutputChunk: () => controller.abort(),
       }),
     );
-    const result = await runCommand(
-      [
-        process.execPath,
-        "-e",
-        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')",
-      ],
-      undefined,
-      undefined,
+    const result = await runNode(
+      "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')",
       undefined,
       controller.signal,
     );
@@ -133,27 +126,18 @@ describe("runCommand", () => {
       return { launchedArgv, options };
     }
 
-    it("quotes the node shell command once and passes it verbatim", async () => {
-      const { launchedArgv, options } = await captureLaunch(
-        "win32",
-        buildNodeShellCommand(shellCommand, "win32"),
-      );
-      expect(launchedArgv).toEqual(["cmd.exe", "/d", "/s", "/c", `"${shellCommand}"`]);
-      expect(options).toMatchObject({ windowsVerbatimArguments: true });
-    });
-
-    it("recognizes an absolute cmd.exe path regardless of case", async () => {
-      const shell = "C:\\Windows\\System32\\CMD.EXE";
-      const { launchedArgv, options } = await captureLaunch("win32", [
-        shell,
-        "/d",
-        "/s",
-        "/c",
-        shellCommand,
-      ]);
-      expect(launchedArgv).toEqual([shell, "/d", "/s", "/c", `"${shellCommand}"`]);
-      expect(options).toMatchObject({ windowsVerbatimArguments: true });
-    });
+    it.each(["cmd.exe", "C:\\Windows\\System32\\CMD.EXE"])(
+      "quotes %s once and passes its command verbatim",
+      async (shell) => {
+        const argv =
+          shell === "cmd.exe"
+            ? buildNodeShellCommand(shellCommand, "win32")
+            : [shell, "/d", "/s", "/c", shellCommand];
+        const { launchedArgv, options } = await captureLaunch("win32", argv);
+        expect(launchedArgv).toEqual([shell, "/d", "/s", "/c", `"${shellCommand}"`]);
+        expect(options).toMatchObject({ windowsVerbatimArguments: true });
+      },
+    );
 
     it.each([
       ["four elements", "win32", ["cmd.exe", "/d", "/s", "/c"]],
@@ -210,36 +194,15 @@ describe("runCommand", () => {
       return (await runCommand([process.execPath], cwd, undefined, undefined)).error;
     }
 
-    it("flags a cwd that exists but is not a directory", async () => {
-      const file = path.join(os.tmpdir(), `node-exec-file-${process.pid}-${Date.now()}.txt`);
-      fs.writeFileSync(file, "x");
-      try {
-        const result = await runCommand(
-          [process.execPath, "-e", "process.exit(0)"],
-          file,
-          undefined,
-          undefined,
-        );
-        expect(result).toMatchObject({ success: false });
-        expect(result.error).toContain(
-          `node exec working directory is not a directory on the node host: ${file}`,
-        );
-      } finally {
-        fs.rmSync(file, { force: true });
+    it.each(["is not a directory", "does not exist"])("clarifies a cwd that %s", async (reason) => {
+      const cwd = path.join(tempDirs.make("openclaw-node-cwd-"), "cwd");
+      if (reason === "is not a directory") {
+        fs.writeFileSync(cwd, "x");
       }
-    });
-
-    it("clarifies a missing cwd during execution", async () => {
-      const cwd = path.join(os.tmpdir(), `node-exec-run-missing-${process.pid}-${Date.now()}`);
-      const result = await runCommand(
-        [process.execPath, "-e", "process.exit(0)"],
-        cwd,
-        undefined,
-        undefined,
-      );
+      const result = await runNode("process.exit(0)", cwd);
       expect(result).toMatchObject({ success: false });
       expect(result.error).toContain(
-        `node exec working directory does not exist on the node host: ${cwd}`,
+        `node exec working directory ${reason} on the node host: ${cwd}`,
       );
     });
 
