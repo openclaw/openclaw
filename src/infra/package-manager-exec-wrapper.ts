@@ -63,12 +63,13 @@ const PNPM_EXEC_CONTEXT_OPTIONS_WITH_VALUE = new Set([
 
 const PNPM_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "node"]);
 const PNPM_SCRIPT_RUN_SUBCOMMANDS = new Set(["restart", "run", "start", "stop", "test"]);
-const COMMON_BUILTIN_NON_EXEC_SUBCOMMANDS = [
+const PNPM_BUILTIN_NON_EXEC_SUBCOMMANDS = new Set([
   "add",
   "audit",
   "bin",
   "config",
   "dedupe",
+  "deploy",
   "help",
   "import",
   "init",
@@ -77,22 +78,18 @@ const COMMON_BUILTIN_NON_EXEC_SUBCOMMANDS = [
   "link",
   "list",
   "outdated",
+  "patch",
   "prune",
   "publish",
-  "remove",
-  "unlink",
-  "why",
-] as const;
-const PNPM_BUILTIN_NON_EXEC_SUBCOMMANDS = new Set([
-  ...COMMON_BUILTIN_NON_EXEC_SUBCOMMANDS,
-  "deploy",
-  "patch",
   "rebuild",
+  "remove",
   "root",
   "server",
   "store",
+  "unlink",
   "update",
   "view",
+  "why",
 ]);
 
 const YARN_OPTIONS_WITH_VALUE = new Set(["--cwd"]);
@@ -101,26 +98,43 @@ const YARN_DLX_OPTIONS_WITH_VALUE = new Set(["--package", "-p"]);
 const YARN_DLX_FLAG_OPTIONS = new Set(["--quiet", "-q"]);
 const YARN_EXEC_SUBCOMMANDS = new Set(["exec", "dlx"]);
 const YARN_BUILTIN_NON_EXEC_SUBCOMMANDS = new Set([
-  ...COMMON_BUILTIN_NON_EXEC_SUBCOMMANDS,
+  "add",
+  "audit",
   "autoclean",
+  "bin",
   "cache",
   "check",
+  "config",
   "create",
+  "dedupe",
   "generate-lock-entry",
   "global",
+  "help",
+  "import",
   "info",
+  "init",
+  "install",
+  "licenses",
+  "link",
+  "list",
   "login",
   "logout",
+  "outdated",
   "owner",
   "pack",
   "policies",
+  "prune",
+  "publish",
+  "remove",
   "self-update",
   "tag",
   "team",
+  "unlink",
   "upgrade",
   "upgrade-interactive",
   "version",
   "versions",
+  "why",
   "workspace",
 ]);
 

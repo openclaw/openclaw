@@ -5,7 +5,10 @@ import type {
 import type { ClawSkillInstallConsent } from "./packages.js";
 
 export class ClawSkillConsentError extends Error {
-  override name = "ClawSkillConsentError";
+  constructor(message: string) {
+    super(message);
+    this.name = "ClawSkillConsentError";
+  }
 }
 
 export function bindClawSkillWarningConsent(

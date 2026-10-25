@@ -14,15 +14,23 @@ import { Compile } from "typebox/compile";
 import { getRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 import { toErrorObject } from "../infra/errors.js";
 import { findJsonSchemaShapeError } from "../shared/json-schema-defaults.js";
-import {
-  createInterpretedMcpJsonSchemaValidator,
-  formatMcpJsonSchemaErrors,
-} from "./mcp-json-schema-validator-interpreted.js";
+import { createInterpretedMcpJsonSchemaValidator } from "./mcp-json-schema-validator-interpreted.js";
 
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 
 function isDraft202012Schema(schema: JsonSchemaType): boolean {
   return (schema as { $schema?: unknown }).$schema === DRAFT_2020_12_SCHEMA;
+}
+
+function formatTypeBoxErrors(errors: Array<{ instancePath?: string; message?: string }>): string {
+  return (
+    errors
+      .map((error) => {
+        const message = error.message?.trim() || "schema validation failed";
+        return error.instancePath ? `${error.instancePath} ${message}` : message;
+      })
+      .join(", ") || "schema validation failed"
+  );
 }
 
 /** MCP SDK validator with draft-2020-12 support for external tool schemas. */
@@ -69,7 +77,7 @@ export function createMcpJsonSchemaValidator(): jsonSchemaValidator {
         return {
           valid: false,
           data: undefined,
-          errorMessage: formatMcpJsonSchemaErrors([...validator.Errors(input)]),
+          errorMessage: formatTypeBoxErrors([...validator.Errors(input)]),
         };
       };
     },

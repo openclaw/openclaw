@@ -1,5 +1,8 @@
 import path from "node:path";
-import { GUEST_FILESYSTEM_READ_NOT_FOUND_EXIT_CODE } from "@openclaw/fs-safe/guest";
+import {
+  GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE,
+  GUEST_FILESYSTEM_READ_NOT_FOUND_EXIT_CODE,
+} from "@openclaw/fs-safe/guest";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import type {
   SandboxBackendCommandParams,
@@ -10,7 +13,6 @@ import { SANDBOX_FILE_IDENTITY } from "./file-mutation-identity.js";
 import {
   buildPinnedMutationArgs,
   PINNED_MUTATION_ACTION_LABELS,
-  resolveSandboxCreateResult,
   SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL,
 } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
@@ -221,7 +223,15 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     params: Parameters<NonNullable<SandboxFsBridge["createFileExclusive"]>>[0],
   ): Promise<"created" | "exists"> {
     const { result, containerPath } = await this.writeFileContents(params, "create");
-    return resolveSandboxCreateResult(result, `Sandbox create failed for ${containerPath}`);
+    if (result.code === GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE) {
+      return "exists";
+    }
+    if (result.code !== 0) {
+      throw new Error(
+        `Sandbox create failed for ${containerPath}: ${result.stderr.toString("utf8").trim()}`,
+      );
+    }
+    return "created";
   }
 
   private async writeFileContents(

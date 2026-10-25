@@ -40,10 +40,7 @@ import {
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import { canReceiveSessionEvent } from "./session-sharing-read.js";
 import { isGatewayAdmin, prepareSessionSharing } from "./session-sharing.js";
-import {
-  resolveRequestedStoredSessionTarget,
-  resolveStoredSessionKeyForAgentStore,
-} from "./session-store-key.js";
+import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 
 type QuestionTarget = {
   agentId?: string;
@@ -113,15 +110,16 @@ export async function withPreparedQuestionSessions<T>(
       if (!question.sessionKey) {
         return undefined;
       }
-      const resolved = resolveRequestedStoredSessionTarget(
-        cfg,
-        question.sessionKey,
-        question.agentId,
-      );
+      const resolved = resolveRequestedSessionAgentId(cfg, question.sessionKey, question.agentId);
       if (!resolved.ok) {
         return undefined;
       }
-      const { agentId, sessionKey } = resolved.value;
+      const agentId = resolved.agentId;
+      const sessionKey = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId,
+        sessionKey: question.sessionKey,
+      });
       const storePath = resolveSessionStorePathForScope({ agentId, sessionKey }, cfg);
       const key = JSON.stringify([agentId, storePath]);
       const group = groups.get(key) ?? {

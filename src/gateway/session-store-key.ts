@@ -180,26 +180,6 @@ export function resolveRequestedSessionStoreTarget(
   });
 }
 
-/** Resolve an admitted session key for lookup inside its selected agent's store. */
-export function resolveRequestedStoredSessionTarget(
-  cfg: OpenClawConfig,
-  sessionKey: string,
-  explicitAgentId?: string,
-): Result<{ sessionKey: string; agentId: string }, ErrorShape> {
-  const requested = resolveRequestedSessionAgentId(cfg, sessionKey, explicitAgentId);
-  if (!requested.ok) {
-    return requested;
-  }
-  return ok({
-    sessionKey: resolveStoredSessionKeyForAgentStore({
-      cfg,
-      sessionKey,
-      agentId: requested.agentId,
-    }),
-    agentId: requested.agentId,
-  });
-}
-
 /** Resolve ownership before a prepared agent's main alias collapses to global. */
 export function resolveSessionStoreAgentId(
   cfg: OpenClawConfig,

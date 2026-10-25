@@ -21,30 +21,40 @@ type DeviceAuthPayloadV3Params = DeviceAuthPayloadParams & {
   deviceFamily?: string | null;
 };
 
-function deviceAuthPayloadParts(params: DeviceAuthPayloadParams): string[] {
+export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string {
+  const scopes = params.scopes.join(",");
+  const token = params.token ?? "";
   return [
+    "v2",
     params.deviceId,
     params.clientId,
     params.clientMode,
     params.role,
-    params.scopes.join(","),
+    scopes,
     String(params.signedAtMs),
-    params.token ?? "",
+    token,
     params.nonce,
-  ];
-}
-
-export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string {
-  return ["v2", ...deviceAuthPayloadParts(params)].join("|");
+  ].join("|");
 }
 
 export function buildDeviceAuthPayloadV3(params: DeviceAuthPayloadV3Params): string {
+  const scopes = params.scopes.join(",");
+  const token = params.token ?? "";
   // Device signatures are byte-for-byte compared by the gateway. Normalize
   // optional metadata before joining so case differences do not break auth.
+  const platform = normalizeDeviceMetadataForAuth(params.platform);
+  const deviceFamily = normalizeDeviceMetadataForAuth(params.deviceFamily);
   return [
     "v3",
-    ...deviceAuthPayloadParts(params),
-    normalizeDeviceMetadataForAuth(params.platform),
-    normalizeDeviceMetadataForAuth(params.deviceFamily),
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    scopes,
+    String(params.signedAtMs),
+    token,
+    params.nonce,
+    platform,
+    deviceFamily,
   ].join("|");
 }

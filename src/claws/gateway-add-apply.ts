@@ -47,7 +47,10 @@ export class ClawGatewayPlanChangedError extends Error {
 }
 
 export class ClawGatewayPlanBlockedError extends Error {
-  override name = "ClawGatewayPlanBlockedError";
+  constructor(message: string) {
+    super(message);
+    this.name = "ClawGatewayPlanBlockedError";
+  }
 }
 
 export type GatewayClawAddApplyResult = {

@@ -13,7 +13,10 @@ import type {
 } from "./official-external-plugin-catalog.types.js";
 
 export class HostedCatalogSignedFeedMonotonicityError extends Error {
-  override name = "HostedCatalogSignedFeedMonotonicityError";
+  constructor(message: string) {
+    super(message);
+    this.name = "HostedCatalogSignedFeedMonotonicityError";
+  }
 }
 
 const SUPPORTED_OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS = new Set([1, 2]);

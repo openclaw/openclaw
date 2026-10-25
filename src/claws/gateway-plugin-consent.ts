@@ -6,7 +6,10 @@ import type {
 import type { ClawPluginInstallConsent } from "./packages.js";
 
 export class ClawGatewayConsentError extends Error {
-  override name = "ClawGatewayConsentError";
+  constructor(message: string) {
+    super(message);
+    this.name = "ClawGatewayConsentError";
+  }
 }
 
 /** Bind the browser's reviewed plugin facts to the immutable Add/Update plan. */

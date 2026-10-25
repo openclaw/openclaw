@@ -55,14 +55,6 @@ const PROTOCOL_RELATIVE_AUTHORITY_RE = /[\\/]{2,}[^\\/?#\s]*/gu;
 
 type UrlRedactionResult = { value: string; parsedWholeUrl: boolean };
 
-function tryDecodeUri(value: string): string | undefined {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return undefined;
-  }
-}
-
 function redactSensitiveUrlPath(value: string): string {
   return value.replace(TELEGRAM_BOT_TOKEN_PATH_RE, "/bot***");
 }
@@ -73,8 +65,10 @@ function normalizeUrlQueryParamName(name: string): {
 } {
   let current = name.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
   for (let depth = 0; depth <= MAX_NESTED_URL_REDACTION_DEPTH; depth += 1) {
-    const decoded = tryDecodeUri(current)?.replace(URL_QUERY_NAME_SEPARATOR_RE, "");
-    if (decoded === undefined) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(current).replace(URL_QUERY_NAME_SEPARATOR_RE, "");
+    } catch {
       break;
     }
     if (decoded === current) {
@@ -325,9 +319,14 @@ function redactFragment(value: string, depth: number): string {
   if (!looksLikeNestedUrlValue(fallback)) {
     return fallback;
   }
-  const decoded = tryDecodeUri(fallback);
-  if (decoded === undefined || decoded === fallback) {
-    return decoded ?? "***";
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(fallback);
+  } catch {
+    return "***";
+  }
+  if (decoded === fallback) {
+    return fallback;
   }
   const redactedDecoded = redactFragment(decoded, depth + 1);
   return redactedDecoded === decoded ? fallback : encodeURIComponent(redactedDecoded);
@@ -341,9 +340,14 @@ function redactEncodedNestedUrlPath(value: string, depth: number): string {
     return "***";
   }
 
-  const decoded = tryDecodeUri(value);
-  if (decoded === undefined || decoded === value) {
-    return decoded ?? "***";
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    return "***";
+  }
+  if (decoded === value) {
+    return value;
   }
 
   const direct = redactSensitiveUrlLikeStringAtDepth(decoded, depth);
@@ -418,9 +422,14 @@ function redactEncodedUrlLikeString(value: string, depth: number): string {
     return "***";
   }
 
-  const decoded = tryDecodeUri(value);
-  if (decoded === undefined || decoded === value) {
-    return decoded ?? "***";
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    return "***";
+  }
+  if (decoded === value) {
+    return value;
   }
 
   const redactedDecoded = redactSensitiveUrlLikeStringAtDepth(decoded, depth + 1);
@@ -450,8 +459,10 @@ function redactNestedUrlValue(value: string, depth: number): string {
     return value;
   }
 
-  const decoded = tryDecodeUri(value);
-  if (decoded === undefined) {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
     return "***";
   }
   if (decoded === value || !looksLikeNestedUrlValue(decoded)) {

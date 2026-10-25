@@ -80,17 +80,13 @@ function skipContainerPrefixes(text: string, start: number) {
   return cursor;
 }
 
-export function listMarkerEnd(text: string, start: number, lineEnd = text.length) {
+function listMarkerEnd(text: string, start: number) {
   const first = text[start] ?? "";
   let markerEnd = start;
   if (first === "-" || first === "+" || first === "*") {
     markerEnd += 1;
   } else if (first >= "0" && first <= "9") {
-    while (
-      markerEnd < lineEnd &&
-      (text[markerEnd] ?? "") >= "0" &&
-      (text[markerEnd] ?? "") <= "9"
-    ) {
+    while ((text[markerEnd] ?? "") >= "0" && (text[markerEnd] ?? "") <= "9") {
       markerEnd += 1;
     }
     const delimiter = text[markerEnd] ?? "";

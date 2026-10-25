@@ -17,7 +17,8 @@ import {
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
-import { resolveRequestedStoredSessionTarget } from "../session-store-key.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type {
@@ -77,7 +78,7 @@ export function dispatchUiCommandToRequester({
       ? commandParams.command.sessionKey
       : commandParams.sessionKey;
   const requestedSession = commandSessionKey
-    ? resolveRequestedStoredSessionTarget(
+    ? resolveRequestedSessionAgentId(
         context.getRuntimeConfig(),
         commandSessionKey,
         commandParams.agentId,
@@ -86,11 +87,18 @@ export function dispatchUiCommandToRequester({
   if (requestedSession && !requestedSession.ok) {
     return { ok: false, error: requestedSession.error };
   }
-  const canonicalSessionKey = requestedSession?.ok ? requestedSession.value.sessionKey : undefined;
+  const canonicalSessionKey =
+    commandSessionKey && requestedSession?.ok
+      ? resolveStoredSessionKeyForAgentStore({
+          cfg: context.getRuntimeConfig(),
+          agentId: requestedSession.agentId,
+          sessionKey: commandSessionKey,
+        })
+      : undefined;
   const normalizedParams: UiCommandParams = {
     ...commandParams,
     ...(canonicalSessionKey ? { sessionKey: canonicalSessionKey } : {}),
-    ...(requestedSession?.ok ? { agentId: requestedSession.value.agentId } : {}),
+    ...(requestedSession?.ok ? { agentId: requestedSession.agentId } : {}),
     command:
       canonicalSessionKey && "sessionKey" in commandParams.command
         ? { ...commandParams.command, sessionKey: canonicalSessionKey }

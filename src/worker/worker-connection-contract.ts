@@ -82,7 +82,10 @@ export class WorkerAdmissionError extends Error {
 export const WORKER_ADMISSION_DEADLINE_MS = 120_000;
 
 export class WorkerAdmissionDeadlineExceededError extends Error {
-  override name = "WorkerAdmissionDeadlineExceededError";
+  constructor(diagnosis: string) {
+    super(diagnosis);
+    this.name = "WorkerAdmissionDeadlineExceededError";
+  }
 }
 
 // Only the initial admission boundary can author this result. A reconnect deadline

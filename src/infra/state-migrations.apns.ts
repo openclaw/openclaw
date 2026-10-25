@@ -42,20 +42,24 @@ const MIGRATION_KIND = "legacy-apns-registrations-json";
 // Legacy values are wall-clock timestamps. Bounding them to ECMAScript Date's
 // finite range rejects hostile counters with ~367 trillion successor values left.
 const MAX_LEGACY_APNS_UPDATED_AT_MS = 8_640_000_000_000_000;
-const COMMON_REGISTRATION_KEYS = [
+const DIRECT_REGISTRATION_KEYS = new Set([
   "nodeId",
   "transport",
+  "token",
   "topic",
   "environment",
   "updatedAtMs",
-] as const;
-const DIRECT_REGISTRATION_KEYS = new Set([...COMMON_REGISTRATION_KEYS, "token"]);
+]);
 const RELAY_REGISTRATION_KEYS = new Set([
-  ...COMMON_REGISTRATION_KEYS,
+  "nodeId",
+  "transport",
   "relayHandle",
   "sendGrant",
   "installationId",
+  "topic",
+  "environment",
   "distribution",
+  "updatedAtMs",
   "relayOrigin",
   "tokenDebugSuffix",
 ]);

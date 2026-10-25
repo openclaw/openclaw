@@ -1,13 +1,10 @@
 import { PATH_ALIAS_POLICIES } from "@openclaw/fs-safe/advanced";
 /**
- * Shell plans and results for pinned sandbox filesystem operations.
+ * Shell plans for pinned sandbox filesystem operations.
  *
  * Selects the local interpreter and supplies quoted Python source to local and remote transports.
  */
-import {
-  GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE,
-  GUEST_FILESYSTEM_PYTHON,
-} from "@openclaw/fs-safe/guest";
+import { GUEST_FILESYSTEM_PYTHON } from "@openclaw/fs-safe/guest";
 import type {
   PathSafetyCheck,
   PinnedSandboxDirectoryEntry,
@@ -38,17 +35,6 @@ export const PINNED_MUTATION_ACTION_LABELS = {
   remove: "remove files",
   "copy-destination": "copy files",
 } as const;
-
-export function resolveSandboxCreateResult(
-  result: { code: number; stderr: Buffer },
-  failureLabel: string,
-) {
-  const { code } = result;
-  if (code !== 0 && code !== GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE) {
-    throw new Error(`${failureLabel}: ${result.stderr.toString("utf8").trim()}`);
-  }
-  return code === 0 ? "created" : "exists";
-}
 
 export const SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL = `'${GUEST_FILESYSTEM_PYTHON.replaceAll("'", `'\\''`)}'`;
 

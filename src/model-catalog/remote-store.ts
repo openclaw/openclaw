@@ -3,7 +3,6 @@ import { readConfigMachineState } from "../state/config-machine-state.js";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { DomainScope } from "../state/openclaw-state-worker-store.types.js";
 
 type RemoteModelCatalogStoreRow = {
   id: number;
@@ -105,8 +104,18 @@ export async function writeRemoteModelCatalogAsync(
   context: OpenClawStateWorkerContext,
 ): Promise<RemoteModelCatalogWriteResult> {
   const input = { ...row };
-  return runRemoteModelCatalogWrite(context, (scope) =>
-    scope.execute({ type: "modelCatalog.remote.write", input }),
+  const { runOpenClawStateWorkerOperation } =
+    await import("../state/openclaw-state-worker-store.js");
+  const { createSqliteWorkerWriteAdmission } = await import("../infra/sqlite-worker-store.js");
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "modelCatalog.remote.write", input }),
+    {
+      createAdmission: createSqliteWorkerWriteAdmission(
+        () => context.admission.assertCurrent(),
+        [context.admission.databasePath],
+      ),
+    },
   );
 }
 
@@ -127,22 +136,17 @@ export async function markRemoteModelCatalogCheckedAsync(
       },
     },
   };
-  return runRemoteModelCatalogWrite(context, (scope) =>
-    scope.execute({ type: "modelCatalog.remote.markChecked", input }),
-  );
-}
-
-async function runRemoteModelCatalogWrite<T>(
-  context: OpenClawStateWorkerContext,
-  operation: (scope: DomainScope) => Promise<T>,
-): Promise<T> {
   const { runOpenClawStateWorkerOperation } =
     await import("../state/openclaw-state-worker-store.js");
   const { createSqliteWorkerWriteAdmission } = await import("../infra/sqlite-worker-store.js");
-  return runOpenClawStateWorkerOperation(context, operation, {
-    createAdmission: createSqliteWorkerWriteAdmission(
-      () => context.admission.assertCurrent(),
-      [context.admission.databasePath],
-    ),
-  });
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "modelCatalog.remote.markChecked", input }),
+    {
+      createAdmission: createSqliteWorkerWriteAdmission(
+        () => context.admission.assertCurrent(),
+        [context.admission.databasePath],
+      ),
+    },
+  );
 }

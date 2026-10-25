@@ -25,7 +25,8 @@ import {
 import { authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { resolveOperatorRoleAgents } from "../operator-role-policy.js";
 import { WRITE_SCOPE } from "../operator-scopes.js";
-import { resolveRequestedStoredSessionTarget } from "../session-store-key.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -71,18 +72,25 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       const pluginId = normalizeOptionalString(params.pluginId);
       const actionId = normalizeOptionalString(params.actionId);
       const rawSessionKey = normalizeOptionalString(params.sessionKey);
-      const sessionTarget = rawSessionKey
-        ? resolveRequestedStoredSessionTarget(
+      const sessionOwner = rawSessionKey
+        ? resolveRequestedSessionAgentId(
             context.getRuntimeConfig(),
             rawSessionKey,
             normalizeOptionalString(params.agentId),
           )
         : undefined;
-      if (sessionTarget && !sessionTarget.ok) {
-        respond(false, undefined, sessionTarget.error);
+      if (sessionOwner && !sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
         return;
       }
-      const sessionKey = sessionTarget?.ok ? sessionTarget.value.sessionKey : undefined;
+      const sessionKey =
+        rawSessionKey && sessionOwner?.ok
+          ? resolveStoredSessionKeyForAgentStore({
+              cfg: context.getRuntimeConfig(),
+              agentId: sessionOwner.agentId,
+              sessionKey: rawSessionKey,
+            })
+          : undefined;
       if (!pluginId || !actionId) {
         reject("plugins.sessionAction pluginId and actionId must be non-empty");
         return;
@@ -138,7 +146,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           pluginId,
           actionId,
           ...(sessionKey ? { sessionKey } : {}),
-          ...(sessionTarget?.ok ? { agentId: sessionTarget.value.agentId } : {}),
+          ...(sessionOwner?.ok ? { agentId: sessionOwner.agentId } : {}),
           ...(params.payload !== undefined ? { payload: params.payload } : {}),
           client: {
             ...(client?.connId ? { connId: client.connId } : {}),

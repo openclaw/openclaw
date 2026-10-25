@@ -6,7 +6,10 @@ import { lstatIfExists } from "../infra/path-existence.js";
 import { readWorkspaceFileWithGuards } from "./workspace-file-read.js";
 
 export class WorkspaceBootstrapSeedConflictError extends Error {
-  override name = "WorkspaceBootstrapSeedConflictError";
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkspaceBootstrapSeedConflictError";
+  }
 }
 
 export async function publishBootstrapFile(

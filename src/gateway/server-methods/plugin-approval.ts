@@ -29,12 +29,14 @@ import {
   truncatePluginApprovalDetail,
 } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
-import { resolveRequestedStoredSessionTarget } from "../session-store-key.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import {
   captureApprovalWorkerOwner,
-  registerPendingApprovalRequestWithDelivery,
+  registerPendingApprovalRecord,
 } from "./approval-registration.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
+import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import {
   bindApprovalRequesterMetadata,
   bindApprovalReviewerDeviceIds,
@@ -115,18 +117,25 @@ export function createPluginApprovalHandlers(
         const rawSessionKey = normalizeOptionalString(
           trustedAgentRuntime?.sessionKey ?? p.sessionKey,
         );
-        const sessionTarget = rawSessionKey
-          ? resolveRequestedStoredSessionTarget(
+        const sessionOwner = rawSessionKey
+          ? resolveRequestedSessionAgentId(
               context.getRuntimeConfig(),
               rawSessionKey,
               normalizeOptionalString(trustedAgentRuntime?.agentId ?? p.agentId),
             )
           : undefined;
-        if (sessionTarget && !sessionTarget.ok) {
-          respond(false, undefined, sessionTarget.error);
+        if (sessionOwner && !sessionOwner.ok) {
+          respond(false, undefined, sessionOwner.error);
           return;
         }
-        const sessionKey = sessionTarget?.ok ? sessionTarget.value.sessionKey : null;
+        const sessionKey =
+          rawSessionKey && sessionOwner?.ok
+            ? resolveStoredSessionKeyForAgentStore({
+                cfg: context.getRuntimeConfig(),
+                agentId: sessionOwner.agentId,
+                sessionKey: rawSessionKey,
+              })
+            : null;
 
         // Sanitize once at the creation boundary, like exec command text: the
         // raw record otherwise reaches channel messages, iOS push, and the web
@@ -179,7 +188,7 @@ export function createPluginApprovalHandlers(
             : {}),
           agentId:
             trustedAgentRuntime?.agentId ??
-            (sessionTarget?.ok ? sessionTarget.value.agentId : sanitizeMeta(p.agentId)),
+            (sessionOwner?.ok ? sessionOwner.agentId : sanitizeMeta(p.agentId)),
           sessionKey,
           runId: trustedAgentRuntime?.operationalRunInstance.runId ?? null,
           turnSourceChannel: normalizeNullableString(turnSource.turnSourceChannel),
@@ -216,10 +225,20 @@ export function createPluginApprovalHandlers(
           });
         }
 
-        await registerPendingApprovalRequestWithDelivery({
-          approvalKind: "plugin",
+        const registration = await registerPendingApprovalRecord({
+          manager,
+          record,
           timeoutMs,
+          respond,
+          context,
           workerOwner,
+        });
+        if (!registration) {
+          return;
+        }
+
+        await handlePendingApprovalRequestWithDelivery({
+          approvalKind: "plugin",
           manager,
           record,
           respond,

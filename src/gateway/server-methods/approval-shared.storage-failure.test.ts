@@ -8,7 +8,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { registerPendingApprovalRequestWithDelivery } from "./approval-registration.js";
+import { registerPendingApprovalRecord } from "./approval-registration.js";
 import { buildRequestedApprovalEvent, handlePendingApprovalRequest } from "./approval-shared.js";
 import { handleApprovalResolve } from "./approval.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -67,10 +67,7 @@ function expectStorageFailure(operation: "request" | "resolve") {
 it("sanitizes durable registration failures while retaining server diagnostics", async () => {
   fs.mkdirSync(databasePath);
   expect(
-    await registerPendingApprovalRequestWithDelivery({
-      approvalKind: "exec",
-      twoPhase: false,
-      getIosPushDelivery: () => undefined,
+    await registerPendingApprovalRecord({
       manager,
       record,
       timeoutMs: 60_000,

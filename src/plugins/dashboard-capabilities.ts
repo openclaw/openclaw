@@ -20,7 +20,10 @@ import type {
 import { validateJsonSchemaValue } from "./schema-validator.js";
 
 export class PluginDashboardDeclarationError extends Error {
-  override name = "PluginDashboardDeclarationError";
+  constructor(message: string) {
+    super(message);
+    this.name = "PluginDashboardDeclarationError";
+  }
 }
 
 function fail(pluginId: string, message: string): never {
