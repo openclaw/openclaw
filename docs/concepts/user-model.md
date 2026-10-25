@@ -84,11 +84,13 @@ does not merge files or create a dossier.
 Missing files or missing qualifying human identity use shared defaults only. A
 human assignment without a profile ID does not fall back to the creator. Display
 labels, channel sender IDs, unknown-source creator IDs, and agent owners cannot
-select a personal file. Internal events and delegated tasks do not automatically
-inherit a personal profile. Subagent bootstrap still contains only its existing
-allowed project instructions. The shared local owner profile represents all
-connections using that identity, not separate people; use per-person sign-in on
-a team Gateway.
+select a personal file. Internal turns continuing the same session use that
+session's selection, including subagent completions, `sessions_send`, goal
+continuation, and cron and restart wakes in that session. Isolated cron sessions
+keep shared defaults only. Subagent sessions still load only their allowed project
+instructions, so delegated tasks never receive a personal `USER.md` file. The shared
+local owner profile represents all connections using that identity, not separate
+people; use per-person sign-in on a team Gateway.
 
 Personal files use the existing guarded reads and memory provenance checks.
 Symlink aliases are not accepted. Each personal file must fit wholly within the

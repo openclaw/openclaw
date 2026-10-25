@@ -52,6 +52,61 @@ type SystemPromptSeries = {
   restart: boolean;
 };
 
+const SYSTEM_PROMPT_ROUTE_PARTS = [
+  "provider",
+  "model",
+  "api",
+  "baseUrl",
+  "inHistorySystemUpdates",
+  "personalProfile",
+] as const;
+type SystemPromptRoutePart = (typeof SYSTEM_PROMPT_ROUTE_PARTS)[number];
+type SystemPromptRestartReason =
+  | "new"
+  | "history"
+  | "model-change"
+  | `route:${SystemPromptRoutePart}`;
+export type SystemPromptSeriesStatus = "pinned" | `restarted:${SystemPromptRestartReason}`;
+
+/** One owner for the series key layout; saved checkpoints compare these exact bytes. */
+export function buildSystemPromptRouteKey(
+  route: Record<SystemPromptRoutePart, string | boolean | undefined>,
+): string {
+  return JSON.stringify(SYSTEM_PROMPT_ROUTE_PARTS.map((part) => route[part]));
+}
+
+export function parseSystemPromptRouteKey(
+  routeKey: unknown,
+): Partial<Record<SystemPromptRoutePart, unknown>> | undefined {
+  if (typeof routeKey !== "string") {
+    return undefined;
+  }
+  let parts: unknown;
+  try {
+    parts = JSON.parse(routeKey);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parts)) {
+    return undefined;
+  }
+  const route: Partial<Record<SystemPromptRoutePart, unknown>> = {};
+  SYSTEM_PROMPT_ROUTE_PARTS.forEach((part, index) => {
+    route[part] = parts[index];
+  });
+  return route;
+}
+
+function changedPromptRoutePart(previous: unknown, current: string): SystemPromptRestartReason {
+  const before = parseSystemPromptRouteKey(previous);
+  const after = parseSystemPromptRouteKey(current);
+  const part =
+    before && after
+      ? SYSTEM_PROMPT_ROUTE_PARTS.find((name) => before[name] !== after[name])
+      : undefined;
+  return part ? `route:${part}` : "new";
+}
+
 type ToolDefinition = Pick<AnyAgentTool, "name" | "description" | "parameters">;
 type ToolSurface = {
   routeKey: string;
@@ -216,6 +271,8 @@ export function prepareSessionSystemPrompt(params: {
     (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
   );
   const afterCheckpoint = params.entries.slice(markerIndex + 1);
+  const checkpoint = params.entries[markerIndex];
+  const data = checkpoint?.type === "custom" ? checkpoint.data : undefined;
   const orphanedUpdate =
     !params.state.pendingSystemPrompt &&
     afterCheckpoint.some((entry) => getOpenClawSystemUpdateKind(entry) === "prompt-update");
@@ -224,13 +281,12 @@ export function prepareSessionSystemPrompt(params: {
     params.state.systemPrompt = undefined;
   }
   let series = params.state.pendingSystemPrompt ?? params.state.systemPrompt;
+  const previous = series ?? (isRecord(data) && typeof data.prefix === "string" ? data : undefined);
   if (
     !series &&
     !orphanedUpdate &&
     (!params.state.systemPromptRouteKey || params.state.systemPromptRouteKey === params.routeKey)
   ) {
-    const entry = params.entries[markerIndex];
-    const data = entry?.type === "custom" ? entry.data : undefined;
     if (
       isRecord(data) &&
       typeof data.prefix === "string" &&
@@ -254,6 +310,15 @@ export function prepareSessionSystemPrompt(params: {
     }
   }
   const restart = !series || series.routeKey !== params.routeKey || series.historyId !== historyId;
+  const seriesStatus: SystemPromptSeriesStatus = !restart
+    ? "pinned"
+    : !previous
+      ? "restarted:new"
+      : previous.historyId !== historyId
+        ? "restarted:history"
+        : afterCheckpoint.some((later) => later.type === "model_change")
+          ? "restarted:model-change"
+          : `restarted:${changedPromptRoutePart(previous.routeKey, params.routeKey)}`;
   const sections =
     !restart && series && series.renderedPrefix !== renderedPrefix
       ? promptDelta(
@@ -290,6 +355,7 @@ export function prepareSessionSystemPrompt(params: {
         )
       : undefined,
     restart,
+    seriesStatus,
     commit: (restartRecorded = false) => {
       if (committed) {
         return;
