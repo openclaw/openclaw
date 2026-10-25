@@ -969,7 +969,7 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
     );
   }
   const typedShimImplementation = source.match(
-    /\brunTsxCliShim\(\s*import\.meta\.url\s*,\s*\{[\s\S]*?\bimplementation\s*:\s*["'](\.\/[^"'\r\n]+\.mts)["']/u,
+    /\brun(?:Node|Tsx)CliShim\(\s*import\.meta\.url\s*,\s*\{[\s\S]*?\bimplementation\s*:\s*["'](\.\/[^"'\r\n]+\.mts)["']/u,
   )?.[1];
   if (typedShimImplementation) {
     // Keep implementation exports auditable: the shim executes the module but

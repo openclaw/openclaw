@@ -357,24 +357,33 @@ const catalog = module.loadControlUiSourceCatalog();`;
     expect(compiled).toContain("r2Materialized");
   });
 
-  it("models a literal typed shim without treating its implementation exports as entries", () => {
-    const file = "scripts/docs-link-audit.mjs";
-    const source = fs.readFileSync(file, "utf8");
-    const compile = knipConfig.compilers.mjs;
-    const compiled = compile(source, file);
-    expect(compiled).toBe(`${source}\nimport "./docs-link-audit.mts";`);
-    expect(compiled).not.toMatch(/import\s*\{[^}]+\}\s*from\s*["']\.\/docs-link-audit\.mts/u);
-    expect(scriptRootWorkspace.entry).toContain("scripts/docs-link-audit.mjs!");
-    expect(scriptRootWorkspace.entry).not.toContain("scripts/docs-link-audit.mts!");
-    expect(isEntry(scriptRootWorkspace.project, "scripts/docs-link-audit.mts")).toBe(true);
-
-    const withoutImplementation = replaceFixture(
-      source,
+  it.each([
+    [
+      "scripts/docs-link-audit.mjs",
+      "./docs-link-audit.mts",
       '{ implementation: "./docs-link-audit.mts" }',
-      "{}",
-    );
-    expect(compile(withoutImplementation, file)).toBe(withoutImplementation);
-  });
+    ],
+    [
+      "scripts/verify-pr-hosted-gates.mjs",
+      "./verify-pr-hosted-gates.mts",
+      '{ implementation: "./verify-pr-hosted-gates.mts" }',
+    ],
+  ] as const)(
+    "models literal typed shim %s without treating its implementation exports as entries",
+    (file, implementation, literalOptions) => {
+      const source = fs.readFileSync(file, "utf8");
+      const compile = knipConfig.compilers.mjs;
+      const compiled = compile(source, file);
+      expect(compiled).toBe(`${source}\nimport ${JSON.stringify(implementation)};`);
+      expect(scriptRootWorkspace.entry).toContain(`${file}!`);
+      const implementationFile = path.join(path.dirname(file), implementation);
+      expect(scriptRootWorkspace.entry).not.toContain(`${implementationFile}!`);
+      expect(isEntry(scriptRootWorkspace.project, implementationFile)).toBe(true);
+
+      const withoutImplementation = replaceFixture(source, literalOptions, "{}");
+      expect(compile(withoutImplementation, file)).toBe(withoutImplementation);
+    },
+  );
 
   it("models retained updater named exports without fabricating private imports", () => {
     const manifest = fs.readFileSync("package.json", "utf8");
