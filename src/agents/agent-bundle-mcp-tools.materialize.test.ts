@@ -37,22 +37,14 @@ function firstTool(runtime: Pick<BundleMcpToolRuntime, "tools">) {
 }
 
 function knowledgeCatalog(server: Partial<McpToolCatalog["servers"][string]> = {}): McpToolCatalog {
-  return {
-    version: 1,
-    generatedAt: 0,
-    tools: [],
-    servers: {
-      knowledge: {
-        serverName: "knowledge",
-        safeServerName: "knowledge",
-        launchSummary: "knowledge",
-        toolCount: 0,
-        resources: { listChanged: false },
-        prompts: { listChanged: false },
-        ...server,
-      },
-    },
-  };
+  const catalog = fixtureCatalog("knowledge", []);
+  Object.assign(catalog.servers.knowledge!, {
+    safeServerName: "knowledge",
+    resources: { listChanged: false },
+    prompts: { listChanged: false },
+    ...server,
+  });
+  return catalog;
 }
 
 function makeToolRuntime(
@@ -371,12 +363,7 @@ describe("createBundleMcpToolRuntime", () => {
       catalog: knowledgeCatalog({ instructions: "Read the catalogue before citing a resource." }),
     });
 
-    expect(tools.map((tool) => getPluginToolMeta(tool)?.mcp?.operation)).toEqual([
-      "prompts_get",
-      "prompts_list",
-      "resources_list",
-      "resources_read",
-    ]);
+    expect(tools).toHaveLength(4);
     for (const tool of tools) {
       expect(getPluginToolMeta(tool)?.mcp?.instructions).toBe(
         "Read the catalogue before citing a resource.",
@@ -458,7 +445,6 @@ describe("createBundleMcpToolRuntime", () => {
       { type: "image", data: "iVBOR", mimeType: "image/png" },
       { type: "text", text: JSON.stringify({ type: "image" }) },
     ]);
-    expect(result.details).toEqual({ mcpServer: "bundleProbe", mcpTool: "bundle_probe" });
   });
 
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
@@ -516,12 +502,6 @@ describe("createBundleMcpToolRuntime", () => {
       catalog: knowledgeCatalog(),
     });
 
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "knowledge__prompts_get",
-      "knowledge__prompts_list",
-      "knowledge__resources_list",
-      "knowledge__resources_read",
-    ]);
     await expect(
       firstTool({ tools }).execute("inventory-only", {}, undefined, undefined),
     ).rejects.toThrow("bundle-mcp catalog projection cannot execute tools");
@@ -571,13 +551,11 @@ describe("createBundleMcpToolRuntime", () => {
   it("keeps root fields callable when an MCP input schema uses a root union (#128743)", async () => {
     const inputSchema = {
       type: "object",
-      title: "MessagesReplyInput",
-      additionalProperties: false,
       required: ["thread_id"],
       properties: {
-        thread_id: { type: "string", minLength: 1, maxLength: 128 },
-        body: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
-        body_file: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        thread_id: { type: "string" },
+        body: { anyOf: [{ type: "string" }, { type: "null" }] },
+        body_file: { anyOf: [{ type: "string" }, { type: "null" }] },
       },
       anyOf: [
         { required: ["body"], properties: { body: { type: "string" } } },

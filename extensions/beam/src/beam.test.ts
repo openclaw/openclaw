@@ -27,14 +27,7 @@ const sourceModel = { provider: "openai", model: "gpt-5.6-sol" };
 
 const servers: http.Server[] = [];
 afterEach(async () => {
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        }),
-    ),
-  );
+  await Promise.all(servers.splice(0).map((server) => server[Symbol.asyncDispose]()));
 });
 
 async function requestStatus(url: string, body: string): Promise<number | undefined> {

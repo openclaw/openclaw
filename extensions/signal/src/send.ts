@@ -131,13 +131,7 @@ function parseTarget(raw: string): SignalTarget {
   return { type: "recipient", recipient: value };
 }
 
-type SignalTargetParams = {
-  recipient?: string[];
-  groupId?: string;
-  username?: string[];
-};
-
-function buildTargetParams(target: SignalTarget): SignalTargetParams {
+function buildTargetParams(target: SignalTarget) {
   if (target.type === "recipient") {
     return { recipient: [target.recipient] };
   }

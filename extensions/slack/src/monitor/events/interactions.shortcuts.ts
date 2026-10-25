@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
-import { resolveSlackMonitorEventScope } from "../event-scope.js";
+import { resolveSlackInteractionEventScope } from "../event-scope.js";
 import {
   captureSlackInteractionEventRoute,
   enqueueSlackInteractionEvent,
@@ -20,18 +20,8 @@ export function registerSlackShortcutHandler(params: {
     const { ack, body } = args;
     await ack();
     const runtimeContext = await params.ctx.readRuntimeContext();
-    const eventScope = resolveSlackMonitorEventScope({
-      ctx: runtimeContext,
-      body,
-      context: args.context,
-      client: args.client,
-      onDrop: (reason) => runtimeContext.runtime.log?.(`slack:interaction drop shortcut ${reason}`),
-    });
+    const eventScope = resolveSlackInteractionEventScope(runtimeContext, args, "shortcut");
     if (eventScope === null) {
-      return;
-    }
-    if (runtimeContext.shouldDropMismatchedSlackEvent?.(body)) {
-      runtimeContext.runtime.log?.("slack:interaction drop shortcut payload (mismatched app/team)");
       return;
     }
 

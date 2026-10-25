@@ -381,6 +381,23 @@ it("refreshes worker append, classification, orphan, and deletion receipts witho
   }
 });
 
+it("bounds empty-window projection probes by maintenance page, not session count", () => {
+  const db = createDatabase();
+  seedSessions(db, "empty-", 1000);
+  db.exec(`DELETE FROM transcript_events;
+    DELETE FROM session_transcript_active_events;
+    DELETE FROM session_transcript_index_state;`);
+  const reads = trackSqliteStatementExecutions(db, ["projection"], (sql) =>
+    /^select .*"rowid" as "rowId" from "session_transcript_/iu.test(sql) ? "projection" : null,
+  );
+  try {
+    expectStatus(settle(db));
+    expect(reads.counts.projection).toBe(3 * Math.ceil(1000 / 128));
+  } finally {
+    reads.restore();
+  }
+});
+
 it("limits orphan deletion per table while completing all sessions and FTS content", () => {
   const db = createDatabase();
   expectStatus(settle(db));

@@ -58,6 +58,32 @@ function npmInstall(spec: string, installPath = `/tmp/${spec.split("@")[0]}`) {
   return { source: "npm" as const, spec, installPath };
 }
 
+function writeEnginePlugin(
+  root: string,
+  id: string,
+  contextEngineIds?: readonly string[],
+  { marker, version = "1.0.0" }: { marker?: string; version?: string } = {},
+) {
+  fs.mkdirSync(root, { recursive: true });
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFileSync(path.join(root, name), JSON.stringify(value));
+  writeJson("package.json", {
+    name: id,
+    version,
+    openclaw: { extensions: ["./index.js"] },
+  });
+  fs.writeFileSync(
+    path.join(root, "index.js"),
+    `${marker ? `require("node:fs").writeFileSync(${JSON.stringify(marker)}, ${JSON.stringify(id)}); ` : ""}throw new Error('install must not execute plugin runtime');`,
+  );
+  writeJson("openclaw.plugin.json", {
+    id,
+    kind: "context-engine",
+    contextEngineIds,
+    configSchema: {},
+  });
+}
+
 const requiredTokenSchema = {
   type: "object",
   required: ["token"],
@@ -177,58 +203,18 @@ describe("persistPluginInstall", () => {
     expect(rollback).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "new installation",
-      enabled: true,
-      previousIds: undefined,
-      declaredIds: ["canonical-engine"],
-    },
-    {
-      name: "update replaces obsolete ownership",
-      enabled: true,
-      previousIds: ["obsolete-engine"],
-      declaredIds: ["canonical-engine"],
-    },
-    {
-      name: "update removes retired declaration",
-      enabled: true,
-      previousIds: ["obsolete-engine"],
-      declaredIds: undefined,
-    },
-    {
-      name: "disabled installation retains ownership",
-      enabled: false,
-      previousIds: undefined,
-      declaredIds: ["canonical-engine"],
-    },
+  it.each<[string, boolean, string[] | undefined, string[] | undefined]>([
+    ["new installation", true, undefined, ["canonical-engine"]],
+    ["replaces obsolete ownership", true, ["obsolete-engine"], ["canonical-engine"]],
+    ["removes retired declaration", true, ["obsolete-engine"], undefined],
+    ["disabled retains ownership", false, undefined, ["canonical-engine"]],
   ])(
-    "persists manifest engine selection and ownership: $name",
-    async ({ enabled, previousIds, declaredIds }) => {
+    "persists manifest engine selection and ownership: %s",
+    async (_name, enabled, previousIds, declaredIds) => {
       await prepareRealInstallMetadata();
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-engine-install-"));
       try {
-        fs.writeFileSync(
-          path.join(rootDir, "package.json"),
-          JSON.stringify({
-            name: "vendor-plugin",
-            version: "2.0.0",
-            openclaw: { extensions: ["./index.js"] },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(rootDir, "index.js"),
-          "throw new Error('install must not execute plugin runtime');",
-        );
-        fs.writeFileSync(
-          path.join(rootDir, "openclaw.plugin.json"),
-          JSON.stringify({
-            id: "vendor-plugin",
-            kind: "context-engine",
-            contextEngineIds: declaredIds,
-            configSchema: {},
-          }),
-        );
+        writeEnginePlugin(rootDir, "vendor-plugin", declaredIds, { version: "2.0.0" });
         if (previousIds) {
           setInstalledPluginIndexInstallRecords({
             "vendor-plugin": {
@@ -262,55 +248,23 @@ describe("persistPluginInstall", () => {
   );
 
   it.each([
-    { name: "sole legacy owner", competing: false, denied: false, selected: "canonical-engine" },
-    {
-      name: "approved declared competitor",
-      competing: true,
-      denied: false,
-      selected: "vendor-plugin",
-    },
-    {
-      name: "denied declared competitor",
-      competing: true,
-      denied: true,
-      selected: "canonical-engine",
-    },
-  ])(
-    "preserves current engine ownership during real install: $name",
-    async ({ competing, denied, selected }) => {
+    ["sole legacy owner", false, false, "canonical-engine"],
+    ["approved declared competitor", true, false, "vendor-plugin"],
+    ["denied declared competitor", true, true, "canonical-engine"],
+  ] as const)(
+    "preserves current engine ownership during real install: %s",
+    async (_name, competing, denied, selected) => {
       await prepareRealInstallMetadata();
       const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-owner-install-"));
       try {
         const vendorDir = path.join(rootDir, "vendor-plugin");
         const ownerDir = path.join(rootDir, "owner-a");
-        fs.mkdirSync(vendorDir);
-        fs.mkdirSync(ownerDir);
         const importMarker = path.join(rootDir, "runtime-imported");
         for (const [dir, id, contextEngineIds] of [
           [vendorDir, "vendor-plugin", ["canonical-engine"]],
           [ownerDir, "owner-a", ["vendor-plugin"]],
         ] as const) {
-          fs.writeFileSync(
-            path.join(dir, "package.json"),
-            JSON.stringify({
-              name: id,
-              version: "1.0.0",
-              openclaw: { extensions: ["./index.js"] },
-            }),
-          );
-          fs.writeFileSync(
-            path.join(dir, "index.js"),
-            `require("node:fs").writeFileSync(${JSON.stringify(importMarker)}, ${JSON.stringify(id)}); throw new Error("install must not import runtime");`,
-          );
-          fs.writeFileSync(
-            path.join(dir, "openclaw.plugin.json"),
-            JSON.stringify({
-              id,
-              kind: "context-engine",
-              contextEngineIds,
-              configSchema: {},
-            }),
-          );
+          writeEnginePlugin(dir, id, contextEngineIds, { marker: importMarker });
         }
         const config: OpenClawConfig = {
           plugins: {

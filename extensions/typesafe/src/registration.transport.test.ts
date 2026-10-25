@@ -5,6 +5,7 @@ import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
 import { MAX_JSON_BYTES } from "./schema.js";
@@ -82,15 +83,10 @@ it("rejects cancellation concurrent with body EOF", async () => {
   );
 });
 it("preserves bounded multi-chunk JSON responses", async () => {
-  const body = new ReadableStream<Uint8Array>({
-    start(stream) {
-      const json = JSON.stringify(response);
-      for (const chunk of [json.slice(0, 50), json.slice(50)]) {
-        stream.enqueue(new TextEncoder().encode(chunk));
-      }
-      stream.close();
-    },
-  });
+  const json = JSON.stringify(response);
+  const body = createClosedChunkStream(
+    [json.slice(0, 50), json.slice(50)].map((chunk) => new TextEncoder().encode(chunk)),
+  );
   mockBodyResponse(body);
   await expect(request()).resolves.toEqual({ evaluation: response });
 });

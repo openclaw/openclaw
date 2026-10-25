@@ -1,7 +1,10 @@
-import { AsyncResource } from "node:async_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  InvocationFrame,
+  runWithPluginExecutionFrame,
+} from "../../plugins/plugin-instance-invocation.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   claimSessionControllerTask,
@@ -14,10 +17,7 @@ import {
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
-import {
-  enterAgentInputRecoveryContext,
-  type AgentInputRecoveryAdmission,
-} from "../../state/agent-input-recovery-context.js";
+import type { AgentInputRecoveryAdmission } from "../../state/agent-input-recovery.types.js";
 import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { baseParams } from "./get-reply-run.test-support.js";
@@ -38,10 +38,12 @@ function withInputRecovery<T>(
   resolve: () => AgentInputRecoveryAdmission | undefined,
   run: () => T,
 ) {
-  return new AsyncResource("TestAgentInputRecovery").runInAsyncScope(() => {
-    enterAgentInputRecoveryContext({ resolveGatewayContext: () => ({ inputRecovery: resolve() }) });
-    return run();
-  });
+  return runWithPluginExecutionFrame(
+    new InvocationFrame({
+      inputRecoveryContext: { resolveGatewayContext: () => ({ inputRecovery: resolve() }) },
+    }),
+    run,
+  );
 }
 
 const key = "agent:main:source-binding";

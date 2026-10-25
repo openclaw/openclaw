@@ -1,15 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { runInNewContext } from "node:vm";
-import { expect, it, vi } from "vitest";
-import { SQLITE_CAPABILITY_PROBE } from "../../node-sqlite.mjs";
+import { copyFileSync, rmSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { buildSync } from "esbuild";
+import { afterEach, expect, it, vi } from "vitest";
+import { probeSqlite } from "../../node-sqlite-capabilities.mjs";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 type ProbeValue = string | Uint8Array;
 
-function probeSqlite(Database: unknown): unknown {
-  const context = { Buffer, Error, Uint8Array, require: () => ({ DatabaseSync: Database }) };
-  return runInNewContext(SQLITE_CAPABILITY_PROBE, context);
-}
+const temporary = useAutoCleanupTempDirTracker(afterEach);
 
 function runProbe(script: string, env?: NodeJS.ProcessEnv): unknown {
   return JSON.parse(
@@ -73,22 +74,8 @@ it.each([
   ({ permission, sqlFailure }) => {
     const output = runProbe(
       `
-          import { DatabaseSync, StatementSync } from "node:sqlite";
+          import { DatabaseSync } from "node:sqlite";
           import { Worker } from "node:worker_threads";
-          const counts = {};
-          for (const [prototype, names] of [
-            [DatabaseSync.prototype, ["prepare", "exec"]],
-            [StatementSync.prototype, ["get", "all", "run", "iterate"]],
-          ]) {
-            for (const name of names) {
-              counts[name] = 0;
-              const original = prototype[name];
-              prototype[name] = function (...args) {
-                counts[name]++;
-                return Reflect.apply(original, this, args);
-              };
-            }
-          }
             let closed = 0;
             const close = DatabaseSync.prototype.close;
             DatabaseSync.prototype.close = function (...args) {
@@ -100,12 +87,6 @@ it.each([
                 throw new Error("injected SQL failure");
               };
             }
-          let workersStarted = 0;
-          let workersExited = 0;
-          process.on("worker", (worker) => {
-            workersStarted++;
-            worker.once("exit", () => workersExited++);
-          });
           const { detectCurrentSqliteCapabilities, nodeRuntimeFailure } = await import(${JSON.stringify(new URL("../../node-sqlite.mjs", import.meta.url).href)});
           const pending = detectCurrentSqliteCapabilities();
           const samePending = pending === detectCurrentSqliteCapabilities();
@@ -121,7 +102,7 @@ it.each([
             }
           process.stdout.write(JSON.stringify({
             asynchronous: pending instanceof Promise,
-            samePending, sameResult, capabilities, workersStarted, workersExited, counts,
+            samePending, sameResult, capabilities,
             closed, workerDenied,
             ...(${permission} ? {
               failure: nodeRuntimeFailure(process.versions.node, capabilities),
@@ -147,20 +128,52 @@ it.each([
         ...(permission ? { version: expect.any(String) } : {}),
         ...(sqlFailure ? { error: "injected SQL failure" } : {}),
       },
-      workersStarted: permission ? 0 : 1,
+      closed: 1,
       ...(permission
         ? {
             failure: sqlFailure
               ? expect.stringContaining("node:sqlite NUL round-trip capability check failed")
               : null,
-            closed: 1,
             workerDenied: { code: "ERR_ACCESS_DENIED", permission: "WorkerThreads" },
             permissions: { worker: false, write: false, child: false },
           }
-        : {
-            workersExited: 1,
-            counts: { prepare: 0, exec: 0, get: 0, all: 0, run: 0, iterate: 0 },
-          }),
+        : {}),
     });
   },
 );
+
+it.each([false, true])("loads a self-contained SQLite probe (bundled=%s)", (bundled) => {
+  const root = temporary.make("sqlite-capability-bootstrap-");
+  const files = ["node-sqlite.mjs", "node-version.mjs", "node-sqlite-capabilities.mjs"];
+  for (const name of files) {
+    copyFileSync(new URL("../../" + name, import.meta.url), path.join(root, name));
+  }
+  let entry = pathToFileURL(path.join(root, "node-sqlite.mjs"));
+  if (bundled) {
+    const outfile = path.join(root, "arbitrary execution directory", "bootstrap.mjs");
+    buildSync({
+      entryPoints: [path.join(root, "node-sqlite.mjs")],
+      outfile,
+      bundle: true,
+      format: "esm",
+      platform: "node",
+    });
+    entry = pathToFileURL(outfile);
+    for (const name of files) {
+      rmSync(path.join(root, name));
+    }
+  }
+  const output = runProbe(`
+    Function.prototype.toString = () => { throw new Error("function source unavailable"); };
+    const { detectCurrentSqliteCapabilities } = await import(${JSON.stringify(entry.href)});
+    const pending = detectCurrentSqliteCapabilities();
+    const capabilities = await pending;
+    process.stdout.write(JSON.stringify({
+      capabilities, samePending: pending === detectCurrentSqliteCapabilities(),
+    }));
+  `);
+  expect(output).toMatchObject({
+    capabilities: { available: true, text: true, blob: true, json: true },
+    samePending: true,
+  });
+});

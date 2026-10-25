@@ -27,6 +27,13 @@ const cronQuery = "Warm automation 0499";
 const activePane = ".chat-pane-cache__pane--active";
 const sidebarClocks = ".sidebar-recent-session openclaw-elapsed-time";
 const initialClockLabels = new WeakMap<Page, string>();
+const progressClockSessions = Array.from(
+  { length: 6 },
+  (_, index) => sessionKeys[index] ?? `agent:main:interaction-${index}`,
+);
+const progressClocks =
+  'openclaw-session-progress-widget [data-progress-card-placement="board"] time';
+const initialProgressClocks = new WeakMap<Page, { count: number; labels: string[] }>();
 
 const nativeBoardSessions = Array.from(
   { length: 6 },
@@ -49,6 +56,7 @@ type InteractionFixtureOptions = {
   longSessionLabels?: boolean;
   longUserMessages?: boolean;
   nativeBoardResources?: boolean;
+  progressCardClocks?: boolean;
   boardFrameResources?: boolean;
   canvasFrameRetention?: boolean;
   mcpAppResources?: boolean;
@@ -164,6 +172,29 @@ function nativeBoardResponses(updatedAt: number) {
   };
 }
 
+function progressClockResponses(updatedAt: number, revision = 1) {
+  return {
+    cases: [
+      ...progressClockSessions.map((sessionKey, index) => ({
+        match: { sessionKey },
+        response: {
+          card: {
+            sessionKey,
+            revision,
+            updatedAt,
+            markdown: `**Verification ${index + 1}**: review the synthetic deployment.`,
+            steps: [
+              { step: "Inspect the change", status: "completed" },
+              { step: "Check the verification record", status: "in_progress" },
+            ],
+          },
+        },
+      })),
+      { response: { card: null } },
+    ],
+  };
+}
+
 export function createInteractionFixture(
   buildId: string,
   version: string,
@@ -256,31 +287,28 @@ export function createInteractionFixture(
     serverBuildId: buildId,
     serverVersion: version,
     sessionKey: sessionKeys[0],
-    ...(options.nativeBoardResources || options.boardFrameResources || options.mcpAppResources
+    ...(options.nativeBoardResources ||
+    options.progressCardClocks ||
+    options.boardFrameResources ||
+    options.mcpAppResources
       ? {
           featureMethods: [
             ...defaultControlUiFeatureMethods,
             "board.get",
-            "progressCard.get",
-            "sessions.list",
+            ...(options.nativeBoardResources ||
+            options.progressCardClocks ||
+            options.boardFrameResources
+              ? ["progressCard.get", "sessions.list"]
+              : []),
+            ...(options.mcpAppResources ? ["board.widget.appView", "mcp.app.view"] : []),
           ],
-          ...(options.nativeBoardResources
+          ...(options.nativeBoardResources || options.progressCardClocks
             ? {
                 controlUiWidgetKinds: [
                   { pluginId: "session", kind: "session:progress", label: "Session progress" },
                 ],
               }
             : {}),
-        }
-      : {}),
-    ...(options.mcpAppResources
-      ? {
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "board.get",
-            "board.widget.appView",
-            "mcp.app.view",
-          ],
         }
       : {}),
     ...(options.canvasFrameRetention
@@ -394,16 +422,21 @@ export function createInteractionFixture(
         version: "interaction-config",
         generatedAt: "2026-10-23T00:00:00.000Z",
       } satisfies ConfigSchemaResponse,
-      "progressCard.get": options.nativeBoardResources
-        ? nativeBoardResponses(Date.now() - 45_000)
-        : { card: null },
-      ...(options.nativeBoardResources
+      "progressCard.get": options.progressCardClocks
+        ? progressClockResponses(Date.now() - 45_000)
+        : options.nativeBoardResources
+          ? nativeBoardResponses(Date.now() - 45_000)
+          : { card: null },
+      ...(options.nativeBoardResources || options.progressCardClocks
         ? {
             "board.get": {
               sessionKey: sessionKeys[0],
               revision: 1,
               tabs: [{ tabId: "main", title: "Verification", position: 0, chatDock: "right" }],
-              widgets: nativeBoardSessions.map((sessionKey, index) => ({
+              widgets: (options.progressCardClocks
+                ? progressClockSessions
+                : nativeBoardSessions
+              ).map((sessionKey, index) => ({
                 name: `verification-progress-${index}`,
                 tabId: "main",
                 title: `Verification ${index + 1}`,
@@ -1164,6 +1197,94 @@ async function runTranscriptPlatformEvents(page: Page): Promise<InteractionEvide
   }
 }
 
+async function prepareProgressClocks(page: Page, gateway: MockGatewayControls) {
+  await prepareChat(page);
+  const pane = page.locator(activePane);
+  const mobileHeader = pane.locator(".agent-chat__header--mobile");
+  const mobile = await mobileHeader.isVisible();
+  const toggle = (mobile ? mobileHeader : pane.locator(".sidebar-region__panels-toggle")).getByRole(
+    "button",
+    { name: "Panels", exact: true },
+  );
+  if (mobile) {
+    const host = pane.locator(".chat-mobile-host");
+    if (!(await host.isVisible())) {
+      await toggle.click();
+    }
+    await host.getByRole("button", { name: "Panels", exact: true }).click();
+    await host
+      .locator(".chat-panel-launcher-mobile")
+      .getByRole("button", { name: "Dashboard", exact: true })
+      .click();
+  } else {
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+      await toggle.click();
+    }
+    await pane
+      .locator(".side-panel-launcher")
+      .getByRole("button")
+      .filter({
+        has: page
+          .getByText("Dashboard", { exact: true })
+          .and(page.locator(".side-panel-type-option__label")),
+      })
+      .click();
+  }
+
+  await gateway.waitForRequest("board.get", { match: { sessionKey: sessionKeys[0] } });
+  await page.waitForFunction(
+    ({ selector, expected }) => {
+      const widgets = [
+        ...document.querySelectorAll<HTMLElement & { active: boolean }>(
+          "openclaw-session-progress-widget",
+        ),
+      ];
+      return (
+        widgets.length === expected &&
+        widgets.every(
+          (widget) =>
+            widget.active &&
+            !widget.querySelector(
+              '.board-widget__plugin-loading, [data-test-id="session-progress-error"]',
+            ),
+        ) &&
+        document.querySelectorAll(selector).length === expected
+      );
+    },
+    { selector: progressClocks, expected: progressClockSessions.length },
+  );
+  const viewport = page.viewportSize()!;
+  await page.mouse.move(viewport.width - 4, viewport.height - 4);
+  await settleSidebarBackgroundWork(page);
+  // Start each sample near a minute boundary without replacing the native clock.
+  const updatedAt = Date.now() - 45_000;
+  await gateway.setMethodResponse("progressCard.get", progressClockResponses(updatedAt, 2));
+  for (const sessionKey of progressClockSessions) {
+    await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
+  }
+  await page.waitForFunction(
+    ({ selector, datetime }) => {
+      const clocks = [...document.querySelectorAll(selector)];
+      return (
+        clocks.length >= 2 &&
+        clocks.every(
+          (clock) =>
+            clock.getAttribute("datetime") === datetime &&
+            clock.textContent?.trim() === "Updated just now",
+        )
+      );
+    },
+    { selector: progressClocks, datetime: new Date(updatedAt).toISOString() },
+  );
+  // The accepted progress refresh also updates the active chat's persisted snapshot.
+  await settleSidebarBackgroundWork(page);
+  const clocks = page.locator(progressClocks);
+  initialProgressClocks.set(page, {
+    count: await clocks.count(),
+    labels: await clocks.allTextContents(),
+  });
+}
+
 async function prepareSessionSwitch(page: Page) {
   await prepareChat(page);
   await switchSession(page, 1);
@@ -1598,6 +1719,61 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       ) {
         throw new Error(`Sidebar or ${visibility} state changed during the idle interval`);
       }
+    },
+  })),
+  {
+    id: "progress-card-clock-tick",
+    route: controlUiSessionPath(sessionKeys[0]),
+    fixture: { progressCardClocks: true },
+    resourceOnly: true,
+    expected:
+      "Mounted progress widgets in the 400-message chat retain their clocks and advance after a native 30-second tick.",
+    rowSelector: progressClocks,
+    prepare: prepareProgressClocks,
+    run: async (page) => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 31_500);
+      });
+      const initial = initialProgressClocks.get(page)!;
+      const clocks = page.locator(progressClocks);
+      const labels = await clocks.allTextContents();
+      if (
+        (await page.evaluate(() => document.visibilityState)) !== "visible" ||
+        labels.length !== initial.count ||
+        labels.some((label, index) => !label.trim() || label === initial.labels[index])
+      ) {
+        throw new Error(
+          "Mounted progress clocks must remain attached and advance while the page is visible",
+        );
+      }
+      initialProgressClocks.delete(page);
+    },
+  },
+  ...(["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+    id: `progress-card-clock-idle-${visibility}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    fixture: { progressCardClocks: true },
+    resourceOnly: true,
+    visibility: visibility === "hidden" ? visibility : undefined,
+    expected: `The actual mounted progress-clock count is retained during ${visibility} native-clock idle.`,
+    rowSelector: progressClocks,
+    prepare: prepareProgressClocks,
+    run: async (page) => {
+      const state = () => page.evaluate(() => document.visibilityState);
+      if ((await state()) !== visibility) {
+        throw new Error(`Expected a ${visibility} page before progress-clock idle`);
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, visibility === "hidden" ? 31_500 : 3_000);
+      });
+      const initial = initialProgressClocks.get(page)!;
+      if (
+        (await state()) !== visibility ||
+        (await page.locator(progressClocks).count()) !== initial.count
+      ) {
+        throw new Error(`Mounted progress clocks or ${visibility} state changed while idle`);
+      }
+      initialProgressClocks.delete(page);
     },
   })),
   {

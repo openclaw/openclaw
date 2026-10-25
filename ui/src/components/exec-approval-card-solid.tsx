@@ -22,7 +22,7 @@ import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import {
   ApprovalCountdown,
   approvalRemainingLabel,
-  useApprovalClock,
+  readApprovalTime,
 } from "./approval-countdown.tsx";
 import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
@@ -339,7 +339,7 @@ export function approvalTitle(active: ExecApprovalRequest): string {
 
 export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   const approval = createMemo(() => props.approval);
-  const nowMs = useApprovalClock();
+  const nowMs = createMemo(() => readApprovalTime(approval().expiresAtMs));
   const expired = () => approval().expiresAtMs <= nowMs();
   const command = createMemo(() => compactApprovalCommand(approval().request.command));
   const sessionTitle = createMemo(() => {

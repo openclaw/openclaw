@@ -85,3 +85,13 @@ export const largeRecoverableCoreConfig = {
     trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
   },
 };
+
+export function createRecoveryBaselineConfig() {
+  return {
+    meta: { lastTouchedVersion: "2026.4.22" },
+    gateway: {
+      mode: "local" as const,
+      trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
+    },
+  };
+}

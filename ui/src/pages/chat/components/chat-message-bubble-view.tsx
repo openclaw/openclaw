@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import {
   createEffect,
@@ -408,6 +409,15 @@ function BubbleContents(props: ContentProps) {
       </For>
       <Show when={props.state().hasToolCards || props.state().failedToolCard}>
         <BubbleToolCards {...props} />
+      </Show>
+      <Show
+        when={
+          !props.state().hasToolCards &&
+          asNullableRecord(asNullableRecord(props.state().message)?.["__openclaw"])
+            ?.catalogTruncated === true
+        }
+      >
+        <p role="status">{t("chat.catalogOutputTruncated")}</p>
       </Show>
     </>
   );

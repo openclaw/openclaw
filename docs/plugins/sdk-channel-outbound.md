@@ -39,8 +39,17 @@ The required options are:
 | `inspect(raw, context)`          | Returns the stable `eventId` and serialized `laneKey`, or `null` for an ignored event. Claim-time facts must match the persisted id and lane.                                                                                                                                                                    |
 | `payload`                        | Supplies the payload version plus body serialization/deserialization. Use `storage: "raw-event"` for the standard `{ version, rawEvent }` string envelope, or provide custom encode/decode callbacks for an existing channel-specific shape. `createClaimError` classifies invalid versions or changed identity. |
 | `deliver(raw, lifecycle, claim)` | Dispatches one decoded event and receives the complete adoption lifecycle. It may return `completed`, `deferred`, `failed-retryable`, or nothing.                                                                                                                                                                |
-| `pollIntervalMs`                 | Schedules abandoned-claim and external-enqueue recovery sweeps, with a minimum interval of one minute. Admissions and retry deadlines wake the drain directly.                                                                                                                                                   |
+| `pollIntervalMs`                 | Schedules abandoned-claim and external-enqueue recovery sweeps, with a minimum interval of five minutes. Admissions and retry deadlines wake the drain directly.                                                                                                                                                 |
 | `retention`                      | Supplies the prune cadence and completed/failed TTL and entry caps.                                                                                                                                                                                                                                              |
+
+Startup recovery runs immediately. External queue writes, including
+`openclaw channels dead-letters resubmit`, do not signal the running monitor.
+External enqueues and dead-owner claims can wait up to the recovery interval plus
+scheduling and execution time. An unrefreshed claim from a still-live remote process
+first expires its lease: with the default 30-minute lease and minimum five-minute
+sweep, that bound is 35 minutes from the last refresh, plus scheduling and execution time. A larger
+`pollIntervalMs` increases the bound. Active local claims keep their existing
+protection, including claims held after a settlement write fails.
 
 The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects

@@ -9,6 +9,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -233,18 +234,31 @@ describe("chat pane catalog", () => {
     expect(pane.history.catalogMessages).toEqual([]);
   });
 
-  it.each<[string, SessionCatalogTranscriptItem, string]>([
-    [
-      "raw tool command",
-      { type: "toolCall", raw: { command: "git status --short" } },
-      "Tool call\n\ngit status --short",
-    ],
-    ["empty reasoning", { type: "reasoning" }, "Thinking"],
-  ])("renders %s", (_name, item, expected) => {
-    const { pane } = createCatalogContinuationPane(vi.fn());
+  it("keeps raw and structured tool inputs visible without call IDs", () => {
+    const { pane } = createCatalogPane(vi.fn());
+    expect(
+      pane.catalogItemMessage({ type: "toolCall", raw: { command: "git status --short" } }),
+    ).toMatchObject({
+      content: [{ type: "toolCall", arguments: "git status --short" }],
+    });
+    expect(
+      extractToolCardsCached(
+        pane.catalogItemMessage({ type: "toolResult", toolInput: { count: 2 }, text: "done" }),
+      ),
+    ).toMatchObject([{ args: { count: 2 }, outputText: "done", completed: true }]);
+  });
 
-    expect(pane.catalogItemMessage(item)).toMatchObject({
-      content: [{ type: "text", text: expected }],
+  it("keeps reasoning in thinking content and omits empty placeholders", () => {
+    const { pane } = createCatalogPane(vi.fn());
+    expect(pane.catalogItemMessage({ type: "reasoning" })).toBeNull();
+    expect(pane.catalogItemMessage({ type: "reasoning", truncated: true })).toMatchObject({
+      content: [{ type: "thinking", thinking: "…" }],
+      __openclaw: { catalogTruncated: true },
+    });
+    expect(
+      pane.catalogItemMessage({ type: "reasoning", text: "Check the evidence." }),
+    ).toMatchObject({
+      content: [{ type: "thinking", thinking: "Check the evidence." }],
     });
   });
 
@@ -256,7 +270,13 @@ describe("chat pane catalog", () => {
     const original = structuredClone(item);
 
     expect(pane.catalogItemMessage(item)).toMatchObject({
-      content: [{ type: "text", text: `Tool result\n\n${preview}\n\n[Output truncated]` }],
+      content: [
+        {
+          type: "toolResult",
+          content: [{ type: "text", text: preview }],
+        },
+      ],
+      __openclaw: { catalogTruncated: true },
     });
     expect(item).toEqual(original);
   });

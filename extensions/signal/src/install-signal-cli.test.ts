@@ -4,6 +4,10 @@ import path from "node:path";
 import * as tar from "tar";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
+import {
+  createClosedChunkStream,
+  createStreamingResponse,
+} from "../../test-support/streaming-error-response.js";
 
 type CapturedArchiveLimits = NonNullable<
   Parameters<typeof import("openclaw/plugin-sdk/setup-tools").extractArchive>[0]["limits"]
@@ -200,13 +204,7 @@ it("rejects declared archives above the download cap", async () => {
 });
 
 it("aborts streamed archives above the download cap and removes partial files", async () => {
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new Uint8Array(6));
-      controller.enqueue(Buffer.alloc(256 * 1024 * 1024));
-      controller.close();
-    },
-  });
+  const body = createClosedChunkStream([new Uint8Array(6), Buffer.alloc(256 * 1024 * 1024)]);
   const fetchResult = okDownloadResponse(body);
   await expectRejectedDownload("268435456-byte download cap", fetchResult.release);
 });
@@ -229,30 +227,19 @@ it("bounds oversized GitHub release metadata and cancels the stream", async () =
   setProcessPlatform("linux", "x64");
   const chunkSize = 1024 * 1024;
   const chunkCount = 20; // 20 MiB — over the 16 MiB cap
-  let readCount = 0;
-  let canceled = false;
-  const oversized = new Response(
-    new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (readCount >= chunkCount) {
-          controller.close();
-          return;
-        }
-        readCount += 1;
-        controller.enqueue(new Uint8Array(chunkSize));
-      },
-      cancel() {
-        canceled = true;
-      },
-    }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
+  const oversized = createStreamingResponse({
+    status: 200,
+    chunkCount,
+    chunkSize,
+    byte: 0,
+    headers: { "Content-Type": "application/json" },
+  });
   const releaseMock = vi.fn().mockResolvedValue(undefined);
-  fetchMock.mockResolvedValue({ response: oversized, release: releaseMock });
+  fetchMock.mockResolvedValue({ response: oversized.response, release: releaseMock });
   const result = await installSignalCli(createRuntimeSpies());
   expect(result).toEqual({ ok: false, error: "Failed to parse signal-cli release info." });
-  expect(canceled).toBe(true);
-  expect(readCount).toBeLessThan(chunkCount);
+  expect(oversized.wasCanceled()).toBe(true);
+  expect(oversized.getReadCount()).toBeLessThan(chunkCount);
   expect(releaseMock).toHaveBeenCalledTimes(1);
 });
 

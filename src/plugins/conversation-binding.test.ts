@@ -129,6 +129,11 @@ type PluginBindingDecision = Parameters<
   typeof resolvePluginConversationBindingApproval
 >[0]["decision"];
 
+const expectExpired = (approvalId: string) =>
+  expect(approveBindingRequest(approvalId, "allow-once")).resolves.toEqual({ status: "expired" });
+const expectBound = (input: PluginBindingRequestInput) =>
+  expect(requestPluginConversationBinding(input)).resolves.toMatchObject({ status: "bound" });
+
 function createAdapter(channel: string, accountId: string): SessionBindingAdapter {
   return {
     channel,
@@ -233,12 +238,7 @@ function clearPluginBindingApprovalRows(): void {
   });
 }
 
-function readPluginBindingApprovalRows(): Array<{
-  account_id: string;
-  channel: string;
-  plugin_id: string;
-  plugin_root: string;
-}> {
+function readPluginBindingApprovalRows() {
   const { db } = openOpenClawStateDatabase();
   const approvalsDb = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(db);
   return executeSqliteQuerySync(
@@ -361,9 +361,7 @@ describe("plugin conversation binding approvals", () => {
 
     // The deadline check is authoritative even when the event loop has not dispatched the timer.
     vi.setSystemTime(1_000 + 30 * 60_000);
-    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
-      status: "expired",
-    });
+    await expectExpired(request.approvalId);
     expect(sessionBindingState.bind).not.toHaveBeenCalled();
     // Retire storage's independent idle timer before counting approval timers.
     await closeOpenClawStateDatabaseAsync();
@@ -386,9 +384,7 @@ describe("plugin conversation binding approvals", () => {
     if (!oldest || !newest) {
       throw new Error("expected bounded pending requests");
     }
-    await expect(approveBindingRequest(oldest.approvalId, "allow-once")).resolves.toEqual({
-      status: "expired",
-    });
+    await expectExpired(oldest.approvalId);
     await expect(approveBindingRequest(newest.approvalId, "deny")).resolves.toMatchObject({
       status: "denied",
     });
@@ -450,13 +446,7 @@ describe("plugin conversation binding approvals", () => {
 
     // Concurrent publication must retain both cached grants.
     for (const account of ["default", "work"]) {
-      expect(
-        (
-          await requestPluginConversationBinding(
-            discordRequest(`channel:race-${account}b`, account),
-          )
-        ).status,
-      ).toBe("bound");
+      await expectBound(discordRequest(`channel:race-${account}b`, account));
     }
   });
 
@@ -465,9 +455,7 @@ describe("plugin conversation binding approvals", () => {
 
     await drainGlobalSingletonLifecycleState();
 
-    await expect(approveBindingRequest(request.approvalId, "allow-once")).resolves.toEqual({
-      status: "expired",
-    });
+    await expectExpired(request.approvalId);
   });
 
   it("does not share persistent approvals across plugin roots even with the same plugin id", async () => {
@@ -636,9 +624,7 @@ describe("plugin conversation binding approvals", () => {
       await drainGlobalSingletonLifecycleState();
       await closeOpenClawStateDatabaseAsync();
       registerSessionBindingAdapter(createAdapter("discord", "isolated"));
-      await expect(
-        requestPluginConversationBinding(bindRequest("channel:worker-reopen")),
-      ).resolves.toMatchObject({ status: "bound" });
+      await expectBound(bindRequest("channel:worker-reopen"));
       sql.expectIdle();
     } finally {
       sql.restore();
@@ -715,9 +701,7 @@ describe("plugin conversation binding approvals", () => {
       try {
         await expectHeld(gate.entered.promise, observed);
         if (stage === "write") {
-          expect((await approveBindingRequest(pending.approvalId, "allow-once")).status).toBe(
-            "expired",
-          );
+          await expectExpired(pending.approvalId);
           expect(sessionBindingState.bind).not.toHaveBeenCalled();
         }
         let finished = false;
@@ -742,9 +726,7 @@ describe("plugin conversation binding approvals", () => {
           gate.spy.mockRestore();
           await closeOpenClawStateDatabaseAsync();
           registerSessionBindingAdapter(createAdapter("discord", "isolated"));
-          await expect(
-            requestPluginConversationBinding(bindRequest("channel:after-reset")),
-          ).resolves.toMatchObject({ status: "bound" });
+          await expectBound(bindRequest("channel:after-reset"));
         }
       } finally {
         gate.release.resolve();

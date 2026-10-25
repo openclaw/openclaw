@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
@@ -72,18 +73,10 @@ function createCapabilityConsentReview(): PluginCapabilityConsentReview {
     name: "Alpha plugin",
     version: "2.0.0",
     source: { kind: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
-    declared: {
-      channels: [],
-      providers: [],
+    declared: createPluginDeclaredSurface({
       tools: ["read", "write"],
       contracts: ["gatewayMethodDispatch: alpha.run"],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    },
+    }),
     grants: {
       hooks: {
         allowPromptInjection: { effective: true },

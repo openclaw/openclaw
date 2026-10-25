@@ -4,6 +4,7 @@ import { buildWidgetDocument } from "../../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
+import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import "../../styles/base.css";
 import "../../styles/chat/board.css";
 import "./board-view.tsx";
@@ -20,28 +21,17 @@ const source: BoardSnapshot = {
     { tabId: "ops", title: "Operations", position: 1, chatDock: "right" },
   ],
   widgets: [
-    {
+    createBoardWidget({
       name: "first",
-      tabId: "main",
       title: "First",
-      contentKind: "html",
-      sizeW: 6,
       sizeH: 3,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    },
-    {
+    }),
+    createBoardWidget({
       name: "second",
-      tabId: "main",
       title: "Second",
-      contentKind: "html",
-      sizeW: 6,
       sizeH: 3,
       position: 1,
-      grantState: "none",
-      revision: 1,
-    },
+    }),
   ],
 };
 
