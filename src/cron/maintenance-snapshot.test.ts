@@ -57,30 +57,27 @@ it.each([
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);
     const cronStorePath = state.statePath("selected-cron/jobs.json");
-    const stale: { sessionKey: string; storePath: string }[] = [];
-    for (const agentId of ["main", "retired"]) {
+    const seedSession = async (agentId: string, jobId = "done-job", sessionId = agentId) => {
       const scope = {
-        sessionKey: `agent:${agentId}:cron:done-job:run:old`,
+        sessionKey: `agent:${agentId}:cron:${jobId}:run:old`,
         storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
       };
-      await replaceSessionEntry(scope, { sessionId: agentId, updatedAt: now - 8 * 86_400_000 });
-      stale.push(scope);
-    }
-    const retiredPath = resolveSqliteTargetFromSessionStorePath(stale[1]!.storePath).path;
+      await replaceSessionEntry(scope, { sessionId, updatedAt: now - 8 * 86_400_000 });
+      return scope;
+    };
+    const healthy = await seedSession("main");
+    const retired = await seedSession("retired");
+    const retiredPath = resolveSqliteTargetFromSessionStorePath(retired.storePath).path;
     // Inspect synthetic persisted bytes without trying to admit a deleted agent for runtime reads.
     const readRetired = () => {
       using database = new DatabaseSync(retiredPath, { readOnly: true });
       return database
         .prepare("SELECT entry_json, archived_at FROM session_nodes WHERE session_key = ?")
-        .get(stale[1]!.sessionKey);
+        .get(retired.sessionKey);
     };
     const retiredBefore = readRetired();
     expect(retiredBefore).toEqual({ entry_json: expect.any(String), archived_at: null });
-    const running = {
-      sessionKey: "agent:main:cron:live-job:run:old",
-      storePath: stale[0]!.storePath,
-    };
-    await replaceSessionEntry(running, { sessionId: "live", updatedAt: now - 8 * 86_400_000 });
+    const running = await seedSession("main", "live-job", "live");
     const job = makeCronReceiptJob("live-job", "main");
     job.state.runningAtMs = now;
     await saveCronStore(cronStorePath, { version: 1, jobs: [job] });
@@ -89,23 +86,19 @@ it.each([
     const resume = createDeferredCore();
     const discover = targets.resolveAllAgentSessionStoreTargetsAsync;
     const discovery = vi.spyOn(targets, "resolveAllAgentSessionStoreTargetsAsync");
+    const pauseAfter = async <T>(result: Promise<T>): Promise<T> => {
+      const value = await result;
+      discovered.resolve();
+      await resume.promise;
+      return value;
+    };
     if (change === "after healthy target") {
       const maintainStore = sessionStores.runSessionRegistryMaintenanceForStore;
       vi.spyOn(sessionStores, "runSessionRegistryMaintenanceForStore").mockImplementationOnce(
-        async (...args) => {
-          const result = await maintainStore(...args);
-          discovered.resolve();
-          await resume.promise;
-          return result;
-        },
+        (...args) => pauseAfter(maintainStore(...args)),
       );
     } else {
-      discovery.mockImplementationOnce(async (...args) => {
-        const result = await discover(...args);
-        discovered.resolve();
-        await resume.promise;
-        return result;
-      });
+      discovery.mockImplementationOnce((...args) => pauseAfter(discover(...args)));
     }
     let sweep: void | Promise<void> = undefined;
     try {
@@ -152,9 +145,9 @@ it.each([
       await sweep;
       // The per-target guard fires before the affected target, not an automatic consumer replay.
       if (change === "after healthy target") {
-        expect(loadSessionEntry(stale[0]!)).toBeUndefined();
+        expect(loadSessionEntry(healthy)).toBeUndefined();
       } else {
-        expect(loadSessionEntry(stale[0]!)).toBeDefined();
+        expect(loadSessionEntry(healthy)).toBeDefined();
       }
       expect(readRetired()).toEqual(retiredBefore);
       expect(logs.warn).toHaveBeenCalledWith("Session registry maintenance deferred", {
@@ -170,15 +163,15 @@ it.each([
         await clock.advanceBy(60_000);
         expect(discovery).toHaveBeenCalledOnce();
         expect(logs.info).not.toHaveBeenCalled();
-        expect(loadSessionEntry(stale[0]!)).toBeDefined();
+        expect(loadSessionEntry(healthy)).toBeDefined();
         expect(readRetired()).toEqual(retiredBefore);
         return;
       }
       await clock.advanceTo(scheduler.nextWakeAtMs!);
       expect(discovery).toHaveBeenCalledTimes(2);
-      expect(loadSessionEntry(stale[0]!)).toBeUndefined();
+      expect(loadSessionEntry(healthy)).toBeUndefined();
       if (change === "registration removal") {
-        expect(loadSessionEntry(stale[1]!)).toBeUndefined();
+        expect(loadSessionEntry(retired)).toBeUndefined();
       } else {
         expect(readRetired()).toEqual(retiredBefore);
       }
