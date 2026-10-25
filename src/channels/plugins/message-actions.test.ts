@@ -44,11 +44,12 @@ function currentContext(
   return { currentChannelProvider, currentChannelId, ...extra };
 }
 
-async function expectAccess(context: Partial<DispatchContext>, allowed = true) {
+async function expectAccess(context: Partial<DispatchContext>, allowed: boolean) {
   if (!allowed) {
     return expectDenied(context);
   }
-  await expect(dispatch(context)).resolves.toMatchObject({ details: { ok: true } });
+  await dispatch(context);
+  expect(handleAction).toHaveBeenCalledOnce();
 }
 
 const nextcloudContext = (
@@ -131,6 +132,29 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(() => {
   setActivePluginRegistry(emptyRegistry);
   vi.restoreAllMocks();
+});
+
+it.each([undefined, "trusted-user"])("gates moderation sender: %s", async (sender) => {
+  register({
+    actions: {
+      describeMessageTool: () => ({ actions: ["kick"] }),
+      supportsAction: ({ action }) => action === "kick",
+      requiresTrustedRequesterSender: ({ action, toolContext }) =>
+        Boolean(action === "kick" && toolContext),
+    },
+  });
+  const pending = dispatch({
+    action: "kick",
+    params: { guildId: "g1", userId: "u1" },
+    requesterSenderId: sender,
+  });
+  if (sender) {
+    await pending;
+    expect(handleAction).toHaveBeenCalledOnce();
+  } else {
+    await expect(pending).rejects.toThrow("Trusted sender identity is required for discord:kick");
+    expect(handleAction).not.toHaveBeenCalled();
+  }
 });
 
 it.each<AccessCase>([
@@ -281,33 +305,48 @@ it("normalizes bundled numeric delivery aliases", async () => {
   registerAlias({ resolveDeliveryTarget }, "bundled", {
     normalizeTarget: (raw) => raw.trim().toLowerCase() || undefined,
   });
-  await expectAccess({
+  await dispatch({
     ...aliasContext,
-    toolContext: currentContext("imessage", "CHAT_ID:42"),
+    toolContext: { currentChannelProvider: "imessage", currentChannelId: "CHAT_ID:42" },
   });
+  expect(resolveDeliveryTarget).toHaveBeenCalledOnce();
+  expect(handleAction).toHaveBeenCalledOnce();
 });
 
 it.each([true, false])("checks synchronous alias proof: %s", async (matches) => {
-  registerAlias({ matchesCurrentConversation: () => matches });
-  await expectAccess(
-    {
-      ...aliasContext,
-      params: { ...aliasContext.params, target: "chat_id:42", to: "chat_id:42" },
-    },
-    matches,
-  );
+  const matchesCurrentConversation = vi.fn(() => matches);
+  registerAlias({ matchesCurrentConversation });
+  const context = {
+    ...aliasContext,
+    params: { ...aliasContext.params, target: "chat_id:42", to: "chat_id:42" },
+  };
+  await expectAccess(context, matches);
+  expect(matchesCurrentConversation).toHaveBeenCalledWith({
+    args: context.params,
+    accountId: "work",
+    toolContext: aliasContext.toolContext,
+  });
 });
 
-it("propagates asynchronous alias failure without synchronous fallback", async () => {
+it.each([true, false, "error"] as const)("awaits alias, never sync: %s", async (outcome) => {
   const fixture = prepareAsyncAlias();
   const pending = dispatch(aliasContext);
   expect(fixture.matchesCurrentConversationAsync).toHaveBeenCalledOnce();
   expect(handleAction).not.toHaveBeenCalled();
-  const expected = expect(pending).rejects.toThrow("proof unavailable");
-  fixture.proof.reject(new Error("proof unavailable"));
+  const expected =
+    outcome === true
+      ? expect(pending).resolves.toMatchObject({ details: { ok: true } })
+      : expect(pending).rejects.toThrow(
+          outcome === "error" ? "proof unavailable" : "exact current conversation",
+        );
+  if (outcome === "error") {
+    fixture.proof.reject(new Error("proof unavailable"));
+  } else {
+    fixture.proof.resolve(outcome);
+  }
   await expected;
   expect(fixture.matchesCurrentConversation).not.toHaveBeenCalled();
-  expect(handleAction).not.toHaveBeenCalled();
+  expect(handleAction).toHaveBeenCalledTimes(outcome === true ? 1 : 0);
 });
 
 it.each<[string, Partial<DispatchContext>]>([

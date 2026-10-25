@@ -17,6 +17,7 @@ import {
   resetDiagnosticSessionStateForTest,
 } from "../logging/diagnostic-session-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
   clearBatchAdmittedToolCallsForRun,
   consumeBatchAdmittedToolCall,
@@ -184,6 +185,31 @@ describe("whole-batch tool-loop admission", () => {
     },
   );
 
+  it("returns bucketed warnings before process reaches a critical loop", async () => {
+    const result = { content: [{ type: "text", text: "unchanged" }], details: {} };
+    for (let index = 0; index < 20; index += 1) {
+      const candidate = call(`repeat-${index}`, "process", pollArgs);
+      const admission = await admitToolCallBatch([candidate], ctx);
+      expect(admission.intervention).toBeUndefined();
+      expect(admission.warnings ?? []).toEqual(
+        index === 10
+          ? [{ kind: "tool-loop-warning", toolCallId: candidate.toolCall.id, count: index }]
+          : [],
+      );
+      commit(admission, candidate);
+      recordOutcome(candidate, result);
+    }
+    expect(
+      events.filter((event) => event.type === "tool.loop" && event.action === "warn"),
+    ).toMatchObject([{ count: 10, agentId: "main" }]);
+    expect(state.toolCallHistory).toHaveLength(20);
+    expect(new Set(state.toolCallHistory?.map((entry) => entry.resultHash)).size).toBe(1);
+    await expectVeto([call("critical", "process", pollArgs)], {
+      detector: "known_poll_no_progress",
+      count: 20,
+    });
+  });
+
   it("records argument-validation failures at launch and escalates their repeats", async () => {
     const skipped = rejectedCall("skipped", "exec");
     const skippedAdmission = await admitToolCallBatch([skipped], ctx);
@@ -211,6 +237,22 @@ describe("whole-batch tool-loop admission", () => {
     });
     expect(warnings).toEqual([{ kind: "tool-loop-warning", toolCallId: "invalid-10", count: 10 }]);
     await expectVeto([rejectedCall("critical", "exec")], {
+      detector: "generic_repeat",
+      count: 20,
+    });
+  });
+
+  it("keeps a terminal exec failure streak across rejected exec calls", async () => {
+    for (let index = 0; index < 20; index += 1) {
+      const job = call(`job-${index}`, "exec", { command: `python job-${index}.py` });
+      const batch = index % 4 === 0 ? [job, rejectedCall(`invalid-${index}`, "exec")] : [job];
+      const admission = await admitToolCallBatch(batch, ctx);
+      expect(admission.intervention).toBeUndefined();
+      commit(admission, ...batch);
+      recordOutcome(job, execFailure);
+    }
+
+    await expectVeto([call("next", "exec", { command: "python next.py" })], {
       detector: "generic_repeat",
       count: 20,
     });
@@ -295,6 +337,24 @@ describe("whole-batch tool-loop admission", () => {
         releaseSkippedCalls: expect.any(Function),
       });
     }
+  });
+
+  it("records an admitted call once and skips only its duplicate single-call loop policy", async () => {
+    const admitted = call("admitted", "read", { path: "/tmp/a" });
+
+    const admission = await admitToolCallBatch([admitted], ctx);
+    commit(admission, admitted);
+    await expect(
+      runBeforeToolCallHook({
+        toolName: admitted.toolCall.name,
+        params: admitted.args,
+        toolCallId: admitted.toolCall.id,
+        ctx,
+      }),
+    ).resolves.toMatchObject({ blocked: false });
+
+    expect(state.toolCallHistory).toHaveLength(1);
+    expect(consumeBatchAdmittedToolCall(admitted.toolCall.id, ctx.runId)).toBe(false);
   });
 
   it("cleans an admitted marker when a run ends before the wrapped tool consumes it", async () => {

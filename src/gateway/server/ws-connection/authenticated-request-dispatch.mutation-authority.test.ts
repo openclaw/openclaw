@@ -1,6 +1,24 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import * as stableJson from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertOperatorModelAllowed } from "../../../agents/admitted-run-context.js";
+import {
+  assertOperatorModelAllowed,
+  readAdmittedRunOperatorAuthority,
+} from "../../../agents/admitted-run-context.js";
+import { prepareChannelRunAdmission } from "../../../auto-reply/reply/channel-run-admission.js";
+import { enqueueFollowupRun, scheduleFollowupDrain } from "../../../auto-reply/reply/queue.js";
+import {
+  createQueueSettings,
+  createQueueTestRun,
+} from "../../../auto-reply/reply/queue.test-helpers.js";
+import {
+  admitFollowupRunLifecycle,
+  completeFollowupRunLifecycle,
+} from "../../../auto-reply/reply/queue/lifecycle.js";
+import {
+  clearFollowupQueue,
+  getExistingFollowupQueue,
+} from "../../../auto-reply/reply/queue/state.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -111,6 +129,44 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("authenticated request mutation custody", () => {
+  it("retains the equivalent committed grant across checks and rejects the next revocation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const email = "retained-policy@example.test";
+      let committedConfig: OpenClawConfig = {
+        gateway: { auth: { identityScopes: { [email]: ["operator.admin"] } } },
+      };
+      setRuntimeConfigSnapshot(committedConfig);
+      const { captures, dispatch } = createCaptureFixture({
+        config: () => committedConfig,
+        profileId: ensureProfileForEmail(email).id,
+        method: "test.retained-policy",
+        policy: { role: "operator", authMethod: "token", verifiedIdentity: email },
+        requireGuard: true,
+      });
+      await dispatch("accepted-policy");
+      const retained = expectDefined(captures.at(-1), "accepted operator source");
+      using _ = { [Symbol.dispose]: retained.release };
+      const stringify = vi.spyOn(stableJson, "stableStringify");
+      try {
+        committedConfig = structuredClone(committedConfig);
+        retained.authority.assertCurrent();
+        stringify.mockClear();
+        retained.authority.assertCurrent();
+        expect(stringify).not.toHaveBeenCalled();
+
+        const acceptedConfig = committedConfig;
+        committedConfig = {
+          gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
+        };
+        expect(retained.authority.assertCurrent).toThrow();
+        committedConfig = acceptedConfig;
+        expect(retained.authority.assertCurrent).toThrow();
+      } finally {
+        stringify.mockRestore();
+      }
+    });
+  });
+
   it("retains the remote grant assertion after accepted work leaves its request", async () => {
     setRuntimeConfigSnapshot({});
     const ingress = new AbortController();
@@ -148,7 +204,7 @@ describe("authenticated request mutation custody", () => {
     }
   });
 
-  it("keeps original wildcard model ceilings separate through WS capture", async () => {
+  it("keeps original wildcard model ceilings separate through WS capture and contiguous collect", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const profile = ensureProfileForEmail("queued-model-ceiling@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -185,11 +241,13 @@ describe("authenticated request mutation custody", () => {
         setRuntimeConfigSnapshot(committedConfig);
         publishOperatorRoleConfigChange(context);
       };
+      const key = "test-ws-original-model-ceilings";
+      const observed: Array<{ prompts: string[] | null; allowsB: boolean }> = [];
+      const failures: unknown[] = [];
       try {
         const wide = await capture("wide-first");
         setPolicy(["fixture/family-*"]);
         const compatible = await capture("wide-second");
-        expect(compatible.source).toBe(wide.source);
         expect(wide.modelPolicy?.models).toEqual([modelA]);
         expect(() => assertOperatorModelAllowed(wide, modelB)).not.toThrow();
         setPolicy(["fixture/family-a"]);
@@ -197,11 +255,62 @@ describe("authenticated request mutation custody", () => {
         setPolicy(["fixture/family-*"]);
         expect(narrow.modelPolicy?.models).toEqual(wide.modelPolicy?.models);
         expect(() => assertOperatorModelAllowed(narrow, modelB)).toThrow("operator role");
-        expect(narrow.source).not.toBe(wide.source);
-      } finally {
+        const runs = [wide, compatible, narrow, wide].map((operatorAuthority, index) => {
+          const run = createQueueTestRun({
+            prompt: `request ${index}`,
+            originatingChannel: "webchat",
+          });
+          run.operatorAuthority = operatorAuthority;
+          run.run.provider = modelA.provider;
+          run.run.model = modelA.model;
+          return run;
+        });
+        for (const run of runs) {
+          expect(enqueueFollowupRun(key, run, createQueueSettings())).toBe(true);
+        }
         for (const retained of captures) {
           retained.release();
         }
+        vi.useFakeTimers();
+        scheduleFollowupDrain(key, async (run) => {
+          const prepared = prepareChannelRunAdmission({
+            cfg: committedConfig,
+            runId: `queued-model-ceiling-${observed.length}`,
+            agentId: "main",
+            ingressKind: "channel",
+            boundary: "auto-reply.agent-runner",
+            operatorAuthority: run.operatorAuthority,
+          });
+          try {
+            await admitFollowupRunLifecycle(run);
+            const admitted = await prepared.admit("embedded");
+            const authority = readAdmittedRunOperatorAuthority(admitted);
+            assertOperatorModelAllowed(authority, modelA);
+            observed.push({
+              prompts: run.prompt.match(/request \d/g),
+              allowsB: authority?.modelPolicy?.allows(modelB) === true,
+            });
+          } catch (error) {
+            failures.push(error);
+          } finally {
+            prepared.close();
+            completeFollowupRunLifecycle(run);
+          }
+        });
+        await vi.runAllTimersAsync();
+        expect(failures).toEqual([]);
+        expect(getExistingFollowupQueue(key)).toBeUndefined();
+        expect(observed).toEqual([
+          { prompts: ["request 0", "request 1"], allowsB: true },
+          { prompts: ["request 2"], allowsB: false },
+          { prompts: ["request 3"], allowsB: true },
+        ]);
+      } finally {
+        clearFollowupQueue(key);
+        for (const retained of captures) {
+          retained.release();
+        }
+        vi.useRealTimers();
       }
     });
   });
@@ -349,9 +458,38 @@ describe("authenticated request mutation custody", () => {
               if (authority.family !== "worker") {
                 throw new Error("WS request lost its worker custody before handler invocation");
               }
-              expect(readGatewayRequestMutationAuthority({ ...options }).family).toBe(
-                "native-compatibility",
-              );
+              const forged = { ...options };
+              const reminted = { ...options };
+              const forgedReader = vi.fn(() => authority);
+              for (const key of Object.getOwnPropertySymbols(options)) {
+                const value = Object.getOwnPropertyDescriptor(options, key)?.value;
+                const Issuer = value.constructor;
+                if (typeof Issuer === "function") {
+                  Object.defineProperty(reminted, key, {
+                    value: new Issuer(reminted, authority),
+                    configurable: true,
+                  });
+                }
+                Object.defineProperty(forged, key, {
+                  value: Object.assign(Object.create(Object.getPrototypeOf(value)), {
+                    read: forgedReader,
+                  }),
+                  configurable: true,
+                });
+              }
+              // Neither ordinary copies nor copied private descriptors transfer invocation custody.
+              for (const copy of [
+                { ...options },
+                Object.assign(Object.create(options), options),
+                Object.defineProperties({}, Object.getOwnPropertyDescriptors(options)),
+                forged,
+                reminted,
+              ]) {
+                expect(readGatewayRequestMutationAuthority(copy).family).toBe(
+                  "native-compatibility",
+                );
+              }
+              expect(forgedReader).not.toHaveBeenCalled();
               inGrant = true;
               authority.assertWorkerCurrent();
               expect(authority.expectedProfileBinding).toBeDefined();
@@ -376,7 +514,13 @@ describe("authenticated request mutation custody", () => {
       },
       client,
     );
-    await gate.during(dispatch, () => {
+    try {
+      await Promise.race([
+        gate.entered,
+        dispatch.then(() => {
+          throw new Error("request returned before reaching its mutation owner");
+        }),
+      ]);
       if (scenario === "transport retirement") {
         connection.abort();
       } else if (scenario === "client invalidated") {
@@ -386,7 +530,10 @@ describe("authenticated request mutation custody", () => {
       } else if (scenario === "policy changed") {
         setRuntimeConfigSnapshot({ gateway: { auth: { allowTailscale: true } } });
       }
-    });
+    } finally {
+      gate.release();
+      await dispatch;
+    }
     expect(grantProfileReads).not.toHaveBeenCalled();
     if (scenario === "transport retirement") {
       expect(grantError).toBeUndefined();

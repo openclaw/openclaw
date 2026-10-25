@@ -28,17 +28,6 @@ function createOutlet(router: TestRouter, context: TestContext): RouterOutletEle
   return mountRouterOutlet({ router, retryContext: context });
 }
 
-function mcpView(teardown: () => Promise<void>) {
-  return (
-    <mcp-app-view
-      ref={(element) => {
-        const target = Object.assign(element, { restartAfterTeardown: vi.fn(), teardown });
-        onTestFinished(registerMcpAppUnmountTarget(target));
-      }}
-    />
-  );
-}
-
 afterEach(() => {
   disposeRouterOutlets();
   disposeRouters();
@@ -68,18 +57,23 @@ describe("openclaw-router-outlet", () => {
       page("next", { renderSolid: () => <p>Next</p> }),
     );
     const outlet = createOutlet(router, context);
-    await router.navigate("page", context);
-    await settleOutlet(outlet);
-    const hosts = outlet.renderedElements?.("openclaw-route-ref-test");
-    expect(hosts).toHaveLength(2);
-    expect(hosts).toContain(native);
-    expect(hosts?.map((host) => host.textContent)).toEqual(["native", "Solid"]);
-    expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBe(native);
+    try {
+      await router.navigate("page", context);
+      await settleOutlet(outlet);
+      const hosts = outlet.renderedElements?.("openclaw-route-ref-test");
+      expect(hosts).toHaveLength(2);
+      expect(hosts).toContain(native);
+      expect(hosts?.map((host) => host.textContent)).toEqual(["native", "Solid"]);
+      expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBe(native);
 
-    await router.navigate("next", context);
-    await settleOutlet(outlet);
-    expect(outlet.renderedElements?.("openclaw-route-ref-test")).toEqual([]);
-    expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBeUndefined();
+      await router.navigate("next", context);
+      await settleOutlet(outlet);
+      expect(outlet.renderedElements?.("openclaw-route-ref-test")).toEqual([]);
+      expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBeUndefined();
+    } finally {
+      outlet.dispose();
+      router.stop();
+    }
   });
 
   it("settles the active route when a parked descendant's update fails", async () => {
@@ -117,6 +111,8 @@ describe("openclaw-router-outlet", () => {
       expect(outlet.textContent).toContain("Current destination");
     } finally {
       childUpdate.resolve(true);
+      outlet.dispose();
+      router.stop();
     }
   });
 
@@ -125,7 +121,15 @@ describe("openclaw-router-outlet", () => {
     const nextData = createDeferredCore<TestData>();
     const OwnedRoute = (props: { label: string }) => (
       <>
-        {mcpView(teardownView)}
+        <mcp-app-view
+          ref={(element) => {
+            const target = Object.assign(element, {
+              restartAfterTeardown: vi.fn(),
+              teardown: teardownView,
+            });
+            onTestFinished(registerMcpAppUnmountTarget(target));
+          }}
+        />
         <div data-testid="owned-route">{props.label}</div>
       </>
     );
@@ -159,6 +163,41 @@ describe("openclaw-router-outlet", () => {
     expect(outlet.querySelector("mcp-app-view")).toBe(appView);
     expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("next");
     expect(teardownView).not.toHaveBeenCalled();
+    outlet.dispose();
+    router.stop();
+  });
+
+  it("replaces the loading skeleton with the resolved route", async () => {
+    const routeModule = createDeferredCore<TestModule>();
+    const context = { label: "loaded" };
+    const router = testRouter(
+      page("page", routeModule.promise, (loadContext) => ({ label: loadContext.label })),
+    );
+    const outlet = createOutlet(router, context);
+    const navigation = router.navigate("page", context);
+
+    await settleOutlet(outlet);
+
+    const loadingState = outlet.querySelector('[role="status"]');
+    expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
+    expect(loadingState?.querySelector(".loading-skeleton")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(loadingState?.getAttribute("aria-busy")).toBeNull();
+    expect(loadingState?.textContent?.trim()).toBe("");
+    expect(outlet.textContent).not.toContain("Loading panel");
+
+    routeModule.resolve({
+      renderSolid: (props) => <div data-testid="route-page">{props.data?.label}</div>,
+    });
+    await navigation;
+    await settleOutlet(outlet);
+
+    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("loaded");
+    expect(outlet.querySelector('[role="status"]')).toBeNull();
+    expect(outlet.querySelector(".loading-skeleton")).toBeNull();
+    outlet.dispose();
+    router.stop();
   });
 
   it.each(["finish", "disconnect"])("settles a retiring MCP route after %s", async (completion) => {
@@ -166,7 +205,15 @@ describe("openclaw-router-outlet", () => {
     const teardownView = vi.fn(() => teardown.promise);
     const RetiringRoute = () => (
       <>
-        {mcpView(teardownView)}
+        <mcp-app-view
+          ref={(element) => {
+            const target = Object.assign(element, {
+              restartAfterTeardown: vi.fn(),
+              teardown: teardownView,
+            });
+            onTestFinished(registerMcpAppUnmountTarget(target));
+          }}
+        />
         <div data-testid="route-page">page</div>
       </>
     );
@@ -180,6 +227,7 @@ describe("openclaw-router-outlet", () => {
     const outlet = createOutlet(router, context);
     await router.navigate("page", context);
     await settleOutlet(outlet);
+
     await router.navigate("next", context);
     await settleOutlet(outlet);
     expect(teardownView).toHaveBeenCalledOnce();
@@ -206,6 +254,50 @@ describe("openclaw-router-outlet", () => {
     teardown.resolve(undefined);
     await expect.poll(() => outlet.querySelector('[data-testid="route-next"]')).not.toBeNull();
     expect(outlet.querySelector("mcp-app-view")).toBeNull();
+    outlet.dispose();
+    router.stop();
+  });
+
+  it("keeps a loaded route visible with an error and retries through the latest context", async () => {
+    const firstLoad = createDeferredCore<TestData>();
+    let loadCount = 0;
+    const router = testRouter(
+      page(
+        "page",
+        {
+          renderSolid: (props) => (
+            <div data-testid="route-page">{props.data?.label ?? "pending"}</div>
+          ),
+        },
+        (context) => {
+          loadCount += 1;
+          return loadCount === 1 ? firstLoad.promise : { label: context.label };
+        },
+      ),
+    );
+    const initialContext = { label: "initial" };
+    const retryContext = { label: "retried" };
+    const outlet = createOutlet(router, initialContext);
+    const navigation = router.navigate("page", initialContext);
+    await settleOutlet(outlet);
+    firstLoad.reject(new Error("load failed"));
+    await expect(navigation).rejects.toThrow("load failed");
+    await settleOutlet(outlet);
+
+    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("pending");
+    expect(outlet.querySelector('[role="alert"]')?.textContent).toContain("load failed");
+
+    outlet.setInputs({ retryContext });
+    await settleOutlet(outlet);
+    outlet.querySelector<HTMLButtonElement>("button")?.click();
+    await expect
+      .poll(() => outlet.querySelector('[data-testid="route-page"]')?.textContent)
+      .toBe("retried");
+
+    expect(loadCount).toBe(2);
+    expect(outlet.querySelector('[role="alert"]')).toBeNull();
+    outlet.dispose();
+    router.stop();
   });
 
   it("keeps asset recovery retryable after the reachability wait expires", async () => {
@@ -255,13 +347,17 @@ describe("openclaw-router-outlet", () => {
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // A failed probe must leave recovery waiting, not retry the retired module.
+    // The gateway restart is what stranded the chunk, so one failed probe must
+    // not end the retry: the click keeps waiting (and shows it) rather than
+    // silently degrading to a revalidation that cannot fix a replaced chunk.
     await vi.advanceTimersByTimeAsync(3_000);
     vi.runAllTicks();
     await settleOutlet(outlet);
     expect(loadCount).toBe(1);
     expect(button?.disabled).toBe(true);
 
+    // Failed asset imports require document recovery; a timed-out probe leaves
+    // the existing error and manual reload available instead of retrying the module.
     await vi.advanceTimersByTimeAsync(35_000);
     vi.runAllTicks();
     await settleOutlet(outlet);
@@ -275,6 +371,8 @@ describe("openclaw-router-outlet", () => {
     await vi.advanceTimersByTimeAsync(0);
     finishProbe?.(new Response(null, { status: 200 }));
     await vi.advanceTimersByTimeAsync(0);
+    outlet.dispose();
+    router.stop();
   });
 
   it("keeps the Reload banner while unsaved work blocks recovery, then reloads when allowed", async () => {
@@ -337,6 +435,8 @@ describe("openclaw-router-outlet", () => {
       expect(moduleLoads).toBe(1);
     } finally {
       releaseGuard();
+      outlet.dispose();
+      router.stop();
     }
   });
 });
