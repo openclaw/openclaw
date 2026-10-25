@@ -35,6 +35,7 @@ import {
   withSessionManagerWriteAssertion,
 } from "./session-manager-write-admission.js";
 import { SessionManager } from "./session-manager.js";
+import { text, toolResult as result } from "./session-message-fixtures.test-support.js";
 
 const authority = { assertCurrent() {}, authorize() {} };
 const bindings: SelectedSessionActorStorageBinding[] = [];
@@ -83,6 +84,24 @@ async function create(name: string) {
   ).toMatchObject({ kind: "committed" });
   return { target, binding, run: <T>(run: () => T) => runWithSessionActorStorage(binding, run) };
 }
+
+async function createManager(name: string) {
+  const fixture = await create(name);
+  return { ...fixture, manager: await SessionManager.openAsync(fixture.target) };
+}
+
+async function appendMessages(manager: SessionManager, messages: unknown[]) {
+  const ids: string[] = [];
+  for (const message of messages) {
+    ids.push(
+      expectDefined(
+        await manager.appendMessageAsync(message as Parameters<SessionManager["appendMessage"]>[0]),
+        "appended entry id",
+      ),
+    );
+  }
+  return ids;
+}
 async function withCommitRevocation(
   target: SessionTranscriptRuntimeTarget,
   operation: (assertCurrent: () => void) => Promise<unknown>,
@@ -105,8 +124,7 @@ function readWatermark(binding: SelectedSessionActorStorageBinding) {
 }
 
 it("persists deduplicated messages, metadata, suffixes, rewrites, branches, and compaction on the memory owner", async () => {
-  const { target } = await create("maintenance");
-  const manager = await SessionManager.openAsync(target);
+  const { target, manager } = await createManager("maintenance");
   const fresh = vi.fn();
   const grant = { beforeFreshMessageCommit: fresh };
   const original = { ...makeUserMessage("original", 1), idempotencyKey: "original:user" };
@@ -119,6 +137,7 @@ it("persists deduplicated messages, metadata, suffixes, rewrites, branches, and 
   await manager.appendLeafControlAsync({ targetId: first.entryId, appendParentId: first.entryId });
   await manager.appendModelChange("synthetic", "model");
   await manager.appendThinkingLevelChange("high");
+  expect((await SessionManager.openAsync(target)).buildSessionContext().thinkingLevel).toBe("high");
   const temporary = await manager.appendCustomEntryAsync("temporary", { exact: "payload" });
   expect(await manager.removeTrailingEntriesAsync((entry) => entry.id === temporary)).toBe(1);
   const rewrite = await manager.prepareTranscriptRewriteAsync();
@@ -131,6 +150,8 @@ it("persists deduplicated messages, metadata, suffixes, rewrites, branches, and 
   expect(manager.getLeafId()).toBe(replacement);
   const branchedId = await manager.createBranchedSession(replacement);
   expect(branchedId).toBe(manager.getSessionId());
+  const next = await manager.appendMessageAsync(makeUserMessage("after branch", 4));
+  expect(manager.getBranch().map((entry) => entry.id)).toEqual([replacement, next]);
   const currentTarget = manager.getSessionTarget()!;
   await withSessionCompactionPersistenceAsync(
     manager,
@@ -201,8 +222,7 @@ it("advances the CLI writer boundary through metadata commits and refuses revoke
 });
 
 it("rolls back fresh-message refusal and checks queued caller authority before mutation", async () => {
-  const { target } = await create("authority");
-  const manager = await SessionManager.openAsync(target);
+  const { target, manager } = await createManager("authority");
   await expect(
     manager.appendMessageAsync(makeUserMessage("refused", 1), {
       beforeFreshMessageCommit() {
@@ -238,8 +258,7 @@ it("rolls back fresh-message refusal and checks queued caller authority before m
 });
 
 it.each(["append", "persist"] as const)("keeps committed %s after revocation", async (method) => {
-  const { target } = await create(`committed-${method}`);
-  const manager = await SessionManager.openAsync(target);
+  const { target, manager } = await createManager(`committed-${method}`);
   await manager.appendCustomEntryAsync("before-revocation");
   await withCommitRevocation(target, (assertCurrent) =>
     withSessionManagerWriteAssertion(manager, assertCurrent, async () => {
@@ -271,47 +290,41 @@ it.each(["append", "persist"] as const)("keeps committed %s after revocation", a
   expect((await SessionManager.openAsync(target)).getEntries()).toEqual(manager.getEntries());
 });
 
-it.each(["registry", "pattern"] as const)(
-  "keeps notes through %s redaction changes",
-  async (policy) => {
-    const { target, binding } = await create(`redaction-${policy}`);
-    const marker = `synthetic-note-${policy}-private-value`;
-    const note = {
-      role: "custom" as const,
-      customType: "fixture:note",
-      content: `Visible ${marker} end`,
-      display: true,
-      timestamp: 1,
-    };
-    const patterns: string[] = [];
-    applyLoggingConfig({ redactPatterns: patterns });
-    let changed = false;
-    const guarded = {
-      ...binding,
-      authority: {
-        assertCurrent() {},
-        authorize(stage: "transaction" | "commit") {
-          if (stage === "commit" && !changed) {
-            changed = true;
-            if (policy === "registry") {
-              registerSecretValueForRedaction(marker);
-            } else {
-              patterns.push(marker);
-            }
-          }
-        },
+it("keeps notes through registry and pattern redaction changes", async () => {
+  const { target, binding } = await create("redaction");
+  const marker = "synthetic-note-private-value";
+  const note = {
+    role: "custom" as const,
+    customType: "fixture:note",
+    content: `Visible ${marker} end`,
+    display: true,
+    timestamp: 1,
+  };
+  const patterns: string[] = [];
+  applyLoggingConfig({ redactPatterns: patterns });
+  let changed = false;
+  const guarded = {
+    ...binding,
+    authority: {
+      assertCurrent() {},
+      authorize(stage: "transaction" | "commit") {
+        if (stage === "commit" && !changed) {
+          changed = true;
+          registerSecretValueForRedaction(marker);
+          patterns.push(marker);
+        }
       },
-    };
-    const committed = await runWithSessionActorStorage(guarded, () =>
-      appendSessionTranscriptNote(target, note),
-    );
-    expect(changed).toBe(true);
-    const reopened = await SessionManager.openAsync(target);
-    expect(reopened.getEntries()).toHaveLength(1);
-    expect(reopened.getEntry(committed.messageId)).toMatchObject({ message: committed.message });
-    expect(committed.message).toEqual(note);
-  },
-);
+    },
+  };
+  const committed = await runWithSessionActorStorage(guarded, () =>
+    appendSessionTranscriptNote(target, note),
+  );
+  expect(changed).toBe(true);
+  const reopened = await SessionManager.openAsync(target);
+  expect(reopened.getEntries()).toHaveLength(1);
+  expect(reopened.getEntry(committed.messageId)).toMatchObject({ message: committed.message });
+  expect(committed.message).toEqual(note);
+});
 
 it("retains the static-note receipt after acknowledged caller authority loss", async () => {
   const { target } = await create("static-receipt");
@@ -334,8 +347,7 @@ it("retains the static-note receipt after acknowledged caller authority loss", a
 });
 
 it("keeps acknowledged rewrite payloads out of error diagnostics", async () => {
-  const { target } = await create("private-rewrite");
-  const manager = await SessionManager.openAsync(target);
+  const { target, manager } = await createManager("private-rewrite");
   const source = await manager.appendMessageAsync(makeUserMessage("original", 1));
   const rewrite = await manager.prepareTranscriptRewriteAsync();
   await rewrite.sessionManager.resetLeafAsync();
@@ -357,8 +369,7 @@ it("keeps acknowledged rewrite payloads out of error diagnostics", async () => {
 });
 
 it("refuses synchronous SDK writes before view mutation or tool-result hooks", async () => {
-  const { target } = await create("sync-preflight");
-  const manager = await SessionManager.openAsync(target);
+  const { target, manager } = await createManager("sync-preflight");
   const id = await manager.appendMessageAsync(makeUserMessage("unchanged", 1));
   const before = structuredClone(manager.getEntries());
   const beforeTarget = manager.getSessionTarget();
@@ -417,37 +428,26 @@ const toolCall = {
   stopReason: "toolUse",
   timestamp: 2,
 };
-const toolResult = (toolCallId: string, text: string) => ({
-  role: "toolResult",
-  toolCallId,
-  toolName: "read",
-  content: [{ type: "text", text }],
-  isError: false,
-  timestamp: 3,
-});
-const answer = (text: string, timestamp: number) => ({
+const toolResult = (toolCallId: string, value: string) => result(value, toolCallId, 3);
+const answer = (value: string, timestamp: number) => ({
   role: "assistant",
-  content: [{ type: "text", text }],
+  content: text(value),
   timestamp,
 });
 
 it("drains incognito reset windows with retained tool pairs and reports later resets", async () => {
-  const { target } = await create("reset-window");
-  const manager = await SessionManager.openAsync(target);
-  const append = async (message: unknown) =>
-    expectDefined(
-      await manager.appendMessageAsync(message as Parameters<SessionManager["appendMessage"]>[0]),
-      "appended entry id",
-    );
-  const oldUser = await append(makeUserMessage("old question", 1));
-  const oldAnswer = await append(answer("old answer", 1));
-  const kept = await append(makeUserMessage("read the file", 2));
-  const call = await append(toolCall);
-  const paired = await append(toolResult("call_1", "paired"));
-  const orphan = await append(toolResult("orphan-call", "orphan"));
-  const summary = await append(answer("summary", 4));
+  const { target, manager } = await createManager("reset-window");
+  const [oldUser, oldAnswer, kept, call, paired, orphan, summary] = await appendMessages(manager, [
+    makeUserMessage("old question", 1),
+    answer("old answer", 1),
+    makeUserMessage("read the file", 2),
+    toolCall,
+    toolResult("call_1", "paired"),
+    toolResult("orphan-call", "orphan"),
+    answer("summary", 4),
+  ]);
   await manager.appendResetBoundaryAsync("idle", kept);
-  const current = await append(makeUserMessage("current question", 5));
+  const [current] = await appendMessages(manager, [makeUserMessage("current question", 5)]);
 
   // The default start is unchanged and still includes pre-reset history.
   await expect(drainVisible({ ...target, maxMessages: 3 })).resolves.toMatchObject({
@@ -458,7 +458,7 @@ it("drains incognito reset windows with retained tool pairs and reports later re
   expect(windowed.ids).toEqual([kept, call, paired, summary, current]);
 
   await manager.appendResetBoundaryAsync("reset");
-  const fresh = await append(makeUserMessage("fresh question", 6));
+  const [fresh] = await appendMessages(manager, [makeUserMessage("fresh question", 6)]);
   await expect(
     drainVisible({ ...target, cursor: windowed.cursor, start: "reset-window" }),
   ).resolves.toMatchObject({ ids: [], reset: "session_reset" });
@@ -468,23 +468,13 @@ it("drains incognito reset windows with retained tool pairs and reports later re
 });
 
 it("records the replaced entry id on repeated incognito rewrites", async () => {
-  const { target } = await create("rewrite-markers");
-  const manager = await SessionManager.openAsync(target);
-  const ids: string[] = [];
-  for (const message of [
+  const { target, manager } = await createManager("rewrite-markers");
+  const [userId, callId, toolId, tailId] = await appendMessages(manager, [
     makeUserMessage("read file", 1),
     toolCall,
     toolResult("call_1", "large original result"),
     answer("summary", 4),
-  ]) {
-    ids.push(
-      expectDefined(
-        await manager.appendMessageAsync(message as Parameters<SessionManager["appendMessage"]>[0]),
-        "appended entry id",
-      ),
-    );
-  }
-  const [userId, callId, toolId, tailId] = ids;
+  ]);
   const markers = async () => {
     const visible = await readVisibleSessionTranscriptMessageEntries(target);
     const delta = await drainVisible(target);
@@ -492,39 +482,31 @@ it("records the replaced entry id on repeated incognito rewrites", async () => {
     expect(delta.ids).toEqual(visible.map((entry) => entry.entryId));
     return visible.map((entry) => [entry.entryId, entry.supersedesEntryId]);
   };
-  const rewriteTool = async (sessionManager: SessionManager, entryId: string, text: string) => {
+  const rewriteTool = async (sessionManager: SessionManager, entryId: string, value: string) => {
     await rewriteTranscriptEntriesInSessionManager({
       sessionManager,
-      replacements: [{ entryId, message: toolResult("call_1", text) as never }],
+      replacements: [{ entryId, message: toolResult("call_1", value) as never }],
     });
     return sessionManager
       .getBranch()
       .slice(2)
       .map((entry) => entry.id);
   };
-  const [toolCopy, tailCopy] = await rewriteTool(
-    manager,
-    expectDefined(toolId, "tool id"),
-    "short",
-  );
-  await expect(markers()).resolves.toEqual([
-    [userId, undefined],
-    [callId, undefined],
-    [toolCopy, toolId],
-    [tailCopy, tailId],
-  ]);
-
-  // A reopened view matches its committed rows, so a later rewrite chains from the copy.
-  const reopened = await SessionManager.openAsync(target);
-  const [toolSecond, tailSecond] = await rewriteTool(
-    reopened,
-    expectDefined(toolCopy, "copy id"),
-    "shorter",
-  );
-  await expect(markers()).resolves.toEqual([
-    [userId, undefined],
-    [callId, undefined],
-    [toolSecond, toolCopy],
-    [tailSecond, tailCopy],
-  ]);
+  let previousTool = toolId;
+  let previousTail = tailId;
+  for (const value of ["short", "shorter"]) {
+    const current = value === "short" ? manager : await SessionManager.openAsync(target);
+    const [nextTool, nextTail] = await rewriteTool(
+      current,
+      expectDefined(previousTool, "tool id"),
+      value,
+    );
+    await expect(markers()).resolves.toEqual([
+      [userId, undefined],
+      [callId, undefined],
+      [nextTool, previousTool],
+      [nextTail, previousTail],
+    ]);
+    [previousTool, previousTail] = [nextTool, nextTail];
+  }
 });
