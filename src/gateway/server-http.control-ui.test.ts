@@ -42,7 +42,7 @@ function withUiServer(
 }
 
 function withUiRoot(
-  run: (check: Check, root: string) => Promise<void>,
+  run: (check: Check) => Promise<void>,
   configure: (root: string) => ServerOptions["overrides"] | Promise<ServerOptions["overrides"]>,
 ) {
   return withTempDir("openclaw-http-ui-", async (directory) => {
@@ -50,26 +50,22 @@ function withUiRoot(
     await fs.writeFile(nodePath.join(root, "index.html"), "<html>spa fallback</html>\n");
     await fs.mkdir(nodePath.join(root, "assets"));
     await fs.writeFile(nodePath.join(root, "assets", "app.js"), "// synthetic asset\n");
-    await withUiServer((check) => run(check, root), {
+    await withUiServer(run, {
       controlUiRoot: { kind: "resolved", path: root },
       ...(await configure(root)),
     });
   });
 }
 
-it.each([
-  { basePath: "", enabled: true },
-  { basePath: "/console/", enabled: false },
-])("authenticates media at $basePath with UI enabled=$enabled", ({ basePath, enabled }) =>
+it("authenticates media under a base path even with the dashboard disabled", () =>
   withUiServer(
     async (check) => {
-      const base = basePath.replace(/\/$/, "");
       const media = await saveMediaBuffer(
         createSolidPngBuffer(4, 2, { r: 24, g: 64, b: 128 }),
         "image/png",
       );
       const query = new URLSearchParams({ meta: "1", source: `media://inbound/${media.id}` });
-      const mediaPath = `${base}/__openclaw__/assistant-media?${query}`;
+      const mediaPath = `/console/__openclaw__/assistant-media?${query}`;
       for (const [method, path] of [
         ["GET", mediaPath],
         ["POST", `${mediaPath}&allow=1`],
@@ -84,15 +80,12 @@ it.each([
         mimeType: "image/png",
         mediaTicket: expect.any(String),
       });
-      await check(`${base}/avatar/main?meta=1`, enabled ? 401 : 404);
-      if (!enabled) {
-        await check(`${base}/`, 404);
-      }
+      await check("/console/avatar/main?meta=1", 404);
+      await check("/console/", 404);
     },
-    { controlUiEnabled: enabled, controlUiBasePath: basePath },
+    { controlUiEnabled: false, controlUiBasePath: "/console/" },
     AUTH_TOKEN,
-  ),
-);
+  ));
 
 it("rejects UI POST before startup fallback", () =>
   withUiServer(

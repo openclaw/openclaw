@@ -10,17 +10,20 @@ import { createSessionObserverCompletion } from "./session-observer-completion.j
 import type { defaultCompleteModel } from "./session-observer-model.js";
 import { observerState } from "./session-observer-state.test-support.js";
 import {
-  createHarness,
+  advanceAndFlush as advance,
+  expectBroadcast,
+  useObserverSuite,
+} from "./session-observer-suite.test-support.js";
+import {
   event,
-  flushObserver,
   modelMessage,
   preparedModel,
-  resetSessionObserverEventSequence,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
 
+const { createHarness } = useObserverSuite();
+
 beforeEach(() => {
-  vi.useFakeTimers();
   setGatewayPluginMetadataSnapshot(
     createPluginMetadataSnapshotFixture({
       plugins: [
@@ -36,21 +39,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
-  resetSessionObserverEventSequence();
   resetSecretRedactionRegistryForTest();
   setCurrentPluginMetadataSnapshot(undefined);
 });
 
-async function advance(ms: number) {
-  await vi.advanceTimersByTimeAsync(ms);
-  await flushObserver();
-}
-
 it.each(["exact tool cap", "invalid schema", "manifest alias"])(
   "warns once when %s failures disable observation, and retries on the next run",
   async (failure) => {
-    vi.setSystemTime(0);
     const notices: AgentEventPayload[] = [];
     const unsubscribe = onAgentEvent((evt) => {
       if (evt.stream === "notice") {
@@ -121,12 +116,7 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
       );
       await startAndAddToolNotes(harness.observer, { runId: "run-2" });
       await advance(12_000);
-      expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-        "session.observer",
-        expect.objectContaining({ runId: "run-2", headline: "Working" }),
-        expect.any(Set),
-        expect.anything(),
-      );
+      expectBroadcast(harness, { runId: "run-2", headline: "Working" });
       expect(notices).toHaveLength(1);
     } finally {
       unsubscribe();
@@ -188,7 +178,6 @@ it("reports a redacted, collapsed, bounded prefix of the last of two rejected re
 });
 
 it("publishes a digest from a utility model that answers after 15s", async () => {
-  vi.setSystemTime(0);
   const completeModel = completionAfter(15_000);
   const harness = createHarness({ completeModel });
   await startAndAddToolNotes(harness.observer);
@@ -198,17 +187,10 @@ it("publishes a digest from a utility model that answers after 15s", async () =>
   await advance(15_000);
 
   expect(completeModel.mock.calls[0]?.[0].abortSignal?.aborted).toBe(false);
-  expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-    "session.observer",
-    expect.objectContaining({ headline: "Working", health: "on-track" }),
-    expect.any(Set),
-    expect.anything(),
-  );
-  await harness.observer.disposeAsync();
+  expectBroadcast(harness, { headline: "Working", health: "on-track" });
 });
 
 it("aborts stuck completions at the cap and disables the run after two failures", async () => {
-  vi.setSystemTime(0);
   const completeModel = completionAfter();
   const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
   const harness = createHarness({ completeModel });
@@ -224,5 +206,4 @@ it("aborts stuck completions at the cap and disables the run after two failures"
   await advance(60_000);
   expect(completeModel).toHaveBeenCalledTimes(2);
   expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
-  await harness.observer.disposeAsync();
 });

@@ -53,67 +53,60 @@ function countStatements<Key extends string>(key: Key, matches: (sql: string) =>
   return Object.assign(counter, { [Symbol.dispose]: counter.restore });
 }
 
-async function replayFixture(kind: "shared" | "repository") {
-  const db = database();
-  const workspace = kind === "repository" ? await sharedRepositoryWorkspace() : undefined;
-  const row = workspace && repositoryReceipt(workspace);
-  const id = row?.request_id ?? "inserted";
-  return {
-    db,
-    id,
-    initial: row ?? expect.objectContaining({ request_id: id, status: "requested" }),
-    retained: row ? { title: null } : { branch: BRANCH },
-    table: row
-      ? /\bfrom "github_repository_publication_requests"/
-      : /\bfrom "github_publication_(?:requests|session_lifecycles)"/,
-    insert: (requestId: string, mismatch = false) =>
-      workspace
-        ? insertRepository(
-            repositoryReceipt(workspace, {
-              request_id: requestId,
-              ...(mismatch ? { title: "Different request" } : {}),
-            }),
-            () => {},
-          )
-        : insertSharedWorktreeReceipt(requestId, {
-            idempotencyKey: "same-request",
-            ...(mismatch ? { branch: "different-branch" } : {}),
-          }),
-    read: () => (row ? readRepository(id) : readGitHubPublicationRequest(db, { requestId: id })),
-    claim: () =>
-      row
-        ? claimRepository(row, "publisher", { assertCurrent() {}, assertCustody() {} })
-        : claimExecution(id, "publisher"),
-  };
-}
-
 describe("publication SQLite materialization", () => {
   it.each(["shared", "repository"] as const)(
     "materializes %s without rereads and preserves replay",
     async (kind) => {
-      const f = await replayFixture(kind);
-      let inserted: ReturnType<typeof f.insert>;
+      const db = database();
+      const workspace = kind === "repository" ? await sharedRepositoryWorkspace() : undefined;
+      const row = workspace && repositoryReceipt(workspace);
+      const id = row?.request_id ?? "inserted";
+      const insert = (requestId: string, mismatch = false) =>
+        workspace
+          ? insertRepository(
+              repositoryReceipt(workspace, {
+                request_id: requestId,
+                ...(mismatch ? { title: "Different request" } : {}),
+              }),
+              () => {},
+            )
+          : insertSharedWorktreeReceipt(requestId, {
+              idempotencyKey: "same-request",
+              ...(mismatch ? { branch: "different-branch" } : {}),
+            });
+      const read = () =>
+        row ? readRepository(id) : readGitHubPublicationRequest(db, { requestId: id });
+      const table = row
+        ? /\bfrom "github_repository_publication_requests"/
+        : /\bfrom "github_publication_(?:requests|session_lifecycles)"/;
+      let inserted: ReturnType<typeof insert>;
       {
         using counter = countStatements(
           "rereads",
-          (sql) => /^select\b/i.test(sql) && f.table.test(sql),
+          (sql) => /^select\b/i.test(sql) && table.test(sql),
         );
-        inserted = f.insert(f.id);
-        expect(inserted).toEqual(f.initial);
+        inserted = insert(id);
+        expect(inserted).toEqual(
+          row ?? expect.objectContaining({ request_id: id, status: "requested" }),
+        );
         expect(counter.counts.rereads).toBe(0);
       }
-      expect(f.read()).toEqual(inserted);
-      f.claim();
-      expect(f.insert("replayed")).toMatchObject({
-        request_id: f.id,
+      expect(read()).toEqual(inserted);
+      if (row) {
+        claimRepository(row, "publisher", { assertCurrent() {}, assertCustody() {} });
+      } else {
+        claimExecution(id, "publisher");
+      }
+      expect(insert("replayed")).toMatchObject({
+        request_id: id,
         status: "publishing",
         gateway_instance_id: "publisher",
       });
-      expect(() => f.insert("mismatched", true)).toThrow("idempotency key was reused");
-      expect(f.read()).toMatchObject({
-        request_id: f.id,
+      expect(() => insert("mismatched", true)).toThrow("idempotency key was reused");
+      expect(read()).toMatchObject({
+        request_id: id,
         status: "publishing",
-        ...f.retained,
+        ...(row ? { title: null } : { branch: BRANCH }),
       });
     },
   );
