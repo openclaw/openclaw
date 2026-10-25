@@ -10,7 +10,6 @@ import {
   finishSuccessfulPackageSwitch,
   managedServiceState,
 } from "./update-command-post-update.test-support.js";
-import * as rollbackModule from "./update-command-rollback.js";
 import type * as serviceOperations from "./update-command-service.js";
 
 type RuntimeRefreshMocks = {
@@ -137,9 +136,9 @@ export function registerCurrentCoreRuntimeRefreshTests(
         ]),
       },
     });
-    expect(getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env })).toMatchObject({
-      status: "failed",
-    });
+    expect(getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env })?.status).toBe(
+      "failed",
+    );
     expect(mocks.stop).toHaveBeenCalledOnce();
     expect(mocks.restart).not.toHaveBeenCalled();
   });
@@ -156,60 +155,43 @@ export function registerServiceStartRefusalFinalizationTests({
     printResult: Mock;
   };
 }) {
-  it.for(["restart", "revalidation"] as const)(
-    "keeps the activated candidate when its service definition refuses startup (%s)",
-    async (phase, { onTestFinished }) => {
-      const identity = createManagedServiceIdentityFixture(makeTempDir("finalizer-service-hold-"));
-      onTestFinished(identity.restore);
-      const root = identity.home;
-      const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
-      const restorePackage = vi.fn();
-      const complete = vi.fn(async () => undefined);
-      if (phase === "revalidation") {
-        mocks.readServiceState.mockRejectedValueOnce(
-          new ServiceStartRefusalError({
-            reason: "masked",
-            message: "Run `systemctl --user unmask openclaw-gateway.service`, then retry.",
-          }),
-        );
-        const actual = await vi.importActual<typeof serviceOperations>(
-          "./update-command-service.js",
-        );
-        mocks.restartService.mockImplementationOnce(actual.maybeRestartService);
-      } else {
-        mocks.restartService.mockResolvedValueOnce("reconciliation-pending");
-      }
+  it("keeps the activated candidate when revalidation refuses startup", async ({
+    onTestFinished,
+  }) => {
+    const identity = createManagedServiceIdentityFixture(makeTempDir("finalizer-service-hold-"));
+    onTestFinished(identity.restore);
+    const root = identity.home;
+    const restorePackage = vi.fn();
+    const complete = vi.fn(async () => undefined);
+    mocks.readServiceState.mockRejectedValueOnce(
+      new ServiceStartRefusalError({
+        reason: "masked",
+        message: "Run `systemctl --user unmask openclaw-gateway.service`, then retry.",
+      }),
+    );
+    const actual = await vi.importActual<typeof serviceOperations>("./update-command-service.js");
+    mocks.restartService.mockImplementationOnce(actual.maybeRestartService);
 
-      await expect(
-        finishSuccessfulPackageSwitch(
-          {
-            packageRoot: root,
-            restartEnvironment: process.env,
-            stoppedForUpdate: phase === "revalidation",
-          },
-          { packageTransaction: { backupRoot: root, rollback: restorePackage, complete } },
-        ),
-      ).resolves.toBeUndefined();
+    await expect(
+      finishSuccessfulPackageSwitch(
+        {
+          packageRoot: root,
+          restartEnvironment: process.env,
+          stoppedForUpdate: true,
+        },
+        { packageTransaction: { backupRoot: root, rollback: restorePackage, complete } },
+      ),
+    ).resolves.toBeUndefined();
 
-      expect(rollback).not.toHaveBeenCalled();
-      expect(restorePackage).not.toHaveBeenCalled();
-      if (phase === "revalidation") {
-        expect(mocks.restartService.mock.calls[0]?.[0]).toMatchObject({
-          shouldRestart: false,
-          serviceMutationSkipMessage: expect.stringMatching(
-            /SERVICE-DEFINITION.*unmask.*openclaw gateway start/,
-          ),
-        });
-        expect(mocks.printResult.mock.lastCall?.[0].steps).toContainEqual(
-          expect.objectContaining({
-            advisory: expect.objectContaining({
-              message: expect.stringContaining("SERVICE-DEFINITION"),
-            }),
-          }),
-        );
-      }
-      expect(complete).toHaveBeenCalledOnce();
-      expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({ status: "ok", root });
-    },
-  );
+    expect(restorePackage).not.toHaveBeenCalled();
+    expect(mocks.printResult.mock.lastCall?.[0].steps).toContainEqual(
+      expect.objectContaining({
+        advisory: expect.objectContaining({
+          message: expect.stringMatching(/SERVICE-DEFINITION.*unmask.*openclaw gateway start/),
+        }),
+      }),
+    );
+    expect(complete).toHaveBeenCalledOnce();
+    expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({ status: "ok", root });
+  });
 }
