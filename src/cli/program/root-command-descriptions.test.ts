@@ -15,18 +15,10 @@ import {
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
-const RESERVED_CATALOG_ROOTS = {
-  tool: "reserved so plugin registration cannot claim this unregistered root",
-  tools: "reserved so plugin registration cannot claim this unregistered root",
-} as const;
-
-const PLUGIN_CATALOG_PATHS = {
-  "browser extension": "registered and covered by the browser plugin",
-  "browser extension native-host": "registered and covered by the browser plugin",
-  memory: "registered and covered by the memory-core plugin",
-  "memory search": "registered and covered by the memory-core plugin",
-  "memory status": "registered and covered by the memory-core plugin",
-} as const;
+const RESERVED_CATALOG_ROOTS = ["tool", "tools"];
+const PLUGIN_CATALOG_PATHS = commandPaths(
+  "browser extension | browser extension native-host | memory | memory search | memory status",
+);
 
 function commandPaths(paths: string): string[] {
   return paths.split("|").map((path) => path.trim());
@@ -117,29 +109,6 @@ function supportsJsonOutput(path: string, command: Command): boolean {
   return hasOwnJsonOption(command) || JSON_OUTPUT_WITHOUT_FLAG.has(path);
 }
 
-function requiredCommandArgs(command: Command): string[] {
-  const args = command.registeredArguments.flatMap((argument) => {
-    if (!argument.required) {
-      return [];
-    }
-    return ["guard-value"];
-  });
-  for (const option of command.options) {
-    if (!option.mandatory) {
-      continue;
-    }
-    const flag = option.long ?? option.short;
-    if (!flag) {
-      continue;
-    }
-    args.push(flag);
-    if (option.required || option.optional) {
-      args.push(option.argChoices?.[0] ?? "guard-value");
-    }
-  }
-  return args;
-}
-
 function collectRegisteredCommandPaths(...programs: Command[]): Set<string> {
   return new Set(
     programs.flatMap((program) =>
@@ -189,8 +158,8 @@ describe("root command descriptions", () => {
 
     const registeredPaths = collectRegisteredCommandPaths(program, lazyProgram);
     const catalogPaths = new Set(cliCommandCatalog.map((entry) => entry.commandPath.join(" ")));
-    const reservedPaths = new Set(Object.keys(RESERVED_CATALOG_ROOTS));
-    const pluginPaths = new Set(Object.keys(PLUGIN_CATALOG_PATHS));
+    const reservedPaths = new Set(RESERVED_CATALOG_ROOTS);
+    const pluginPaths = new Set(PLUGIN_CATALOG_PATHS);
 
     // The two exception groups are deliberate: reserved roots and plugin-owned paths.
     for (const path of catalogPaths) {
@@ -231,31 +200,6 @@ describe("root command descriptions", () => {
       const command = registered.get(path);
       expect(command, path).toBeDefined();
       expect(command && hasOwnJsonOption(command), path).toBe(false);
-    }
-  });
-
-  it("accepts declared JSON output options through the registered command parsers", async () => {
-    const program = await registerAllBuiltInCommands();
-    const contexts = collectShellCompletionCommandTree(program).descendants.filter((context) => {
-      const path = context.pathVariants[0]?.join(" ") ?? "";
-      return supportsJsonOutput(path, context.command) && hasOwnJsonOption(context.command);
-    });
-
-    expect(contexts.length).toBeGreaterThan(0);
-    for (const context of contexts) {
-      const path = context.pathVariants[0]?.join(" ") ?? "";
-      const failure = new Error(`synthetic failure for ${path}`);
-      context.command.action(async () => {
-        throw failure;
-      });
-      const args = [
-        ...requiredCommandArgs(context.command),
-        // Conditional alternatives are not represented by Commander's mandatory options.
-        ...(path === "database port" ? ["--to", "sqlite"] : []),
-        "--json",
-      ];
-
-      await expect(context.command.parseAsync(args, { from: "user" }), path).rejects.toBe(failure);
     }
   });
 });

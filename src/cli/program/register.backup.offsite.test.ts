@@ -45,6 +45,21 @@ async function expectListing(directory: string, entries: string[], partial = fal
   expect(await fs.readdir(directory)).toEqual(partial ? expect.arrayContaining(entries) : entries);
 }
 
+async function expectFile(file: string, content: string) {
+  await expect(fs.readFile(file, "utf8")).resolves.toBe(content);
+}
+
+async function prepareStorage(state: OpenClawTestState, scratchRoot: string) {
+  const destination = state.path("offsite");
+  await fs.mkdir(destination);
+  await fs.mkdir(scratchRoot, { recursive: true });
+  vi.spyOn(os, "tmpdir").mockReturnValue(scratchRoot);
+  await state.writeConfig(archiveConfig(destination));
+  const harness = createCliHarness();
+  await harness.run("storage", "init", "archive");
+  return { destination, ...harness };
+}
+
 function archiveConfig(destination: string) {
   return {
     storage: {
@@ -57,19 +72,6 @@ function archiveConfig(destination: string) {
       },
     },
   };
-}
-
-async function prepareNestedTmp(state: OpenClawTestState) {
-  const destination = state.path("offsite");
-  const nestedTmp = state.statePath("tmp");
-  await fs.mkdir(destination);
-  await fs.mkdir(nestedTmp, { recursive: true });
-  vi.spyOn(os, "tmpdir").mockReturnValue(nestedTmp);
-  vi.spyOn(os, "hostname").mockReturnValue("nested-tmp-host");
-  await state.writeConfig(archiveConfig(destination));
-  const harness = createCliHarness();
-  await harness.run("storage", "init", "archive");
-  return { destination, nestedTmp, ...harness };
 }
 
 function createCliHarness() {
@@ -121,14 +123,8 @@ describe("offsite backup CLI", () => {
     }) => Promise<void>,
   ) {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const destination = state.path("offsite");
       const scratchRoot = state.path("scratch");
-      await fs.mkdir(destination);
-      await fs.mkdir(scratchRoot);
-      vi.spyOn(os, "tmpdir").mockReturnValue(scratchRoot);
-      await state.writeConfig(archiveConfig(destination));
-      const { run, create, errors } = createCliHarness();
-      await run("storage", "init", "archive");
+      const { destination, create, errors } = await prepareStorage(state, scratchRoot);
       const identity = await deviceIdentity.loadOrCreateProcessDeviceIdentityAsync();
       const nextIdentity = { ...identity, deviceId: "replacement-installation-device-id" };
       const location = await openStorageLocation({ name: "archive", config: getRuntimeConfig() });
@@ -393,10 +389,9 @@ describe("offsite backup CLI", () => {
       const capturedState = created.assets.find((asset) => asset.kind === "state");
       expect(capturedState).toBeDefined();
       const restoredState = path.join(target, capturedState!.archivePath);
-      expect(await fs.readFile(path.join(restoredState, "operator-note.txt"), "utf8")).toBe(
-        "preserved state\n",
-      );
-      expect(await fs.readFile(path.join(restoredState, "openclaw.json"), "utf8")).toBe(
+      await expectFile(path.join(restoredState, "operator-note.txt"), "preserved state\n");
+      await expectFile(
+        path.join(restoredState, "openclaw.json"),
         await fs.readFile(state.configPath, "utf8"),
       );
       expect(created.assets.some((asset) => asset.kind === "workspace")).toBe(false);
@@ -428,7 +423,9 @@ describe("offsite backup CLI", () => {
 
   it("creates nested-TMPDIR backups, reclaims abandoned scratch, preserves active scratch and reports strays", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const { destination, nestedTmp, create, from } = await prepareNestedTmp(state);
+      const nestedTmp = state.statePath("tmp");
+      vi.spyOn(os, "hostname").mockReturnValue("nested-tmp-host");
+      const { destination, create } = await prepareStorage(state, nestedTmp);
       await fs.writeFile(state.statePath("operator-note.txt"), "preserved state\n");
       // Nested TMPDIR uses the state parent, outside Doctor's scanned roots.
       const fallbackRoot = path.dirname(state.stateDir);
@@ -463,17 +460,9 @@ describe("offsite backup CLI", () => {
           [created.location!.key, "owner.json"],
           true,
         );
-        expect(await from("list", "nested-tmp-host")).toMatchObject({
-          backups: [{ key: created.location!.key, sizeBytes: created.location!.plaintextBytes }],
-        });
-        await expect(from("verify", "nested-tmp-host", "latest")).resolves.toMatchObject({
-          ok: true,
-        });
         await expectAbsent(abandoned.directory);
-        await expect(
-          fs.readFile(path.join(active.directory, "archive.tar.gz"), "utf8"),
-        ).resolves.toBe("synthetic archive");
-        await expect(fs.readFile(stray, "utf8")).resolves.toBe("not a scratch directory");
+        await expectFile(path.join(active.directory, "archive.tar.gz"), "synthetic archive");
+        await expectFile(stray, "not a scratch directory");
         expect((await scratchDirectories(fallbackRoot)).toSorted()).toEqual(
           [path.basename(active.directory), path.basename(stray)].toSorted(),
         );

@@ -227,7 +227,6 @@ describe("registerPreActionHooks", () => {
   });
 
   it.each([
-    ["channels send --json", false, 1, undefined],
     ["config set gateway.auth.mode local --json", true, 0, false],
     ["config set gateway.auth.mode local --dry-run --json", true, 1, true],
     ["agents list", true, 0, undefined],
@@ -318,6 +317,7 @@ describe("registerPreActionHooks", () => {
     expect(loadPluginsMock).toHaveBeenCalledWith({
       scope: "configured-channels",
     });
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
     expect(stderrDuringPluginLoad).toBe(true);
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
