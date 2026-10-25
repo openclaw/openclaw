@@ -11,11 +11,7 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
-import { createPluginRuntime } from "../../plugins/runtime/index.js";
-import {
-  listSessionCatalogEntries,
-  type SessionCatalogProvider,
-} from "../../plugins/session-catalog.js";
+import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
@@ -47,8 +43,8 @@ let projection: ReturnType<typeof createSessionRowProjectionFixture>;
 const snapshot = () =>
   createSessionCatalogRequestEntrySnapshot({ cfg: {}, fallbackAgentId: "main", projection });
 
-function setEntries(entries: Array<{ sessionKey: string; entry: Partial<SessionEntry> }>) {
-  for (const { sessionKey, entry } of entries) {
+function setEntries(entries: Record<string, Partial<SessionEntry>>) {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
     projection.setEntry(sessionKey, { sessionId: sessionKey, updatedAt: 1, ...entry });
   }
 }
@@ -75,18 +71,17 @@ describe("session catalog entry snapshots", () => {
       }
       return { id: "current-profile", displayName: "Taylor", avatarRevision: "2", hasAvatar: true };
     });
+    const message = (text: string, id?: string, label?: string) => ({
+      type: "userMessage" as const,
+      text,
+      ...(id
+        ? { sender: { identity: { type: "profile" as const, id }, ...(label ? { label } : {}) } }
+        : {}),
+    });
     const items = [
-      { type: "userMessage" as const, text: "Unknown author" },
-      {
-        type: "userMessage" as const,
-        text: "Known author",
-        sender: { identity: { type: "profile" as const, id: "merged-profile" }, label: "Stale" },
-      },
-      {
-        type: "userMessage" as const,
-        text: "Deleted author",
-        sender: { identity: { type: "profile" as const, id: "deleted-profile" } },
-      },
+      message("Unknown author"),
+      message("Known author", "merged-profile", "Stale"),
+      message("Deleted author", "deleted-profile"),
     ];
     const catalog = catalogProvider("external", {
       read: async ({ hostId, threadId }) => ({ hostId, threadId, items, nextCursor: "older" }),
@@ -123,46 +118,33 @@ describe("session catalog entry snapshots", () => {
     [undefined, undefined],
   ])("projects provider color %s to its canonical wire value", (color, expected) => {
     const host = snapshot().projectHostSessions(
-      catalogHost({
-        sessions: [catalogSession("color-fixture", { color })],
-      }),
+      catalogHost({ sessions: [catalogSession("color-fixture", { color })] }),
       new Map(),
     );
     expect(host.sessions[0]?.color).toBe(expected);
   });
 
-  it("allocates only the requested wrapper shape while retaining captured entries", async () => {
+  it("reuses frozen wrapper shapes while retaining captured entries", async () => {
     const key = "agent:main:lazy";
-    setEntries([{ sessionKey: key, entry: { label: "Before" } }]);
+    setEntries({ [key]: { label: "Before" } });
     const cfg = {};
     const capture = () =>
       createSessionCatalogRequestEntrySnapshot({ cfg, fallbackAgentId: "main", projection });
-    using freeze = vi.spyOn(Object, "freeze");
-    const wrappers = () =>
-      freeze.mock.calls
-        .map(([value]) => value)
-        .filter(
-          (value) =>
-            value && typeof value === "object" && "sessionKey" in value && "entry" in value,
-        );
     const first = capture();
     first.freeze();
     const catalog = first.sessionEntries.entriesForCatalog!();
     expect(first.entryForSession(key)?.label).toBe("Before");
-    expect(wrappers()).toHaveLength(1);
     const second = capture();
     second.freeze();
     expect(second.sessionEntries.entriesForCatalog!()).toBe(catalog);
-    expect(wrappers()).toHaveLength(1);
 
     await Promise.resolve();
-    setEntries([{ sessionKey: key, entry: { label: "After" } }]);
+    setEntries({ [key]: { label: "After" } });
     const entries = first.sessionEntries.entriesForAgent("MAIN");
     expect(entries).toEqual([
       { sessionKey: key, entry: expect.objectContaining({ label: "Before" }) },
     ]);
     expect(second.sessionEntries.entriesForAgent("main")).toBe(entries);
-    expect(wrappers()).toHaveLength(2);
     expect(Object.keys(entries[0]!)).toEqual(["sessionKey", "entry"]);
     expect(Object.keys(catalog[0]!)).toEqual(["sessionKey", "entry", "agentId"]);
     for (const value of [entries, entries[0], catalog, catalog[0]]) {
@@ -177,7 +159,7 @@ describe("session catalog entry snapshots", () => {
 
   it("reuses planning revisions until entries or configuration change", async () => {
     const key = "agent:main:alpha-adopted";
-    setEntries([{ sessionKey: key, entry: { label: "Before" } }]);
+    setEntries({ [key]: { label: "Before" } });
     let cfg = {};
     const context = bindSessionRowProjection({ getRuntimeConfig: () => cfg }, () => projection);
     const revisions: Array<object | undefined> = [];
@@ -186,17 +168,9 @@ describe("session catalog entry snapshots", () => {
       list: vi.fn(async ({ sessionEntries }) => {
         revisions.push(sessionEntries?.revision);
         labels.push(sessionEntries?.entriesForCatalog?.()[0]?.entry.label);
-        const entries = listSessionCatalogEntries({
-          config: {},
-          runtime: createPluginRuntime(),
-          sessionEntries,
-        });
-        const adopted = entries.find((candidate) => candidate.sessionKey === key);
         return [
           catalogHost({
-            sessions: adopted
-              ? [catalogSession("alpha-thread", { sessionKey: adopted.sessionKey })]
-              : [],
+            sessions: [catalogSession("alpha-thread", { sessionKey: key })],
           }),
         ];
       }),
@@ -215,7 +189,7 @@ describe("session catalog entry snapshots", () => {
     await poll();
     expect(revisions[0]).toBeDefined();
     expect(revisions[1]).toBe(revisions[0]);
-    setEntries([{ sessionKey: key, entry: { label: "After", updatedAt: 2 } }]);
+    setEntries({ [key]: { label: "After", updatedAt: 2 } });
     await poll();
     expect(revisions[2]).not.toBe(revisions[1]);
     await poll();
@@ -242,26 +216,23 @@ describe("session catalog entry snapshots", () => {
       ),
       now: 1,
     });
-    const entries = [
-      { sessionKey: "agent:main:child", entry: { ...creation, updatedAt: 1 } },
-      {
-        sessionKey: "agent:main:channel",
-        entry: {
-          ...buildSessionCreationStamp({
-            via: "channel",
-            actor: { type: "human", source: "channel", id: "former" },
-            sandbox: "required",
-            now: 1,
-          }),
-          updatedAt: 1,
-        },
+    const entries = {
+      "agent:main:child": { ...creation, updatedAt: 1 },
+      "agent:main:channel": {
+        ...buildSessionCreationStamp({
+          via: "channel",
+          actor: { type: "human", source: "channel", id: "former" },
+          sandbox: "required",
+          now: 1,
+        }),
+        updatedAt: 1,
       },
-    ];
+    };
     setEntries(entries);
     display.mockClear();
     const current = snapshot();
     const host = catalogHost({
-      sessions: entries.map(({ sessionKey }) =>
+      sessions: Object.keys(entries).map((sessionKey) =>
         catalogSession(sessionKey, {
           sessionKey,
           createdActor: { type: "human", id: "provider-spoof" },

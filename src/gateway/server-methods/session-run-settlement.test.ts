@@ -20,6 +20,19 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 function fixture() {
+  const cleanups: (() => void)[] = [];
+  const waits: Promise<unknown>[] = [];
+  const track = <T>(promise: Promise<T>) => {
+    waits.push(promise);
+    void promise.catch(() => {});
+    return promise;
+  };
+  onTestFinished(async () => {
+    for (const cleanup of cleanups.toReversed()) {
+      cleanup();
+    }
+    await Promise.allSettled(waits);
+  });
   const target = {
     context: {},
     storePath: "terminal-session-store",
@@ -47,10 +60,8 @@ function fixture() {
       sessionKey: target.canonicalKey,
       agentId: target.agentId,
       target: captureSessionTarget({
+        ...controllerTarget,
         storeScope: options?.storePath ?? target.storePath,
-        sessionKey: target.canonicalKey,
-        incarnation: target.sessionId,
-        agentId: target.agentId,
       }),
       timeoutMs: 60_000,
       kind: options?.kind,
@@ -58,7 +69,9 @@ function fixture() {
     if (!registration.registered) {
       throw new Error("Missing registered run");
     }
-    onTestFinished(async () => {
+    cleanups.push(() => {
+      registration.entry.adapter.projectSessionTerminalPending = false;
+      registration.entry.adapter.projectSessionTerminalPersistence = undefined;
       const claim = registration.entry.input.claim;
       claim?.operation?.complete();
       if (claim) {
@@ -66,30 +79,32 @@ function fixture() {
       }
       registration.cleanup();
       retireSessionControllerInput(registration.entry.input);
-      await registration.entry.input.settlement.promise;
     });
+    track(registration.entry.input.settlement.promise);
     if (options?.terminal !== false) {
       registration.entry.adapter.projectSessionTerminalObservedAt = Date.now();
     }
     return registration;
   };
-  const admit = () => beginSessionEffect({ target: controllerTarget, assertAllowed: () => {} });
-  return { target, controllerTarget, register, admit };
+  const admit = async () => {
+    const admission = await beginSessionEffect({
+      target: controllerTarget,
+      assertAllowed: () => {},
+    });
+    cleanups.push(() => admission.release());
+    return admission;
+  };
+  return { target, register, admit, track };
 }
 
 it("leaves live runs to the existing active-work gate", async () => {
   const { target, register, admit } = fixture();
   const registration = register({ terminal: false });
-  const admission = await admit();
-  try {
-    expect(await waitForTerminalSessionRunSettlement(target)).toBe(false);
-    expect(isCompetingSessionControllerWorkActive(target.storePath, [target.sessionId])).toBe(true);
-    expect(getRpcSource("terminal-run")).toBe(registration.entry);
-    expect(registration.controller.signal.aborted).toBe(false);
-  } finally {
-    registration.cleanup();
-    admission.release();
-  }
+  await admit();
+  expect(await waitForTerminalSessionRunSettlement(target)).toBe(false);
+  expect(isCompetingSessionControllerWorkActive(target.storePath, [target.sessionId])).toBe(true);
+  expect(getRpcSource("terminal-run")).toBe(registration.entry);
+  expect(registration.controller.signal.aborted).toBe(false);
 });
 
 it.each(["pending", "persistence"] as const)(
@@ -102,128 +117,97 @@ it.each(["pending", "persistence"] as const)(
     } else {
       registration.entry.adapter.projectSessionTerminalPersistence = Promise.resolve();
     }
-    try {
-      expect(await waitForTerminalSessionRunSettlement(target)).toBe(false);
-      expect(getRpcSource("terminal-run")).toBe(registration.entry);
-      expect(registration.controller.signal.aborted).toBe(false);
-    } finally {
-      registration.entry.adapter.projectSessionTerminalPending = false;
-      registration.entry.adapter.projectSessionTerminalPersistence = undefined;
-      registration.cleanup();
-    }
+    expect(await waitForTerminalSessionRunSettlement(target)).toBe(false);
+    expect(getRpcSource("terminal-run")).toBe(registration.entry);
+    expect(registration.controller.signal.aborted).toBe(false);
   },
 );
 
 it("joins captured terminal owners without waiting for its caller or a successor admission", async () => {
-  const { target, register, admit } = fixture();
+  const { target, register, admit, track } = fixture();
   const registration = register();
-  let release: Awaited<ReturnType<typeof claimRpcSourceForTest>> | undefined;
-  let caller: Awaited<ReturnType<typeof admit>> | undefined;
-  let successor: Awaited<ReturnType<typeof admit>> | undefined;
-  let waiting: Promise<boolean> | undefined;
-  try {
-    release = await claimRpcSourceForTest(registration.entry);
-    const reply = registration.entry.input.claim!.operation!;
-    reply.freezeAbort();
-    caller = await admit();
-    let settled = false;
-    waiting = caller.run(() => waitForTerminalSessionRunSettlement(target));
-    void waiting.then(() => {
-      settled = true;
-    });
-    successor = await admit();
-    registration.cleanup();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toBe(false);
-    release();
-    expect(await waiting).toBe(true);
-    expect(caller.isActive()).toBe(true);
-    expect(successor.isActive()).toBe(true);
-  } finally {
-    release?.();
-    registration.cleanup();
-    caller?.release();
-    successor?.release();
-    await waiting;
-  }
+  const release = await claimRpcSourceForTest(registration.entry);
+  registration.entry.input.claim!.operation!.freezeAbort();
+  const caller = await admit();
+  let settled = false;
+  const waiting = track(caller.run(() => waitForTerminalSessionRunSettlement(target)));
+  void waiting.then(() => {
+    settled = true;
+  });
+  const successor = await admit();
+  registration.cleanup();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(settled).toBe(false);
+  release();
+  expect(await waiting).toBe(true);
+  expect(caller.isActive()).toBe(true);
+  expect(successor.isActive()).toBe(true);
 });
 
 it.each(["timeout", "cancel"] as const)(
   "bounds terminal settlement on %s without cancelling the run",
   async (ending) => {
-    const { target, register } = fixture();
+    const { target, register, track } = fixture();
     const registration = register();
     const controller = new AbortController();
-    const waiting = waitForTerminalSessionRunSettlement({ ...target, signal: controller.signal });
-    try {
-      if (ending === "cancel") {
-        const rejected = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
-        controller.abort();
-        await rejected;
-      } else {
-        await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
-        expect(await waiting).toBe(false);
-      }
-      expect(registration.controller.signal.aborted).toBe(false);
-    } finally {
-      registration.cleanup();
-      await waiting.catch(() => {});
-      await vi.advanceTimersByTimeAsync(0);
+    const waiting = track(
+      waitForTerminalSessionRunSettlement({ ...target, signal: controller.signal }),
+    );
+    if (ending === "cancel") {
+      const rejected = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
+      controller.abort();
+      await rejected;
+    } else {
+      await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
+      expect(await waiting).toBe(false);
     }
+    expect(registration.controller.signal.aborted).toBe(false);
   },
 );
 
 it.each([false, true])(
   "excludes only the in-band turn while joining another terminal source (other=%s)",
   async (hasOther) => {
-    const { target, register, admit } = fixture();
+    const { target, register, admit, track } = fixture();
     const caller = register({ kind: "agent", runId: "caller-run" });
     const release = await claimRpcSourceForTest(caller.entry);
     const operation = caller.entry.input.claim!.operation!;
     const admission = await admit();
     const other = hasOther ? register() : undefined;
     let settled = false;
-    const waiting = admission.run(() =>
-      withSessionControllerOwner(operation, async () => {
-        expect(await waitForTerminalSessionRunSettlement(target)).toBe(true);
-        settled = true;
-      }),
+    const waiting = track(
+      admission.run(() =>
+        withSessionControllerOwner(operation, async () => {
+          expect(await waitForTerminalSessionRunSettlement(target)).toBe(true);
+          settled = true;
+        }),
+      ),
     );
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toBe(!hasOther);
-      other?.cleanup();
-      await waiting;
-      expect(settled).toBe(true);
-      expect(admission.isActive()).toBe(true);
-    } finally {
-      other?.cleanup();
-      release();
-      admission.release();
-      await waiting;
-      caller.cleanup();
-    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(!hasOther);
+    other?.cleanup();
+    await waiting;
+    expect(settled).toBe(true);
+    expect(admission.isActive()).toBe(true);
+    release();
   },
 );
 
 it("refuses an acquired live admission without waiting for an older terminal owner", async () => {
-  const { target, register, admit } = fixture();
+  const { target, register, admit, track } = fixture();
   const terminal = register();
   const live = await admit();
   let result: boolean | undefined;
-  const waiting = waitForTerminalSessionRunSettlement(target).then((value) => {
-    result = value;
-  });
-  try {
-    await vi.advanceTimersByTimeAsync(0);
-    expect(result).toBe(false);
-    expect(live.isActive()).toBe(true);
-    expect(getRpcSource("terminal-run")).toBe(terminal.entry);
-  } finally {
-    terminal.cleanup();
-    live.release();
-    await waiting;
-  }
+  const waiting = track(
+    waitForTerminalSessionRunSettlement(target).then((value) => {
+      result = value;
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(0);
+  expect(result).toBe(false);
+  expect(live.isActive()).toBe(true);
+  expect(getRpcSource("terminal-run")).toBe(terminal.entry);
+  await waiting;
 });
 
 it.each(["store", "Gateway"] as const)(
@@ -237,11 +221,7 @@ it.each(["store", "Gateway"] as const)(
     if (dimension === "Gateway") {
       bindGatewayContextResolver(registration.entry.input, () => undefined);
     }
-    try {
-      expect(await waitForTerminalSessionRunSettlement(target)).toBe(true);
-      expect(registration.controller.signal.aborted).toBe(false);
-    } finally {
-      registration.cleanup();
-    }
+    expect(await waitForTerminalSessionRunSettlement(target)).toBe(true);
+    expect(registration.controller.signal.aborted).toBe(false);
   },
 );

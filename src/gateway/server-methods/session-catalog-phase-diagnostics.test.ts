@@ -14,7 +14,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import * as projectionAccess from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
+import {
+  catalogHost,
+  catalogProvider as provider,
+} from "./session-catalog.fixtures.test-support.js";
 import {
   hoisted,
   resetSessionCatalogTestState,
@@ -26,13 +29,7 @@ type Phase = Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed
 const leaderTrace = { traceId: "11111111111111111111111111111111", spanId: "1111111111111111" };
 const followerTrace = { traceId: "22222222222222222222222222222222", spanId: "2222222222222222" };
 const privateText = "synthetic-private-catalog-content";
-const host = {
-  hostId: privateText,
-  label: privateText,
-  kind: "gateway" as const,
-  connected: true,
-  sessions: [],
-};
+const host = catalogHost({ hostId: privateText, label: privateText });
 
 describe("registered catalog list phase diagnostics", () => {
   let clock: number;
@@ -48,11 +45,10 @@ describe("registered catalog list phase diagnostics", () => {
       { provider: provider(privateText, list ? { list } : {}) },
     ];
   };
-  const start = (trace?: typeof leaderTrace, client?: Parameters<typeof startCall>[3]) => {
-    return runWithDiagnosticTraceContext(trace, () =>
+  const start = (trace?: typeof leaderTrace, client?: Parameters<typeof startCall>[3]) =>
+    runWithDiagnosticTraceContext(trace, () =>
       startCall("sessions.catalog.list", {}, config, client),
     );
-  };
   const expectNames = (traceId: string, ...names: string[]) =>
     expect(
       phases.filter((event) => event.trace?.traceId === traceId).map(({ name }) => name),

@@ -28,6 +28,19 @@ const blockedProvider = (gate: ReturnType<typeof createDeferredCore<SessionCatal
     label: "Blocking catalog",
     list: vi.fn(() => gate.promise),
   });
+const occupyProviders = (blocker: SessionCatalogProvider, signal?: AbortSignal) =>
+  Array.from({ length: 16 }, (_, index) =>
+    listSessionCatalogProvider({ ...blocker, id: `blocking-catalog-${index}` }, { signal }),
+  );
+const inRegistry = <T>(
+  pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+  pluginId: string,
+  run: () => T,
+) =>
+  withPluginRuntimeGatewayRequestScope(
+    { pluginRegistry, pluginId, isWebchatConnect: () => false },
+    run,
+  );
 
 describe("session catalog provider admission", () => {
   it.each([false, true])(
@@ -53,8 +66,7 @@ describe("session catalog provider admission", () => {
           sessions: [],
         },
       ];
-      const provider: SessionCatalogProvider = {
-        id: "delayed-node-catalog",
+      const provider = catalogProvider("delayed-node-catalog", {
         label: "Delayed node catalog",
         list: async () => {
           await discovery.promise;
@@ -67,8 +79,7 @@ describe("session catalog provider admission", () => {
             releaseNode?.();
           }
         },
-        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-      };
+      });
       const lifetime = new SessionCatalogListLifetime([]);
       const result = withPluginRuntimeGatewayRequestScope(
         { hasCurrentClientAuthority: caller.isCurrent, isWebchatConnect: () => false },
@@ -85,15 +96,7 @@ describe("session catalog provider admission", () => {
         if (revoked) {
           await expect(result).rejects.toThrow("Gateway caller authority is no longer active.");
         } else {
-          await expect(result).resolves.toEqual([
-            {
-              hostId: "node:catalog-device",
-              label: "Test node",
-              kind: "node",
-              connected: true,
-              sessions: [],
-            },
-          ]);
+          await expect(result).resolves.toEqual(hosts);
         }
         expect(connection.signal.aborted).toBe(false);
         expect(sourceReleased).toHaveBeenCalledOnce();
@@ -128,21 +131,10 @@ describe("session catalog provider admission", () => {
       }),
     };
     const active = predecessor.run(async () =>
-      withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: firstRegistry, pluginId: "first-owner", isWebchatConnect: () => false },
-        () =>
-          Promise.all(
-            Array.from({ length: 16 }, (_, index) =>
-              listSessionCatalogProvider({ ...blocker, id: `blocking-catalog-${index}` }, {}),
-            ),
-          ),
-      ),
+      inRegistry(firstRegistry, "first-owner", () => Promise.all(occupyProviders(blocker))),
     );
     const pending = requester.run(async () =>
-      withPluginRuntimeGatewayRequestScope(
-        { pluginRegistry: queuedRegistry, pluginId: "queued-owner", isWebchatConnect: () => false },
-        () => listSessionCatalogProvider(queued, {}),
-      ),
+      inRegistry(queuedRegistry, "queued-owner", () => listSessionCatalogProvider(queued, {})),
     );
     try {
       expect(blocker.list).toHaveBeenCalledTimes(16);
@@ -180,12 +172,7 @@ describe("session catalog provider admission", () => {
       const queued = { ...blocker, id: "retired-catalog", list: vi.fn(async () => []) };
       const successor = { ...blocker, id: "live-catalog", list: vi.fn(async () => []) };
       const activeOwner = new AbortController();
-      const active = Array.from({ length: 16 }, (_, index) =>
-        listSessionCatalogProvider(
-          { ...blocker, id: `blocking-catalog-${index}` },
-          { signal: activeOwner.signal },
-        ),
-      );
+      const active = occupyProviders(blocker, activeOwner.signal);
       const owner = new AbortController();
       const lifetime = new SessionCatalogListLifetime([owner.signal]);
       let retiredErrors: unknown[] | undefined;
