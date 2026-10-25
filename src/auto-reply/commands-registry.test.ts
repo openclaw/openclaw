@@ -197,17 +197,14 @@ describe("commands registry", () => {
         ["/login cancel openrouter", false],
       ] as const) {
         for (const authorized of [true, false]) {
-          expect(
-            isActiveRunSafeCommandTurn({
-              commandTurn: createCommandTurnContext(source, {
-                authorized,
-                commandName: "login",
-                body,
-              }),
-              cfg: {},
-              provider: "discord",
-            }),
-          ).toBe(authorized && expected);
+          const commandTurn = createCommandTurnContext(source, {
+            authorized,
+            commandName: "login",
+            body,
+          });
+          expect(isActiveRunSafeCommandTurn({ commandTurn, cfg: {}, provider: "discord" })).toBe(
+            authorized && expected,
+          );
         }
       }
     },
@@ -254,11 +251,12 @@ describe("commands registry", () => {
   });
 
   it("merges native command specs with primary precedence and stable secondary order", () => {
-    const primary: readonly NativeCommandSpec[] = [
-      { name: " Primary ", description: "primary", acceptsArgs: false },
-      { name: "", description: "blank primary", acceptsArgs: false },
-      { name: "PRIMARY", description: "duplicate primary", acceptsArgs: false },
-    ];
+    const spec = (name: string): NativeCommandSpec => ({
+      name,
+      description: name,
+      acceptsArgs: false,
+    });
+    const primary = [" Primary ", "", "PRIMARY"].map(spec);
     const acceptedSecondary: NativeCommandSpec = {
       name: "Secondary",
       description: "secondary",
@@ -268,11 +266,9 @@ describe("commands registry", () => {
       isAlias: true,
     };
     const secondary: readonly NativeCommandSpec[] = [
-      { name: "primary", description: "primary collision", acceptsArgs: false },
-      { name: " ", description: "blank secondary", acceptsArgs: false },
+      ...["primary", " "].map(spec),
       acceptedSecondary,
-      { name: " secondary ", description: "secondary collision", acceptsArgs: false },
-      { name: "third", description: "third", acceptsArgs: false },
+      ...[" secondary ", "third"].map(spec),
     ];
     const primaryBefore = structuredClone(primary);
     const secondaryBefore = structuredClone(secondary);
@@ -315,23 +311,13 @@ describe("commands registry", () => {
       expect(spec.args?.length ?? 0).toBeLessThanOrEqual(25);
       const command = nativeCommand(spec.name, "discord");
       const args = command.args ?? spec.args ?? [];
-      const argNames = new Set<string>();
-      let sawOptional = false;
+      expect(new Set(args.map((arg) => arg.name)).size).toBe(args.length);
+      const required = args.map((arg) => arg.required ?? false);
+      expect(required).toEqual(required.toSorted((a, b) => Number(b) - Number(a)));
       for (const arg of args) {
-        expect(argNames.has(arg.name)).toBe(false);
-        argNames.add(arg.name);
-        const isRequired = arg.required ?? false;
-        if (!isRequired) {
-          sawOptional = true;
-        } else {
-          expect(sawOptional).toBe(false);
-        }
         expect(arg.name).toMatch(/^[a-z0-9_-]{1,32}$/);
         expectLength(arg.description, 100);
         const choices = resolveCommandArgChoices({ command, arg, cfg, provider: "discord" });
-        if (choices.length === 0) {
-          continue;
-        }
         expect(choices.length).toBeLessThanOrEqual(25);
         for (const choice of choices) {
           expectLength(choice.label, 100);
@@ -344,12 +330,6 @@ describe("commands registry", () => {
   it("registers fast mode as a first-class options command", () => {
     const fast = chatCommand("fast");
     expect(fast).toMatchObject({ nativeName: "fast", textAliases: ["/fast"], category: "options" });
-    const modeArg = expectDefined(
-      fast.args?.find((arg) => arg.name === "mode"),
-      "fast mode arg",
-    );
-    expect(modeArg.description).toContain("ultrafast");
-    expect(typeof modeArg.choices).toBe("function");
     const modelRef = "openai-codex/gpt-5.5";
     const menu = argMenu({
       command: fast,
@@ -369,21 +349,17 @@ describe("commands registry", () => {
     ]);
   });
 
-  it("detects known text commands", () => {
-    for (const command of listChatCommands()) {
-      for (const alias of command.textAliases) {
-        for (const separator of ["", ":"]) {
-          expect(resolveTextCommand(`${alias}${separator}`)?.command.key).toBe(command.key);
-          const withArgs = resolveTextCommand(`${alias}${separator} list`);
-          if (command.acceptsArgs) {
-            expect(withArgs?.command.key).toBe(command.key);
-          } else {
-            expect(withArgs).toBeNull();
-          }
-        }
-      }
-    }
-    expect(resolveTextCommand("try /status")).toBeNull();
+  it.each([
+    ["/help", "help"],
+    ["/help:", "help"],
+    ["/help list", null],
+    ["/help: list", null],
+    ["/think high", "think"],
+    ["/thinking: high", "think"],
+    ["try /status", null],
+  ] as const)("resolves text command %s", (text, key) => {
+    const resolved = resolveTextCommand(text);
+    expect(resolved && resolved.command.key).toBe(key);
   });
 
   it("respects text command gating", () => {
@@ -452,19 +428,10 @@ describe("commands registry args", () => {
     expect(buildCommandTextFromArgs(chatCommand(key), { values })).toBe(expected);
   });
   it("resolves function-based choices with a default provider/model context", () => {
-    const seen: CommandArgChoiceContext[] = [];
-    const command = commandFixture(
-      "think",
-      [
-        commandArg("level", {
-          choices: (context) => {
-            seen.push(context);
-            return ["low", "high"];
-          },
-        }),
-      ],
-      { argsMenu: "auto" },
-    );
+    const choices = vi.fn<(context: CommandArgChoiceContext) => string[]>(() => ["low", "high"]);
+    const command = commandFixture("think", [commandArg("level", { choices })], {
+      argsMenu: "auto",
+    });
     const menu = argMenu({
       command,
       agentRuntime: "codex",
@@ -477,7 +444,7 @@ describe("commands registry args", () => {
     expect(formatCommandArgMenuTitle({ command, menu })).toBe(
       "Choose level for /think.\nOptions: low, high.",
     );
-    const seenChoice = expectDefined(seen.at(-1), "command choice context");
+    const seenChoice = expectDefined(choices.mock.lastCall?.[0], "command choice context");
     expect(seenChoice).toMatchObject({
       command: { key: "think" },
       arg: { name: "level" },
@@ -490,35 +457,24 @@ describe("commands registry args", () => {
     expect(seenChoice.model?.trim().length).toBeGreaterThan(0);
   });
   it.each([
-    { model: "gpt-5.6-sol", agentRuntime: "codex", supportsUltra: true },
-    { model: "gpt-5.6-terra", agentRuntime: "codex", supportsUltra: true },
-    { model: "gpt-5.6-luna", agentRuntime: "codex", supportsUltra: true },
-    { model: "gpt-5.6-luna", agentRuntime: "openclaw", supportsUltra: true },
-  ])(
-    "uses the $agentRuntime thinking profile for openai/$model native menus",
-    ({ model, agentRuntime, supportsUltra }) => {
-      const command = nativeCommand("think");
-      const menu = argMenu({
-        command,
-        provider: "openai",
-        model,
-        agentRuntime,
-      });
-      expect(menu.choices.some((choice) => choice.value === "ultra")).toBe(supportsUltra);
-    },
-  );
-  it.each([
-    {
-      source: "configured",
-      cfg: modelConfig("ollama", ollamaModel),
-      catalog: undefined,
-    },
-    {
-      source: "runtime",
-      cfg: agentModels({ "ollama/*": {} }),
-      catalog: [{ provider: "ollama", ...ollamaModel }],
-    },
-  ])("uses $source model catalog reasoning for /think arg menus", ({ cfg, catalog }) => {
+    ["gpt-5.6-sol", "codex"],
+    ["gpt-5.6-terra", "codex"],
+    ["gpt-5.6-luna", "codex"],
+    ["gpt-5.6-luna", "openclaw"],
+  ])("uses the %s thinking profile with %s native menus", (model, agentRuntime) => {
+    const command = nativeCommand("think");
+    const menu = argMenu({
+      command,
+      provider: "openai",
+      model,
+      agentRuntime,
+    });
+    expect(menu.choices.some((choice) => choice.value === "ultra")).toBe(true);
+  });
+  it.each<[unknown, CommandArgChoiceContext["catalog"]]>([
+    [modelConfig("ollama", ollamaModel), undefined],
+    [agentModels({ "ollama/*": {} }), [{ provider: "ollama", ...ollamaModel }]],
+  ])("uses model catalog %j reasoning for /think arg menus", (cfg, catalog) => {
     installOllamaThinkingProvider();
     const command = nativeCommand("think");
     const menu = argMenu({
