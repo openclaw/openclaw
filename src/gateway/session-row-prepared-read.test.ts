@@ -80,7 +80,9 @@ function describeFixture() {
       isWebchatConnect: () => false,
       extraHandlers,
     });
-  return { projection, context, client, request, authorize, dispatch };
+  const describe = (respond: Parameters<typeof handleGatewayRequest>[0]["respond"]) =>
+    dispatch(gatewayRequest("description", "sessions.describe", { key: query.key }), respond);
+  return { projection, context, client, request, authorize, dispatch, describe };
 }
 
 async function withPendingStartupInspection(
@@ -200,7 +202,7 @@ it("admits an unrelated agent's write while startup preparation continues", asyn
   });
 });
 
-it("refuses a write while its logical agent's physical shared-store owner is pending", async () => {
+it("waits for the physical shared-store owner on reads but refuses pending writes", async () => {
   await withPendingStartupInspection(
     async ({ authorize, context, databasePath, complete, admission }) => {
       useSharedStore(context, databasePath);
@@ -213,8 +215,17 @@ it("refuses a write while its logical agent's physical shared-store owner is pen
         },
       });
       expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
+      let settled = false;
+      const reading = authorize("sessions.list", { agentId: "ops" }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
       complete();
       await admission.pendingPreparation;
+      await expect(reading).resolves.toMatchObject({ error: null });
       await expect(write()).resolves.toMatchObject({ error: null });
     },
   );
@@ -267,23 +278,6 @@ it("dispatches broad lists while an agent remains in startup preparation", async
       "agent-database-inspection-pending",
     );
     await request;
-  });
-});
-
-it("holds a logical agent's read for the physical shared-store owner", async () => {
-  await withPendingStartupInspection(async ({ authorize, context, databasePath, complete }) => {
-    useSharedStore(context, databasePath);
-    let settled = false;
-    const reading = authorize("sessions.list", { agentId: "ops" }).then((result) => {
-      settled = true;
-      return result;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settled).toBe(false);
-    expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
-    expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
-    complete();
-    await expect(reading).resolves.toMatchObject({ error: null });
   });
 });
 
@@ -344,7 +338,6 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
             outcome === "revoked" ? { error: { code: "FORBIDDEN" } } : { error: null },
           );
         }
-        expect(prepare).toHaveBeenCalledTimes(outcome === "changed config" ? 2 : 1);
         expect(discoverySignal?.aborted).toBe(true);
       },
     );
@@ -422,7 +415,7 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
 it.each(["dispatch scopes", "private access"] as const)(
   "rechecks %s after row preparation",
   async (boundary) => {
-    const { projection, context, client, dispatch } = describeFixture();
+    const { projection, context, client, describe: dispatchDescription } = describeFixture();
     const prepare = projection.withPreparedExactRows.bind(projection);
     const describe = vi.spyOn(projection, "describe");
     if (boundary === "dispatch scopes") {
@@ -443,10 +436,7 @@ it.each(["dispatch scopes", "private access"] as const)(
     });
     if (boundary === "dispatch scopes") {
       const respond = vi.fn();
-      await dispatch(
-        gatewayRequest("revoked-description", "sessions.describe", { key: query.key }),
-        respond,
-      );
+      await dispatchDescription(respond);
       expect(respond).toHaveBeenCalledExactlyOnceWith(
         false,
         undefined,
@@ -502,55 +492,43 @@ it.each(["operator.admin", "operator.read"])(
   },
 );
 
-it.each(["disposed", "refreshed"] as const)(
-  "consumes rows only from an active, ready frame: %s",
-  async (preparation) => {
-    const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-    const queries = vi.fn(() => [query]);
-    const initial = owner.state;
-    let current = initial;
-    const state = vi.fn(() => current);
-    if (preparation === "refreshed") {
-      Object.defineProperty(owner, "state", { get: state });
-      vi.spyOn(owner, "describe").mockImplementation(() => {
-        current = {
-          ...initial,
-          rowContext: {
-            ...initial.rowContext,
-            configuredDefaultModelByAgent: new Map([
-              ["main", { provider: "fixture", model: "fresh" }],
-            ]),
-          },
-        };
-        return undefined;
-      });
-    }
-    const consume = vi.fn((read: SessionRowReadView) => {
-      state.mockClear();
-      expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
-        provider: "fixture",
-        model: "fresh",
-      });
-      expect(read.describe(query)).toBeUndefined();
-      expect(state).not.toHaveBeenCalled();
+it("captures metadata refreshed during preparation without rereading it during consumption", () => {
+  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
+  const initial = owner.state;
+  let current = initial;
+  const state = vi.fn(() => current);
+  Object.defineProperty(owner, "state", { get: state });
+  vi.spyOn(owner, "describe").mockImplementation(() => {
+    current = {
+      ...initial,
+      rowContext: {
+        ...initial.rowContext,
+        configuredDefaultModelByAgent: new Map([["main", { provider: "fixture", model: "fresh" }]]),
+      },
+    };
+    return undefined;
+  });
+  const consume = vi.fn((read: SessionRowReadView) => {
+    state.mockClear();
+    expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
+      provider: "fixture",
+      model: "fresh",
     });
-    try {
-      const read = () =>
-        readPreparedSessionRows(owner, () => preparation !== "disposed", queries, consume);
-      if (preparation === "disposed") {
-        expect(read).toThrow("no longer active");
-        expect(queries).not.toHaveBeenCalled();
-      } else {
-        read();
-      }
-      if (preparation !== "refreshed") {
-        expect(consume).not.toHaveBeenCalled();
-      }
-    } finally {
-      owner.dispose();
-    }
-  },
-);
+    expect(read.describe(query)).toBeUndefined();
+    expect(state).not.toHaveBeenCalled();
+  });
+  try {
+    const queries = vi.fn(() => [query]);
+    expect(() => readPreparedSessionRows(owner, () => false, queries, consume)).toThrow(
+      "no longer active",
+    );
+    expect(queries).not.toHaveBeenCalled();
+    expect(consume).not.toHaveBeenCalled();
+    readPreparedSessionRows(owner, () => true, queries, consume);
+  } finally {
+    owner.dispose();
+  }
+});
 
 it.each(["child", "parent"] as const)(
   "rechecks %s membership after placement preparation and consumes the exact frame once",

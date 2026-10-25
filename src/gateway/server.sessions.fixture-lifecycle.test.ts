@@ -185,10 +185,7 @@ test("suite setup joins Gateway implementation preparation before releasing its 
   startupPreparation.held = true;
   gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
   const fixture = takeHooks();
-  let setupFinished = false;
-  const pendingSetup = setup(fixture).then(() => {
-    setupFinished = true;
-  });
+  const pendingSetup = setup(fixture);
   let pendingCleanup: Promise<void> | undefined;
   try {
     await awaitGateBeforeSettlement(
@@ -196,7 +193,6 @@ test("suite setup joins Gateway implementation preparation before releasing its 
       pendingSetup,
       "fixture setup completed before Gateway implementation preparation",
     );
-    expect(setupFinished).toBe(false);
     const home = process.env.HOME!;
     expect(fsSync.existsSync(home)).toBe(true);
     pendingCleanup = cleanup(fixture);
@@ -495,14 +491,7 @@ function containsFault(error) {
   ));
 }
 async function expectRefusal(run, preserveFault = false) {
-  let rejected = false;
-  try {
-    await run();
-  } catch (error) {
-    rejected = true;
-    if (preserveFault) expect(containsFault(error)).toBe(true);
-  }
-  expect(rejected).toBe(true);
+  await expect(run()).rejects.toSatisfy(error => !preserveFault || containsFault(error));
 }
 
 test("observes retained Gateway owners through fixture teardown", async () => {

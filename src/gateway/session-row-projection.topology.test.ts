@@ -64,6 +64,44 @@ function settleHeldRead(
   });
 }
 
+function holdStoreRead(afterRead = false) {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  let held = false;
+  const pause = async () => {
+    if (!held) {
+      held = true;
+      entered.resolve();
+      await release.promise;
+    }
+  };
+  const read = history.withSessionHistoryWorkerDatabases;
+  vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+    (targets, consume, lane) =>
+      read(
+        targets,
+        async (owners) => {
+          if (!afterRead) {
+            await pause();
+            return consume(owners);
+          }
+          return consume(
+            owners.map((owner) => ({
+              ...owner,
+              async readStoreProjection(input) {
+                const result = await owner.readStoreProjection(input);
+                await pause();
+                return result;
+              },
+            })),
+          );
+        },
+        lane,
+      ),
+  );
+  return { entered, release };
+}
+
 it.for(["publication", "source", "dispose"] as const)(
   "fences cold store admission across a delayed worker reply: %s",
   async (change, { signal }) => {
@@ -71,32 +109,7 @@ it.for(["publication", "source", "dispose"] as const)(
       const cfg: OpenClawConfig = { agents: { entries: { main: {}, late: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
-      let held = false;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-        (targets, consume, lane) =>
-          readDatabases(
-            targets,
-            (owners) =>
-              consume(
-                owners.map((owner) => ({
-                  ...owner,
-                  async readStoreProjection(input) {
-                    const result = await owner.readStoreProjection(input);
-                    if (!held) {
-                      held = true;
-                      entered.resolve();
-                      await release.promise;
-                    }
-                    return result;
-                  },
-                })),
-              ),
-            lane,
-          ),
-      );
+      const { entered, release } = holdStoreRead(true);
       const scope = { agentId: "late", sessionKey: "agent:late:admission" };
       replaceSessionEntrySync(scope, { sessionId: "admission", updatedAt: 1, label: "Original" });
       const reading = projection.prepareMembership();
@@ -172,25 +185,7 @@ it("reconciles a resident reset while a topology store snapshot awaits its worke
     const publishedEntry = { ...entry, updatedAt: 2, label: "Published metadata" };
     replaceSessionEntrySync(scope, publishedEntry);
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const readDatabases = history.withSessionHistoryWorkerDatabases;
-    let held = false;
-    vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-      (targets, consume, lane) =>
-        readDatabases(
-          targets,
-          async (owners) => {
-            if (!held) {
-              held = true;
-              entered.resolve();
-              await release.promise;
-            }
-            return consume(owners);
-          },
-          lane,
-        ),
-    );
+    const { entered, release } = holdStoreRead();
     sessionChanges.emit({ all: true, scope: "stores" });
     const pending = projection.prepareMembership();
     await using _ = settleHeldRead(projection, release, pending);
