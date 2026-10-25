@@ -11,6 +11,10 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Requested IMA4 fix (Borewit/music-metadata#2869); remove after 2026-11-01T09:29:39.519Z.
+  - "music-metadata@12.3.1"
+  # Required by music-metadata 12.3.1; remove after 2026-10-25T13:11:01.213Z.
+  - "strtok3@10.6.2"
   - "@openai/codex"
   - "@openai/codex-*"
   # Solid itself is exempt from the release-age gate (Peter, 2026-10-11).
