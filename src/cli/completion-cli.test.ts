@@ -133,17 +133,6 @@ describe("completion-cli", () => {
     );
   }
 
-  it("escapes zsh option descriptions for double-quoted arguments specs", () => {
-    const program = new Command()
-      .name("openclaw")
-      .option("--literal", "Use $OPENCLAW_STATE_DIR with `model/list` and John's profile");
-    const script = getCompletionScript("zsh", program);
-    expect(script).toContain(
-      "--literal[Use \\$OPENCLAW_STATE_DIR with \\`model/list\\` and John's profile]",
-    );
-    expect(script).not.toContain("John'\\''s");
-  });
-
   itUnix.each(["built-in", "root"] as const)("keeps %s zsh descriptions literal", (scope) => {
     const program = new Command().name("openclaw");
     let describedCommand: Command;
@@ -187,14 +176,15 @@ ${completionFunction}
     }
   });
 
-  itUnix("keeps zsh choice boundaries literal", () => {
+  itUnix("keeps zsh choice and option description boundaries literal", () => {
+    const description = "Use $OPENCLAW_STATE_DIR with `model/list` and John's profile";
     const program = choiceProgram([
       "two words",
       'say "hello"',
       "it's literal",
       "literal $(printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2)",
       "literal `printf OPENCLAW_COMPLETION_VALUE_EXECUTED >&2`",
-    ]);
+    ]).option("--literal", description);
     const stdout = runZshScript(`${getCompletionScript("zsh", program)}
 _arguments() { printf '%s\\n' "$@"; }
 _openclaw_root_completion
@@ -205,6 +195,7 @@ _openclaw_root_completion
     expect(stdout).toContain("two\\ words");
     expect(stdout).toContain('say\\ \\"hello\\"');
     expect(stdout).toContain("OPENCLAW_COMPLETION_VALUE_EXECUTED");
+    expect(stdout).toContain(`--literal[${description}]`);
   });
 
   itUnix("completes zsh short clusters in groups and leaves", async (ctx) => {
@@ -313,9 +304,9 @@ ${cases
 
   itWithPowerShell("ignores PowerShell arguments after the cursor", async () => {
     const prefix = "openclaw completion --shell f";
-    const program = documentedProgram();
-    program.command("status").description("Root status").option("--json", "JSON output");
-    expect(await powershell.complete(program, `${prefix} --yes`, prefix.length)).toEqual(["fish"]);
+    expect(
+      await powershell.complete(documentedProgram(), `${prefix} --yes`, prefix.length),
+    ).toEqual(["fish"]);
   });
 
   itWithPowerShell("matches literal PowerShell choice prefixes", async () => {

@@ -379,27 +379,22 @@ describe("command secret target ids", () => {
     expect(ids.has("gateway.remote.password")).toBe(true);
   });
 
-  it("does not coerce missing accountId to default when channel is scoped", () => {
-    const scoped = getScopedChannelsCommandSecretTargets({
-      config: discordAccounts({ "Ops Team": "DISCORD_OPS" }) as never,
-      channel: "discord",
-    });
-
-    expectScope(scoped, {
-      allowedPaths: undefined,
-      targetIds: ["channels.discord.accounts.*.token", "channels.discord.token"],
-    });
-  });
-
-  it("scopes a missing accountId to the channel default when requested", () => {
-    const scoped = getScopedChannelsCommandSecretTargets({
-      config: discordAccounts({ "Ops Team": "DISCORD_OPS", chat: "DISCORD_CHAT" }) as never,
-      channel: "discord",
-      defaultAccountWhenMissing: true,
-    });
-
-    expect(scoped.allowedPaths).toEqual(new Set(["channels.discord.accounts.Ops Team.token"]));
-  });
+  it.each([false, true])(
+    "uses a default channel account only when requested (%s)",
+    (defaultAccountWhenMissing) => {
+      const scoped = getScopedChannelsCommandSecretTargets({
+        config: discordAccounts({ "Ops Team": "DISCORD_OPS", chat: "DISCORD_CHAT" }) as never,
+        channel: "discord",
+        defaultAccountWhenMissing,
+      });
+      expectScope(scoped, {
+        targetIds: ["channels.discord.accounts.*.token", "channels.discord.token"],
+        allowedPaths: defaultAccountWhenMissing
+          ? ["channels.discord.accounts.Ops Team.token"]
+          : undefined,
+      });
+    },
+  );
 
   it("unions only the selected broadcast channel/account routes", () => {
     const scoped = getScopedChannelsCommandSecretTargets({

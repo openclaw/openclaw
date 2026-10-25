@@ -7,35 +7,26 @@ import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
 const enabledClawsLabsConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
 
-const mocks = vi.hoisted(() => {
-  const logs: string[] = [];
-  const errors: string[] = [];
-  const runtime = {
-    log: vi.fn((value: unknown) => logs.push(String(value))),
-    error: vi.fn((value: unknown) => errors.push(String(value))),
-    writeJson: vi.fn((value: unknown, space = 2) =>
-      logs.push(JSON.stringify(value, null, space > 0 ? space : undefined)),
-    ),
+const mocks = vi.hoisted(() => ({
+  runtime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeJson: vi.fn(),
     writeStdout: vi.fn(),
     exit: vi.fn((code: number) => {
       throw new Error(`__exit__:${code}`);
     }),
-  };
-  return {
-    logs,
-    errors,
-    runtime,
-    loadConfig: vi.fn<() => Record<string, unknown>>(() => ({})),
-    readCurrentConfigForPolicyCheck: vi.fn(),
-    listConfiguredMcpServers: vi.fn(),
-    applyClawAddPlanStateless: vi.fn(),
-    withOpenClawStateLease: vi.fn(),
-    leaseAssertOwned: vi.fn(),
-    preflightClawPackage: vi.fn(),
-    callGatewayFromCli: vi.fn(),
-    sleep: vi.fn(),
-  };
-});
+  },
+  loadConfig: vi.fn<() => Record<string, unknown>>(() => ({})),
+  readCurrentConfigForPolicyCheck: vi.fn(),
+  listConfiguredMcpServers: vi.fn(),
+  applyClawAddPlanStateless: vi.fn(),
+  withOpenClawStateLease: vi.fn(),
+  leaseAssertOwned: vi.fn(),
+  preflightClawPackage: vi.fn(),
+  callGatewayFromCli: vi.fn(),
+  sleep: vi.fn(),
+}));
 
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
@@ -116,8 +107,9 @@ async function add(args: string[] = [], source?: string) {
 }
 
 function output() {
-  return JSON.parse(mocks.logs[0] ?? "{}");
+  return mocks.runtime.writeJson.mock.calls[0]?.[0];
 }
+const logLines = () => mocks.runtime.log.mock.calls.map(([line]) => String(line));
 
 function gatewayConfig(agent = "worker", revision = "revision-new", applied = revision) {
   return {
@@ -147,8 +139,6 @@ async function addWithAgentReadiness(beforeWait?: () => void) {
 describe("claws cli", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
-    mocks.logs.length = 0;
-    mocks.errors.length = 0;
     vi.clearAllMocks();
     mocks.loadConfig.mockReset().mockReturnValue(enabledClawsLabsConfig);
     mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue(enabledClawsLabsConfig);
@@ -253,7 +243,7 @@ describe("claws cli", () => {
 
     await runClawsAddCommand(manifestPath, { dryRun: true, workspace });
 
-    const printed = mocks.logs.join("\n");
+    const printed = logLines().join("\n");
     expect(printed).not.toMatch(/^Experimental:/m);
     expect(printed).toContain("MCP remote:");
     expect(printed).toContain("example.com");
@@ -282,16 +272,20 @@ describe("claws cli", () => {
 
     await add(["--dry-run"], path);
 
-    expect(mocks.logs).toContain("Capability escalations (2):");
-    expect(mocks.logs.some((line) => line.startsWith("  ! agent:demo-agent"))).toBe(true);
-    expect(mocks.logs.some((line) => line.startsWith("  ! mcpServer:docs"))).toBe(true);
-    expect(mocks.logs.some((line) => line.includes('"env":["API_TOKEN"]'))).toBe(true);
+    expect(logLines()).toEqual(
+      expect.arrayContaining([
+        "Capability escalations (2):",
+        expect.stringMatching(/^ {2}! agent:demo-agent/),
+        expect.stringMatching(/^ {2}! mcpServer:docs/),
+        expect.stringContaining('"env":["API_TOKEN"]'),
+      ]),
+    );
   });
 
   it("adds a minimal Claw directly with an internal plan binding", async () => {
     await add(["--json"]);
 
-    expect(mocks.errors).toEqual([]);
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
     const [plan, options] = mocks.applyClawAddPlanStateless.mock.calls[0]!;
     expect(options.consentPlanIntegrity).toBe(plan.planIntegrity);
     expect(output()).toMatchObject({
@@ -341,7 +335,7 @@ describe("claws cli", () => {
       warnings: [expect.objectContaining({ warning })],
     });
     expect(mocks.applyClawAddPlanStateless).not.toHaveBeenCalled();
-    mocks.logs.length = 0;
+    mocks.runtime.writeJson.mockClear();
 
     await add(["--acknowledge-clawhub-risk", "--json"], root);
     expect(mocks.applyClawAddPlanStateless).toHaveBeenCalledOnce();

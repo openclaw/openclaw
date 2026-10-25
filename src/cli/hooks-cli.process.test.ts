@@ -112,7 +112,6 @@ async function createTimeoutOwnershipFixture() {
   const nodeWrapperPath = path.join(root, "node-with-tsx");
   const pidLogPath = path.join(root, "pids");
   const preloadPath = path.join(root, "track-relay-pid.mjs");
-  const readyMarkerPath = path.join(root, "ready");
   const stateDir = path.join(root, "state");
   await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(
@@ -122,8 +121,7 @@ async function createTimeoutOwnershipFixture() {
       "fs.appendFileSync(process.env.RELAY_PID_LOG, `${process.pid}\\n`);",
       "const originalAsyncIterator = process.stdin[Symbol.asyncIterator].bind(process.stdin);",
       "process.stdin[Symbol.asyncIterator] = function () {",
-      "  fs.writeFileSync(process.env.RELAY_READY_MARKER, `${process.pid}\\n`);",
-      '  process.stdout.write("relay-ready\\n");',
+      "  process.stdout.write(`relay-ready:${process.pid}\\n`);",
       "  return originalAsyncIterator();",
       "};",
       "",
@@ -134,7 +132,7 @@ async function createTimeoutOwnershipFixture() {
     ["#!/bin/sh", 'exec "$OPENCLAW_TEST_NODE" --import tsx "$@"', ""].join("\n"),
   );
   await fs.chmod(nodeWrapperPath, 0o755);
-  return { nodeWrapperPath, pidLogPath, preloadPath, readyMarkerPath, stateDir };
+  return { nodeWrapperPath, pidLogPath, preloadPath, stateDir };
 }
 
 async function readPidFile(filePath: string): Promise<number[]> {
@@ -296,19 +294,19 @@ describe("hooks CLI process lifecycle", () => {
           OPENCLAW_STATE_DIR: fixture.stateDir,
           OPENCLAW_TEST_NODE: resolveTestNodeExecPath(),
           RELAY_PID_LOG: fixture.pidLogPath,
-          RELAY_READY_MARKER: fixture.readyMarkerPath,
         },
         stdio: ["pipe", "pipe", "pipe"],
       });
       activeChildren.add(child);
       const closed = once(child, "close");
-      const ready = createDeferred();
+      const ready = createDeferred<number>();
       let stdout = "";
       child.stdout.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => {
         stdout += chunk;
-        if (stdout.includes("relay-ready\n")) {
-          ready.resolve();
+        const pid = /relay-ready:(\d+)\n/.exec(stdout)?.[1];
+        if (pid) {
+          ready.resolve(Number(pid));
         }
       });
       child.once("close", () => activeChildren.delete(child));
@@ -318,7 +316,7 @@ describe("hooks CLI process lifecycle", () => {
       }
 
       try {
-        await withinTest(
+        const readyPid = await withinTest(
           awaitGateBeforeSettlement(
             ready.promise,
             closed,
@@ -326,7 +324,7 @@ describe("hooks CLI process lifecycle", () => {
           ),
           signal,
         );
-        expect((await readPidFile(fixture.readyMarkerPath))[0]).toBe(timeoutOwnedPid);
+        expect(readyPid).toBe(timeoutOwnedPid);
         expect(new Set(await readPidFile(fixture.pidLogPath))).toEqual(new Set([timeoutOwnedPid]));
 
         expect(child.kill("SIGKILL")).toBe(true);

@@ -298,15 +298,16 @@ describe("plugins marketplace refresh", () => {
 describe("plugins marketplace list", () => {
   const source = "owner/repo";
   const manifest = {
-    name: "QA Marketplace",
+    name: "QA \u001b]0;marketplace-title-pwned\u0007Marketplace",
     version: "1.0.0",
     plugins: [
-      ["numeric", "1.2.3"],
+      ["\u001b[31mnumeric\u001b[0m", "\u001b[32m1.2.3\u001b[0m"],
       ["prefixed", "v1.2.3"],
       ["missing", undefined],
-    ].map(([name, version]) => ({
+    ].map(([name, version], index) => ({
       name,
       version,
+      description: index === 0 ? "drops \r\n\u0007bell and \u001b[2J clear" : undefined,
       source: { kind: "path", path: "./plugins/demo" },
     })),
   };
@@ -319,7 +320,7 @@ describe("plugins marketplace list", () => {
     );
   }
   it.each([false, true])(
-    "renders marketplace versions and routes progress (json=%s)",
+    "renders versions, preserves JSON and sanitizes terminal output (json=%s)",
     async (json) => {
       result();
       await list(source, { json });
@@ -330,47 +331,17 @@ describe("plugins marketplace list", () => {
         expect(runtime.log.mock.calls.map(([line]) => String(line))).toEqual([
           `Cloning marketplace source ${source}...`,
           expect.stringContaining("QA Marketplace"),
-          "numeric v1.2.3",
+          "numeric v1.2.3 - drops \\r\\nbell and  clear",
           "prefixed v1.2.3",
           "missing",
         ]);
+        expect(output()).not.toContain("\u001b");
+        expect(output()).not.toContain("\u0007");
         expect(runtime.writeJson).not.toHaveBeenCalled();
       }
       expect(runtime.error).not.toHaveBeenCalled();
     },
   );
-
-  it("sanitizes terminal control characters in human output but not JSON", async () => {
-    const injected = {
-      name: "Market\u001b]0;marketplace-title-pwned\u0007place",
-      version: "1.0.0",
-      plugins: [
-        {
-          name: "\u001b[31mred-plugin\u001b[0m",
-          version: "\u001b[32m1.2.3\u001b[0m",
-          description: "drops \r\n\u0007bell and \u001b[2J clear",
-          source: { kind: "path", path: "./plugins/demo" },
-        },
-      ],
-    };
-    const injectedResult = { ok: true, sourceLabel: source, manifest: injected };
-    mocks.listMarketplacePlugins.mockResolvedValueOnce(injectedResult);
-
-    await list(source, { json: true });
-    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ source, ...injected });
-    expect(runtime.log).not.toHaveBeenCalled();
-
-    vi.clearAllMocks();
-    mocks.listMarketplacePlugins.mockResolvedValueOnce(injectedResult);
-    await list(source, { json: false });
-    const human = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-    expect(human).not.toContain("\u001b");
-    expect(human).not.toContain("\u0007");
-    expect(human).toContain("Marketplace");
-    expect(human).toContain("red-plugin");
-    expect(human).toContain("v1.2.3");
-    expect(human).toContain("drops \\r\\nbell and  clear");
-  });
 
   it("hands quiet failures to the canonical JSON error renderer", async () => {
     const message = "mock git remote unavailable";
