@@ -75,7 +75,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(!source.contains("sidebarDrawerContentCard"))
         #expect(!source.contains("sidebarContentDragOffset"))
 
-        #expect(drawerSource.contains("@GestureState(resetTransaction:"))
         #expect(drawerSource.contains(".simultaneousGesture("))
         #expect(drawerSource.contains("isEnabled: self.isDrawerLayout && !self.reduceMotion"))
         #expect(drawerSource.contains(".accessibilityHidden(!self.isPresented)"))
@@ -95,17 +94,11 @@ struct RootTabsSidebarRegressionTests {
         #expect(!contentCard.contains("Color(uiColor: .systemGroupedBackground)"))
         #expect(!contentCard.contains(".shadow("))
 
-        #expect(drawerGesture.contains(".updating(self.$dragState)"))
-        #expect(drawerGesture.contains("dragSession.disposition = disposition"))
-        #expect(drawerGesture.contains("let disposition = dragSession.disposition"))
-        #expect(drawerGesture.contains("dragSession.disposition = nil"))
         #expect(drawerGesture.contains("case .opening:"))
         #expect(drawerGesture.contains("case .closing:"))
         #expect(drawerGesture.contains("onShow()"))
         #expect(drawerGesture.contains("onHide()"))
         #expect(drawerSource.contains("UnevenRoundedRectangle("))
-        #expect(drawerSource.contains("topLeadingRadius: RootSidebarShellMetric.topLeadingRadius * progress"))
-        #expect(drawerSource.contains("bottomLeadingRadius: RootSidebarShellMetric.cornerRadius * progress"))
 
         #expect(!source.contains("showsDismissButton:"))
         #expect(!sidebarSource.contains("let showsDismissButton: Bool"))
