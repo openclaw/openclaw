@@ -20,6 +20,7 @@ const m = vi.hoisted(() => ({
   prepareUpload: vi.fn(),
 }));
 vi.mock("../browser-host-availability.js", () => ({ isBrowserHostAvailable: m.hostAvailable }));
+// mock-isolation: Dashboard admission uses synthetic state, not the persistent dashboard owner.
 vi.mock("../browser-dashboard.js", () => ({
   inspectBrowserDashboard: m.inspect,
   assertBrowserDashboardTargetCurrent: async () => {},

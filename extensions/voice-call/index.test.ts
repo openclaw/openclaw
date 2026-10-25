@@ -342,7 +342,9 @@ it("does not fall back to one-shot TwiML speak when realtime-only speech is requ
     message: "hello",
   });
 
-  expect(runtimeStub.webhookServer["speakRealtime"]).toHaveBeenCalledWith("call-1", "hello");
+  expect(vi.mocked(runtimeStub.webhookServer.speakRealtime).mock.calls).toEqual([
+    ["call-1", "hello"],
+  ]);
   expect(runtimeStub.manager["speak"]).not.toHaveBeenCalled();
   expect(respond).toEqual([true, { success: false, error: "No active realtime bridge for call" }]);
 });
@@ -688,7 +690,7 @@ describe("runtime lifecycle", () => {
     expect(createRuntime).toHaveBeenCalledTimes(1);
     release.resolve();
     await stopped;
-    start(bService, "service-b");
+    void start(bService, "service-b");
     await invoke(concrete);
     await invoke(cold);
     await aService.service.stop?.(serviceContext);
@@ -701,7 +703,7 @@ describe("runtime lifecycle", () => {
     expect(b.stop).toHaveBeenCalledOnce();
     expectError(await invoke(concrete), "requires service startup");
     expectError(await invoke(cold), "requires service startup");
-    start(bService, "service-b-restarted");
+    void start(bService, "service-b-restarted");
     await invoke(bTool);
     await gatewayCall(bService, "call-restarted");
     expect(restarted.initiateCall).toHaveBeenCalledTimes(2);
@@ -738,7 +740,7 @@ describe("runtime lifecycle", () => {
     const fixture = runtime();
     createRuntime.mockResolvedValue(fixture.value);
     const service = registerVoiceCall({});
-    service.service.start(serviceContext);
+    void service.service.start(serviceContext);
     await call(service.tool());
     const consult = registerVoiceCall({ registrationMode: "tool-discovery" });
     fixture.initiateCall.mockRejectedValueOnce(
@@ -758,7 +760,7 @@ describe("runtime lifecycle", () => {
       .mockRejectedValueOnce(new Error("provider boom"))
       .mockResolvedValueOnce(fixture.value);
     const service = registerVoiceCall({ logger: createVoiceCallLogger(logged.resolve) });
-    service.service.start(serviceContext);
+    void service.service.start(serviceContext);
     await expect(logged.promise).resolves.toContain("Failed to start runtime: provider boom");
     expect(serviceHealth.reportFailure).toHaveBeenCalledWith(
       expect.objectContaining({ message: "provider boom" }),

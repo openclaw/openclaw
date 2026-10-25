@@ -19,6 +19,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) =>
   loadConfig: () => mocks.runtimeConfig,
 }));
 
+// mock-isolation: Auth generation and persistence are outside this shared-control lifecycle fixture.
 vi.mock("../browser/control-auth.js", () => ({
   ensureBrowserControlAuth: mocks.ensureBrowserControlAuth,
   resolveBrowserControlAuth: vi.fn(() => ({})),
@@ -34,6 +35,7 @@ vi.mock("../browser/server-lifecycle.js", () => ({
   stopKnownBrowserProfiles: mocks.stopKnownBrowserProfiles,
 }));
 
+// mock-isolation: Shared-control lifecycle tests must not discover or launch a real browser.
 vi.mock("../browser/chrome.js", () => ({
   diagnoseChromeCdp: vi.fn(async () => ({ ok: false })),
   formatChromeCdpDiagnostic: vi.fn(() => "not reachable"),
