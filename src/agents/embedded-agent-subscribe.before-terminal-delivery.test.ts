@@ -364,11 +364,11 @@ it("preserves the undelivered prefix when a deferred answer extends it", async (
   await h.drain();
   expectNoReplies(h);
   await h.finish(messages);
-  expect([h.replies(), h.partials(), h.assistantEvents()].map(visibleTexts)).toEqual([
-    ["Result:complete"],
-    ["Result:complete"],
-    ["Result:complete"],
-  ]);
+  expect(
+    [h.replies(), h.partials(), h.assistantEvents()].map((replies) =>
+      replies.map(({ text }) => text).filter(Boolean),
+    ),
+  ).toEqual([["Result:complete"], ["Result:complete"], ["Result:complete"]]);
   expect(h.lifecycleEnded()).toBe(true);
 });
 

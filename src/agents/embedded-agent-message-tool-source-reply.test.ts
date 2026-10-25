@@ -217,7 +217,7 @@ describe("isDeliveredMessagingToolResult", () => {
     DeliveryInput?,
   ];
 
-  it.each([
+  it.each<DeliveryCase>([
     ["CLI receipt", textBlock(receipt), true],
     ["text receipt", { content: [{ text: "sent" }] }, true],
     ["sent status", { status: "sent" }, true],
@@ -304,7 +304,7 @@ describe("isDeliveredMessagingToolResult", () => {
       { action: "send", channel: "qa-channel", target: "qa-a2a-requester", message: "reply" },
       { toolName: "message" },
     ],
-  ] satisfies DeliveryCase[])("%s", (_name, result, expected, routing, extra) => {
+  ])("%s", (_name, result, expected, routing, extra) => {
     const args = typeof routing === "string" ? { action: routing } : routing;
     expectMessagingDelivery({ result, args, ...extra }).toBe(expected);
   });
@@ -326,7 +326,7 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
   });
   type Input = Parameters<typeof expectSourceReplyDelivery>[0];
   type Case = [string, unknown, unknown, boolean, Omit<Input, "args" | "result">?];
-  it.each([
+  it.each<Case>([
     ["confirmed poll", poll, confirmed({ ok: true, pollId: "poll-1" }), true],
     ["unconfirmed poll", poll, { details: { ok: true, pollId: "poll-1" } }, false],
     ["implicit send", send, sent, true, { deliveryConfirmed: true }],
@@ -376,7 +376,7 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
       },
       false,
     ],
-  ] satisfies Case[])("%s", (_name, args, result, expected, options) => {
+  ])("%s", (_name, args, result, expected, options) => {
     expectSourceReplyDelivery({ args, result, ...options }).toBe(expected);
   });
 });
