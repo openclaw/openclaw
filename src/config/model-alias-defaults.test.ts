@@ -1,20 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
 import type { ModelDefinitionConfig, ModelProviderConfig, OpenClawConfig } from "./types.js";
 
-const providerPolicyMocks = vi.hoisted(() => ({
-  normalizeProviderConfigForConfigDefaults: vi.fn(
-    (params: { providerConfig: ModelProviderConfig }) => params.providerConfig,
-  ),
-}));
-
 vi.mock("./provider-policy.js", () => ({
   applyProviderConfigDefaultsForConfig: (params: { config: OpenClawConfig }) => params.config,
-  normalizeProviderConfigForConfigDefaults: (
-    ...args: Parameters<typeof providerPolicyMocks.normalizeProviderConfigForConfigDefaults>
-  ) => providerPolicyMocks.normalizeProviderConfigForConfigDefaults(...args),
+  normalizeProviderConfigForConfigDefaults: (params: { providerConfig: ModelProviderConfig }) =>
+    params.providerConfig,
 }));
 
 const emptyManifestRegistry = { plugins: [] } satisfies Pick<PluginManifestRegistry, "plugins">;
@@ -27,19 +20,12 @@ function applyModelDefaults(
 }
 
 describe("applyModelDefaults", () => {
-  beforeEach(() => {
-    providerPolicyMocks.normalizeProviderConfigForConfigDefaults.mockReset();
-    providerPolicyMocks.normalizeProviderConfigForConfigDefaults.mockImplementation(
-      (params) => params.providerConfig,
-    );
-  });
-
   function providerConfig(
     provider: string,
     model: Partial<ModelDefinitionConfig> = {},
     defaults: { maxTokens?: number } = {},
-  ) {
-    const config = {
+  ): OpenClawConfig {
+    const config: ModelProviderConfig = {
       baseUrl: "https://proxy.example/v1",
       apiKey: "sk-test",
       api: "openai-completions",
@@ -55,20 +41,7 @@ describe("applyModelDefaults", () => {
         },
       ],
     };
-    return { models: { providers: { [provider]: config } } } as never;
-  }
-
-  function mistralModel(model: Partial<ModelDefinitionConfig> = {}) {
-    return applyModelDefaults(
-      providerConfig("mistral", {
-        id: "mistral-large-latest",
-        name: "Mistral",
-        input: ["text", "image"],
-        contextWindow: 262_144,
-        maxTokens: 262_144,
-        ...model,
-      }),
-    ).models?.providers?.mistral?.models?.[0];
+    return { models: { providers: { [provider]: config } } };
   }
 
   function defaultModels(
@@ -81,29 +54,24 @@ describe("applyModelDefaults", () => {
     return { model: { primary, fallbacks }, models: { [primary]: {} } };
   }
 
-  function buildCustomProviderManifestRegistry() {
-    return {
-      plugins: [
-        createPluginManifestRecordFixture({
-          id: "custom-provider-plugin",
-          providers: ["myproxy"],
-          origin: "config",
-          rootDir: "/tmp/custom-provider-plugin",
-          source: "test",
-          manifestPath: "/tmp/custom-provider-plugin/openclaw.plugin.json",
-          modelIdNormalization: {
-            providers: {
-              myproxy: {
-                aliases: { latest: "modern-model" },
-                prefixWhenBare: "vendor",
-              },
+  const customManifestRegistry = {
+    plugins: [
+      createPluginManifestRecordFixture({
+        id: "custom-provider-plugin",
+        providers: ["myproxy"],
+        origin: "config",
+        modelIdNormalization: {
+          providers: {
+            myproxy: {
+              aliases: { latest: "modern-model" },
+              prefixWhenBare: "vendor",
             },
           },
-        }),
-      ],
-      diagnostics: [],
-    } satisfies PluginManifestRegistry;
-  }
+        },
+      }),
+    ],
+    diagnostics: [],
+  } satisfies PluginManifestRegistry;
 
   it("preserves an authored Sonnet alias when the new default target is also present", () => {
     const models = {
@@ -147,17 +115,9 @@ describe("applyModelDefaults", () => {
   });
 
   it("normalizes configured provider rows with explicit manifest registry policies", () => {
-    const next = applyModelDefaults(
-      providerConfig("myproxy", {
-        id: "latest",
-        name: "Custom latest",
-        contextWindow: 200_000,
-        maxTokens: 8192,
-      }),
-      {
-        manifestRegistry: buildCustomProviderManifestRegistry(),
-      },
-    );
+    const next = applyModelDefaults(providerConfig("myproxy", { id: "latest" }), {
+      manifestRegistry: customManifestRegistry,
+    });
 
     expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
   });
@@ -165,11 +125,7 @@ describe("applyModelDefaults", () => {
   it("leaves an omitted native context window undefined", () => {
     const model = applyModelDefaults(providerConfig("myproxy")).models?.providers?.myproxy
       ?.models?.[0];
-    expect(model).toMatchObject({
-      reasoning: false,
-      input: ["text"],
-      maxTokens: 8192,
-    });
+    expect(model).toMatchObject({ reasoning: false, input: ["text"], maxTokens: 8192 });
     expect(model?.contextWindow).toBeUndefined();
     expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
@@ -189,7 +145,9 @@ describe("applyModelDefaults", () => {
     { id: "constructor", contextWindow: 128_000, maxTokens: 32_000, expected: 32_000 },
     { id: "custom-mistral-model", contextWindow: 128_000, maxTokens: 128_000, expected: 8192 },
   ])("normalizes Mistral output limits for $id", ({ expected, ...model }) => {
-    expect(mistralModel(model)).toMatchObject({
+    const actual = applyModelDefaults(providerConfig("mistral", model)).models?.providers?.mistral
+      ?.models?.[0];
+    expect(actual).toMatchObject({
       contextWindow: model.contextWindow,
       maxTokens: expected,
     });

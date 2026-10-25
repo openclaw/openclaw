@@ -98,16 +98,15 @@ it.each(["root", "include"])("publishes managed %s writes with auth-store scope"
     const backup = include
       ? registerManagedRuntimeConfigWriteOwner(file, async () => fallback)
       : undefined;
-    const events: Array<Omit<RuntimeConfigWriteNotification, "preparedCandidatesByOwner">> = [];
-    let candidates: RuntimeConfigWriteNotification["preparedCandidatesByOwner"];
+    const events: RuntimeConfigWriteNotification[] = [];
+    const record = (event: RuntimeConfigWriteNotification) => {
+      if (event.configPath === file) {
+        events.push(event);
+      }
+    };
     const stop = include
-      ? registerRuntimeConfigWriteListener((event) => {
-          if (event.configPath === file) {
-            events.push(event);
-            candidates = event.preparedCandidatesByOwner;
-          }
-        })
-      : registerConfigWriteListener((event) => events.push(event), {
+      ? registerRuntimeConfigWriteListener(record)
+      : registerConfigWriteListener(record, {
           ownsRuntimeActivationFor: file,
           preCommitRuntimePreflight: preflight,
         });
@@ -146,6 +145,7 @@ it.each(["root", "include"])("publishes managed %s writes with auth-store scope"
     expect(preflight).toHaveBeenCalledWith(expect.any(Object), { includeAuthStoreRefs: false });
     expect(events).toHaveLength(1);
     const [event] = events;
+    const candidates = event?.preparedCandidatesByOwner;
     expect(event?.runtimeRefresh).toEqual({ includeAuthStoreRefs: false });
     expect(event?.snapshot).toMatchObject({ path: file, sourceConfig: next });
     const projected = owner ? candidates?.get(owner.ownerId) : event?.preparedCandidate;
