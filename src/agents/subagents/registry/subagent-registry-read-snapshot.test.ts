@@ -173,11 +173,7 @@ it("hydrates live-parent descendants and rejects changed topology", async () => 
       grandchild: runs.get(grandchild.runId)?.childSessionKey,
     })),
   ).toEqual({ ready: true, value: { rawParent: true, grandchild: grandchild.childSessionKey } });
-  memory.set("new-child", {
-    ...parent,
-    runId: "new-child",
-    childSessionKey: "agent:main:subagent:new",
-  });
+  memory.set("new-child", child("new-child", root));
   const consume = vi.fn();
   expect(prepared.consume(consume)).toEqual({ ready: false });
   expect(consume).not.toHaveBeenCalled();
