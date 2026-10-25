@@ -60,17 +60,18 @@ if (mode === "prepare") {
   let entered = 0;
   const blockers: Promise<unknown>[] = [];
   const slots = resolveWorkerPoolSize("compute");
-  // eslint-disable-next-line @typescript-eslint/unbound-method -- Reinstalled below and called with its encoder receiver.
-  const originalEncode = TextEncoder.prototype.encode;
+  const OriginalTextEncoder = globalThis.TextEncoder;
   let payload: WeakRef<Uint8Array> | undefined;
   let payloadBytes = 0;
-  TextEncoder.prototype.encode = function (input) {
-    const bytes = originalEncode.call(this, input);
-    if (bytes.byteLength > 1_000_000) {
-      payload = new WeakRef(bytes);
-      payloadBytes = bytes.byteLength;
+  globalThis.TextEncoder = class extends OriginalTextEncoder {
+    override encode(input?: string) {
+      const bytes = super.encode(input);
+      if (bytes.byteLength > 1_000_000) {
+        payload = new WeakRef(bytes);
+        payloadBytes = bytes.byteLength;
+      }
+      return bytes;
     }
-    return bytes;
   };
   const waitFor = async (condition: () => boolean) => {
     const deadline = performance.now() + 120_000;
@@ -100,8 +101,7 @@ if (mode === "prepare") {
           {
             type: "workspace.manifest.tree-input",
             input: {
-              payload: originalEncode.call(
-                new TextEncoder(),
+              payload: new OriginalTextEncoder().encode(
                 JSON.stringify({
                   inputPath: path.join(scratch, `blocker-${index}`),
                   ref: "refs/heads/blocker",
@@ -217,7 +217,7 @@ if (mode === "prepare") {
   } finally {
     release.resolve();
     await Promise.allSettled([...blockers, ...(completion ? [completion] : [])]);
-    TextEncoder.prototype.encode = originalEncode;
+    globalThis.TextEncoder = OriginalTextEncoder;
     await drainGlobalSingletonLifecycleState();
     for (let index = 0; index < slots; index++) {
       await fs.rm(path.join(scratch, `blocker-${index}`), { force: true });
