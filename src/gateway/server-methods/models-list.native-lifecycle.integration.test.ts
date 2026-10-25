@@ -6,9 +6,14 @@ import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
-import { createCatalogModel as catalogModel } from "./models-catalog-fixture.test-support.js";
+import {
+  catalogAgents,
+  createCatalogModel as catalogModel,
+  writeCatalogPlugin,
+} from "./models-catalog-fixture.test-support.js";
 import {
   createModelsTestState,
+  modelsTestConfig,
   serveModelsEndpoint,
   startModelsGateway,
 } from "./models-integration.test-support.js";
@@ -72,16 +77,15 @@ it.for([false, true])(
         { provider, id: "harness-host-row", name: "Harness host model" },
       ];
       if (withProviderCredentials) {
+        const original = nativeModelId === "native-account-only";
         rows.push(
           nativeRow(
             "unrelated-native-model",
-            nativeModelId === "native-account-only"
-              ? "Unrelated native model"
-              : "Outside-scope replacement",
+            original ? "Unrelated native model" : "Outside-scope replacement",
             otherProvider,
           ),
         );
-        if (nativeModelId !== "native-account-only") {
+        if (!original) {
           rows.push(nativeRow("outside-scope-new", "Outside-scope new model", otherProvider));
         }
       }
@@ -197,34 +201,26 @@ it.for([false, true])(
         state.applyEnv();
       }
       const token = "native-lifecycle-gateway-token";
+      const providerConfig = (models: Array<{ id: string; name: string }>, apiKey?: string) => ({
+        baseUrl,
+        api: "openai-completions" as const,
+        models,
+        ...(apiKey ? { apiKey } : {}),
+      });
       const cfg = {
-        agents: {
-          defaults: {
-            model: `${provider}/static-model`,
-            modelPolicy: { allow: [`${provider}/*`] },
-            models: { [`${provider}/static-model`]: { agentRuntime: { id: harness } } },
-          },
-          entries: { main: { workspace: state.workspaceDir } },
-        },
+        agents: catalogAgents(state, {
+          model: `${provider}/static-model`,
+          modelPolicy: { allow: [`${provider}/*`] },
+          models: { [`${provider}/static-model`]: { agentRuntime: { id: harness } } },
+        }),
         models: {
           providers: {
-            [provider]: {
-              baseUrl,
-              api: "openai-completions",
-              models: [
-                { id: "static-model", name: "Static model" },
-                { id: "configured-native", name: "Configured native model" },
-              ],
-            },
+            [provider]: providerConfig([
+              { id: "static-model", name: "Static model" },
+              { id: "configured-native", name: "Configured native model" },
+            ]),
             ...(withProviderCredentials
-              ? {
-                  [otherProvider]: {
-                    baseUrl,
-                    api: "openai-completions",
-                    apiKey: "unrelated-native-key",
-                    models: [],
-                  },
-                }
+              ? { [otherProvider]: providerConfig([], "unrelated-native-key") }
               : {}),
           },
         },
@@ -471,12 +467,6 @@ it("models.list discovers credential-free providers at startup and explicitly re
   });
   await using listening = await serveModelsEndpoint(endpoint, true);
   const { baseUrl } = listening;
-  await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-    id: provider,
-    providers: [provider],
-    providerCatalogEntry: "./provider-discovery.cjs",
-    configSchema: { type: "object", additionalProperties: false },
-  });
   await state.writeText(
     "catalog-plugin/provider-discovery.cjs",
     `module.exports = {
@@ -487,26 +477,24 @@ it("models.list discovers credential-free providers at startup and explicitly re
       } },
     };`,
   );
-  const pluginPath = await state.writeText(
-    "catalog-plugin/index.cjs",
+  const pluginPath = await writeCatalogPlugin(
+    state,
+    provider,
     `module.exports = {
       id: ${JSON.stringify(provider)}, register(api) { api.registerProvider(require("./provider-discovery.cjs")); }
     };`,
+    { providerCatalogEntry: "./provider-discovery.cjs" },
   );
   const token = "credential-free-gateway-token";
-  const cfg = {
-    agents: {
-      defaults: { models: { [`${provider}/*`]: {} } },
-      entries: { main: { workspace: state.workspaceDir } },
-    },
+  const cfg = modelsTestConfig(state, token, {
+    agents: catalogAgents(state, { models: { [`${provider}/*`]: {} } }),
     plugins: {
       allow: [provider],
       load: { paths: [pluginPath] },
       slots: { memory: "none" },
       entries: { [provider]: { enabled: true } },
     },
-    gateway: { mode: "local", auth: { mode: "token", token } },
-  };
+  });
   await state.writeConfig(cfg);
   await using gateway = await startModelsGateway(state, cfg, token);
   const { client, server } = gateway;
