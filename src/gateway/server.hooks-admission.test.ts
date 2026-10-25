@@ -47,6 +47,10 @@ const ROTATED_HOOK_TOKEN = "hook-secret-rotated";
 const fixtureLifetime = createFixtureLifetime();
 const enabledHooks = { enabled: true, token: HOOK_TOKEN };
 type HookReceipt = ReturnType<typeof sessionEventHandoff.enqueueSessionEventForHost>;
+const hookHeaders = (token = HOOK_TOKEN) => ({
+  Authorization: `Bearer ${token}`,
+  "Content-Type": "application/json",
+});
 
 function observeHookReceipts(
   onReceipt: (text: string, receipt: HookReceipt, source: string | undefined) => void,
@@ -135,11 +139,7 @@ async function postHook(
 ): Promise<Response> {
   return await fetch(`http://127.0.0.1:${port}${hookPath}`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "Idempotency-Key": idempotencyKey,
-    },
+    headers: { ...hookHeaders(token), "Idempotency-Key": idempotencyKey },
     body: JSON.stringify(body),
   });
 }
@@ -153,34 +153,27 @@ async function waitForCronIsolatedRuns(count: number): Promise<void> {
 async function writeReloadableHooksConfig(hooks: Record<string, unknown>): Promise<void> {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert(configPath, "expected OPENCLAW_CONFIG_PATH");
-  await fs.writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        gateway: { reload: { mode: "hybrid" } },
-        agents: {
-          defaults: {
-            skipBootstrap: true,
-            model: { primary: "openai/gpt-5.6-luna" },
-            models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-          },
-        },
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://openai.example.test/v1",
-              apiKey: "synthetic-fixture-key",
-              models: [{ id: "gpt-5.6-luna", name: "Hook fixture model" }],
-            },
-          },
-        },
-        hooks,
+  const config = {
+    gateway: { reload: { mode: "hybrid" } },
+    agents: {
+      defaults: {
+        skipBootstrap: true,
+        model: { primary: "openai/gpt-5.6-luna" },
+        models: { "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
       },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+    },
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://openai.example.test/v1",
+          apiKey: "synthetic-fixture-key",
+          models: [{ id: "gpt-5.6-luna", name: "Hook fixture model" }],
+        },
+      },
+    },
+    hooks,
+  };
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
 async function patchHooksConfig(
@@ -200,7 +193,6 @@ async function waitForHookStatus(params: {
   port: number;
   path: string;
   token: string;
-  body: string;
   status: number;
 }): Promise<void> {
   await expect
@@ -208,11 +200,8 @@ async function waitForHookStatus(params: {
       async () => {
         const response = await fetch(`http://127.0.0.1:${params.port}${params.path}`, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${params.token}`,
-            "Content-Type": "application/json",
-          },
-          body: params.body,
+          headers: hookHeaders(params.token),
+          body: "{}",
         });
         await response.arrayBuffer();
         return response.status;
@@ -239,10 +228,7 @@ async function postOversizedChunkedHook(port: number): Promise<{
           port,
           path: "/hooks/wake",
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${HOOK_TOKEN}`,
-            "Content-Type": "application/json",
-          },
+          headers: hookHeaders(),
         },
         (res) => {
           const chunks: Buffer[] = [];
@@ -388,7 +374,6 @@ function withRevokedHook(
                 port,
                 path: "/hooks/wake",
                 token: HOOK_TOKEN,
-                body: "{}",
                 status: mode === "disable" ? 404 : 401,
               });
               if (mode === "rotate") {
@@ -580,7 +565,6 @@ describe("gateway hook admission", () => {
         port,
         path: "/incoming/wake",
         token: ROTATED_HOOK_TOKEN,
-        body: "{}",
         status: 400,
       });
       const replayedRunId = await hookRunId(

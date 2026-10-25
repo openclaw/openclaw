@@ -609,23 +609,19 @@ test.each(["human", "agent"] as const)(
           await fixture.create(`${model}@${authProfileId}`);
           fixture.expectRejected();
         }
-        const getConfig = fixture.context.getRuntimeConfig;
-        const service = createModelAccountConnectService({ getConfig });
+        const human = origin === "human";
+        const service = createModelAccountConnectService({
+          getConfig: fixture.context.getRuntimeConfig,
+        });
         try {
-          const requests =
-            origin === "human"
-              ? ([
-                  ["users.selectModelAccount", { authProfileId, profileId: fixture.owner.id }],
-                  ["users.unlinkAuthProfile", { provider: "openai", profileId: fixture.owner.id }],
-                ] as const)
-              : ([
-                  ["users.selectModelAccount", { authProfileId }],
-                  [
-                    "users.authConnect.start",
-                    { profileId: fixture.owner.id, provider: "openai", method: "oauth" },
-                  ],
-                ] as const);
-          const context = origin === "human" ? directContext(fixture.context) : fixture.context;
+          const profileId = fixture.owner.id;
+          const requests = [
+            ["users.selectModelAccount", { authProfileId, ...(human ? { profileId } : {}) }],
+            human
+              ? ["users.unlinkAuthProfile", { provider: "openai", profileId }]
+              : ["users.authConnect.start", { profileId, provider: "openai", method: "oauth" }],
+          ] as const;
+          const context = human ? directContext(fixture.context) : fixture.context;
           for (const [method, params] of requests) {
             const result = await directSessionReq(method, params, {
               client: fixture.client,

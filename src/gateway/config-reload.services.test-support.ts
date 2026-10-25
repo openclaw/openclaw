@@ -73,6 +73,11 @@ export function expectCalls(count: number, ...callbacks: Array<{ mock: { calls: 
 }
 
 type Harness = ReturnType<typeof createReloaderHarness>;
+function expectApplied(harness: Harness, count: number, config: OpenClawConfig) {
+  expect(harness.onHotReload).toHaveBeenCalledTimes(count);
+  expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
+}
+
 type PluginChange = Parameters<Harness["reloader"]["applyPluginLifecycleChange"]>[0];
 export function applyPluginChange(
   harness: Harness,
@@ -239,9 +244,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
 
     const pluginConfig = <T extends NonNullable<OpenClawConfig["plugins"]>["entries"]>(
       entries: T,
-    ) => ({
-      plugins: { entries },
-    });
+    ) => ({ plugins: { entries } });
     const codexConfig = (sandbox: string): OpenClawConfig =>
       pluginConfig({ codex: { enabled: true, config: { sandbox } } });
     const codexRuntime = (operationId: string) => ({
@@ -257,9 +260,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
       );
     describe("plugin drain recovery", () => {
       it("hot-applies model settings without replacing the Codex generation", async () => {
-        const initialConfig: OpenClawConfig = {
-          plugins: { entries: { codex: { enabled: true } } },
-        };
+        const initialConfig = pluginConfig({ codex: { enabled: true } });
         let config = initialConfig;
         const harness = await createReadyReloader(async () => snapshotOf(config), {
           initialConfig,
@@ -337,9 +338,8 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           cleanup.resolve();
           await cleanupCall;
           await flushReload(harness.reloader);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(3);
+          expectApplied(harness, 3, config);
           expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(true);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
           expect(harness.log.error).toHaveBeenCalledTimes(2);
         } finally {
           await harness.reloader.stop();
@@ -380,15 +380,9 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           reloadPlugins: true,
           changedPaths: ["plugins.entries.codex.config.sandbox", "agents.entries.main.skills"],
         });
-        expect(harness.onHotReload.mock.lastCall?.[1]).toEqual({
-          plugins: {
-            entries: { codex: { enabled: true, config: { sandbox: "workspace-write" } } },
-          },
-          agents: { entries: { main: { skills: [] } } },
-        });
-        expect(harness.onConfigApplied).toHaveBeenCalledOnce();
+        expect(harness.onHotReload.mock.lastCall?.[1]).toEqual(config);
+        expectCalls(1, harness.onConfigApplied, harness.onConfigAccepted);
         expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
-        expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
         expect(harness.onConfigAccepted.mock.lastCall?.[0]).toEqual(config);
         expect(harness.onConfigCandidateCommitted).toHaveBeenCalledOnce();
         expect(harness.onConfigCandidateCommitted.mock.lastCall?.[0].changedPaths).toEqual([
@@ -446,14 +440,12 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           await expect(
             applyPluginChange(harness, config, { pluginIds: ["codex"], waitForDrain: true }),
           ).resolves.toBe(runtime);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(3);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
+          expectApplied(harness, 3, config);
 
           config = { ...config, agents: { defaults: { model: "openai/gpt-5.6-sol" } } };
           await flushWatcherChange(harness);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(4);
+          expectApplied(harness, 4, config);
           expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(false);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
         },
       );
 
@@ -492,15 +484,13 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
             other: nextOther,
           });
           await flushWatcherChange(harness);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(2);
+          expectApplied(harness, 2, config);
           expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(true);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
 
           config = pluginConfig({ ...(existingEntries ? { codex } : {}), other: nextOther });
           await flushWatcherChange(harness);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(3);
+          expectApplied(harness, 3, config);
           expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(true);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
           expect(harness.log.error).toHaveBeenCalledOnce();
         },
       );
