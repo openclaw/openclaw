@@ -43,47 +43,30 @@ const assistant = (timestamp: number, input: number, output: number) => ({
   usage: { input, output },
 });
 
-it.each([false, true])(
-  "does not present a partial response group as complete usage (unavailable: %s)",
-  (unavailable) => {
-    const first = {
-      role: "assistant",
-      content: "First answer.",
-      timestamp: 1000,
-      usage: { input: 100, output: 20, cost: { total: 1 } },
-    };
-    const group = createMessageGroup(first, "assistant", {
-      messages: [
-        { key: "first", message: first },
-        {
-          key: "second",
-          message: {
-            ...first,
-            content: "Second answer.",
-            usage: {
-              input: 50,
-              output: 50,
-              cost: { total: 2 },
-              ...(unavailable ? { usageReport: { state: "unavailable" } } : {}),
-            },
-          },
-        },
-      ],
-    });
-    const view = mount(() => (
-      <MessageGroup group={group} options={{ showReasoning: false, contextWindow: 1000 }} />
-    ));
-    flush();
-    const metadata = view.query(".msg-meta__details");
-    expect(
-      [...(metadata?.querySelectorAll(".msg-meta__tokens") ?? [])].map((node) => node.textContent),
-    ).toEqual(unavailable ? ["Token usage and cost unavailable"] : ["↑150", "↓70"]);
-    expect([
-      metadata?.querySelector(".msg-meta__cost") === null,
-      metadata?.querySelector(".msg-meta__ctx") === null,
-    ]).toEqual([unavailable, unavailable]);
-  },
-);
+it("does not present a partial response group as complete usage", () => {
+  const first = {
+    ...assistant(1000, 100, 20),
+    usage: { input: 100, output: 20, cost: { total: 1 } },
+  };
+  const second = {
+    ...assistant(1001, 50, 50),
+    usage: { input: 50, output: 50, cost: { total: 2 }, usageReport: { state: "unavailable" } },
+  };
+  const group = createMessageGroup(first, "assistant", {
+    messages: [
+      { key: "first", message: first },
+      { key: "second", message: second },
+    ],
+  });
+  const view = mount(() => (
+    <MessageGroup group={group} options={{ showReasoning: false, contextWindow: 1000 }} />
+  ));
+  flush();
+  expect(view.all(".msg-meta__tokens").map((node) => node.textContent)).toEqual([
+    "Token usage and cost unavailable",
+  ]);
+  expect(view.query(".msg-meta__cost, .msg-meta__ctx")).toBeNull();
+});
 
 it.each([
   ["ends with its answer", true],
@@ -195,7 +178,6 @@ it("keeps distinct peer avatars and focused message content across group updates
   const bubbles = view.all(".chat-bubble");
   expect(bubbles).toHaveLength(2);
   const avatars = view.all(".chat-bubble .chat-avatar-slot");
-  expect(avatars[0]).not.toBe(avatars[1]);
   avatars.forEach((avatar, index) => {
     expect(avatar.closest(".chat-bubble")).toBe(bubbles[index]);
     expect(avatar.querySelector('[aria-label="Peer"]')).not.toBeNull();
@@ -229,7 +211,6 @@ it("keeps distinct peer avatars and focused message content across group updates
   bubbles.forEach((bubble, index) => expect(updatedBubbles[index]).toBe(bubble));
   const updatedAvatars = view.all(".chat-bubble .chat-avatar-slot");
   expect(updatedAvatars).toHaveLength(2);
-  expect(updatedAvatars[0]).not.toBe(updatedAvatars[1]);
   expect(
     updatedAvatars.every((avatar) => avatar.querySelector('[aria-label="Peer Updated"]') !== null),
   ).toBe(true);

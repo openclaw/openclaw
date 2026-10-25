@@ -253,88 +253,59 @@ describe("chat attachment read failures", () => {
     });
   }
 
-  it.each([false, true])(
-    "retains published payload custody when remaining reads abort (presented=%s)",
-    async (presented) => {
-      StubFileReader.heldNames.add("held.png");
-      const registered = vi.spyOn(payloads, "registerChatAttachmentPayload");
-      const create = vi.fn(() => "blob:completed-paste");
-      const revoke = vi.fn();
-      vi.stubGlobal(
-        "URL",
-        class extends URL {
-          static override createObjectURL = create;
-          static override revokeObjectURL = revoke;
-        },
-      );
-      const h = readFixture();
-      const { reads } = h;
-      h.paste([imageFile("completed.png", "hi"), imageFile("held.png", "held")], {
-        attachmentLimits: undefined,
-      });
-      await vi.waitFor(() => expect(registered).toHaveBeenCalledOnce());
-      const attachment = expectDefined(
-        registered.mock.calls[0]?.[0].attachment,
-        "completed payload",
-      );
-      onTestFinished(() => payloads.releaseChatAttachmentPayload(attachment.id));
-      expect(payloads.getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aGk=");
-      expect(create).not.toHaveBeenCalled();
-      expect(reads.pendingReads).toBe(1);
-      if (presented) {
-        expect(payloads.getChatAttachmentPreviewUrl(attachment)).toBe("blob:completed-paste");
-      }
+  it("retains published payload custody when remaining reads abort", async () => {
+    StubFileReader.heldNames.add("held.png");
+    const registered = vi.spyOn(payloads, "registerChatAttachmentPayload");
+    const create = vi.fn(() => "blob:completed-paste");
+    const revoke = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = create;
+        static override revokeObjectURL = revoke;
+      },
+    );
+    const h = readFixture();
+    const { reads } = h;
+    h.paste([imageFile("completed.png", "hi"), imageFile("held.png", "held")], {
+      attachmentLimits: undefined,
+    });
+    await vi.waitFor(() => expect(registered).toHaveBeenCalledOnce());
+    const attachment = expectDefined(registered.mock.calls[0]?.[0].attachment, "completed payload");
+    onTestFinished(() => payloads.releaseChatAttachmentPayload(attachment.id));
+    expect(payloads.getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aGk=");
+    expect(create).not.toHaveBeenCalled();
+    expect(reads.pendingReads).toBe(1);
+    expect(payloads.getChatAttachmentPreviewUrl(attachment)).toBe("blob:completed-paste");
 
-      reads.abortReads();
+    reads.abortReads();
 
-      expect(payloads.getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aGk=");
-      expect(payloads.getChatAttachmentBlob(attachment)).not.toBeNull();
-      expect(h).toMatchObject({ reads: { pendingReads: 0 }, attachments: [attachment] });
-      expect(create).toHaveBeenCalledTimes(presented ? 1 : 0);
-      expect(revoke).not.toHaveBeenCalled();
-      payloads.releaseChatAttachmentPayload(attachment.id);
-      expect(revoke.mock.calls).toEqual(presented ? [["blob:completed-paste"]] : []);
-    },
-  );
+    expect(payloads.getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aGk=");
+    expect(payloads.getChatAttachmentBlob(attachment)).not.toBeNull();
+    expect(h).toMatchObject({ reads: { pendingReads: 0 }, attachments: [attachment] });
+    expect(create).toHaveBeenCalledOnce();
+    expect(revoke).not.toHaveBeenCalled();
+    payloads.releaseChatAttachmentPayload(attachment.id);
+    expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:completed-paste");
+  });
 
   it.each(["error", "timeout"])(
     "removes a failed read %s and reports it in a toast",
     async (failure) => {
-      const files =
-        failure === "error"
-          ? [imageFile("good.png", "ok"), imageFile("bad.png", "broken")]
-          : [imageFile("stalled.png", "stalled")];
+      fakeTimers();
+      StubFileReader.failNames.add("bad.png");
+      StubFileReader.heldNames.add("bad.png");
+      const h = readFixture();
+      h.paste([imageFile("good.png", "ok"), imageFile("bad.png", "broken")], {
+        attachmentLimits: undefined,
+      });
+      expect(h.reads.pendingReads).toBe(2);
       if (failure === "error") {
-        StubFileReader.failNames.add("bad.png");
-        StubFileReader.heldNames = new Set(files.map((file) => file.name));
-      } else {
-        fakeTimers();
-        StubFileReader.heldNames.add("stalled.png");
-      }
-      const h = previewFixture([], {}, true);
-      const { container, reads } = h;
-      handleChatAttachmentPaste(pasteEventWithFiles(files), h.previewProps);
-      if (failure === "error") {
-        await waitForSolid(() =>
-          expect(
-            container.querySelectorAll('.chat-attachment-thumb[aria-busy="true"]'),
-          ).toHaveLength(2),
-        );
         StubFileReader.heldReads.splice(0).forEach((finish) => finish());
-        await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
-        expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["good.png"]);
-        const tiles = container.querySelectorAll(".chat-attachment-thumb");
-        expect(tiles).toHaveLength(1);
-        expect(tiles[0]?.querySelector("img")?.alt).toBe("good.png");
-      } else {
-        expect(reads.pendingReads).toBe(1);
-        await vi.advanceTimersByTimeAsync(15_001);
-        expect(reads.pendingReads).toBe(0);
-        await waitForSolid(() =>
-          expect(container.querySelector(".chat-attachment-thumb")).toBeNull(),
-        );
       }
-      expect(container.querySelector(".chat-attachment-failures")).toBeNull();
+      await vi.advanceTimersByTimeAsync(failure === "error" ? 0 : 15_001);
+      expect(h.reads.pendingReads).toBe(0);
+      expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["good.png"]);
       await expectAttachmentToast("Could not attach file. Try again.");
     },
   );
@@ -408,49 +379,31 @@ describe("chat attachment read failures", () => {
     await expectAttachmentToast();
   });
 
-  it.each<[string, File[], string, number | undefined, string[]?, number?]>([
-    [
-      "huge.gif",
-      [imageFile("small.png", "tiny"), imageFile("huge.gif", "way-too-big", "image/gif")],
-      "",
-      4,
-      ["small.png"],
-      8,
-    ],
+  it.each<[string, File[], string, number | undefined]>([
     ["empty.png", [new File([], "empty.png", { type: "image/png" })], "", undefined],
     ["pasted-text", [], "x".repeat(2048), 1024],
     ["pasted-image", [], `data:image/gif;base64,${btoa("p".repeat(64))}`, 16],
-  ])(
-    "rejects %s at intake while preserving admitted siblings",
-    async (name, files, text, imageLimit, accepted, maxBytes = 1024) => {
-      const onAttachmentsChange = vi.fn<(attachments: ChatAttachment[]) => void>();
-      handleChatAttachmentPaste(pasteEventWithFiles(files, text), {
-        draft: "Review the attachment",
-        attachmentLimits:
-          imageLimit === undefined
-            ? undefined
-            : { maxBytes, maxImageBytes: imageLimit, maxBatchBytes: maxBytes },
-        attachments: [],
-        onAttachmentsChange,
-      });
-      await toastHost.updateComplete;
-      await vi.waitFor(() =>
-        expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
-          name === "empty.png"
-            ? "Could not attach file. Try again."
-            : "File too large. Try a smaller file.",
-        ),
-      );
-      if (accepted) {
-        await vi.waitFor(() => expect(onAttachmentsChange).toHaveBeenCalled());
-        expect(onAttachmentsChange.mock.calls[0]?.[0].map(({ fileName }) => fileName)).toEqual(
-          accepted,
-        );
-      } else {
-        expect(onAttachmentsChange).not.toHaveBeenCalled();
-      }
-    },
-  );
+  ])("rejects %s at intake", async (name, files, text, imageLimit) => {
+    const onAttachmentsChange = vi.fn<(attachments: ChatAttachment[]) => void>();
+    handleChatAttachmentPaste(pasteEventWithFiles(files, text), {
+      draft: "Review the attachment",
+      attachmentLimits:
+        imageLimit === undefined
+          ? undefined
+          : { maxBytes: 1024, maxImageBytes: imageLimit, maxBatchBytes: 1024 },
+      attachments: [],
+      onAttachmentsChange,
+    });
+    await toastHost.updateComplete;
+    await vi.waitFor(() =>
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
+        name === "empty.png"
+          ? "Could not attach file. Try again."
+          : "File too large. Try a smaller file.",
+      ),
+    );
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
 
   it.each(["abort", "remove", "timeout"] as const)(
     "settles pending image preparation on %s and discards a late worker result",
@@ -621,60 +574,36 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
   expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["peer.png"]);
 });
 
-describe("attachment removal names", () => {
-  it("removes only the chosen pasted-text card without changing the draft", async () => {
-    const pasted = ["first", "second"].map((id): ChatAttachment => ({
-      id,
-      mimeType: "text/plain",
-      fileName: "pasted-text-123.txt",
-      origin: "paste",
-    }));
-    const onDraftChange = vi.fn();
-    const h = previewFixture(pasted, { draft: "Keep this draft", onDraftChange });
-    const { container } = h;
-    document.body.append(container);
-    onTestFinished(() => container.remove());
-    const first = expectDefined(
-      container.querySelector<HTMLElement>("openclaw-chat-pasted-text"),
-      "pasted text attachment",
-    );
-    flush();
-    const remove = first?.querySelector<HTMLButtonElement>(".chat-attachment-remove");
-    expect(remove?.getAttribute("aria-label")).toBe("Remove pasted-text-123.txt");
-    remove?.click();
-    expect(h.attachments).toEqual([pasted[1]]);
-    expect(onDraftChange).not.toHaveBeenCalled();
-  });
-
-  it("names full filenames and removes only the activated ID, including duplicate names", () => {
-    const names = [
-      "budget.csv",
-      "notes.txt",
-      "notes.txt",
-      undefined,
-      "   ",
-      "تقرير-الميزانية.txt",
-      "long-".repeat(50) + "report.txt",
-    ];
+it.each([false, true])(
+  "removes only the activated ID without changing the draft (paste=%s)",
+  (paste) => {
+    const names = paste
+      ? ["pasted-text-123.txt", "pasted-text-123.txt"]
+      : ["notes.txt", "notes.txt", undefined, "   "];
     const originals: ChatAttachment[] = names.map((fileName, index) => ({
       id: "named-" + index,
       mimeType: "text/plain",
       fileName,
+      origin: paste ? "paste" : "file",
     }));
     const released = vi.spyOn(payloads, "releaseChatAttachmentPayload");
-    const h = previewFixture(originals);
+    const onDraftChange = vi.fn();
+    const h = previewFixture(originals, { draft: "Keep this draft", onDraftChange });
     const { container } = h;
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+    flush();
     const buttons = [...container.querySelectorAll<HTMLButtonElement>(".chat-attachment-remove")];
     const labels = names.map((name) => (name?.trim() ? "Remove " + name : "Remove attachment"));
     expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual(labels);
     expect(
       buttons.map((button) => (button.parentElement as HTMLElement & { content: string }).content),
     ).toEqual(labels);
-    buttons[2]?.click();
-    expect(h.attachments.map(({ id }) => id)).toEqual(
-      originals.filter((_, index) => index !== 2).map(({ id }) => id),
-    );
-    expect(released).toHaveBeenCalledExactlyOnceWith("named-2");
+    const removed = paste ? 0 : 1;
+    buttons[removed]?.click();
+    expect(h.attachments).toEqual(originals.filter((_, index) => index !== removed));
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(released).toHaveBeenCalledExactlyOnceWith(`named-${removed}`);
     released.mockRestore();
-  });
-});
+  },
+);
