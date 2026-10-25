@@ -13,6 +13,7 @@ const DREAMING_TOKEN = "__openclaw_memory_core_short_term_promotion_dream__";
 const DREAMING_TAG = "[managed-by=memory-core.short-term-promotion]";
 const INACTIVE_STORE = "/old-state/cron/jobs.json";
 const CANONICAL_PAYLOAD = { kind: "agentTurn", message: DREAMING_TOKEN, lightContext: true };
+const MODEL_PAYLOAD = { ...CANONICAL_PAYLOAD, model: "operator-model" };
 const CANONICAL_FIELDS = {
   declarationKey: "memory-core:memory-dreaming-promotion",
   sessionTarget: "isolated",
@@ -30,6 +31,7 @@ const REM_PHASE_FIELDS = {
   description: undefined,
   payload: { kind: "systemEvent", text: "__openclaw_memory_core_rem_sleep__" },
 };
+const AUTHORED_JOB = { name: "Daily standup", description: "Operator job" };
 const dreamingConfig = (enabled: boolean) => ({
   plugins: { entries: { "memory-core": { config: { dreaming: { enabled } } } } },
 });
@@ -66,6 +68,12 @@ function makeJob(
     ...row,
   };
 }
+
+function storedJob(storeKey: string) {
+  return (id: string, fields: Record<string, unknown> = {}, sortOrder = 4) =>
+    makeJob(id, fields, { storeKey, sortOrder });
+}
+const inactiveJob = storedJob(INACTIVE_STORE);
 
 function createInput(jobs: PluginDoctorCronJob[], config: MigrationInput["config"] = {}) {
   const inventory: PluginDoctorCronInventory = { jobs };
@@ -137,10 +145,10 @@ describe("dreaming cron Doctor selection", () => {
       "partially migrated agent turn",
       {
         sessionTarget: "isolated",
-        payload: { ...CANONICAL_PAYLOAD, lightContext: false, model: "operator-model" },
+        payload: { ...MODEL_PAYLOAD, lightContext: false },
         delivery: { mode: "none" },
       },
-      { payload: { ...CANONICAL_PAYLOAD, model: "operator-model" } },
+      { payload: MODEL_PAYLOAD },
     ],
   ] as const)("adopts %s preserving authored fields", async (_label, fields, expected) => {
     const job = makeJob("survivor", fields);
@@ -152,22 +160,18 @@ describe("dreaming cron Doctor selection", () => {
   it("prefers declared over legacy and legacy over phase within each partition", async () => {
     const legacy = makeJob("legacy-oldest", { createdAtMs: 1 });
     const declared = makeJob("declared-survivor", AUTHORED_FIELDS);
-    const phase = makeJob(
-      "rem-phase",
-      { ...REM_PHASE_FIELDS, createdAtMs: 1 },
-      { storeKey: INACTIVE_STORE },
-    );
-    const inactive = makeJob("inactive-survivor", {}, { storeKey: INACTIVE_STORE });
+    const phase = inactiveJob("rem-phase", { ...REM_PHASE_FIELDS, createdAtMs: 1 });
+    const inactive = inactiveJob("inactive-survivor");
     const test = createInput([legacy, declared, phase, inactive]);
     await inspectAndMigrate(test);
     expectRepairs(test, [deleted(legacy), adopted(inactive), deleted(phase)]);
   });
 
   it.each([true, false])("repairs phase partitions when enabled=%s", async (enabled) => {
-    const phaseOnlyStore = "/phase-only/cron/jobs.json";
+    const phaseJob = storedJob("/phase-only/cron/jobs.json");
     const declared = makeJob("declared", CANONICAL_FIELDS);
     const legacy = makeJob("legacy-unified");
-    const phase = makeJob(
+    const phase = phaseJob(
       "a-light-phase",
       {
         name: "Memory Light Dreaming",
@@ -181,30 +185,19 @@ describe("dreaming cron Doctor selection", () => {
         },
         delivery: { mode: "announce", channel: "telegram", to: "operator" },
       },
-      { storeKey: phaseOnlyStore, sortOrder: 99 },
+      99,
     );
-    const tiedPhase = makeJob(
-      "z-rem-phase",
-      { ...REM_PHASE_FIELDS, createdAtMs: 5 },
-      { storeKey: phaseOnlyStore, sortOrder: 0 },
-    );
-    const newerPhase = makeJob("0-newer-phase", REM_PHASE_FIELDS, {
-      storeKey: phaseOnlyStore,
-      sortOrder: 1,
-    });
-    const renamedPhase = makeJob(
-      "renamed-phase",
-      {
-        name: "My authored phase name",
-        description: "[managed-by=memory-core.dreaming.rem] authored suffix",
-        payload: {
-          kind: "agentTurn",
-          message: "__openclaw_memory_core_rem_sleep__",
-          model: "operator-model",
-        },
+    const tiedPhase = phaseJob("z-rem-phase", { ...REM_PHASE_FIELDS, createdAtMs: 5 }, 0);
+    const newerPhase = phaseJob("0-newer-phase", REM_PHASE_FIELDS, 1);
+    const renamedPhase = inactiveJob("renamed-phase", {
+      name: "My authored phase name",
+      description: "[managed-by=memory-core.dreaming.rem] authored suffix",
+      payload: {
+        kind: "agentTurn",
+        message: "__openclaw_memory_core_rem_sleep__",
+        model: "operator-model",
       },
-      { storeKey: INACTIVE_STORE },
-    );
+    });
     const managed = [declared, legacy, tiedPhase, newerPhase, phase, renamedPhase];
     const test = createInput(
       [
@@ -215,7 +208,7 @@ describe("dreaming cron Doctor selection", () => {
         }),
         { ...makeJob("malformed"), definitionJson: "{malformed", definition: null },
         makeJob("foreign", { declarationKey: "other-plugin:dreaming" }),
-        makeJob("authored", { name: "Daily standup", description: "Operator job" }),
+        makeJob("authored", AUTHORED_JOB),
       ],
       dreamingConfig(enabled),
     );
@@ -234,7 +227,7 @@ describe("dreaming cron Doctor selection", () => {
           deleted(newerPhase),
           adopted(renamedPhase, {
             description: `${DREAMING_TAG} authored suffix`,
-            payload: { ...CANONICAL_PAYLOAD, model: "operator-model" },
+            payload: MODEL_PAYLOAD,
           }),
         ]
       : managed.map(deleted);
@@ -249,18 +242,14 @@ describe("dreaming cron Doctor selection", () => {
     ["unified", DREAMING_TAG, true],
     ["mixed", `${DREAMING_TAG} [managed-by=memory-core.dreaming.rem]`, false],
   ] as const)("retains authored prompts with %s tags", async (_label, tags, enabled) => {
-    const test = createInput(
-      [
-        makeJob("authored-tagged", {
-          ...CANONICAL_FIELDS,
-          declarationKey: undefined,
-          name: "My memory maintenance",
-          description: `${tags} authored description`,
-          payload: { ...CANONICAL_PAYLOAD, message: "Preserve my authored prompt" },
-        }),
-      ],
-      dreamingConfig(enabled),
-    );
+    const job = makeJob("authored-tagged", {
+      ...CANONICAL_FIELDS,
+      declarationKey: undefined,
+      name: "My memory maintenance",
+      description: `${tags} authored description`,
+      payload: { ...CANONICAL_PAYLOAD, message: "Preserve my authored prompt" },
+    });
+    const test = createInput([job], dreamingConfig(enabled));
     const { detection, result } = await inspectAndMigrate(test);
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([expect.stringContaining("authored-tagged")]);
@@ -270,7 +259,7 @@ describe("dreaming cron Doctor selection", () => {
   });
 
   it.each([
-    ["unrelated", { name: "Daily standup", description: "Operator job" }],
+    ["unrelated", AUTHORED_JOB],
     ["declared", AUTHORED_FIELDS],
   ] as const)("plans no edits for an authored %s job", async (_label, fields) => {
     const test = createInput([makeJob("unchanged", fields)]);
