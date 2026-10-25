@@ -293,7 +293,7 @@ it("uses savepoints for nested write transaction rollback", () => {
   const stateDir = tempDirs.make("openclaw-state-transactions-");
   const stateOptions = { env: { OPENCLAW_STATE_DIR: stateDir } };
 
-  runOpenClawStateWriteTransaction((database) => {
+  writeTransaction((database) => {
     const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
     executeSqliteQuerySync(
       database.db,
@@ -305,7 +305,7 @@ it("uses savepoints for nested write transaction rollback", () => {
       }),
     );
     expect(() =>
-      runOpenClawStateWriteTransaction((inner) => {
+      writeTransaction((inner) => {
         const innerDb = getNodeSqliteKysely<StateDbTestDatabase>(inner.db);
         executeSqliteQuerySync(
           inner.db,
@@ -321,7 +321,7 @@ it("uses savepoints for nested write transaction rollback", () => {
     ).toThrow("rollback nested");
   }, stateOptions);
 
-  const database = openOpenClawStateDatabase(stateOptions);
+  const database = openDatabase(stateOptions);
   const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
   expect(
     executeSqliteQuerySync(
