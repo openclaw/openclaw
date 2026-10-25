@@ -174,26 +174,24 @@ describe("legacy device-auth Doctor migration", () => {
     expect(readToken()?.token).toBe("répaired-�");
   });
 
-  it.each([".doctor-importing", ".native-importing"])(
-    "imports matching retained %s claims once",
-    async (suffix) => {
-      const { original, claimPath } = writeClaim(suffix);
-      expect((await migrate()).changes).toEqual(["Migrated 1 device-auth token to SQLite."]);
-      expect(readToken()?.token).toBe("legacy-token");
-      expect((await migrate()).changes).toEqual([]);
-      expect(readSource()).toEqual(original);
-      expect(fs.readFileSync(claimPath)).toEqual(original);
-    },
-  );
-
-  it.each([".doctor-importing", ".native-importing"])(
-    "rejects conflicting %s claims without importing tokens",
-    async (suffix) => {
-      const { original, claimPath, claim } = writeClaim(suffix, "other-token");
+  it.each(
+    [".doctor-importing", ".native-importing"].flatMap((suffix) =>
+      ["legacy-token", "other-token"].map((token) => [suffix, token]),
+    ),
+  )(
+    "retains %s claim bytes containing %s, importing only matching claims",
+    async (suffix, token) => {
+      const { original, claimPath, claim } = writeClaim(suffix, token);
       const result = await migrate();
-      expect(result.changes).toEqual([]);
-      expect(result.warnings.join("\n")).toContain("Legacy device-auth files disagree");
-      expect(readStoredToken()).toBeUndefined();
+      if (token === "legacy-token") {
+        expect(result.changes).toEqual(["Migrated 1 device-auth token to SQLite."]);
+        expect(readToken()?.token).toBe("legacy-token");
+        expect((await migrate()).changes).toEqual([]);
+      } else {
+        expect(result.changes).toEqual([]);
+        expect(result.warnings.join("\n")).toContain("Legacy device-auth files disagree");
+        expect(readStoredToken()).toBeUndefined();
+      }
       expect(readSource()).toEqual(original);
       expect(fs.readFileSync(claimPath)).toEqual(claim);
     },

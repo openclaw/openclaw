@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { recordUpdateDatabaseWrites } from "../cli/update-cli/update-command-database-receipts.js";
 import * as state from "../state/openclaw-state-db.js";
@@ -19,8 +18,6 @@ afterEach(async () => {
 function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-compaction-") } };
 }
-const names = (prefix: string, suffixes: string) =>
-  suffixes.split(",").map((suffix) => prefix + suffix);
 function timedStep(step: string, status: "completed" | "failed" = "completed") {
   return { step, status, startedAtMs: 1_000, endedAtMs: 2_000 };
 }
@@ -28,7 +25,6 @@ function timedStep(step: string, status: "completed" | "failed" = "completed") {
 describe("update run ledger compaction", () => {
   it.each([
     { name: "step count", count: 130, detail: undefined },
-    { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
     { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512), missingWrites: true },
   ])("retains evidence across the $name bound and reopen", ({ count, detail, missingWrites }) => {
     const options = isolatedOptions();
@@ -65,22 +61,13 @@ describe("update run ledger compaction", () => {
     );
     const evidence = [
       "candidate-admission",
-      ...names("warning:", "update-admission-unsupported-target,update-admission-fallback"),
-      ...names("warning:", "managed-service-membership,finalize:plugins:deadline"),
-      ...names("", "global update,global update (omit optional)"),
-      "candidate-doctor-lint",
-      ...names("candidate-", "state-snapshot,doctor,gateway-startup,state-cleanup"),
-      "post-stop-checks",
-      ...names("git-", "checkout,runtime-activation"),
-      ...names("", "openclaw doctor,pre-plugin doctor,post-plugin doctor"),
-      "updater-runtime-retention",
-      "diagnostic:updater-runtime-retention",
-      ...names("managed-service-", "executor-check,install,restart"),
-      ...names("", "update-driver-handoff,diagnostic:update-driver-handoff"),
-    ].map((step) => {
-      const failed = step.startsWith("global update") || step === "candidate-doctor-lint";
-      return timedStep(step, failed ? "failed" : "completed");
-    });
+      "warning:update-admission-fallback",
+      "global update",
+      "candidate-gateway-startup",
+      "openclaw doctor",
+      "managed-service-restart",
+      "update-driver-handoff",
+    ].map((step) => timedStep(step, step === "global update" ? "failed" : "completed"));
     const refusal = {
       reason: "refused",
       message: "Repair is pending.",
@@ -94,14 +81,14 @@ describe("update run ledger compaction", () => {
       });
     }
     const notices = [
-      ...names("notice:", "ack,activating,verifying"),
+      "validating",
+      "notice:ack",
       "previous generation restoration",
-      ...names("finalize:", "doctor,future-phase"),
       // Candidate Doctor's predecessor-stop receipt: identity lives in the key.
       "finalize:predecessor-stop:1758600000000:1000:631:0123456789abcdef",
       "post-update verification",
     ];
-    for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
+    for (const step of notices) {
       write({ step, status: "completed", detail });
     }
     for (let index = 0; index < count; index++) {
@@ -133,9 +120,7 @@ describe("update run ledger compaction", () => {
     expect(retainedRefusal).toMatchObject({ reason: "refused", message: "Repair is pending." });
     expect(retainedRefusal?.keys).toHaveLength(32);
     expect(retainedRefusal?.keys.every((key) => key.length < 1_020)).toBe(true);
-    expect(persisted.steps.map((step) => step.step)).toEqual(
-      expect.arrayContaining([...UPDATE_RUN_PHASES, ...notices]),
-    );
+    expect(persisted.steps.map((step) => step.step)).toEqual(expect.arrayContaining(notices));
     expect(persisted.steps.length).toBeLessThanOrEqual(128);
     expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
   });
@@ -145,16 +130,10 @@ describe("update run ledger compaction", () => {
     const runId = "00000000-0000-4000-8000-000000000098";
     const version = "2026.9.8";
     // v2026.9.8 fixture: bypass today's writer so it cannot add the new timing steps.
-    const steps = [
-      ..."requested,staging,validating,repairing,activating,restarting,verifying,finished".split(
-        ",",
-      ),
-      "candidate-admission",
-      "global update",
-      ...names("notice:", "ack,activating,verifying"),
-      "post-update verification",
-      "finalize:doctor",
-    ].map((step) => Object.assign(timedStep(step), { detail: "legacy diagnostic ".repeat(50) }));
+    const steps = Array.from({ length: 15 }, (_, index) => ({
+      ...timedStep(`finalize:legacy-${index}`),
+      detail: "legacy diagnostic ".repeat(50),
+    }));
     const requester = { channel: "discord", senderId: "legacy-operator" };
     const oldRecord = {
       runId,

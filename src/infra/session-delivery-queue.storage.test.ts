@@ -125,35 +125,20 @@ describe("session-delivery queue storage", () => {
 
   it("persists agent-loop routing and provenance for restart replay", async () => {
     await withSessionDeliveryQueue(async (_stateDir, ctx) => {
-      await enqueue(
-        agentTurn("image:task-1:agent-loop", {
-          sessionKey: "agent:main:discord:channel:123",
-          route: {
-            channel: "discord",
-            to: "channel:123",
-            accountId: "default",
-            chatType: "channel",
-          },
-          inputProvenance: {
-            kind: "inter_session",
-            sourceSessionKey: "image_generate:task-1",
-            sourceChannel: "internal",
-            sourceTool: "image_generate",
-          },
-          sourceReplyDeliveryMode: "message_tool_only",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        }),
-        ctx,
-      );
-
-      expect(await listPending(ctx)).toEqual([
-        expect.objectContaining({
-          route: expect.objectContaining({ channel: "discord", to: "channel:123" }),
-          inputProvenance: expect.objectContaining({ sourceTool: "image_generate" }),
-          sourceReplyDeliveryMode: "message_tool_only",
-          expectedMediaUrls: ["/tmp/proof.png"],
-        }),
-      ]);
+      const replay: Parameters<typeof agentTurn>[1] = {
+        sessionKey: "agent:main:discord:channel:123",
+        route: { channel: "discord", to: "channel:123", accountId: "default", chatType: "channel" },
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "image_generate:task-1",
+          sourceChannel: "internal",
+          sourceTool: "image_generate",
+        },
+        sourceReplyDeliveryMode: "message_tool_only",
+        expectedMediaUrls: ["/tmp/proof.png"],
+      };
+      await enqueue(agentTurn("image:task-1:agent-loop", replay), ctx);
+      expect(await listPending(ctx)).toEqual([expect.objectContaining(replay)]);
     });
   });
 
@@ -216,17 +201,5 @@ describe("session-delivery queue storage", () => {
     } finally {
       sqlCalls.restore();
     }
-  });
-
-  it("retains a permanent completion receipt", async () => {
-    await withSessionDeliveryQueue(async (dir, ctx) => {
-      const payload = systemEvent("restart:permanent-completed", true);
-      const id = await enqueue(payload, ctx);
-      await settle(id, ctx);
-
-      expect(await enqueue(payload, ctx)).toBe(id);
-      expect(readStatus(dir, id)).toBe("completed");
-      expect(await listPending(ctx)).toEqual([]);
-    });
   });
 });

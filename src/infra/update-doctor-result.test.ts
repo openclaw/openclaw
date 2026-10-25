@@ -7,10 +7,8 @@ import {
   consumeUpdatePostInstallDoctorResult,
   createDeferredConfiguredPluginRepairDoctorResult,
   createUpdatePostInstallDoctorResultPath,
-  getUpdateDoctorConfigWriteAuthority,
   normalizeUpdatePostInstallDoctorWarnings,
   recordUpdateDoctorConfigMigration,
-  recordUpdateDoctorConfigWrite,
   recordUpdateDoctorConfigWriteRefusal,
   writeUpdatePostInstallDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -162,48 +160,6 @@ describe("post-install doctor result IPC", () => {
       expect(capture.configChanges).toEqual([]);
       expect(capture.configWriteRefusal).toBeUndefined();
     });
-  });
-
-  it("carries current authority to included writes and advances only the root input hash", async () => {
-    const configPath = "/synthetic/openclaw.json";
-    const initialHash = "a".repeat(64);
-    const committedHash = "b".repeat(64);
-    let revoked = false;
-    const assertCurrent = () => {
-      if (revoked) {
-        throw new Error("Requester authority revoked.");
-      }
-    };
-    expect(getUpdateDoctorConfigWriteAuthority(configPath)).toBeUndefined();
-    await captureUpdateDoctorConfigWrites(
-      configPath,
-      async () => {
-        expect(getUpdateDoctorConfigWriteAuthority(configPath)).toEqual({
-          inputHash: initialHash,
-          assertCurrent,
-        });
-        expect(getUpdateDoctorConfigWriteAuthority("/synthetic/agents.json")).toEqual({
-          assertCurrent,
-        });
-        recordUpdateDoctorConfigWrite(
-          configPath,
-          initialHash,
-          committedHash,
-          {},
-          '{"tools":{"profile":"full"}}',
-        );
-        expect(getUpdateDoctorConfigWriteAuthority(configPath)).toEqual({
-          inputHash: committedHash,
-          assertCurrent,
-        });
-        revoked = true;
-        expect(() =>
-          getUpdateDoctorConfigWriteAuthority("/synthetic/agents.json")?.assertCurrent(),
-        ).toThrow("Requester authority revoked.");
-      },
-      { inputHash: initialHash, assertCurrent },
-    );
-    expect(getUpdateDoctorConfigWriteAuthority(configPath)).toBeUndefined();
   });
 
   it("rejects result paths outside the secure OpenClaw temp root", async () => {

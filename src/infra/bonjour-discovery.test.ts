@@ -10,11 +10,20 @@ const WIDE_AREA_DOMAIN = "openclaw.internal.";
 
 function mockCommands(
   platform: NodeJS.Platform,
-  stdout: (...args: Parameters<typeof processExec.runCommandWithTimeout>) => string,
+  stdout:
+    | Record<string, string>
+    | ((...args: Parameters<typeof processExec.runCommandWithTimeout>) => string),
 ) {
   vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  const read = (...args: Parameters<typeof processExec.runCommandWithTimeout>) => {
+    const value = typeof stdout === "function" ? stdout(...args) : stdout[args[0].join(" ")];
+    if (value === undefined) {
+      throw new Error(`unexpected argv: ${args[0].join(" ")}`);
+    }
+    return value;
+  };
   return vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (...args) => ({
-    stdout: stdout(...args),
+    stdout: read(...args),
     stderr: "",
     code: 0,
     signal: null,
@@ -44,35 +53,15 @@ describe("bonjour-discovery", () => {
 
   it("discovers beacons on darwin across local + wide-area domains", async () => {
     const studioInstance = "Peter’s Mac Studio Gateway";
-    const run = mockCommands("darwin", (argv) => {
-      const domain = argv[3] ?? "";
-
-      if (argv[0] === "dns-sd" && argv[1] === "-B") {
-        if (domain === "local.") {
-          return "Add 2 3 local. _openclaw-gw._tcp. Peter\\226\\128\\153s Mac Studio Gateway\nAdd 2 3 local. _openclaw-gw._tcp. Laptop Gateway\n";
-        }
-        if (domain === WIDE_AREA_DOMAIN) {
-          return `Add 2 3 ${WIDE_AREA_DOMAIN} _openclaw-gw._tcp. Tailnet Gateway\n`;
-        }
-      }
-
-      if (argv[0] === "dns-sd" && argv[1] === "-L") {
-        const instance = argv[2] ?? "";
-        const host =
-          instance === studioInstance
-            ? "studio.local"
-            : instance === "Laptop Gateway"
-              ? "laptop.local"
-              : "tailnet.local";
-        const tailnetDns = instance === "Tailnet Gateway" ? "studio.tailnet.ts.net" : "";
-        const displayName =
-          instance === studioInstance
-            ? "Peter\\226\\128\\153s\\032Mac\\032Studio"
-            : instance.replace(" Gateway", "");
-        return `${instance}._openclaw-gw._tcp. can be reached at ${host}:18789\ntxtvers=1 displayName=${displayName} lanHost=${host} gatewayPort=18789 sshPort=22${tailnetDns ? ` tailnetDns=${tailnetDns}` : ""}\n`;
-      }
-
-      throw new Error(`unexpected argv: ${argv.join(" ")}`);
+    const run = mockCommands("darwin", {
+      "dns-sd -B _openclaw-gw._tcp local.":
+        "Add 2 3 local. _openclaw-gw._tcp. Peter\\226\\128\\153s Mac Studio Gateway\nAdd 2 3 local. _openclaw-gw._tcp. Laptop Gateway\n",
+      [`dns-sd -B _openclaw-gw._tcp ${WIDE_AREA_DOMAIN}`]: `Add 2 3 ${WIDE_AREA_DOMAIN} _openclaw-gw._tcp. Tailnet Gateway\n`,
+      [`dns-sd -L ${studioInstance} _openclaw-gw._tcp local.`]: `${studioInstance}._openclaw-gw._tcp. can be reached at studio.local:18789\ntxtvers=1 displayName=Peter\\226\\128\\153s\\032Mac\\032Studio lanHost=studio.local gatewayPort=18789 sshPort=22\n`,
+      "dns-sd -L Laptop Gateway _openclaw-gw._tcp local.":
+        "Laptop Gateway._openclaw-gw._tcp. can be reached at laptop.local:18789\ntxtvers=1 displayName=Laptop lanHost=laptop.local gatewayPort=18789 sshPort=22\n",
+      [`dns-sd -L Tailnet Gateway _openclaw-gw._tcp ${WIDE_AREA_DOMAIN}`]:
+        "Tailnet Gateway._openclaw-gw._tcp. can be reached at tailnet.local:18789\ntxtvers=1 displayName=Tailnet lanHost=tailnet.local gatewayPort=18789 sshPort=22 tailnetDns=studio.tailnet.ts.net\n",
     });
 
     const beacons = await discoverGatewayBeacons({
@@ -177,39 +166,18 @@ describe("bonjour-discovery", () => {
     const serviceBase = `_openclaw-gw._tcp.${zone}`;
     const studioService = `studio-gateway.${serviceBase}`;
 
-    mockCommands("darwin", (argv) => {
-      const cmd = argv[0];
-
-      if (cmd === "dns-sd" && argv[1] === "-B") {
-        return "";
-      }
-
-      if (cmd === "tailscale" && argv[1] === "status" && argv[2] === "--json") {
-        return JSON.stringify({
-          Self: { TailscaleIPs: ["100.69.232.64"] },
-          Peer: { "peer-1": { TailscaleIPs: ["100.123.224.76"] } },
-        });
-      }
-
-      if (cmd === "dig") {
-        const server = argv.find((a) => a.startsWith("@"));
-        const qname = argv[argv.length - 2] ?? "";
-        const qtype = argv[argv.length - 1] ?? "";
-
-        if (server === "@100.123.224.76" && qtype === "PTR" && qname === serviceBase) {
-          return `${studioService}.\n`;
-        }
-
-        if (server === "@100.123.224.76" && qtype === "SRV" && qname === studioService) {
-          return `0 0 18789 studio.${zone}.\n`;
-        }
-
-        if (server === "@100.123.224.76" && qtype === "TXT" && qname === studioService) {
-          return '"displayName=Studio" "gatewayPort=18789" "transport=gateway" "sshPort=22" "tailnetDns=peters-mac-studio-1.sheep-coho.ts.net" "cliPath=/opt/homebrew/bin/openclaw" ';
-        }
-      }
-
-      throw new Error(`unexpected argv: ${argv.join(" ")}`);
+    const dig = "dig +short +time=1 +tries=1 @100.123.224.76";
+    mockCommands("darwin", {
+      "dns-sd -B _openclaw-gw._tcp local.": "",
+      [`dns-sd -B _openclaw-gw._tcp ${WIDE_AREA_DOMAIN}`]: "",
+      "tailscale status --json": JSON.stringify({
+        Self: { TailscaleIPs: ["100.69.232.64"] },
+        Peer: { "peer-1": { TailscaleIPs: ["100.123.224.76"] } },
+      }),
+      [`${dig} ${serviceBase} PTR`]: `${studioService}.\n`,
+      [`${dig} ${studioService} SRV`]: `0 0 18789 studio.${zone}.\n`,
+      [`${dig} ${studioService} TXT`]:
+        '"displayName=Studio" "gatewayPort=18789" "transport=gateway" "sshPort=22" "tailnetDns=peters-mac-studio-1.sheep-coho.ts.net" "cliPath=/opt/homebrew/bin/openclaw" ',
     });
 
     const beacons = await discoverGatewayBeacons({
