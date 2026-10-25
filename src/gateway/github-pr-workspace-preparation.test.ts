@@ -156,46 +156,34 @@ describe("existing PR preparation through the registered agent action", () => {
     },
   );
 
-  it.each([false, true])(
-    "uses the actual empty source only when no earlier work needs preserving (earlier notes=%s)",
-    async (earlierNotes) => {
-      const f = await fixture({ empty: true, fork: true });
-      const before = f.readSession();
-      const emptyHead = await f.local!.git("-C", f.emptySource!, "rev-parse", "HEAD");
-      const guestHead = await f.guestGit("rev-parse", "HEAD");
-      const guestBranch = await f.guestGit("symbolic-ref", "HEAD");
-      if (earlierNotes) {
-        await fs.writeFile(path.join(f.projection, "notes.txt"), "work before the URL arrived\n");
-        await expect(f.invoke()).rejects.toThrow("existing dirty, untracked, or unpublished work");
-        expect(f.readSession().worktree).toEqual(before.worktree);
-        expect(await f.git("rev-parse", "HEAD")).toBe(emptyHead);
-        await expectFile(f.projection, "notes.txt", "work before the URL arrived\n");
-        await expectMissing(f.projection, "pr.txt");
-      } else {
-        expect(await f.invoke()).toMatchObject({
-          status: "prepared",
-          headCommit: f.headCommit,
-          review: { mode: "local", base: f.commonAncestor },
-        });
-        expect(f.readSession()).toMatchObject({
-          sessionId: before.sessionId,
-          spawnedCwd: before.spawnedCwd,
-          sessionRoot: before.sessionRoot,
-          worktree: { ...before.worktree, githubPullRequest: { preparedHeadCommit: f.headCommit } },
-        });
-        expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
-        const prTree = await f.local!.git("-C", f.upstream, "rev-parse", `${f.headCommit}^{tree}`);
-        expect(await f.git("write-tree")).toBe(prTree);
-        expect(await f.git("status", "--porcelain")).toBe("");
-        expect(await f.guestGit("write-tree")).toBe(prTree);
-        await expectFile(f.projection, "pr.txt", "original PR contents\n");
-      }
-      expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
-      expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
-      expect(await f.local!.git("-C", f.emptySource!, "rev-parse", "HEAD")).toBe(emptyHead);
-      expect(await f.local!.git("-C", f.emptySource!, "status", "--porcelain")).toBe("");
-    },
-  );
+  it("installs into the actual clean empty source without replacing guest identity", async () => {
+    const f = await fixture({ empty: true, fork: true });
+    const before = f.readSession();
+    const emptyHead = await f.local!.git("-C", f.emptySource!, "rev-parse", "HEAD");
+    const guestHead = await f.guestGit("rev-parse", "HEAD");
+    const guestBranch = await f.guestGit("symbolic-ref", "HEAD");
+    expect(await f.invoke()).toMatchObject({
+      status: "prepared",
+      headCommit: f.headCommit,
+      review: { mode: "local", base: f.commonAncestor },
+    });
+    expect(f.readSession()).toMatchObject({
+      sessionId: before.sessionId,
+      spawnedCwd: before.spawnedCwd,
+      sessionRoot: before.sessionRoot,
+      worktree: { ...before.worktree, githubPullRequest: { preparedHeadCommit: f.headCommit } },
+    });
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+    const prTree = await f.local!.git("-C", f.upstream, "rev-parse", `${f.headCommit}^{tree}`);
+    expect(await f.git("write-tree")).toBe(prTree);
+    expect(await f.git("status", "--porcelain")).toBe("");
+    expect(await f.guestGit("write-tree")).toBe(prTree);
+    await expectFile(f.projection, "pr.txt", "original PR contents\n");
+    expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);
+    expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
+    expect(await f.local!.git("-C", f.emptySource!, "rev-parse", "HEAD")).toBe(emptyHead);
+    expect(await f.local!.git("-C", f.emptySource!, "status", "--porcelain")).toBe("");
+  });
 
   it("refuses initial dirty, untracked, and unpublished work before changing files, heads or association", async () => {
     const f = await fixture();
