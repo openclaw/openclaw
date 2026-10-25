@@ -94,6 +94,11 @@ to update the Gateway. **Open Gateway** opens the native connection screen;
 Gateway setup and pairing remain available. The offline **Device** section also
 remains available without Dashboard support.
 
+Embedded Dashboard pages request native signatures instead of receiving the
+app's private device key or a stored device grant in their startup script. The
+connection response can carry a device token in memory, as required by the
+Gateway protocol; the native authentication path does not persist it in page storage.
+
 The **This iPhone** or **This iPad** page contains appearance, notification
 delivery, camera access, keep-awake behavior, and optional Health summaries.
 Its **Permissions** page shows notification, camera, microphone, speech, location,

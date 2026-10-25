@@ -19,6 +19,10 @@ export type SessionColdExternalization = {
   archive: Omit<SessionColdArchive, "archive_blob">;
   envelopeBytes: number;
 };
+export type SessionColdOversized = {
+  sessionId: string;
+  lowerBoundBytes: number;
+};
 
 export type SessionColdMutationResult = {
   transcriptPublication?: readonly import("./session-transcript-authority.types.js").SessionTranscriptAuthorityReceipt[];

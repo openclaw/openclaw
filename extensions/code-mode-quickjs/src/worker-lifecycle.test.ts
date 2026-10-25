@@ -19,7 +19,7 @@ import {
 } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { EvalFlags, QuickJS, type Snapshot } from "quickjs-wasi";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   createQuickJsTestConfig,
   quickJsTestModules as modules,
@@ -40,9 +40,7 @@ const resolveModule = createRequire(import.meta.url).resolve;
 function completeOutput(output: CodeModeOutputSource): unknown[] {
   expect(output.source.kind).toBe("complete");
   const entries: unknown = JSON.parse(output.source.json);
-  if (!Array.isArray(entries)) {
-    throw new Error("expected complete output entries");
-  }
+  assert(Array.isArray(entries), "expected complete output entries");
   return entries;
 }
 
@@ -97,10 +95,7 @@ function run(task: RunArgs[0], inlineHost?: RunArgs[4], timeoutMs = 10_000) {
 function parkedResult(
   result: CodeModeWorkerResult,
 ): Extract<CodeModeWorkerResult, { status: "waiting" }> {
-  expect(result).toMatchObject({ status: "waiting" });
-  if (result.status !== "waiting") {
-    throw new Error("expected a suspended guest");
-  }
+  assert(result.status === "waiting", "expected a suspended guest");
   return result;
 }
 function settled(
@@ -157,17 +152,12 @@ type FailureOptions = {
 type FailureCase = [string, string, string, string, number, FailureOptions?];
 const internal = "internal_error";
 const yieldControl = "await yield_control();";
+const continuationError = 'throw new Error("invalid code mode continuation budget");';
 
 describe("Code Mode worker lifecycle", () => {
   it.each<FailureCase>([
     ["host continuation", yieldControl, "host", internal, 1, { resumeTimeoutMs: Number.NaN }],
-    [
-      "guest same-message exception",
-      'throw new Error("invalid code mode continuation budget");',
-      "guest",
-      internal,
-      0,
-    ],
+    ["guest same-message exception", continuationError, "guest", internal, 0],
     ["host source wrapper", "return true;", "host", internal, 0, { prelude: "}" }],
     ["guest syntax", "return (", "input", "invalid_input", 0],
     ["guest pending promise", "await new Promise(() => {});", "input", "invalid_input", 0],
@@ -253,24 +243,24 @@ describe("Code Mode worker lifecycle", () => {
     });
   });
 
-  it("accounts for a same-line Unicode prelude in syntax locations", async () => {
-    const result = await run({ ...input("const value = ;"), prelude: "const helper = 'é🦞';" });
-    expect(result).toMatchObject({
-      status: "failed",
-      error: expect.stringMatching(/SyntaxError[\s\S]*openclaw-code-mode:user\.js:1:15/),
-    });
+  it.each<[string, string, string, unknown]>([
+    [
+      "Unicode syntax location",
+      "const value = ;",
+      "const helper = 'é🦞';",
+      expect.stringMatching(/SyntaxError[\s\S]*openclaw-code-mode:user\.js:1:15/),
+    ],
+    [
+      "prelude failure location",
+      "return true;",
+      'throw new Error("prelude failure");\n',
+      "Error: prelude failure",
+    ],
+  ])("preserves %s", async (_name, source, prelude, error) => {
+    expect(await run({ ...input(source), prelude })).toMatchObject({ status: "failed", error });
   });
 
-  it("does not attribute a prelude failure to submitted source", async () => {
-    const result = await run({
-      ...input("return true;"),
-      prelude: 'throw new Error("prelude failure");\n',
-    });
-    expect(result).toMatchObject({ status: "failed", error: "Error: prelude failure" });
-  });
-
-  it("transfers snapshot heaps and releases consumed copies across resumes", async () => {
-    // Real snapshots must transfer heaps without storage-codec copies or retained inputs.
+  it("transfers snapshots and releases consumed heaps and replies", async () => {
     const workerUrl = await instrumentedWorker(
       "code-mode-snapshot-transfer-",
       `
@@ -279,14 +269,12 @@ describe("Code Mode worker lifecycle", () => {
       import { setFlagsFromString } from "node:v8";
       import { runInNewContext } from "node:vm";
       import { parentPort } from "node:worker_threads";
-      const gc = (() => {
-        // Bun ignores V8 flags; use its synchronous full collector in this worker.
-        if (typeof globalThis.Bun?.gc === "function") {
-          return () => globalThis.Bun.gc(true);
-        }
+      // Bun needs its own synchronous collector; Node exposes V8's collector.
+      let gc = () => globalThis.Bun.gc(true);
+      if (typeof globalThis.Bun?.gc !== "function") {
         setFlagsFromString("--expose-gc");
-        return runInNewContext("gc");
-      })();
+        gc = runInNewContext("gc");
+      }
       let consumed;
       let settlements = [];
       const on = parentPort.on;
@@ -329,16 +317,15 @@ describe("Code Mode worker lifecycle", () => {
       };
       const serialize = QuickJS.serializeSnapshot;
       QuickJS.serializeSnapshot = (snapshot) => {
-        if (snapshot.memory.byteLength > 0) throw new Error("snapshot heap serialization copies memory");
+        assert.equal(snapshot.memory.byteLength, 0, "snapshot heap serialization copies memory");
         return serialize(snapshot);
       };
       QuickJS.deserializeSnapshot = () => { throw new Error("snapshot heap deserialization copies memory"); };
       const postMessage = parentPort.postMessage.bind(parentPort);
       parentPort.postMessage = (message, transferList) => {
-        if (message.value?.status === "waiting" &&
-            !transferList?.includes(message.value.continuation.memory.buffer)) {
-          throw new Error("snapshot heap must transfer to the host");
-        }
+        assert.ok(message.value?.status !== "waiting" ||
+          transferList?.includes(message.value.continuation.memory.buffer),
+          "snapshot heap must transfer to the host");
         postMessage(message, transferList);
       };
       `,
@@ -388,10 +375,11 @@ describe("Code Mode worker lifecycle", () => {
         "globalThis.previousRun = true; for (let i = 0; i < 130; i++) setTimeout(() => {}, 1);",
       ),
     ).toMatchObject({ status: "failed", code: "invalid_input" });
-    const cancelled = await execute(
-      'const timer = setTimeout(() => {}, 1); clearTimeout(timer); await yield_control("pause");',
-    );
-    expect(cancelled).toMatchObject({
+    expect(
+      await execute(
+        'const timer = setTimeout(() => {}, 1); clearTimeout(timer); await yield_control("pause");',
+      ),
+    ).toMatchObject({
       status: "waiting",
       canceledRequestIds: ["bridge:sleep:1"],
     });
@@ -415,9 +403,8 @@ describe("Code Mode worker lifecycle", () => {
         error: expect.stringContaining("RangeError: Maximum call stack size exceeded"),
         failurePhase: "guest",
       });
-      if (result.status === "failed") {
-        expect(result.error).not.toContain("memory access out of bounds");
-      }
+      assert(result.status === "failed");
+      expect(result.error).not.toContain("memory access out of bounds");
     },
   );
 
@@ -434,17 +421,15 @@ describe("Code Mode worker lifecycle", () => {
           ? "let total = 0; for (let index = 0; index < 100_000; index++) total += index; return total;"
           : "while (true) {}";
       const task = await executionInput(source, kind, limits);
-      // Change the clock inside the real worker, after its VM deadline starts.
-      // Parent-only clock spies cannot reach this isolated thread.
+      // Shift the real worker's clock only after its VM deadline starts.
       const workerUrl = await instrumentedWorker(
         "code-mode-worker-clock-",
         `
         const realNow = Date.now;
         let shifted = false;
-        for (const method of ["create", "restore"]) {
-          const original = QuickJS[method];
-          QuickJS[method] = function (...args) {
-            const optionsIndex = method === "create" ? 0 : 1;
+        const original = QuickJS[${JSON.stringify(kind === "exec" ? "create" : "restore")}];
+        QuickJS[${JSON.stringify(kind === "exec" ? "create" : "restore")}] = function (...args) {
+            const optionsIndex = ${kind === "exec" ? 0 : 1};
             const options = args[optionsIndex];
             const interrupt = options.interruptHandler;
             args[optionsIndex] = { ...options, interruptHandler: () => {
@@ -455,8 +440,7 @@ describe("Code Mode worker lifecycle", () => {
               return interrupt();
             } };
             return original.apply(this, args);
-          };
-        }
+        };
       `,
       );
       const result = await runCodeModeWorker(task, 5_000, workerUrl);
@@ -492,10 +476,7 @@ describe("Code Mode worker lifecycle", () => {
         5_000,
       );
     const probe = await execute();
-    expect(probe.status).toBe("waiting");
-    if (probe.status !== "waiting") {
-      throw new Error("expected a suspended guest");
-    }
+    assert(probe.status === "waiting", "expected a suspended guest");
     const encodedBytes = QuickJS.serializeSnapshot(probe.continuation).byteLength;
 
     expect(await execute(encodedBytes)).toMatchObject({ status: "waiting" });
@@ -580,8 +561,9 @@ describe("Code Mode live VM", () => {
     expect(output).toEqual(
       Array.from({ length: 8 }, (_, i) => ({ type: "text", text: String(i) })),
     );
-    const next = await run(input("return typeof privateCell;"), undefined, 15_000);
-    expectCompleted(next, { json: '"undefined"' });
+    expectCompleted(await run(input("return typeof privateCell;"), undefined, 15_000), {
+      json: '"undefined"',
+    });
   });
 
   it("checkpoints a slow host waiter under contention so queued cells can run within the same capacity", async () => {

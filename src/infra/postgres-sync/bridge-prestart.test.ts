@@ -1,13 +1,13 @@
-import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
-import type { Worker } from "node:worker_threads";
+import { MessagePort, type Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { preparePostgresBridge } from "./bridge-prestart.js";
 import { PostgresSyncConnection } from "./connection.js";
+import { closePostgresPool } from "./pool.js";
 import type { BridgeWorkerData } from "./protocol.js";
 
-const observed = vi.hoisted(() => ({ workers: [] as { worker: Worker; control: Int32Array }[] }));
+const observed = vi.hoisted(() => ({ workers: [] as Worker[], connections: [] as Int32Array[] }));
 
 // Observe native transports without replacing their bootstrap, module loading, or messages.
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -17,8 +17,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
     Worker: class extends actual.Worker {
       constructor(...args: ConstructorParameters<typeof actual.Worker>) {
         super(...args);
-        const data = args[1]?.workerData as BridgeWorkerData;
-        observed.workers.push({ worker: this, control: new Int32Array(data.signal) });
+        observed.workers.push(this);
       }
     },
   };
@@ -34,10 +33,32 @@ const params = {
 const prepared: ReturnType<typeof preparePostgresBridge>[] = [];
 afterEach(async () => {
   await Promise.all(prepared.splice(0).map((scope) => scope[Symbol.asyncDispose]()));
-  await Promise.all(observed.workers.splice(0).map(({ worker }) => worker.terminate()));
+  await closePostgresPool();
+  observed.workers.length = 0;
+  observed.connections.length = 0;
+  vi.restoreAllMocks();
 });
 
+function observeConnections() {
+  // Capture the native method; Reflect.apply below preserves each port's receiver.
+  // oxlint-disable-next-line typescript/unbound-method
+  const post = MessagePort.prototype.postMessage;
+  vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+    this: MessagePort,
+    ...args
+  ) {
+    const data = args[0] as { connection?: BridgeWorkerData };
+    if (data.connection) {
+      observed.connections.push(new Int32Array(data.connection.signal));
+    }
+    return Reflect.apply(post, this, args);
+  });
+}
+
 function prepare(overrides: Partial<typeof params> = {}, signal?: AbortSignal) {
+  if (observed.connections.length === 0) {
+    observeConnections();
+  }
   const scope = preparePostgresBridge({ ...params, ...overrides }, signal);
   prepared.push(scope);
   return scope;
@@ -57,57 +78,49 @@ function open(overrides: Partial<typeof params> = {}) {
   }
 }
 
-it("starts one real bridge before the factory, and connects only when that factory opens", async () => {
+it("prepares a logical bridge once and connects only when its factory opens", async () => {
   const scope = prepare();
-  expect(observed.workers).toHaveLength(1);
-  const { worker, control } = observed.workers[0]!;
-  await once(worker, "online");
+  expect(observed.workers).toHaveLength(4);
+  const control = observed.connections[0]!;
   expect(Atomics.load(control, 0)).toBe(0);
-
   await scope.run(async () => {
     await Promise.resolve();
     const nested = prepare();
     nested.run(() => open());
   });
-  expect(observed.workers).toHaveLength(1);
+  expect(observed.connections).toHaveLength(1);
   expect(Atomics.load(control, 0)).toBe(1);
 });
 
-it.each(["url", "schema", "storeId"] as const)(
-  "keeps a prestarted bridge exclusive to its %s",
+it.each(["url", "schema", "storeId", "lockTimeoutMs", "statementTimeoutMs"] as const)(
+  "keeps a prepared connection exclusive to its %s",
   (field) => {
     const scope = prepare();
-    scope.run(() => open({ [field]: `${params[field]}-other` }));
-    expect(observed.workers).toHaveLength(2);
-    expect(Atomics.load(observed.workers[0]!.control, 0)).toBe(0);
-    expect(Atomics.load(observed.workers[1]!.control, 0)).toBe(1);
+    const value = params[field];
+    scope.run(() => open({ [field]: typeof value === "number" ? value + 1 : `${value}-other` }));
+    expect(observed.connections).toHaveLength(2);
+    expect(Atomics.load(observed.connections[0]!, 0)).toBe(0);
+    expect(Atomics.load(observed.connections[1]!, 0)).toBe(1);
+    expect(observed.workers).toHaveLength(4);
   },
 );
 
-it.each(["lockTimeoutMs", "statementTimeoutMs"] as const)(
-  "keeps a prestarted bridge exclusive to its %s",
-  (field) => {
-    const scope = prepare();
-    scope.run(() => open({ [field]: params[field] + 1 }));
-    expect(observed.workers).toHaveLength(2);
-    expect(Atomics.load(observed.workers[0]!.control, 0)).toBe(0);
-    expect(Atomics.load(observed.workers[1]!.control, 0)).toBe(1);
-  },
-);
-
-it.each(["dispose", "abort"] as const)("joins an unused bridge after %s", async (mode) => {
-  const controller = new AbortController();
-  const scope = prepare({}, controller.signal);
-  const { worker, control } = observed.workers[0]!;
-  await once(worker, "online");
-  const exited = once(worker, "exit");
-  if (mode === "abort") {
-    controller.abort();
-  } else {
+it.each(["dispose", "abort"] as const)(
+  "releases an unused logical bridge after %s",
+  async (mode) => {
+    const controller = new AbortController();
+    const scope = prepare({}, controller.signal);
+    if (mode === "abort") {
+      controller.abort();
+    } else {
+      await scope[Symbol.asyncDispose]();
+    }
     await scope[Symbol.asyncDispose]();
-  }
-  await exited;
-  await scope[Symbol.asyncDispose]();
-  expect(Atomics.load(control, 0)).toBe(0);
-  expect(worker.threadId).toBe(-1);
-});
+    // Disposal must not terminate shared services needed by another connection.
+    open();
+    expect(observed.connections).toHaveLength(2);
+    expect(Atomics.load(observed.connections[0]!, 0)).toBe(0);
+    expect(Atomics.load(observed.connections[1]!, 0)).toBe(1);
+    expect(observed.workers).toHaveLength(4);
+  },
+);

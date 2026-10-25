@@ -25,6 +25,7 @@ import * as processExec from "../../process/exec.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -36,14 +37,7 @@ import { stageSandboxMedia } from "./stage-sandbox-media.js";
 
 const SCP_STDERR_TAIL_CHARS = 16_384;
 const REMOTE_PATH = "/synthetic/attachments/report with spaces.txt";
-const SUCCESS = {
-  code: 0,
-  stdout: "",
-  stderr: "",
-  signal: null,
-  killed: false,
-  termination: "exit",
-} satisfies Awaited<ReturnType<typeof processExec.runCommandWithTimeout>>;
+const SUCCESS = createCommandResult();
 
 function mockSuccessfulScp(body: string) {
   return vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {

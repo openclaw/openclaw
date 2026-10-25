@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
@@ -48,6 +49,86 @@ import { listProjectedSessions } from "./session-utils-list.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("separates promoted navigation activity from live controller activity", async () => {
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(1_800_000_000_000);
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const parent = "agent:main:dashboard:former-parent";
+    const child = "agent:main:dashboard:promoted";
+    const requester = "agent:main:dashboard:requester";
+    const worker = "agent:main:subagent:promotion-worker";
+    const childEntry = {
+      sessionId: child,
+      updatedAt: Date.now(),
+      status: "done" as const,
+      parentSessionKey: parent,
+    };
+    for (const key of [parent, requester]) {
+      seedRow(key, { sessionId: key, updatedAt: Date.now(), status: "done" });
+    }
+    seedRow(child, childEntry);
+    seedRow(worker, { sessionId: worker, updatedAt: Date.now(), spawnedBy: child });
+    const workerRun = createSubagentRunRecord({
+      runId: "promotion-worker",
+      childSessionKey: worker,
+      requesterSessionKey: child,
+      startedAt: Date.now(),
+    });
+    const controllerRun = createSubagentRunRecord({
+      runId: "promotion-controller",
+      childSessionKey: child,
+      requesterSessionKey: requester,
+      controllerSessionKey: parent,
+      startedAt: Date.now(),
+    });
+    using workerExecution = holdSubagentExecution(workerRun.runId, worker);
+    subagentRuns.set(workerRun.runId, workerRun);
+    subagentRuns.commitOwnership(workerRun);
+    try {
+      using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+      const read = async () =>
+        new Map(
+          (await listProjectedSessions({ projection, opts: {} })).sessions.map((row) => [
+            row.key,
+            row,
+          ]),
+        );
+      expect((await read()).get(parent)).toMatchObject({
+        childSessions: [child],
+        hasActiveSubagentRun: true,
+      });
+      seedRow(child, { ...childEntry, sidebarRoot: true });
+      for (let repeat = 0; repeat < 2; repeat++) {
+        const rows = await read();
+        expect(rows.get(child)?.hasActiveSubagentRun).toBe(true);
+        expect(rows.get(parent)?.hasActiveSubagentRun).not.toBe(true);
+        expect(rows.get(parent)?.childSessions).toEqual([child]);
+      }
+      using controllerExecution = holdSubagentExecution(controllerRun.runId, child);
+      subagentRuns.set(controllerRun.runId, controllerRun);
+      subagentRuns.commitOwnership(controllerRun);
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect((await read()).get(parent)?.hasActiveSubagentRun).toBe(true);
+      }
+      controllerExecution[Symbol.dispose]();
+      subagentRuns.delete(controllerRun.runId);
+      publishSubagentRunChanges([child, parent, requester], [controllerRun.runId]);
+      for (let repeat = 0; repeat < 2; repeat++) {
+        expect((await read()).get(parent)?.hasActiveSubagentRun).not.toBe(true);
+      }
+      seedRow(child, childEntry);
+      expect((await read()).get(parent)?.hasActiveSubagentRun).toBe(true);
+      workerExecution[Symbol.dispose]();
+      subagentRuns.delete(workerRun.runId);
+      publishSubagentRunChanges([worker, child], [workerRun.runId]);
+      expect((await read()).get(parent)?.hasActiveSubagentRun).not.toBe(true);
+    } finally {
+      subagentRuns.delete(controllerRun.runId);
+      subagentRuns.delete(workerRun.runId);
+    }
+  });
+});
 
 it("projects send policy and recipient restrictions, clearing them when the current role permits sending", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
@@ -561,5 +642,54 @@ it("preserves selected account across role changes but rejects a changed merge i
     } finally {
       release();
     }
+  });
+});
+
+it("reuses follow-up run progress across presentations until the run index changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const key = "agent:main:subagent:progress-fact";
+    seedRow(key, {
+      sessionId: "progress-fact",
+      updatedAt: 1,
+      status: "done",
+      spawnedBy: "agent:main:parent",
+    });
+    using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+    const list = () => listProjectedSessions({ projection, opts: { limit: 10 } });
+    expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
+      true,
+    );
+    const index = projection.state.rowContext.projectedAgentRuns!;
+    using keys = vi.spyOn(index.sessionKeys, "get");
+    using ids = vi.spyOn(index.sessionIds, "get");
+    await list();
+    await list();
+    expect(keys).not.toHaveBeenCalled();
+    expect(ids).not.toHaveBeenCalled();
+
+    const claim = claimAgentRunContext(
+      "progress-fact-follow-up",
+      { agentId: "main", sessionId: "progress-fact", projectSessionActive: true },
+      { trackOwner: true, ownsContext: true },
+    );
+    try {
+      expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).toBe(
+        true,
+      );
+      seedRow(key, {
+        sessionId: "replacement-session",
+        updatedAt: 2,
+        status: "done",
+        spawnedBy: "agent:main:parent",
+      });
+      expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
+        true,
+      );
+    } finally {
+      releaseAgentRunContext("progress-fact-follow-up", claim);
+    }
+    expect((await list()).sessions.find((row) => row.key === key)?.hasActiveSubagentRun).not.toBe(
+      true,
+    );
   });
 });

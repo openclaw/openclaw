@@ -707,6 +707,8 @@ The Gateway refreshes recaps after a run ends, not when a turn starts or new inp
 
 Visible conversations created by an agent receive recaps too, including spawned dashboard chats and conversations assigned to a sidebar group. Their parent-session link does not exclude them from recap generation; hidden background subagents remain excluded.
 
+Recap generation uses Gateway service authority, including for operator-created sessions and requested refreshes. Changing or revoking an operator role's model policy does not stop these calls. To stop recap generation, disable the owning agent's utility routing with `utilityModel: ""`; this also disables its other utility routing. Session access still controls who can read recaps or request refreshes. See [operator model policy](/gateway/operator-scopes#named-operator-roles).
+
 The oversized-message notice applies only to omitted user or assistant messages. Oversized tool results, including screenshots, do not trigger it. Older cached notices remain visible until the next recap refresh, which clears screenshot-only notices while retaining notices for earlier oversized conversation messages. Legacy omission flags are rechecked once and marked with the current cache revision. Correcting an otherwise current recap does not call the model.
 
 To find an older archived conversation, choose **Sessions**, **All time**, and **Everyone** in the people filter, then enter its name or label in **Search session titles…**. This metadata search includes archived sessions and applies across the complete caller-visible store before the 100-result window. Narrow the query if results are truncated. Open an archived match to read its retained history, then select **Unarchive** to continue the same conversation.

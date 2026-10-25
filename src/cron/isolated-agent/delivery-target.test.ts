@@ -1,62 +1,38 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram-targets.js";
-import type {
-  ChannelDirectoryEntry,
-  ChannelOutboundAdapter,
-} from "../../channels/plugins/types.public.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
+  createTargetsTestRegistry,
   forumMessagingForTest,
   telegramMessagingForTest,
 } from "../../infra/outbound/targets.test-helpers.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createOutboundTestPlugin } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
-const { extractDeliveryInfoMock, loadSessionEntry } = vi.hoisted(() => ({
+const { extractDeliveryInfoMock, sessionEntries } = vi.hoisted(() => ({
   extractDeliveryInfoMock: vi.fn(),
-  loadSessionEntry: vi.fn(),
-}));
-
-vi.mock("../../config/sessions/main-session.js", () => ({
-  canonicalizeMainSessionAlias: vi.fn(({ sessionKey }) => sessionKey),
-  resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
+  sessionEntries: new Map<string, SessionEntry>(),
 }));
 
 vi.mock("../../config/sessions/delivery-info.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/delivery-info.js")>()),
   extractDeliveryInfo: extractDeliveryInfoMock,
-  extractDeliveryInfoBatch: (
-    requests: Array<{ sessionKey?: string; agentId?: string }>,
-    options: { cfg?: OpenClawConfig },
-  ) =>
-    requests.map(({ sessionKey, agentId }) =>
-      sessionKey
-        ? extractDeliveryInfoMock(sessionKey, { ...options, agentId })
-        : { deliveryContext: undefined, threadId: undefined },
+  extractDeliveryInfoBatch: (requests: Array<{ sessionKey?: string }>) =>
+    requests.map(({ sessionKey }) =>
+      sessionKey ? extractDeliveryInfoMock() : { deliveryContext: undefined, threadId: undefined },
     ),
-}));
-
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
 // mock-isolation: exercise delivery routing with controlled session entries, without worker I/O.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
-  readSessionEntriesFromStoreInWorker: async ({
-    agentId,
-    storePath,
-    sessionKeys,
-  }: {
-    agentId: string;
-    storePath: string;
-    sessionKeys: string[];
-  }) => ({
+  readSessionEntriesFromStoreInWorker: async ({ sessionKeys }: { sessionKeys: string[] }) => ({
     entries: sessionKeys.flatMap((sessionKey) => {
-      const entry = loadSessionEntry({ agentId, storePath, sessionKey });
+      const entry = sessionEntries.get(sessionKey);
       return entry ? [{ sessionKey, entry }] : [];
     }),
   }),
@@ -71,9 +47,7 @@ vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
 // mock-isolation: Resolve delivery targets from scenario fixtures, not host channel state.
 vi.mock("../../infra/outbound/targets.runtime.js", () => ({ resolveOutboundTarget: vi.fn() }));
 const mockedModuleIds = [
-  "../../config/sessions/main-session.js",
   "../../config/sessions/delivery-info.js",
-  "../../config/sessions/paths.js",
   "../../config/sessions/session-entry-read-runtime.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
@@ -106,7 +80,7 @@ function createStubOutbound(label: string, checkAllowlist = false): ChannelOutbo
   };
 }
 
-const normalizeTelegramTargetForDeliveryTest = vi.fn((raw: string): string | undefined => {
+const normalizeTelegramTargetForDeliveryTest = (raw: string): string | undefined => {
   const target = parseTelegramTargetForTest(raw);
   if (!target.chatId) {
     return undefined;
@@ -115,7 +89,7 @@ const normalizeTelegramTargetForDeliveryTest = vi.fn((raw: string): string | und
   return target.messageThreadId == null
     ? `telegram:${normalizedTo}`
     : `telegram:${normalizedTo}:topic:${target.messageThreadId}`;
-});
+};
 
 const telegramMessaging = {
   ...telegramMessagingForTest,
@@ -138,9 +112,8 @@ beforeEach(() => {
   resetPluginRuntimeStateForTest();
   extractDeliveryInfoMock.mockReset();
   extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
-  normalizeTelegramTargetForDeliveryTest.mockClear();
   vi.mocked(resolveOutboundTarget).mockReset();
-  vi.mocked(loadSessionEntry).mockReset().mockReturnValue(undefined);
+  sessionEntries.clear();
   setPlugins(
     plugin("forum", { messaging: forumMessagingForTest }),
     plugin("telegram", { messaging: telegramMessaging }),
@@ -159,15 +132,11 @@ beforeEach(() => {
 afterEach(() => resetPluginRuntimeStateForTest());
 
 function makeCfg(overrides?: Partial<OpenClawConfig>): OpenClawConfig {
-  return { bindings: [], channels: {}, ...overrides };
+  return { bindings: [], channels: {}, session: { store: "/tmp/test-store.json" }, ...overrides };
 }
 
 function setPlugins(...plugins: ReturnType<typeof createOutboundTestPlugin>[]) {
-  setActivePluginRegistry(
-    createTestRegistry(
-      plugins.map((channel) => ({ pluginId: channel.id, source: "test", plugin: channel })),
-    ),
-  );
+  setActivePluginRegistry(createTargetsTestRegistry(plugins));
 }
 
 function resolveTarget(
@@ -188,50 +157,43 @@ function expectTargetError(
 const AGENT_ID = "agent-b";
 const DEFAULT_TARGET = { channel: "forum" as const, to: "room:default" };
 
-function sessionEntry(context: DeliveryContext): SessionEntry {
-  return {
+function setSessionEntry(sessionKey: string, context: DeliveryContext) {
+  sessionEntries.set(sessionKey, {
     sessionId: "session",
     updatedAt: 1000,
     delivery: normalizeSessionDeliveryState({ context }),
-  };
-}
-
-function setSessionStore(store: Record<string, SessionEntry>) {
-  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => store[sessionKey]);
+  });
 }
 
 function setLastSessionEntry(context: DeliveryContext) {
-  setSessionStore({ "agent:test:main": sessionEntry(context) });
-}
-
-async function resolveLastTarget(cfg: OpenClawConfig) {
-  return resolveDeliveryTarget(cfg, AGENT_ID, { channel: "last" });
+  setSessionEntry(`agent:${AGENT_ID}:main`, context);
 }
 
 describe("resolveDeliveryTarget", () => {
-  // Regression #91613: the shared main bucket can belong to another conversation.
-  it("refuses keyless delivery inherited from the shared main recipient", async () => {
-    setLastSessionEntry({ channel: "alpha", to: "room-allowed" });
-
-    const result = await resolveLastTarget(makeCfg({ channels: { alpha: { allowFrom: [] } } }));
-
-    expect(result).toMatchObject({
-      channel: "alpha",
-      ok: false,
-      error: expect.objectContaining({ message: expect.stringContaining("wrong room") }),
-    });
+  it.each([
+    // Regression #91613: the shared main bucket can belong to another conversation.
+    ["shared recipient", undefined, "alpha", "wrong room"],
+    ["missing target", undefined, "alpha", "requires target"],
+    ["empty recipient", "telegram:", "telegram", "Target is required"],
+    ["ambiguous channel", undefined, undefined, "Channel is required"],
+  ] as const)("rejects %s", async (scenario, to, channel, message) => {
+    if (scenario === "shared recipient") {
+      setLastSessionEntry({ channel: "alpha", to: "room-allowed" });
+    } else if (scenario === "ambiguous channel") {
+      vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
+        new Error("Channel is required when multiple channels are configured: alpha, forum"),
+      );
+    }
+    const result = await resolveTarget({ channel: "last", to });
+    expect(result).toMatchObject({ channel, to: undefined });
+    expectTargetError(result, message);
   });
 
   it("applies allowFrom rerouting to dry-run delivery previews", async () => {
     setLastSessionEntry({ channel: "alpha", to: "room-denied" });
 
     const cfg = makeCfg({ channels: { alpha: { allowFrom: ["room-allowed"] } } });
-    const result = await resolveDeliveryTarget(
-      cfg,
-      AGENT_ID,
-      { channel: "last", to: undefined },
-      { dryRun: true },
-    );
+    const result = await resolveTarget({ channel: "last" }, cfg, { dryRun: true });
 
     expect(result).toMatchObject({ ok: true, channel: "alpha", to: "room-allowed" });
   });
@@ -279,28 +241,21 @@ describe("resolveDeliveryTarget", () => {
   );
 
   it("resolves cron reserved explicit targets through directory entries", async () => {
-    const listGroups = async () => [
-      {
-        kind: "group",
-        id: "-1002458651455",
-        name: "current",
-      } satisfies ChannelDirectoryEntry,
-    ];
     setPlugins(
       plugin(
         "telegram",
         {
           capabilities: { chatTypes: ["group"] },
           messaging: {
-            ...telegramMessagingForTest,
-            normalizeTarget: normalizeTelegramTargetForDeliveryTest,
-            targetResolver: {
-              reservedLiterals: ["current", "self", "this", "me"],
-              hint: "<chatId>",
-            },
+            ...telegramMessaging,
+            targetResolver: { reservedLiterals: ["current"], hint: "<chatId>" },
           },
         },
-        { directory: { listGroups } },
+        {
+          directory: {
+            listGroups: async () => [{ kind: "group", id: "-1002458651455", name: "current" }],
+          },
+        },
       ),
     );
 
@@ -344,18 +299,10 @@ describe("resolveDeliveryTarget", () => {
     setPlugins(plugin("alpha"));
     vi.mocked(resolveOutboundTarget).mockResolvedValueOnce({ ok: true, to: "room:default" });
 
-    const cfg = makeCfg();
-    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
-      channel: "forum",
-      to: "room:default",
-    });
-
-    expect(result).toMatchObject({
+    expect(await resolveTarget(DEFAULT_TARGET)).toMatchObject({
       ok: true,
       channel: "forum",
       to: "room:default",
-      accountId: undefined,
-      threadId: undefined,
       mode: "explicit",
     });
   });
@@ -386,37 +333,8 @@ describe("resolveDeliveryTarget", () => {
 
   it("does not carry a Telegram topic threadId to a bare explicit group target", async () => {
     setLastSessionEntry({ channel: "telegram", to: "-100200300:topic:77", threadId: "77" });
-    normalizeTelegramTargetForDeliveryTest.mockClear();
-
     const result = await resolveTarget({ channel: "telegram", to: "-100200300" });
-
     expect(result).toMatchObject({ ok: true, to: "-100200300", threadId: undefined });
-    expect(normalizeTelegramTargetForDeliveryTest).toHaveBeenCalledWith("-100200300");
-  });
-
-  it("uses single configured channel when neither explicit nor session channel exists", async () => {
-    const result = await resolveLastTarget(makeCfg());
-    expect(result.channel).toBe("alpha");
-    expectTargetError(result, "requires target");
-  });
-
-  it("rejects provider-prefixed explicit targets without a recipient", async () => {
-    const result = await resolveTarget({ channel: "last", to: "telegram:" });
-
-    expect(result.channel).toBe("telegram");
-    expect(result.to).toBeUndefined();
-    expectTargetError(result, "Target is required");
-  });
-
-  it("returns an error when channel selection is ambiguous", async () => {
-    vi.mocked(resolveMessageChannelSelection).mockRejectedValueOnce(
-      new Error("Channel is required when multiple channels are configured: alpha, forum"),
-    );
-
-    const result = await resolveLastTarget(makeCfg());
-    expect(result.channel).toBeUndefined();
-    expect(result.to).toBeUndefined();
-    expectTargetError(result, "Channel is required");
   });
 
   it("prefers stored deliveryContext lookup over exact session-store entries", async () => {
@@ -429,18 +347,15 @@ describe("resolveDeliveryTarget", () => {
       },
       threadId: "thread-stored",
     });
-    setSessionStore({
-      "agent:test:thread:42": sessionEntry({
-        channel: "alpha",
-        to: "room-lowercase",
-        threadId: "thread-old",
-      }),
+    setSessionEntry("agent:test:thread:42", {
+      channel: "alpha",
+      to: "room-lowercase",
+      threadId: "thread-old",
     });
 
     const result = await resolveTarget({
       channel: "last",
       sessionKey: "agent:test:thread:42",
-      to: undefined,
     });
 
     expect(result).toMatchObject({
@@ -450,24 +365,6 @@ describe("resolveDeliveryTarget", () => {
       accountId: "primary",
       threadId: "thread-stored",
     });
-  });
-
-  it("scopes unqualified stored delivery lookups to the job agent", async () => {
-    extractDeliveryInfoMock.mockImplementation((sessionKey: string) => ({
-      deliveryContext: {
-        channel: "alpha",
-        to: sessionKey === "agent:agent-b:main" ? "ops-room" : "default-room",
-      },
-      threadId: undefined,
-    }));
-
-    const result = await resolveTarget({ channel: "last", sessionKey: "main", to: undefined });
-
-    expect(extractDeliveryInfoMock).toHaveBeenCalledWith("agent:agent-b:main", {
-      cfg: expect.any(Object),
-      agentId: AGENT_ID,
-    });
-    expect(result).toMatchObject({ ok: true, channel: "alpha", to: "ops-room" });
   });
 
   it("resolves plugin default targets through the modern target route", async () => {

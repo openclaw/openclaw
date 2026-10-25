@@ -10,6 +10,7 @@ import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import * as diskSpace from "../infra/disk-space.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildBackupArchivePath } from "./backup-shared.js";
+import { encodeTarEntry } from "./backup-tar.test-support.js";
 import type { BackupManifest } from "./backup-verify-manifest.js";
 import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -58,36 +59,6 @@ function createAgentManifest(
     archivePath: buildBackupArchivePath(TEST_ARCHIVE_ROOT, asset.sourcePath),
   });
   return manifest;
-}
-
-function encodeTarEntry(params: {
-  path: string;
-  contents?: string | Uint8Array;
-  type?: "File" | "Link" | "SymbolicLink";
-  linkpath?: string;
-}): Buffer {
-  const body =
-    typeof params.contents === "string"
-      ? Buffer.from(params.contents, "utf8")
-      : Buffer.from(params.contents ?? []);
-  const type = params.type ?? "File";
-  const header = new tar.Header({
-    path: params.path,
-    type,
-    size: type === "File" ? body.length : 0,
-    mode: 0o600,
-    uid: 0,
-    gid: 0,
-    mtime: new Date(0),
-    ...(params.linkpath ? { linkpath: params.linkpath } : {}),
-  });
-  const headerBlock = Buffer.alloc(512);
-  header.encode(headerBlock);
-  if (type !== "File") {
-    return headerBlock;
-  }
-  const padding = Buffer.alloc((512 - (body.length % 512)) % 512);
-  return Buffer.concat([headerBlock, body, padding]);
 }
 
 async function createHardlinkArchive(linkpath: string) {

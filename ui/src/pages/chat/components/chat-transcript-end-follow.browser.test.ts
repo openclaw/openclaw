@@ -3,7 +3,7 @@ import { page } from "vitest/browser";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
-import { TranscriptTestHost } from "../test-helpers/chat-transcript-native.tsx";
+import { TranscriptTestHost, renderReadyRows } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
@@ -55,15 +55,9 @@ class EndFollowFixture extends TranscriptTestHost {
       { kind: "content", key: "earlier", content: this.earlier },
       { kind: "content", key: "growing-run", content: this.last },
     ];
-    const content = this.transcript.renderSession("agent:main:end-follow", (session) => {
-      session.setContentReady(true);
-      return session.render(
-        rows,
-        (row) => (row.kind === "content" ? row.content : null),
-        null,
-        false,
-      );
-    });
+    const content = this.transcript.renderSession("agent:main:end-follow", (session) =>
+      renderReadyRows(session, rows),
+    );
     if (content.parentElement !== this.thread) {
       this.thread.replaceChildren(content);
     }
@@ -97,6 +91,10 @@ async function mountEndFollowFixture(savedOffset?: number) {
   host.style.cssText = "display: block; width: 800px";
   document.body.append(host);
   await host.updateComplete;
+  if (savedOffset === undefined) {
+    // These growth cases start after navigation has measured both fixed-height rows.
+    host.transcript.scrollToEnd();
+  }
   const thread = host.querySelector<HTMLElement>(".chat-thread")!;
   const row = host.querySelector<HTMLElement>('[data-virtual-row-key="growing-run"]')!;
   const extent = host.querySelector<HTMLElement>(".chat-thread-inner--virtual")!;

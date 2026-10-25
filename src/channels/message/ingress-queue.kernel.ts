@@ -684,11 +684,11 @@ export function listChannelIngressRowsInDatabase(
     input.status === "unsettled" ? ["pending", "claimed"] : [input.status],
   );
   if (input.status === "claimed" || input.status === "failed") {
-    let ordered = select.orderBy(input.status === "claimed" ? "claimed_at" : "failed_at", "asc");
-    if (input.status === "claimed") {
-      ordered = ordered.orderBy("received_at", "asc");
-    }
-    ordered = ordered.orderBy("event_id", "asc");
+    const ordered = (
+      input.status === "claimed"
+        ? select.orderBy("claimed_at", "asc").orderBy("received_at", "asc")
+        : select.orderBy("failed_at", (order) => order.asc().nullsFirst())
+    ).orderBy("event_id", "asc");
     return executeSqliteQuerySync(
       db,
       input.status === "failed" ? ordered.limit(normalizeLimit(input.limit)) : ordered,

@@ -9,7 +9,7 @@ import type { AgentContextPruningConfig } from "../../config/types.agent-default
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionManager } from "../sessions/index.js";
@@ -30,7 +30,6 @@ import { dropThinkingBlocks } from "./thinking.js";
 import {
   getToolResultProjectionBaseKey,
   getToolResultProjectionKeys,
-  getToolResultTextBlocks,
   hashToolResultText,
   TOOL_RESULT_PROJECTION_KEY,
 } from "./tool-result-projection-key.js";
@@ -172,7 +171,7 @@ function softPruneCacheTtlToolResult(
       ? text
       : `${sliceUtf16Safe(text, 0, 1_500)}\n...\n${sliceUtf16Safe(text, -1_500)}\n\n` +
         `[Tool result trimmed: kept first 1500 chars and last 1500 chars of ${text.length} chars.]`;
-  return { ...message, content: freezeJsonSnapshot([{ type: "text", text: projected }]) };
+  return { ...message, content: freezeTrustedJsonSnapshot([{ type: "text", text: projected }]) };
 }
 
 /** Projects expired cache-TTL history without mutating the transcript. */
@@ -281,7 +280,7 @@ export function pruneExpiredCacheTtlToolResults(params: {
       }
       const cleared = {
         ...message,
-        content: freezeJsonSnapshot([{ type: "text" as const, text: settings.placeholder }]),
+        content: freezeTrustedJsonSnapshot([{ type: "text" as const, text: settings.placeholder }]),
       };
       totalChars += cacheTtlMessageChars(cleared) - chars;
       recordProjection(index, cleared, "hard");
@@ -736,7 +735,7 @@ export function restoreCacheTtlToolResultProjections(
     projectionState.frozen.add(key);
     if (texts) {
       projectionState.replacements.set(key, {
-        content: freezeJsonSnapshot(texts.map((text) => ({ type: "text" as const, text }))),
+        content: freezeTrustedJsonSnapshot(texts.map((text) => ({ type: "text" as const, text }))),
       });
     }
   }
@@ -757,9 +756,7 @@ export function reconcileToolResultPromptProjectionState(
     messages.flatMap((message, index) => {
       const key = keys[index];
       const source = key ? projectionState.sourceHashByKey.get(key) : undefined;
-      return key && (!source || source === hashToolResultText(getToolResultTextBlocks(message)))
-        ? [key]
-        : [];
+      return key && (!source || source === hashToolResultText(message)) ? [key] : [];
     }),
   );
   for (const key of [
@@ -800,10 +797,7 @@ export function projectToolResultMessages(params: {
           ? params.projectionState.replacements.get(key)
           : undefined;
       if (key && !params.recovering && !params.projectionState.sourceHashByKey.has(key)) {
-        params.projectionState.sourceHashByKey.set(
-          key,
-          hashToolResultText(getToolResultTextBlocks(source)),
-        );
+        params.projectionState.sourceHashByKey.set(key, hashToolResultText(source));
       }
       const message = projected
         ? projectToolResultMessage(
@@ -851,13 +845,13 @@ function materializeRestoredCacheTtl(
       mark.mode === "hard"
         ? {
             ...message,
-            content: freezeJsonSnapshot([{ type: "text" as const, text: mark.placeholder }]),
+            content: freezeTrustedJsonSnapshot([{ type: "text" as const, text: mark.placeholder }]),
           }
         : softPruneCacheTtlToolResult(message);
     recordToolResultPromptProjection(state, key, projected, mark.mode);
     state.frozen.add(key);
     if (!state.sourceHashByKey.has(key)) {
-      state.sourceHashByKey.set(key, hashToolResultText(getToolResultTextBlocks(message)));
+      state.sourceHashByKey.set(key, hashToolResultText(message));
     }
   }
   // Marks whose source left the branch (compaction, reset) are dropped with this pass.

@@ -10,6 +10,10 @@ import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel } from "./protocol.js";
 import type { CodexAppServerScopedRequest } from "./request.js";
 
+type CyberAccessProgram = NonNullable<
+  import("openclaw/plugin-sdk/provider-catalog-shared").ProviderCatalogOutcome["modelAccessPrograms"]
+>[number]["cyber"][number];
+
 // Allow Codex's five-second remote catalog refresh to finish or fall back,
 // with headroom for client acquisition, response transit, and account/read.
 export const DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS = 10_000;
@@ -24,6 +28,7 @@ export type CodexAppServerModel = {
   inputModalities: string[];
   supportedReasoningEfforts: string[];
   serviceTiers?: string[];
+  availableAccessPrograms?: { cyber: CyberAccessProgram[] };
   defaultReasoningEffort?: string;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
 };
@@ -147,6 +152,19 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
     ...(displayName ? { displayName } : {}),
     ...(description ? { description } : {}),
     hidden: value.hidden,
+    ...(value.availableAccessPrograms
+      ? {
+          availableAccessPrograms: {
+            cyber: value.availableAccessPrograms.cyber.map((program) =>
+              program === "daybreakBlue"
+                ? "daybreak_blue"
+                : program === "daybreakRed"
+                  ? "daybreak_red"
+                  : "standard",
+            ),
+          },
+        }
+      : {}),
     isDefault: value.isDefault,
     inputModalities: value.inputModalities ?? ["text", "image"],
     serviceTiers: normalizeUniqueTrimmedStringList(

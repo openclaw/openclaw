@@ -35,10 +35,19 @@ export function connectNavigationPrefetch(options: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let idle: number | undefined;
   let intent: string | undefined;
-  // New Session is the common next step. Other routes warm on hover/focus/touch
-  // rather than fetching every optional route after an ordinary chat load.
-  const nextPending = () =>
-    intent && pending.has(intent) ? intent : pending.has("new-session") ? "new-session" : undefined;
+  // Explicit intent wins. A declared next interaction owns this route's idle work;
+  // routes without one fall back to New Session.
+  const nextPending = () => {
+    if (intent && pending.has(intent)) {
+      return intent;
+    }
+    const currentRoute = options.router.getState().matches[0]?.routeId;
+    const currentNext = currentRoute ? `${currentRoute}-next` : undefined;
+    if (currentNext && manifest?.[currentNext]) {
+      return pending.has(currentNext) ? currentNext : undefined;
+    }
+    return pending.has("new-session") ? "new-session" : undefined;
+  };
   const available = () => {
     const state = options.router.getState();
     return (
@@ -229,6 +238,11 @@ export function connectNavigationPrefetch(options: {
             : undefined;
     if (key) {
       prioritize(key);
+      if (key === "appearance" && ready()) {
+        // The Settings command has no route href; warm its owner's config/schema
+        // through the same loader used by ordinary navigation links.
+        void options.preloadRoute("appearance").catch(() => undefined);
+      }
     }
   };
   const stops = [

@@ -57,3 +57,13 @@ export function recordTaskOwnership(
   }
   return owner === false ? undefined : taskId;
 }
+
+/** Agents and workflows make their own tool calls; subagent-owned work can resume its Agent. */
+export function isDescendantTask(task: Record<string, unknown>): boolean {
+  return (
+    task.task_type === "local_agent" ||
+    task.task_type === "local_workflow" ||
+    task.owned_by_subagent === true ||
+    typeof task.parent_task_id === "string"
+  );
+}

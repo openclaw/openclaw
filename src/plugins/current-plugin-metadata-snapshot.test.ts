@@ -20,10 +20,13 @@ import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-sto
 import * as controlPlane from "./plugin-control-plane-context.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
+  projectPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   restorePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { classifyProviderFailoverSignalWithPlugin } from "./provider-failover.js";
 import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -222,6 +225,54 @@ it("invalidates a generic scope when the config identity has a different policy"
   const { config } = fixture;
   config.plugins.allow = ["runtime"];
   fixture.scope(() => expectSnapshot(undefined, fixture));
+});
+
+it("carries published generations through external auth without rehashing their policy", async () => {
+  const resolver = createProviderExternalAuthResolver({ resolveProviderPluginsForHooks: () => [] });
+  for (const id of ["original", "replacement"]) {
+    const config = { plugins: { allow: [id] } };
+    const snapshot = createSnapshot({ config });
+    setGatewayPluginMetadataSnapshot(snapshot, { config });
+    const policyHash = vi.spyOn(indexPolicy, "resolveInstalledPluginIndexPolicyHash");
+    const fingerprint = vi.spyOn(controlPlane, "resolvePluginControlPlaneFingerprint");
+    try {
+      for (let read = 0; read < 3; read++) {
+        await resolver.withPreparedExternalAuthProfiles({ config }, async () => {
+          await Promise.resolve();
+          expectSnapshot(snapshot, { config });
+          expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(snapshot)).toBe(true);
+        });
+      }
+      expect(policyHash).not.toHaveBeenCalled();
+      expect(fingerprint).not.toHaveBeenCalled();
+    } finally {
+      policyHash.mockRestore();
+      fingerprint.mockRestore();
+    }
+  }
+});
+
+it("lets a projected generic scope fall through to its complete published inventory", () => {
+  const config = { plugins: { allow: ["first", "second"] } };
+  const snapshot = createPluginMetadataSnapshotFixture(
+    { plugins: [{ id: "first" }, { id: "second" }] },
+    indexPolicy.resolveInstalledPluginIndexPolicyHash(config),
+  );
+  setGatewayPluginMetadataSnapshot(snapshot, { config });
+  withPluginMetadataSnapshotScope(
+    projectPluginMetadataSnapshot(snapshot, ["first"]),
+    () => {
+      expect(resolvePluginMetadataSnapshot({ config, pluginIds: ["second"] }).pluginIds).toEqual([
+        "second",
+      ]);
+      expect(
+        resolvePluginMetadataSnapshot({ config, pluginIds: ["second"] }).plugins.map(
+          (plugin) => plugin.id,
+        ),
+      ).toEqual(["second"]);
+    },
+    { config },
+  );
 });
 
 it("keeps prepared metadata usable when the launch directory is removed", () => {

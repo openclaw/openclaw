@@ -189,6 +189,26 @@ describe("discord components", () => {
     ).toThrow("options");
   });
 
+  it("preserves modal callback authority and Components V2 flags", () => {
+    const modal = {
+      title: "Select details",
+      callbackData: "codex:modal",
+      allowedUsers: ["discord:user-1"],
+      fields: [
+        { type: "select" as const, label: "Priority", options: [{ label: "High", value: "high" }] },
+      ],
+    };
+    const result = buildDiscordComponentMessage({ spec: { modal } });
+    const entry = result.modals[0];
+    assert(entry, "Expected a modal entry");
+    expect(entry).toMatchObject({
+      callbackData: "codex:modal",
+      allowedUsers: ["discord:user-1"],
+    });
+    expect(result.entries[0]).toMatchObject({ kind: "modal-trigger", modalId: entry.id });
+    expect(buildDiscordComponentMessageFlags(result.components)).toBe(MessageFlags.IsComponentsV2);
+  });
+
   it("rejects malformed component count and length limits", () => {
     const invalid = (raw: Parameters<typeof readDiscordComponentSpec>[0], error: string) =>
       expect(() => readDiscordComponentSpec(raw)).toThrow(error);

@@ -192,10 +192,12 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   // The accessor barrel is still initializing when this mock resolves (import cycle through the
   // session controller), so take exact-read helpers from their defining module.
   const exactRead = await import("../../config/sessions/session-accessor.sqlite-exact-read.js");
+  const admittedRead =
+    await import("../../config/sessions/session-accessor.sqlite-entry-admitted-read.js");
   const listRead = await import("../../config/sessions/session-accessor.sqlite-entry-list.read.js");
   return {
     ...actual,
-    loadExactSessionEntryCandidates: exactRead.loadExactSessionEntryCandidates,
+    loadExactSessionEntryCandidates: admittedRead.loadExactSessionEntryCandidates,
     loadExactSessionEntryReadOnly: exactRead.loadExactSessionEntryReadOnly,
     listSessionEntriesReadOnly: listRead.listSessionEntriesReadOnly,
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,

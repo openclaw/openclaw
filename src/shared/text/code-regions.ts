@@ -1,7 +1,12 @@
+import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import {
   findMarkdownCodeRegions as findCodeRegions,
   parseMarkdownOwnership,
 } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import {
+  advanceProtectionScanState,
+  createProtectionScanState,
+} from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { isInsideCode } from "./code-ranges.js";
 
 export { findCodeRegions };
@@ -22,6 +27,71 @@ export function findCodeOwnership(
 ) {
   const { codeSpans: _codeSpans, ...ownership } = parseMarkdownOwnership(text, options);
   return ownership;
+}
+
+/** Stable retained Markdown boundary and the context required to resume its tail. */
+export function findTextCheckpoint(
+  text: string,
+  referenceLength: number,
+  resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
+) {
+  const state = createProtectionScanState();
+  let cursor = referenceLength;
+  let lastLineStart = cursor;
+  let closedFence = false;
+  for (let end = text.indexOf("\n", cursor); end !== -1; end = text.indexOf("\n", cursor)) {
+    const line = text.slice(cursor, end + 1);
+    const inFence = Boolean(state.fenceChar);
+    advanceProtectionScanState(state, line);
+    // References, image descriptions, and setext headings can need earlier paragraph context.
+    if (
+      state.paragraphAmbiguous ||
+      state.structuralUnknown ||
+      (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
+    ) {
+      const ownership = resolveOwnership(text);
+      const retain = ownership.retainStart;
+      let start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
+      const startsDefinition = ownership.definitions.some(
+        (definition) =>
+          definition.start >= start && /^[ \t]*$/.test(text.slice(start, definition.start)),
+      );
+      if (!startsDefinition) {
+        const adjacentDefinition = ownership.definitions.findLast(
+          (definition) =>
+            definition.end <= start &&
+            /^[ \t]*(?:\r\n|\r|\n)[ \t]*$/.test(text.slice(definition.end, start)),
+        );
+        // A synthetic blank after a definition would turn adjacent indented prose into code.
+        if (adjacentDefinition) {
+          start = text.lastIndexOf("\n", adjacentDefinition.start - 1) + 1;
+        }
+      }
+      const completeEnd = text.lastIndexOf("\n") + 1;
+      if (
+        !/\r(?!\n)/.test(text) &&
+        ownership.regions.some((region) => region.block && region.start === retain)
+      ) {
+        const fence = scanFenceSpans(text.slice(start, completeEnd)).state.open;
+        if (fence) {
+          return {
+            offset: completeEnd,
+            context: fence.marker + "\n",
+            definitions: ownership.definitions,
+          };
+        }
+      }
+      return { offset: start, context: "", definitions: ownership.definitions };
+    }
+    lastLineStart = cursor;
+    cursor = end + 1;
+    closedFence = inFence && !state.fenceChar;
+  }
+  if (state.fenceChar) {
+    // Only the proven top-level fence is carried; its settled body is never parsed again.
+    return { offset: cursor, context: state.fenceChar.repeat(state.fenceLength) + "\n" };
+  }
+  return { offset: closedFence ? cursor : lastLineStart, context: "" };
 }
 
 /** Reuse a parsed prefix only when an append cannot change Markdown ownership. */

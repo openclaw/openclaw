@@ -656,7 +656,7 @@ CREATE INDEX "idx_agent_acp_parent_stream_run" ON "acp_parent_stream_events" (("
 
 CREATE INDEX "idx_agent_board_widgets_tab_position" ON "board_widgets" (("session_key") ASC, ("tab_id") ASC, ("position") ASC);
 
-CREATE INDEX "idx_agent_cache_expiry" ON "cache_entries" (("scope") ASC, ("expires_at") ASC NULLS FIRST, ("key") ASC) WHERE "expires_at" IS NOT NULL;
+CREATE INDEX "idx_agent_cache_expiry" ON "cache_entries" (("scope") ASC, ("expires_at") ASC, ("key") ASC) WHERE "expires_at" IS NOT NULL;
 
 CREATE INDEX "idx_agent_cache_updated" ON "cache_entries" (("scope") ASC, ("updated_at") DESC, ("key") ASC);
 
@@ -696,7 +696,7 @@ CREATE INDEX "idx_agent_session_members_identity" ON "session_members" (("identi
 
 CREATE INDEX "idx_agent_session_nodes_active" ON "session_nodes" (("session_key") ASC) WHERE "archived_at" IS NULL;
 
-CREATE INDEX "idx_agent_session_nodes_archived_at" ON "session_nodes" (("archived_at") ASC NULLS FIRST, ("session_key") ASC) WHERE "archived_at" IS NOT NULL;
+CREATE INDEX "idx_agent_session_nodes_archived_at" ON "session_nodes" (("archived_at") ASC, ("session_key") ASC) WHERE "archived_at" IS NOT NULL;
 
 CREATE INDEX "idx_agent_session_nodes_current_session_id" ON "session_nodes" (("current_session_id") ASC);
 
@@ -704,13 +704,13 @@ CREATE INDEX "idx_agent_session_nodes_entry_not_valid" ON "session_nodes" (("ses
 
 CREATE INDEX "idx_agent_session_nodes_entry_valid_pending" ON "session_nodes" (("session_key") ASC) WHERE ("entry_valid" = 0);
 
-CREATE INDEX "idx_agent_session_nodes_label" ON "session_nodes" (("label") ASC NULLS FIRST, ("session_key") ASC) WHERE "label" IS NOT NULL;
+CREATE INDEX "idx_agent_session_nodes_label" ON "session_nodes" (("label") ASC, ("session_key") ASC) WHERE "label" IS NOT NULL;
 
 CREATE INDEX "idx_agent_session_nodes_parent_session_key" ON "session_nodes" (("parent_session_key") ASC NULLS FIRST, ("session_key") ASC);
 
 CREATE INDEX "idx_agent_session_nodes_spawned_by" ON "session_nodes" (("spawned_by") ASC NULLS FIRST, ("session_key") ASC);
 
-CREATE INDEX "idx_agent_session_nodes_status" ON "session_nodes" (("status") ASC NULLS FIRST, ("session_key") ASC) WHERE "status" IS NOT NULL;
+CREATE INDEX "idx_agent_session_nodes_status" ON "session_nodes" (("status") ASC, ("session_key") ASC) WHERE "status" IS NOT NULL;
 
 CREATE INDEX "idx_agent_session_nodes_updated_at" ON "session_nodes" (("updated_at") DESC, ("session_key") ASC);
 
@@ -722,7 +722,7 @@ CREATE INDEX "idx_agent_session_suggestions_session_state_created" ON "session_s
 
 CREATE UNIQUE INDEX "idx_agent_transcript_active_event_seq" ON "session_transcript_active_events" (("session_id") ASC, ("event_seq") ASC);
 
-CREATE UNIQUE INDEX "idx_agent_transcript_active_messages" ON "session_transcript_active_events" (("session_id") ASC, ("message_position") ASC NULLS FIRST) WHERE "message_position" IS NOT NULL;
+CREATE UNIQUE INDEX "idx_agent_transcript_active_messages" ON "session_transcript_active_events" (("session_id") ASC, ("message_position") ASC) WHERE "message_position" IS NOT NULL;
 
 CREATE INDEX "idx_agent_transcript_context_pending" ON "session_transcript_active_events" (("session_id") ASC) WHERE "context_eligible" IS NULL;
 
@@ -732,7 +732,7 @@ CREATE INDEX "idx_agent_session_transcript_archives_retention" ON "session_trans
 
 CREATE INDEX "idx_session_transcript_fts_rows_session_message" ON "session_transcript_fts_rows" (("session_id") ASC, ("message_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_session_windows_conversation" ON "session_windows" (("primary_conversation_id") ASC NULLS FIRST) WHERE "primary_conversation_id" IS NOT NULL;
+CREATE INDEX "idx_agent_session_windows_conversation" ON "session_windows" (("primary_conversation_id") ASC) WHERE "primary_conversation_id" IS NOT NULL;
 
 CREATE INDEX "idx_agent_session_windows_created_at" ON "session_windows" (("created_at") DESC, ("session_id") ASC);
 
@@ -750,7 +750,13 @@ CREATE INDEX "idx_agent_transcript_event_identity_sequence" ON "transcript_event
 
 CREATE INDEX "idx_agent_transcript_event_sequence" ON "transcript_event_identities" (("session_id") ASC, ("event_type") ASC NULLS FIRST, ("seq") DESC);
 
-CREATE UNIQUE INDEX "idx_agent_transcript_message_idempotency" ON "transcript_event_identities" (("session_id") ASC, ("message_idempotency_key") ASC NULLS FIRST) WHERE "message_idempotency_key" IS NOT NULL;
+CREATE UNIQUE INDEX "idx_agent_transcript_message_idempotency" ON "transcript_event_identities" (("session_id") ASC, ("message_idempotency_key") ASC) WHERE "message_idempotency_key" IS NOT NULL;
+
+CREATE INDEX "idx_memory_index_sources_exact_path" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')))));
+
+CREATE INDEX "idx_memory_index_sources_basename" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.regexp_replace(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')), '^.*/', ''))));
+
+CREATE INDEX "idx_memory_index_sources_stem" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')), '^.*/', ''), '^(.+)\.[^.]*$', '\1'))));
 
 ALTER TABLE "acp_parent_stream_events" ADD FOREIGN KEY ("session_id") REFERENCES "session_windows" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   auditMarkdownTable,
   expectReadableAuditTable,
@@ -27,12 +28,7 @@ const wideTable = `| Service | Owner | Region | Status | Version | Deploy | Inci
 | Gateway | Platform | eu-west-1 | Healthy | 2026.8.18 | Complete | 0 | [Long operational note that keeps this column wide](https://example.com/table-reference) |`;
 
 function tableMessage(id: string, text: string, timestamp = Date.now()) {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp,
-    __openclaw: { id, seq: 1 },
-  };
+  return chatMessage("assistant", text, { timestamp, __openclaw: { id, seq: 1 } });
 }
 function expectFocused(locator: Locator) {
   return expect

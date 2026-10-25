@@ -104,6 +104,9 @@ export function inheritSessionSelection(
       : {}),
     ...(parentEntry.contextWindow ? { contextWindow: parentEntry.contextWindow } : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
+    ...(parentEntry.cyberAccessProgram !== undefined
+      ? { cyberAccessProgram: parentEntry.cyberAccessProgram }
+      : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.toolOverrides ? { toolOverrides: parentEntry.toolOverrides } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),

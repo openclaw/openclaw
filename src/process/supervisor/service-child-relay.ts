@@ -5,7 +5,10 @@ import {
   registerSealedRuntimeProcessEntrypoints,
   resolveRuntimeProcessEntrypointUrl,
 } from "../../infra/runtime-process-url.js";
-import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerEnv,
+} from "../../infra/runtime-worker-url.js";
 import { resolveLaunchableNodePath } from "../../infra/stable-node-path.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
@@ -142,7 +145,9 @@ function runServiceChildRelay(): void {
       process.exitCode = 1;
       return;
     }
-    const anchorUrl = resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor");
+    const anchorUrl = start.nativeProcessOwner
+      ? new URL(start.nativeProcessOwner)
+      : resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor");
     const stdio: SpawnStdioEntry[] = ["inherit", "inherit", "inherit"];
     parentLineageFds = start.parentLineageFds ?? [];
     for (const fd of [start.controlFd, start.lineageFd, ...parentLineageFds, start.secretFd]) {
@@ -153,11 +158,16 @@ function runServiceChildRelay(): void {
     reserveStdioEntry(stdio, "ipc");
     try {
       const executable = resolveLaunchableNodePath();
+      const env = resolveRuntimeWorkerEnv(anchorUrl, process.env);
+      if (start.nativeProcessOwner) {
+        // The admitted host owns this entry; portable relays have no embedded image inventory.
+        delete env.BUN_BE_BUN;
+      }
       anchor = spawn(executable, resolveRuntimeWorkerArgv(anchorUrl, executable), {
         stdio,
         detached: true,
         windowsHide: true,
-        env: process.env,
+        env,
       });
     } catch (error) {
       report({

@@ -34,6 +34,7 @@ import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-age
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   hashSessionArchiveBytes,
+  trackSqliteArchiveTemporaryFile,
   MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES,
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
@@ -174,6 +175,7 @@ async function encodeStagedTranscriptArchive(params: {
     nowMs: createdAt,
   })}${compressed ? ".zst" : ""}`;
   const encodedPath = `${archivePath}.${randomUUID()}.stage`;
+  trackSqliteArchiveTemporaryFile(encodedPath, true);
   try {
     await pipeline([
       fs.createReadStream(params.stagedPath),
@@ -191,6 +193,7 @@ async function encodeStagedTranscriptArchive(params: {
     };
   } finally {
     fs.rmSync(encodedPath, { force: true });
+    trackSqliteArchiveTemporaryFile(encodedPath, false);
   }
 }
 
@@ -212,6 +215,7 @@ export async function materializeTranscriptArchiveInWorker(
     reason: input.reason,
     sessionId: input.sessionId,
   })}.${randomUUID()}.jsonl-stage`;
+  trackSqliteArchiveTemporaryFile(stagedPath, true);
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) =>
@@ -286,6 +290,7 @@ export async function materializeTranscriptArchiveInWorker(
     return { archive, sessionId: input.sessionId, ...(history ? { preparedPlan } : {}) };
   } finally {
     fs.rmSync(stagedPath, { force: true });
+    trackSqliteArchiveTemporaryFile(stagedPath, false);
   }
 }
 

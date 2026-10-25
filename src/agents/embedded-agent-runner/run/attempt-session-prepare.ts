@@ -448,6 +448,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       sessionVersion: sessionManager.getHeader()?.version,
       appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
       inHistorySystemUpdates: input.inHistorySystemUpdates,
+      currentUserIdempotencyKey: input.preparedUserTurnMessage?.idempotencyKey,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(userTranscriptContexts?.length ? { userTranscriptContexts } : {}),
       ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),

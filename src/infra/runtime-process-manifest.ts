@@ -18,6 +18,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
   }
 
   return {
+    daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
     repositoryPublicationRestore: runtimeProcessEntrypoint(
@@ -48,6 +49,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "commands/doctor-database-engine-inspection.worker",
     ),
     backupDatabaseDiscovery: runtimeProcessEntrypoint("infra/backup-database-discovery.worker"),
+    sqliteHeaderProbe: runtimeProcessEntrypoint("infra/sqlite-header-probe.worker"),
     databaseBackup: runtimeProcessEntrypoint("snapshot/database-backup.worker"),
     managedHandoffEngine: runtimeProcessEntrypoint(
       "infra/update-managed-service-handoff-engine.worker",
@@ -309,6 +311,14 @@ export const pluginRuntimeProcessManifest = {
   iMessageChatDb: {
     ...pluginRuntimeProcess("imessage", "src/chat-db", "src/chat-db.worker"),
     sourceWorkerName: "chat-db.worker",
+  },
+  knowledgeRegistry: {
+    ...pluginRuntimeProcess("knowledge", "src/registry-client", "src/registry-worker"),
+    sourceWorkerName: "registry-worker",
+  },
+  knowledgeStorage: {
+    ...pluginRuntimeProcess("knowledge", "src/storage-client", "src/storage-worker"),
+    sourceWorkerName: "storage-worker",
   },
   mxcLauncher: {
     plugin: "mxc",
@@ -651,6 +661,14 @@ export function createStandaloneRuntimeProcessEntrypoints(
 
 // Script assets execute in their destination runtime rather than a worker thread.
 export const runtimeProcessScriptEntrypoints = {
+  bunSqliteLibraryProbe: {
+    buildSource: "src/infra/bun-sqlite-library-probe.entry.ts",
+    sourceModule: "src/infra/bun-sqlite-library-probe.generated.ts",
+    sourceBinding: "BUN_SQLITE_LIBRARY_PROBE_SOURCE",
+    kind: "file",
+    fileName: "bun-sqlite-library-probe.mjs",
+    materialize: true,
+  },
   packageCliNodeProbe: {
     buildSource: "scripts/lib/package-cli-node-probe.entry.mjs",
     sourceModule: "scripts/lib/package-cli-node-probe.generated.mjs",
@@ -685,6 +703,7 @@ export const runtimeProcessScriptEntrypoints = {
     kind: "file",
     fileName: "daemon-runtime-probe.mjs",
     materialize: true,
+    runtimeEntrypoint: "daemonRuntimeProbe",
   },
   updateStateSizes: {
     sourceModule: "src/infra/update-state-sizes.generated.mjs",

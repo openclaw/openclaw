@@ -168,7 +168,11 @@ function AppSidebarContent(
   });
   const narrationState = createParkedProjection(
     () => narrationProjection()?.read(),
-    () => props.navigationVisible,
+    () => {
+      projection.revision();
+      // Preserve live narration for reactivation without preparing hidden previews.
+      return props.navigationVisible && owner.sessionsShowPreview;
+    },
   );
   onSettled(() => context.gateway.subscribeEvents((event) => owner.narration?.handleEvent(event)));
   const presentationRevision = createParkedProjection(

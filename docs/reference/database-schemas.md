@@ -168,7 +168,9 @@ the file. A clean-close seal carries validated facts across process restarts.
 File identity uses volume, inode, and stable
 birthtime captured once with `fstat` on the retained admission descriptor, not SQL.
 Admission lookups and established borrowers reuse those shared facts without
-checking the pathname again. Native open and reopen still identify replacement
+checking the pathname again. Shared-state handle lookups, including lease storage
+preparation, do not enter a schema read scope. Actual cached reads retain their
+schema and row-revision admission. Native open and reopen still identify replacement
 files, and creation witnesses retain their physical file check. A replaced or
 restored file needs fresh admission. Migration and repair owners validate their
 changes and publish new facts after successful DDL settlement. Ordinary Doctor
