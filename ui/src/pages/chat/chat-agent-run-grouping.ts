@@ -63,8 +63,9 @@ function itemRunId(item: AgentRunFramePart): string | undefined {
     if (item.replyRunId) {
       return item.replyRunId;
     }
-    // Matching execution IDs cannot erase a forwarded presentation boundary.
-    if (item.groups.some(hasForwardedSource)) {
+    // Matching execution IDs cannot erase a forwarded presentation boundary
+    // or frame a rollup that no visible reply owns.
+    if (item.ownerless || item.groups.some(hasForwardedSource)) {
       return undefined;
     }
   }

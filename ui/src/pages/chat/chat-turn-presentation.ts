@@ -75,6 +75,8 @@ export type WorkGroupRenderItem = {
   groups: MessageGroup[];
   /** Terminal reply owning this rollup’s presentation, not its nested execution identities. */
   replyRunId?: string;
+  /** No visible reply owns this rollup; nested execution identities must not frame it. */
+  ownerless?: true;
   /** Hidden group -> preceding preserved output; absent entries stay under the summary. */
   previewAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
@@ -398,6 +400,9 @@ export function collapseCompletedTurnWork(
       key: `work:${terminalReply.key}`,
       groups,
       ...(replyRunId ? { replyRunId } : {}),
+      // Above several runs' replies, work owned by none of them stays unframed
+      // even when its rows share one run.
+      ...(earlierRunReplies.size > 0 && !replyRunId ? { ownerless: true as const } : {}),
       ...(previewAfterGroup.size > 0 ? { previewAfterGroup } : {}),
       durationMs,
     });
