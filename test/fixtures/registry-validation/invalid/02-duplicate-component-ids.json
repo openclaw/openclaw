@@ -1,0 +1,39 @@
+{
+  "schema": {
+    "schemaId": "openclaw.registry-specification",
+    "version": "1.0.0",
+    "compatibilityPolicy": "exact"
+  },
+  "components": [
+    {
+      "componentId": "duplicate-id",
+      "pathClass": "NATIVE_RUNTIME",
+      "logicalName": "First Declaration",
+      "declarationRule": null,
+      "declaredValue": null,
+      "declarationSource": "src/config/paths.ts",
+      "lifecycle": "persistent",
+      "startupRequirementRule": true,
+      "capabilityDependencies": [],
+      "taskDependencyRules": [],
+      "fallbackPolicy": null,
+      "validationPolicy": {},
+      "notes": "First declaration with this ID."
+    },
+    {
+      "componentId": "duplicate-id",
+      "pathClass": "CONFIGURED_WORKSPACE",
+      "logicalName": "Second Declaration",
+      "declarationRule": null,
+      "declaredValue": null,
+      "declarationSource": "openclaw.json",
+      "lifecycle": "configurable",
+      "startupRequirementRule": false,
+      "capabilityDependencies": [],
+      "taskDependencyRules": [],
+      "fallbackPolicy": null,
+      "validationPolicy": {},
+      "notes": "Second declaration with same ID — must be rejected."
+    }
+  ]
+}
