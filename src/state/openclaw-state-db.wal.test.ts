@@ -32,7 +32,6 @@ import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
 } from "./openclaw-state-db-cache.js";
-import { expectRow, expectRows, readRow } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -113,6 +112,10 @@ function seedEvent(db: EngineConnection, scope: string) {
   db.prepare(
     "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
   ).run(scope, "preserved", "{}", 1);
+}
+
+function readRow(db: EngineConnection, query: string) {
+  return db.prepare(query).get();
 }
 
 const statsTableQuery = "SELECT name FROM sqlite_schema WHERE name='sqlite_stat1'";
@@ -294,7 +297,7 @@ it("keeps periodic WAL off-host across native contention", async ({ signal }) =>
     expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
     sql.assertIdle();
   });
-  expectRow(database.db, "SELECT tbl FROM sqlite_stat1 WHERE tbl='schema_meta'", {
+  expect(readRow(database.db, "SELECT tbl FROM sqlite_stat1 WHERE tbl='schema_meta'")).toEqual({
     tbl: "schema_meta",
   });
 });
@@ -365,7 +368,7 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
     expect(read.all("run-100", 0)).toEqual(before);
     {
       using fresh = new DatabaseSync(database.path, { readOnly: true });
-      expectRow(fresh, runStatsQuery, { stat: expect.stringMatching(/^[1-9]\d* /) });
+      expect(readRow(fresh, runStatsQuery)).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
       expect(fresh.prepare(`EXPLAIN QUERY PLAN ${query}`).all("run-100", 0)).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -373,7 +376,7 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
           }),
         ]),
       );
-      expectRows(fresh, query, before, "run-100", 0);
+      expect(fresh.prepare(query).all("run-100", 0)).toEqual(before);
     }
     execute({ maxPages: 512, checkpointMode: "PASSIVE", continuation: true });
     expect(plannerPasses()).toBe(1);
@@ -398,7 +401,9 @@ it("refreshes planner stats without changing snapshots or indexes", async () => 
     await periodic();
     expect(plannerPasses()).toBe(3);
     expect(refreshedStatisticsAtCommit).toEqual({ stat: expect.stringMatching(/^[1-9]\d* /) });
-    expectRows(database.db, "SELECT * FROM sqlite_stat1 ORDER BY tbl,idx", statistics);
+    expect(database.db.prepare("SELECT * FROM sqlite_stat1 ORDER BY tbl,idx").all()).toEqual(
+      statistics,
+    );
     expect(read.all("run-100", 0)).toEqual(before);
     expect(database.db.isTransaction).toBe(false);
   } finally {
@@ -468,80 +473,86 @@ it("joins private timer cancellation after publisher failure", async () => {
     await close(scheduledWork);
   }
   const reopened = openOpenClawStateDatabase({ path: pathname });
-  expectRow(
-    reopened.db,
-    "SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'",
-    {
-      value_json: "true",
-    },
-  );
+  expect(
+    readRow(
+      reopened.db,
+      "SELECT value_json FROM config_machine_state WHERE state_key='test:capture-bind'",
+    ),
+  ).toEqual({ value_json: "true" });
 });
 
-it.each([false, true])(
-  "admits parent adoption only before retirement (retiring: %s)",
-  async (retiring, { signal }) => {
-    const pathname = makeDatabasePath("adoption");
-    const parent = createOpenClawDatabaseMaintenanceScope();
-    const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
-    const { database, periodic } = child.run(() => openWithPeriodicMaintenance(pathname));
-    await using cleanup = new AsyncDisposableStack();
-    cleanup.defer(() => closeOpenClawStateDatabaseByPathAsync(database.path));
-    cleanup.defer(() => parent.close());
-    cleanup.defer(() => child.close());
+it("keeps periodic WAL after parent adoption", async ({ signal }) => {
+  const pathname = makeDatabasePath("adopted-owner");
+  const parent = createOpenClawDatabaseMaintenanceScope();
+  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+  const { database, periodic } = child.run(() => openWithPeriodicMaintenance(pathname));
+  const sql = observeHostSql(database.db);
+  try {
+    const adopt = () => openOpenClawStateDatabase({ path: pathname });
+    expect(parent.run(adopt)).toBe(database);
+    await child.close();
+    expect(database.db.isOpen).toBe(true);
+    sql.clear();
+    await expectPeriodicCheckpoint(database, periodic, signal, () => {
+      expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
+      sql.assertIdle();
+    });
+  } finally {
+    await child.close();
+    await parent.close();
+    await closeOpenClawStateDatabaseByPathAsync(database.path);
+  }
+});
+
+it("refuses adoption once cached-handle retirement starts", async () => {
+  const pathname = makeDatabasePath("closing-owner");
+  const parent = createOpenClawDatabaseMaintenanceScope();
+  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+  const { database } = child.run(() => openWithPeriodicMaintenance(pathname));
+  const entered = createDeferred();
+  const released = createDeferred();
+  const adopt = () => {
     const open = () => openOpenClawStateDatabase({ path: pathname });
-    if (!retiring) {
-      const sql = observeHostSql(database.db);
-      expect(parent.run(open)).toBe(database);
-      await child.close();
-      expect(database.db.isOpen).toBe(true);
-      sql.clear();
-      await expectPeriodicCheckpoint(database, periodic, signal, () => {
-        expect(database.walMaintenance.health).toMatchObject({ state: "complete", warning: false });
-        sql.assertIdle();
-      });
-      return;
-    }
-    const entered = createDeferred();
-    const released = createDeferred();
-    const adopt = () => runOutsideOpenClawDatabaseMaintenanceScope(open);
-    let synchronousAdmission: unknown;
-    let inspected = false;
-    const cancel = walAdmission.cancelSqliteWalWriteAdmission;
-    const cancellation = vi
-      .spyOn(walAdmission, "cancelSqliteWalWriteAdmission")
-      .mockImplementation(async (target) => {
-        if (target === database.db) {
-          if (!inspected) {
-            inspected = true;
-            try {
-              synchronousAdmission = adopt();
-            } catch (error) {
-              synchronousAdmission = error;
-            }
+    return runOutsideOpenClawDatabaseMaintenanceScope(open);
+  };
+  let synchronousAdmission: unknown;
+  let inspected = false;
+  const cancel = walAdmission.cancelSqliteWalWriteAdmission;
+  const cancellation = vi
+    .spyOn(walAdmission, "cancelSqliteWalWriteAdmission")
+    .mockImplementation(async (target) => {
+      if (target === database.db) {
+        if (!inspected) {
+          inspected = true;
+          try {
+            synchronousAdmission = adopt();
+          } catch (error) {
+            synchronousAdmission = error;
           }
-          entered.resolve();
-          await released.promise;
         }
-        await cancel(target);
-      });
-    const closing = child.close();
-    try {
-      await entered.promise;
-      expect(synchronousAdmission).toMatchObject({
-        message: expect.stringMatching(/maintenance.*closed/i),
-      });
-      expect(adopt).toThrow(/maintenance.*closed/i);
-      released.resolve();
-      await closing;
-      expect(database.db.isOpen).toBe(false);
-      expect(openOpenClawStateDatabase({ path: pathname }).db.isOpen).toBe(true);
-    } finally {
-      released.resolve();
-      await closing;
-      cancellation.mockRestore();
-    }
-  },
-);
+        entered.resolve();
+        await released.promise;
+      }
+      await cancel(target);
+    });
+  const closing = child.close();
+  try {
+    await entered.promise;
+    expect(synchronousAdmission).toMatchObject({
+      message: expect.stringMatching(/maintenance.*closed/i),
+    });
+    expect(adopt).toThrow(/maintenance.*closed/i);
+    released.resolve();
+    await closing;
+    expect(database.db.isOpen).toBe(false);
+    expect(openOpenClawStateDatabase({ path: pathname }).db.isOpen).toBe(true);
+  } finally {
+    released.resolve();
+    await closing;
+    cancellation.mockRestore();
+    await parent.close();
+  }
+});
 
 it("does not borrow a timer caller's maintenance authority", async ({ signal }) => {
   const { database, periodic } = openWithPeriodicMaintenance(makeDatabasePath("authority"));
@@ -645,12 +656,11 @@ it("cancels queued WAL work without replay on synchronous close", async () => {
     expect(observations).toEqual([]);
     sql.assertIdle();
     const reopened = openOpenClawStateDatabase({ path: database.path });
-    expectRows(
-      reopened.db,
-      "SELECT event_key FROM diagnostic_events WHERE scope=?",
-      [{ event_key: "preserved" }],
-      "maintenance-close",
-    );
+    expect(
+      reopened.db
+        .prepare("SELECT event_key FROM diagnostic_events WHERE scope=?")
+        .all("maintenance-close"),
+    ).toEqual([{ event_key: "preserved" }]);
   } finally {
     stop();
     try {
@@ -679,9 +689,9 @@ it("flushes worker writes before host close without host SQL", async () => {
     close.mockRestore();
   }
   using reopened = new DatabaseSync(database.path, { readOnly: true });
-  expectRow(reopened, "SELECT value_json FROM plugin_state_entries WHERE entry_key = 'retained'", {
-    value_json: '"final"',
-  });
+  expect(
+    readRow(reopened, "SELECT value_json FROM plugin_state_entries WHERE entry_key = 'retained'"),
+  ).toEqual({ value_json: '"final"' });
 });
 
 it("joins worker retirement before granting raw sole custody", async () => {

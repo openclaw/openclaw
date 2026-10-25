@@ -1,7 +1,19 @@
+// Full-entry coverage for wiring the post-compaction loop guard into embedded runs.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { SessionState } from "../../logging/diagnostic-session-state.js";
-import type { ToolOutcomeObserver } from "../agent-tools.before-tool-call.js";
+import type {
+  diagnosticSessionStates as DiagnosticSessionStatesType,
+  getDiagnosticSessionState as GetDiagnosticSessionStateType,
+  SessionState,
+} from "../../logging/diagnostic-session-state.js";
+import type {
+  ToolOutcomeObserver,
+  wrapToolWithBeforeToolCallHook as WrapToolWithBeforeToolCallHookType,
+} from "../agent-tools.before-tool-call.js";
+import type {
+  recordToolCallOutcome as RecordToolCallOutcomeType,
+  recordToolCall as RecordToolCallType,
+} from "../tool-loop-detection.js";
 import {
   type makeAttemptResult,
   makeCompactionSuccess,
@@ -10,6 +22,8 @@ import {
 import {
   mockedAcquireAgentRunPreparedModelRuntime,
   mockedCompactDirect,
+  mockedIsCompactionFailureError,
+  mockedIsLikelyContextOverflowError,
   mockedRunEmbeddedAttempt,
   resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
@@ -24,8 +38,11 @@ let baseParams: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>["r
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 // Import after the shared harness loads so these references point at the
 // same module instances as the re-imported runner graph.
-let diagnostics: typeof import("../../logging/diagnostic-session-state.js");
-let toolHistory: typeof import("../tool-loop-detection.js");
+let diagnosticSessionStates: typeof DiagnosticSessionStatesType;
+let getDiagnosticSessionState: typeof GetDiagnosticSessionStateType;
+let recordToolCall: typeof RecordToolCallType;
+let recordToolCallOutcome: typeof RecordToolCallOutcomeType;
+let wrapToolWithBeforeToolCallHook: typeof WrapToolWithBeforeToolCallHookType;
 
 // The default history cap distinguishes sequence-based observation from an index cursor.
 const HISTORY_TRIM_CAP = 30;
@@ -34,6 +51,8 @@ const POST_COMPACTION_ABORT_DETAILS = {
   detector: "compaction_loop_persisted",
   count: 3,
   toolName: "gateway",
+  message:
+    "CRITICAL: tool gateway repeated 3 times with identical arguments and identical results within 3 attempts after auto-compaction. The compaction did not break the loop. Aborting to prevent runaway resource use.",
 };
 
 function seedToolHistory(state: SessionState) {
@@ -41,7 +60,8 @@ function seedToolHistory(state: SessionState) {
   for (let i = 0; i < HISTORY_TRIM_CAP; i += 1) {
     const toolParams = { iter: i };
     const toolCallId = `seed-${state.toolCallHistory?.length ?? 0}`;
-    toolHistory.recordToolCallOutcome(state, {
+    recordToolCall(state, "seed", toolParams, toolCallId, { runId });
+    recordToolCallOutcome(state, {
       toolName: "seed",
       toolParams,
       toolCallId,
@@ -50,6 +70,8 @@ function seedToolHistory(state: SessionState) {
     });
   }
 }
+
+let liveToolCallSeq = 0;
 
 function prepareCompactedAttempt() {
   mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -65,11 +87,25 @@ function prepareCompactedAttempt() {
 }
 
 let sessionResult: typeof makeAttemptResult;
-function repeatToolOutcome(onToolOutcome?: ToolOutcomeObserver) {
+async function repeatToolOutcome(onToolOutcome?: ToolOutcomeObserver) {
   for (let i = 0; i < 3; i += 1) {
-    // The mocked attempt reports outcomes; wrapper/guard integration lives in
-    // agent-tools.before-tool-call.network-error.test.ts.
-    onToolOutcome?.({ toolName: "gateway", argsHash: "lookup-x", resultHash: "identical-result" });
+    // Use the real wrapper so the guard sees live tool outcomes, not seeded history.
+    const tool = wrapToolWithBeforeToolCallHook(
+      { name: "gateway", execute: vi.fn(async () => "identical-result") } as never,
+      {
+        agentId: "main",
+        sessionKey: baseParams.sessionKey,
+        sessionId: baseParams.sessionId,
+        runId: baseParams.runId,
+        onToolOutcome,
+      },
+    );
+    await tool.execute(
+      `gateway-${++liveToolCallSeq}`,
+      { action: "lookup", path: "x" },
+      undefined,
+      undefined,
+    );
   }
 }
 
@@ -81,28 +117,6 @@ function observeSettlement(run: ReturnType<typeof runEmbeddedAgent>) {
     })
     .catch(() => {});
   return state;
-}
-
-function expectBackendHeld(completion: { settled: boolean }, pending: Set<Promise<unknown>>) {
-  expect(completion.settled).toBe(false);
-  expect(pending.size, "backend still runs after the outer deadline").toBeGreaterThan(0);
-}
-
-async function settleTimedOutAttempt(
-  run: ReturnType<typeof runEmbeddedAgent>,
-  completion: { settled: boolean },
-  settleAttempt: () => void,
-) {
-  settleAttempt();
-  await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
-  expect(completion.settled).toBe(true);
-}
-
-function gatewayResult(overrides: Parameters<typeof makeAttemptResult>[0] = {}) {
-  return sessionResult({
-    toolMetas: Array.from({ length: 3 }, () => ({ toolName: "gateway" })),
-    ...overrides,
-  });
 }
 
 async function withHeldAttempt(
@@ -143,12 +157,15 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
   let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
-    diagnostics = await import("../../logging/diagnostic-session-state.js");
-    toolHistory = await import("../tool-loop-detection.js");
+    ({ diagnosticSessionStates, getDiagnosticSessionState } =
+      await import("../../logging/diagnostic-session-state.js"));
+    ({ recordToolCall, recordToolCallOutcome } = await import("../tool-loop-detection.js"));
+    ({ wrapToolWithBeforeToolCallHook } = await import("../agent-tools.before-tool-call.js"));
   });
 
   beforeEach(async () => {
-    diagnostics.diagnosticSessionStates.clear();
+    liveToolCallSeq = 0;
+    diagnosticSessionStates.clear();
     resetSharedRunIntegrationHarnessMocks();
     session = await createSharedRunIntegrationSession();
     sessionResult = session.makeAttemptResult;
@@ -166,12 +183,29 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           const work = task();
           queuedTasks.push(work);
           pendingTasks.add(work);
-          return work.finally(() => pendingTasks.delete(work));
+          void work.then(
+            () => pendingTasks.delete(work),
+            () => pendingTasks.delete(work),
+          );
+          return work;
         },
         options,
       );
     const spy = vi.spyOn(queue, "enqueueCommandInLane").mockImplementation(observe);
     restoreQueueObserver = () => spy.mockRestore();
+    mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
+      const lower = msg?.toLowerCase() ?? "";
+      return lower.includes("request_too_large") && lower.includes("summarization failed");
+    });
+    mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
+      const lower = msg?.toLowerCase() ?? "";
+      return (
+        lower.includes("request_too_large") ||
+        lower.includes("request size exceeds") ||
+        lower.includes("context window exceeded") ||
+        lower.includes("prompt too large")
+      );
+    });
   });
 
   afterEach(async () => {
@@ -218,13 +252,6 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       let attemptReturned = false;
       let attemptSignalAborted = false;
       let attemptSignalReason: unknown;
-      const history = diagnostics.getDiagnosticSessionState({
-        sessionKey: baseParams.sessionKey,
-        sessionId: baseParams.sessionId,
-      });
-      // Exercise live sequence observation while the history's index stays capped.
-      seedToolHistory(history);
-      expect(history.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
 
       prepareCompactedAttempt();
       // Abort inside the live attempt; raise the loop error after it unwinds.
@@ -234,14 +261,14 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           onToolOutcome?: ToolOutcomeObserver;
         };
         await repeatToolOutcome(onToolOutcome);
-        expect(history.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
         attemptSignalAborted = abortSignal?.aborted ?? false;
         attemptSignalReason = abortSignal?.reason;
         attemptReturned = true;
         if (revoked) {
           admission.close();
         }
-        return gatewayResult({
+        return session.makeAttemptResult({
+          toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
           acceptedSessionSpawns: [
             {
               runId: child.runId,
@@ -272,6 +299,8 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         }
       }
 
+      expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(attemptReturned).toBe(true);
       expect(attemptSignalAborted).toBe(true);
       expect(attemptSignalReason).toBeInstanceOf(Error);
@@ -291,49 +320,75 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
         await Promise.race([started, run]);
         expect(attemptAborted).toBe(true);
         await vi.advanceTimersByTimeAsync(30_001);
-        expectBackendHeld(completion, pendingTasks);
-        await settleTimedOutAttempt(run, completion, settleAttempt);
+        expect(completion.settled).toBe(false);
+        expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(0);
+        settleAttempt();
+        await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+        expect(completion.settled).toBe(true);
       },
     );
   });
 
-  it("keeps cold runtime acquisition outside execution budget", async () => {
-    vi.useFakeTimers();
-    const acquisitionStarted = createDeferred();
-    const resumeAcquisition = createDeferred();
-    const acquire = mockedAcquireAgentRunPreparedModelRuntime.getMockImplementation();
-    if (!acquire) {
-      throw new Error("Missing prepared runtime fixture");
-    }
-    mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
-      async (input, options?: { abortSignal?: AbortSignal }) => {
-        acquisitionStarted.resolve();
-        await resumeAcquisition.promise;
-        options?.abortSignal?.throwIfAborted();
-        return await acquire(input);
-      },
-    );
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(session.makeAttemptResult());
-    const run = runEmbeddedAgent({
-      ...baseParams,
-      runId: "run-cold-acquisition",
-      timeoutMs: 1,
-    });
-    const completion = observeSettlement(run);
-    try {
-      await Promise.race([acquisitionStarted.promise, run]);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(completion.settled).toBe(false);
-      expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-      resumeAcquisition.resolve();
-      await run;
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-    } finally {
-      resumeAcquisition.resolve();
-      await run.catch(() => undefined);
-      vi.useRealTimers();
-    }
-  });
+  it.each([false, true])(
+    "keeps cold runtime acquisition outside execution budget (stop=%s)",
+    async (stop) => {
+      vi.useFakeTimers();
+      const acquisitionStarted = createDeferred();
+      const resumeAcquisition = createDeferred();
+      const parent = new AbortController();
+      const acquire = mockedAcquireAgentRunPreparedModelRuntime.getMockImplementation();
+      if (!acquire) {
+        throw new Error("Missing prepared runtime fixture");
+      }
+      let acquisitionSignal: AbortSignal | undefined;
+      mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
+        async (input, options?: { abortSignal?: AbortSignal }) => {
+          acquisitionSignal = options?.abortSignal;
+          acquisitionStarted.resolve();
+          await resumeAcquisition.promise;
+          acquisitionSignal?.throwIfAborted();
+          return await acquire(input);
+        },
+      );
+      if (!stop) {
+        mockedRunEmbeddedAttempt.mockResolvedValueOnce(session.makeAttemptResult());
+      }
+      const run = runEmbeddedAgent({
+        ...baseParams,
+        runId: `run-cold-acquisition-${stop}`,
+        timeoutMs: 1,
+        abortSignal: parent.signal,
+      });
+      let settled = false;
+      const observed = run
+        .finally(() => {
+          settled = true;
+        })
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([acquisitionStarted.promise, run]);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(settled).toBe(false);
+        expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+        if (stop) {
+          parent.abort(new Error("stopped during preparation"));
+          expect(acquisitionSignal?.aborted).toBe(true);
+        }
+        resumeAcquisition.resolve();
+        if (stop) {
+          await expect(run).rejects.toThrow("stopped during preparation");
+          expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+        } else {
+          await run;
+          expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+        }
+      } finally {
+        resumeAcquisition.resolve();
+        await observed;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("enforces the runtime deadline after a paused built-in attempt resumes", async () => {
     let publishDeadline: EmbeddedRunAttemptParams["onAttemptDeadlineChanged"];
@@ -372,12 +427,66 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
           Date.now(),
         );
         await replyOperation?.watchdog.tick();
-        expectBackendHeld(completion, pendingTasks);
-        await settleTimedOutAttempt(run, completion, settleAttempt);
+        expect(completion.settled).toBe(false);
+        expect(pendingTasks.size, "backend still runs after the owner deadline").toBeGreaterThan(0);
+        settleAttempt();
+        await expect(run).rejects.toMatchObject({
+          name: "CommandLaneTaskTimeoutError",
+        });
         expect(attemptSignal?.aborted).toBe(true);
+        expect(completion.settled).toBe(true);
       },
     );
   });
+
+  it.each(["timeout", "abort"] as const)(
+    "retains a native lane after %s until the attempt settles",
+    async (kind) => {
+      const stopped = createDeferred();
+      let attemptSignal: AbortSignal | undefined;
+      await withHeldAttempt(
+        {
+          runId: `run-native-${kind}-lane-release`,
+          timeoutMs: 48 * 60 * 60 * 1000,
+          agentHarnessRuntimeOverride: "openclaw",
+        },
+        ({ abortSignal, onAttemptTimeoutArmed, onAttemptTimeout, onAttemptAbort }) => {
+          attemptSignal = abortSignal;
+          abortSignal?.addEventListener("abort", () => stopped.resolve(), { once: true });
+          onAttemptTimeoutArmed?.();
+          if (kind === "timeout") {
+            onAttemptTimeout?.(new Error("attempt timed out"));
+          } else {
+            onAttemptAbort?.();
+          }
+        },
+        async (run, started, completion, settleAttempt) => {
+          await vi.advanceTimersByTimeAsync(0);
+          await started;
+          await vi.advanceTimersByTimeAsync(30_001);
+          // Writer fencing is asynchronous; timer advancement does not join its receipt.
+          await Promise.race([stopped.promise, run]);
+
+          expect(completion.settled).toBe(false);
+          expect(attemptSignal?.aborted).toBe(true);
+          expect(pendingTasks.size, "backend still runs after the outer timeout").toBeGreaterThan(
+            0,
+          );
+          settleAttempt();
+          await expect(run).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
+          if (kind === "timeout") {
+            await expect(run).rejects.toBe(attemptSignal?.reason);
+          }
+          expect(attemptSignal?.reason).toMatchObject(
+            kind === "timeout"
+              ? { name: "CommandLaneTaskTimeoutError" }
+              : { name: "AbortError", message: "agent run aborted" },
+          );
+          expect(completion.settled).toBe(true);
+        },
+      );
+    },
+  );
 
   it("does not arm the post-compaction guard when loop detection is disabled", async () => {
     prepareCompactedAttempt();
@@ -385,16 +494,56 @@ describe("post-compaction loop guard wired into runEmbeddedAgent", () => {
       const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
         .onToolOutcome;
       await repeatToolOutcome(onToolOutcome);
-      return gatewayResult();
+      return session.makeAttemptResult({
+        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
+      });
     });
 
     const result = await runEmbeddedAgent({
       ...session.runParams,
-      config: { tools: { loopDetection: { enabled: false } } } as never,
+      config: {
+        tools: {
+          loopDetection: {
+            enabled: false,
+          },
+        },
+      } as never,
     });
 
     expect(result.meta.error).toBeUndefined();
-    expect(mockedCompactDirect).toHaveBeenCalledOnce();
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts post-compaction loop from the live tool path even when toolCallHistory is at its trim cap", async () => {
+    const sessionState = getDiagnosticSessionState({
+      sessionKey: baseParams.sessionKey,
+      sessionId: baseParams.sessionId,
+    });
+
+    seedToolHistory(sessionState);
+    expect(sessionState.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
+
+    prepareCompactedAttempt();
+    // Attempt 2 (post-compaction): three identical live tool outcomes while
+    // history is already at the cap. The guard aborts on the third result
+    // before the mocked attempt can return.
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
+        .onToolOutcome;
+      await repeatToolOutcome(onToolOutcome);
+      // History is still capped at HISTORY_TRIM_CAP after the trim.
+      expect(sessionState.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
+      return session.makeAttemptResult({
+        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
+      });
+    });
+
+    await expect(runEmbeddedAgent(session.runParams)).rejects.toMatchObject(
+      POST_COMPACTION_ABORT_DETAILS,
+    );
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 });

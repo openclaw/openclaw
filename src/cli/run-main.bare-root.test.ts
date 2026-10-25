@@ -57,7 +57,15 @@ function expectBoundTui(expected: {
 }
 
 function expectGatewayTarget(expected: Parameters<typeof expectBoundTui>[0]): void {
-  expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith(expected);
+  expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
+    ...expected,
+    ...(expected.configuredRemote
+      ? {
+          originScopedDeviceAuth: true,
+          config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
+        }
+      : {}),
+  });
   expectBoundTui(expected);
 }
 
@@ -132,22 +140,40 @@ describe("runCli exit behavior", () => {
     });
   });
 
-  it("rejects unknown pre-URL options without exposing their values to command discovery", async () => {
-    const error = await runCli(
-      cliArgs("--typo=do-not-print-me", "https://gateway.example/dashboard/main/movies-a1166b81"),
-    ).catch((caught: unknown) => caught);
+  it.each([
+    ["unknown inline option", ["--typo=do-not-print-me"]],
+    ["option terminator", ["--"]],
+  ])("rejects a pre-URL %s without reflecting values", async (_label, prefix) => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+    let error: unknown;
+    try {
+      await runCli(cliArgs(...prefix, target));
+    } catch (caught) {
+      error = caught;
+    }
+
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain("do-not-print-me");
     expect(runTuiCliActionMock).not.toHaveBeenCalled();
   });
 
-  it("resumes onboarding when an interrupted first run only persisted risk acknowledgement", async () => {
-    readConfigFileSnapshotMock.mockResolvedValueOnce(
-      validConfig({
+  it("rejects a missing pre-URL direct option value before command discovery", async () => {
+    const target = "https://gateway.example/dashboard/main/movies-a1166b81";
+
+    await expect(runCli(cliArgs("--token", target))).rejects.toThrow("--token requires a value");
+    expect(runTuiCliActionMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "resumes onboarding when an interrupted first run only persisted risk acknowledgement",
+      snapshot: validConfig({
         meta: { updatedBy: "fixture" },
         wizard: { securityAcknowledgedAt: "2026-07-13T00:00:00.000Z" },
       }),
-    );
+    },
+  ])("$name", async ({ snapshot }) => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce(snapshot);
     await expect(runBareCli()).resolves.toBeUndefined();
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledOnce();
@@ -168,39 +194,41 @@ describe("runCli exit behavior", () => {
     expectNonInteractiveBareCliError,
   });
 
-  it("configures missing inference on the selected remote Gateway", async () => {
-    const url = "ws://127.0.0.1:18789";
-    const sourceConfig = {
-      agents: { defaults: { model: { primary: "openai/local-only-model" } } },
-      gateway: {
-        mode: "remote",
-        remote: {
-          url,
-          token: "missing-inference-remote-auth",
-          tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
+  it.each(["ws://127.0.0.1:18789"])(
+    "configures missing inference on the selected remote Gateway: %s",
+    async (url) => {
+      const sourceConfig = {
+        agents: { defaults: { model: { primary: "openai/local-only-model" } } },
+        gateway: {
+          mode: "remote",
+          remote: {
+            url,
+            token: "missing-inference-remote-auth",
+            tlsFingerprint: `sha256:${TLS_FINGERPRINT.toUpperCase()}`,
+          },
         },
-      },
-    };
-    readConfigFileSnapshotMock.mockResolvedValueOnce({ exists: true, valid: true, sourceConfig });
-    probeGatewayConfiguredModelMock.mockImplementationOnce(async (options) =>
-      options.url === "ws://127.0.0.1:18789" && !options.originScopedDeviceAuth
-        ? "reachable-unverified"
-        : "missing-configured-model",
-    );
+      };
+      readConfigFileSnapshotMock.mockResolvedValueOnce({ exists: true, valid: true, sourceConfig });
+      probeGatewayConfiguredModelMock.mockImplementationOnce(async (options) =>
+        options.url === "ws://127.0.0.1:18789" && !options.originScopedDeviceAuth
+          ? "reachable-unverified"
+          : "missing-configured-model",
+      );
 
-    await runBareCli();
+      await runBareCli();
 
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
-    expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
-      config: sourceConfig,
-      gatewayUrl: url,
-      configuredRemote: true,
-      token: "missing-inference-remote-auth",
-      tlsFingerprint: TLS_FINGERPRINT,
-    });
-    expect(runTuiMock).not.toHaveBeenCalled();
-  });
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(readLocalOnboardingStateMock).not.toHaveBeenCalled();
+      expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
+        config: sourceConfig,
+        gatewayUrl: url,
+        configuredRemote: true,
+        token: "missing-inference-remote-auth",
+        tlsFingerprint: TLS_FINGERPRINT,
+      });
+      expect(runTuiMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("carries the canonical local TLS fingerprint through bare root", async () => {
     primeBareRootConfig({
@@ -228,29 +256,32 @@ describe("runCli exit behavior", () => {
     const tempDir = tempDirs.make("openclaw-bare-auth-mode-");
     const tokenMarker = path.join(tempDir, "token-provider-ran");
     const passwordMarker = path.join(tempDir, "password-provider-ran");
-    const secretProvider = (marker: string, id: string, value: string) => ({
-      source: "exec" as const,
-      command: process.execPath,
-      args: [
-        "-e",
-        [
-          "const fs=require('node:fs');",
-          `fs.writeFileSync(${JSON.stringify(marker)},'1');`,
-          `process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { [${JSON.stringify(id)}]: ${JSON.stringify(value)} } }));`,
-        ].join(""),
-      ],
-      allowInsecurePath: true,
-    });
+    const tokenProgram = [
+      "const fs=require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(tokenMarker)},'1');`,
+      "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { TOKEN_SECRET: 'token-from-exec' } }));", // pragma: allowlist secret
+    ].join("");
+    const passwordProgram = [
+      "const fs=require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(passwordMarker)},'1');`,
+      "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { PASSWORD_SECRET: 'password-from-exec' } }));", // pragma: allowlist secret
+    ].join("");
     await withSecureTestNodeExecPath(async () => {
       primeBareRootConfig({
         secrets: {
           providers: {
-            tokenprovider: secretProvider(tokenMarker, "TOKEN_SECRET", "token-from-exec"),
-            passwordprovider: secretProvider(
-              passwordMarker,
-              "PASSWORD_SECRET",
-              "password-from-exec",
-            ),
+            tokenprovider: {
+              source: "exec",
+              command: process.execPath,
+              args: ["-e", tokenProgram],
+              allowInsecurePath: true,
+            },
+            passwordprovider: {
+              source: "exec",
+              command: process.execPath,
+              args: ["-e", passwordProgram],
+              allowInsecurePath: true,
+            },
           },
         },
         gateway: {
@@ -334,26 +365,28 @@ describe("runCli exit behavior", () => {
     expectBoundTui({ url, configuredRemote: true, token: "restart-remote-auth" });
   });
 
-  it("does not probe a plaintext remote gateway over LAN IP without opt-in", async () => {
-    const url = "ws://192.168.1.10:18789";
-    primeBareRootConfig({
-      gateway: {
-        mode: "remote",
-        remote: {
-          url,
-          token: "unsafe-remote-auth",
+  it.each([{ label: "LAN IP", url: "ws://192.168.1.10:18789" }])(
+    "does not probe a plaintext remote gateway over $label without opt-in",
+    async ({ url }) => {
+      primeBareRootConfig({
+        gateway: {
+          mode: "remote",
+          remote: {
+            url,
+            token: "unsafe-remote-auth",
+          },
         },
-      },
-    });
+      });
 
-    await withEnvAsync({ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: undefined }, async () => {
-      await runBareCli();
-    });
+      await withEnvAsync({ OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: undefined }, async () => {
+        await runBareCli();
+      });
 
-    expect(probeGatewayConfiguredModelMock).not.toHaveBeenCalled();
-    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
-    expect(runTuiMock).not.toHaveBeenCalled();
-  });
+      expect(probeGatewayConfiguredModelMock).not.toHaveBeenCalled();
+      expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+      expect(runTuiMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {

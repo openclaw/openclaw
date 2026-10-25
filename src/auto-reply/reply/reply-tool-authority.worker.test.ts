@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -16,10 +15,15 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import {
+  projectionLane,
+  targetDiscoveryLane,
+} from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { bindSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
+import * as sessionReaders from "../../gateway/session-utils-store-worker.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
 import {
@@ -68,6 +72,72 @@ function makeRun(overrides: Partial<ReturnType<typeof createQueueTestRun>["run"]
   return run;
 }
 
+async function prepareEmbedded(
+  state: OpenClawTestState,
+  config: OpenClawConfig,
+  runId: string,
+  overrides: Partial<Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1]> = {},
+  boundary = "worker-authority-test",
+) {
+  const admission = prepareAgentRunAdmission({
+    cfg: config,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      agentId: "main",
+      runId,
+      ingress: { kind: "system", state: "present", boundary },
+    },
+  });
+  try {
+    const admittedRunContext = await admission.admit("embedded", boundary);
+    const attempt = {
+      sessionId: "execution",
+      sessionKey: executionKey,
+      runId,
+      agentId: "main",
+      config,
+      sessionFile: "/tmp/authority-worker.jsonl",
+      workspaceDir: state.workspaceDir,
+      provider: "openai",
+      modelId: "gpt-test",
+      senderIsOwner: true,
+      messageProvider: "webchat",
+      ...overrides,
+    };
+    return {
+      admission,
+      submit: (effect: () => Promise<string>) =>
+        withPreparedEmbeddedRunToolAuthority({ admittedRunContext }, attempt, undefined, effect),
+    };
+  } catch (error) {
+    admission.close();
+    throw error;
+  }
+}
+
+it("prepares embedded tool authority without caller-thread SQL and refuses a closing owner", async () => {
+  await withState(async (state, config) => {
+    setRuntimeConfigSnapshot(config);
+    await seed(policyKey, { sessionId: "policy", sandboxMode: "off" });
+    const { admission, submit } = await prepareEmbedded(state, config, "worker-authority", {
+      sandboxSessionKey: policyKey,
+    });
+    const effects = vi.fn(async () => "admitted");
+    const calls = observeMainThreadSql();
+    try {
+      await expect(submit(effects)).resolves.toBe("admitted");
+      calls.expectIdle();
+      const pending = submit(effects);
+      admission.close();
+      await expect(pending).rejects.toThrow();
+      expect(effects).toHaveBeenCalledTimes(1);
+      calls.expectIdle();
+    } finally {
+      admission.close();
+    }
+  });
+});
+
 it.each(["main", "policy", "borrowed"] as const)(
   "retains the %s-agent source while rereading changed sandbox policy before steering",
   async (policyAgent) => {
@@ -102,30 +172,61 @@ it.each(["main", "policy", "borrowed"] as const)(
         await admission.databaseClaim.release();
         throw new Error("Expected admitted session reader");
       }
+      const discovery = vi.spyOn(sessionReaders, "prepareGatewaySessionEntryReadOnlyInWorker");
       const snapshot = prepareReplyToolAuthority(run, undefined, () => reader);
       try {
         const operation = createTestReplyOperation({
           sessionKey: executionKey,
           sessionId: run.run.sessionId,
         });
-        await operation.bindToolAuthoritySnapshotAsync(snapshot);
+        let initialEntries = 0;
+        const initialReads = [projectionLane, targetDiscoveryLane].map(({ pool }) => {
+          const runRequest = pool.run.bind(pool);
+          return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
+            const reply = await runRequest(...args);
+            if (
+              reply.ok &&
+              typeof reply.value === "object" &&
+              reply.value !== null &&
+              "kind" in reply.value &&
+              reply.value.kind === "session-exact-entries"
+            ) {
+              initialEntries++;
+            }
+            return reply;
+          });
+        });
+        try {
+          await operation.bindToolAuthoritySnapshotAsync(snapshot);
+          expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
+        } finally {
+          initialReads.forEach((read) => read.mockRestore());
+        }
         const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
         await upsertSessionEntryCore(
           { agentId: policyAgentId, sessionKey: classificationKey, env: state.env },
           { sandboxMode: undefined },
         );
         const calls = observeMainThreadSql();
+        discovery.mockClear();
         expect(() => snapshot.fingerprint(run.run)).toThrow(
           "Tool authority classification session changed",
         );
         expect(await snapshot.fingerprintAsync(run.run)).not.toBe(admitted);
+        if (reader) {
+          expect(discovery).not.toHaveBeenCalled();
+        }
+        discovery.mockClear();
         await expect(
           operation.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay(run)),
         ).resolves.toBeUndefined();
         calls.expectIdle();
+        expect(discovery).not.toHaveBeenCalled();
         if (admission) {
           await admission.databaseClaim.release();
+          discovery.mockClear();
           await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
+          expect(discovery).not.toHaveBeenCalled();
         }
       } finally {
         snapshot.close();
@@ -163,7 +264,9 @@ it.each(["execution", "separate"] as const)(
         kind: "visible",
         resetTriggered: false,
       });
-      assert(admitted.status === "owned", "Fixture requires retained reply admission");
+      if (admitted.status !== "owned") {
+        throw new Error("Fixture requires retained reply admission");
+      }
       const controller = getSessionControllerEntryForOperation(admitted.operation);
       const run = makeRun({
         workspaceDir: state.workspaceDir,
@@ -174,13 +277,16 @@ it.each(["execution", "separate"] as const)(
         config: {},
       });
       const reader = getReplyOperationSessionReader(admitted.operation);
-      assert(reader, "Fixture requires an execution reader");
+      if (!reader) {
+        throw new Error("Fixture requires an execution reader");
+      }
       const snapshot = prepareReplyToolAuthority(
         run,
         undefined,
         captureReplyOperationSessionReader(admitted.operation),
       );
       const independent = prepareReplyToolAuthority(run);
+      const discovery = vi.spyOn(sessionReaders, "prepareGatewaySessionEntryReadOnlyInWorker");
       try {
         await admitted.operation.bindToolAuthoritySnapshotAsync(snapshot);
         const fingerprint = await admitted.operation.bindToolAuthorityRouteAsync(run.run);
@@ -195,7 +301,9 @@ it.each(["execution", "separate"] as const)(
             result: { sessionId: "compacted-execution", tokensBefore: 0 },
           },
         });
-        assert(accepted.admissionTransition, "Compaction must acknowledge the identity transition");
+        if (!accepted.admissionTransition) {
+          throw new Error("Compaction must acknowledge the committed identity transition");
+        }
         await acknowledgeReplySessionTransition(admitted.operation, accepted.admissionTransition);
         admitted.operation.updateSessionId(accepted.sessionId);
         expect(() => reader.assertCurrent()).toThrow(/released/u);
@@ -214,7 +322,9 @@ it.each(["execution", "separate"] as const)(
         }
         admitted.operation.complete();
         await waitForReplyRunSuccessorAdmission(executionKey, null, { target: controller.target });
+        discovery.mockClear();
         await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
+        expect(discovery).not.toHaveBeenCalled();
       } finally {
         independent.close();
         admitted.operation.complete();
@@ -345,38 +455,19 @@ it("propagates a lineage database failure before submitTurn", async () => {
       subagentRole: "orchestrator",
       inheritedToolPolicyVersion: 1,
     });
-    const boundary = "database-failure-test";
-    const admission = prepareAgentRunAdmission({
-      cfg: config,
-      operationalRunInstance: createOperationalRunInstanceRef(runId),
-      facts: { agentId: "main", runId, ingress: { kind: "system", state: "present", boundary } },
-    });
+    const { admission, submit } = await prepareEmbedded(
+      state,
+      config,
+      runId,
+      { sessionId, sessionKey, sessionFile: state.statePath("unreadable-lineage.jsonl") },
+      "database-failure-test",
+    );
     try {
-      const admittedRunContext = await admission.admit("embedded", boundary);
       const brokenPath = resolveOpenClawAgentSqlitePath({ agentId: "broken", env: state.env });
       fs.mkdirSync(path.dirname(brokenPath), { recursive: true });
       fs.writeFileSync(brokenPath, "not a SQLite database");
       const submitTurn = vi.fn(async () => "submitted");
-      await expect(
-        withPreparedEmbeddedRunToolAuthority(
-          { admittedRunContext },
-          {
-            sessionId,
-            sessionKey,
-            runId,
-            agentId: "main",
-            config,
-            sessionFile: state.statePath("unreadable-lineage.jsonl"),
-            workspaceDir: state.workspaceDir,
-            provider: "openai",
-            modelId: "gpt-test",
-            senderIsOwner: true,
-            messageProvider: "webchat",
-          },
-          undefined,
-          submitTurn,
-        ),
-      ).rejects.toThrow(/not a database/i);
+      await expect(submit(submitTurn)).rejects.toThrow(/not a database/i);
       expect(submitTurn).not.toHaveBeenCalled();
     } finally {
       admission.close();

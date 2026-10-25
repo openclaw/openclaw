@@ -210,10 +210,11 @@ describe("unified approval handlers", () => {
       status: "cancelled",
       terminalReason: "run-aborted",
     });
-    expect(await managers.exec.getSnapshot(completedRun.record.id)).toMatchObject({
+    const completedRunSnapshot = await managers.exec.getSnapshot(completedRun.record.id);
+    expect(completedRunSnapshot).toMatchObject({
       request: { runId: "run-completed" },
-      resolvedAtMs: undefined,
     });
+    expect(completedRunSnapshot?.resolvedAtMs).toBeUndefined();
     expect(publish).toHaveBeenCalledWith(
       expect.objectContaining({ id: aborted.record.id, decision: "deny" }),
       expect.objectContaining({ id: aborted.record.id }),
@@ -500,6 +501,11 @@ describe("unified approval handlers", () => {
     });
     expect(handleResolved).toHaveBeenCalledTimes(1);
     expect(handleIosResolved).toHaveBeenCalledTimes(1);
+    for (const phase of ["broadcast", "forwarder"]) {
+      expect(context.logGateway.error).toHaveBeenCalledWith(
+        expect.stringContaining(`exec approvals: unified resolve ${phase} failed`),
+      );
+    }
     expect(context.approvalEvents!.publishResolved).toHaveBeenCalledWith(
       "exec",
       expect.objectContaining({ id: pending.record.id, decision: "deny" }),

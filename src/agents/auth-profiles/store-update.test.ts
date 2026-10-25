@@ -140,14 +140,16 @@ afterEach(() => {
 
 it.each(["shared", "agent"] as const)(
   "publishes %s credentials before release and preserves authority for metadata and rollback",
-  (target) =>
-    withState(async (state) => {
+  async (target) => {
+    await withState(async (state) => {
       const agentDir = target === "agent" ? state.agentDir("child") : undefined;
       const replacement = credential("synthetic-after");
       save(makeStore({ selected: "synthetic-before" }), agentDir);
       const readCurrent = await prepareCredentialReader(state.env, agentDir);
       expect(readCurrent()).toEqual(credential("synthetic-before"));
       let mode: "credential" | "metadata" | "rollback" = "credential";
+      let grants = 0;
+      let receipts = 0;
       const settled: unknown[] = [];
       const unsubscribe = authProfileCredentialPublication.subscribeFacts((change) => {
         if (change.kind === "settled") {
@@ -157,6 +159,7 @@ it.each(["shared", "agent"] as const)(
       probe.admission(operationAdmission, (request, grant, admit) => {
         admit(request, (beforeRelease) => {
           if (request.stage === "commit") {
+            grants++;
             if (mode === "metadata") {
               expect(readCurrent()).toEqual(replacement);
             } else {
@@ -174,6 +177,7 @@ it.each(["shared", "agent"] as const)(
         (admission, publish) =>
           observe(admission, (receipt) => {
             if (isRecord(receipt.facts) && receipt.facts.authCredentials) {
+              receipts++;
               expect(readCurrent).toThrow("Auth profile credential authority is unavailable");
             }
             publish(receipt);
@@ -181,22 +185,24 @@ it.each(["shared", "agent"] as const)(
       );
       try {
         await update({ profiles: { selected: "synthetic-after" } }, agentDir, target === "shared");
-        expect(settled).toEqual([replacement]);
+        expect({ receipts, settled }).toEqual({ receipts: 1, settled: [replacement] });
         expect(readCurrent()).toEqual(replacement);
         mode = "metadata";
         await update({ order: ["selected"] }, agentDir, target === "shared");
-        expect(settled).toEqual([replacement]);
+        expect({ receipts, count: settled.length }).toEqual({ receipts: 1, count: 1 });
         mode = "rollback";
         await expect(
           update({ profiles: { selected: "synthetic-refused" } }, agentDir, target === "shared"),
         ).rejects.toThrow("synthetic credential commit refusal");
+        expect(grants).toBe(3);
         expect(settled).toEqual([replacement, replacement]);
         expect(readCurrent()).toEqual(replacement);
         expect(readPersistedStore(agentDir)?.profiles.selected).toEqual(replacement);
       } finally {
         unsubscribe();
       }
-    }),
+    });
+  },
 );
 
 it("keeps shared credentials denied after worker death without a native outcome", async () => {
@@ -268,6 +274,7 @@ it("keeps env-only agent callbacks isolated when saving", async () => {
     const result = await withEnvOnlyAuthProfileStore(() =>
       updateStore({ agentDir: localDir, saveOptions, updater }),
     );
+    expect(updater).toHaveBeenCalledOnce();
     expect(result).toEqual(explicit);
     expect(readPersistedStore()).toEqual(shared);
     expect(readPersistedStore(localDir)).toEqual(explicit);
@@ -293,8 +300,8 @@ it("rejects a native auth owner before initializing its state directory", async 
 
 it.for(["local", "legacy-shared"] as const)(
   "retains the %s physical store before waiting for auth FIFO preparation",
-  (kind) =>
-    withState(async (state) => {
+  async (kind) => {
+    await withState(async (state) => {
       const agentDir = state.agentDir(kind === "local" ? "child" : "main");
       noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, state.env);
       runAuthProfileWriteTransaction(
@@ -331,13 +338,14 @@ it.for(["local", "legacy-shared"] as const)(
         reservation.release();
         await Promise.allSettled([updating]);
       }
-    }),
+    });
+  },
 );
 
 it.each(["stale", "newer-write", "rebound-owner"])(
   "invalidates an unacknowledged commit after release with a %s view",
-  (scenario) =>
-    withState(async (state) => {
+  async (scenario) => {
+    await withState(async (state) => {
       const agentDir = state.agentDir("child");
       seedSnapshot(makeStore({ selected: "synthetic-before" }), agentDir);
       const capture = executions.captureOpenClawAgentDatabaseExecution;
@@ -384,7 +392,8 @@ it.each(["stale", "newer-write", "rebound-owner"])(
       } else {
         expect(snapshot(agentDir)).toBeUndefined();
       }
-    }),
+    });
+  },
 );
 
 it.each([
@@ -395,8 +404,8 @@ it.each([
   { target: "shared", changed: "other", outcome: "interrupted" },
 ])(
   "reconciles an overtaking $target native save of $changed ($outcome)",
-  ({ target, changed, outcome }) =>
-    withState(async (state) => {
+  async ({ target, changed, outcome }) => {
+    await withState(async (state) => {
       const agentDir = target === "agent" ? state.agentDir("child") : undefined;
       const initial = makeStore({ selected: "synthetic-before", other: "synthetic-other" });
       seedSnapshot(initial, agentDir);
@@ -452,7 +461,8 @@ it.each([
           expect(snapshot(derivedDir)?.profiles).toEqual(expected);
         }
       }
-    }),
+    });
+  },
 );
 
 it("does not retain inherited order when a native rotation overtakes state publication", async () => {
@@ -508,6 +518,7 @@ it("keeps a shared rotation that commits while a local save awaits publication",
       },
     );
     await update({ profiles: { local: "synthetic-local-after" } }, agentDir);
+    expect(rotated).toBe(true);
     expect(snapshot(agentDir)?.profiles).toEqual({
       local: credential("synthetic-local-after"),
       shared: credential("synthetic-shared-after"),
@@ -520,8 +531,8 @@ it("keeps a shared rotation that commits while a local save awaits publication",
 
 it.each(["before-callback", "in-callback", "commit"] as const)(
   "refuses personal-account update authority revoked at %s",
-  (phase) =>
-    withState(async () => {
+  async (phase) => {
+    await withState(async () => {
       const original = {
         type: "token" as const,
         provider: "anthropic",
@@ -567,5 +578,6 @@ it.each(["before-callback", "in-callback", "commit"] as const)(
       ).rejects.toThrow("synthetic personal authority revoked");
       expect(updater).toHaveBeenCalledTimes(phase === "before-callback" ? 0 : 1);
       expect(readUserModelAuthProfile(authProfileId)?.credential).toEqual(original);
-    }),
+    });
+  },
 );

@@ -84,8 +84,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     createTools.mockReturnValueOnce(names.map(makeTool));
   }
 
-  function readCreateToolsArgs() {
-    const args = createTools.mock.calls[0]?.[0];
+  function readCreateToolsArgs(index = 0) {
+    const args = createTools.mock.calls[index]?.[0];
     if (!args) {
       throw new Error("expected createOpenClawTools args");
     }
@@ -148,8 +148,12 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       'Scheduled account "creator" is unavailable',
     );
     expect(createTools).not.toHaveBeenCalled();
+    expect(resolveToolPolicy).toHaveBeenCalledTimes(1);
     expect(resolveToolPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: "creator", groupId: "ops" }),
+      expect.objectContaining({
+        accountId: "creator",
+        groupId: "ops",
+      }),
     );
   });
 
@@ -169,11 +173,29 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const names = ["read", "sessions_spawn", "automations", "gateway", "plugins", "nodes"];
     createTools.mockReturnValueOnce(names.map(makeTool)).mockReturnValueOnce(names.map(makeTool));
     const cfg = { gateway: { tools: { allow: ["gateway", "plugins"] } } };
-    expect(toolNames(await resolveTools({ cfg, senderIsOwner: true }))).toEqual(names);
-    expect(toolNames(await resolveTools({ cfg, senderIsOwner: false }))).toEqual([
-      "read",
-      "sessions_spawn",
-    ]);
+    const ownerResult = await resolveTools({ cfg, senderIsOwner: true });
+    const nonOwnerResult = await resolveTools({ cfg, senderIsOwner: false });
+    expect(toolNames(ownerResult)).toEqual(names);
+    expect(toolNames(nonOwnerResult)).toEqual(["read", "sessions_spawn"]);
+    const args = readCreateToolsArgs(1);
+    const denied = [
+      "automations",
+      "gateway",
+      "plugins",
+      "screen",
+      "terminal",
+      "portal",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "nodes",
+      "computer",
+      "mobile_ui",
+      "openclaw",
+      "intent",
+      "sessions",
+    ];
+    expect([args.pluginToolDenylist, args.inheritedToolDenylist]).toEqual([denied, denied]);
   });
 
   it.each([
@@ -217,6 +239,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
           });
           expect(sessions.execute).not.toHaveBeenCalled();
         }
+        expect(readCreateToolsArgs().senderIsOwner).toBe(senderIsOwner);
       } finally {
         admission.close();
       }
@@ -250,6 +273,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
           result.tools.find((tool) => tool.name === name)?.execute(`call-${name}`, args);
 
         await run("automations", { action: "runs", jobId: "job-1" });
+        expect(automations.execute).toHaveBeenCalledTimes(readsServed ? 1 : 0);
         await expect(
           run("automations", { action: "update", jobId: "job-1" }),
         ).resolves.toMatchObject({ details: { gated: true } });
@@ -308,12 +332,14 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const result = await resolveNodeExecTools({ bashElevated: elevated });
 
     expect(toolNames(result).filter((name) => name === "exec")).toEqual(["exec"]);
+    expect(createExec).toHaveBeenCalledOnce();
     expect(createExec.mock.calls[0]?.[0]).toMatchObject({
       host: "node",
       allowBackground: false,
       elevated,
     });
     const presentation = createExec.mock.calls[0]?.[1];
+    expect(presentation?.description).toContain("node-only");
     expect(presentation?.parameters).toHaveProperty("properties.host.enum", ["node"]);
   });
 
@@ -322,15 +348,71 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     { execSession: { execHost: "node" }, execOverrides: { host: "gateway" } },
     { cfg: { agents: { defaults: { sandbox: { mode: "all" } } } } },
     { surface: "http" },
-    {
-      cfg: { agents: { defaults: { sandbox: { mode: "non-main" } } } },
-      sessionKey: "agent:main:main",
-      runtimePolicySessionKey: "agent:main:discord:default:direct:peer-42",
-      agentId: "main",
-    },
   ])("omits exec when host or surface policy forbids it: %j", async (overrides) => {
     mockTools("read", "exec", "nodes");
     await expectNoNodeExec(overrides);
+  });
+
+  it("uses the runtime policy key for non-main sandbox classification", async () => {
+    await expectNoNodeExec({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "non-main" } } },
+      },
+      sessionKey: "agent:main:main",
+      runtimePolicySessionKey: "agent:main:discord:default:direct:peer-42",
+      agentId: "main",
+    });
+  });
+
+  it("filters node exec through immutable sender-scoped policy", async () => {
+    const result = await resolveNodeExecTools({
+      cfg: {
+        tools: {
+          toolsBySender: {
+            "id:blocked-sender": { deny: ["exec"] },
+          },
+        },
+      },
+      sessionKey: "agent:main:discord:channel:dev",
+      senderIsOwner: false,
+      messageProvider: "discord",
+      channelContext: { sender: { id: "blocked-sender" } },
+    });
+
+    expect(toolNames(result)).not.toContain("exec");
+    expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+  });
+
+  it("filters node exec through plugin group policy bound to group labels", async () => {
+    const resolveToolPolicy = vi.fn(
+      (params: { groupChannel?: string | null; groupSpace?: string | null }) =>
+        params.groupChannel === "ops" && params.groupSpace === "guild-blocked"
+          ? { deny: ["exec"] }
+          : undefined,
+    );
+    getChannelPlugin.mockReturnValue({
+      groups: { resolveToolPolicy },
+    });
+
+    const result = await resolveNodeExecTools({
+      sessionKey: "agent:main:direct:child",
+      spawnedBy: "agent:main:discord:channel:bound",
+      groupId: "bound",
+      groupChannel: "ops",
+      groupSpace: "guild-blocked",
+      senderIsOwner: false,
+      messageProvider: "discord",
+    });
+
+    expect(resolveToolPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupId: "bound",
+        groupChannel: "ops",
+        groupSpace: "guild-blocked",
+      }),
+    );
+    expect(toolNames(result)).not.toContain("exec");
+    expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
   });
 
   const wildcardExecDeny = { tools: { toolsBySender: { "*": { deny: ["exec"] } } } };
@@ -342,31 +424,6 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     messageProvider: "discord",
   };
   it.each<[string, ToolOverrides, boolean]>([
-    [
-      "immutable sender deny",
-      {
-        cfg: { tools: { toolsBySender: { "id:blocked-sender": { deny: ["exec"] } } } },
-        sessionKey: "agent:main:discord:channel:dev",
-        senderIsOwner: false,
-        messageProvider: "discord",
-        channelContext: { sender: { id: "blocked-sender" } },
-      },
-      false,
-    ],
-    [
-      "plugin group deny",
-      {
-        cfg: {},
-        sessionKey: "agent:main:direct:child",
-        spawnedBy: "agent:main:discord:channel:bound",
-        groupId: "bound",
-        groupChannel: "ops",
-        groupSpace: "guild-blocked",
-        senderIsOwner: false,
-        messageProvider: "discord",
-      },
-      false,
-    ],
     [
       "external-channel owner",
       { sessionKey: externalOrigin.sessionKey, messageProvider: "discord" },
@@ -384,39 +441,28 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       { requesterOrigin: externalOrigin, messageProvider: "webchat" },
       false,
     ],
-    [
-      "internal requester without current owner authority",
+    ...[false, undefined].map((senderIsOwner): [string, ToolOverrides, boolean] => [
+      `internal requester with current owner=${senderIsOwner}`,
       {
         requesterOrigin: { ...internalOrigin, operatorProfileId: "requester" },
         messageProvider: "webchat",
-        senderIsOwner: false,
+        senderIsOwner,
       },
       false,
-    ],
-  ])("applies node exec policy for %s", async (_name, params, available) => {
-    if (_name === "plugin group deny") {
-      getChannelPlugin.mockReturnValue({
-        groups: {
-          resolveToolPolicy: (group: {
-            groupId?: string;
-            groupChannel?: string;
-            groupSpace?: string;
-          }) =>
-            group.groupId === "bound" &&
-            group.groupChannel === "ops" &&
-            group.groupSpace === "guild-blocked"
-              ? { deny: ["exec"] }
-              : undefined,
-        },
-      });
-    }
+    ]),
+  ])("applies wildcard sender policy for %s", async (_name, params, available) => {
     const result = await resolveNodeExecTools({
-      cfg: params.cfg ?? wildcardExecDeny,
+      cfg: wildcardExecDeny,
       sessionKey: "agent:main:main",
       ...params,
     });
 
     expect(result.tools.some((tool) => tool.name === "exec")).toBe(available);
+    if (available) {
+      expect(readCreateToolsArgs().pluginToolDenylist).not.toContain("exec");
+    } else {
+      expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+    }
   });
 
   it("does not inherit node-only exec as a generic child or cron capability", async () => {
@@ -440,9 +486,36 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       delegationCapability: "report_only",
     });
     expect(toolNames(result)).toEqual(["read", "cron", "gateway", "nodes"]);
-    const args = readCreateToolsArgs();
-    const inherited = ["read", "automations", "gateway", "nodes"];
-    expect(args.inheritedToolAllowlist).toEqual(inherited);
-    expect(args.cronCreatorToolAllowlist).toEqual(inherited.map((name) => ({ name })));
+    expect(readCreateToolsArgs().inheritedToolAllowlist).toEqual([
+      "read",
+      "automations",
+      "gateway",
+      "nodes",
+    ]);
+    expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
+      { name: "read" },
+      { name: "automations" },
+      { name: "gateway" },
+      { name: "nodes" },
+    ]);
+  });
+
+  it("narrows report-only loopback tools to their status actions", async () => {
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    createTools.mockReturnValueOnce([{ ...makeTool("cron"), execute }]);
+    const cron = (
+      await resolveTools({
+        senderIsOwner: true,
+        delegationCapability: "report_only",
+      })
+    ).tools.find((tool) => tool.name === "cron");
+    await expect(cron?.execute("cron-status", { action: "status" })).resolves.toEqual({
+      content: [],
+      details: {},
+    });
+    await expect(cron?.execute("cron-add", { action: "add" })).rejects.toThrow(
+      "New delegation is unavailable",
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 });
