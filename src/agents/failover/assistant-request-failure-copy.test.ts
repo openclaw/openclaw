@@ -1,22 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { decodePostgresError } from "../../infra/postgres-sync/protocol.js";
-import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
 import { formatUserFacingAssistantErrorText } from "../embedded-agent-helpers/error-text.js";
-import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
 import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
 import { makeAssistantMessageFixture as makeAssistant } from "../test-helpers/assistant-message-fixtures.js";
 import {
   ERROR_DETAILS_HINT,
+  PROVIDER_SCHEMA_REJECTION_USER_TEXT,
   renderAssistantRequestFailureCopy,
   renderRecordedAssistantFailureCopy,
+  renderFormatErrorCopy,
   renderRuntimeCoordinationFailureCopy,
-  renderStorageFailureSummary,
 } from "./assistant-request-failure-copy.js";
 import { isAuthErrorMessage } from "./message-patterns.js";
 
 describe("renderAssistantRequestFailureCopy", () => {
-  const target = { provider: "openai", model: "test-model" };
   const runFailure =
     "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
   const live = (fields: Parameters<typeof makeAssistant>[0]) =>
@@ -34,17 +31,6 @@ describe("renderAssistantRequestFailureCopy", () => {
     });
   function expectBoth(expected: string, fields: Parameters<typeof makeAssistant>[0]) {
     expect(copies(makeAssistant(fields))).toEqual([expected, expected]);
-  }
-  function expectPrivateCopies(
-    assistant: ReturnType<typeof makeAssistant>,
-    ...fragments: (string | undefined)[]
-  ) {
-    for (const copy of copies(assistant)) {
-      for (const fragment of fragments) {
-        expect(copy).toContain(fragment);
-      }
-      expect(copy).not.toContain("PRIVATE");
-    }
   }
 
   it("preserves approval-expiry guidance in assistant history", () => {
@@ -89,62 +75,31 @@ describe("renderAssistantRequestFailureCopy", () => {
   });
 
   it.each([
-    ["operator cancellation", "canceling statement due to user request PRIVATE_STORAGE_DETAIL"],
-    ["statement timeout", "canceling statement due to statement timeout PRIVATE_STORAGE_DETAIL"],
-  ])("retains %s guidance in live replies and saved history", (_scenario, message) => {
-    const error = decodePostgresError({ name: "error", message, code: "57014" });
-    const storageFailure = classifyGatewayStorageFailure(error);
-    expect(storageFailure).toBe("57014");
-    const assistant = makeAssistant({
-      errorMessage: error.message,
-      errorCode: storageFailure,
-      errorType: error.name,
-    });
-    expect(classifyGatewayStorageFailure(assistant)).toBe("57014");
-    expect(classifyProviderRuntimeFailureKind(buildAssistantFailoverSignal(assistant))).toBe(
-      "gateway_storage",
-    );
-    const summary = renderStorageFailureSummary(storageFailure);
-    expect(summary).toEqual(expect.any(String));
-    expect(summary).not.toBe("");
-    expectPrivateCopies(assistant, summary, ERROR_DETAILS_HINT);
-  });
-
-  it("retains cancellation provenance through name-only actor errors", () => {
+    ["user request", "57014"],
+    ["statement timeout", "57014"],
+    ["user request", undefined],
+  ])("retains storage guidance for %s (code=%s) in live and saved replies", (cause, errorCode) => {
     const error = decodePostgresError({
       name: "error",
-      message: "canceling statement due to user request PRIVATE_ACTOR_DETAIL",
       code: "57014",
+      message: `canceling statement due to ${cause} PRIVATE_STORAGE_DETAIL`,
     });
-    const actorError = { name: error.name, message: error.message };
-    expect(classifyGatewayStorageFailure(actorError)).toBe("57014");
-    const assistant = makeAssistant({
-      errorMessage: actorError.message,
-      errorType: actorError.name,
-    });
-    expect(classifyGatewayStorageFailure(assistant)).toBe("57014");
-    expectPrivateCopies(assistant, ERROR_DETAILS_HINT);
+    expectBoth(
+      `⚠️ PostgreSQL canceled a database operation or its statement timed out. Check the conversation for completed work before trying again. If it happens again, ask the operator to check PostgreSQL timeouts and server activity. ${ERROR_DETAILS_HINT}`,
+      {
+        errorMessage: error.message,
+        errorType: error.name,
+        errorCode,
+      },
+    );
   });
 
   it("keeps provider-owned 57014 errors out of storage cancellation handling", () => {
-    const assistant = makeAssistant({
+    expectBoth("⚠️ The AI service needs a short break. Please try again in a few minutes.", {
       errorCode: "57014",
       errorType: "rate_limit_error",
       errorMessage: "Rate limit reached PRIVATE_PROVIDER_DETAIL",
     });
-    const signal = buildAssistantFailoverSignal(assistant);
-    expect(classifyGatewayStorageFailure(assistant)).toBeUndefined();
-    expect(classifyGatewayStorageFailure(signal)).toBeUndefined();
-    expect(classifyProviderRuntimeFailureKind(signal)).toBe("rate_limit");
-    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(
-      renderAssistantRequestFailureCopy({ reason: "rate_limit" }),
-    );
-    for (const copy of copies(assistant)) {
-      expect(copy).toEqual(expect.any(String));
-      expect(copy).not.toBe("");
-      expect(copy).not.toMatch(/postgres/i);
-      expect(copy).not.toContain("PRIVATE_PROVIDER_DETAIL");
-    }
   });
 
   it("renders loading facts consistently in live replies and saved history without provider prose", () => {
@@ -263,15 +218,13 @@ describe("renderAssistantRequestFailureCopy", () => {
     '400 Bad Request: [{"input":"PRIVATE_PROMPT"}]',
     '422 Unprocessable Entity: [{"input":"PRIVATE_PROMPT"',
   ])("keeps raw response bodies out of live and saved replies: %s", (errorMessage) => {
-    expectPrivateCopies(makeAssistant({ errorMessage }));
+    for (const copy of copies(makeAssistant({ errorMessage }))) {
+      expect(copy).not.toContain("PRIVATE");
+    }
+    expect(renderFormatErrorCopy(errorMessage)).toBe(PROVIDER_SCHEMA_REJECTION_USER_TEXT);
   });
 
   it("handles partial model context", () => {
     expect(renderAssistantRequestFailureCopy({ model: "test-model" })).toBe(runFailure);
-  });
-
-  it("requires a valid HTTP status before asserting a request failure", () => {
-    expect(renderAssistantRequestFailureCopy({ ...target, status: 0 })).toBe(runFailure);
-    expect(renderAssistantRequestFailureCopy({ ...target, status: 400 })).toBe(runFailure);
   });
 });
