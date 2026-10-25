@@ -45,9 +45,10 @@ const fixtures = Array.from({ length: sessionCount }, (_, index) => {
     sandbox: "required",
     createdActor: {
       type: "human",
+      source: "profile",
       id: `actor-${index}`,
       label: "Synthetic actor",
-      identity: { type: "profile", id: `profile-${index}` },
+      delegatedBy: { type: "agent", id: `parent-${index}` },
     },
   };
   const original = {

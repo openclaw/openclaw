@@ -104,14 +104,24 @@ const classificationEntry: SessionEntry = {
   lifecycleRevision: "generation",
   sandbox: "required",
   sandboxMode: "off",
-  createdActor: { type: "human", id: "creator", identity: { type: "profile", id: "creator" } },
+  createdActor: {
+    type: "human",
+    source: "profile",
+    id: "creator",
+    delegatedBy: { type: "agent", id: "parent" },
+  },
 };
-it.each<{ name: string; patch: Partial<SessionEntry>; current: boolean }>([
+it.each([
   { name: "unrelated metadata", patch: { updatedAt: 2, label: "Renamed" }, current: true },
   {
     name: "reordered actor keys",
     patch: {
-      createdActor: { identity: { id: "creator", type: "profile" }, id: "creator", type: "human" },
+      createdActor: {
+        delegatedBy: { id: "parent", type: "agent" },
+        id: "creator",
+        source: "profile",
+        type: "human",
+      },
     },
     current: true,
   },
@@ -129,7 +139,7 @@ it.each<{ name: string; patch: Partial<SessionEntry>; current: boolean }>([
     patch: {
       createdActor: {
         ...classificationEntry.createdActor!,
-        identity: { type: "agent", id: "creator" },
+        delegatedBy: { type: "human", source: "profile", id: "creator" },
       },
     },
     current: false,
@@ -140,42 +150,49 @@ it.each<{ name: string; patch: Partial<SessionEntry>; current: boolean }>([
     current: false,
   },
   { name: "removed creator", patch: { createdActor: undefined }, current: false },
-])("retained classification observes $name on publication", ({ patch, current }) => {
-  const original = {
-    storePath: "/synthetic/classification",
-    canonicalKey: "agent:main:classification",
-    storeKeys: ["agent:main:classification"],
-    agentId: "main",
-    source: {
+] satisfies { name: string; patch: Partial<SessionEntry>; current: boolean }[])(
+  "retained classification observes $name on publication",
+  ({ patch, current }) => {
+    const original = {
+      storePath: "/synthetic/classification",
+      canonicalKey: "agent:main:classification",
+      storeKeys: ["agent:main:classification"],
       agentId: "main",
-      path: "/synthetic/classification.db",
-      databaseIdentity: "classification-test",
-    },
-    sources: undefined,
-    sessionId: classificationEntry.sessionId,
-    lifecycleRevision: classificationEntry.lifecycleRevision,
-  };
-  const retained = retainReplyToolAuthorityClassification(original, classificationEntry, () => {});
-  expect(retained).toBeDefined();
-  try {
-    const entry = { ...classificationEntry, ...patch };
-    publishRetainedSessionEntryChange(
-      "classification-test",
-      original.canonicalKey,
-      entry,
+      source: {
+        agentId: "main",
+        path: "/synthetic/classification.db",
+        databaseIdentity: "classification-test",
+      },
+      sources: undefined,
+      sessionId: classificationEntry.sessionId,
+      lifecycleRevision: classificationEntry.lifecycleRevision,
+    };
+    const retained = retainReplyToolAuthorityClassification(
+      original,
       classificationEntry,
-      true,
-      entry,
+      () => {},
     );
-    if (current) {
-      expect(() => retained!.assertCurrent()).not.toThrow();
-    } else {
-      expect(() => retained!.assertCurrent()).toThrow("classification session changed");
+    expect(retained).toBeDefined();
+    try {
+      const entry = { ...classificationEntry, ...patch };
+      publishRetainedSessionEntryChange(
+        "classification-test",
+        original.canonicalKey,
+        entry,
+        classificationEntry,
+        true,
+        entry,
+      );
+      if (current) {
+        expect(() => retained!.assertCurrent()).not.toThrow();
+      } else {
+        expect(() => retained!.assertCurrent()).toThrow("classification session changed");
+      }
+    } finally {
+      retained?.release();
     }
-  } finally {
-    retained?.release();
-  }
-});
+  },
+);
 it("treats absent and undefined classification fields equally but still checks live authority", () => {
   const entry: SessionEntry = { sessionId: "optional", updatedAt: 1 };
   let active = true;
