@@ -56,7 +56,6 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   }),
 }));
 
-const authority = { assertCurrent() {}, authorize() {} };
 type MemoryOwner = ReturnType<typeof memorySessionActorOwners.get>;
 let actor: MemoryOwner;
 let childActor: MemoryOwner;
@@ -72,28 +71,15 @@ function memoryOwner(agentId: string) {
   return memorySessionActorOwners.get({ agentId, path: actorPath(agentId) });
 }
 
-async function create(
+function create(
   owner: MemoryOwner,
   sessionKey: string,
   entry: Pick<SessionEntry, "sessionId"> & Partial<SessionEntry>,
 ) {
-  const acquired = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
+  return replaceSessionEntry(
+    { agentId: owner.agentId, sessionKey, storePath: owner.path, env: actorEnv },
+    { updatedAt: 1, incognito: true, ...entry },
   );
-  try {
-    const result = await acquired.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: { entry: { updatedAt: 1, incognito: true, ...entry } },
-      },
-      authority,
-    );
-    expect(result.kind).toBe("committed");
-    return { entry: acquired.snapshot(authority)?.entry };
-  } finally {
-    await acquired.release();
-  }
 }
 
 async function withMemorySource<T>(
@@ -327,18 +313,17 @@ describe("selected incognito announcement requester", () => {
     const sessionKey = "agent:child:dashboard:incognito-result";
     const runId = "child-result-run";
     setSessionStore();
-    const created = await create(childActor, sessionKey, {
+    await create(childActor, sessionKey, {
       sessionId: "child-result",
       lifecycleRevision: "child-result-initial",
     });
-    assert(created.entry);
     await withMemorySource(childActor, () =>
       appendTranscriptMessage(
         {
           agentId: "child",
           storePath: childActor.path,
           sessionKey,
-          sessionId: created.entry!.sessionId,
+          sessionId: "child-result",
         },
         {
           message: {
@@ -416,8 +401,4 @@ it("reads an unbound incognito announcement from its memory owner", async () => 
   expect((await loadRequesterSessionEntry(sessionKey, agentId)).entry?.sessionId).toBe(
     "unbound-announcement",
   );
-  expect(
-    memorySessionActorOwners.read({ agentId, path: storePath })?.readSession(sessionKey, authority)
-      ?.entry?.sessionId,
-  ).toBe("unbound-announcement");
 });

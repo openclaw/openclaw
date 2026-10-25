@@ -91,9 +91,7 @@ it("keeps bound automation management after the old cohort is explicitly removed
     sessionId: "sess-main",
     agentId: "main",
   });
-  onTestFinished(() => {
-    releaseAgentRunDelegatedAuthority(originalAuthority);
-  });
+  onTestFinished(() => releaseAgentRunDelegatedAuthority(originalAuthority));
   const originalCapability = createCronCreatorAuthorityCapability(
     sourceRunId,
     { kind: "unknown" },

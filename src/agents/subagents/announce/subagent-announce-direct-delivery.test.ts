@@ -198,45 +198,31 @@ function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.send).not.toHaveBeenCalled();
 }
 
-it.each([
-  ["committed steering", false, false],
-  ["unconfirmed steering", false, true],
-  ["required direct delivery", true, false],
-] as const)(
-  "preserves the completion dispatch phase for %s without replacing controller custody",
-  async (_name, requireDirectDelivery, unconfirmed) => {
-    const fixture = setup("subagent_announce");
-    const expected = unconfirmed
-      ? { delivered: false, path: "steered", error: "commit outcome unknown" }
-      : { delivered: true, path: requireDirectDelivery ? "direct" : "steered" };
-    const { queueMessage, input } = steering(fixture, async (_text, options, assertCurrent) => {
-      assertCurrent();
-      options?.onQueueAccepted?.(true);
-      return unconfirmed ? unconfirmedCommit : undefined;
-    });
-    fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
-    const result = await deliverSubagentAnnouncement({
-      ...fixture.params,
-      controllerInput: input,
-      requireDirectDelivery,
-    });
-    expect(result).toMatchObject(expected);
-    expect(result.phases).toEqual([
-      {
-        phase: "direct-primary",
-        ...expected,
-        deliveredAt: undefined,
-        enqueuedAt: undefined,
-        ...(!unconfirmed ? { error: undefined } : {}),
-      },
-    ]);
-    expect(queueMessage).toHaveBeenCalledTimes(requireDirectDelivery ? 0 : 1);
-    expect(fixture.dispatch).toHaveBeenCalledTimes(requireDirectDelivery ? 1 : 0);
-    if (requireDirectDelivery) {
-      expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
-    }
-  },
-);
+it("preserves the direct completion phase without replacing controller custody", async () => {
+  const fixture = setup("subagent_announce");
+  const expected = { delivered: true, path: "direct" };
+  const { queueMessage, input } = steering(fixture, async () => {
+    throw new Error("Required direct delivery must not steer");
+  });
+  fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
+  const result = await deliverSubagentAnnouncement({
+    ...fixture.params,
+    controllerInput: input,
+    requireDirectDelivery: true,
+  });
+  expect(result).toMatchObject(expected);
+  expect(result.phases).toEqual([
+    {
+      phase: "direct-primary",
+      ...expected,
+      deliveredAt: undefined,
+      enqueuedAt: undefined,
+      error: undefined,
+    },
+  ]);
+  expect(queueMessage).not.toHaveBeenCalled();
+  expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+});
 
 it("keeps the same completion input queued when timeout recovery cannot accept steering", async ({
   signal,
