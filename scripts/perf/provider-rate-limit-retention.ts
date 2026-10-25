@@ -185,7 +185,7 @@ async function completedRateLimitContext(index: number) {
   return new WeakRef(payload);
 }
 const before = await settledHeap();
-const held = [];
+const held: Awaited<ReturnType<typeof admit>>[] = [];
 for (let index = 0; index < turns; index++) {
   const entry = await admit(index);
   held.push(entry);

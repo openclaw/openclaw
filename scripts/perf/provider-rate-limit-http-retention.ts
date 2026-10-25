@@ -137,7 +137,7 @@ async function turn(index: number) {
       }
       result = await output.result();
     }
-    assert.equal(result.stopReason, "stop", result.errorMessage);
+    assert.equal(result.stopReason, "stop", result.errorMessage ?? "Expected a successful result");
   }
   held.push(output);
 }
