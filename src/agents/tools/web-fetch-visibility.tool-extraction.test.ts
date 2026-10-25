@@ -73,6 +73,7 @@ const PAGES: Record<string, string> = {
   "/markdown-code": MARKDOWN_CODE,
   "/markdown-unclosed": `\`\`\`text\n${UNCLOSED_CODE}`,
   "/markdown-inline-fence-prose": INLINE_FENCE,
+  "/markdown-escaped-bang": String.raw`Read \![important](https://example.com) and \\![diagram](image.png).`,
   "/implicit-nested-siblings":
     "<ul><li hidden><ul><li>A<li>B</li></ul>Secret</li></ul><p>Visible</p>",
   "/unmatched-container": "<p hidden>Before</div>Secret</p><p>Visible</p>",
@@ -161,6 +162,11 @@ describe("web_fetch content fidelity through the real tool execute path", () => 
     },
     { path: "/markdown-unclosed", mode: "text", expected: UNCLOSED_CODE },
     { path: "/markdown-inline-fence-prose", mode: "text", expected: INLINE_FENCE },
+    {
+      path: "/markdown-escaped-bang",
+      mode: "text",
+      expected: String.raw`Read \!important and \\.`,
+    },
   ] as const)("preserves $path in $mode mode", async ({ path, mode, expected }) => {
     const { envelope } = await extract(path, mode);
     expect(envelope).toMatchObject({

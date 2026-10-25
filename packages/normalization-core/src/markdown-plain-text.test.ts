@@ -12,6 +12,11 @@ describe("flattenMarkdownToPlainText", () => {
     ],
     ["images", "Status ![green check](https://example.com/check.png)", "Status green check"],
     [
+      "escaped image markers before links",
+      String.raw`Read \![important](https://example.com) and \\![diagram](image.png)`,
+      String.raw`Read \!important and \\diagram`,
+    ],
+    [
       "nested link label brackets",
       "Read the [Report [Q3 [draft]]](https://example.com/r) and then deploy.",
       "Read the Report [Q3 [draft]] and then deploy.",
