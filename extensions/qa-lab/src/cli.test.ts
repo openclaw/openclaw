@@ -66,24 +66,6 @@ const { listQaRunnerCliContributions } = vi.hoisted(() => ({
   ]),
 }));
 
-function requireQaTelegramOptions() {
-  const [call] = runQaTelegramCommand.mock.calls;
-  if (!call) {
-    throw new Error("expected qa telegram command call");
-  }
-  const [options] = call;
-  return options;
-}
-
-function requireQaSuiteOptions() {
-  const [call] = runQaSuiteCommand.mock.calls;
-  if (!call) {
-    throw new Error("expected qa suite command call");
-  }
-  const [options] = call;
-  return options;
-}
-
 vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/qa-runner-runtime")>()),
   listQaRunnerCliContributions,
@@ -153,25 +135,43 @@ describe("qa cli registration", () => {
     expect(process.exitCode).toBe(1);
   }
 
+  // Each pair declares the CLI spelling independently from the runtime field.
+  async function expectRoute(
+    args: string[],
+    command: ReturnType<typeof vi.fn>,
+    fields: Record<string, readonly [string, string | string[] | boolean]>,
+    defaults: Record<string, unknown> = {},
+  ) {
+    await parseQa(args, Object.fromEntries(Object.values(fields)));
+    expect(command).toHaveBeenCalledWith({
+      ...defaults,
+      ...Object.fromEntries(Object.entries(fields).map(([key, [, value]]) => [key, value])),
+    });
+  }
+
   beforeEach(() => {
     previousExitCode = process.exitCode;
     stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     program = new Command();
-    runQaCredentialsAddCommand.mockReset();
-    runQaCredentialsListCommand.mockReset();
-    runQaCredentialsRemoveCommand.mockReset();
-    runQaCoverageReportCommand.mockReset();
-    runQaJsonlReplayCommand.mockReset();
-    runQaLabSelfCheckCommand.mockReset();
-    runQaManualLaneCommand.mockReset();
-    runQaProfileCommand.mockReset();
-    runQaProviderServerCommand.mockReset();
-    runQaSuiteCommand.mockReset();
-    runQaTelegramCommand.mockReset();
-    runMantisBeforeAfterCommand.mockReset();
-    runMantisDesktopBrowserSmokeCommand.mockReset();
-    runMantisDiscordSmokeCommand.mockReset();
-    runMantisSlackDesktopSmokeCommand.mockReset();
+    for (const command of [
+      runQaCredentialsAddCommand,
+      runQaCredentialsListCommand,
+      runQaCredentialsRemoveCommand,
+      runQaCoverageReportCommand,
+      runQaJsonlReplayCommand,
+      runQaLabSelfCheckCommand,
+      runQaManualLaneCommand,
+      runQaProfileCommand,
+      runQaProviderServerCommand,
+      runQaSuiteCommand,
+      runQaTelegramCommand,
+      runMantisBeforeAfterCommand,
+      runMantisDesktopBrowserSmokeCommand,
+      runMantisDiscordSmokeCommand,
+      runMantisSlackDesktopSmokeCommand,
+    ]) {
+      command.mockReset();
+    }
     listQaRunnerCliContributions
       .mockReset()
       .mockReturnValue([createAvailableQaRunnerContribution()]);
@@ -283,87 +283,55 @@ describe("qa cli registration", () => {
   });
 
   it("routes mantis discord-smoke flags into the mantis runtime command", async () => {
-    await parseQa(["mantis", "discord-smoke"], {
-      "repo-root": "/tmp/openclaw-repo",
-      "output-dir": ".artifacts/qa-e2e/mantis/discord-smoke",
-      "guild-id": "123456789012345678",
-      "channel-id": "223456789012345678",
-      "token-file": "/tmp/mantis-token",
-      message: "hello from mantis",
-      "skip-post": true,
-    });
-
-    expect(runMantisDiscordSmokeCommand).toHaveBeenCalledWith({
-      repoRoot: "/tmp/openclaw-repo",
-      outputDir: ".artifacts/qa-e2e/mantis/discord-smoke",
-      guildId: "123456789012345678",
-      channelId: "223456789012345678",
-      tokenEnv: undefined,
-      tokenFile: "/tmp/mantis-token",
-      tokenFileEnv: undefined,
-      message: "hello from mantis",
-      skipPost: true,
-    });
+    await expectRoute(
+      ["mantis", "discord-smoke"],
+      runMantisDiscordSmokeCommand,
+      {
+        repoRoot: ["repo-root", "/tmp/openclaw-repo"],
+        outputDir: ["output-dir", ".artifacts/qa-e2e/mantis/discord-smoke"],
+        guildId: ["guild-id", "123456789012345678"],
+        channelId: ["channel-id", "223456789012345678"],
+        tokenFile: ["token-file", "/tmp/mantis-token"],
+        message: ["message", "hello from mantis"],
+        skipPost: ["skip-post", true],
+      },
+      { tokenEnv: undefined, tokenFileEnv: undefined },
+    );
   });
 
   it("routes mantis before/after flags into the mantis runtime command", async () => {
-    await parseQa(["mantis", "run"], {
-      transport: "discord",
-      scenario: "discord-status-reactions-tool-only",
-      baseline: "origin/main",
-      candidate: "HEAD",
-      "repo-root": "/tmp/openclaw-repo",
-      "output-dir": ".artifacts/qa-e2e/mantis/local-discord-status-reactions",
-      "credential-source": "convex",
-      "credential-role": "maintainer",
-      "skip-install": true,
-      "skip-build": true,
-    });
-
-    expect(runMantisBeforeAfterCommand).toHaveBeenCalledWith({
-      baseline: "origin/main",
-      candidate: "HEAD",
-      credentialRole: "maintainer",
-      credentialSource: "convex",
-      fastMode: true,
-      outputDir: ".artifacts/qa-e2e/mantis/local-discord-status-reactions",
-      providerMode: "live-frontier",
-      repoRoot: "/tmp/openclaw-repo",
-      scenario: "discord-status-reactions-tool-only",
-      signal: expect.any(AbortSignal),
-      skipBuild: true,
-      skipInstall: true,
-      transport: "discord",
-    });
+    await expectRoute(
+      ["mantis", "run"],
+      runMantisBeforeAfterCommand,
+      {
+        transport: ["transport", "discord"],
+        scenario: ["scenario", "discord-status-reactions-tool-only"],
+        baseline: ["baseline", "origin/main"],
+        candidate: ["candidate", "HEAD"],
+        repoRoot: ["repo-root", "/tmp/openclaw-repo"],
+        outputDir: ["output-dir", ".artifacts/qa-e2e/mantis/local-discord-status-reactions"],
+        credentialSource: ["credential-source", "convex"],
+        credentialRole: ["credential-role", "maintainer"],
+        skipInstall: ["skip-install", true],
+        skipBuild: ["skip-build", true],
+      },
+      { fastMode: true, providerMode: "live-frontier", signal: expect.any(AbortSignal) },
+    );
   });
 
   it("routes mantis desktop browser smoke flags into the mantis runtime command", async () => {
-    await parseQa(["mantis", "desktop-browser-smoke"], {
-      "repo-root": "/tmp/openclaw-repo",
-      "output-dir": ".artifacts/qa-e2e/mantis/desktop-browser",
-      "browser-url": "https://openclaw.ai/docs",
-      "html-file": "qa-artifacts/timeline.html",
-      "crabbox-bin": "/tmp/crabbox",
-      provider: "hetzner",
-      class: "beast",
-      "lease-id": "cbx_123abc",
-      "idle-timeout": "30m",
-      ttl: "90m",
-      "keep-lease": true,
-    });
-
-    expect(runMantisDesktopBrowserSmokeCommand).toHaveBeenCalledWith({
-      browserUrl: "https://openclaw.ai/docs",
-      crabboxBin: "/tmp/crabbox",
-      htmlFile: "qa-artifacts/timeline.html",
-      idleTimeout: "30m",
-      keepLease: true,
-      leaseId: "cbx_123abc",
-      machineClass: "beast",
-      outputDir: ".artifacts/qa-e2e/mantis/desktop-browser",
-      provider: "hetzner",
-      repoRoot: "/tmp/openclaw-repo",
-      ttl: "90m",
+    await expectRoute(["mantis", "desktop-browser-smoke"], runMantisDesktopBrowserSmokeCommand, {
+      repoRoot: ["repo-root", "/tmp/openclaw-repo"],
+      outputDir: ["output-dir", ".artifacts/qa-e2e/mantis/desktop-browser"],
+      browserUrl: ["browser-url", "https://openclaw.ai/docs"],
+      htmlFile: ["html-file", "qa-artifacts/timeline.html"],
+      crabboxBin: ["crabbox-bin", "/tmp/crabbox"],
+      provider: ["provider", "hetzner"],
+      machineClass: ["class", "beast"],
+      leaseId: ["lease-id", "cbx_123abc"],
+      idleTimeout: ["idle-timeout", "30m"],
+      ttl: ["ttl", "90m"],
+      keepLease: ["keep-lease", true],
     });
   });
 
@@ -386,51 +354,32 @@ describe("qa cli registration", () => {
   });
 
   it("routes mantis Slack desktop smoke flags into the mantis runtime command", async () => {
-    await parseQa(["mantis", "slack-desktop-smoke"], {
-      "repo-root": "/tmp/openclaw-repo",
-      "output-dir": ".artifacts/qa-e2e/mantis/slack-desktop",
-      "crabbox-bin": "/tmp/crabbox",
-      provider: "hetzner",
-      market: "on-demand",
-      "machine-class": "beast",
-      "lease-id": "cbx_123abc",
-      "fresh-pr": "openclaw/openclaw#85141",
-      "idle-timeout": "45m",
-      ttl: "120m",
-      "slack-url": "https://app.slack.com/client/T123/C123",
-      "provider-mode": "live-frontier",
-      model: "openai/gpt-5.6-luna",
-      "alt-model": "openai/gpt-5.6-luna",
-      scenario: "slack-canary",
-      "credential-source": "env",
-      "credential-role": "maintainer",
-      fast: true,
-      "keep-lease": true,
-    });
-
-    expect(runMantisSlackDesktopSmokeCommand).toHaveBeenCalledWith({
-      alternateModel: "openai/gpt-5.6-luna",
-      crabboxBin: "/tmp/crabbox",
-      credentialRole: "maintainer",
-      credentialSource: "env",
-      fastMode: true,
-      freshPr: "openclaw/openclaw#85141",
-      gatewaySetup: undefined,
-      idleTimeout: "45m",
-      keepLease: true,
-      leaseId: "cbx_123abc",
-      machineClass: "beast",
-      market: "on-demand",
-      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop",
-      primaryModel: "openai/gpt-5.6-luna",
-      provider: "hetzner",
-      providerMode: "live-frontier",
-      repoRoot: "/tmp/openclaw-repo",
-      scenarioIds: ["slack-canary"],
-      slackChannelId: undefined,
-      slackUrl: "https://app.slack.com/client/T123/C123",
-      ttl: "120m",
-    });
+    await expectRoute(
+      ["mantis", "slack-desktop-smoke"],
+      runMantisSlackDesktopSmokeCommand,
+      {
+        repoRoot: ["repo-root", "/tmp/openclaw-repo"],
+        outputDir: ["output-dir", ".artifacts/qa-e2e/mantis/slack-desktop"],
+        crabboxBin: ["crabbox-bin", "/tmp/crabbox"],
+        provider: ["provider", "hetzner"],
+        market: ["market", "on-demand"],
+        machineClass: ["machine-class", "beast"],
+        leaseId: ["lease-id", "cbx_123abc"],
+        freshPr: ["fresh-pr", "openclaw/openclaw#85141"],
+        idleTimeout: ["idle-timeout", "45m"],
+        ttl: ["ttl", "120m"],
+        slackUrl: ["slack-url", "https://app.slack.com/client/T123/C123"],
+        providerMode: ["provider-mode", "live-frontier"],
+        primaryModel: ["model", "openai/gpt-5.6-luna"],
+        alternateModel: ["alt-model", "openai/gpt-5.6-luna"],
+        scenarioIds: ["scenario", ["slack-canary"]],
+        credentialSource: ["credential-source", "env"],
+        credentialRole: ["credential-role", "maintainer"],
+        fastMode: ["fast", true],
+        keepLease: ["keep-lease", true],
+      },
+      { gatewaySetup: undefined, slackChannelId: undefined },
+    );
   });
 
   it("routes coverage report flags into the qa runtime command", async () => {
@@ -579,70 +528,59 @@ describe("qa cli registration", () => {
   it("forwards --list-scenarios for telegram runs", async () => {
     await parseQa(["telegram", "--list-scenarios"]);
 
-    const options = requireQaTelegramOptions();
-    expect(options.listScenarios).toBe(true);
+    expect(runQaTelegramCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ listScenarios: true }),
+    );
   });
 
   it("forwards --allow-failures for telegram runs", async () => {
     await parseQa(["telegram", "--allow-failures"]);
 
-    const options = requireQaTelegramOptions();
-    expect(options.allowFailures).toBe(true);
+    expect(runQaTelegramCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ allowFailures: true }),
+    );
   });
 
   it("forwards --allow-failures for suite runs", async () => {
     await parseQa(["suite", "--allow-failures"]);
 
-    const options = requireQaSuiteOptions();
-    expect(options.allowFailures).toBe(true);
-    expect(options.providerMode).toBeUndefined();
+    expect(runQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ allowFailures: true, providerMode: undefined }),
+    );
   });
   it("forwards --runtime-pair-lane for suite runs", async () => {
     await parseQa(["suite", "--runtime-pair-lane", "core", "--runtime-pair-lane", "extended,soak"]);
 
-    const options = requireQaSuiteOptions();
-    expect(options.runtimePairLane).toEqual(["core", "extended,soak"]);
+    expect(runQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimePairLane: ["core", "extended,soak"] }),
+    );
   });
 
   it("routes credential add flags into the qa runtime command", async () => {
-    await parseQa(["credentials", "add"], {
-      kind: "telegram",
-      "payload-file": "qa/payload.json",
-      "repo-root": "/tmp/openclaw-repo",
-      note: "shared lane",
-      "site-url": "https://first-schnauzer-821.convex.site",
-      "endpoint-prefix": "/qa-credentials/v1",
-      "actor-id": "maintainer-local",
-      json: true,
-    });
-
-    expect(runQaCredentialsAddCommand).toHaveBeenCalledWith({
-      kind: "telegram",
-      payloadFile: "qa/payload.json",
-      repoRoot: "/tmp/openclaw-repo",
-      note: "shared lane",
-      siteUrl: "https://first-schnauzer-821.convex.site",
-      endpointPrefix: "/qa-credentials/v1",
-      actorId: "maintainer-local",
-      json: true,
+    await expectRoute(["credentials", "add"], runQaCredentialsAddCommand, {
+      kind: ["kind", "telegram"],
+      payloadFile: ["payload-file", "qa/payload.json"],
+      repoRoot: ["repo-root", "/tmp/openclaw-repo"],
+      note: ["note", "shared lane"],
+      siteUrl: ["site-url", "https://first-schnauzer-821.convex.site"],
+      endpointPrefix: ["endpoint-prefix", "/qa-credentials/v1"],
+      actorId: ["actor-id", "maintainer-local"],
+      json: ["json", true],
     });
   });
 
   it("routes credential remove flags into the qa runtime command", async () => {
-    await parseQa(["credentials", "remove"], {
-      "credential-id": "j57b8k419ba7bcsfw99rg05c9184p8br",
-      "site-url": "https://first-schnauzer-821.convex.site",
-      "actor-id": "maintainer-local",
-      json: true,
-    });
-
-    expect(runQaCredentialsRemoveCommand).toHaveBeenCalledWith({
-      credentialId: "j57b8k419ba7bcsfw99rg05c9184p8br",
-      siteUrl: "https://first-schnauzer-821.convex.site",
-      actorId: "maintainer-local",
-      endpointPrefix: undefined,
-      json: true,
-    });
+    await expectRoute(
+      ["credentials", "remove"],
+      runQaCredentialsRemoveCommand,
+      {
+        credentialId: ["credential-id", "j57b8k419ba7bcsfw99rg05c9184p8br"],
+        siteUrl: ["site-url", "https://first-schnauzer-821.convex.site"],
+        actorId: ["actor-id", "maintainer-local"],
+        json: ["json", true],
+      },
+      { endpointPrefix: undefined },
+    );
   });
 
   it("routes credential list defaults into the qa runtime command", async () => {
