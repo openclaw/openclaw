@@ -24,6 +24,7 @@ import type {
   StoredCodexCatalogEntry,
 } from "../../extensions/codex/src/session-catalog-index-state.js";
 import { CodexCatalogIndex } from "../../extensions/codex/src/session-catalog-index.js";
+import type { CodexSessionCatalogPage } from "../../extensions/codex/src/session-catalog-types.js";
 
 const { values } = parseArgs({
   options: {
@@ -172,6 +173,7 @@ function inspectPreviewStrings(snapshotPath: string) {
   let oldRevisionCopies = 0;
   let sourceBackingCopies = 0;
   const slicedPreviews = new Set<number>();
+  const residentPreviews = new Set<number>();
   for (let offset = 0; offset < nodes.length; offset += nodeWidth) {
     if (nodes[offset + nodeType] !== flatType) {
       continue;
@@ -194,6 +196,15 @@ function inspectPreviewStrings(snapshotPath: string) {
     }
     const name = strings[edges[offset + edgeName]!]!;
     const target = edges[offset + edgeTarget]!;
+    const value = strings[nodes[target + nodeName]!]!;
+    if (
+      (name === "preview" || name === "fallbackName") &&
+      nodes[target + nodeType] === flatType &&
+      value.length === 500 &&
+      value.startsWith(previewMarker)
+    ) {
+      residentPreviews.add(target);
+    }
     if (
       (name === "preview" || name === "fallbackName") &&
       nodes[target + nodeType] === slicedType
@@ -207,6 +218,11 @@ function inspectPreviewStrings(snapshotPath: string) {
     oldRevisionCopies,
     sourceBackingCopies,
     slicedPreviewCount: slicedPreviews.size,
+    residentCopies: residentPreviews.size,
+    residentBytes: [...residentPreviews].reduce(
+      (sum, target) => sum + nodes[target + nodeSize]!,
+      0,
+    ),
   };
 }
 
@@ -278,7 +294,10 @@ try {
   let cursor: string | undefined;
   let checked = 0;
   do {
-    const page = await index.list({ limit: 64, ...(cursor ? { cursor } : {}) });
+    const page: CodexSessionCatalogPage = await index.list({
+      limit: 64,
+      ...(cursor ? { cursor } : {}),
+    });
     for (const session of page.sessions) {
       const row = Number(session.threadId.slice("synthetic-thread-".length));
       assert(Number.isSafeInteger(row) && row >= 0 && row < rows);
@@ -342,9 +361,11 @@ try {
   );
   assert.equal(strings.slicedPreviewCount, 0, "Resident previews must be detached");
   if (values["verify-shared"]) {
-    assert(
-      strings.flatCopies > 0 && strings.flatCopies <= distinct,
-      "Resident previews must share one flat string per distinct value",
+    // Search indexing may retain separate lowercase strings with the same content.
+    assert.equal(
+      strings.residentCopies,
+      distinct,
+      "Resident preview fields must share flat strings",
     );
   }
 } finally {
