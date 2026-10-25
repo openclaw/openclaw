@@ -1,7 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   resolveMemorySlotDecisionShared,
   resolvePluginActivationStateShared,
@@ -90,9 +90,14 @@ function createSharedNormalizedPluginsConfig(
 ): NormalizedPluginsConfig {
   const value = createNormalizedPluginsConfig(config);
   for (const entry of Object.values(value.entries)) {
-    // Plugin payloads retain their original owner; only normalized policy is shared and frozen.
-    const { config: _config, ...policy } = entry;
-    freezeJsonSnapshot(policy);
+    // Normalization owns these fixed-depth policy fields; plugin payloads retain their owner.
+    Object.freeze(entry.hooks?.timeouts);
+    Object.freeze(entry.hooks);
+    Object.freeze(entry.subagent?.allowedModels);
+    Object.freeze(entry.subagent);
+    Object.freeze(entry.llm?.allowedModels);
+    Object.freeze(entry.llm?.allowedCompletionModels);
+    Object.freeze(entry.llm);
     Object.freeze(entry);
   }
   Object.freeze(value.entries);
