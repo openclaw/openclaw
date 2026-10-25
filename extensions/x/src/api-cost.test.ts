@@ -27,6 +27,10 @@ function client(fetch: XFetch, dailyUsd = 100, spend = createXTestSpend({ dailyU
   });
 }
 
+async function expectSpent(api: ReturnType<typeof client>, usd: number) {
+  expect(await api.spend.status()).toMatchObject({ dayUsd: usd, cycleUsd: usd });
+}
+
 describe("X paid request budget boundary", () => {
   it("reserves the whole username batch, then charges only the users returned", async () => {
     const users = [
@@ -41,7 +45,7 @@ describe("X paid request budget boundary", () => {
     });
     const api = client(fetch, 0.03);
     await expect(api.getUsersByUsernames(["@alice", "bob", "missing"])).resolves.toEqual(users);
-    expect(await api.spend.status()).toMatchObject({ dayUsd: 0.02, cycleUsd: 0.02 });
+    await expectSpent(api, 0.02);
     await expect(api.getUsersByUsernames(["alice", "bob"])).rejects.toBeInstanceOf(
       XBudgetExceededError,
     );
@@ -53,11 +57,11 @@ describe("X paid request budget boundary", () => {
     { label: "oversized", usernames: Array.from({ length: 101 }, (_, index) => `user${index}`) },
     { label: "comma-separated handle", usernames: ["alice,bob"] },
     { label: "overlong handle", usernames: ["x".repeat(16)] },
-  ])("refuses a $label username batch before spending or dispatching", async ({ usernames }) => {
+  ])("rejects $label usernames before spending or dispatch", async ({ usernames }) => {
     const fetch = vi.fn<XFetch>();
     const api = client(fetch);
     await expect(api.getUsersByUsernames(usernames)).rejects.toThrow("1–100 valid usernames");
-    expect(await api.spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
+    await expectSpent(api, 0);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -86,7 +90,7 @@ describe("X paid request budget boundary", () => {
     });
     const api = client(fetch, 0.02);
     await api.getPosts(["11"]);
-    expect(await api.spend.status()).toMatchObject({ dayUsd: 0 });
+    await expectSpent(api, 0);
     const first = api.reply({ text: "Plain reply", inReplyToId: "11" });
     await entered.promise;
     try {
@@ -100,59 +104,47 @@ describe("X paid request budget boundary", () => {
       release.resolve();
       await first;
     }
-    expect(await api.spend.status()).toMatchObject({ dayUsd: 0.02 });
+    await expectSpent(api, 0.02);
   });
 
   it("counts returned posts, included posts and users, and lookups without deduplication", async () => {
+    const user = { id: "7", username: "author" };
+    const page = { data: [post], includes: { tweets: [{ ...post, id: "10" }], users: [user] } };
     const api = client(async (url) =>
-      Response.json(
-        url.includes("/users/by/")
-          ? { data: { id: "7", username: "author" } }
-          : {
-              data: [post],
-              includes: {
-                tweets: [{ ...post, id: "10" }],
-                users: [{ id: "7", username: "author" }],
-              },
-            },
-      ),
+      Response.json(url.includes("/users/by/") ? { data: user } : page),
     );
     await api.getPosts(["11", "10"]);
     await api.getPosts(["11", "10"]);
     await api.getUserByUsername("author");
-    expect(await api.spend.status()).toMatchObject({ dayUsd: 0.05, cycleUsd: 0.05 });
+    await expectSpent(api, 0.05);
   });
 
   it.each([
-    { label: "explicit empty 4xx", response: () => Response.json({}, { status: 403 }), spent: 0 },
-    {
-      label: "4xx with resources",
-      response: () => Response.json({ data: [post, { ...post, id: "12" }] }, { status: 403 }),
-      spent: 0.01,
-    },
-    { label: "5xx", response: () => Response.json({}, { status: 503 }), spent: 0.15 },
-    { label: "unparseable success", response: () => new Response("invalid JSON"), spent: 0.15 },
-    {
-      label: "invalid success payload",
-      response: () => Response.json({ data: "invalid" }),
-      spent: 0.15,
-    },
-  ])("settles $label conservatively at the HTTP boundary", async ({ response, spent }) => {
+    ["explicit empty 4xx", () => Response.json({}, { status: 403 }), 0],
+    [
+      "4xx with resources",
+      () => Response.json({ data: [post, { ...post, id: "12" }] }, { status: 403 }),
+      0.01,
+    ],
+    ["5xx", () => Response.json({}, { status: 503 }), 0.15],
+    ["unparseable success", () => new Response("invalid JSON"), 0.15],
+    ["invalid success payload", () => Response.json({ data: "invalid" }), 0.15],
+  ] as const)("settles %s conservatively", async (_label, response, spent) => {
     const api = client(async () => response());
     await expect(api.getMentions({ userId: "9" })).rejects.toThrow();
-    expect(await api.spend.status()).toMatchObject({ dayUsd: spent });
+    await expectSpent(api, spent);
   });
 
   it.each([
-    { label: "null envelope", body: null, spent: 0.01 },
-    { label: "string envelope", body: "invalid", spent: 0.01 },
-    { label: "array envelope", body: [], spent: 0.01 },
-    { label: "empty resource envelope", body: {}, spent: 0 },
-  ])("settles a username lookup with a $label conservatively", async ({ body, spent }) => {
+    ["null", null, 0.01],
+    ["string", "invalid", 0.01],
+    ["array", [], 0.01],
+    ["empty resource", {}, 0],
+  ] as const)("settles a %s username envelope conservatively", async (_label, body, spent) => {
     const fetch = vi.fn<XFetch>(async () => Response.json(body));
     const api = client(fetch, 0.01);
     await expect(api.getUserByUsername("author")).rejects.toThrow("X API");
-    expect(await api.spend.status()).toMatchObject({ dayUsd: spent, cycleUsd: spent });
+    await expectSpent(api, spent);
     if (spent) {
       await expect(api.getUserByUsername("author")).rejects.toBeInstanceOf(XBudgetExceededError);
       expect(fetch).toHaveBeenCalledOnce();
@@ -175,14 +167,14 @@ describe("X paid request budget boundary", () => {
   });
 
   it.each([
-    { text: "Plain text", cost: 0.02 },
-    { text: "Visit https://example.com", cost: 0.2 },
-    { text: "Visit example.com", cost: 0.2 },
-    { text: "Contact person@example.com", cost: 0.02 },
-  ])("charges reply text '$text' with the shared URL detector", async ({ text, cost }) => {
+    ["Plain text", 0.02],
+    ["Visit https://example.com", 0.2],
+    ["Visit example.com", 0.2],
+    ["Contact person@example.com", 0.02],
+  ] as const)("charges reply text '%s' using the URL detector", async (text, cost) => {
     const api = client(async () => Response.json({ data: { id: "21" } }));
     await api.reply({ text, inReplyToId: "11" });
-    expect(await api.spend.status()).toMatchObject({ dayUsd: cost });
+    await expectSpent(api, cost);
   });
 
   it.each([

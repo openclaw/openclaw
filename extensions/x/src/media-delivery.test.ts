@@ -23,12 +23,16 @@ afterEach(async () => {
 async function mediaFixture(failProcessing = false) {
   const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-x-media-"));
   roots.push(root);
-  const file = path.join(root, "proof.png");
+  const write = async (name: string, content: Buffer | string) => {
+    const file = path.join(root, name);
+    await writeFile(file, content);
+    return file;
+  };
   const bytes = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
     "base64",
   );
-  await writeFile(file, bytes);
+  const file = await write("proof.png", bytes);
   const mention = {
     ...post("501", "10"),
     entities: { mentions: [{ id: "100", username: "roboclawbot" }] },
@@ -69,16 +73,11 @@ async function mediaFixture(failProcessing = false) {
     },
   });
   client.getXApi.mockResolvedValue(api);
-  const context = {
-    cfg: config,
-    to: "x:501",
-    text: "Proof.",
-    mediaAccess: { localRoots: [root] },
-  };
+  const context = { cfg: config, to: "x:501", text: "Proof.", mediaAccess: { localRoots: [root] } };
   const sendMedia = (mediaUrl = file, text = context.text) =>
     xPlugin.outbound!.sendMedia!({ ...context, mediaUrl, text });
   const posts = () => requests.filter((r) => r.path === "/2/tweets").map((r) => r.body);
-  return { root, file, bytes, requests, api, context, sendMedia, posts };
+  return { root, file, bytes, requests, api, context, sendMedia, posts, write };
 }
 
 describe("X native attachment delivery", () => {
@@ -93,10 +92,7 @@ describe("X native attachment delivery", () => {
     ["outbound", "video"],
   ] as const)("attaches native %s media with %s caption", async (route, kind) => {
     const test = await mediaFixture();
-    const mediaUrl = kind === "video" ? path.join(test.root, "proof.mp4") : test.file;
-    if (kind === "video") {
-      await writeFile(mediaUrl, videoBytes);
-    }
+    const mediaUrl = kind === "video" ? await test.write("proof.mp4", videoBytes) : test.file;
     const text = kind === "empty" ? "" : kind === "video" ? "Video proof." : "Proof.";
     const ctx = { ...test.context, text };
     if (route === "action") {
@@ -107,18 +103,12 @@ describe("X native attachment delivery", () => {
         params: { to: ctx.to, ...(text ? { message: text } : {}), media: mediaUrl },
       });
     } else if (route === "payload") {
-      await xPlugin.outbound!.sendPayload!({
-        ...ctx,
-        payload: { text, mediaUrl },
-      });
+      await xPlugin.outbound!.sendPayload!({ ...ctx, payload: { text, mediaUrl } });
     } else if (route === "message") {
       await xPlugin.message!.send!.media!({ ...ctx, mediaUrl });
     } else if (route === "monitor-mediaUrl" || route === "monitor-mediaUrls") {
       const monitor = completedMonitor({
-        cfg: {
-          ...config,
-          agents: { entries: { maintainer: { workspace: test.root } } },
-        },
+        cfg: { ...config, agents: { entries: { maintainer: { workspace: test.root } } } },
         visibleSessionUrl: null,
         finals: [
           {
@@ -142,9 +132,7 @@ describe("X native attachment delivery", () => {
       media: { media_ids: ["701"] },
     };
     expect(test.posts()).toEqual([expected]);
-    if (kind !== "image") {
-      expect(test.requests.at(-1)?.body).toEqual(expected);
-    }
+    expect(test.requests.at(-1)?.path).toBe("/2/tweets");
     if (kind === "video") {
       expect(test.requests.find((r) => r.path.endsWith("/initialize"))?.body).toMatchObject({
         media_type: "video/mp4",
@@ -156,8 +144,7 @@ describe("X native attachment delivery", () => {
 
   it("uploads a gallery once and attaches it only to the first caption chunk", async () => {
     const test = await mediaFixture();
-    const second = path.join(test.root, "second.png");
-    await writeFile(second, test.bytes);
+    const second = await test.write("second.png", test.bytes);
     const text = "a".repeat(300);
     const result = await xPlugin.outbound!.sendPayload!({
       ...test.context,
@@ -176,39 +163,30 @@ describe("X native attachment delivery", () => {
   });
 
   it.each([
-    "outside roots",
-    "unsupported file",
-    "too many",
-    "mixed video",
-    "oversized image",
-  ] as const)("rejects %s before any upload or post", async (scenario) => {
+    ["outside roots", async (test) => [test.file], true],
+    ["unsupported file", async (test) => [await test.write("private.txt", "not an image")]],
+    [
+      "too many",
+      async (test) => Array.from({ length: 5 }, (_, i) => path.join(test.root, i + ".png")),
+    ],
+    ["mixed video", async (test) => [test.file, await test.write("proof.mp4", videoBytes)]],
+    [
+      "oversized image",
+      async (test) => [
+        await test.write("proof.png", Buffer.concat([test.bytes, Buffer.alloc(5 * 1024 * 1024)])),
+      ],
+    ],
+  ] satisfies [
+    string,
+    (test: Awaited<ReturnType<typeof mediaFixture>>) => Promise<string[]>,
+    boolean?,
+  ][])("rejects %s before any upload or post", async (_scenario, urls, outsideRoots) => {
     const test = await mediaFixture();
-    let urls = [test.file];
-    let allowed = [test.root];
-    if (scenario === "outside roots") {
-      allowed = [path.join(test.root, "other")];
-    }
-    if (scenario === "unsupported file") {
-      const file = path.join(test.root, "private.txt");
-      await writeFile(file, "not an image");
-      urls = [file];
-    }
-    if (scenario === "too many") {
-      urls = Array.from({ length: 5 }, (_, i) => path.join(test.root, i + ".png"));
-    }
-    if (scenario === "mixed video") {
-      const video = path.join(test.root, "proof.mp4");
-      await writeFile(video, videoBytes);
-      urls.push(video);
-    }
-    if (scenario === "oversized image") {
-      await writeFile(test.file, Buffer.concat([test.bytes, Buffer.alloc(5 * 1024 * 1024)]));
-    }
     await expect(
       xPlugin.outbound!.sendPayload!({
         ...test.context,
-        mediaAccess: { localRoots: allowed },
-        payload: { text: "Proof.", mediaUrls: urls },
+        mediaAccess: { localRoots: [outsideRoots ? path.join(test.root, "other") : test.root] },
+        payload: { text: "Proof.", mediaUrls: await urls(test) },
       }),
     ).rejects.toMatchObject({ name: "PlatformMessageNotDispatchedError", retryable: false });
     expect(test.requests).toEqual([]);
