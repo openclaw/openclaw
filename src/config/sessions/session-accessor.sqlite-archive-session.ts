@@ -12,6 +12,7 @@ import {
   registerOpenClawStateDatabaseAsyncResource,
 } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../paths.js";
 import type {
   SqliteArchiveOperation,
@@ -88,7 +89,7 @@ class ArchiveSession {
   private released = false;
 
   constructor(options: OpenClawAgentDatabaseOptions) {
-    const env = { ...(options.env ?? process.env) };
+    const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
     env.OPENCLAW_STATE_DIR = resolveStateDir(env);
     this.options = {
       agentId: normalizeAgentId(options.agentId),
