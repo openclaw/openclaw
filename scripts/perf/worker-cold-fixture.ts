@@ -1,6 +1,6 @@
 // Offline setup only, before launching a Gateway against this synthetic fixture:
 // node --import ./scripts/tsx.mjs scripts/perf/worker-cold-fixture.ts --state-dir .local/worker-base
-// --count 257 selects 256 load histories plus one reserved idle-restore history
+// --count 257 selects 256 load histories plus one reserved post-idle history read
 // (default 128). Native maintenance batches may archive more than the requested
 // count; the summary records the actual total and selects exactly count keys. The
 // resulting worker-cold-summary.json lists current session keys for first/repeat

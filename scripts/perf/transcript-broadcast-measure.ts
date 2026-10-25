@@ -19,8 +19,8 @@
 // --cold-idle-ms 310000 adds a quiet tail after the measured soak, then reads the
 // last cold-summary key reserved from load. Use 257 cold keys for 256 load reads.
 // The tail records worker lifetimes/heaps and the real history response separately
-// from timing gates. A new archive-worker start on the reserved read proves cold
-// restoration after retirement; a hot read alone cannot establish that proof.
+// from timing gates. Background usage refresh can warm the reserved key; this is
+// a functional history-read check, not guaranteed cold-restoration proof.
 
 // Stream custom syntax with --answer-chunk $'```json\n{"ok":true}\n```\nprose\n'.
 // Add --final-answer-phase to exercise the visible projection during each delta.
@@ -6663,7 +6663,7 @@ try {
   let coldIdle;
   if (coldIdleMs !== undefined && coldIdleKey !== undefined) {
     // All polling has stopped and the synthetic stress cron is disabled above.
-    // Keep ordinary Gateway maintenance enabled; request no archive work until restore.
+    // Keep ordinary Gateway maintenance enabled; issue no workload requests during quiet.
     await drainEvents();
     const before = await readGatewayResources(gateway, { includeWorkers: true });
     const startedAtEpochMs = Date.now();
@@ -6676,9 +6676,9 @@ try {
     }
     const elapsedMs = Date.now() - startedAtEpochMs;
     const after = await readGatewayResources(gateway, { includeWorkers: true });
-    const restoreStartedAt = performance.now();
+    const historyReadStartedAt = performance.now();
     const history = await rpc(sender, "chat.history", { sessionKey: coldIdleKey, limit: 50 });
-    const restoreMs = performance.now() - restoreStartedAt;
+    const historyReadMs = performance.now() - historyReadStartedAt;
     if (
       !isRecord(history) ||
       !Array.isArray(history.messages) ||
@@ -6687,12 +6687,12 @@ try {
         (message: unknown) => isRecord(message) && contentText(message.content).length > 0,
       )
     ) {
-      throw new Error("Post-idle chat.history did not restore the reserved fixture transcript");
+      throw new Error("Post-idle chat.history did not return the reserved fixture transcript");
     }
     const responsePath = path.join(output, "cold-idle-history.json");
     const response = JSON.stringify(history);
     writeFileSync(responsePath, `${response}\n`);
-    const restored = await readGatewayResources(gateway, { includeWorkers: true });
+    const afterHistoryRead = await readGatewayResources(gateway, { includeWorkers: true });
     const archiveStarts = (resources: typeof before) =>
       resources.workers?.workerLifecycle
         .filter((worker) =>
@@ -6706,10 +6706,10 @@ try {
       sessionKey: coldIdleKey,
       before,
       after,
-      restored,
+      afterHistoryRead,
       quietArchiveWorkerStarts: archiveStarts(after) - archiveStarts(before),
-      restoreArchiveWorkerStarts: archiveStarts(restored) - archiveStarts(after),
-      restoreMs,
+      archiveWorkerStartsDuringHistoryRead: archiveStarts(afterHistoryRead) - archiveStarts(after),
+      historyReadMs,
       messageCount: history.messages.length,
       responsePath,
       responseSha256: createHash("sha256").update(response).digest("hex"),
