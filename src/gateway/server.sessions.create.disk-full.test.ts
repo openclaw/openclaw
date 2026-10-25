@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, test, vi } from "vitest";
+import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
@@ -135,12 +136,7 @@ test.each(["transcript", "admission"] as const)(
         }
         return send(...args);
       });
-    type Created = {
-      key: string;
-      sessionId: string;
-      runStarted: boolean;
-      runError?: { message: string };
-    };
+    type Created = SessionsCreateResult & { sessionId: string };
     const params = {
       agentId: "main",
       key,
