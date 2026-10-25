@@ -50,6 +50,20 @@ function seedDatabase(seed: (db: import("node:sqlite").DatabaseSync) => void) {
   seed(db);
 }
 
+function waitClock(initialNowMs = 1001, onSleep = () => {}) {
+  let nowMs = initialNowMs;
+  let elapsed = 0;
+  return {
+    now: () => nowMs,
+    monotonicNow: () => elapsed,
+    sleep: async (ms: number) => {
+      onSleep();
+      nowMs += ms;
+      elapsed += ms;
+    },
+  };
+}
+
 /** Models a prior host or recycled PID without replacing the real lease store. */
 function overwriteStartupMigrationLeaseOwner(
   leaseEnv: NodeJS.ProcessEnv,
@@ -191,28 +205,19 @@ describe("startup migration lease", () => {
   it.each([false, true])(
     "waits for a startup migration lease to be released (other host: %s)",
     async (otherHost) => {
-      let nowMs = 1001;
-      let elapsedMs = 0;
-      let sleepCount = 0;
       const lease = await acquireLease({ now: () => 1000, owner: "first" });
       if (otherHost) {
         overwriteStartupMigrationLeaseOwner(env, { host: "previous-pod" });
       }
+      const release = vi.fn(() => lease.release());
       const acquired = await acquireLease({
         owner: "second",
         timeoutMs: 1000,
         pollIntervalMs: 250,
-        now: () => nowMs,
-        monotonicNow: () => elapsedMs,
-        sleep: async (ms) => {
-          sleepCount += 1;
-          lease.release();
-          nowMs += ms;
-          elapsedMs += ms;
-        },
+        ...waitClock(1001, release),
       });
 
-      expect(sleepCount).toBe(1);
+      expect(release).toHaveBeenCalledOnce();
       expect(acquired.owner).toBe("second");
       acquired.release();
     },
@@ -221,8 +226,7 @@ describe("startup migration lease", () => {
   it.each([false, true])(
     "preserves the lease and error when the wait bound expires (other host: %s)",
     async (otherHost) => {
-      let nowMs = 1001;
-      let elapsedMs = 0;
+      const clock = waitClock();
       const lease = await acquireLease({ now: () => 1000, owner: "first" });
       if (otherHost) {
         overwriteStartupMigrationLeaseOwner(env, { host: "previous-pod" });
@@ -233,18 +237,13 @@ describe("startup migration lease", () => {
           owner: "second",
           timeoutMs: 500,
           pollIntervalMs: 250,
-          now: () => nowMs,
-          monotonicNow: () => elapsedMs,
-          sleep: async (ms) => {
-            nowMs += ms;
-            elapsedMs += ms;
-          },
+          ...clock,
         }),
       ).rejects.toThrow(
         `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
       );
-      expect(elapsedMs).toBe(500);
-      expect(hasActiveStartupMigrationLease({ env, nowMs })).toBe(true);
+      expect(clock.monotonicNow()).toBe(500);
+      expect(hasActiveStartupMigrationLease({ env, nowMs: clock.now() })).toBe(true);
       lease.release();
     },
   );
@@ -252,23 +251,18 @@ describe("startup migration lease", () => {
   it("waits for an unknown prior-host owner to expire before acquiring its lease", async () => {
     const prior = await acquireLease({ now: () => 1000, owner: "prior" });
     overwriteStartupMigrationLeaseOwner(env, { host: "previous-pod" });
-    let nowMs = 1000 + STARTUP_MIGRATION_LEASE_TTL_MS - 1;
-    let elapsedMs = 0;
+    const clock = waitClock(1000 + STARTUP_MIGRATION_LEASE_TTL_MS - 1, () => {
+      expect(hasActiveStartupMigrationLease({ env, nowMs: clock.now() })).toBe(true);
+    });
     const acquired = await acquireLease({
       owner: "replacement",
       timeoutMs: 500,
       pollIntervalMs: 250,
-      now: () => nowMs,
-      monotonicNow: () => elapsedMs,
-      sleep: async (ms) => {
-        expect(hasActiveStartupMigrationLease({ env, nowMs })).toBe(true);
-        nowMs += ms;
-        elapsedMs += ms;
-      },
+      ...clock,
     });
-    expect(elapsedMs).toBe(250);
+    expect(clock.monotonicNow()).toBe(250);
     prior.release();
-    expect(hasActiveStartupMigrationLease({ env, nowMs })).toBe(true);
+    expect(hasActiveStartupMigrationLease({ env, nowMs: clock.now() })).toBe(true);
     acquired.release();
   });
 
