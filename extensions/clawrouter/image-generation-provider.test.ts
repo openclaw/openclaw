@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
+import { buffer } from "node:stream/consumers";
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import { generateImage } from "openclaw/plugin-sdk/image-generation-runtime";
 import type {
@@ -102,15 +103,12 @@ describe("registered ClawRouter image generation over HTTP", () => {
   }> = [];
   const server = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
+      const body = await buffer(request);
       calls.push({
         url: request.url ?? "",
         method: request.method,
         headers: request.headers,
-        body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined,
+        body: body.length ? JSON.parse(body.toString()) : undefined,
       });
       response.setHeader("Content-Type", "application/json");
       if (request.url === holdPath) {
@@ -198,9 +196,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
       socket.destroy();
     }
     for (const ownedServer of [server, storageServer]) {
-      const closed = new Promise<void>((resolve, reject) => {
-        ownedServer.close((error) => (error ? reject(error) : resolve()));
-      });
+      const closed = ownedServer[Symbol.asyncDispose]();
       ownedServer.closeAllConnections();
       await closed;
     }
