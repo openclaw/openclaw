@@ -7,18 +7,15 @@ const nativeCloneRequired = new Error("Opaque session snapshot requires native c
 /** Detach mutable containers while sharing sealed transcript payloads. */
 export function cloneTranscriptView<T>(
   snapshot: T,
-  {
-    shareImmutablePayloads = true,
-    stringSource,
-  }: { shareImmutablePayloads?: boolean; stringSource?: unknown } = {},
+  { shareImmutablePayloads = true }: { shareImmutablePayloads?: boolean } = {},
 ): T {
   const copies = new Map<object, object>();
-  const copy = (value: unknown, source?: unknown): unknown => {
+  const copy = (value: unknown): unknown => {
     if (typeof value === "function" || typeof value === "symbol") {
       throw nativeCloneRequired;
     }
     if (value === null || typeof value !== "object") {
-      return typeof value === "string" && value === source ? source : value;
+      return value;
     }
     if (isProxy(value)) {
       throw nativeCloneRequired;
@@ -54,18 +51,13 @@ export function cloneTranscriptView<T>(
       result.length = value.length;
     }
     copies.set(value, result);
-    const sourceObject =
-      source !== null && typeof source === "object" && !isProxy(source) ? source : undefined;
     for (const key of Object.keys(value)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
       if (!("value" in descriptor)) {
         throw nativeCloneRequired;
       }
-      // Borrow equal strings without adopting SDK edits, key order, or invoking getters.
-      const sourceValue: unknown =
-        sourceObject && Object.getOwnPropertyDescriptor(sourceObject, key)?.value;
       Object.defineProperty(result, key, {
-        value: copy(descriptor.value, sourceValue),
+        value: copy(descriptor.value),
         enumerable: true,
         configurable: true,
         writable: true,
@@ -75,7 +67,7 @@ export function cloneTranscriptView<T>(
   };
   try {
     // SAFETY: Copying containers preserves the snapshot's shape and shared references.
-    return copy(snapshot, stringSource) as T;
+    return copy(snapshot) as T;
   } catch (error) {
     if (error !== nativeCloneRequired) {
       throw error;

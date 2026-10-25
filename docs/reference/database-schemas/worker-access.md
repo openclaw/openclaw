@@ -6688,7 +6688,8 @@ Initial model-context snapshots also reuse equal string values from the loaded
 SessionManager. The context reader still owns selection and admission; its projected
 fields, property order, and mutable containers remain authoritative. Resident SDK
 edits and accessors cannot change the returned context, and frozen resident payloads
-do not make the initial model view immutable.
+do not make the initial model view immutable. Fresh reader-owned message containers
+are reused in place; an admitted cohort still detaches the manager's mutable view.
 
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with

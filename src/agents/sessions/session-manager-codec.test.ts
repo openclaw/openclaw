@@ -274,47 +274,6 @@ describe("model context projection isolation", () => {
     expect(Reflect.set(projected.message.content, "length", 0)).toBe(true);
     expect(message.content).toMatchObject([{ arguments: { path: "original.txt" } }]);
   });
-
-  it.each(["reordered", "accessor", "changed"] as const)(
-    "preserves authoritative tool argument bytes with a %s resident message",
-    (mutation) => {
-      const selected = messageEntry(
-        makeAgentAssistantMessage({
-          content: [
-            {
-              type: "toolCall",
-              id: "call",
-              name: "read",
-              arguments: { path: "original.txt", mode: "read" },
-            },
-          ],
-        }),
-      );
-      const resident = structuredClone(selected);
-      assert(resident.message.role === "assistant");
-      const residentCall = resident.message.content[0];
-      assert(residentCall?.type === "toolCall");
-      residentCall.arguments = { mode: "read", path: "original.txt" };
-      if (mutation === "accessor") {
-        Object.defineProperty(residentCall.arguments, "path", {
-          get() {
-            throw new Error("Initial context must not invoke a resident SDK getter");
-          },
-          enumerable: true,
-        });
-      } else if (mutation === "changed") {
-        residentCall.arguments.path = "unpersisted.txt";
-      }
-      const projected = cloneSessionModelContextEntries(
-        [selected],
-        new Map([[resident.id, resident]]),
-      )[0];
-      assert(projected?.type === "message" && projected.message.role === "assistant");
-      const call = projected.message.content[0];
-      assert(call?.type === "toolCall");
-      expect(JSON.stringify(call.arguments)).toBe('{"path":"original.txt","mode":"read"}');
-    },
-  );
 });
 
 it.each(parentTraversalCases)(

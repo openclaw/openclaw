@@ -49,7 +49,7 @@ import type { Message } from "../../llm/types.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
-import { cloneSessionModelContextEntries } from "./session-manager-codec.js";
+import { buildInitialContext, cloneSessionModelContextEntries } from "./session-manager-codec.js";
 import {
   sessionManagerOpenCompaction,
   sessionManagerOpenTranscriptCohort,
@@ -181,7 +181,7 @@ export class SessionManager extends SessionManagerBranching {
     ) {
       throw new Error("Session manager changed during initial context read");
     }
-    return buildCoreSessionContext(cloneSessionModelContextEntries(context.getBranch(), this.byId));
+    return buildInitialContext(context.getBranch(), this.byId);
   }
 
   /** No buffered writes remain here; asynchronous metadata methods own their settlement. */

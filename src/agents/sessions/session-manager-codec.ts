@@ -1,3 +1,4 @@
+import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import { stripCompactionReplayCheckpointInPlace } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
@@ -140,10 +141,7 @@ export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEnt
   return boundary?.type === "compaction" ? boundary : null;
 }
 
-export function cloneSessionModelContextEntries(
-  branch: readonly SessionEntry[],
-  residentEntries?: ReadonlyMap<string, SessionEntry>,
-): SessionEntry[] {
+export function cloneSessionModelContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
   // Project storage-only payloads before cloning, while isolating mutable manager entries.
   const events = [...branch];
   for (let index = 0; index < events.length; index++) {
@@ -158,8 +156,35 @@ export function cloneSessionModelContextEntries(
   // Initial model history stays writable even when resident payloads are frozen.
   return cloneTranscriptView(events, {
     shareImmutablePayloads: false,
-    stringSource: residentEntries && events.map((entry) => residentEntries.get(entry.id)),
   });
+}
+
+/** Build initial history using the reader's private messages and equal resident strings. */
+export function buildInitialContext(
+  branch: SessionEntry[],
+  residentEntries: ReadonlyMap<string, SessionEntry>,
+): SessionContext {
+  const reuse = (target: object, source: unknown): void => {
+    if (source === null || typeof source !== "object" || isProxy(source)) {
+      return;
+    }
+    for (const key of Object.keys(target)) {
+      const value: unknown = Reflect.get(target, key);
+      const resident: unknown = Object.getOwnPropertyDescriptor(source, key)?.value;
+      if (typeof value === "string" && value === resident) {
+        Reflect.set(target, key, resident);
+      } else if (value !== null && typeof value === "object") {
+        reuse(value, resident);
+      }
+    }
+  };
+  for (const entry of branch) {
+    // Custom system-prompt metadata can be pooled and frozen; messages stay private.
+    if (entry.type === "message") {
+      reuse(entry, residentEntries.get(entry.id));
+    }
+  }
+  return buildCoreSessionContext(branch);
 }
 
 export function buildSessionContext(
