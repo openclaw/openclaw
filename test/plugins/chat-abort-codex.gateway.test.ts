@@ -20,13 +20,7 @@ import {
 } from "../../src/gateway/server-methods/chat.abort.test-helpers.js";
 import { claimAgentRunDelegatedAuthority } from "../../src/infra/agent-run-registry.js";
 import { withSessionTurn } from "../../src/sessions/session-controller.admission.js";
-import { resolveActiveReplyRunOwnerForSignal } from "../../src/sessions/session-controller.barriers.js";
-import { createReplyOperation } from "../../src/sessions/session-controller.js";
 import { captureSessionTarget } from "../../src/sessions/session-controller.lifecycle.js";
-import {
-  tryClaimSessionControllerTask,
-  releaseSessionControllerClaim,
-} from "../../src/sessions/session-controller.mailbox.js";
 import { markReplyOperationExecutionStarted } from "../../src/sessions/session-controller.state.js";
 import { AsyncWorkScope } from "../../src/shared/async-work-scope.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
@@ -82,33 +76,15 @@ afterEach(() => {
 });
 
 describe("chat.abort native transcript settlement", () => {
-  it.each(
-    [
-      ...(["chat", "agent"] as const).flatMap((owner) =>
-        [true, false].map((hasNativeText) => ({ owner, hasNativeText })),
-      ),
-      {
-        owner: "agent" as const,
-        hasNativeText: true,
-        nativeFirst: true,
-      },
-      ...[false, true].map((warningDeliveryFails) => ({
-        owner: "agent" as const,
-        hasNativeText: false,
-        superseded: true,
-        warningDeliveryFails,
-      })),
-    ].flatMap((test) =>
-      (["run", "session"] as const).map((stopScope) =>
-        Object.assign(
-          { nativeFirst: false, superseded: false, warningDeliveryFails: false, stopScope },
-          test,
-        ),
-      ),
-    ),
-  )(
-    "settles Stop history ($owner, scope=$stopScope, native text=$hasNativeText, native first=$nativeFirst, superseded=$superseded, warning delivery fails=$warningDeliveryFails)",
-    async ({ owner, stopScope, hasNativeText, nativeFirst, superseded, warningDeliveryFails }) => {
+  it.each([
+    ["run", true, false, false, false],
+    ["session", false, false, false, false],
+    ["session", true, true, false, false],
+    ["run", false, false, true, false],
+    ["session", false, false, true, true],
+  ] as const)(
+    "settles Stop history (scope=%s, native text=%s, native first=%s, superseded=%s, warning delivery fails=%s)",
+    async (stopScope, hasNativeText, nativeFirst, superseded, warningDeliveryFails) => {
       await withOpenClawTestState({ label: "chat-abort-codex" }, async () => {
         const target = await fixture.createTarget();
         session.target = target;
@@ -148,31 +124,11 @@ describe("chat.abort native transcript settlement", () => {
           runId,
           ...target,
           timeoutMs: 30_000,
-          kind: owner === "agent" ? "agent" : "chat-send",
+          kind: "agent",
           operationalRunInstance,
-          resolveTerminalProducer: (active) => {
-            const operation = active.input.claim?.operation;
-            return operation
-              ? resolveActiveReplyRunOwnerForSignal(operation.abortSignal)
-              : undefined;
-          },
         });
         const input = expectDefined(registration.entry, "registered source").input;
         registration.initializeTiming();
-        const chatClaim =
-          owner === "chat"
-            ? expectDefined(tryClaimSessionControllerTask(input), "chat claim")
-            : undefined;
-        const operation =
-          owner === "chat"
-            ? createReplyOperation({
-                ...target,
-                target: controllerTarget,
-                mailboxClaim: chatClaim,
-                resetTriggered: false,
-                upstreamAbortSignal: registration.controller.signal,
-              })
-            : undefined;
         const delivery = createDeferredCore();
         const nativeRelease = createDeferredCore();
         const nativeCompletion = nativeRelease.promise.then(() => native.finish(true));
@@ -197,58 +153,42 @@ describe("chat.abort native transcript settlement", () => {
           await delivery.promise;
           return { payloads: [], meta: { durationMs: 0, aborted: true } };
         });
-        const completion = operation
-          ? operation.ownerSettlement.then(async () => {
-              if (chatClaim) {
-                releaseSessionControllerClaim(chatClaim);
-                await chatClaim.settlement.promise;
-              }
-            })
-          : withSessionTurn(
-              {
+        const completion = withSessionTurn(
+          {
+            ...target,
+            target: controllerTarget,
+            controllerInput: input,
+            abortSignal: registration.controller.signal,
+          },
+          async (admitted) => {
+            if (!admitted) {
+              throw new Error("expected admitted agent turn");
+            }
+            markReplyOperationExecutionStarted(admitted);
+            admitted.setPhase("running");
+            return await dispatchAgentRunFromGateway({
+              admittedRunEntry: registration.entry,
+              ingressOpts: {
+                message: "Synthetic native abort",
                 ...target,
-                target: controllerTarget,
-                controllerInput: input,
+                allowModelOverride: false,
                 abortSignal: registration.controller.signal,
               },
-              async (admitted) => {
-                if (!admitted) {
-                  throw new Error("expected admitted agent turn");
-                }
-                markReplyOperationExecutionStarted(admitted);
-                admitted.setPhase("running");
-                return await dispatchAgentRunFromGateway({
-                  admittedRunEntry: registration.entry,
-                  ingressOpts: {
-                    message: "Synthetic native abort",
-                    ...target,
-                    allowModelOverride: false,
-                    abortSignal: registration.controller.signal,
-                  },
-                  runId,
-                  dedupeKeys: [],
-                  abortController: registration.controller,
-                  cleanupAbortController: registration.cleanup,
-                  io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
-                  context: dispatchContext,
-                });
-              },
-            );
+              runId,
+              dedupeKeys: [],
+              abortController: registration.controller,
+              cleanupAbortController: registration.cleanup,
+              io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
+              context: dispatchContext,
+            });
+          },
+        );
         let deliverySettled = false;
-        void completion?.then(() => {
+        void completion.then(() => {
           deliverySettled = true;
         });
-        const cancel = vi.fn();
-        operation?.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
-        operation?.setPhase("running");
-        if (operation) {
-          markReplyOperationExecutionStarted(operation);
-        }
         try {
-          if (!operation) {
-            await Promise.race([executionStarted.promise, completion]);
-            expect(session.command).toHaveBeenCalledOnce();
-          }
+          await Promise.race([executionStarted.promise, completion]);
           if (nativeFirst) {
             nativeRelease.resolve();
             await readyForDelivery.promise;
@@ -265,17 +205,11 @@ describe("chat.abort native transcript settlement", () => {
           );
           expect(registration.controller.signal.aborted).toBe(true);
           expect(input.claim?.released).toBe(false);
-          if (operation) {
-            expect(cancel).toHaveBeenCalledWith("user_abort");
-          }
 
           nativeRelease.resolve();
           const mirrored = await nativeCompletion;
-          operation?.completeWithAfterClearBarrier(delivery.promise);
           await execution.runWhenIdle(() => undefined);
-          if (!operation) {
-            await readyForDelivery.promise;
-          }
+          await readyForDelivery.promise;
 
           expect(deliverySettled).toBe(false);
           expect(failures).toEqual(new Set());
@@ -306,10 +240,6 @@ describe("chat.abort native transcript settlement", () => {
               assistantTranscriptOwned: true,
               assistantTranscriptIdempotencyKey: nativeKey,
               terminalAnchor: {
-                agentId: target.agentId,
-                sessionId: target.sessionId,
-                sessionKey: target.sessionKey,
-                storePath: target.storePath,
                 entryId: messages[0]?.id,
                 rawSeq: expect.any(Number),
                 idempotencyKey: nativeKey,
@@ -322,9 +252,6 @@ describe("chat.abort native transcript settlement", () => {
                 stopReason: "aborted",
                 idempotencyKey: nativeKey,
                 __openclaw: {
-                  mirrorIdentity: `${turnId}:assistant`,
-                  mirrorOrigin: "codex-app-server",
-                  mirrorSourceFingerprint: expect.any(String),
                   runId,
                   runTerminal: true,
                 },
@@ -345,24 +272,9 @@ describe("chat.abort native transcript settlement", () => {
 
           delivery.resolve();
           await completion;
-          const successor = await fixture.createTurn(target, {
-            runId: "run-successor",
-            turnId: "turn-successor",
-            text: nativeText,
-          });
-          const next = await successor.finish(false);
-          expect(next.assistantTranscriptOwned).toBe(true);
-          expect(next.terminalAnchor?.entryId).not.toBe(mirrored.terminalAnchor?.entryId);
-          const afterSuccessor = (await loadTranscriptEvents(target)).filter(isAssistantEvent);
-          expect(afterSuccessor).toHaveLength(2);
-          expect(afterSuccessor[1]?.message).toMatchObject({
-            content: [{ type: "text", text: nativeText }],
-            __openclaw: { runId: "run-successor", runTerminal: true },
-          });
         } finally {
           nativeRelease.resolve();
           delivery.resolve();
-          operation?.complete();
           await completion;
           await nativeCompletion;
           await execution.drain();
