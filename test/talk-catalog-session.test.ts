@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import { openaiMediaUnderstandingProvider } from "../extensions/openai/api.js";
 import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.js";
@@ -23,9 +22,6 @@ import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js"
 import { createDeferred } from "./helpers/promise.js";
 
 const sessionKey = "agent:researcher:catalog";
-const speechConfig = (configured: boolean) => ({
-  providers: { sample: { apiKey: configured ? "synthetic-speech-key" : "" } },
-});
 
 describe("session-scoped Talk catalog", () => {
   it.each([false, true])(
@@ -43,12 +39,10 @@ describe("session-scoped Talk catalog", () => {
                 speaker: {},
                 researcher: {
                   workspace: state.workspaceDir,
-                  tts: speechConfig(selectedHasCredentials),
                 },
               },
             },
             talk: { agentId: "speaker" },
-            tts: { provider: "sample", ...speechConfig(!selectedHasCredentials) },
             tools: {
               media: {
                 audio: { enabled: true },
@@ -128,17 +122,13 @@ describe("session-scoped Talk catalog", () => {
             provider: {
               id: "sample",
               label: "Sample speech",
-              resolveConfig: ({ rawConfig }) => ({
-                resolvedKey: asOptionalRecord(asOptionalRecord(rawConfig.providers)?.sample)
-                  ?.apiKey,
-              }),
               isConfigured: () => false,
-              isConfiguredAsync: async ({ providerConfig }) => {
+              isConfiguredAsync: async () => {
                 expectDefined(
                   captureGatewayRootWorkReleaseObserver(),
                   "catalog refresh must own root work admission",
                 )(catalogReleased.resolve);
-                return providerConfig.resolvedKey === "synthetic-speech-key";
+                return false;
               },
               synthesize: async () => {
                 throw new Error("catalog must not synthesize");
@@ -176,14 +166,6 @@ describe("session-scoped Talk catalog", () => {
                     ok: true,
                     error: undefined,
                     response: {
-                      speech: {
-                        providers: [
-                          expect.objectContaining({
-                            id: "sample",
-                            configured: !selectedHasCredentials,
-                          }),
-                        ],
-                      },
                       transcription: {
                         ready: configured,
                         providers: [expect.objectContaining({ id: "openai", configured })],

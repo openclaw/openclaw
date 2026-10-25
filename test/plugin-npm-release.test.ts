@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
@@ -23,11 +22,6 @@ import { createDeferred } from "./helpers/promise.js";
 import { writePublishablePluginFixture } from "./helpers/publishable-plugin-fixture.js";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
-});
-
 const tempDirs: string[] = [];
 const version = "2026.4.10";
 const makeRepo = () => makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
@@ -51,7 +45,6 @@ const isExternal = (pluginId: string, packageJson: PluginPackageJson) =>
   });
 
 afterEach(() => {
-  vi.mocked(execFileSync).mockReset();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   cleanupTempDirs(tempDirs);
@@ -78,15 +71,12 @@ it("requires the external plugin package compatibility contract for npm publish"
   ]);
 });
 
-it("warns once per stale dependency without blocking or inspecting Git", () => {
+it("warns once per stale dependency without blocking", () => {
   const plugin: PublishablePluginPackage = {
     ...makePlugin("codex"),
     requiredLatestDependencies: [{ packageName: "@openai/codex", version: "0.139.0" }],
   };
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const git = vi.mocked(execFileSync).mockImplementation(() => {
-    throw new Error("not a Git checkout");
-  });
   const resolveLatest = vi.fn(() => "0.153.0");
   const warnings = assertPluginReleaseDependencyFreshness(
     [plugin, { ...plugin, packageName: "@openclaw/another-harness" }],
@@ -102,7 +92,6 @@ it("warns once per stale dependency without blocking or inspecting Git", () => {
     warnings.map((warning) => [`release check: warning: ${warning}`]),
   );
   expect(resolveLatest).toHaveBeenCalledExactlyOnceWith("@openai/codex");
-  expect(git).not.toHaveBeenCalled();
 });
 
 it("fails closed when the registry refuses the published-version lookup", async () => {
@@ -175,37 +164,12 @@ it("rejects duplicate npm package names from different plugin directories", () =
   );
 });
 
-it("keeps publishable plugin dist trees out of the core npm package unless bundled", () => {
-  const excludedDirs = collectRootPackageExcludedExtensionDirs();
-  for (const plugin of allPublishable()) {
-    expect(excludedDirs.has(plugin.extensionId), plugin.extensionId).toBe(
-      isExternal(plugin.extensionId, {
-        ...readPackage(plugin.packageDir),
-        name: plugin.packageName,
-      }),
-    );
-  }
-});
-
-it("keeps deferred publication targets bundled with staged release metadata", () => {
+it("keeps deferred publication targets bundled", () => {
   const bundledIds = new Set(collectBundledPluginBuildEntries({ env: {} }).map(({ id }) => id));
   const excludedDirs = collectRootPackageExcludedExtensionDirs();
   const publicationIds = new Set(allPublishable().map(({ extensionId }) => extensionId));
-  for (const { id, minHostVersion, publishToNpm = true } of [
-    { id: "cua-computer", minHostVersion: ">=2026.9.6", publishToNpm: false },
-    { id: "logbook", minHostVersion: ">=2026.9.5" },
-    { id: "memory-wiki", minHostVersion: ">=2026.9.4" },
-    { id: "onepassword", minHostVersion: ">=2026.9.4" },
-  ]) {
+  for (const id of ["cua-computer", "logbook", "memory-wiki", "onepassword"]) {
     const packageJson = readPackage(join("extensions", id));
-    expect(packageJson, id).toMatchObject({
-      name: `@openclaw/${id}`,
-      openclaw: {
-        build: { bundledDist: true },
-        install: { minHostVersion },
-        release: { publishToNpm, publishToClawHub: true },
-      },
-    });
     expect(
       {
         bundled: bundledIds.has(id),

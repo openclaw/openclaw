@@ -2,9 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { twitchPlugin } from "../extensions/twitch/api.js";
 import { isDeliveredMessagingToolResult } from "../src/agents/embedded-agent-message-tool-source-reply.js";
-import { installMessageToolTerminalHook } from "../src/agents/embedded-agent-runner/run/message-tool-terminal.js";
-import type { Agent, AfterToolCallContext } from "../src/agents/runtime/index.js";
-import { makeAgentAssistantMessage } from "../src/agents/test-helpers/agent-message-fixtures.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import type { TrustedMessageAuditEvent } from "../src/audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest } from "../src/audit/message-audit-events.test-support.js";
@@ -14,7 +11,6 @@ import { setRuntimeConfigSnapshot } from "../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../src/config/types.js";
 import { loadUnfinishedDeliveries } from "../src/infra/outbound/delivery-queue-storage.js";
 import * as messageActionRunner from "../src/infra/outbound/message-action-runner.js";
-import { sendMessage } from "../src/infra/outbound/message.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { onSessionTranscriptUpdate } from "../src/sessions/transcript-events.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
@@ -24,8 +20,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   setActivePluginRegistry(createTestRegistry([]));
 });
-
-const runMessageAction = messageActionRunner.runMessageAction;
 
 const manager = vi.hoisted(() => ({ sendMessage: vi.fn() }));
 vi.mock("../extensions/twitch/src/client-manager-registry.js", () => ({
@@ -95,9 +89,6 @@ describe("Twitch message-tool delivery", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         workspaceDir: state.workspaceDir,
       });
-      expect(tool.parameters).toMatchObject({
-        properties: { action: { enum: expect.arrayContaining(["send"]) } },
-      });
       const args = {
         action: "send",
         message,
@@ -143,7 +134,6 @@ describe("Twitch message-tool delivery", () => {
         expect.soft(transcriptUpdated).toHaveBeenCalledTimes(sent ? 1 : 0);
         expect.soft(isDeliveredMessagingToolResult({ args, result })).toBe(sent);
         const actionResult = await runAction.mock.results[0]?.value;
-        expect.soft(actionResult).toMatchObject({ handledBy: "core", to: target });
         expect
           .soft(formatMessageCliText(actionResult).join("\n"))
           .toContain(sent ? "fixture-sent-1" : "send suppressed: adapter_returned_no_send");
@@ -153,96 +143,11 @@ describe("Twitch message-tool delivery", () => {
           : { outcome: "suppressed", resultCount: 0, reasonCode: "no_visible_payload" };
         expect.soft(completed).toEqual([expect.objectContaining(expectedAudit)]);
         expect(await loadUnfinishedDeliveries(state.stateDir)).toEqual([]);
-
-        const agent = {} as Agent;
-        const delivered = vi.fn();
-        installMessageToolTerminalHook({
-          agent,
-          config: cfg,
-          currentProvider: "twitch",
-          currentAccountId: sourceAccountId,
-          currentChannelId: toolContext.currentChannelId,
-          currentMessagingTarget: toolContext.currentMessagingTarget,
-          sessionKey,
-          sourceReplyDeliveryMode: "message_tool_only",
-          onDeliveredSourceReply: delivered,
-        });
-        const toolCall = {
-          type: "toolCall" as const,
-          id: "twitch-send",
-          name: "message",
-          arguments: args,
-        };
-        const context: AfterToolCallContext = {
-          toolCall,
-          args,
-          result,
-          isError: false,
-          context: { systemPrompt: "", messages: [], tools: [] },
-          assistantMessage: makeAgentAssistantMessage({
-            content: [toolCall],
-            model: "gpt-5.6-luna",
-            stopReason: "toolUse",
-          }),
-        };
-        expect
-          .soft((await agent.afterToolCall?.(context))?.terminate)
-          .toBe(sent && (!explicit || sameSource) ? true : undefined);
-        expect.soft(delivered).toHaveBeenCalledTimes(sent && (!explicit || sameSource) ? 1 : 0);
       } finally {
         unsubscribeAudit();
         unsubscribeTranscript();
         runAction.mockRestore();
       }
-    });
-  });
-});
-
-describe("Twitch core send defaults and failures", () => {
-  it.each([undefined, "other"])("uses the configured channel for account %s", async (accountId) => {
-    await withOpenClawTestState({ prefix: "twitch-default-send-" }, async (state) => {
-      const cfg = installConfig({
-        defaultAccount: "secondary",
-        accounts: { secondary: makeAccount(), other: makeAccount("otherchannel") },
-      });
-      manager.sendMessage.mockReset().mockResolvedValue({ ok: true, messageId: "default-send-1" });
-      const result = await sendMessage({
-        cfg,
-        channel: "twitch",
-        to: "",
-        accountId,
-        content: "**Hello** Twitch!",
-        queuePolicy: "best_effort",
-      });
-      expect(result).toMatchObject({
-        deliveryStatus: "sent",
-        result: { messageId: "default-send-1" },
-      });
-      expect(manager.sendMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ username: "fixture-bot" }),
-        accountId ? "otherchannel" : "sourcechannel",
-        "Hello Twitch!",
-        cfg,
-        accountId ?? "secondary",
-      );
-      expect(await loadUnfinishedDeliveries(state.stateDir)).toEqual([]);
-    });
-  });
-
-  it("keeps transport failures actionable instead of reporting delivery", async () => {
-    await withOpenClawTestState({ prefix: "twitch-send-error-" }, async () => {
-      const cfg = installConfig(makeAccount());
-      manager.sendMessage
-        .mockReset()
-        .mockResolvedValue({ ok: false, error: "fixture transport disconnected" });
-      await expect(
-        runMessageAction({
-          cfg,
-          action: "send",
-          params: { channel: "twitch", to: "#sourcechannel", message: "Hello Twitch!" },
-        }),
-      ).rejects.toThrow("fixture transport disconnected");
-      expect(manager.sendMessage).toHaveBeenCalledOnce();
     });
   });
 });

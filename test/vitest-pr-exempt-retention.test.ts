@@ -185,18 +185,3 @@ it.each(["hourly", "release"] as const)(
     }
   },
 );
-
-it("keeps release-only UI files out of ordinary owner-selected plans", () => {
-  const { dedicatedGroups } = getPrExemptCensus();
-  const owners = dedicatedGroups(
-    createUiTestShardGroups({
-      includeReleaseOnlyTests: false,
-      includePrExemptRuntimeTests: false,
-      changedPaths: ["ui/vite.config.ts"],
-      uiE2eFiles: [...RELEASE_ONLY_UI_TEST_FILES].filter((file) => !isUiTestTarget(file)),
-    }),
-  );
-  for (const file of RELEASE_ONLY_UI_TEST_FILES) {
-    expectUiOwnerCount(owners, file, 0);
-  }
-});

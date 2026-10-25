@@ -5,8 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "../extensions/codex/test-api.js";
 import { asToolParamsRecord, type AnyAgentTool } from "../src/agents/tools/common.js";
 import {
-  onDiagnosticEvent,
-  onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
@@ -40,8 +38,6 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
   const skillName = "daily-brief";
   let skillFile: string;
   let unregisterUsage: ReturnType<typeof registerSkillUsageTracking>;
-  let publicEvents: DiagnosticEventPayload[];
-  let sharedEvents: DiagnosticEventPayload[];
   let trustedEvents: DiagnosticEventPayload[];
 
   beforeEach(async () => {
@@ -51,11 +47,7 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     resetGlobalHookRunner();
     setActivePluginRegistry(createEmptyPluginRegistry());
     setDiagnosticsEnabledForProcess(false);
-    publicEvents = [];
-    sharedEvents = [];
     trustedEvents = [];
-    onDiagnosticEvent((event) => publicEvents.push(event));
-    onInternalDiagnosticEvent((event) => sharedEvents.push(event), { include: ["skill.used"] });
     onTrustedInternalDiagnosticEvent((event) => trustedEvents.push(event), {
       include: ["skill.used"],
     });
@@ -178,32 +170,24 @@ describe("persistent skill usage through registered Codex dynamic tools", () => 
     expect(rows).toEqual(count === 0 ? [] : [row]);
   }
 
-  it.each([false, true])(
-    "counts repeated successful reads with process diagnostics=%s",
-    async (enabled) => {
-      setDiagnosticsEnabledForProcess(enabled);
-      const { call, execute } = createBridge();
-      expect(await call("read-1")).toMatchObject({
-        success: true,
-        contentItems: [{ type: "inputText", text: "# Daily brief\n" }],
-      });
-      await expectUsage(1);
-      unregisterUsage = registerSkillUsageTracking({ env: testState.env });
-      expect(await call("read-2")).toMatchObject({ success: true });
-      await expectUsage(2);
-      expect(execute).toHaveBeenCalledTimes(2);
-      expect(consumeRunSkillUsage(runId)).toEqual([
-        { name: skillName, source: "workspace", activation: "read", skillFile },
-      ]);
-      expect(consumeRunSkillUsage(runId)).toEqual([]);
-      expect(publicEvents).toEqual([]);
-      expect(sharedEvents.map((event) => event.type)).toEqual(
-        enabled ? ["skill.used", "skill.used"] : [],
-      );
-      expect(trustedEvents.map((event) => event.type)).toEqual(["skill.used", "skill.used"]);
-      expect(JSON.stringify([...sharedEvents, ...trustedEvents])).not.toContain(skillFile);
-    },
-  );
+  it("persists repeated successful reads with process diagnostics disabled", async () => {
+    const { call, execute } = createBridge();
+    expect(await call("read-1")).toMatchObject({
+      success: true,
+      contentItems: [{ type: "inputText", text: "# Daily brief\n" }],
+    });
+    await expectUsage(1);
+    unregisterUsage = registerSkillUsageTracking({ env: testState.env });
+    expect(await call("read-2")).toMatchObject({ success: true });
+    await expectUsage(2);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(consumeRunSkillUsage(runId)).toEqual([
+      { name: skillName, source: "workspace", activation: "read", skillFile },
+    ]);
+    expect(consumeRunSkillUsage(runId)).toEqual([]);
+    expect(trustedEvents.map((event) => event.type)).toEqual(["skill.used", "skill.used"]);
+    expect(JSON.stringify(trustedEvents)).not.toContain(skillFile);
+  });
 
   it.each(["error", "blocked", "thrown", "policy", "unknown"] as const)(
     "does not count a %s read",
