@@ -573,6 +573,17 @@ openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 
 The interval defaults to `24h` when `--every` is omitted. An explicitly empty or whitespace-only interval is rejected before a schedule is created or updated.
 
+Scheduled backup runs carry their own execution budget instead of the generic
+[ten-minute command default](/automation/cron-jobs/how-it-works): a full archive is sized by the data and takes
+hours on a multi-gigabyte installation. A schedule created by an earlier release keeps the
+generic default until it is enabled again; re-running `openclaw backup enable` with the same
+mode and target re-stamps the managed declaration.
+
+Re-enabling converges the declaration, which writes the whole command payload: any value set
+afterwards with `cron edit` — `--timeout-seconds`, or a staging `payload.env` override — is
+replaced and has to be applied again. Those overrides keep winning for as long as the schedule
+is left alone.
+
 Offsite schedules accept `--namespace <name>`, `--claim-namespace`, `--no-include-workspace`, and
 `--keep-daily`, `--keep-weekly`, and `--keep-monthly`. They use the same archive,
 encryption, and [retention rules](/cli/backup#offsite-retention) as `backup create --to`.
