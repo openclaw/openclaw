@@ -433,14 +433,12 @@ export function registerReverseHotReloadTest() {
 
     expect(onHotReload.mock.calls.map(([, config]) => config)).toEqual([configA, initialConfig]);
     expect(onHotReload.mock.calls[1]?.[0].hotReasons).toContain("hooks.path");
-    expect(harness.onConfigAccepted.mock.calls.map(([config]) => config)).toEqual([
-      configA,
-      initialConfig,
-    ]);
-    expect(harness.onConfigApplied.mock.calls.map(([, config]) => config)).toEqual([
-      configA,
-      initialConfig,
-    ]);
+    for (const configs of [
+      harness.onConfigAccepted.mock.calls.map(([config]) => config),
+      harness.onConfigApplied.mock.calls.map(([, config]) => config),
+    ]) {
+      expect(configs).toEqual([configA, initialConfig]);
+    }
     expect(promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).toEqual([
       "post-commit-a",
       "reverse-b",

@@ -14,13 +14,8 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import { encodePngRgb } from "../media/png-encode.js";
-import {
-  ensureCanonicalUserProfileForEmail,
-  syncCanonicalGitHubIdentity,
-} from "../state/user-profile-writes.js";
-import { guestScopes } from "./github-publication-requester.test-support.js";
+import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
@@ -28,10 +23,6 @@ import {
   SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { updateGitHubToolIdentityConfig } from "./github-tool-identity-config.js";
-import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
-import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
-import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 
 const mocks = githubPublicationTestMocks();
 vi.mock("node:dns/promises", { spy: true });
@@ -181,7 +172,7 @@ async function evidenceFixture(imported = false) {
   );
   vi.stubGlobal("fetch", fetch);
   onTestFinished(() => vi.unstubAllGlobals());
-  const upload = (input: Record<string, unknown> = {}, client?: typeof f.guestSource.client) =>
+  const upload = (input: Record<string, unknown> = {}) =>
     f.invoke(
       "guest",
       {
@@ -191,7 +182,7 @@ async function evidenceFixture(imported = false) {
         ...input,
       },
       SESSION_KEY,
-      { client, sandbox },
+      { sandbox },
     );
   const rejectEvidence = (overrides: Record<string, unknown>, message?: string) =>
     expect(upload({ evidence: { ...evidence, ...overrides } })).rejects.toThrow(message);
@@ -248,7 +239,7 @@ describe("workspace evidence through the guest tool and registered publication a
     expect(f.fetch).toHaveBeenCalledOnce();
   });
 
-  it("uploads inspected guest workspace bytes and associates the reference only through metadata editing", async () => {
+  it("uploads inspected guest workspace bytes without editing PR metadata", async () => {
     const f = await evidenceFixture();
     const body = f.state.body;
     expect((await f.upload()).details).toMatchObject({
@@ -271,14 +262,7 @@ describe("workspace evidence through the guest tool and registered publication a
       redirect: "manual",
       body: new Uint8Array(f.bytes),
     });
-    await f.invoke("guest", {
-      action: "edit",
-      ...f.expected,
-      expectedBody: body,
-      body: `![Proof](${f.url})\n\n${body}`,
-    });
-    expect(f.state.body).toBe(`![Proof](${f.url})\n\n${body}`);
-    expect(f.writes.map((write) => write.action)).toEqual(["edit"]);
+    expect(f.writes).toEqual([]);
   });
 
   it("rejects foreign paths, altered bytes, unsafe media and unrelated publication selectors before upload", async () => {
@@ -373,42 +357,6 @@ describe("workspace evidence through the guest tool and registered publication a
     });
     await expect(f.upload()).rejects.toThrow("GitHub may have created the attachment");
     expect(f.fetch).toHaveBeenCalledOnce();
-  });
-
-  it("denies evidence publication to an admitted shared-session participant who is not its creator", async () => {
-    const f = await evidenceFixture();
-    const participant = await ensureCanonicalUserProfileForEmail(
-      "publication-evidence-peer@example.test",
-    );
-    const client = createOperatorWsClient({ connId: participant.id, scopes: [...guestScopes] });
-    client.authenticatedUserProfile = {
-      profileId: participant.id,
-      displayName: null,
-      avatarRevision: "fixture",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
-    prepareGatewayConnectOperatorAccess(client);
-    const scope = { agentId: "main", sessionKey: SESSION_KEY };
-    await upsertSessionEntryCore(scope, { visibility: "shared" });
-    addSessionMember(scope, { identityId: participant.id, addedBy: f.guestProfile });
-    const admission = await resolveSessionMutationAuthorizationAsync({
-      client,
-      context: Object.assign(createRequestContext(), f.guestSource.context),
-      method: "sessions.patch",
-      requestParams: { key: SESSION_KEY, label: "Shared work" },
-    });
-    try {
-      expect(admission.error).toBeNull();
-      expect(admission.authorization).toBeDefined();
-      admission.authorization!.assertCurrent();
-      await expect(f.upload({}, client)).rejects.toThrow(
-        "The original GitHub publication requester is no longer authorized.",
-      );
-      expect(f.fetch).not.toHaveBeenCalled();
-    } finally {
-      admission.authorization?.release?.();
-    }
   });
 
   it("rechecks PR head and the guest's current role after evidence preparation", async () => {

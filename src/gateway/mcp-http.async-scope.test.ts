@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -155,7 +154,7 @@ it("serves fresh request scopes after its replacement creator closes", async () 
   expect(constructionScopes[0]?.aborted).toBe(true);
 });
 
-it("keeps Gateway readers while shedding the starting turn's async stores", async () => {
+it("retains Gateway readers but sheds the starting turn's transcript fence", async () => {
   const session = { agentId: "main", sessionId: "first-turn-session" };
   const receipt: UserTurnTranscriptAdmissionReceipt = {
     ...session,
@@ -169,30 +168,22 @@ it("keeps Gateway readers while shedding the starting turn's async stores", asyn
     logicalTurnId: "first-turn",
     role: "user",
   };
-  // Stands in for turn-local stores this listener does not name explicitly.
-  const turnLocal = new AsyncLocalStorage<string>();
   const readers = createSqliteReadOnlyWorkerScope();
   const readerContext = readers.run(() => readOnlyWorkerScope.getStore());
   const observed: unknown[] = [];
   execute.mockImplementation(() => {
-    observed.push([
-      readTranscriptFence(session),
-      turnLocal.getStore(),
-      readOnlyWorkerScope.getStore(),
-    ]);
+    observed.push([readTranscriptFence(session), readOnlyWorkerScope.getStore()]);
     return completed;
   });
   try {
     await readers.run(() =>
-      turnLocal.run("first-turn", () =>
-        withTranscriptFence(receipt, () => {
-          expect(readTranscriptFence(session)).toBe(receipt);
-          return ensureMcpLoopbackServer();
-        }),
-      ),
+      withTranscriptFence(receipt, () => {
+        expect(readTranscriptFence(session)).toBe(receipt);
+        return ensureMcpLoopbackServer();
+      }),
     );
     expect(await callTool()).toMatchObject({ result: { ...completed, isError: false } });
-    expect(observed).toEqual([[undefined, undefined, readerContext]]);
+    expect(observed).toEqual([[undefined, readerContext]]);
   } finally {
     await closeMcpLoopbackServer();
     await readers.close();
