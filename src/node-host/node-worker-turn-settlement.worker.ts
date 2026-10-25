@@ -22,7 +22,7 @@ export function settleNodeWorkerActiveTurns(
     owner.state === "running" ||
     !(schema ? schema.tables.has("node_worker_turns") : tableExists(database, "node_worker_turns"))
   ) {
-    return;
+    return undefined;
   }
   const update = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "node_worker_turns">>(database)
     .updateTable("node_worker_turns")
@@ -45,4 +45,5 @@ export function settleNodeWorkerActiveTurns(
     return executeSqliteQueryTakeFirstSync(database, update.returningAll());
   }
   executeSqliteQuerySync(database, update);
+  return undefined;
 }
