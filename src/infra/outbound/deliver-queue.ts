@@ -1,6 +1,6 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 // Owns durable queue admission and hands stable custody to the execution loop.
-import { readAskUserQuestionId } from "../../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata, readAskUserQuestionId } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirementsForBatch } from "../../channels/message/capabilities.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type { ChannelMessageDeferredDeliveryAdmissionResult } from "../../channels/message/types.js";
@@ -33,7 +33,11 @@ import {
 } from "./deliver-queue-admission.js";
 import { deliverOutboundPayloadsWithQueueCleanup } from "./deliver-queue-execute.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
-import type { OutboundDeliveryResult, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
+import {
+  PlatformMessageNotDispatchedError,
+  type OutboundDeliveryResult,
+  type OutboundPayloadDeliveryOutcome,
+} from "./deliver-types.js";
 import { markDurableDeliveryQueued } from "./delivery-completion.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
 import {
@@ -154,9 +158,38 @@ async function runOutboundDeliveryWithIntent(
   input: InternalDeliverOutboundPayloadsParams,
   prepare: typeof prepareOutboundPayloadBatch,
 ): Promise<OutboundDeliveryResult[]> {
+  // Fix the source lane before modifiers can replace a payload or its private metadata.
+  const reasoningPayloadIndexes = new Set([
+    ...(input.reasoningPayloadIndexes ?? []),
+    ...input.payloads.flatMap((payload, index) =>
+      payload.isReasoning === true &&
+      getReplyPayloadMetadata(payload)?.reasoningVisibilityOwner !== undefined
+        ? [index]
+        : [],
+    ),
+  ]);
+  if (
+    reasoningPayloadIndexes.size > 0 &&
+    (input.skipQueue !== true ||
+      input.deliveryQueueId !== undefined ||
+      input.deliveryIntentId ||
+      input.deliveryCompletion ||
+      input.completionRetention ||
+      input.reusePendingDeliveryIntent ||
+      input.mirror)
+  ) {
+    throw new PlatformMessageNotDispatchedError("Guarded reasoning requires live-only delivery", {
+      cause: undefined,
+      retryable: false,
+    });
+  }
   const { replyToId, replyToMode, ...currentParams } = input;
   const reply = normalizeOutboundReplyFacts({ reply: input.reply, replyToId, replyToMode });
-  const params = { ...currentParams, ...(reply ? { reply } : {}) };
+  const params = {
+    ...currentParams,
+    ...(reasoningPayloadIndexes.size > 0 ? { reasoningPayloadIndexes } : {}),
+    ...(reply ? { reply } : {}),
+  };
   const stableIntentId = params.deliveryIntentId?.trim();
   if (stableIntentId) {
     params.deliveryIntentId = stableIntentId;

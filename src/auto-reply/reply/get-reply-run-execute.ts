@@ -434,7 +434,7 @@ export async function executePreparedReplyRun(
           )
       : undefined;
   const reasoningVisibility =
-    opts?.onReasoningVisibility && opts.registerReasoningVisibilityCleanup && sessionKey
+    opts?.reasoningVisibilityEnabled && opts.registerReasoningVisibilityCleanup && sessionKey
       ? await createReplyReasoningVisibility(buildReplyRunReasoningParams(state, sessionKey))
       : undefined;
   if (reasoningVisibility) {

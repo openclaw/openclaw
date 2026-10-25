@@ -27,7 +27,8 @@ import { resolveMatrixExtraContent } from "../../outbound.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
-import { chunkMatrixText, sendMessageMatrix } from "../send.js";
+import { sendMatrixReasoningNotices } from "../send-reasoning.js";
+import { sendMessageMatrix } from "../send.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY, type MatrixSendResult } from "../send/types.js";
 import type { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
@@ -178,38 +179,23 @@ export function createMatrixReplyDispatcher(config: {
     try {
       if (reply.isReasoning === true) {
         // Each notice chunk is quiet; the answer retains its first-reply slot.
-        const { chunks } = chunkMatrixText(visibleText ?? "", { cfg, accountId });
-        for (const chunk of chunks) {
-          if (!config.shouldDeliverReasoning?.(reply)) {
-            logVerbose("matrix reasoning suppressed by current turn policy");
-            break;
-          }
-          let suppressed = false;
-          try {
-            await sendMessageMatrix(roomId, chunk, {
+        await sendMatrixReasoningNotices({
+          text: visibleText ?? "",
+          cfg,
+          accountId,
+          shouldDeliver: () => config.shouldDeliverReasoning?.(reply) === true,
+          send: (chunk, quietOptions) =>
+            sendMessageMatrix(roomId, chunk, {
               client,
               cfg,
               replyToId: replyToIdForReply,
               fallbackReplyToId,
               threadId: threadTarget,
               accountId,
-              extraContent: { msgtype: "m.notice", "m.mentions": {} },
               onDeliveryResult,
-              assertDirectAdapterHandoff: () => {
-                if (!config.shouldDeliverReasoning?.(reply)) {
-                  suppressed = true;
-                  throw new DOMException("Matrix reasoning visibility revoked", "AbortError");
-                }
-              },
-            });
-          } catch (error) {
-            if (!suppressed) {
-              throw error;
-            }
-            logVerbose("matrix reasoning suppressed before platform send");
-            break;
-          }
-        }
+              ...quietOptions,
+            }),
+        });
         return accepted.result();
       }
       for (const [index, mediaUrl] of targets.entries()) {
@@ -286,7 +272,7 @@ export function createMatrixReplyDispatcher(config: {
             const id = draftStream?.eventId();
             const content = draftStream?.content();
             if (id && content) {
-              previewLifecycle.retainPreview();
+              previewLifecycle.beginFinalDelivery();
               return mergeMatrixReplyDeliveryResults([
                 createDraftDeliveryResult(id, content),
                 deliveryResult,

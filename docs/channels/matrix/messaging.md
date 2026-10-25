@@ -112,8 +112,9 @@ preview. `/reasoning off` hides it. Matrix does not display `/reasoning stream`
 updates; use `on` for completed reasoning messages.
 
 Reasoning follows the sender's command authorization and any inline setting for
-the current turn. Turning it off stops unsent reasoning chunks; notices already
-delivered remain in the room.
+the current turn. Turning it off stops unsent reasoning chunks once the setting
+change is committed. `/reasoning off` may wait for an active reply to finish;
+notices already delivered remain in the room.
 
 ## Voice messages
 

@@ -7,6 +7,7 @@ import {
 import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { DeliveryQueueStateContext } from "../../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { InternalDeliverOutboundPayloadsParams } from "../../infra/outbound/deliver-contracts.js";
 import {
   type OutboundDeliveryResult,
   isOutboundDeliveryError,
@@ -177,6 +178,9 @@ export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
   onSendFailure?: (error: unknown) => Promise<void> | void;
 };
 
+type InternalMessageSendContextParams = DurableMessageSendContextParams &
+  Pick<InternalDeliverOutboundPayloadsParams, "reasoningPayloadIndexes">;
+
 export type DurableMessageSendContext = MessageSendContext<
   ReplyPayload,
   DurableMessageBatchSendResult
@@ -190,7 +194,7 @@ export async function withDurableMessageSendContextCore<T>(
 }
 
 async function withMessageSendContext<T>(
-  params: DurableMessageSendContextParams,
+  params: InternalMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
   deliver: typeof deliverOutboundPayloadsInternal,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
@@ -360,7 +364,7 @@ async function withMessageSendContext<T>(
 }
 
 export async function sendDurableMessageBatchCore(
-  params: DurableMessageSendContextParams,
+  params: InternalMessageSendContextParams,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
   queueContext?: DeliveryQueueStateContext,
   sessionGeneration?: SessionDeliveryGeneration,
@@ -379,7 +383,7 @@ export async function sendDurableMessageBatchCore(
 }
 
 export async function sendStructuredDurableMessageBatchCore(
-  input: Omit<DurableMessageSendContextParams, "payloads"> & {
+  input: Omit<InternalMessageSendContextParams, "payloads"> & {
     plan: readonly OutboundPayloadPlan[];
   },
   sessionGeneration?: SessionDeliveryGeneration,
@@ -393,7 +397,7 @@ export async function sendStructuredDurableMessageBatchCore(
 }
 
 async function sendMessageBatch(
-  params: DurableMessageSendContextParams,
+  params: InternalMessageSendContextParams,
   deliver: typeof deliverOutboundPayloadsInternal,
   conversationDeliveryTarget?: ConversationDeliveryTarget,
 ): Promise<DurableMessageBatchSendResult> {

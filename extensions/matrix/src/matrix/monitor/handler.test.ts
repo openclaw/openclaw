@@ -22,6 +22,7 @@ import { registerMatrixLiveAllowlistTests } from "./handler.live-allowlist.test-
 import { registerMatrixPreviewDeliveryTests } from "./handler.preview-delivery.test-support.js";
 import {
   createMatrixHandlerTestHarness as createHarness,
+  createMatrixReplyDispatcherTestState as replyDispatcher,
   createMatrixReactionEvent,
   createMatrixReactionTestHarness,
   createMatrixRoomMessageEvent,
@@ -120,15 +121,6 @@ function agentRoute(sessionKey = "agent:ops:main") {
 
 function dispatchResult(final = 0, block = 0) {
   return { queuedFinal: final > 0, counts: { final, block, tool: 0 } };
-}
-
-function replyDispatcher(waitForIdle = async () => {}) {
-  return {
-    dispatcher: { markComplete: () => {}, waitForIdle },
-    replyOptions: {},
-    markDispatchIdle: () => {},
-    markRunComplete: () => {},
-  };
 }
 
 beforeEach(() => {
@@ -787,6 +779,7 @@ describe("matrix monitor handler draft streaming", () => {
     blockStreamingEnabled?: boolean;
     streaming?: "partial" | "quiet" | "progress" | "off";
     previewToolProgressEnabled?: boolean;
+    isReasoningVisible?: (payload: ReplyPayload) => boolean;
     accountConfig?: import("../../types.js").MatrixConfig;
   }) {
     let capturedDeliver: DeliverFn | undefined;
@@ -810,6 +803,7 @@ describe("matrix monitor handler draft streaming", () => {
 
     const { handler } = createHarness({
       streaming: opts?.streaming ?? "quiet",
+      isReasoningVisible: opts?.isReasoningVisible,
       accountConfig: opts?.accountConfig,
       previewToolProgressEnabled: opts?.previewToolProgressEnabled ?? false,
       blockStreamingEnabled: opts?.blockStreamingEnabled ?? false,

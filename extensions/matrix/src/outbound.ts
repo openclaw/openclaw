@@ -7,7 +7,10 @@ import {
   createReplyToFanout,
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  attachChannelToResult,
+  createEmptyChannelResult,
+} from "openclaw/plugin-sdk/channel-send-result";
 import {
   renderPresentationForDelivery,
   renderMessagePresentationFallbackText,
@@ -20,9 +23,11 @@ import {
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+import { sendMatrixReasoningNotices } from "./matrix/send-reasoning.js";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
 import { matrixPresentationCapabilities } from "./presentation-capabilities.js";
+import { getMatrixRuntime } from "./runtime.js";
 
 const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
 const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
@@ -154,6 +159,7 @@ async function sendMatrixOutbound(
 
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  supportsReasoningPayloads: true,
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
@@ -163,6 +169,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     cfg,
     to,
     payload,
+    guardedReasoning,
     mediaLocalRoots,
     mediaReadFile,
     mediaAccess,
@@ -204,6 +211,42 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     };
+    if (guardedReasoning === true) {
+      const results = await sendMatrixReasoningNotices({
+        text: payload.text ?? "",
+        cfg,
+        accountId: accountId ?? undefined,
+        shouldDeliver: () => {
+          try {
+            return getMatrixRuntime().channel.reply.isReasoningVisible(payload);
+          } catch {
+            return false;
+          }
+        },
+        assertDirectAdapterHandoff,
+        send: (text, quietOptions) =>
+          send(to, text, {
+            ...sendOptions,
+            replyToId: resolveReplyToId(),
+            ...quietOptions,
+          }),
+      });
+      const last = results.at(-1);
+      if (!last) {
+        return createEmptyChannelResult("matrix", { outcome: "not_sent" });
+      }
+      const receipt = createMessageReceiptFromOutboundResults({ results });
+      receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+      return attachChannelToResult(
+        "matrix",
+        toMatrixOutboundResult({
+          ...last,
+          primaryMessageId: receipt.primaryPlatformMessageId,
+          receipt,
+          content: results.map((result) => result.content).join("\n"),
+        }),
+      );
+    }
     const sendPart = (text: string, index: number, mediaUrl?: string) =>
       send(to, text, {
         ...sendOptions,

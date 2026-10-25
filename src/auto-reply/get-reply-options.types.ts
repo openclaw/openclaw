@@ -372,12 +372,8 @@ export type GetReplyOptions = {
   progressPreambleEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
   reasoningPayloadsEnabled?: boolean;
-  /**
-   * Supplies the core-owned visibility check for durable reasoning on managed reply
-   * dispatchers. Check the exact payload again immediately before each platform send.
-   * Unbound payloads, off/stream turns, and settled owners return false.
-   */
-  onReasoningVisibility?: (isVisible: (payload: ReplyPayload) => boolean) => void;
+  /** Prepare producing-turn visibility for the host runtime's durable reasoning reader. */
+  reasoningVisibilityEnabled?: boolean;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
   commentaryPayloadsEnabled?: boolean;
   /** Optional turn-frozen commentary owner; visibility is live by default.

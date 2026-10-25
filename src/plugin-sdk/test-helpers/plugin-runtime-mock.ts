@@ -342,6 +342,9 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
         convertMarkdownTables: vi.fn((text: string) => text),
       },
       reply: {
+        isReasoningVisible: vi.fn<PluginRuntime["channel"]["reply"]["isReasoningVisible"]>(
+          () => false,
+        ),
         dispatchReplyWithBufferedBlockDispatcher: vi.fn<
           PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]
         >(async () => ({

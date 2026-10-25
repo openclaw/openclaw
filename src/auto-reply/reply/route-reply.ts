@@ -31,6 +31,7 @@ import {
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
+import { isReplyReasoningVisible } from "./reasoning-visibility-state.js";
 import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 
@@ -158,7 +159,15 @@ async function routeReplyOperation(
     ...(reason === "channel_transform" ? { reason } : {}),
   });
   const payload = operation.kind === "raw" ? operation.payload : operation.plan.payload;
-  if (operation.kind === "raw" && shouldSuppressReasoningPayload(payload)) {
+  const rawReasoning = operation.kind === "raw" && shouldSuppressReasoningPayload(payload);
+  const guardedReasoning =
+    shouldSuppressReasoningPayload(payload) &&
+    getReplyPayloadMetadata(payload)?.reasoningVisibilityOwner !== undefined;
+  if (
+    (rawReasoning || guardedReasoning) &&
+    (!isReplyReasoningVisible(payload) ||
+      getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion !== undefined)
+  ) {
     return suppress("suppressed");
   }
   const normalizedChannel = normalizeMessageChannel(channel);
@@ -166,6 +175,13 @@ async function routeReplyOperation(
     normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
   const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
   const bundledPlugin = channelId && !loadedPlugin ? getBundledChannelPlugin(channelId) : undefined;
+  const outbound = loadedPlugin?.outbound ?? bundledPlugin?.outbound;
+  if (
+    (rawReasoning || guardedReasoning) &&
+    (outbound?.supportsReasoningPayloads !== true || typeof outbound.sendPayload !== "function")
+  ) {
+    return suppress("suppressed");
+  }
   const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
   const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
   const resolvedAgentId = resolveSessionAgentId({
@@ -324,7 +340,14 @@ async function routeReplyOperation(
       onPlatformSendDispatch: params.beforeDeliver,
       assertDirectAdapterHandoff: params.assertCurrent,
       ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
-      ...(params.deliveryIntentId
+      ...(guardedReasoning
+        ? {
+            skipQueue: true,
+            durability: "best_effort" as const,
+            reasoningPayloadIndexes: new Set([0]),
+          }
+        : {}),
+      ...(!guardedReasoning && params.deliveryIntentId
         ? {
             deliveryIntentId: params.deliveryIntentId,
             reusePendingDeliveryIntent: true,
@@ -333,7 +356,7 @@ async function routeReplyOperation(
           }
         : {}),
       mirror:
-        params.mirror !== false && params.sessionKey
+        !guardedReasoning && params.mirror !== false && params.sessionKey
           ? {
               sessionKey: params.sessionKey,
               agentId: resolvedAgentId,
@@ -358,6 +381,7 @@ async function routeReplyOperation(
             undefined,
             undefined,
             params.sessionGeneration,
+            rawReasoning ? true : undefined,
           );
     if (send.status === "failed" || send.status === "partial_failed") {
       const delivery = summarizeVisibleRouteReplyDelivery(

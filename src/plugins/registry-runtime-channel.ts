@@ -1,3 +1,4 @@
+import type { ReplyPayload } from "../auto-reply/types.js";
 import { createHostChannelInboundEventContextBuilder } from "../channels/inbound-event/host-context-builder.js";
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { assertSessionEntryPatchAuthority } from "../config/sessions/session-entry-patch-authority.js";
@@ -125,6 +126,7 @@ export function createScopedPluginChannelRuntime(
   invokeSelectedRuntime: <T>(run: () => T) => T,
   assertRuntimeCurrent: () => void,
 ): PluginRuntime["channel"] {
+  const isReasoningVisible = channel.reply.isReasoningVisible;
   const inbound = {
     ...channel.inbound,
     run: ((...args: Parameters<typeof channel.inbound.run>) =>
@@ -192,6 +194,8 @@ export function createScopedPluginChannelRuntime(
     },
     reply: {
       ...channel.reply,
+      isReasoningVisible: (payload: ReplyPayload) =>
+        invokeSelectedRuntime(() => isReasoningVisible(payload)),
       dispatchReplyFromConfig: (...args) =>
         invokeSelectedRuntime(() => channel.reply.dispatchReplyFromConfig(...args)),
       dispatchReplyWithBufferedBlockDispatcher: (...args) =>

@@ -176,6 +176,7 @@ describe("matrix monitor handler reply presentation", () => {
       blockStreamingEnabled: true,
       replyToMode: "off",
       previewToolProgressEnabled: false,
+      isReasoningVisible: () => true,
       createReplyDispatcherWithTyping: (params) => {
         capturedDeliver.resolve((params as { deliver: DeliverFn }).deliver);
         return {
@@ -202,8 +203,7 @@ describe("matrix monitor handler reply presentation", () => {
     vi.useFakeTimers();
     try {
       expect(options.reasoningPayloadsEnabled).toBe(true);
-      expect(options.onReasoningVisibility).toBeTypeOf("function");
-      options.onReasoningVisibility?.(() => true);
+      expect(options.reasoningVisibilityEnabled).toBe(true);
       await options.onPartialReply?.({ text: "Answer prefix" });
       await vi.advanceTimersByTimeAsync(1000);
       expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
@@ -247,16 +247,26 @@ describe("matrix monitor handler reply presentation", () => {
     }
   });
 
-  it.each(["unbound", "denied", "revoked"] as const)(
+  it.each(["unbound", "denied", "revoked", "unavailable"] as const)(
     "suppresses typed reasoning when core visibility is %s while delivering the answer",
     async (policy) => {
       const capturedDeliver = createDeferred<DeliverFn>();
+      let visible = policy === "revoked";
       const { handler } = createMatrixHandlerTestHarness({
         cfg: {
           agents: { defaults: { reasoningDefault: "on" } },
           channels: { matrix: { dm: { allowFrom: ["*"] } } },
         },
         streaming: "off",
+        isReasoningVisible:
+          policy === "unbound"
+            ? () => false
+            : () => {
+                if (policy === "unavailable") {
+                  throw new Error("Plugin runtime is no longer active");
+                }
+                return visible;
+              },
         createReplyDispatcherWithTyping: (params) => {
           capturedDeliver.resolve((params as { deliver: DeliverFn }).deliver);
           return {
@@ -266,13 +276,7 @@ describe("matrix monitor handler reply presentation", () => {
             markRunComplete: () => {},
           };
         },
-        dispatchInboundMessage: async ({ replyOptions }) => {
-          let visible = policy === "revoked";
-          if (policy !== "unbound") {
-            (replyOptions?.onReasoningVisibility as GetReplyOptions["onReasoningVisibility"])?.(
-              () => visible,
-            );
-          }
+        dispatchInboundMessage: async () => {
           const deliver = await capturedDeliver.promise;
           visible = false;
           await deliver({ text: "Hidden reasoning", isReasoning: true }, { kind: "block" });

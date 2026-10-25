@@ -62,6 +62,7 @@ type MatrixHandlerTestHarnessOptions = {
   runtime?: RuntimeEnv;
   logger?: RuntimeLogger;
   currentConfig?: () => unknown;
+  isReasoningVisible?: MatrixMonitorHandlerParams["core"]["channel"]["reply"]["isReasoningVisible"];
   logVerboseMessage?: (message: string) => void;
   allowFrom?: string[];
   allowFromResolvedEntries?: MatrixMonitorHandlerParams["allowFromResolvedEntries"];
@@ -137,6 +138,15 @@ export function createMatrixIngressLifecycle() {
     onAdoptionFinalizing: vi.fn(),
     onAbandoned: vi.fn(async () => {}),
   } satisfies ChannelIngressMonitorLifecycle;
+}
+
+export function createMatrixReplyDispatcherTestState(waitForIdle = async () => {}) {
+  return {
+    dispatcher: { markComplete: () => {}, waitForIdle },
+    replyOptions: {},
+    markDispatchIdle: () => {},
+    markRunComplete: () => {},
+  };
 }
 
 export function createMatrixHandlerTestHarness(
@@ -326,6 +336,7 @@ export function createMatrixHandlerTestHarness(
           recordInboundSession,
         },
         reply: {
+          isReasoningVisible: options.isReasoningVisible ?? (() => false),
           settleReplyDispatcher: async ({
             dispatcher,
             onSettled,

@@ -54,6 +54,8 @@ export type PluginRuntimeChannel = {
     convertMarkdownTables: typeof import("../../../packages/markdown-core/src/tables.js").convertMarkdownTables;
   };
   reply: {
+    /** Read current policy for an opaque, host-issued reasoning payload. */
+    isReasoningVisible: typeof import("../../auto-reply/reply/reasoning-visibility-state.js").isReplyReasoningVisible;
     dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
     /**
      * @deprecated Prefer `openclaw/plugin-sdk/channel-outbound` adapters plus

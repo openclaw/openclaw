@@ -129,6 +129,9 @@ export function createReplyToModeFilterForChannel(
   // Named channels allow explicit tags even when their plugin is not loaded.
   const allowExplicitReplyTagsWhenOff =
     adapter?.allowExplicitReplyTagsWhenOff ?? adapter?.allowTagsWhenOff ?? Boolean(normalized);
+  const supportsReasoningPayloads = normalized
+    ? getChannelPlugin(normalized)?.outbound?.supportsReasoningPayloads === true
+    : false;
   let hasThreaded = false;
   const apply = (payload: ReplyPayload, preview = false): ReplyPayload => {
     const isStatusNotice = isReplyPayloadStatusNotice(payload);
@@ -150,8 +153,12 @@ export function createReplyToModeFilterForChannel(
     if (mode === "all") {
       return payload;
     }
-    // Status notices keep their target without consuming the first-reply slot.
-    if (isSingleUseReplyToMode(mode) && !isStatusNotice) {
+    // Status notices and opted-in quiet reasoning leave the ordinary answer its first-reply slot.
+    if (
+      isSingleUseReplyToMode(mode) &&
+      !isStatusNotice &&
+      !(supportsReasoningPayloads && payload.isReasoning === true)
+    ) {
       if (hasThreaded) {
         return setReplyPayloadMetadata(
           copyReplyPayloadMetadata(payload, {

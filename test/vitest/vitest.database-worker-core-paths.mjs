@@ -1,6 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/memory-path-migration.conformance.test.ts",
+  "src/plugins/registry-runtime.reasoning-visibility.test.ts",
   "src/auto-reply/reply/get-reply.fallback-transcript.test.ts",
   "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",

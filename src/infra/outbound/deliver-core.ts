@@ -1,5 +1,6 @@
 // Executes normalized outbound payloads against the selected channel transport.
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { isReplyReasoningVisible } from "../../auto-reply/reply/reasoning-visibility-state.js";
 import { payloadRequiresDurablePayloadTransport } from "../../channels/message/capabilities.js";
 import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import { renderPresentationForDelivery } from "../../channels/plugins/outbound/presentation-delivery.js";
@@ -13,7 +14,11 @@ import {
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { createChannelHandler } from "./deliver-channel.js";
-import type { ChannelHandler, DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
+import type {
+  ChannelHandler,
+  DeliverOutboundPayloadsCoreParams,
+  InternalDeliverOutboundPayloadsParams,
+} from "./deliver-contracts.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import {
   buildPayloadSummary,
@@ -55,7 +60,8 @@ function normalizePlatformIds(values: Array<string | undefined>): string[] {
 }
 
 export async function deliverOutboundPayloadsCore(
-  params: DeliverOutboundPayloadsCoreParams,
+  params: DeliverOutboundPayloadsCoreParams &
+    Pick<InternalDeliverOutboundPayloadsParams, "reasoningPayloadIndexes">,
 ): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to } = params;
   const preparedBatch = params.preparedBatch;
@@ -338,6 +344,7 @@ export async function deliverOutboundPayloadsCore(
     reportedResults.clear();
     payloadEvidence = { placement: createDeliveryPlacementEvidenceRecorder() };
     const payloadIndex = preparedEntry.sourceIndex;
+    const guardedReasoning = params.reasoningPayloadIndexes?.has(payloadIndex) === true;
     activeSourceIndex = payloadIndex;
     payloadSendStarted = false;
     const payload = preparedEntry.payload;
@@ -442,12 +449,22 @@ export async function deliverOutboundPayloadsCore(
       );
       payloadSummary = effectivePayloadSummary;
       const deliveryHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
+      if (
+        guardedReasoning &&
+        (deliveryHandler.supportsReasoningPayloads !== true ||
+          !deliveryHandler.sendPayload ||
+          !isReplyReasoningVisible(effectivePayload))
+      ) {
+        recordSuppressedPayload("adapter_returned_no_send");
+        continue;
+      }
       effectiveDeliveryKind = deliveryKindForPayload(effectivePayload, payloadSummary);
       startDeliveryDiagnostics(effectiveDeliveryKind);
 
       params.onPayload?.(payloadSummary);
       const replyToResolution = resolveCurrentReplyTo(effectivePayload);
       const sendOverrides: OutboundMessageSendOverrides = {
+        ...(guardedReasoning ? { guardedReasoning: true as const } : {}),
         replyToId: replyToResolution.replyToId,
         replyToIdSource: replyToResolution.source,
         ...(preparedTarget.threadId != null ? { threadId: preparedTarget.threadId } : {}),
@@ -463,6 +480,8 @@ export async function deliverOutboundPayloadsCore(
         ((deliveryHandler.supportsMediaPayload && payloadSummary.mediaUrls.length > 1) ||
           payloadRequiresDurablePayloadTransport(effectivePayload, {
             sendTextOnlyErrorPayloads: deliveryHandler.sendTextOnlyErrorPayloads,
+            supportsReasoningPayloads:
+              guardedReasoning && deliveryHandler.supportsReasoningPayloads,
           }))
       ) {
         const delivery = await deliveryHandler.sendPayload(

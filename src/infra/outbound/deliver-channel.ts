@@ -323,6 +323,7 @@ function createPluginHandler(
   };
   const resolveCtx = (overrides?: OutboundMessageSendOverrides) => ({
     ...baseCtx,
+    ...(overrides?.guardedReasoning ? { guardedReasoning: true as const } : {}),
     replyToId: overrides && "replyToId" in overrides ? overrides.replyToId : baseCtx.replyToId,
     replyToIdSource:
       overrides && "replyToIdSource" in overrides
@@ -398,6 +399,7 @@ function createPluginHandler(
         }
       : undefined,
     sendTextOnlyErrorPayloads: outbound?.sendTextOnlyErrorPayloads === true,
+    supportsReasoningPayloads: outbound?.supportsReasoningPayloads === true,
     presentationCapabilities: outbound?.resolvePresentationCapabilities
       ? outbound.resolvePresentationCapabilities({
           cfg: params.cfg,

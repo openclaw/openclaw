@@ -8,6 +8,8 @@ import type { ReplyToOverride } from "./reply-policy.js";
 
 /** Per-send overrides carried from outbound planning into channel delivery. */
 export type OutboundMessageSendOverrides = ReplyToOverride & {
+  /** @internal Preserve the original host-bound reasoning lane across modifier projections. */
+  guardedReasoning?: true;
   threadId?: string | number | null;
   audioAsVoice?: boolean;
   formatting?: OutboundDeliveryFormattingOptions;

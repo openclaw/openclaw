@@ -4,14 +4,15 @@ import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReasoningLevel } from "../thinking.js";
-import type { ReplyPayload } from "../types.js";
+import { registerReplyReasoningVisibility } from "./reasoning-visibility-state.js";
 import type { ReplyReasoningVisibility } from "./reasoning-visibility.types.js";
 import { isDispatchFinalReplySessionWriterAuthorized } from "./session-writer-delivery-authority.js";
 
-// Metadata carries an opaque owner, not a caller-supplied visibility callback.
-const visibilityByOwner = new WeakMap<object, { isVisible: () => boolean; storePath?: string }>();
+export {
+  bindReplyReasoningVisibility,
+  isReplyReasoningVisible,
+} from "./reasoning-visibility-state.js";
 
 export function canUseReasoningState(
   command: { isAuthorizedSender: boolean; senderIsOwner: boolean },
@@ -22,32 +23,6 @@ export function canUseReasoningState(
     command.senderIsOwner ||
     (Array.isArray(gatewayClientScopes) && gatewayClientScopes.includes("operator.admin"))
   );
-}
-
-/** Bind durable reasoning to its producing turn across copies and queued delivery. */
-export function bindReplyReasoningVisibility(
-  payload: ReplyPayload,
-  owner: ReplyReasoningVisibility | undefined,
-): void {
-  if (payload.isReasoning === true) {
-    setReplyPayloadMetadata(payload, { reasoningVisibilityOwner: owner });
-  }
-}
-
-export function isReplyReasoningVisible(payload: ReplyPayload): boolean {
-  const owner = getReplyPayloadMetadata(payload)?.reasoningVisibilityOwner;
-  if (payload.isReasoning !== true || owner === undefined) {
-    return false;
-  }
-  try {
-    const policy = visibilityByOwner.get(owner);
-    return (
-      policy?.isVisible() === true &&
-      isDispatchFinalReplySessionWriterAuthorized(payload, policy.storePath)
-    );
-  } catch {
-    return false;
-  }
 }
 
 /** The resolved turn can lose visibility, but a later turn cannot authorize its payloads. */
@@ -67,6 +42,7 @@ export async function createReplyReasoningVisibility(params: {
   let closed = false;
   let unsubscribe: (() => void) | undefined;
   let release = () => {};
+  let releaseVisibility = () => {};
   const initialSessionId = params.sessionEntry?.sessionId;
   const initialRevision = params.sessionEntry?.lifecycleRevision;
   const initialLevel = params.sessionEntry?.reasoningLevel;
@@ -85,7 +61,7 @@ export async function createReplyReasoningVisibility(params: {
         return;
       }
       closed = true;
-      visibilityByOwner.delete(owner);
+      releaseVisibility();
       unsubscribe?.();
       unsubscribe = undefined;
       release();
@@ -162,12 +138,15 @@ export async function createReplyReasoningVisibility(params: {
       owner.close();
       return owner;
     }
-    visibilityByOwner.set(owner, {
-      storePath: params.storePath,
-      isVisible: () => {
-        const aborted = queued ? isQueuedAborted?.() : params.abortSignal?.aborted;
-        return !revoked && !closed && !aborted && isCurrent();
-      },
+    releaseVisibility = registerReplyReasoningVisibility(owner, (payload) => {
+      const aborted = queued ? isQueuedAborted?.() : params.abortSignal?.aborted;
+      return (
+        !revoked &&
+        !closed &&
+        !aborted &&
+        isCurrent() &&
+        isDispatchFinalReplySessionWriterAuthorized(payload, params.storePath)
+      );
     });
   } catch {
     // A display-policy preparation failure must suppress reasoning, never the ordinary answer.

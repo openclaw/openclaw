@@ -9,11 +9,18 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { createDefaults, createTurn as createBaseTurn } from "./followup-delivery.test-helpers.js";
+import {
+  bindReplyReasoningVisibility,
+  isReplyReasoningVisible,
+  registerReplyReasoningVisibility,
+} from "./reasoning-visibility-state.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const { a2aChannelPlugin } = await loadBundledPluginFacade<{ a2aChannelPlugin: ChannelPlugin }>({
   pluginId: "a2a",
@@ -149,6 +156,67 @@ beforeEach(() => {
 afterEach(() => setActivePluginRegistry(createTestRegistry()));
 
 describe("follow-up delivery channel boundary", () => {
+  it("routes retained reasoning and the ordinary answer through the opted-in origin", async () => {
+    register({
+      ...createChannelPlugin("matrix"),
+      outbound: {
+        deliveryMode: "direct",
+        supportsReasoningPayloads: true,
+        sendText: vi.fn(),
+        sendPayload: vi.fn(),
+      },
+    });
+    const owner = { retainForQueue: () => {}, releaseDispatch: () => {}, close: () => {} };
+    const release = registerReplyReasoningVisibility(owner, () => true);
+    const reasoning = { text: "retained thought", isReasoning: true };
+    bindReplyReasoningVisibility(reasoning, owner);
+    const turn = createTurn("matrix");
+    turn.queued.originatingTo = "!room:example.org";
+    turn.queued.run.sessionKey = "agent:main:matrix:room:test";
+    channelState.outcomes = ["delivered", "delivered", "delivered"];
+    const fallback = vi.fn(async () => {});
+    try {
+      const { replyPayloads } = await buildReplyPayloads({
+        config: {},
+        payloads: [reasoning, { text: "ordinary answer" }, { text: "later answer" }],
+        blockStreamingEnabled: false,
+        blockReplyPipeline: null,
+        replyToMode: "first",
+        replyToChannel: "matrix",
+        currentMessageId: "$inbound",
+        applyReplyToMode: createReplyToModeFilterForChannel("first", "matrix"),
+      });
+      const retained = resolveFollowupDeliveryPayloads({
+        cfg: {},
+        payloads: replyPayloads,
+        originatingChannel: "matrix",
+        originatingReplyToMode: "first",
+        reasoningPayloadsEnabled: true,
+      });
+      await sendToOrigin(turn, retained, {
+        defaults: createDefaults(fallback),
+      });
+      const calls = channelState.deliver.mock.calls;
+      expect(calls.map(([send]) => send.payloads[0]?.text)).toEqual([
+        "retained thought",
+        "ordinary answer",
+        "later answer",
+      ]);
+      expect(calls.map(([send]) => send.payloads[0]?.replyToId)).toEqual([
+        "$inbound",
+        "$inbound",
+        undefined,
+      ]);
+      expect(calls[0]?.[0]).toMatchObject({ skipQueue: true, queuePolicy: "best_effort" });
+      expect(calls[0]?.[0].mirror).toBeUndefined();
+      expect(isReplyReasoningVisible(calls[0]?.[0].payloads[0])).toBe(true);
+      expect(calls[1]?.[0].skipQueue).toBeUndefined();
+      expect(fallback).not.toHaveBeenCalled();
+    } finally {
+      release();
+    }
+  });
+
   it.each(["suppressed", "delivered", "failed", "held", "ambiguous"] as const)(
     "records only confirmed origin delivery (%s)",
     async (outcome) => {

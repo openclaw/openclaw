@@ -288,6 +288,7 @@ function matchesMatrixToolContextRoom(params: {
 
 const matrixChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  supportsReasoningPayloads: true,
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,

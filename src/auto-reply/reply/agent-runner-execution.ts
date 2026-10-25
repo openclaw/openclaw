@@ -77,7 +77,7 @@ import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
 import type { FollowupRun } from "./queue.js";
-import { bindReplyReasoningVisibility, isReplyReasoningVisible } from "./reasoning-visibility.js";
+import { bindReplyReasoningVisibility } from "./reasoning-visibility.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
@@ -695,7 +695,6 @@ async function executeAgentTurnOutcome(
 }
 
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
-  params.opts?.onReasoningVisibility?.(isReplyReasoningVisible);
   params.opts?.onRunVerbosityResolved?.({
     verboseLevelOverride: params.followupRun.run.verboseLevelOverride,
     resolvedVerboseLevel: params.resolvedVerboseLevel,

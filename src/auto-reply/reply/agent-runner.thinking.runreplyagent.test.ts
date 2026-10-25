@@ -11,7 +11,7 @@ import {
   setupAgentRunnerTestHooks,
 } from "./agent-runner.misc.runreplyagent.test-support.js";
 import { createBaseRun } from "./agent-runner.runreplyagent.test-support.js";
-import { createReplyReasoningVisibility } from "./reasoning-visibility.js";
+import { createReplyReasoningVisibility, isReplyReasoningVisible } from "./reasoning-visibility.js";
 
 await vi.hoisted(async () => {
   await import("./agent-runner.misc.runreplyagent.test-support.js");
@@ -65,15 +65,11 @@ it.each([false, true])(
       authorized: true,
       resolvedLevel: "on",
     });
-    let isVisible: (payload: ReplyPayload) => boolean = () => false;
-    const onReasoningVisibility = vi.fn((predicate: typeof isVisible) => {
-      isVisible = predicate;
-    });
+    const isVisible = isReplyReasoningVisible;
     const onBlockReply = vi.fn((payload: ReplyPayload) => {
       expect(isVisible(payload)).toBe(true);
     });
     runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
-      expect(onReasoningVisibility).toHaveBeenCalledOnce();
       await params.onBlockReply?.({ text: "Streamed reasoning", isReasoning: true });
       return {
         payloads: [{ text: "Reasoning", isReasoning: true }, { text: "Done" }],
@@ -90,7 +86,7 @@ it.each([false, true])(
           sessionStore: { [sessionKey]: sessionEntry },
           blockStreamingEnabled,
           blockReplyChunking: { minChars: 1, maxChars: 200, breakPreference: "paragraph" },
-          opts: { onReasoningVisibility, onBlockReply, reasoningPayloadsEnabled: true },
+          opts: { onBlockReply, reasoningPayloadsEnabled: true },
         },
       }).run();
       const payloads = Array.isArray(result) ? result : [result];

@@ -13,7 +13,6 @@ import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
@@ -330,7 +329,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       });
       const { draftStream } = draftController;
       draftControllerRef = draftController;
-      let isReasoningVisible: (payload: ReplyPayload) => boolean = () => false;
       const replyDispatcher = createMatrixReplyDispatcher({
         cfg,
         prefixOptions,
@@ -348,7 +346,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         accountId: _route.accountId,
         mediaLocalRoots,
         logVerboseMessage,
-        shouldDeliverReasoning: (payload) => isReasoningVisible(payload),
+        shouldDeliverReasoning: (payload) => {
+          try {
+            return core.channel.reply.isReasoningVisible(payload);
+          } catch {
+            // A retired plugin generation cannot authorize a reasoning send.
+            return false;
+          }
+        },
       });
       const { deliverReply, onReplyError, turnDispatcherOptions } = replyDispatcher;
       const pinnedMainDmOwner = isDirectMessage
@@ -448,9 +453,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             replyOptions: {
               skillFilter: roomConfig?.skills,
               reasoningPayloadsEnabled: true,
-              onReasoningVisibility: (isVisible) => {
-                isReasoningVisible = isVisible;
-              },
+              reasoningVisibilityEnabled: true,
               // Preserve explicit block streaming with draft previews: drafts update the live
               // block, while block deliveries finalize completed blocks as separate events.
               disableBlockStreaming: !blockStreamingEnabled,

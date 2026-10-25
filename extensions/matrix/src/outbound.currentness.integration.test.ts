@@ -135,6 +135,7 @@ type MatrixFixture = {
   timeline: string[];
   pending: typeof settle;
   pause: () => ReturnType<typeof createPause>;
+  setReasoningVisible: (visible: boolean) => void;
 };
 
 async function withMatrixFixture(
@@ -218,6 +219,9 @@ async function withMatrixFixture(
         uploads,
         timeline,
         pending,
+        setReasoningVisible: (visible) => {
+          vi.mocked(runtime.channel.reply.isReasoningVisible).mockReturnValue(visible);
+        },
         pause: () => {
           const blocked = createPause();
           pauses.push(blocked);
@@ -238,6 +242,90 @@ async function withMatrixFixture(
 describe("registered Matrix sender currentness", () => {
   // The message adapter delegates to outbound; only receipt projection needs both surfaces.
   const registration = "message";
+  it("sends typed reasoning as quiet real Matrix events rather than ordinary text", async () => {
+    await withMatrixFixture(
+      registration,
+      async ({ senders, context, handlers, timeline, pending, setReasoningVisible }) => {
+        setReasoningVisible(true);
+        const contents: unknown[] = [];
+        handlers.request = async ({ request, response, path }) => {
+          if (request.method !== "PUT" || !path.includes("/send/m.room.message/")) {
+            return false;
+          }
+          timeline.push(path);
+          contents.push(await readRequestJson(request));
+          respondJson(response, { event_id: `$notice-${contents.length}` });
+          return true;
+        };
+        const options = {
+          ...context,
+          guardedReasoning: true as const,
+          text: "private thought",
+          payload: { text: "private thought", isReasoning: true },
+        };
+        const result = await pending(senders.sendPayload(options));
+        expectAccepted(result, "$notice-1");
+        expect(contents).toEqual([
+          expect.objectContaining({
+            body: "private thought",
+            msgtype: "m.notice",
+            "m.mentions": {},
+          }),
+        ]);
+      },
+    );
+  });
+
+  it("rechecks reasoning after real SDK room preparation without suppressing the answer", async () => {
+    await withMatrixFixture(
+      registration,
+      async ({ senders, context, handlers, timeline, pending, pause, setReasoningVisible }) => {
+        setReasoningVisible(true);
+        const preparation = pause();
+        let held: http.ServerResponse | undefined;
+        handlers.request = async ({ response, path }) => {
+          if (!path.includes("/state/m.room.encryption")) {
+            return false;
+          }
+          held = response;
+          await preparation.wait();
+          respondJson(response, { errcode: "M_NOT_FOUND", error: "unencrypted room" }, 404);
+          return true;
+        };
+        const assertCurrent = vi.fn();
+        const options = {
+          ...context,
+          guardedReasoning: true as const,
+          text: "must remain private",
+          payload: { text: "must remain private", isReasoning: true },
+          assertDirectAdapterHandoff: assertCurrent,
+        };
+        const result = pending(senders.sendPayload(options));
+        await waitForBoundary(preparation.entered, result, "real SDK encryption preparation");
+        if (!held) {
+          throw new Error("SDK preparation response was not captured");
+        }
+        expect(held.writableEnded).toBe(false);
+        expect(held.destroyed).toBe(false);
+        expect(held.socket?.destroyed).toBe(false);
+        expect(timeline).toEqual([]);
+        setReasoningVisible(false);
+        preparation.release();
+        const suppressed = await result;
+        expect(suppressed.error).toBeUndefined();
+        expect(suppressed.value).toMatchObject({ outcome: "not_sent" });
+        expect(suppressed.value).not.toHaveProperty("messageId");
+        expect(assertCurrent).toHaveBeenCalled();
+        expect(timeline).toEqual([]);
+        expectAccepted(
+          await pending(senders.sendText({ ...context, text: "ordinary answer" })),
+          "$accepted",
+        );
+        expect(timeline).toHaveLength(1);
+      },
+    );
+  });
+
   it(`${registration} stops canceled media preparation before uploading`, async () => {
     await withMatrixFixture(
       registration,
