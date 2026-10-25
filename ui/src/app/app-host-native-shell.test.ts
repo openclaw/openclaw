@@ -328,13 +328,14 @@ it.each(
   expect(navigate).toHaveBeenCalledOnce();
 });
 
-it.each(["modal", "onboarding", "read-only", "unavailable", "offline"])(
+it.each(["modal", "onboarding", "read-only", "sessions-read-only", "unavailable", "offline"])(
   "leaves the New Session shortcut unhandled during %s",
   (guard) => {
     platformIs("MacIntel");
     const shell = createShellOwner();
     const context = nativeSessionContext("main", {
       ...(guard === "read-only" ? { scopes: ["operator.read"] } : {}),
+      ...(guard === "sessions-read-only" ? { scopes: ["operator.sessions.read"] } : {}),
       ...(guard === "unavailable" ? { methods: [] } : {}),
     });
     shell.runtime = { context } as ApplicationRuntime;
@@ -353,6 +354,10 @@ it.each(["modal", "onboarding", "read-only", "unavailable", "offline"])(
     document.dispatchEvent(key);
     expect(key.defaultPrevented).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
+    if (guard !== "modal") {
+      shell.handleNativeNewSession();
+      expect(navigate).not.toHaveBeenCalled();
+    }
   },
 );
 
@@ -378,69 +383,33 @@ it("retains a native new-session request until a context exists", () => {
   expect(navigate).toHaveBeenCalledExactlyOnceWith("new-session", { search: "?agent=main" });
 });
 
-it("does not start a native session without exact sessions.create access", () => {
-  for (const options of [
-    { methods: ["sessions.list"], scopes: ["operator.write"] },
-    { methods: ["sessions.create"], scopes: ["operator.read"] },
-    { methods: ["sessions.create"], scopes: ["operator.sessions.read"] },
-  ]) {
-    const shell = navigationShell(nativeSessionContext("main", options));
-
-    shell.handleNativeNewSession();
-
-    expect(navigate).not.toHaveBeenCalled();
-  }
-});
-
 it.each([
   ["/settings/appearance", "appearance", "", undefined],
   ["/settings/appearance", "appearance", "/gateway", undefined],
   ["/settings/channels", "channels", "", undefined],
   ["/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef", "chat", "/gateway", "?view=chat"],
+  ["/custodian", "custodian", "", "onboarding=1"],
+  ["/custodian", "custodian", "", "?onboarding=1#x"],
+  ["https://example.com", null, "", undefined],
+  ["//example.com", null, "", undefined],
+  ["/https://example.com", null, "", undefined],
+  ["/unknown", null, "", undefined],
 ] as const)(
-  "preserves native destination %s and acknowledges it",
+  "routes and acknowledges only valid native destinations: %s (%s, %s, %s)",
   (path, routeId, basePath, search) => {
     navigationShell({ basePath });
     const event = nativeNavigate({ path, search });
-    expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledExactlyOnceWith(routeId, {
-      pathname: `${basePath}${path}`,
-      ...(search ? { search } : {}),
-    });
+    expect(event.defaultPrevented).toBe(routeId !== null);
+    if (routeId === null) {
+      expect(navigate).not.toHaveBeenCalled();
+    } else {
+      expect(navigate).toHaveBeenCalledExactlyOnceWith(routeId, {
+        pathname: `${basePath}${path}`,
+        ...(search === "?view=chat" ? { search } : {}),
+      });
+    }
   },
 );
-
-it.each(["onboarding=1", "?onboarding=1#x"])(
-  "ignores malformed native search %s and keeps the plain route",
-  (search) => {
-    navigationShell({ basePath: "" });
-    const event = nativeNavigate({ path: "/custodian", search });
-    expect(event.defaultPrevented).toBe(true);
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("custodian", { pathname: "/custodian" });
-  },
-);
-
-it.each(["https://example.com", "//example.com", "/https://example.com", "/unknown"])(
-  "leaves invalid native Dashboard path %s unhandled",
-  (path) => {
-    navigationShell();
-    const event = nativeNavigate({ path });
-    expect(event.defaultPrevented).toBe(false);
-    expect(navigate).not.toHaveBeenCalled();
-  },
-);
-
-it("does not start a native session during onboarding", () => {
-  const shell = navigationShell({
-    navigate,
-    agentSelection: { state: { selectedId: "main" } },
-  } as unknown as ApplicationContext);
-  shell.onboarding = true;
-
-  shell.handleNativeNewSession();
-
-  expect(navigate).not.toHaveBeenCalled();
-});
 
 it("deduplicates native nav state reports", () => {
   const postMessage = vi.fn();
