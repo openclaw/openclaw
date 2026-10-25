@@ -119,13 +119,10 @@ async function withoutSql<T>(
   observe: () => { queries: string[]; restore: () => void } = observeHostDataSql,
 ) {
   const sql = observe();
-  try {
-    const result = await run();
-    expect(sql.queries).toEqual([]);
-    return result;
-  } finally {
-    sql.restore();
-  }
+  using _ = { [Symbol.dispose]: sql.restore };
+  const result = await run();
+  expect(sql.queries).toEqual([]);
+  return result;
 }
 
 function inWriterTransaction(connection: EngineConnection, check: () => void) {
@@ -140,27 +137,18 @@ function inWriterTransaction(connection: EngineConnection, check: () => void) {
   }
 }
 
-it("retains a worker grant through a configured directory alias", () =>
-  withSharingState(async ({ state, cfg, seed }) => {
-    const directory = state.statePath("physical");
-    const alias = state.statePath("selected");
-    mkdirSync(directory);
-    symlinkSync(directory, alias, "junction");
-    cfg.session = { store: `${alias}/sessions.json` };
-    const { capture } = seed("agent:main:aliased-worker-grant", "aliased-worker-grant");
-    const grant = await (await capture("sessions.dispatch")).prepareWorkerGrant!();
-    try {
-      expect(() => grant.assertCurrent()).not.toThrow();
-    } finally {
-      await grant.release();
-    }
-  }));
-it.each(["resident", "fixed"] as const)(
+it.each(["resident", "fixed", "alias"] as const)(
   "revokes %s worker grants after committed membership changes without main-thread reads",
   (mode) =>
     withSharingState(async ({ state, cfg, seed, materialize }) => {
       if (mode === "fixed") {
         cfg.session = { store: state.statePath("legacy", "sessions.json") };
+      } else if (mode === "alias") {
+        const directory = state.statePath("physical");
+        const alias = state.statePath("selected");
+        mkdirSync(directory);
+        symlinkSync(directory, alias, "junction");
+        cfg.session = { store: `${alias}/sessions.json` };
       }
       const sessionKey = "agent:main:worker-grant";
       const sessionId = "worker-grant-session";

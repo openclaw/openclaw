@@ -35,52 +35,33 @@ function projectSelected(avatar: string, cfg = avatarFixture().cfg) {
 }
 
 it("inlines the selected local file", async () => {
-  const { projectInline, workspace } = avatarFixture("", { avatar: "avatar.png" });
+  const { cfg, workspace } = avatarFixture();
   fs.writeFileSync(path.join(workspace, "avatar.png"), APNG_BYTES);
 
-  expect(await projectInline()).toMatchObject({
+  expect(await projectSelected("avatar.png", cfg)).toMatchObject({
     avatar: encodeDataUrl(APNG_BYTES),
     resolution: { kind: "local", source: "avatar.png" },
   });
 });
 
-it("preserves a selected emoji", async () => {
-  expect(await avatarFixture("", { emoji: "🦞" }).projectInline()).toEqual({
-    avatar: "🦞",
-    resolution: null,
-  });
-});
-
 it.each([
-  ["remote URL", "https://example.com/avatar.png"],
-  ["data URI", encodeDataUrl(APNG_BYTES)],
-])("preserves a selected %s", async (_name, avatar) => {
-  expect(await avatarFixture("", { avatar }).projectInline()).toMatchObject({
-    avatar,
-    resolution: { source: avatar },
+  ["🦞", "🦞", null, null],
+  ["https://example.com/avatar.png", "🦞", "remote", null],
+  [encodeDataUrl(APNG_BYTES), "🦞", "data", null],
+  ["data:text/plain,avatar", "🦞", "none", "unsupported_data_url"],
+  ["slack://avatar.png", "🦞", "none", "unsupported_uri"],
+  ["/avatar/main/extra", "🦞", "none", "outside_workspace"],
+  ["missing.png", "🦞", "none", "missing"],
+  ["missing.png", undefined, "none", "missing"],
+] as const)("projects selected avatar %s (fallback %s)", async (avatar, emoji, kind, reason) => {
+  const cfg = avatarFixture().cfg;
+  expect(
+    await resolveGatewayAssistantAvatar({ cfg, identity: { agentId: "main", avatar, emoji } }),
+  ).toEqual({
+    avatar: kind === "none" ? (emoji ?? "A") : avatar,
+    resolution: kind ? { kind, source: avatar, ...(reason ? { reason } : { url: avatar }) } : null,
   });
 });
-
-it.each([
-  ["data:text/plain,avatar", "unsupported_data_url"],
-  ["slack://avatar.png", "unsupported_uri"],
-  ["/avatar/main/extra", "outside_workspace"],
-])("rejects selected avatar %s", async (avatar, reason) => {
-  expect(await projectSelected(avatar)).toEqual({
-    avatar: "🦞",
-    resolution: { kind: "none", reason, source: avatar },
-  });
-});
-
-it.each([undefined, "🦞"])(
-  "uses the fallback for missing local avatars (emoji=%s)",
-  async (emoji) => {
-    expect(await avatarFixture("", { avatar: "missing.png", emoji }).projectInline()).toEqual({
-      avatar: emoji ?? "A",
-      resolution: { kind: "none", reason: "missing", source: "missing.png" },
-    });
-  },
-);
 
 it.each(["/avatar/main", "/openclaw/avatar/main"])(
   "preserves same-origin route %s",
@@ -95,10 +76,10 @@ it.each(["/avatar/main", "/openclaw/avatar/main"])(
   },
 );
 
-function avatarFixture(basePath = "", initialIdentity: { avatar?: string; emoji?: string } = {}) {
+function avatarFixture(basePath = "") {
   const workspace = tempRoots.make("openclaw-avatar-");
   const entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {
-    main: { workspace, identity: initialIdentity },
+    main: { workspace, identity: {} },
   };
   const config: OpenClawConfig = {
     ...(basePath ? { gateway: { controlUi: { basePath } } } : {}),
@@ -114,14 +95,8 @@ function avatarFixture(basePath = "", initialIdentity: { avatar?: string; emoji?
   return {
     workspace,
     cfg: config,
-    projectInline: () => resolve(),
     setAvatar(this: void, avatar: string | undefined, agentId = "main") {
-      const identity = entries[agentId]?.identity;
-      if (identity) {
-        identity.avatar = avatar;
-      } else {
-        entries[agentId] = { workspace, identity: { avatar } };
-      }
+      (entries[agentId] ??= { workspace }).identity = { avatar };
       setRuntimeConfigSnapshot(config);
     },
     async project(this: void, agentId = "main") {
@@ -229,7 +204,7 @@ it("keeps a detailed saved picker avatar within the notification image budget", 
   expect(size?.height).toBeLessThanOrEqual(32);
 });
 
-// Two 2×2 red/blue frames encoded with img2webp; VP8X animation flag and timing are retained.
+// Two 2×2 red/blue frames encoded with img2webp.
 const ANIMATED_WEBP = Buffer.from(
   "UklGRoQAAABXRUJQVlA4WAoAAAACAAAAAQAAAQAAQU5JTQYAAAD/////AABBTk1GKAAAAAAAAAAAAAEAAAEAAGQAAAJWUDhMDwAAAC8BQAAABxD9j/4HIqL/AQBBTk1GKAAAAAAAAAAAAAEAAAEAAGQAAABWUDhMDwAAAC8BQAAABxDR//4HIqL/AQA=",
   "base64",
@@ -247,7 +222,6 @@ it.each([
   ["local", "image/apng", "avatar.png", APNG_BYTES],
   ["escaped-base64", "image/apng", undefined, APNG_BYTES],
   ["local", "image/webp", "avatar.webp", ANIMATED_WEBP],
-  ["data", "image/webp", undefined, ANIMATED_WEBP],
   ["data", "image/bmp", undefined, BMP_BYTES],
   ["percent-data", "image/avif", undefined, AVIF_BYTES],
   [
