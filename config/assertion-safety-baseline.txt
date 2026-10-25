@@ -2164,7 +2164,6 @@ src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	1
 src/plugins/provider-model-compat.ts	3
 src/plugins/provider-openai-chatgpt-oauth.ts	1
-src/plugins/provider-policy-surface.ts	1
 src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
 src/plugins/registry-registrars-host.ts	1
@@ -2368,7 +2367,6 @@ ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/dock-panel-layout.ts	3
 ui/src/components/lobster-dex.ts	2
 ui/src/components/markdown-assistant-transcript.ts	1
-ui/src/components/markdown-code-blocks.ts	1
 ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/session-data.ts	1

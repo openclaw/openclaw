@@ -112,6 +112,52 @@ export function CardPriority(input: { card: WorkboardCard }) {
     </>
   );
 }
+type LabelResizeOwner = {
+  observer: ResizeObserver;
+  labels: Map<Element, (entry: ResizeObserverEntry) => void>;
+};
+const labelResizeOwners = new WeakMap<Document, LabelResizeOwner>();
+
+function observeLabelWidth(
+  element: HTMLElement,
+  resized: (entry: ResizeObserverEntry) => void,
+): () => void {
+  if (typeof ResizeObserver !== "function") {
+    return () => {};
+  }
+  const doc = element.ownerDocument;
+  let owner = labelResizeOwners.get(doc);
+  if (!owner) {
+    const labels = new Map<Element, (entry: ResizeObserverEntry) => void>();
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        try {
+          labels.get(entry.target)?.(entry);
+        } catch (error) {
+          reportError(error);
+        }
+      }
+    });
+    owner = { observer, labels };
+    labelResizeOwners.set(doc, owner);
+  }
+  owner.labels.set(element, resized);
+  owner.observer.observe(element);
+  let active = true;
+  return () => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    owner.labels.delete(element);
+    owner.observer.unobserve(element);
+    if (!owner.labels.size) {
+      owner.observer.disconnect();
+      labelResizeOwners.delete(doc);
+    }
+  };
+}
+
 const pendingLabelMeasurements = new Map<HTMLElement, () => (() => () => void) | undefined>();
 let labelMeasurementFrame: number | undefined;
 function flushLabelMeasurements() {
@@ -196,16 +242,12 @@ function labelOverflowRef(
       labelMeasurementFrame ??= requestAnimationFrame(flushLabelMeasurements);
     };
     refresh = update;
-    const observer =
-      typeof ResizeObserver === "function"
-        ? new ResizeObserver((entries) => {
-            if (entries.some((entry) => entry.contentRect.width !== measuredWidth)) {
-              update();
-            }
-          })
-        : null;
+    const stopResize = observeLabelWidth(element, (entry) => {
+      if (entry.contentRect.width !== measuredWidth) {
+        update();
+      }
+    });
     update();
-    observer?.observe(element);
     dispose = () => {
       pendingLabelMeasurements.delete(element);
       if (pendingLabelMeasurements.size === 0 && labelMeasurementFrame !== undefined) {
@@ -213,7 +255,7 @@ function labelOverflowRef(
         labelMeasurementFrame = undefined;
       }
       refresh = undefined;
-      observer?.disconnect();
+      stopResize();
     };
   };
 }

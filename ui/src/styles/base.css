@@ -35,6 +35,9 @@
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
+  --chat-send-foreground: var(--primary-foreground);
+  --chat-composer-surface: var(--popover);
+  --chat-user-surface: var(--accent-subtle);
   --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
   --session-hovercard-attribution-surface: color-mix(in srgb, var(--text) 6%, transparent);
 
@@ -57,11 +60,11 @@
   --muted-foreground: #8b8b94;
   --file-icon-glyph: var(--muted);
 
-  /* Navigation controls use their own resting ink and subdued primary action. */
+  /* Navigation controls use their own resting ink and the selected accent pair. */
   --sidebar-rail-control-color: color-mix(in srgb, var(--text-strong) 46%, transparent);
-  --sidebar-rail-action-bg: oklch(from var(--accent) calc(l * 0.94) calc(c * 0.72) h);
-  --sidebar-rail-action-hover-bg: oklch(from var(--accent-hover) calc(l * 0.94) calc(c * 0.72) h);
-  --sidebar-rail-action-active-bg: oklch(from var(--accent) calc(l * 0.9) calc(c * 0.72) h);
+  --sidebar-rail-action-bg: var(--accent);
+  --sidebar-rail-action-hover-bg: var(--accent-hover);
+  --sidebar-rail-action-active-bg: color-mix(in srgb, var(--accent) 90%, var(--text));
 
   /* GitHub references share an opaque neutral surface; only their ink carries status. */
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
@@ -551,6 +554,7 @@
   --bg-hover: #efebe4;
   --bg-muted: #efebe4;
   --bg-content: #f4f1ec;
+  --chat-user-surface: color-mix(in srgb, var(--accent) 15%, var(--bg));
 
   --surface-hover-amount: 4%;
   --surface-selected-amount: 6%;

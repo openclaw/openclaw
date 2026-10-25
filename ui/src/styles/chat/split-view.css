@@ -773,6 +773,7 @@
   min-height: 28px;
   gap: var(--space-1);
   padding: 0 8px;
+  padding-inline-end: 6px;
   border-color: transparent;
   border-radius: var(--radius-full);
   background: var(--session-header-sharing-surface);

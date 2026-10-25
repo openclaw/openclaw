@@ -267,7 +267,11 @@ export function createPreparedAccountCatalogAccess(
       let observation = readAccount(identityKey, params.credential);
       if (!observation) {
         if (!params.allowDiscovery) {
-          return { outcomes: [], isCurrent: () => ownerIsCurrent() && !accounts.has(identityKey) };
+          return {
+            outcomes: [],
+            hasPublishedCatalog: false,
+            isCurrent: () => ownerIsCurrent() && !accounts.has(identityKey),
+          };
         }
         observation = createAccount(identityKey, {
           source: "profile",
@@ -299,9 +303,14 @@ export function createPreparedAccountCatalogAccess(
                 ? createAccount(identityKey, { source: "profile", credential: params.credential })
                 : captured;
               published.outcomes = outcomes;
-              if (pending.refresh && captured.serviceTierObservations?.length) {
+              if (pending.refresh) {
                 scheduleExpiry();
-                onChanged?.();
+                if (
+                  captured.serviceTierObservations?.length ||
+                  !isDeepStrictEqual(captured.outcomes, outcomes)
+                ) {
+                  onChanged?.();
+                }
               }
               return published;
             })
@@ -323,6 +332,7 @@ export function createPreparedAccountCatalogAccess(
       const outcomes = published.outcomes;
       return {
         outcomes: outcomes ?? [],
+        hasPublishedCatalog: outcomes !== undefined,
         isCurrent: () => current(published) && published.outcomes === outcomes,
       };
     },

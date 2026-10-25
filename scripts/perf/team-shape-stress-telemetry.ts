@@ -2,6 +2,7 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import path from "node:path";
 import {
   constants,
@@ -149,6 +150,7 @@ export async function startTeamStressTelemetry(options: Options) {
       partial,
       mainThreadCpuMs,
       mainThreadCpuPercent: (mainThreadCpuMs / durationMs) * 100,
+      hostLoadAverage: loadavg(),
       gc: summarizeGc(windowGc, durationMs),
       eventLoop: {
         count: loop.count,

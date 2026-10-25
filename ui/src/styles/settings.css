@@ -1396,6 +1396,11 @@ textarea.settings-input {
   text-transform: uppercase;
 }
 
+/* Inside the drawer there is no Escape key to hint at. */
+.shell--mobile-nav .settings-sidebar__esc {
+  display: none;
+}
+
 .settings-sidebar__agent openclaw-agent-select {
   display: block;
   min-width: 0;

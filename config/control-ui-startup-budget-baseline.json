@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 270371,
-  "reason": "Settings demand loading previously reduced remote readiness by 20.77% and scripting by 49.68%, deferring 1702960 reply bytes. Integrated with main ba9f1eacbd0: same-host startup 270216 to 270371 B gzip (+155 B), five JS and one CSS request; Chat +225 B, New Session +50 B. Ratchet to the measured integrated head.",
+  "startupJsGzipBytes": 271935,
+  "reason": "Same-host uncached 8937cb4 to 92174fc builds measure startup 271947 to 271935 B gzip (-12 B), Chat +1451 B and New Session +29 B (within build variance), with unchanged CSS bytes and JS/CSS request counts. The lazy highlighting worker cuts 5000-line code/diff CPU by 18-70%; avoiding leaf-subtree table scans cuts dense-code CPU median/p95 by 65.9%/64.3%. Record the measured integrated startup head.",
   "updatedAt": "2026-10-25"
 }

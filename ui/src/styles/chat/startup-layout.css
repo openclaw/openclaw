@@ -380,6 +380,18 @@
   min-height: var(--desktop-header-height, calc(var(--rail-header-height) - var(--space-1)));
   padding-inline: 12px 8px;
   gap: 4px;
+
+  .chat-icon-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .chat-details-toggle svg,
+  .chat-pane__workspace-chip svg,
+  .chat-pane__workspace-chip .workspace-icon {
+    width: var(--rail-header-action-glyph-size);
+    height: var(--rail-header-action-glyph-size);
+  }
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-leading,
@@ -395,6 +407,17 @@
   gap: 0;
 }
 
+.chat-pane__header:not(.chat-pane__header--mobile)
+  :is(
+    .chat-icon-btn,
+    .chat-details-toggle,
+    .chat-pane__layout-trigger,
+    .chat-pane__sharing-trigger
+  ),
+.sidebar-region__panels-toggle .chat-pane__panels-toggle {
+  line-height: calc(20px * var(--control-ui-text-scale));
+}
+
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__layout-trigger {
@@ -408,11 +431,6 @@
   width: 32px;
   min-width: 32px;
   padding: 0;
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-icon-btn svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__panels-toggle svg {
@@ -441,12 +459,6 @@
 .chat-pane__header:not(.chat-pane__header--mobile)
   .chat-details-toggle:is(:hover, [aria-expanded="true"]) {
   background: var(--session-header-control-hover-bg, var(--bg-hover));
-}
-
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-details-toggle svg,
-.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__workspace-chip svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile)
@@ -479,6 +491,22 @@
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__session-title {
   padding-inline-end: 0;
+}
+
+/* Align visible lettering with the glyph centerline without moving hit areas. */
+.chat-pane__header:not(.chat-pane__header--mobile)
+  :is(
+    .chat-pane__workspace-chip > .oc-menu-item__label > span,
+    .chat-pane__session-title-text,
+    .chat-pane__parent-session-text,
+    .chat-pane__agent-name,
+    .chat-pane__sharing-trigger-state > span
+  ) {
+  transform: translateY(calc(-1px * var(--control-ui-text-scale)));
+}
+
+.chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__session-title-input {
+  padding-block-end: calc(2px * var(--control-ui-text-scale));
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__crumbs {

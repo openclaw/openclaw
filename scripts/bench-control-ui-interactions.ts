@@ -49,11 +49,17 @@ import {
   readControlUiResourceCounts,
   type ControlUiResourceCounts,
 } from "./lib/control-ui-resource-counts.ts";
+import {
+  createWorkboardResourceFixture,
+  prepareWorkboardResourceSource,
+} from "./lib/control-ui-workboard-resource-fixture.ts";
 
 const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string", default: "dist/control-ui" },
     "compare-bundle-dir": { type: "string" },
+    "workboard-source-root": { type: "string" },
+    "compare-workboard-source-root": { type: "string" },
     output: { type: "string", default: ".artifacts/control-ui-interactions" },
     steps: { type: "string" },
     viewport: { type: "string", default: "both" },
@@ -67,6 +73,9 @@ const { values } = parseArgs({
     "invalidation-tracking": { type: "boolean", default: false },
     "resource-counts": { type: "boolean", default: false },
     "process-wakeups": { type: "boolean", default: false },
+    "renderer-process-metrics": { type: "boolean", default: false },
+    counterbalance: { type: "boolean", default: false },
+    "asset-latency-ms": { type: "string", default: "0" },
     "projection-fixtures": { type: "boolean", default: false },
     "projection-counts": { type: "boolean", default: false },
     headed: { type: "boolean", default: false },
@@ -88,6 +97,10 @@ if (values.theme !== "light" && values.theme !== "dark") {
 const theme = values.theme;
 const pairs = Number(values.pairs);
 const cpuThrottle = Number(values["cpu-throttle"]);
+const assetLatencyMs = Number(values["asset-latency-ms"]);
+if (!Number.isFinite(assetLatencyMs) || assetLatencyMs < 0) {
+  throw new Error("asset-latency-ms must be nonnegative");
+}
 if (!Number.isFinite(cpuThrottle) || cpuThrottle < 1) {
   throw new Error("cpu-throttle must be at least 1");
 }
@@ -127,10 +140,52 @@ async function settle(page: Page) {
   );
 }
 
-async function metrics(cdp: CDPSession) {
+async function metrics(
+  cdp: CDPSession,
+): Promise<Record<string, number> & { JSHeapUsedSize: number }> {
   const result: { metrics: Array<{ name: string; value: number }> } =
     await cdp.send("Performance.getMetrics");
-  return Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const measured = Object.fromEntries(result.metrics.map(({ name, value }) => [name, value]));
+  const heapUsed = measured.JSHeapUsedSize;
+  if (heapUsed === undefined) {
+    throw new Error("Chromium did not report the required JS heap metric");
+  }
+  return { ...measured, JSHeapUsedSize: heapUsed };
+}
+
+type RendererProcessSnapshot = Array<{ id: number; cpuSeconds: number; rssBytes: number }>;
+
+async function rendererProcesses(cdp: CDPSession): Promise<RendererProcessSnapshot> {
+  const { processInfo }: { processInfo: Array<{ id: number; type: string; cpuTime: number }> } =
+    await cdp.send("SystemInfo.getProcessInfo");
+  const renderers = processInfo.filter(({ type }) => type === "renderer");
+  if (
+    !renderers.length ||
+    renderers.some(
+      ({ id, cpuTime }) => !Number.isSafeInteger(id) || id <= 0 || !Number.isFinite(cpuTime),
+    )
+  ) {
+    throw new Error("The owned browser did not provide valid renderer processes");
+  }
+  // Only CDP-reported PIDs from this benchmark-owned browser reach ps.
+  const rows = execFileSync(
+    "/bin/ps",
+    ["-o", "pid=,rss=", "-p", renderers.map(({ id }) => id).join(",")],
+    {
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  )
+    .trim()
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/).map(Number));
+  return renderers.map(({ id, cpuTime }) => {
+    const rss = rows.find(([pid]) => pid === id)?.[1];
+    if (rss === undefined || !Number.isFinite(rss) || rss < 0) {
+      throw new Error(`Renderer ${id} did not supply a valid RSS snapshot`);
+    }
+    return { id, cpuSeconds: cpuTime, rssBytes: rss * 1024 };
+  });
 }
 
 function distribution(numbers: number[]) {
@@ -271,6 +326,18 @@ type Result = {
   taskMs?: number;
   layoutMs?: number;
   styleMs?: number;
+  heapBeforeBytes?: number;
+  heapAfterBytes?: number;
+  heapDeltaBytes?: number;
+  rendererCpuMs?: number;
+  rendererRssBeforeBytes?: number;
+  rendererRssAfterBytes?: number;
+  rendererProcessMetrics?: {
+    before?: RendererProcessSnapshot;
+    after?: RendererProcessSnapshot;
+    complete: boolean;
+    error?: string;
+  };
   durationBreakdownMs?: Record<string, number>;
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
@@ -284,7 +351,11 @@ type Result = {
   projectionFixture?: ProjectionFixtureFacts;
   projectionCoverageArtifact?: string;
   projectionScreenshotArtifact?: string;
-  measurementClass?: "production-interaction" | "projection-counter" | "projection-cpu";
+  measurementClass?:
+    | "production-interaction"
+    | "projection-counter"
+    | "projection-cpu"
+    | "diagnostic";
   skipReason?: string;
   trace?: ReturnType<typeof summarizeInteractionTrace>;
   longTaskDetails?: ReturnType<typeof summarizeLongTaskCpuProfiles>;
@@ -306,6 +377,7 @@ const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
   indexSha256: string;
+  workboardSource?: Awaited<ReturnType<typeof prepareWorkboardResourceSource>>;
   projectionBuild?: { entry: string; descriptorSha256: string; entrySha256: string };
   server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
@@ -335,8 +407,9 @@ if (values["process-wakeups"]) {
     }
   }
 }
+const browserExecutable = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browser = await chromium.launch({
-  executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+  executablePath: browserExecutable,
   headless: !values.headed,
 });
 
@@ -446,7 +519,7 @@ try {
       sandboxPort: address.port,
     };
   }
-  for (const directory of bundles) {
+  for (const [bundleIndex, directory] of bundles.entries()) {
     const resolved = path.resolve(directory);
     const html = await readFile(path.join(resolved, "index.html"), "utf8");
     const raw = html.match(
@@ -456,6 +529,15 @@ try {
       throw new Error(`Missing build identity: ${directory}`);
     }
     const build: { buildId: string; version: string } = JSON.parse(raw);
+    const sourceRoot = [values["workboard-source-root"], values["compare-workboard-source-root"]][
+      bundleIndex
+    ];
+    const needsWorkboard = scenarios.some((scenario) => scenario.fixture?.workboardResources);
+    if (needsWorkboard && !sourceRoot) {
+      throw new Error(`Missing explicit Workboard source root for bundle ${bundleIndex}`);
+    }
+    const workboardSource =
+      needsWorkboard && sourceRoot ? await prepareWorkboardResourceSource(sourceRoot) : undefined;
     let projectionBuild: (typeof servers)[number]["projectionBuild"];
     if (values["projection-fixtures"]) {
       const descriptor = await readFile(path.join(resolved, "projection-fixture.json"), "utf8");
@@ -477,10 +559,11 @@ try {
     }
     servers.push({
       directory: resolved,
+      workboardSource,
       build,
       indexSha256: createHash("sha256").update(html).digest("hex"),
       projectionBuild,
-      server: await startControlUiBenchGatewayServer(resolved),
+      server: await startControlUiBenchGatewayServer(resolved, 0, assetLatencyMs),
     });
   }
   await writeFile(
@@ -489,6 +572,7 @@ try {
       {
         revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
         browser: browser.version(),
+        browserExecutable,
         host: {
           platform: os.platform(),
           arch: os.arch(),
@@ -500,6 +584,18 @@ try {
           : "untraced CDP metrics",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         cpuThrottle,
+        pairOrder: values.counterbalance ? "AB/BA alternating by pair" : "AB",
+        assetLatency: {
+          milliseconds: assetLatencyMs,
+          scope:
+            "Simulated asset RTT: response delay for every owned HTTP-server request, including worker modules; no bandwidth shaping or Gateway/provider delay.",
+        },
+        rendererProcessMetrics: values["renderer-process-metrics"]
+          ? "CDP whole-renderer-process CPU (including dedicated workers), plus ps RSS endpoint snapshots; not retained heap or GPU memory."
+          : false,
+        heavyContentWorkerObservation: scenarios.some(({ id }) => id.startsWith("heavy-"))
+          ? "Benchmark init script observes only markdown-code-highlight Worker starts, replies, errors, termination and live count."
+          : false,
         mobileTouchEmulation: true,
         screenshots: values["first-pair-screenshots"] ? "first pair per cell" : "all",
         resourceCounts: values["resource-counts"]
@@ -537,8 +633,21 @@ try {
                 "board-pins": { A: 400, B: 80 },
                 "sdk-avatars": { A: 120, B: 40 },
                 "sdk-avatar-identities": { A: 120, B: 40 },
+                tooltips: { A: 100 },
+                "link-providers": { A: 100, B: 30 },
+                "link-metadata": { A: 100, B: 30 },
+                "ci-pairs": { A: 100, B: 30 },
+                "clawhub-cards": { A: 100, B: 30 },
               },
               publications: 20,
+              nativeResourceWork: {
+                tooltips: "20 native child-list mutation batches",
+                "link-providers": "20 native child-list mutation batches in A",
+                "link-metadata": "20 replay request events; two actual panel producers",
+                "ci-pairs": "20 native A Gateway snapshots",
+                "clawhub-cards": "20 native A Gateway snapshots",
+                idle: "No deliberate publication; three native-clock seconds",
+              },
               note: "Extra benchmark-only entry changes the build graph; compare identical entry builds and measure shipping bytes separately.",
             }
           : undefined,
@@ -547,21 +656,28 @@ try {
         exclusions: [
           "No live Gateway/provider",
           "No sidebar text input exists; measure command palette search separately",
-          "No fake clocks, Lit probes or simulated transport delay",
+          "No fake clocks or Lit probes; optional simulated asset delay is recorded above",
         ],
-        scenarios: scenarios.map(({ id, route, expected, fixture }) => ({
-          id,
-          route,
-          expected,
-          fixture,
-        })),
+        scenarios: scenarios.map(
+          ({ id, route, expected, fixture, diagnostic, observationBrowser }) => ({
+            id,
+            route,
+            expected,
+            fixture,
+            diagnostic,
+            observationBrowser,
+          }),
+        ),
         viewports,
-        bundles: servers.map(({ directory, build, indexSha256, projectionBuild }) => ({
-          directory,
-          ...build,
-          indexSha256,
-          projectionBuild,
-        })),
+        bundles: servers.map(
+          ({ directory, build, indexSha256, workboardSource, projectionBuild }) => ({
+            directory,
+            ...build,
+            indexSha256,
+            workboardSource,
+            projectionBuild,
+          }),
+        ),
       },
       null,
       2,
@@ -572,7 +688,11 @@ try {
       for (let pair = 0; pair < pairs; pair++) {
         const startedAt = new Date().toISOString();
         const startLoad = os.loadavg();
-        for (const [bundle, slot] of servers.entries()) {
+        const slots = [...servers.entries()];
+        if (values.counterbalance && pair % 2 === 1) {
+          slots.reverse();
+        }
+        for (const [bundle, slot] of slots) {
           const artifactPrefix = `${viewport.name}-${theme}-${scenario.id}-${pair + 1}-${bundle}`;
           const nativeVisibility =
             scenario.visibility === "hidden" && values.headed
@@ -674,18 +794,29 @@ try {
             await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
             if (
               nativeVisibility &&
-              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+              (scenario.fixture?.boardFrameResources ||
+                scenario.fixture?.browserResources ||
+                scenario.fixture?.workboardResources)
             ) {
               // Native default contexts allow service workers, which hide fixture fetches from page.route.
               await cdp.send("Network.enable");
               await cdp.send("Network.setBypassServiceWorker", { bypass: true });
             }
-            const fixture = createInteractionFixture(
-              slot.build.buildId,
-              slot.build.version,
-              scenario.fixture,
-              sandbox,
-            );
+            const workboardSource = scenario.fixture?.workboardResources
+              ? slot.workboardSource
+              : undefined;
+            const fixture = workboardSource
+              ? createWorkboardResourceFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  workboardSource.root,
+                )
+              : createInteractionFixture(
+                  slot.build.buildId,
+                  slot.build.version,
+                  scenario.fixture,
+                  sandbox,
+                );
             const sessions = createTeamScaleSidebarListOwner({
               rows: fixture.sessions,
               viewerProfileId: "interaction-viewer",
@@ -725,24 +856,31 @@ try {
             await scenario.prepare(page, gateway);
             if (
               nativeVisibility &&
-              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+              (scenario.fixture?.boardFrameResources ||
+                scenario.fixture?.browserResources ||
+                scenario.fixture?.workboardResources)
             ) {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
               await cdp.send("Network.disable");
             }
-            result.measurementClass = scenario.projectionFamily
-              ? values["projection-counts"]
-                ? "projection-counter"
-                : "projection-cpu"
-              : "production-interaction";
+            result.measurementClass = scenario.diagnostic
+              ? "diagnostic"
+              : scenario.projectionFamily
+                ? values["projection-counts"]
+                  ? "projection-counter"
+                  : "projection-cpu"
+                : "production-interaction";
             if (scenario.projectionFamily) {
               result.projectionFixture = await prepareProjectionFixture(
                 page,
                 scenario.projectionFamily,
                 values["projection-counts"],
               );
-              await page.waitForFunction(() => window.openclawControlUi !== undefined);
-              await settleSidebarBackgroundWork(page);
+              // Native instance fixtures have no shell or navigation prefetch owner.
+              if (scenario.route !== "/instance-resource-fixture.html") {
+                await page.waitForFunction(() => window.openclawControlUi !== undefined);
+                await settleSidebarBackgroundWork(page);
+              }
             }
             // Slow CPUs can still be loading boot modules after the first ready frame.
             await page.waitForLoadState("networkidle");
@@ -886,6 +1024,22 @@ try {
                 }
               }
             }
+            if (values["renderer-process-metrics"]) {
+              const observation: NonNullable<Result["rendererProcessMetrics"]> = {
+                complete: false,
+              };
+              result.rendererProcessMetrics = observation;
+              try {
+                const ownedBrowser = context.browser();
+                if (!ownedBrowser) {
+                  throw new Error("Active context has no owned Chromium browser");
+                }
+                processSession ??= await ownedBrowser.newBrowserCDPSession();
+                observation.before = await rendererProcesses(processSession);
+              } catch (error) {
+                observation.error = String(error);
+              }
+            }
             const taskProbe = await page.evaluateHandle(() => {
               const durations: number[] = [];
               const observer = new PerformanceObserver((list) => {
@@ -917,6 +1071,43 @@ try {
               result.projectionCoverageArtifact = artifact;
             }
             const after = await metrics(cdp);
+            if (processSession && result.rendererProcessMetrics?.before) {
+              const observation = result.rendererProcessMetrics;
+              try {
+                observation.after = await rendererProcesses(processSession);
+                const beforeRows = observation.before!;
+                const afterRows = observation.after;
+                if (
+                  beforeRows.length !== afterRows.length ||
+                  beforeRows.some(({ id }) => !afterRows.some((row) => row.id === id))
+                ) {
+                  throw new Error("Owned renderer process set changed during the interval");
+                }
+                const cpuSeconds = afterRows.reduce(
+                  (sum, row) =>
+                    sum + row.cpuSeconds - beforeRows.find(({ id }) => id === row.id)!.cpuSeconds,
+                  0,
+                );
+                if (cpuSeconds < 0) {
+                  throw new Error("Owned renderer CPU counters moved backwards");
+                }
+                result.rendererCpuMs = cpuSeconds * 1000;
+                result.rendererRssBeforeBytes = beforeRows.reduce(
+                  (sum, row) => sum + row.rssBytes,
+                  0,
+                );
+                result.rendererRssAfterBytes = afterRows.reduce(
+                  (sum, row) => sum + row.rssBytes,
+                  0,
+                );
+                observation.complete = true;
+              } catch (error) {
+                observation.error = String(error);
+              }
+            }
+            result.heapBeforeBytes = before.JSHeapUsedSize;
+            result.heapAfterBytes = after.JSHeapUsedSize;
+            result.heapDeltaBytes = after.JSHeapUsedSize - before.JSHeapUsedSize;
             result.longTasks = await taskProbe.evaluate(({ durations, observer }) => {
               durations.push(...observer.takeRecords().map((entry) => entry.duration));
               observer.disconnect();
@@ -997,13 +1188,26 @@ try {
               const sdk =
                 scenario.projectionFamily === "sdk-avatars" ||
                 scenario.projectionFamily === "sdk-avatar-identities";
+              const resourceFamily = [
+                "tooltips",
+                "link-providers",
+                "link-metadata",
+                "ci-pairs",
+                "clawhub-cards",
+              ].includes(scenario.projectionFamily);
               const method =
                 scenario.projectionFamily === "board-pins"
                   ? "board.get"
-                  : scenario.projectionFamily === "sdk-avatar-identities"
-                    ? "agent.identity.get"
-                    : "agents.list";
-              const expected = scenario.projectionIdle ? 0 : sdk ? 10 : 20;
+                  : scenario.projectionFamily === "ci-pairs"
+                    ? "controlUi.sessionPullRequests.checks"
+                    : scenario.projectionFamily === "clawhub-cards"
+                      ? "plugins.catalog.get"
+                      : resourceFamily
+                        ? "forge.detail"
+                        : scenario.projectionFamily === "sdk-avatar-identities"
+                          ? "agent.identity.get"
+                          : "agents.list";
+              const expected = scenario.projectionIdle || resourceFamily ? 0 : sdk ? 10 : 20;
               if ((result.requests[method] ?? 0) !== expected) {
                 throw new Error(
                   `Expected ${expected} measured ${method} requests, got ${result.requests[method] ?? 0}`,
@@ -1142,6 +1346,11 @@ try {
                     delete result.processWakeups.delta;
                     result.processWakeups.reason = `Process session cleanup failed: ${String(error)}`;
                   }
+                  if (result.rendererProcessMetrics) {
+                    result.rendererProcessMetrics.complete = false;
+                    delete result.rendererCpuMs;
+                    result.rendererProcessMetrics.error = `Process session cleanup failed: ${String(error)}`;
+                  }
                 }
               }
               if (scenario.projectionFamily) {
@@ -1199,7 +1408,7 @@ try {
 }
 const summary = viewports
   .flatMap(({ name }) =>
-    scenarios.flatMap(({ id }) =>
+    scenarios.flatMap(({ id, diagnostic }) =>
       servers.map((_, bundle) => {
         const samples = results.filter(
           (row) =>
@@ -1247,9 +1456,21 @@ const summary = viewports
                 )
               : undefined,
           metrics: Object.fromEntries(
-            (["wallMs", "scriptMs", "taskMs", "layoutMs", "styleMs"] as const).map((metric) => [
+            (
+              [
+                "wallMs",
+                "scriptMs",
+                "taskMs",
+                "layoutMs",
+                "styleMs",
+                ...(values["renderer-process-metrics"] ? ["rendererCpuMs" as const] : []),
+              ] as const
+            ).map((metric) => [
               metric,
-              samples.length && !values["projection-counts"]
+              !diagnostic &&
+              samples.length &&
+              !values["projection-counts"] &&
+              samples.every((row) => row[metric] !== undefined)
                 ? distribution(samples.map((row) => row[metric]!))
                 : null,
             ]),
@@ -1296,6 +1517,9 @@ await writeFile(
       skipped: results.filter((row) => row.status === "skipped").length,
       processWakeupsIncomplete: values["process-wakeups"]
         ? results.filter((row) => row.processWakeups?.complete !== true).length
+        : undefined,
+      rendererProcessMetricsIncomplete: values["renderer-process-metrics"]
+        ? results.filter((row) => row.rendererProcessMetrics?.complete !== true).length
         : undefined,
       summary,
     },

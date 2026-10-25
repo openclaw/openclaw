@@ -461,7 +461,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 [candidateThinkingCatalog, params.prepared.configuredThinkingCatalog],
                 [providerOverride, modelOverride, candidateRuntime],
               ),
-              configuredAuthProfileId,
+              configuredAuthProfileId: runOptions.authProfileId ?? configuredAuthProfileId,
               modelFallbacksOverride: runOptions.modelFallbacksOverride,
               originalProvider: provider,
               cfg,

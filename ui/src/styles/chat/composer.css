@@ -2944,6 +2944,11 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .chat-controls__fast-mode-row {
   gap: 8px;
   padding: 11px 12px;
+}
+
+/* Effort menu sections (Access, Effort, Speed) are separated only between siblings. */
+.chat-controls__effort-menu > * + *,
+.chat-controls__fast-mode-row {
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 

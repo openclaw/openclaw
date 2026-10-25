@@ -208,6 +208,42 @@ it("loads each built entry's own package exports despite controller source alias
   }
 });
 
+it("counts built policy preparation only inside the diagnostic measurement window", async () => {
+  const root = temporary.make("team-stress-policy-counts-");
+  fs.writeFileSync(
+    path.join(root, "operator-model-policy-fixture.mjs"),
+    `export function prepareOperatorModelPolicy(value) { prepareRefs(); return value; }
+     export function restoreOperatorModelPolicySnapshot(value) { return value; }
+     function prepareRefs() {}`,
+  );
+  const entry = path.join(root, "entry.mjs");
+  fs.writeFileSync(
+    entry,
+    `import {prepareOperatorModelPolicy, restoreOperatorModelPolicySnapshot} from "./operator-model-policy-fixture.mjs";
+     prepareOperatorModelPolicy("outside");
+     process.emit("message", {channel: "team-shape-stress", action: "start"});
+     if (prepareOperatorModelPolicy("inside") !== "inside") throw new Error("changed output");
+     restoreOperatorModelPolicySnapshot({});
+     process.emit("message", {channel: "team-shape-stress", action: "stop", output: ${JSON.stringify(root)}});`,
+  );
+  const loader = new URL("../../scripts/perf/team-shape-stress-loader.mjs", import.meta.url);
+  await executeFile(resolveTestNodeExecPath(), ["--import", loader.href, entry], {
+    cwd: root,
+    env: { ...process.env, OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" },
+    timeout: 15_000,
+  });
+  const result = JSON.parse(
+    fs.readFileSync(path.join(root, "operator-model-policy-counts.json"), "utf8"),
+  );
+  expect(result.counts).toEqual({
+    prepareOperatorModelPolicy: 1,
+    restoreOperatorModelPolicySnapshot: 1,
+    prepareRefs: 1,
+    prepareSessionRowRecipient: 0,
+  });
+  expect(result.installed).toHaveLength(3);
+});
+
 it("requires ten-minute evidence windows and marks explicit short runs as smoke", () => {
   const options = parseStressOptions(["--output", "/unused"]);
   expect(options).toMatchObject({
@@ -219,10 +255,14 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     listWeight: 16,
     roundMs: 60_000,
     churnMs: 6_000,
+    operatorModelPolicy: false,
   });
   expect(parseStressOptions(["--output", "/unused", "--smoke-seconds", "1"])).toMatchObject({
     durationMs: 1_000,
     smoke: true,
+  });
+  expect(parseStressOptions(["--output", "/unused", "--operator-model-policy"])).toMatchObject({
+    operatorModelPolicy: true,
   });
   for (const args of [
     [],
