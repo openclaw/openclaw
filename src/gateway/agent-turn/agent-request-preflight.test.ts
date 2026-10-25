@@ -28,12 +28,7 @@ async function runRequest(
       ? undefined
       : null;
   const io = createAgentTurnIo(respond);
-  const result = await prepareAgentRequestPreflight({
-    request,
-    context,
-    client,
-    io,
-  } as never);
+  const result = await prepareAgentRequestPreflight({ request, context, client, io } as never);
   const replay = () =>
     createAgentTurnService({ context, isWebchatConnect: () => false } as never).startTurn({
       preflight: result,
@@ -114,7 +109,7 @@ describe("agent database admission preflight", () => {
 async function runPreflight(
   swarmOutputSchema?: Record<string, unknown>,
   swarmCollector = true,
-  options?: {
+  options: {
     enabled?: boolean;
     requesterOnlyEnabled?: boolean;
     backend?: boolean;
@@ -128,10 +123,10 @@ async function runPreflight(
     admissionPending?: boolean;
     completed?: boolean;
     ended?: boolean;
-  },
+  } = {},
 ) {
   const sessionKey = "agent:worker:subagent:collector";
-  if (options?.register) {
+  if (options.register) {
     subagentRuns.set("collector-run", {
       runId: "collector-run",
       childSessionKey: sessionKey,
@@ -144,26 +139,26 @@ async function runPreflight(
       collect: true,
       outputSchema: swarmOutputSchema,
       swarmLaunchIdempotencyKey: "collector-run",
-      swarmLaunchPending: options?.launchPending ?? true,
-      execution: options?.ended
+      swarmLaunchPending: options.launchPending ?? true,
+      execution: options.ended
         ? { status: "terminal", endedAt: 2 }
-        : { status: options?.launchPending === false ? "running" : "queued", endedAt: undefined },
-      collectorCompletion: options?.completed ? { status: "done" } : undefined,
+        : { status: options.launchPending === false ? "running" : "queued", endedAt: undefined },
+      collectorCompletion: options.completed ? { status: "done" } : undefined,
     });
   }
   const getRuntimeConfig = () =>
-    options?.requesterOnlyEnabled
+    options.requesterOnlyEnabled
       ? {
           tools: { swarm: false },
           agents: {
             entries: { main: { tools: { swarm: true } }, worker: {} },
           },
         }
-      : options?.enabled === undefined
+      : options.enabled === undefined
         ? {}
         : { tools: { swarm: options.enabled } };
   const dedupe = new Map<string, DedupeEntry>();
-  if (options?.cached) {
+  if (options.cached) {
     dedupe.set("agent:collector-run", {
       ts: 1,
       ok: true,
@@ -179,12 +174,12 @@ async function runPreflight(
     {
       message: "collect",
       sessionKey,
-      idempotencyKey: options?.idempotencyKey ?? "collector-run",
+      idempotencyKey: options.idempotencyKey ?? "collector-run",
       lane: "subagent",
-      ...(options?.includeCollectorFields === false ? {} : { swarmCollector, swarmOutputSchema }),
+      ...(options.includeCollectorFields === false ? {} : { swarmCollector, swarmOutputSchema }),
     },
     getRuntimeConfig,
-    options?.backend ?? false,
+    options.backend ?? false,
     dedupe,
   );
 }
@@ -235,20 +230,20 @@ describe("agent request Swarm preflight", () => {
     expectRejected(await runPreflight(schema));
   });
 
-  it("rejects collector flags while Swarm is disabled", async () => {
-    expectRejected(await runCollector({ enabled: false }), {
-      message: "swarm collector fields require an enabled, host-registered collector run",
-    });
-  });
-
   it.each([
+    ["disabled", { enabled: false }],
     ["unregistered", { register: false }],
     ["non-backend", { backend: false }],
     ["ordinary turn", { includeCollectorFields: false }],
     ["mismatched launch", { idempotencyKey: "different-launch" }],
     ["terminal with a pending launch", { ended: true }],
   ] as const)("rejects %s collector requests", async (_name, options) => {
-    expectRejected(await runCollector(options));
+    expectRejected(await runCollector(options), {
+      code: "INVALID_REQUEST",
+      ...(_name === "disabled"
+        ? { message: "swarm collector fields require an enabled, host-registered collector run" }
+        : {}),
+    });
   });
 
   it("keeps a retained collector session reserved from its persisted marker", async () => {
@@ -267,34 +262,22 @@ describe("agent request Swarm preflight", () => {
     );
   });
 
-  it("allows an exact cached collector replay after Swarm is disabled", async () => {
-    await expectCachedReplay(
-      await runCollector({ enabled: false, launchPending: false, cached: true }),
-    );
+  it.each([
+    ["disabled", { enabled: false }],
+    ["provisional", { enabled: undefined, admissionPending: true }],
+    ["completed", { completed: true }],
+  ] as const)("allows exact %s collector replay", async (_name, options) => {
+    const replayed = await runCollector({ launchPending: false, cached: true, ...options });
+    await expectCachedReplay(replayed, "admissionPending" in options);
+    if ("admissionPending" in options) {
+      expect(replayed.respond.mock.calls[0]?.[1]).not.toHaveProperty("reservationId");
+    }
   });
 
-  it("marks a provisional cached replay as admission pending without exposing its reservation", async () => {
-    const replayed = await runCollector({
-      enabled: undefined,
-      launchPending: false,
-      cached: true,
-      admissionPending: true,
-    });
-    await expectCachedReplay(replayed, true);
-    expect(replayed.respond.mock.calls[0]?.[1]).not.toHaveProperty("reservationId");
-  });
-
-  it("keeps completed collector sessions closed while allowing their exact cached replay", async () => {
-    const ordinary = await runCollector({
-      includeCollectorFields: false,
-      launchPending: false,
-      completed: true,
-    });
-    expectRejected(ordinary, { code: "INVALID_REQUEST", message: collectorContinuationRefusal });
-
-    subagentRuns.clear();
-    await expectCachedReplay(
-      await runCollector({ launchPending: false, completed: true, cached: true }),
+  it("keeps completed collector sessions closed", async () => {
+    expectRejected(
+      await runCollector({ includeCollectorFields: false, launchPending: false, completed: true }),
+      { code: "INVALID_REQUEST", message: collectorContinuationRefusal },
     );
   });
 

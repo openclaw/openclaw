@@ -211,13 +211,10 @@ it("keeps a concurrent replacement after preparing a rotation from the stored ro
       throw new Error("Session preparation did not return a candidate");
     }
     const initialPatch = await buildReusePatch({
+      ...prepared,
       freshEntry: prepared.entry,
       initialEntry: prepared.entry,
-      cfg: prepared.cfg,
       canonicalSessionKey: prepared.canonicalKey,
-      storePath: prepared.storePath,
-      resetPolicy: prepared.resetPolicy,
-      now: prepared.now,
       fallbackSessionId: undefined,
     });
     expect(initialPatch.isNewSession).toBe(true);

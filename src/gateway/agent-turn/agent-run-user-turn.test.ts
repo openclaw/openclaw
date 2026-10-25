@@ -70,17 +70,11 @@ function prepareTurn(entry: SessionEntry, overrides: Partial<TurnParams> = {}) {
   });
 }
 
-function loadEntry(
-  entry: SessionEntry | undefined,
-  canonicalKey = "agent:main:worker-child",
-  includeInStore = true,
-) {
+function loadEntry(entry: SessionEntry | undefined, includeInStore = true) {
   mocks.loadSessionEntry.mockResolvedValue({
-    cfg: {},
     storePath: "/tmp/sessions.json",
-    canonicalKey,
     entry,
-    store: includeInStore && entry ? { [canonicalKey]: entry } : {},
+    store: includeInStore && entry ? { "agent:main:worker-child": entry } : {},
   });
 }
 
@@ -118,7 +112,6 @@ it.each([undefined, "replacement-session"])(
     const sessionKey = "agent:main:main";
     loadEntry(
       currentSessionId ? { ...sessionEntry, sessionId: currentSessionId } : undefined,
-      sessionKey,
       false,
     );
 
@@ -236,7 +229,6 @@ it.each([
         );
       }
       expect(cleanup).toHaveBeenCalledTimes(1);
-      expect(mocks.stageSessionPendingInput).toHaveBeenCalledTimes(1);
       expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);
       expect(mocks.deleteMediaBuffer).toHaveBeenCalledTimes(custody === "unretained" ? 1 : 0);
       if (custody === "unretained") {

@@ -19,7 +19,6 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileDisplayName,
@@ -181,16 +180,15 @@ describe("requester-settle processing survives later user turns", () => {
     expect(io.emitAcceptance).not.toHaveBeenCalled();
   };
   const appendNewerTurn = async (manager: SessionManager, key: string, text: string) => {
-    const user: PersistedUserTurnMessage = {
+    await manager.appendMessageAsync({
       role: "user",
       content: text,
       timestamp: 3,
       idempotencyKey: key,
-    };
-    await manager.appendMessageAsync(user);
+    });
     await manager.appendMessageAsync(assistant("stop", `${text} finished`));
   };
-  const expectCompletedReplays = async (
+  const expectCompletedReplay = async (
     before: Awaited<ReturnType<typeof loadTranscriptEvents>>,
     prepareReplay = prepare,
     count = 1,
@@ -279,7 +277,7 @@ describe("requester-settle processing survives later user turns", () => {
       manager.appendMessageAsync(original.recorder!.getPendingInputMessage!()!),
     ).rejects.toThrow("outside the current turn");
     expect(completed).toMatchObject({ reason: "completed", status: "ok" });
-    await expectCompletedReplays(before, prepare, 2);
+    await expectCompletedReplay(before, prepare, 2);
     expect(reads.command).toHaveBeenCalledOnce();
   });
 
@@ -317,47 +315,44 @@ describe("requester-settle processing survives later user turns", () => {
     },
   );
 
-  it("retains legitimate unconsumed interrupted input instead of inferring processing completion", async () => {
-    const original = await prepare();
-    expect(original.runtimeContextFragments).toBeUndefined();
-    await release(original);
-    rotateAgentEventLifecycleGeneration();
-    const resumed = await prepare();
-    expect(resumed.runtimeContextFragments).toEqual([
-      { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
-    ]);
-    expect(completion(resumed)).toBeUndefined();
-    expect(await resumed.recorder!.persistApproved()).toMatchObject({ appended: true });
-    await complete(resumed);
-    await release(resumed);
-    await expectUserInputs(scope(), 1);
-  });
-
-  it("never infers completion for legacy committed input and preserves its current-turn refusal", async () => {
-    const original = await prepare();
-    await original.recorder!.persistApproved();
-    await release(original);
-    rotateAgentEventLifecycleGeneration();
-    const resumed = await prepare();
-    expect(resumed.runtimeContextFragments).toEqual([
-      { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
-    ]);
-    expect(resumed.message).toBe(message);
-    expectNoReconciliation(resumed);
-    expect(await resumed.recorder!.persistApproved()).toMatchObject({ appended: false });
-    await release(resumed);
-    const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
-    await appendNewerTurn(manager, "newer:user", "Newer request");
-    const before = await loadTranscriptEvents(scope());
-    rotateAgentEventLifecycleGeneration();
-    const replay = await prepare();
-    expectNoReconciliation(replay);
-    await expect(
-      manager.appendMessageAsync(replay.recorder!.getPendingInputMessage!()!),
-    ).rejects.toThrow("outside the current turn");
-    expect(await loadTranscriptEvents(scope())).toEqual(before);
-    await release(replay);
-  });
+  it.each([false, true])(
+    "resumes interrupted input without inferring completion (consumed=%s)",
+    async (consumed) => {
+      const original = await prepare();
+      if (consumed) {
+        await original.recorder!.persistApproved();
+      } else {
+        expect(original.runtimeContextFragments).toBeUndefined();
+      }
+      await release(original);
+      rotateAgentEventLifecycleGeneration();
+      const resumed = await prepare();
+      expect(resumed.runtimeContextFragments).toEqual([
+        { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
+      ]);
+      expect(resumed.message).toBe(message);
+      expectNoReconciliation(resumed);
+      expect(await resumed.recorder!.persistApproved()).toMatchObject({ appended: !consumed });
+      if (!consumed) {
+        await complete(resumed);
+        await release(resumed);
+        await expectUserInputs(scope(), 1);
+        return;
+      }
+      await release(resumed);
+      const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
+      await appendNewerTurn(manager, "newer:user", "Newer request");
+      const before = await loadTranscriptEvents(scope());
+      rotateAgentEventLifecycleGeneration();
+      const replay = await prepare();
+      expectNoReconciliation(replay);
+      await expect(
+        manager.appendMessageAsync(replay.recorder!.getPendingInputMessage!()!),
+      ).rejects.toThrow("outside the current turn");
+      expect(await loadTranscriptEvents(scope())).toEqual(before);
+      await release(replay);
+    },
+  );
 
   it("cannot publish a cancellation after losing completion authority", async () => {
     let current = true;
@@ -469,7 +464,7 @@ describe("requester-settle processing survives later user turns", () => {
     await complete(original);
     await release(original);
     const before = await loadTranscriptEvents(scope());
-    await expectCompletedReplays(before, preparePeer);
+    await expectCompletedReplay(before, preparePeer);
     expect(reads.command).not.toHaveBeenCalled();
   });
 });

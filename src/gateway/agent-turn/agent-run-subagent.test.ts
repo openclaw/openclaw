@@ -103,10 +103,7 @@ it.each([true, false])(
     if (current) {
       await expect(preparation).resolves.toBeUndefined();
       expect(mocks.registerSubagentRun).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          childSessionKey,
-          sessionEntry,
-        }),
+        expect.objectContaining({ childSessionKey, sessionEntry }),
         { assertCurrent },
       );
     } else {
