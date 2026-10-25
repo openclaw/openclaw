@@ -48,7 +48,7 @@ const rows = Array.from({ length: 10_000 }, (_, i): CodexCatalogIndexRow => ({
   },
 }));
 let reads = 0;
-let pending: Promise<unknown> | undefined;
+const nativeWalks: Promise<unknown>[] = [];
 const index = new CodexCatalogIndex({
   homeId: "synthetic-hydration-measure",
   ...(!values.remote ? { localSessionsRoot: root } : {}),
@@ -64,7 +64,7 @@ const index = new CodexCatalogIndex({
   },
   runNativeWalk: (run) => {
     const result = run();
-    pending = result;
+    nativeWalks.push(result);
     return result;
   },
 });
@@ -84,6 +84,7 @@ try {
   await index.reconcile();
   assert.equal(reads, 625);
   reads = 0;
+  nativeWalks.length = 0;
   global.gc?.();
   await nextTurn();
   if (inspector) {
@@ -108,10 +109,11 @@ try {
         page: { sessions: [{ ...row.page.sessions[0]!, name: `Changed title ${walk}:${i}` }] },
       };
     }
-    pending = undefined;
     now += 15 * 60_000 + 1;
     await index.list({ limit: 16 });
     await nextTurn();
+    assert.equal(nativeWalks.length, 1);
+    const pending = nativeWalks.pop();
     assert(pending, "Resident demand must start a full native safety walk");
     await pending;
     await nextTurn();
