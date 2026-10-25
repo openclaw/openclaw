@@ -26,6 +26,7 @@ function writeJson(file: string, value: unknown) {
 function writeJsonl(file: string, entries: unknown[]) {
   fs.writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
 }
+
 export function addDeferredPluginSessions(storePath: string, count: number) {
   const entries = JSON.parse(fs.readFileSync(storePath, "utf8"));
   for (let index = 2; index < count; index++) {
@@ -80,14 +81,10 @@ export async function seedStaleDeferredPluginSessionImport(state: OpenClawTestSt
   );
   await closeOpenClawAgentDatabasesAsync();
   const sqlitePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath, fixture.scope).path;
-  const db = openNodeSqliteDatabase(sqlitePath);
-  try {
-    db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run("legacy-kept");
-    db.prepare("DELETE FROM session_windows WHERE session_id = ?").run("legacy-kept");
-    db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run("agent:main:kept");
-  } finally {
-    db.close();
-  }
+  using db = openNodeSqliteDatabase(sqlitePath);
+  db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run("legacy-kept");
+  db.prepare("DELETE FROM session_windows WHERE session_id = ?").run("legacy-kept");
+  db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run("agent:main:kept");
   return { ...fixture, foreignReport, sqlitePath };
 }
 
