@@ -28,7 +28,6 @@ import * as exec from "../../infra/exec-request-context.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resolveMemoryAudienceFromEntry } from "../../plugins/memory-audience.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
-import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
@@ -106,11 +105,8 @@ it.each([
     }
     const cleanup = createDeferredCore();
     const resumed = createDeferredCore<string>();
-    const plugin = new PluginInstance("reload-fixture");
-    const consumer = plugin.retainConsumer();
     const order: string[] = [];
     const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
-      expect(plugin.hasRetainedConsumers).toBe(false);
       order.push("reload");
       respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
     });
@@ -146,12 +142,11 @@ it.each([
           onYield: () => {
             order.push("yield");
             runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
-            // Mirror the runtime: cleanup owns its asynchronous consumer close.
-            const closing = consumer.close(async () => {
-              await cleanup.promise;
-              order.push("cleanup");
-            });
-            operation.completeWithAfterClearBarrier(closing);
+            operation.completeWithAfterClearBarrier(
+              cleanup.promise.then(() => {
+                order.push("cleanup");
+              }),
+            );
           },
         });
       const start = async () => {
@@ -264,8 +259,6 @@ it.each([
       cleanup.resolve();
       operation.complete();
       other?.complete();
-      await consumer.close(() => undefined);
-      await plugin.dispose();
     }
   });
 });

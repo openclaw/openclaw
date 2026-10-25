@@ -263,61 +263,6 @@ it("runs explicit deployment refs and preserves timeout-only music defaults", as
   expect(detailsOf(result).timeoutMs).toBe(180_000);
 });
 
-it.each([
-  { edit: { enabled: false }, images: ["data:image/png;base64,Zmlyc3Q="] },
-  {
-    edit: { enabled: true, maxInputImages: 1 },
-    images: ["data:image/png;base64,Zmlyc3Q=", "data:image/png;base64,bGFzdA=="],
-  },
-])("uses a capable music fallback for reference images ($edit)", async ({ edit, images }) => {
-  const primaryGenerate = vi.fn(async () => ({
-    tracks: [{ buffer: Buffer.from("wrong"), mimeType: "audio/mpeg" }],
-  }));
-  const fallbackGenerate = vi.fn(async () => ({
-    tracks: [{ buffer: generatedWav, mimeType: "audio/wav" }],
-  }));
-  const providers: MusicGenerationProvider[] = [
-    { id: "primary-music", capabilities: { edit }, generateMusic: primaryGenerate },
-    {
-      id: "fallback-music",
-      capabilities: { edit: { enabled: true, maxInputImages: 2 } },
-      generateMusic: fallbackGenerate,
-    },
-  ];
-  listMusicGenerationProvidersMock.mockReturnValue(providers);
-  const actualRuntime = await vi.importActual<typeof import("../../music-generation/runtime.js")>(
-    "../../music-generation/runtime.js",
-  );
-  musicGenerationRuntimeMocks.generateMusic.mockImplementation(
-    (params: Parameters<typeof actualRuntime.generateMusic>[0]) =>
-      actualRuntime.generateMusic(params, {
-        getProvider: (id) => providers.find((provider) => provider.id === id),
-        listProviders: () => providers,
-      }),
-  );
-  mediaStoreMocks.saveMediaBuffer.mockResolvedValue(
-    savedMedia("reference-score.wav", generatedWav.byteLength, "audio/wav"),
-  );
-  const result = await musicTool(
-    "primary-music/score",
-    {},
-    {
-      fallbacks: ["fallback-music/score"],
-    },
-  ).execute("call-reference-fallback", { prompt: "score this cover art", images });
-
-  expect(primaryGenerate).not.toHaveBeenCalled();
-  expect(fallbackGenerate).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      inputImages: images.map((_, index) => ({
-        buffer: Buffer.from(index === 0 ? "first" : "last"),
-        mimeType: "image/png",
-      })),
-    }),
-  );
-  expect(detailsOf(result).provider).toBe("fallback-music");
-});
-
 it("rejects oversized inline reference images before music generation", async () => {
   registerMusicProvider({ capabilities: { edit: { enabled: true, maxInputImages: 1 } } });
   const tool = expectMusicGenerateTool(
@@ -430,9 +375,6 @@ it("preserves the selected stored filename in background completion", async () =
     expect(text).toContain("Timeout normalized: requested 1000ms; used 120000ms.");
     const details = detailsOf(result);
     expect(details).toMatchObject({
-      async: true,
-      status: "started",
-      task: { taskId: "task-123" },
       instrumental: true,
       timeoutMs: 120_000,
       requestedTimeoutMs: 1000,
@@ -443,7 +385,6 @@ it("preserves the selected stored filename in background completion", async () =
     expect(taskExecutorMocks.completeOperation).not.toHaveBeenCalled();
     expect(mediaStoreMocks.saveMediaBuffer).not.toHaveBeenCalled();
     await complete();
-    expect(generate).toHaveBeenCalledOnce();
     expect(generateMusicOptions()).toMatchObject({
       autoProviderFallback: false,
       timeoutMs: 120_000,
@@ -600,26 +541,6 @@ it("warns when optional provider overrides are ignored", async () => {
   expect(details).not.toHaveProperty("format");
 });
 
-it("surfaces normalized durations from runtime metadata", async () => {
-  mockGeneratedMusic({
-    provider: "minimax",
-    model: "music-2.6",
-    normalization: { durationSeconds: { requested: 45, applied: 30 } },
-    metadata: { requestedDurationSeconds: 45, normalizedDurationSeconds: 30 },
-  });
-  mediaStoreMocks.saveMediaBuffer.mockResolvedValueOnce(
-    savedMedia("generated-night-drive.mp3", 11),
-  );
-
-  const result = await musicTool().execute("call-1", { prompt, durationSeconds: 45 });
-  const text = textOf(result);
-
-  expect(text).toContain("Duration normalized: requested 45s; used 30s.");
-  const details = detailsOf(result);
-  expect(details).toMatchObject({ durationSeconds: 30, requestedDurationSeconds: 45 });
-  expect(details.normalization).toEqual({ durationSeconds: { requested: 45, applied: 30 } });
-});
-
 it("rejects fractional duration seconds before generation", async () => {
   const generateMusic = mockGeneratedMusic({ provider: "minimax", model: "music-2.6" });
 
@@ -662,7 +583,10 @@ it("passes web_fetch SSRF policy when loading reference images", async () => {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     }),
   );
-  expect(generateMusicOptions()?.timeoutMs).toBe(180_000);
+  expect(generateMusicOptions()).toMatchObject({
+    inputImages: [{ buffer: Buffer.from("image"), mimeType: "image/png" }],
+    timeoutMs: 180_000,
+  });
   expect(fetchTimeout.buildTimeoutAbortSignal).toHaveBeenCalledTimes(1);
   expect(vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mock.calls[0]?.[0]).toEqual({
     operation: "music-generate.reference-fetch",

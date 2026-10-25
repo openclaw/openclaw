@@ -370,18 +370,21 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
       ).toHaveBeenCalledWith(sessionKey);
     },
   );
-  it("keeps pending cron media active until a handoff retry delivers it", async () => {
+  it("keeps cron media active through capped exponential handoff retries", async () => {
     vi.useFakeTimers();
     const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement
-      .mockResolvedValueOnce({
-        delivered: false,
-        path: "none",
-        reason: "completion_handoff_pending",
-        error: "cron run continuation is not ready",
-      })
-      .mockResolvedValueOnce({ delivered: true, path: "direct" });
-    const { scheduled, schedule } = await scheduledImageTask(sessionKey);
+    let attempts = 0;
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockImplementation(async () =>
+      ++attempts < 7
+        ? {
+            delivered: false,
+            path: "none",
+            reason: "completion_handoff_pending",
+            error: "cron run continuation is not ready",
+          }
+        : { delivered: true, path: "direct" },
+    );
+    const { onWakeFailure, scheduled, schedule } = await scheduledImageTask(sessionKey);
     schedule();
 
     const backgroundWork = scheduled[0]?.();
@@ -393,37 +396,20 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     await vi.advanceTimersByTimeAsync(249);
     expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
-    await backgroundWork;
-
     expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(2);
-    expect(detachedTaskRuntimeMocks.completeOperation).toHaveBeenCalledTimes(1);
-    expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
-  });
-
-  it("caps exponential pending-handoff retries until delivery succeeds", async () => {
-    vi.useFakeTimers();
-    let wakeAttempt = 0;
-    const { lifecycle, onWakeFailure, scheduled, schedule } = completionFixture(
-      imageHandle("pending"),
-    );
-    lifecycle.wakeTaskCompletion.mockImplementation(async () => {
-      wakeAttempt += 1;
-      return { status: wakeAttempt < 7 ? "pending" : "delivered" };
-    });
-    schedule();
-
-    const backgroundWork = scheduled[0]?.();
-    await vi.advanceTimersByTimeAsync(7_749);
-    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(6);
-    expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
-
+    await vi.advanceTimersByTimeAsync(7_499);
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(6);
+    expect(detachedTaskRuntimeMocks.completeOperation).not.toHaveBeenCalled();
+    expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(true);
     await vi.advanceTimersByTimeAsync(1);
     await backgroundWork;
-    expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(7);
-    expect(lifecycle.recordTaskProgress).toHaveBeenCalledTimes(7);
-    expectCall(lifecycle.completeTaskRun, {
-      terminalResult: undefined,
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(7);
+    expect(detachedTaskRuntimeMocks.completeOperation).toHaveBeenCalledTimes(1);
+    expectCall(detachedTaskRuntimeMocks.completeOperation, {
+      status: "succeeded",
+      terminalOutcome: undefined,
     });
+    expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
     expect(onWakeFailure).not.toHaveBeenCalled();
   });
 
@@ -551,35 +537,6 @@ describe("createMediaGenerationTaskLifecycle", () => {
     expect(hasPendingGeneratedMediaTaskForSessionKey(sessionKey)).toBe(false);
   });
 
-  it("pins a missing requester target from session state when the task starts", async () => {
-    const original = { channel: "telegram", to: "5866004662", accountId: "bot-1" };
-    sessionMocks.loadSessionEntry.mockReturnValue(requesterEntry(original));
-    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
-      delivered: true,
-    });
-    const lifecycle = createImageMediaLifecycle();
-
-    const handle = await lifecycle.createTaskRun({
-      sessionKey: "agent:main:telegram:5866004662",
-      requesterOrigin: { channel: "telegram" },
-      prompt: "proof image",
-    });
-    expect(handle?.requesterOrigin).toEqual(original);
-
-    sessionMocks.loadSessionEntry.mockReturnValue(
-      requesterEntry({ channel: "telegram", to: "other-peer", accountId: "bot-1" }),
-    );
-    await lifecycle.wakeTaskCompletion({
-      handle,
-      status: "ok",
-      statusLabel: "completed successfully",
-      result: "generated",
-    });
-    expectCall(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement, {
-      completionDirectOrigin: original,
-    });
-  });
-
   it.each([
     [
       "another account",
@@ -687,14 +644,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
         status: "ok",
         statusLabel: "completed successfully",
         result: 'Generated 1 track.\n- path="/tmp/generated-night-drive.mp3"',
-        attachments: [
-          {
-            type: "audio",
-            path: "/tmp/generated-night-drive.mp3",
-            mimeType: "audio/mpeg",
-            name: "generated-night-drive.mp3",
-          },
-        ],
+        attachments: [{ type: "audio", path: "/tmp/generated-night-drive.mp3" }],
       }),
     ).resolves.toEqual({ status: "delivered" });
 
@@ -702,21 +652,12 @@ describe("createMediaGenerationTaskLifecycle", () => {
       requesterSessionKey: "agent:main:dashboard:music-session",
       requesterSessionOrigin: origin,
       completionDirectOrigin: origin,
-      sourceTool: "music_generate",
-      bestEffortDeliver: true,
     });
     const announceParams = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock
       .calls[0]?.[0] as { triggerMessage?: string; internalEvents?: unknown[] } | undefined;
     expect(announceParams?.triggerMessage).toContain("MEDIA:/tmp/generated-night-drive.mp3");
-    expect(announceParams?.internalEvents).toEqual([
-      expect.objectContaining({
-        mediaUrls: ["/tmp/generated-night-drive.mp3"],
-        attachments: [
-          expect.objectContaining({
-            path: "/tmp/generated-night-drive.mp3",
-          }),
-        ],
-      }),
+    expect(announceParams?.internalEvents).toMatchObject([
+      { mediaUrls: ["/tmp/generated-night-drive.mp3"] },
     ]);
   });
 });

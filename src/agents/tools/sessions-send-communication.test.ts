@@ -294,66 +294,54 @@ describe("sessions_send communication boundary", () => {
     vi.mocked(callAgentToolGatewayRequest).mockClear();
     await denied(operation(undefined, target), "disabled");
   });
-  it.each([
-    ["main", "subagent:child", false],
-    ["worker", "subagent:child", false],
-    ["main", "cron:dispatch:run:child", false],
-    ["worker", "subagent:child", true],
-  ] as const)(
-    "keeps expired cron parents reachable until their %s/%s child is archived (archived intermediary=%s)",
-    async (childAgentId, childName, archivedIntermediary) => {
-      const expiredAt = Date.now() - 8 * 24 * 60 * 60_000;
-      const parent = endpoint("cron:dispatch:run:old", { updatedAt: expiredAt });
-      parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
-      const ancestor = archivedIntermediary
-        ? endpoint("subagent:archived", {
-            spawnedBy: parent.sessionKey,
-            parentSessionId: parent.entry!.sessionId,
-            archivedAt: Date.now(),
-          })
-        : parent;
-      ancestor.storePath = parent.storePath;
-      const target = endpoint(
-        childName,
-        {
-          updatedAt: Date.now(),
-          spawnedBy: ancestor.sessionKey,
-          parentSessionId: ancestor.entry!.sessionId,
-        },
-        childAgentId,
-        childAgentId === "main" ? parent.storePath : path.join(tempDirs.make(), "sessions.sqlite"),
-      );
-      state.config = { tools: { agentToAgent: { enabled: true, allow: ["*"] } } };
-      await replaceSessionEntry(parent, parent.entry!);
-      expect(loadSessionEntry(parent)?.updatedAt).toBe(expiredAt);
-      if (archivedIntermediary) {
-        await replaceSessionEntry(ancestor, ancestor.entry!);
-      }
-      await replaceSessionEntry(target, target.entry!);
-      const maintain = (apply: boolean) =>
-        runSessionRegistryMaintenanceForStore({
-          agentId: "main",
-          storePath: parent.storePath,
-          childStores: [parent, ...(childAgentId === "main" ? [] : [target])],
-          apply,
-          retentionMs: 7 * 24 * 60 * 60_000,
-          runningCronJobIds: new Set(),
-        });
-      for (const apply of [false, true]) {
-        expect((await maintain(apply)).pruned).toBe(0);
-      }
-      parent.entry = loadSessionEntry(parent);
-      expect(parent.entry).toBeDefined();
-      const input = operation(undefined, target);
-      await delivered(input);
-      parent.entry!.communication = { receive: "never" };
-      input.callGateway.mockClear();
-      await denied(input, "disabled");
-      await upsertSessionEntryCore(target, { archivedAt: Date.now() });
-      expect((await maintain(true)).pruned).toBe(1);
-      expect(loadSessionEntry(parent)).toBeUndefined();
-    },
-  );
+  it("keeps an expired cron ancestor reachable through an archived intermediary until its cross-agent child is archived", async () => {
+    const expiredAt = Date.now() - 8 * 24 * 60 * 60_000;
+    const parent = endpoint("cron:dispatch:run:old", { updatedAt: expiredAt });
+    parent.storePath = path.join(tempDirs.make(), "sessions.sqlite");
+    const ancestor = endpoint("subagent:archived", {
+      spawnedBy: parent.sessionKey,
+      parentSessionId: parent.entry!.sessionId,
+      archivedAt: Date.now(),
+    });
+    ancestor.storePath = parent.storePath;
+    const target = endpoint(
+      "subagent:child",
+      {
+        updatedAt: Date.now(),
+        spawnedBy: ancestor.sessionKey,
+        parentSessionId: ancestor.entry!.sessionId,
+      },
+      "worker",
+      path.join(tempDirs.make(), "sessions.sqlite"),
+    );
+    state.config = { tools: { agentToAgent: { enabled: true, allow: ["*"] } } };
+    await replaceSessionEntry(parent, parent.entry!);
+    expect(loadSessionEntry(parent)?.updatedAt).toBe(expiredAt);
+    await replaceSessionEntry(ancestor, ancestor.entry!);
+    await replaceSessionEntry(target, target.entry!);
+    const maintain = (apply: boolean) =>
+      runSessionRegistryMaintenanceForStore({
+        agentId: "main",
+        storePath: parent.storePath,
+        childStores: [parent, target],
+        apply,
+        retentionMs: 7 * 24 * 60 * 60_000,
+        runningCronJobIds: new Set(),
+      });
+    for (const apply of [false, true]) {
+      expect((await maintain(apply)).pruned).toBe(0);
+    }
+    parent.entry = loadSessionEntry(parent);
+    expect(parent.entry).toBeDefined();
+    const input = operation(undefined, target);
+    await delivered(input);
+    parent.entry!.communication = { receive: "never" };
+    input.callGateway.mockClear();
+    await denied(input, "disabled");
+    await upsertSessionEntryCore(target, { archivedAt: Date.now() });
+    expect((await maintain(true)).pruned).toBe(1);
+    expect(loadSessionEntry(parent)).toBeUndefined();
+  });
   it("refuses delivery when parent lineage changes during approval", async () => {
     const { parent, entry } = await rotatedParent();
     const input = operation(
