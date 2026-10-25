@@ -18,6 +18,27 @@ export function createProjectionResourceProbe() {
   const restore: Array<() => void> = [];
   const arrays = new WeakSet<object>();
   let nativeCallbackDepth = 0;
+  const methods: Record<string, { calls: number; duringNativeCallback: number }> = {};
+
+  function observeMethod(source: object, method: string, label: string) {
+    const descriptor = Object.getOwnPropertyDescriptor(source, method);
+    const original: unknown = Reflect.get(source, method);
+    if (typeof original !== "function") throw new Error(`Missing native method: ${label}`);
+    const counts = (methods[label] ??= { calls: 0, duringNativeCallback: 0 });
+    Object.defineProperty(source, method, {
+      configurable: true,
+      writable: true,
+      value: function (this: unknown, ...args: unknown[]) {
+        counts.calls++;
+        counts.duringNativeCallback += Number(nativeCallbackDepth > 0);
+        return Reflect.apply(original, this, args);
+      },
+    });
+    restore.push(() => {
+      if (descriptor) Object.defineProperty(source, method, descriptor);
+      else Reflect.deleteProperty(source, method);
+    });
+  }
 
   function observeWidgets(widgets: readonly unknown[], label: string) {
     if (arrays.has(widgets)) {
@@ -135,6 +156,8 @@ export function createProjectionResourceProbe() {
   return {
     observeSource,
     observeWidgets,
+    observeMethod,
+    methodSnapshot: () => structuredClone(methods),
     snapshot: (): ProjectionResourceSnapshot => structuredClone({ sources, scans }),
     dispose() {
       for (const undo of restore.toReversed()) {
