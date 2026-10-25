@@ -116,25 +116,23 @@ describe("together video generation provider", () => {
 
   it("creates, polls, and downloads a video", async () => {
     mockVideoDownload();
-    const result = await generateVideo({ model: "" });
+    const result = await generateVideo({
+      model: "",
+      cfg: {
+        models: { providers: { together: { baseUrl: "https://api.together.xyz/v1", models: [] } } },
+      },
+    });
     expect(postJsonRequestMock).toHaveBeenCalledOnce();
     expect(submittedRequest()).toMatchObject({ url: apiUrl, body: expectedBody });
     expect(result.videos).toEqual([expect.objectContaining({ fileName: "video-1.webm" })]);
     expect(result.metadata).toEqual({ videoId: "video_123", status: "completed", videoUrl });
   });
 
-  it("surfaces an immediately failed submission before polling or validating id", async () => {
-    const release = mockSubmission({
-      status: "failed",
-      error: { message: "Together video quota exhausted" },
-    });
-
-    await expect(generateVideo()).rejects.toThrow("Together video quota exhausted");
-    expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledOnce();
-  });
-
   it.each([
+    [
+      { status: "failed", error: { message: "Together video quota exhausted" } },
+      "Together video quota exhausted",
+    ],
     [{ status: "failed", error: null }, "Together video generation failed"],
     [
       { id: "video_missing_output", status: "completed" },
@@ -157,15 +155,10 @@ describe("together video generation provider", () => {
   });
 
   it.each([
-    { video_url: "https://example.com/completed.mp4" },
-    { url: "https://example.com/completed.mp4" },
-    {
-      video_url: " https://example.com/completed.mp4 ",
-      url: "https://example.com/secondary.mp4",
-    },
+    { video_url: ` ${videoUrl} `, url: "https://example.com/secondary.mp4" },
     [
       { video_url: " ", url: " " },
-      { url: "https://example.com/completed.mp4" },
+      { url: videoUrl },
       { video_url: "https://example.com/secondary.mp4" },
     ],
   ])("downloads completed output %j without polling", async (outputs) => {
@@ -180,11 +173,7 @@ describe("together video generation provider", () => {
     expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       model,
-      metadata: {
-        status: "completed",
-        videoId: "video_completed",
-        videoUrl: "https://example.com/completed.mp4",
-      },
+      metadata: { status: "completed", videoId: "video_completed", videoUrl },
     });
     expect(release).toHaveBeenCalledOnce();
   });
@@ -225,15 +214,6 @@ describe("together video generation provider", () => {
     );
   });
 
-  it("replaces the shared text endpoint with the video endpoint", async () => {
-    await generateBody({
-      cfg: {
-        models: { providers: { together: { baseUrl: "https://api.together.xyz/v1", models: [] } } },
-      },
-    });
-    expect(submittedRequest().url).toBe(apiUrl);
-  });
-
   it.each([1, 99, 2, 10])("validates Wan duration %s", async (durationSeconds) => {
     const body = await generateBody({ durationSeconds });
     if (durationSeconds === 1 || durationSeconds === 99) {
@@ -255,8 +235,7 @@ describe("together video generation provider", () => {
     ["832x1104", "720P", "3:4"],
     ["1248x1648", "1080P", "3:4"],
   ])("translates Wan size %s to resolution and ratio", async (size, resolution, ratio) => {
-    const body = await generateBody({ size });
-    expect(body).toEqual({ ...expectedBody, resolution, ratio });
+    expect(await generateBody({ size })).toEqual({ ...expectedBody, resolution, ratio });
   });
 
   it.each([
