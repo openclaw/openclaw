@@ -8,55 +8,18 @@ import {
   sessionRowIdentity,
   type SessionRowWire,
 } from "../../packages/gateway-protocol/src/session-row-deltas.js";
-import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import type { SessionEventRowsResetCause } from "../infra/diagnostic-rpc-types.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import {
+  recordSessionEventRowReset,
+  updateSessionEventRowRetention,
+} from "./session-event-row-retention.js";
 import {
   prepareSessionRowDeltaFields,
   type SessionRowDeltaFields,
   type createSessionRowDeltaDiffer,
 } from "./session-row-delta-fields.js";
 import { serializeSessionRow } from "./session-row-serialization.js";
-
-let retainedEntries = 0;
-let retainedBytes = 0;
-let reportPending = false;
-const resets = new Map<SessionEventRowsResetCause, number>();
-
-/** Aggregate vector charges; connection owners account only committed handoffs and releases. */
-function updateSessionEventRowRetention(entriesDelta: number, bytesDelta: number) {
-  retainedEntries += entriesDelta;
-  retainedBytes += bytesDelta;
-  scheduleReport();
-}
-
-/** Batch only committed retirements, with a fixed set of causes and no row identities. */
-function recordSessionEventRowReset(cause: SessionEventRowsResetCause, count: number) {
-  if (count === 0) {
-    return;
-  }
-  resets.set(cause, (resets.get(cause) ?? 0) + count);
-  scheduleReport();
-}
-
-function scheduleReport() {
-  if (reportPending) {
-    return;
-  }
-  reportPending = true;
-  setImmediate(() => {
-    reportPending = false;
-    emitTrustedDiagnosticEvent({
-      type: "sessions.event.retention",
-      entries: retainedEntries,
-      estimatedBytes: retainedBytes,
-    });
-    for (const [cause, count] of resets) {
-      emitTrustedDiagnosticEvent({ type: "sessions.event.rows.reset", cause, count });
-    }
-    resets.clear();
-  }).unref();
-}
 
 const MAX_ROWS = 128;
 const MAX_CONTENT_CHARS = 128 * 1024;

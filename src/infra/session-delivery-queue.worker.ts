@@ -1,35 +1,16 @@
-import { isDeepStrictEqual } from "node:util";
 import { computeBackoff } from "../../packages/retry/src/index.js";
 import {
-  decodeSubagentCompletionRecord,
-  mutateSubagentCompletionInDatabase,
-} from "../agents/subagents/completion/subagent-completion-mutation.kernel.js";
-import type {
-  SubagentCompletionMutation,
-  SubagentCompletionMutationResult,
-  SubagentCompletionRecord,
-} from "../agents/subagents/completion/subagent-completion-mutation.types.js";
-import {
-  bindSubagentRunRecord,
-  rowToSubagentRunRecord,
-} from "../agents/subagents/registry/subagent-registry.store.codec.js";
-import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
-import { readSubagentRunRow } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
-import {
-  compareSubagentRunGeneration,
-  isSubagentRunGenerationCandidate,
-} from "../agents/subagents/registry/subagent-run-generation.js";
+  admitSubagentCompletionInWorker,
+  mutateSubagentCompletionInWorker,
+} from "../agents/subagents/completion/subagent-completion-admission.worker.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
-import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
   WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
 import {
-  bindDeliveryQueueEntry,
+  type bindDeliveryQueueEntry,
   loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite-bound.js";
@@ -41,169 +22,13 @@ import {
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
   updateDeliveryQueueEntryInDatabase,
-  type DeliveryQueueStoredStatus,
 } from "./delivery-queue-sqlite.kernel.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import type { DeliveryQueueStoredStatus } from "./delivery-queue-sqlite.kernel.js";
 import {
   SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
 } from "./session-delivery-queue.records.js";
 import type { SessionDeliveryAgentRunUpdate } from "./session-delivery-queue.worker-contract.js";
-import type { EngineConnection } from "./sql-connection.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "./sqlite-worker-operation-admission.js";
-import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
-
-const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
-
-function commitCompletionWrite<T extends object>(
-  input: { writeId: string },
-  database: OpenClawStateDatabase,
-  operationLabel: string,
-  mutate: () => T,
-): T & { writeId: string } {
-  const { writeId } = input;
-  return runOpenClawStateWriteTransaction(
-    () => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const receipt = { writeId, ...mutate() };
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
-      deferSqliteWorkerCommitReceipt(database.db, receipt);
-      return receipt;
-    },
-    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-    { operationLabel },
-  );
-}
-
-/** The shared-state worker owns queue insertion and its exact native completion owner. */
-function admitSubagentCompletionInWorker(
-  input: {
-    writeId: string;
-    queueEntry: QueuedSessionDelivery;
-    expected: SubagentRunRecord;
-    subagent: SubagentRunRecord;
-  },
-  database: OpenClawStateDatabase,
-): {
-  writeId: string;
-  claimed: boolean;
-  status: DeliveryQueueStoredStatus;
-  record: SubagentCompletionRecord;
-} {
-  const { expected, subagent, queueEntry } = input;
-  const owner = queueEntry.kind === "agentTurn" ? queueEntry.owner : undefined;
-  const delivery = subagent.delivery;
-  if (
-    !owner ||
-    owner.kind !== "subagent_completion" ||
-    owner.runId !== subagent.runId ||
-    subagent.runId !== expected.runId ||
-    owner.generation !== delivery?.generation ||
-    owner.deadlineAt !== delivery.deadlineAt ||
-    queueEntry.id !== delivery.queueId
-  ) {
-    throw new Error("subagent completion admission records do not share one owner generation");
-  }
-  const boundQueue = bindDeliveryQueueEntry({
-    queueName: SESSION_DELIVERY_QUEUE_NAME,
-    entry: queueEntry,
-    insertOnly: true,
-  });
-  const boundSubagent = bindSubagentRunRecord(subagent);
-  return commitCompletionWrite(input, database, "subagent completion delivery admission", () => {
-    const originalRow = readSubagentRunRow(database, expected.runId);
-    const current = originalRow && rowToSubagentRunRecord(originalRow);
-    if (
-      !originalRow ||
-      !current ||
-      compareSubagentRunGeneration(current, expected) !== 0 ||
-      current.childSessionKey !== expected.childSessionKey ||
-      current.requesterSessionKey !== expected.requesterSessionKey ||
-      current.requesterStorePath !== expected.requesterStorePath
-    ) {
-      throw new Error("subagent completion owner changed before admission");
-    }
-    const siblings = executeSqliteQuerySync(
-      database.db,
-      query(database.db)
-        .selectFrom("subagent_runs")
-        .selectAll()
-        .where("child_session_key", "=", expected.childSessionKey),
-    ).rows;
-    for (const row of siblings) {
-      const candidate = rowToSubagentRunRecord(row);
-      if (
-        !candidate ||
-        (isSubagentRunGenerationCandidate(
-          candidate,
-          expected.childSessionKey,
-          expected.childAgentId,
-        ) &&
-          compareSubagentRunGeneration(candidate, expected) > 0)
-      ) {
-        throw new Error("subagent completion owner was replaced before admission");
-      }
-    }
-    const claimed = upsertBoundDeliveryQueueEntryInDatabase(boundQueue, database);
-    const status = claimed
-      ? "pending"
-      : (getDeliveryQueueEntryOwnersInDatabase(
-          database,
-          [SESSION_DELIVERY_QUEUE_NAME],
-          queueEntry.id,
-        ).get(SESSION_DELIVERY_QUEUE_NAME)?.status ?? "pending");
-    if (claimed) {
-      writeSubagentRunValuesInDatabase(database, [boundSubagent], []);
-    } else {
-      // The namespace owns this payload; a duplicate may acknowledge only its original generation.
-      const existing = loadDeliveryQueueEntryInDatabase(
-        database,
-        SESSION_DELIVERY_QUEUE_NAME,
-        queueEntry.id,
-        // SAFETY: The exact session queue namespace is written only with its typed delivery payload.
-      ) as QueuedSessionDelivery | null;
-      const existingOwner = existing?.kind === "agentTurn" ? existing.owner : undefined;
-      if (
-        !existingOwner ||
-        existingOwner.kind !== owner.kind ||
-        existingOwner.runId !== owner.runId ||
-        existingOwner.taskId !== owner.taskId ||
-        existingOwner.generation !== owner.generation ||
-        existingOwner.deadlineAt !== owner.deadlineAt ||
-        existing?.sessionKey !== queueEntry.sessionKey ||
-        (existing.kind === "agentTurn" &&
-          queueEntry.kind === "agentTurn" &&
-          !isDeepStrictEqual(existing.requesterBinding, queueEntry.requesterBinding)) ||
-        (current.delivery?.generation ?? 1) !== owner.generation ||
-        (status === "pending" &&
-          (current.delivery?.queueId !== queueEntry.id ||
-            current.delivery.deadlineAt !== owner.deadlineAt))
-      ) {
-        throw new Error(`session delivery queue conflict for ${queueEntry.id}`);
-      }
-    }
-    return {
-      claimed,
-      status,
-      record: decodeSubagentCompletionRecord(claimed ? boundSubagent : originalRow),
-    };
-  });
-}
-
-function mutateSubagentCompletionInWorker(
-  input: {
-    writeId: string;
-    mutation: SubagentCompletionMutation;
-  },
-  database: OpenClawStateDatabase,
-): SubagentCompletionMutationResult & { writeId: string } {
-  return commitCompletionWrite(input, database, "subagent completion " + input.mutation.kind, () =>
-    mutateSubagentCompletionInDatabase(database, input.mutation),
-  );
-}
 
 function readSessionDelivery(
   database: OpenClawStateDatabase,

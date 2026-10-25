@@ -186,7 +186,7 @@ export async function resolveOpenClawWrapperPath(
   return resolved;
 }
 
-export async function resolveCliProgramArguments(params: {
+async function resolveCliProgramArguments(params: {
   cliEntrypoint?: string;
   service?: "gateway" | "node";
   args: string[];
@@ -261,4 +261,52 @@ export async function resolveGatewayProgramArguments(params: {
     result.programArguments.splice(1, 0, ...resolveGatewayHeapExecArgv(params.existingCommand));
   }
   return result;
+}
+
+export async function resolveNodeProgramArguments(params: {
+  cliEntrypoint?: string;
+  host: string;
+  port: number;
+  contextPath?: string;
+  tls?: boolean;
+  tlsFingerprint?: string;
+  nodeId?: string;
+  displayName?: string;
+  installedAppsSharing?: boolean;
+  commands?: string[];
+  allCommands?: boolean;
+  dev?: boolean;
+  runtime: GatewayDaemonRuntime;
+  runtimePath?: string;
+  wrapperPath?: string;
+}): Promise<GatewayProgramArgs> {
+  const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
+  if (params.tls === false && !params.tlsFingerprint) {
+    // Managed services must carry plaintext explicitly; omission would let the
+    // node runtime re-inherit TLS from the operator's global Gateway config.
+    args.push("--no-tls");
+  } else if (params.tls || params.tlsFingerprint) {
+    args.push("--tls");
+  }
+  if (params.tlsFingerprint) {
+    args.push("--tls-fingerprint", params.tlsFingerprint);
+  }
+  if (params.contextPath) {
+    args.push("--context-path", params.contextPath);
+  }
+  if (params.nodeId) {
+    args.push("--node-id", params.nodeId);
+  }
+  if (params.displayName) {
+    args.push("--display-name", params.displayName);
+  }
+  if (params.installedAppsSharing !== undefined) {
+    args.push(params.installedAppsSharing ? "--share-installed-apps" : "--no-share-installed-apps");
+  }
+  if (params.allCommands) {
+    args.push("--all-commands");
+  } else if (params.commands !== undefined) {
+    args.push("--commands", params.commands.join(","));
+  }
+  return resolveCliProgramArguments({ ...params, service: "node", args });
 }

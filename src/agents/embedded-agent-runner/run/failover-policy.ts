@@ -10,6 +10,8 @@ type ModelFallbackDecision = { action: "fallback_model"; reason: FailoverReason 
 export type RetryLimitFailoverDecision = ModelFallbackDecision | { action: "return_error_payload" };
 type PromptFailoverDecision = ProfileDecision | ModelFallbackDecision;
 export type AssistantFailoverDecision = PromptFailoverDecision | { action: "continue_normal" };
+type RunFailoverDecision = RetryLimitFailoverDecision | AssistantFailoverDecision;
+
 type RetryLimitDecisionParams = {
   stage: "retry_limit";
   fallbackConfigured: boolean;
@@ -41,6 +43,11 @@ type AssistantDecisionParams = {
   harnessOwnsTransport?: boolean;
   profileRotated: boolean;
 };
+
+type RunFailoverDecisionParams =
+  | RetryLimitDecisionParams
+  | PromptDecisionParams
+  | AssistantDecisionParams;
 
 function isTerminalFormatFailure(params: {
   allowFormatRetry?: boolean;
@@ -102,9 +109,7 @@ export function resolveRunFailoverDecision(
  * surface the error, continue normally, or return an error payload. Prompt,
  * assistant, and retry-limit stages intentionally use different action sets.
  */
-export function resolveRunFailoverDecision(
-  params: RetryLimitDecisionParams | PromptDecisionParams | AssistantDecisionParams,
-): RetryLimitFailoverDecision | AssistantFailoverDecision {
+export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): RunFailoverDecision {
   if (params.stage === "retry_limit") {
     const reason = params.failoverReason;
     if (

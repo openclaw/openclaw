@@ -422,10 +422,12 @@ export async function dispatchInboundMessageWithDispatcher(
   return await dispatchInboundMessageWithPlainDispatcherCore(params, "legacy");
 }
 
+type ProjectedOptions = Omit<ReplyDispatcherOptions, "beforeDeliver" | "beforeDeliverOptions">;
+
 /** Creates a core-owned dispatcher whose modifiers fence projected output capture. */
 export async function dispatchInboundMessageWithProjectedDispatcher(
   params: Omit<PlainInboundDispatcherParams, "dispatcherOptions"> & {
-    dispatcherOptions: Omit<ReplyDispatcherOptions, "beforeDeliver" | "beforeDeliverOptions">;
+    dispatcherOptions: ProjectedOptions;
   },
 ): Promise<DispatchInboundResult> {
   return await dispatchInboundMessageWithPlainDispatcherCore(params, "projected");

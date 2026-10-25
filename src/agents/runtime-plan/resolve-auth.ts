@@ -15,6 +15,17 @@ import {
 } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
+type PreparedRuntimeModelAuthResolution = Readonly<{
+  auth: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
+  plan: AgentRuntimeAuthPlan;
+}>;
+
+type PreparedRuntimeAuthAttemptResolution<Model, Auth> = Readonly<{
+  model: Model;
+  plan: AgentRuntimeAuthPlan;
+  auth: Auth;
+}>;
+
 function normalizeRouteBaseUrl(value: string): string {
   return value.replace(/\/+$/u, "");
 }
@@ -94,13 +105,7 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
   }): Promise<{ plan: AgentRuntimeAuthPlan; auth: Auth }>;
   forceCredentialScopedDirectModelResolve?: boolean;
   errorMessage: string;
-}): Promise<
-  Readonly<{
-    model: Model;
-    plan: AgentRuntimeAuthPlan;
-    auth: Auth;
-  }>
-> {
+}): Promise<PreparedRuntimeAuthAttemptResolution<Model, Auth>> {
   const hasAvailableCandidate = (attempt: PreparedAgentRuntimeAuthAttempt) =>
     attempt.kind !== "profile" ||
     Boolean(
@@ -296,12 +301,7 @@ export async function resolvePreparedRuntimeModelAuth(
   params: Omit<Parameters<typeof getApiKeyForModelCore>[0], "profileId"> & {
     plan: AgentRuntimeAuthPlan;
   },
-): Promise<
-  Readonly<{
-    auth: Awaited<ReturnType<typeof getApiKeyForModelCore>>;
-    plan: AgentRuntimeAuthPlan;
-  }>
-> {
+): Promise<PreparedRuntimeModelAuthResolution> {
   const { plan, ...authParams } = params;
   const candidates = preparedProfileIds(plan);
   if (candidates.length === 0) {

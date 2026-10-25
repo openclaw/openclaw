@@ -113,16 +113,17 @@ type TtsRequestSetup = {
   providerRegistry: TtsProviderRegistry;
 };
 
-/** Keeps catalog and direct lookup selections in one explicit speech request owner. */
-export async function acquireTtsRequest(
-  params: TtsRequestSetupParams,
-): Promise<
+type AcquiredTtsRequest =
   | { error: string }
   | ({ setup: TtsRequestSetup } & Pick<
       Awaited<ReturnType<typeof acquirePluginCapabilityProviders<"speechProviders">>>,
       "run" | "release"
-    >)
-> {
+    >);
+
+/** Keeps catalog and direct lookup selections in one explicit speech request owner. */
+export async function acquireTtsRequest(
+  params: TtsRequestSetupParams,
+): Promise<AcquiredTtsRequest> {
   const cfg = selectLiveRuntimeConfig(params.cfg);
   const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
@@ -222,6 +223,7 @@ export async function withOwnedTtsRequest<T>(
   return await finishCapabilityOperation(outcome, acquired.release);
 }
 
+type ReadySpeechProvider = Extract<TtsProviderReadyResolution, { kind: "ready" }>;
 type TtsProviderOperation<TSynthesis> =
   | {
       kind: "ready";
@@ -258,7 +260,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   providerRegistry: TtsProviderRegistry;
   selectOperation: (params: {
     provider: TtsProvider;
-    resolvedProvider: Extract<TtsProviderReadyResolution, { kind: "ready" }>;
+    resolvedProvider: ReadySpeechProvider;
   }) => TtsProviderOperation<TSynthesis>;
   buildSuccess: (params: TtsProviderSuccess<TSynthesis>) => TResult;
 }) {

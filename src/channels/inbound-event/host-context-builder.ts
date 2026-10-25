@@ -18,20 +18,21 @@ import { bindChildSessionPublication } from "../message-access/child-session-pub
 import type { ChannelIngressHostOwner } from "../message-access/ingress-host-owner.js";
 import type { ChannelIngressContextBinding } from "../message-access/runtime-types.js";
 
+type HostContextParams = {
+  channel: string;
+  accountId?: string;
+  channelIngress?: Parameters<typeof prepareHostChannelContextAdmissionEvidence>[0]["ingress"];
+  sender: { id?: string | number | null };
+  route: { agentId: string; routeSessionKey: string; dispatchSessionKey?: string };
+  reply: { nativeChannelId?: string };
+  conversation: { nativeChannelId?: string };
+  messageId?: string;
+  message: { inboundEventKind?: "user_request" | "room_event" };
+};
 type MaybePromise<T> = T | Promise<T>;
 /** Wrap the ordinary builder with the private bundled-channel evidence binding. */
 export function createHostChannelInboundEventContextBuilder<
-  Params extends {
-    channel: string;
-    accountId?: string;
-    channelIngress?: Parameters<typeof prepareHostChannelContextAdmissionEvidence>[0]["ingress"];
-    sender: { id?: string | number | null };
-    route: { agentId: string; routeSessionKey: string; dispatchSessionKey?: string };
-    reply: { nativeChannelId?: string };
-    conversation: { nativeChannelId?: string };
-    messageId?: string;
-    message: { inboundEventKind?: "user_request" | "room_event" };
-  },
+  Params extends HostContextParams,
   Built extends MsgContext,
 >(
   buildContext: (params: Params) => MaybePromise<Built>,

@@ -39,6 +39,7 @@ type AgentRunAttemptFailure = {
 };
 
 type AgentRunAttemptTimeoutObservation = "compaction" | "tool_execution";
+type AgentRunAttemptTimeoutSource = "runtime" | "run_budget" | "idle" | "external";
 type AgentRunAttemptSettlementWarning = {
   pendingStage: string;
   elapsedMs: number;
@@ -63,7 +64,7 @@ export type AgentRunAttemptTerminal =
   | {
       kind: "timeout";
       phase: "prompt" | AgentRunAttemptTimeoutObservation;
-      source: "runtime" | "run_budget" | "idle" | "external";
+      source: AgentRunAttemptTimeoutSource;
       /** Present only when timeout handling also aborted the live harness run. */
       aborted?: true;
       failure?: AgentRunAttemptFailure;
@@ -74,6 +75,19 @@ export type AgentRunAttemptTerminal =
       error: unknown;
       timeoutObservation?: AgentRunAttemptTimeoutObservation;
     };
+
+type LegacyAgentRunAttemptTerminalInput = {
+  settlementWarning?: AgentRunAttemptSettlementWarning;
+  aborted?: boolean;
+  externalAbort?: boolean;
+  idleTimedOut?: boolean;
+  promptError?: unknown;
+  promptErrorSource?: AgentRunAttemptFailureSource | null;
+  timedOut?: boolean;
+  timedOutByRunBudget?: boolean;
+  timedOutDuringCompaction?: boolean;
+  timedOutDuringToolExecution?: boolean;
+};
 
 // Timeout owns mechanical abort/failure observations; within a timeout, the
 // latest concrete phase/source can only refine toward stronger attribution.
@@ -267,18 +281,9 @@ export function mergeAgentRunAttemptTerminal(
 }
 
 /** Normalizes the shipped harness result shape at the Plugin SDK boundary. */
-export function normalizeAgentRunAttemptTerminal(input: {
-  settlementWarning?: AgentRunAttemptSettlementWarning;
-  aborted?: boolean;
-  externalAbort?: boolean;
-  idleTimedOut?: boolean;
-  promptError?: unknown;
-  promptErrorSource?: AgentRunAttemptFailureSource | null;
-  timedOut?: boolean;
-  timedOutByRunBudget?: boolean;
-  timedOutDuringCompaction?: boolean;
-  timedOutDuringToolExecution?: boolean;
-}): AgentRunAttemptTerminal {
+export function normalizeAgentRunAttemptTerminal(
+  input: LegacyAgentRunAttemptTerminalInput,
+): AgentRunAttemptTerminal {
   let terminal: AgentRunAttemptTerminal = {
     kind: "ok",
     ...(input.settlementWarning && { settlementWarning: input.settlementWarning }),
@@ -424,6 +429,11 @@ type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
   status?: unknown;
 };
 
+type AgentRunLifecycleTerminalData = AgentRunTerminalWaitInput & {
+  aborted?: unknown;
+  fallbackExhaustedFailure?: unknown;
+};
+
 /** Shared grace window for terminal observations that may still be followed by a retry. */
 export const AGENT_RUN_TERMINAL_RETRY_GRACE_MS = 15_000;
 
@@ -477,10 +487,7 @@ export function buildAgentRunTerminalOutcome(
 
 export function buildAgentRunTerminalOutcomeFromLifecycleEvent(input: {
   phase: "end" | "error";
-  data?: AgentRunTerminalWaitInput & {
-    aborted?: unknown;
-    fallbackExhaustedFailure?: unknown;
-  };
+  data?: AgentRunLifecycleTerminalData;
   abortSignal?: AbortSignal;
   startedAt?: unknown;
   endedAt?: unknown;

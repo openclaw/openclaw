@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { resolveCliProgramArguments } from "../src/daemon/program-args.js";
+import { resolveNodeProgramArguments } from "../src/daemon/program-args.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "../src/daemon/systemd-unit.js";
 import { stageLauncherFixture } from "./helpers/openclaw-launcher-fixture.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
@@ -278,10 +278,10 @@ process.exit(0);
 `);
     const legacyEntrypoint = path.join(f.base, "dist", "index.js");
     await fs.writeFile(legacyEntrypoint, "await import('./entry.js');\n");
-    const command = await resolveCliProgramArguments({
+    const command = await resolveNodeProgramArguments({
       cliEntrypoint: legacyEntrypoint,
-      service: "node",
-      args: ["node", "run", "--host", "127.0.0.1", "--port", "18789"],
+      host: "127.0.0.1",
+      port: 18789,
       runtime: "node",
       runtimePath: process.execPath,
     });

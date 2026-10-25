@@ -209,6 +209,13 @@ async function resolveProactiveOwnerRoute(
   return undefined;
 }
 
+/** Explicit policy shared by automation execution and read-only owner-route diagnostics. */
+export async function resolveProactiveDeliveryTarget(
+  params: ProactiveDeliveryParams,
+): Promise<OutboundTarget> {
+  return resolveDeliveryTargetWithPolicy(params);
+}
+
 export async function hasResolvableProactiveOwnerRoute(
   params: ProactiveDeliveryParams,
 ): Promise<boolean> {
@@ -219,11 +226,17 @@ export async function hasResolvableProactiveOwnerRoute(
   return delivery.channel !== "none" && Boolean(delivery.to);
 }
 
+/** Resolves ordinary owner delivery through the channel's existing session route owner. */
+export async function resolveProactiveDeliveryTargetWithSessionRoute(
+  params: ProactiveDeliveryParams & { agentId: string; currentSessionKey?: string },
+): Promise<OutboundTarget> {
+  return resolveDeliveryTargetWithPolicyAndSessionRoute(params);
+}
+
 /**
- * Explicit policy shared by automation execution and read-only owner-route diagnostics.
- * Owner/unset ignores `to`; only explicit channels consume it.
+ * Resolves per-send policy. Owner/unset ignores `to`; only explicit channels consume it.
  */
-export async function resolveProactiveDeliveryTarget(
+async function resolveDeliveryTargetWithPolicy(
   params: ProactiveDeliveryParams,
 ): Promise<OutboundTarget> {
   const { cfg, entry } = params;
@@ -429,14 +442,11 @@ function buildNoDeliveryTarget(params: {
   };
 }
 
-/**
- * Resolves ordinary owner delivery by refining per-send policy through
- * the channel's existing outbound session route.
- */
-export async function resolveProactiveDeliveryTargetWithSessionRoute(
+/** Refines per-send policy through the channel's outbound session route. */
+async function resolveDeliveryTargetWithPolicyAndSessionRoute(
   params: ProactiveDeliveryParams & { agentId: string; currentSessionKey?: string },
 ): Promise<OutboundTarget> {
-  const delivery = await resolveProactiveDeliveryTarget(params);
+  const delivery = await resolveDeliveryTargetWithPolicy(params);
   const policy = params.policy;
   const ownerRouteMustBeDirect = policy?.target === undefined || policy.target === "owner";
   if (delivery.channel === "none" || !delivery.to) {

@@ -1,14 +1,10 @@
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
+  renderNativeHookRelayUnavailableResponse,
 } from "../agents/harness/native-hook-relay-client.js";
 import { invokeRemoteNativeHookRelay } from "../agents/harness/native-hook-relay-remote-client.js";
-import { codexNativeHookRelayResponseCodec } from "../agents/harness/native-hook-relay-response-codec.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
-import {
-  readNativeHookRelayProvider,
-  readNativeHookRelayEvent,
-} from "../agents/harness/native-hook-relay-utils.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
@@ -86,31 +82,15 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
     writeText(stderr, response.stderr);
     return response.exitCode;
   };
-  const unavailable = (message = "Native hook relay unavailable") => {
-    const preToolUseUnavailable = opts.preToolUseUnavailable;
-    readNativeHookRelayProvider(provider);
-    const unavailableEvent = readNativeHookRelayEvent(event);
-    const unavailableMessage = message?.trim() || "Native hook relay unavailable";
-    if (unavailableEvent === "pre_tool_use") {
-      // The cold CLI cannot reconstruct relay policy after lookup fails. Fail
-      // closed unless the generated command recorded that no local policy exists.
-      if (preToolUseUnavailable === "noop") {
-        return writeResponse(codexNativeHookRelayResponseCodec.renderNoopResponse());
-      }
-      return writeResponse(
-        codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(unavailableMessage),
-      );
-    }
-    if (unavailableEvent === "permission_request") {
-      return writeResponse(
-        codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse(
-          "deny",
-          unavailableMessage,
-        ),
-      );
-    }
-    return writeResponse(codexNativeHookRelayResponseCodec.renderNoopResponse());
-  };
+  const unavailable = (message = "Native hook relay unavailable") =>
+    writeResponse(
+      renderNativeHookRelayUnavailableResponse({
+        provider,
+        event,
+        preToolUseUnavailable: opts.preToolUseUnavailable,
+        message,
+      }),
+    );
   const timedOut = (error: NativeHookRelayDeadlineError) => {
     writeText(stderr, formatRelayCliError("native hook relay timed out", error));
     return unavailable("Native hook relay timed out");

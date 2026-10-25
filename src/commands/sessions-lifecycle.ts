@@ -18,25 +18,43 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { SESSION_ARCHIVE_REQUEST_TIMEOUT_MS } from "../shared/session-archive-timeout.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 
+type SessionsLifecycleCliOptions = {
+  keys: string[];
+  agent?: string;
+  dryRun?: boolean;
+  yes?: boolean;
+  timeout?: string;
+  url?: string;
+  token?: string;
+  password?: string;
+  json?: boolean;
+};
+
 type SessionsLifecycleOperation = "archive" | "delete";
+
+type SessionsLifecycleStatus =
+  | "archived"
+  | "already_archived"
+  | "deleted"
+  | "would_archive"
+  | "would_delete"
+  | "not_found"
+  | "failed";
 
 type SessionsLifecycleResult = {
   key: string;
   ok: boolean;
-  status:
-    | "archived"
-    | "already_archived"
-    | "deleted"
-    | "would_archive"
-    | "would_delete"
-    | "not_found"
-    | "failed";
+  status: SessionsLifecycleStatus;
   error?: string;
   archived?: string[];
   worktreePreserved?: PreservedSessionWorktree;
 };
 
 type SessionsListRow = Pick<SessionRow, "key" | "sessionId" | "agentId" | "archived" | "isMain">;
+
+type SessionsDescribeResult = {
+  session: SessionsListRow | null;
+};
 
 type SessionsLifecycleRpcOptions = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
@@ -91,9 +109,7 @@ async function listRequestedSessions(
         rpcOptions,
         { key, ...(agent ? { agentId: agent } : {}) },
         { defaultTimeoutMs: 30_000 },
-      )) as {
-        session: SessionsListRow | null;
-      };
+      )) as SessionsDescribeResult;
       if (!response || !("session" in response)) {
         throw new Error("Gateway returned an invalid sessions.describe response.");
       }
@@ -188,17 +204,7 @@ function outputLifecycleResults(
 
 export async function sessionsLifecycleCommand(
   operation: SessionsLifecycleOperation,
-  opts: {
-    keys: string[];
-    agent?: string;
-    dryRun?: boolean;
-    yes?: boolean;
-    timeout?: string;
-    url?: string;
-    token?: string;
-    password?: string;
-    json?: boolean;
-  },
+  opts: SessionsLifecycleCliOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
   const keys = uniqueStrings(opts.keys.map((key) => key.trim()));

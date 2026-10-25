@@ -28,6 +28,8 @@ export const CODE_MODE_BRIDGE_METHODS = [
   "sleep",
   "swarmNote",
 ] as const;
+type CodeModeBridgeMethod = (typeof CODE_MODE_BRIDGE_METHODS)[number];
+
 export type CodeModeConfig = {
   timeoutMs: number;
   memoryLimitBytes: number;
@@ -38,13 +40,13 @@ export type CodeModeConfig = {
 
 export type PendingBridgeRequest = {
   id: string;
-  method: (typeof CODE_MODE_BRIDGE_METHODS)[number];
+  method: CodeModeBridgeMethod;
   args: unknown[];
 };
 
 export type SettledBridgeRequest = { id: string; ok: boolean; json: string };
 
-export type CodeModeWorkerPayload<State> = (
+type CodeModeWorkerInput<State> =
   | {
       kind: "exec";
       source: string;
@@ -62,8 +64,9 @@ export type CodeModeWorkerPayload<State> = (
       config: CodeModeConfig;
       settledRequests: SettledBridgeRequest[];
       pendingRequests?: PendingBridgeRequest[];
-    }
-) & {
+    };
+
+export type CodeModeWorkerPayload<State> = CodeModeWorkerInput<State> & {
   /** Only interactive, non-replay cells can hand full final JSON to the run store. */
   retainFinalValue?: boolean;
 };

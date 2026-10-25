@@ -26,6 +26,7 @@ import {
 import { renderPostCompactionModelFailurePayload } from "./agent-runner-failure-reply.js";
 import { recoverBlockReplySources, setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
+import { commandTranscriptMirror } from "./channel-command-user-turn.js";
 import { resolveCommandContextText } from "./context-text.js";
 import {
   DispatchReplyOperationAbortedError,
@@ -50,7 +51,6 @@ import {
   sendReplyWithTranscriptMirror,
   transcriptMirrorForDeliveredPayload,
 } from "./dispatch-from-config.transcript.js";
-import { commandTranscriptMirror } from "./dispatch-native-subagent.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply.js";
 import {
   resolveRoutedReplyDeliveryOutcome,

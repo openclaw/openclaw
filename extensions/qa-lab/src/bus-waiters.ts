@@ -1,0 +1,116 @@
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  QaBusEvent,
+  QaBusMessage,
+  QaBusStateSnapshot,
+  QaBusThread,
+  QaBusWaitForInput,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+
+const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
+
+export function throwQaBusClosed(): never {
+  throw new Error("qa-bus closed");
+}
+
+export type QaBusWaitMatch = QaBusEvent | QaBusMessage | QaBusThread;
+
+type Waiter = {
+  settle: (snapshot: QaBusStateSnapshot) => boolean;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+};
+
+function createQaBusMatcher(
+  input: QaBusWaitForInput,
+): (snapshot: QaBusStateSnapshot) => QaBusWaitMatch | null {
+  return (snapshot) => {
+    if (input.kind === "event-kind") {
+      return snapshot.events.find((event) => event.kind === input.eventKind) ?? null;
+    }
+    if (input.kind === "thread-id") {
+      return snapshot.threads.find((thread) => thread.id === input.threadId) ?? null;
+    }
+    return (
+      snapshot.messages.find(
+        (message) =>
+          !message.deleted &&
+          (!input.direction || message.direction === input.direction) &&
+          message.text.includes(input.textIncludes),
+      ) ?? null
+    );
+  };
+}
+
+export function createQaBusWaiterStore(getSnapshot: () => QaBusStateSnapshot) {
+  const waiters = new Set<Waiter>();
+  let readSnapshot = getSnapshot;
+
+  const waitForMatch = async <T>(
+    matcher: (snapshot: QaBusStateSnapshot) => T | null,
+    timeoutMs: number | undefined,
+  ): Promise<T> => {
+    const immediate = matcher(readSnapshot());
+    if (immediate !== null) {
+      return immediate;
+    }
+    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_WAIT_TIMEOUT_MS, 0);
+    return await new Promise<T>((resolve, reject) => {
+      const waiter: Waiter = {
+        settle(snapshot) {
+          const match = matcher(snapshot);
+          if (match === null) {
+            return false;
+          }
+          resolve(match);
+          return true;
+        },
+        reject,
+        timer: setTimeout(() => {
+          waiters.delete(waiter);
+          reject(new Error(`qa-bus wait timeout after ${resolvedTimeoutMs}ms`));
+        }, resolvedTimeoutMs),
+      };
+      waiters.add(waiter);
+    });
+  };
+
+  return {
+    reset(reason = "qa-bus reset", terminal = false) {
+      readSnapshot = terminal ? throwQaBusClosed : readSnapshot;
+      for (const waiter of waiters) {
+        clearTimeout(waiter.timer);
+        waiter.reject(new Error(reason));
+      }
+      waiters.clear();
+    },
+    settle() {
+      if (waiters.size === 0) {
+        return;
+      }
+      const snapshot = readSnapshot();
+      for (const waiter of Array.from(waiters)) {
+        if (waiter.settle(snapshot)) {
+          clearTimeout(waiter.timer);
+          waiters.delete(waiter);
+        }
+      }
+    },
+    waitFor(input: QaBusWaitForInput) {
+      return waitForMatch(createQaBusMatcher(input), input.timeoutMs);
+    },
+    async waitForCursorAdvance(
+      afterCursor: number,
+      timeoutMs: number,
+      shouldResolve?: (snapshot: QaBusStateSnapshot) => boolean,
+    ) {
+      await waitForMatch(
+        (snapshot) =>
+          snapshot.cursor > afterCursor && (!shouldResolve || shouldResolve(snapshot))
+            ? true
+            : null,
+        timeoutMs,
+      );
+    },
+  };
+}

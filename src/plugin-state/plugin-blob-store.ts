@@ -1,34 +1,26 @@
-import { serialize } from "node:v8";
-import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
-import {
-  reserveSqliteWorkerInputPreparation,
-  type SqliteWorkerInputPreparation,
-} from "../infra/sqlite-worker-store.js";
-import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   MAX_PLUGIN_BLOB_BYTES_PER_ENTRY,
   MAX_PLUGIN_BLOB_BYTES_PER_PLUGIN,
   MAX_PLUGIN_BLOB_ENTRIES_PER_PLUGIN,
-  wrapPluginBlobError,
 } from "./plugin-blob-store.sqlite.js";
 import type {
   OpenBlobStoreOptions,
-  PluginBlobEntry,
-  PluginBlobEntryInfo,
-  PluginBlobRegistrationReceipt,
   PluginBlobOverflowPolicy,
   PluginBlobStoreWithReceipts,
   PluginBlobStoreOperation,
 } from "./plugin-blob-store.types.js";
 import { PluginBlobStoreError } from "./plugin-blob-store.types.js";
-import type { PluginBlobWorkerOperations } from "./plugin-blob-store.worker.js";
 import {
-  pluginBlobWorkerOperations,
-  type PluginBlobReadCommand,
-} from "./plugin-blob-worker-contract.js";
+  clearPluginBlobsInWorker,
+  lookupPluginBlobInWorker,
+  listPluginBlobsInWorker,
+  deletePluginBlobInWorker,
+  deleteExpiredPluginBlobKeyInWorker,
+  deleteExpiredPluginBlobsInWorker,
+  registerPluginBlobInWorker,
+  registerPluginBlobIfAbsentInWorker,
+} from "./plugin-blob-worker-client.js";
 import {
   createPluginStoreOptionPolicy,
   serializePluginStoreJson,
@@ -184,10 +176,7 @@ function createPluginBlobStoreInternal<TMetadata>(
 
   return {
     async register(key, bytes, metadata, opts) {
-      const { env: operationEnv, ...input } = prepareWrite(key, bytes, metadata, opts);
-      await execute(operationEnv, { type: "pluginBlob.register", input }, () =>
-        captureRegistrationInput("pluginBlob.register", input),
-      );
+      await registerPluginBlobInWorker(prepareWrite(key, bytes, metadata, opts));
     },
     async registerIfAbsent(key, bytes, metadata, opts) {
       return (
@@ -199,57 +188,31 @@ function createPluginBlobStoreInternal<TMetadata>(
       return registerPluginBlobIfAbsentInWorker(prepareWrite(key, bytes, metadata, opts));
     },
     async lookup(key) {
-      const { env: operationEnv, ...input } = {
+      return lookupPluginBlobInWorker<TMetadata>({
         ...scope,
         key: validateKey(key, "lookup"),
-      };
-      const reply = await readPluginBlob({ type: "pluginBlob.lookup", input }, operationEnv);
-      if (reply === undefined) {
-        return undefined;
-      }
-      if (reply.ok && reply.type === "pluginBlob.lookup") {
-        // SAFETY: The plugin namespace owns metadata shape; the read kernel validates JSON.
-        return reply.value as PluginBlobEntry<TMetadata> | undefined;
-      }
-      throw new Error("Unexpected plugin blob lookup reply");
+      });
     },
     async entries() {
-      const { env: operationEnv, ...input } = scope;
-      const reply = await readPluginBlob({ type: "pluginBlob.entries", input }, operationEnv);
-      if (reply === undefined) {
-        return [];
-      }
-      if (reply.ok && reply.type === "pluginBlob.entries") {
-        // SAFETY: The plugin namespace owns metadata shape; the read kernel validates JSON.
-        return reply.value as PluginBlobEntryInfo<TMetadata>[];
-      }
-      throw new Error("Unexpected plugin blob entries reply");
+      return listPluginBlobsInWorker<TMetadata>(scope);
     },
     async delete(key) {
-      const { env: operationEnv, ...input } = {
+      return deletePluginBlobInWorker({
         ...scope,
         key: validateKey(key, "delete"),
-      };
-      return execute(operationEnv, { type: "pluginBlob.delete", input });
+      });
     },
     async deleteExpiredKey(key) {
-      const { env: operationEnv, ...input } = {
+      return deleteExpiredPluginBlobKeyInWorker<TMetadata>({
         ...scope,
         key: validateKey(key, "sweep"),
-      };
-      const entry = await execute(operationEnv, { type: "pluginBlob.deleteExpiredKey", input });
-      // SAFETY: The plugin namespace owns the metadata type; its kernel validates stored JSON.
-      return entry as PluginBlobEntryInfo<TMetadata> | undefined;
+      });
     },
     async deleteExpired() {
-      const { env: operationEnv, ...input } = scope;
-      const entries = await execute(operationEnv, { type: "pluginBlob.deleteExpired", input });
-      // SAFETY: The plugin namespace owns the metadata type; its kernel validates stored JSON.
-      return entries as PluginBlobEntryInfo<TMetadata>[];
+      return deleteExpiredPluginBlobsInWorker<TMetadata>(scope);
     },
     async clear() {
-      const { env: operationEnv, ...input } = scope;
-      await execute(operationEnv, { type: "pluginBlob.clear", input });
+      await clearPluginBlobsInWorker(scope);
     },
   };
 }
@@ -277,95 +240,4 @@ export function resetPluginBlobStoreForTests(options: { closeDatabase?: boolean 
   if (options.closeDatabase !== false) {
     closeOpenClawStateDatabaseForTest();
   }
-}
-
-type Scope = Pick<SqliteWorkerStore<PluginBlobWorkerOperations>, "execute">;
-
-type Input<Key extends keyof PluginBlobWorkerOperations> =
-  PluginBlobWorkerOperations[Key]["input"] & { env?: NodeJS.ProcessEnv };
-
-async function execute<Key extends keyof PluginBlobWorkerOperations>(
-  env: NodeJS.ProcessEnv | undefined,
-  command: { type: Key; input: PluginBlobWorkerOperations[Key]["input"] },
-  prepare?: () => SqliteWorkerInputPreparation,
-): Promise<PluginBlobWorkerOperations[Key]["output"]> {
-  const databasePath = resolveOpenClawStateSqlitePath(env ?? process.env);
-  const description = pluginBlobWorkerOperations[command.type];
-  let dispatched = false;
-  let preparation: SqliteWorkerInputPreparation | undefined;
-  try {
-    preparation = prepare?.();
-    const context = captureOpenClawStateWorkerContext({ path: databasePath, env });
-    const { runOpenClawStateWorkerOperation } =
-      await import("../state/openclaw-state-worker-store.js");
-    return await runOpenClawStateWorkerOperation(
-      context,
-      async (scope: Scope) => {
-        dispatched = true;
-        return await (preparation
-          ? preparation.handoff(() => scope.execute<Key>(command))
-          : scope.execute<Key>(command));
-      },
-      { assertCurrent: preparation?.assertCurrent },
-    );
-  } catch (error) {
-    throw wrapPluginBlobError(
-      error,
-      description.operation,
-      dispatched ? "PLUGIN_BLOB_WRITE_FAILED" : "PLUGIN_BLOB_OPEN_FAILED",
-      dispatched ? description.message : "Failed to open plugin blob store.",
-      env,
-      databasePath,
-    );
-  } finally {
-    preparation?.release();
-  }
-}
-
-function captureRegistrationInput(
-  type: "pluginBlob.register" | "pluginBlob.registerIfAbsent",
-  input: PluginBlobWorkerOperations["pluginBlob.register"]["input"],
-): SqliteWorkerInputPreparation {
-  const metadataBytes = serialize({
-    type,
-    input: { ...input, bytes: new Uint8Array() },
-  }).byteLength;
-  const preparation = reserveSqliteWorkerInputPreparation(input.bytes.byteLength + metadataBytes);
-  try {
-    input.bytes = Uint8Array.from(input.bytes);
-    return preparation;
-  } catch (error) {
-    preparation.release();
-    throw error;
-  }
-}
-
-function registerPluginBlobIfAbsentInWorker(
-  params: Input<"pluginBlob.registerIfAbsent">,
-): Promise<PluginBlobRegistrationReceipt | undefined> {
-  const { env, ...input } = params;
-  return execute(env, { type: "pluginBlob.registerIfAbsent", input }, () =>
-    captureRegistrationInput("pluginBlob.registerIfAbsent", input),
-  );
-}
-
-function readPluginBlob(command: PluginBlobReadCommand, env?: NodeJS.ProcessEnv) {
-  const databasePath = resolveOpenClawStateSqlitePath(env ?? process.env);
-  const operation = command.type === "pluginBlob.lookup" ? "lookup" : "entries";
-  // This call captures and retains the selected source before any await.
-  return executeExistingOpenClawStateRead({ path: databasePath, env }, command, {
-    mapError: (error, phase) =>
-      wrapPluginBlobError(
-        error,
-        operation,
-        phase === "before-read" ? "PLUGIN_BLOB_OPEN_FAILED" : "PLUGIN_BLOB_READ_FAILED",
-        phase === "before-read"
-          ? "Failed to open plugin blob store."
-          : operation === "lookup"
-            ? "Failed to read plugin blob entry."
-            : "Failed to list plugin blob entries.",
-        env,
-        databasePath,
-      ),
-  });
 }

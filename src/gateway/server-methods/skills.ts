@@ -11,72 +11,34 @@ import {
   validateSkillsSecurityVerdictsParams,
   validateSkillsSkillCardParams,
   validateSkillsUpdateParams,
-  validateSkillsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  tryResolveAmbientOwnerAgentId,
-} from "../../agents/agent-scope-config.js";
-import { resolveNodeExecEligibilityAsync } from "../../agents/exec-defaults.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { registerClawHubCatalogIconUrls } from "../../plugins/catalog-icon-registry.js";
 import { updateSkillConfigEntry } from "../../skills/config/mutations.js";
-import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import {
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
 } from "../../skills/lifecycle/clawhub.js";
 import { prepareWorkspaceSkillEntries } from "../../skills/loading/workspace-skill-loader.js";
-import { ensureSkillsWatcher, refreshSkillsDiscovery } from "../../skills/runtime/refresh.js";
-import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
-import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import {
   collectClawHubVerdictTargets,
   fetchOpenClawSkillSecurityVerdicts,
 } from "../../skills/security/clawhub-verdicts.js";
 import { respondError } from "./response.js";
-import { withSessionDiscoveryAccess } from "./session-discovery-access.js";
 import { skillsFilesHandlers } from "./skills-files.js";
 import { handleSkillsInstall } from "./skills-install.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
 import { skillsRetiredHandlers } from "./skills-retired.js";
+import { buildRemoteAwareWorkspaceSkillStatus, handleSkillsStatus } from "./skills-status.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
 import { skillsWorkshopHandlers } from "./skills-workshop.js";
-import {
-  resolveSkillsAgentWorkspace,
-  type ResolvedSkillsWorkspace,
-} from "./skills-workspace-handler.js";
+import { resolveSkillsAgentWorkspace } from "./skills-workspace-handler.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
-
-async function buildRemoteAwareWorkspaceSkillStatus(
-  resolved: ResolvedSkillsWorkspace,
-  selections?: SkillLibrarySelection[],
-  skillCardKey?: string,
-) {
-  await prepareRemoteSkillConnections();
-  // Remote skill availability depends on the agent's executable-node surface,
-  // not only the workspace contents, so status reports include live eligibility.
-  const nodeSkills = await resolveNodeExecEligibilityAsync({
-    cfg: resolved.cfg,
-    agentId: resolved.agentId,
-  });
-  return prepareWorkspaceSkillStatus(resolved.workspaceDir, {
-    librarySelections: selections,
-    skillCardKey,
-    config: resolved.cfg,
-    agentId: resolved.agentId,
-    eligibility: {
-      nodeSkills,
-      remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
-    },
-  });
-}
 
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsFilesHandlers,
@@ -84,45 +46,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsUploadHandlers,
   ...skillsWorkshopHandlers,
   ...skillsRetiredHandlers,
-  "skills.status": defineValidatedGatewayHandler(
-    "skills.status",
-    validateSkillsStatusParams,
-    async ({ params, respond, context, client, signal, hasCurrentClientAuthority }) => {
-      const agentId = params.agentId ?? tryResolveAmbientOwnerAgentId(context.getRuntimeConfig());
-      const resolved = resolveSkillsAgentWorkspace({ ...params, agentId }, context);
-      if (!resolved.ok) {
-        respond(false, undefined, resolved.error);
-        return;
-      }
-      await withSessionDiscoveryAccess(
-        {
-          client,
-          context,
-          respond,
-          signal,
-          hasCurrentClientAuthority,
-          sessionKey: params.sessionKey,
-          agentId: resolved.agentId,
-          changedError: errorShape(ErrorCodes.INVALID_REQUEST, "Session changed; retry."),
-        },
-        async (entry) => {
-          await ensureSkillsWatcher({
-            workspaceDir: resolved.workspaceDir,
-            config: resolved.cfg,
-            agentId: resolved.agentId,
-          });
-          if (params.refresh === true) {
-            await refreshSkillsDiscovery({ config: resolved.cfg });
-          }
-          const { report } = await buildRemoteAwareWorkspaceSkillStatus(
-            resolved,
-            entry?.skillLibrarySelections,
-          );
-          return report;
-        },
-      );
-    },
-  ),
+  "skills.status": handleSkillsStatus,
   "skills.securityVerdicts": defineValidatedGatewayHandler(
     "skills.securityVerdicts",
     validateSkillsSecurityVerdictsParams,

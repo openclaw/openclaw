@@ -89,6 +89,26 @@ type RealtimeVoiceConnectionState = {
   terminalNotified: boolean;
 };
 
+type RealtimeVoiceConnectAttempt = {
+  readonly promise: Promise<void>;
+  readonly ready: boolean;
+  readonly settled: boolean;
+  readonly startupFailed: boolean;
+  reject: (error: Error) => void;
+  rejectStartup: (error: Error) => boolean;
+  resolve: (providerReady?: boolean) => void;
+  startTimeout: () => void;
+};
+
+type RealtimeVoiceConnectAttemptOptions = {
+  connection: RealtimeVoiceSessionConnection;
+  onAbort: (outcome: RealtimeVoiceTerminalOutcome | undefined) => void;
+  onTimeout: () => void;
+  timeoutError: () => Error;
+  timeoutMs: number;
+  ref?: boolean;
+};
+
 export class RealtimeVoiceSessionLifecycle {
   private state: RealtimeVoiceIdleState | RealtimeVoiceConnectionState = { phase: "idle" };
   private connectPromise: Promise<void> | undefined;
@@ -171,23 +191,7 @@ export class RealtimeVoiceSessionLifecycle {
     return { attempt: state.retryAttempts, signal: state.controller.signal };
   }
 
-  createConnectAttempt(options: {
-    connection: RealtimeVoiceSessionConnection;
-    onAbort: (outcome: RealtimeVoiceTerminalOutcome | undefined) => void;
-    onTimeout: () => void;
-    timeoutError: () => Error;
-    timeoutMs: number;
-    ref?: boolean;
-  }): {
-    readonly promise: Promise<void>;
-    readonly ready: boolean;
-    readonly settled: boolean;
-    readonly startupFailed: boolean;
-    reject: (error: Error) => void;
-    rejectStartup: (error: Error) => boolean;
-    resolve: (providerReady?: boolean) => void;
-    startTimeout: () => void;
-  } {
+  createConnectAttempt(options: RealtimeVoiceConnectAttemptOptions): RealtimeVoiceConnectAttempt {
     let settled = false;
     let ready = false;
     let startupFailed = false;

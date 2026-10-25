@@ -6,6 +6,7 @@ import { sleep } from "../../utils/sleep.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { readNativeHookRelayClientBridgeRecord } from "./native-hook-relay-client-store.js";
 import { DEFAULT_RELAY_TIMEOUT_MS } from "./native-hook-relay-constants.js";
+import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
   InvokeNativeHookRelayBridgeParams,
   InvokeNativeHookRelayParams,
@@ -211,4 +212,28 @@ export function isNativeHookRelayBridgeStaleRegistrationError(error: unknown): b
   return (
     error instanceof Error && error.message === NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR
   );
+}
+
+/** Render the provider response used when both relay transports are unavailable. */
+export function renderNativeHookRelayUnavailableResponse(params: {
+  provider: unknown;
+  event: unknown;
+  preToolUseUnavailable?: unknown;
+  message?: string;
+}): NativeHookRelayProcessResponse {
+  readNativeHookRelayProvider(params.provider);
+  const event = readNativeHookRelayEvent(params.event);
+  const message = params.message?.trim() || "Native hook relay unavailable";
+  if (event === "pre_tool_use") {
+    // The cold CLI cannot reconstruct relay policy after lookup fails. Fail
+    // closed unless the generated command recorded that no local policy exists.
+    if (params.preToolUseUnavailable === "noop") {
+      return codexNativeHookRelayResponseCodec.renderNoopResponse();
+    }
+    return codexNativeHookRelayResponseCodec.renderPreToolUseBlockResponse(message);
+  }
+  if (event === "permission_request") {
+    return codexNativeHookRelayResponseCodec.renderPermissionDecisionResponse("deny", message);
+  }
+  return codexNativeHookRelayResponseCodec.renderNoopResponse();
 }

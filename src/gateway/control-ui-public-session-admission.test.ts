@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
-import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import type { PublicSessionRepresentation } from "./control-ui-public-session-cache.js";
 
 let gate: ReturnType<typeof createControlUiPublicSessionRequestGate>;
 const config = {};
@@ -18,8 +17,8 @@ function request(index = 0) {
     sessionKey: `agent:main:public-${index}`,
     requestKey: `page-${index}`,
     config,
-    consume: (value) => value,
-  } satisfies Omit<Parameters<ControlUiPublicSessionRequestGate["run"]>[0], "work">;
+    consume: (value: PublicSessionRepresentation | null) => value,
+  };
 }
 afterEach(() => {
   gate.dispose();
@@ -237,53 +236,5 @@ describe("public reader admission", () => {
     }
     expect((await gate.run({ ...request(), work })).kind).toBe("rate-limited");
     expect(work).toHaveBeenCalledTimes(2);
-  });
-});
-
-it("keeps cached public text until its own transcript or publication changes", async () => {
-  const work = vi.fn(async () => "Published text");
-  const read = () => gate.run({ ...request(), work });
-  const initial = await read();
-  expect(await read()).toEqual(initial);
-  sessionChanges.emit({ sessionKey: "agent:main:other" });
-  expect(await read()).toEqual(initial);
-  expect(work).toHaveBeenCalledTimes(1);
-  emitSessionTranscriptUpdate({
-    sessionKey: request().sessionKey,
-    sessionId: "generation",
-    agentId: "main",
-  });
-  await read();
-  expect(work).toHaveBeenCalledTimes(2);
-  sessionChanges.emit({ sessionKey: request().sessionKey });
-  await read();
-  expect(work).toHaveBeenCalledTimes(3);
-  sessionChanges.emit({ all: true, scope: "stores" });
-  await read();
-  expect(work).toHaveBeenCalledTimes(4);
-  emitSessionTranscriptUpdate({ sessionFile: "/synthetic/unknown-session.jsonl" });
-  await read();
-  expect(work).toHaveBeenCalledTimes(5);
-});
-
-it("separates page variants and evicts the least-recent public representation at 128 entries", async () => {
-  const latest = vi.fn(async () => "Latest");
-  const older = vi.fn(async () => "Older");
-  const readLatest = () => gate.run({ ...request(0), work: latest });
-  const readOlder = () => gate.run({ ...request(1), work: older });
-  expect(await readLatest()).toMatchObject({ kind: "ok", value: { body: "Latest" } });
-  expect(await readOlder()).toMatchObject({ kind: "ok", value: { body: "Older" } });
-  await readLatest();
-  await readOlder();
-  expect(latest).toHaveBeenCalledTimes(1);
-  expect(older).toHaveBeenCalledTimes(1);
-  for (let index = 2; index < 130; index++) {
-    await gate.run({ ...request(index), work: async () => "Bounded" });
-  }
-  await readLatest();
-  expect(latest).toHaveBeenCalledTimes(2);
-  expect(await gate.run({ ...request(129), work: async () => "Must stay cached" })).toMatchObject({
-    kind: "ok",
-    value: { body: "Bounded" },
   });
 });

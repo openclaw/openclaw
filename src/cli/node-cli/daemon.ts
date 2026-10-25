@@ -16,7 +16,7 @@ import {
 } from "../../daemon/constants.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
 import { resolveDurableNodeEntrypoint } from "../../daemon/npx-service-install.js";
-import { resolveCliProgramArguments } from "../../daemon/program-args.js";
+import { resolveNodeProgramArguments } from "../../daemon/program-args.js";
 import {
   buildPlatformRuntimeLogHints,
   buildPlatformServiceStartHints,
@@ -262,40 +262,18 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const cliEntrypoint =
     restoreServiceCli?.entrypoint ??
     (!devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(installEnv) : undefined);
-  const nodeTls = Boolean(tls);
-  const { nodeId, displayName, shareInstalledApps, commands, allCommands } = opts;
-  const args = ["node", "run", "--host", host, "--port", String(port)];
-  if (!nodeTls && !tlsFingerprint) {
-    // Managed services must carry plaintext explicitly; omission would let the
-    // node runtime re-inherit TLS from the operator's global Gateway config.
-    args.push("--no-tls");
-  } else if (nodeTls || tlsFingerprint) {
-    args.push("--tls");
-  }
-  if (tlsFingerprint) {
-    args.push("--tls-fingerprint", tlsFingerprint);
-  }
-  if (contextPath) {
-    args.push("--context-path", contextPath);
-  }
-  if (nodeId) {
-    args.push("--node-id", nodeId);
-  }
-  if (displayName) {
-    args.push("--display-name", displayName);
-  }
-  if (shareInstalledApps !== undefined) {
-    args.push(shareInstalledApps ? "--share-installed-apps" : "--no-share-installed-apps");
-  }
-  if (allCommands) {
-    args.push("--all-commands");
-  } else if (commands !== undefined) {
-    args.push("--commands", commands.join(","));
-  }
-  const { programArguments, workingDirectory } = await resolveCliProgramArguments({
+  const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
-    service: "node",
-    args,
+    host,
+    port,
+    contextPath,
+    tls: Boolean(tls),
+    tlsFingerprint,
+    nodeId: opts.nodeId,
+    displayName: opts.displayName,
+    installedAppsSharing: opts.shareInstalledApps,
+    commands: opts.commands,
+    allCommands: opts.allCommands,
     dev: devMode,
     runtime,
     runtimePath,

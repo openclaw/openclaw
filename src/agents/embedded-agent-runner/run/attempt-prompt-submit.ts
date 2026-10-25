@@ -42,6 +42,27 @@ import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+type PromptSubmissionSession = {
+  messages: AgentMessage[];
+  readonly isCompacting: boolean;
+  [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];
+  agent: {
+    state: { messages: AgentMessage[] };
+    streamFn: StreamFn;
+    transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+    prepareNextTurn?: Agent["prepareNextTurn"];
+    prepareNextTurnWithContext?: Agent["prepareNextTurnWithContext"];
+    continue?: () => Promise<void>;
+  };
+};
+
+type PromptActiveSession = (
+  prompt: string,
+  options?: Parameters<AgentSession["prompt"]>[1],
+) => Promise<void>;
+
+type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
+
 export async function submitEmbeddedAttemptPrompt(input: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
@@ -52,22 +73,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | "userTurnTranscriptRecorder"
   >;
   registration?: ActiveEmbeddedRunAttachment;
-  activeSession: {
-    messages: AgentMessage[];
-    readonly isCompacting: boolean;
-    [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];
-    agent: {
-      state: { messages: AgentMessage[] };
-      streamFn: StreamFn;
-      transformContext?: (
-        messages: AgentMessage[],
-        signal?: AbortSignal,
-      ) => Promise<AgentMessage[]>;
-      prepareNextTurn?: Agent["prepareNextTurn"];
-      prepareNextTurnWithContext?: Agent["prepareNextTurnWithContext"];
-      continue?: () => Promise<void>;
-    };
-  };
+  activeSession: PromptSubmissionSession;
   appendOnlyRuntimeContext?: boolean;
   appendContext?: string;
   contextTokenBudget: number;
@@ -86,10 +92,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   ) => MeasuredRequestContext | undefined | Promise<MeasuredRequestContext | undefined>;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
-  promptActiveSession: (
-    prompt: string,
-    options?: Parameters<AgentSession["prompt"]>[1],
-  ) => Promise<void>;
+  promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
   runtimeOnly: boolean;
   setNextUserMessagePersistence?: (mode: NextUserMessagePersistence) => void;
@@ -97,7 +100,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
   toolResultAggregateMaxChars: number;
   toolResultMaxChars: number;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
-  trajectoryRecorder: Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>> | null;
+  trajectoryRecorder: TrajectoryRecorder | null;
   transcriptLeafId: string | null;
   transcriptPrompt: string;
 }): Promise<void> {
@@ -322,12 +325,14 @@ export async function submitEmbeddedAttemptPrompt(input: {
   }
 }
 
+type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
+
 /** Classifies prompt submissions that have no visible current-turn content. */
 export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
   imageCount: number;
-}): ("blank_user_prompt" | "empty_prompt_history_images") | null {
+}): PromptSubmissionSkipReason | null {
   if (params.prompt.trim().length > 0 || params.imageCount > 0) {
     return null;
   }
@@ -363,22 +368,26 @@ function hasNonEmptyContent(content: unknown): boolean {
 
 /** Classifies prompt failures and performs yield or mid-turn recovery. */
 type PromptErrorAttempt = Pick<EmbeddedRunAttemptParams, "runId" | "sessionId" | "abortSignal">;
+type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
+
+type EmbeddedAttemptPromptErrorOutcome = {
+  promptFailure?: {
+    error: unknown;
+    source: "prompt";
+  };
+};
+
 export async function handleEmbeddedAttemptPromptError(input: {
   activeSession: AgentSession;
   attempt: PromptErrorAttempt;
   error: unknown;
   handleMidTurnPrecheckRequest: (request: MidTurnPrecheckRequest) => Promise<void>;
   markYieldAborted: () => void;
-  withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) => Promise<T>;
+  withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
   yieldAbortSettled: Promise<void> | null;
   yieldDetected: boolean;
   yieldMessage: string | null;
-}): Promise<{
-  promptFailure?: {
-    error: unknown;
-    source: "prompt";
-  };
-}> {
+}): Promise<EmbeddedAttemptPromptErrorOutcome> {
   const yieldAborted = input.yieldDetected && isSessionsYieldAbortError(input.error);
   if (yieldAborted) {
     // Publish terminal state before fallible recovery so outer cleanup still recognizes the yield.

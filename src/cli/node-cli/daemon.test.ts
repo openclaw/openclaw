@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js";
 const pinSnapshotMock = vi.hoisted(() =>
   vi.fn<() => DaemonRuntimePinSnapshot>(() => ({ revision: "empty", stored: false })),
@@ -15,21 +13,15 @@ vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   readDaemonRuntimePinForInstall: pinSnapshotMock,
 }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { stageScheduledTask } from "../../daemon/schtasks-install.js";
-import { readScheduledTaskCommand } from "../../daemon/schtasks-layout.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceInstallArgs,
 } from "../../daemon/service-types.js";
-import * as windowsEncoding from "../../infra/windows-encoding.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { runNodeDaemonInstall, runNodeDaemonLifecycle, runNodeDaemonStatus } from "./daemon.js";
 
 const TLS_FINGERPRINT = "ab".repeat(32);
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const nodeTail = ["node", "run", "--host", "gateway.example", "--port", "18789"];
 const runtimePath = (runtime: "node" | "bun") =>
   path.join(
     path.dirname(process.execPath),
@@ -163,95 +155,6 @@ afterEach(() => {
 });
 
 describe("runNodeDaemonInstall", () => {
-  it("carries plaintext and command restrictions into the managed node command", async () => {
-    mocks.loadNodeHostConfig.mockResolvedValue(null);
-    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
-    const launcherPath = path.resolve("/opt/openclaw/openclaw.mjs");
-    process.argv = [process.execPath, entryPath];
-
-    await runNodeDaemonInstall({
-      force: true,
-      host: "gateway.example",
-      port: 18789,
-      runtime: "node",
-      runtimePath: NODE_RUNTIME_PATH,
-      tls: false,
-      commands: ["fixture.list", "fixture.read"],
-    });
-    const result = installedPlan();
-
-    expect(result.programArguments).toEqual([
-      NODE_RUNTIME_PATH,
-      launcherPath,
-      ...nodeTail,
-      "--no-tls",
-      "--commands",
-      "fixture.list,fixture.read",
-    ]);
-  });
-
-  it("replaces persisted command restrictions with all commands while retaining node options", async () => {
-    mocks.loadNodeHostConfig.mockResolvedValue(null);
-    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-    vi.spyOn(fs, "stat").mockImplementation(actualFs.stat);
-    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
-    process.argv = [process.execPath, entryPath];
-    vi.spyOn(windowsEncoding, "resolveWindowsOemCodePage").mockReturnValue(437);
-    const home = tempDirs.make("openclaw-node-command-reset-");
-    const env = {
-      HOME: home,
-      USERPROFILE: home,
-      OPENCLAW_STATE_DIR: path.join(home, "state"),
-      OPENCLAW_TASK_SCRIPT_NAME: "node.cmd",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node Fixture",
-    };
-    const stdout = new PassThrough();
-    const options = {
-      host: "gateway.example",
-      port: 18789,
-      displayName: "Fixture Node",
-      shareInstalledApps: false,
-      runtime: "node" as const,
-    };
-    try {
-      await runNodeDaemonInstall({ ...options, force: true, commands: ["fixture.read"] });
-      const restricted = installedPlan();
-      await stageScheduledTask({
-        env,
-        stdout,
-        programArguments: restricted.programArguments,
-        workingDirectory: restricted.workingDirectory,
-      });
-      const saved = await readScheduledTaskCommand(env);
-      expect(saved?.programArguments).toEqual(
-        expect.arrayContaining(["--commands", "fixture.read"]),
-      );
-
-      mocks.service.install.mockClear();
-      await runNodeDaemonInstall({ ...options, force: true, allCommands: true });
-      const reset = installedPlan();
-      await stageScheduledTask({
-        env,
-        stdout,
-        programArguments: reset.programArguments,
-        workingDirectory: reset.workingDirectory,
-      });
-      const replaced = await readScheduledTaskCommand(env);
-      expect(replaced?.programArguments).toEqual(
-        expect.arrayContaining([
-          "--all-commands",
-          "--display-name",
-          "Fixture Node",
-          "--no-share-installed-apps",
-        ]),
-      );
-      expect(replaced?.programArguments).not.toContain("--commands");
-      expect(replaced?.programArguments).not.toContain("fixture.read");
-    } finally {
-      stdout.destroy();
-    }
-  });
-
   const originalArgv = process.argv;
   afterEach(() => {
     process.argv = originalArgv;

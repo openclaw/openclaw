@@ -43,6 +43,12 @@ const log = createSubsystemLogger("gateway/web-push");
 const LEGACY_WEB_PUSH_PATHS = ["push/web-push-subscriptions.json", "push/vapid-keys.json"] as const;
 
 type WebPushRuntime = typeof import("web-push");
+type WebPushRuntimeModule = WebPushRuntime & { default?: WebPushRuntime };
+type WebPushDeliveryOptions = Pick<
+  NonNullable<Parameters<WebPushRuntime["sendNotification"]>[2]>,
+  "TTL" | "timeout" | "topic" | "urgency"
+>;
+
 export {
   WebPushSubscriptionBindingError,
   hasBoundWebPushSubscriptions,
@@ -59,9 +65,7 @@ export {
 } from "./push-web-store.js";
 
 const loadWebPushRuntime = createLazyRuntimeModule(() =>
-  import("web-push").then(
-    (mod: WebPushRuntime & { default?: WebPushRuntime }) => mod.default ?? mod,
-  ),
+  import("web-push").then((mod: WebPushRuntimeModule) => mod.default ?? mod),
 );
 
 // Production callers run under the Gateway's lifetime state/config lock. Doctor must
@@ -121,13 +125,15 @@ function resolveVapidSubjectFromEnv(): string {
   );
 }
 
+type RegisterWebPushParams = Pick<
+  Parameters<typeof upsertWebPushSubscription>[0],
+  "endpoint" | "keys" | "binding" | "guard"
+> & {
+  baseDir?: string;
+};
+
 export async function registerWebPushSubscription(
-  params: Pick<
-    Parameters<typeof upsertWebPushSubscription>[0],
-    "endpoint" | "keys" | "binding" | "guard"
-  > & {
-    baseDir?: string;
-  },
+  params: RegisterWebPushParams,
 ): Promise<WebPushSubscription> {
   const { endpoint, keys, baseDir } = params;
 
@@ -175,19 +181,16 @@ type WebPushPayload = {
   icon?: string;
 };
 
+type PreparedWebPushNotificationParams = {
+  subscriptions: readonly WebPushSubscription[];
+  payload: WebPushPayload;
+  deliveryOptions?: WebPushDeliveryOptions;
+};
+
 /** Prepares transport state so callers can perform final authorization immediately before send. */
 export async function prepareWebPushNotificationSender(
   baseDir?: string,
-): Promise<
-  (params: {
-    subscriptions: readonly WebPushSubscription[];
-    payload: WebPushPayload;
-    deliveryOptions?: Pick<
-      NonNullable<Parameters<WebPushRuntime["sendNotification"]>[2]>,
-      "TTL" | "timeout" | "topic" | "urgency"
-    >;
-  }) => Promise<WebPushSendResult[]>
-> {
+): Promise<(params: PreparedWebPushNotificationParams) => Promise<WebPushSendResult[]>> {
   assertLegacyWebPushMigrationComplete(baseDir);
   const vapidKeys = await resolveVapidKeys(baseDir);
   const webPush = await loadWebPushRuntime();

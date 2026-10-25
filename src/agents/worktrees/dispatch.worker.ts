@@ -1,8 +1,3 @@
-import { hasLocalWorkspaceProjectionInDatabase } from "../../gateway/worker-environments/local-workspace-store.kernel.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import type { DB } from "../../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type {
   WorkerOperationHandlers,
   WorkerOperations,
@@ -13,15 +8,11 @@ import {
   releasePendingWorktreeInDatabase,
 } from "./pending-slots.worker.js";
 import { writeProvisionedSnapshotInDatabase } from "./provisioned-snapshot.worker.js";
+import { withWorktreeRegistryWorkerReceipt } from "./registry-publication.js";
 import {
-  withWorktreeRegistryWorkerReceipt,
-  worktreeRegistryPublication,
-} from "./registry-publication.js";
-import {
-  getRegistryWorktreeInDatabase,
-  rowToRecord,
-  worktreeGcRevision,
-} from "./registry-read.kernel.js";
+  retireMissingWorktreeInWorker,
+  deferWorktreeCleanupInWorker,
+} from "./registry-retirement.worker.js";
 import {
   worktreeRunEndMutation,
   claimWorktreeRemovalInDatabase,
@@ -38,11 +29,7 @@ import {
   releaseWorktreeRunLeaseInDatabase,
   type WorktreeRunLeaseRowInput,
 } from "./run-lease-store.kernel.js";
-import type {
-  WorktreeRegistryPredicate,
-  ManagedWorktreeRecord,
-  WorktreeRemovalDeferral,
-} from "./types.js";
+import type { WorktreeRegistryPredicate } from "./types.js";
 
 export const worktreeOperations = {
   "worktrees.assertPredicates": (
@@ -77,111 +64,13 @@ export const worktreeOperations = {
     writeProvisionedSnapshotInDatabase,
   ),
   "worktrees.retireMissing": (
-    input: {
-      observed: Pick<
-        ManagedWorktreeRecord,
-        "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
-      >;
-      removedAt: number;
-    },
+    input: Parameters<typeof retireMissingWorktreeInWorker>[0],
     { open, stateOptions },
-  ): { record?: ManagedWorktreeRecord; protection?: "local-workspace-projection" } => {
-    const options = { ...stateOptions(), database: open() };
-    const { observed, removedAt } = input;
-    return runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        withWorktreeRegistryWorkerReceipt(db, () => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          // Projection creation checks the live registry in its own write transaction.
-          // Whichever writer commits first fences the other, including unfinished preparation.
-          if (hasLocalWorkspaceProjectionInDatabase(db, observed.id)) {
-            return {
-              record: getRegistryWorktreeInDatabase(db, observed.id),
-              protection: "local-workspace-projection",
-            };
-          }
-          // A path probe cannot retire a restored lifecycle or a rebound repository.
-          const retired = executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<Pick<DB, "worktrees">>(db)
-              .updateTable("worktrees")
-              .set({ removed_at: removedAt })
-              .where("id", "=", observed.id)
-              .where("removed_at", "is", null)
-              // A private exact-state retirement path may still hold the complete
-              // source. Only its explicit recovery owner can finalize that lifecycle.
-              .where((eb) =>
-                eb.or([
-                  eb("snapshot_ref", "is", null),
-                  eb("snapshot_ref", "not like", "refs/openclaw/snapshots/exact-%"),
-                ]),
-              )
-              .where("path", "=", observed.path)
-              .where("last_active_at", "=", observed.lastActiveAt)
-              .where("repo_root", "=", observed.repoRoot)
-              .where("repo_fingerprint", "=", observed.repoFingerprint)
-              .returningAll(),
-          ).rows[0];
-          worktreeRegistryPublication.rows(db, retired ? [retired] : []);
-          const record = retired
-            ? rowToRecord(retired)
-            : getRegistryWorktreeInDatabase(db, observed.id);
-
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-          return { record };
-        }),
-      options,
-      { operationLabel: "worktrees.retireMissing" },
-    );
-  },
+  ) => retireMissingWorktreeInWorker(input, { ...stateOptions(), database: open() }),
   "worktrees.deferCleanup": (
-    input: {
-      observed: ManagedWorktreeRecord;
-      reason: string | null;
-      retry?: WorktreeRemovalDeferral;
-      removalToken?: string;
-    },
+    input: Parameters<typeof deferWorktreeCleanupInWorker>[0],
     { open, stateOptions },
-  ): boolean => {
-    const options = { ...stateOptions(), database: open() };
-    const { observed, reason, retry, removalToken } = input;
-    return runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        withWorktreeRegistryWorkerReceipt(db, () => {
-          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-          if (removalToken) {
-            assertWorktreeRegistryPredicates(db, [
-              { kind: "removal-claim", id: observed.id, token: removalToken },
-            ]);
-          }
-          const current = getRegistryWorktreeInDatabase(db, observed.id);
-          const revision = worktreeGcRevision(observed);
-          if (
-            !current ||
-            current.removedAt !== undefined ||
-            worktreeGcRevision(current) !== revision
-          ) {
-            return false;
-          }
-          const rows = executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<Pick<DB, "worktrees">>(db)
-              .updateTable("worktrees")
-              .set({
-                gc_protection_json:
-                  reason === null ? null : JSON.stringify({ revision, reason, retry }),
-              })
-              .where("id", "=", observed.id)
-              .returningAll(),
-          ).rows;
-          worktreeRegistryPublication.rows(db, rows);
-          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-          return true;
-        }),
-      options,
-      { operationLabel: "worktrees.deferCleanup" },
-    );
-  },
+  ) => deferWorktreeCleanupInWorker(input, { ...stateOptions(), database: open() }),
   "worktrees.admitRunLease": (input: WorktreeRunLeaseRowInput, { writeAdmitted }) =>
     writeAdmitted(
       ({ db }) =>

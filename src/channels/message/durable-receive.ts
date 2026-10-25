@@ -10,6 +10,41 @@ type DurableInboundReceivePendingRecord<TPayload, TMetadata = unknown> = Omit<
   "channelId" | "accountId" | "queueName" | "laneKey"
 >;
 
+type DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata> =
+  | {
+      kind: "accepted";
+      duplicate: false;
+      record: DurableInboundReceivePendingRecord<TPayload, TMetadata>;
+    }
+  | {
+      kind: "pending";
+      duplicate: true;
+      record: DurableInboundReceivePendingRecord<TPayload, TMetadata>;
+    }
+  | {
+      kind: "completed";
+      duplicate: true;
+      record: Pick<
+        ChannelIngressQueueCompletedRecord<TCompletedMetadata>,
+        "id" | "completedAt" | "metadata"
+      >;
+    };
+
+type DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> = {
+  accept(
+    id: string,
+    payload: TPayload,
+    options?: { metadata?: TMetadata; receivedAt?: number },
+  ): Promise<DurableInboundReceiveAcceptResult<TPayload, TMetadata, TCompletedMetadata>>;
+  pending(): Promise<Array<DurableInboundReceivePendingRecord<TPayload, TMetadata>>>;
+  complete(
+    id: string,
+    options?: { metadata?: TCompletedMetadata; completedAt?: number },
+  ): Promise<void>;
+  release(id: string, options?: { lastError?: string; releasedAt?: number }): Promise<boolean>;
+  deletePending(id: string): Promise<boolean>;
+};
+
 function normalizeDurableInboundReceiveId(id: string): string {
   const normalized = id.trim();
   if (!normalized) {
@@ -25,39 +60,7 @@ export function createDurableInboundReceiveJournalFromQueue<
 >(options: {
   queue: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>;
   retention?: ChannelIngressQueuePruneOptions;
-}): {
-  accept(
-    id: string,
-    payload: TPayload,
-    options?: { metadata?: TMetadata; receivedAt?: number },
-  ): Promise<
-    | {
-        kind: "accepted";
-        duplicate: false;
-        record: DurableInboundReceivePendingRecord<TPayload, TMetadata>;
-      }
-    | {
-        kind: "pending";
-        duplicate: true;
-        record: DurableInboundReceivePendingRecord<TPayload, TMetadata>;
-      }
-    | {
-        kind: "completed";
-        duplicate: true;
-        record: Pick<
-          ChannelIngressQueueCompletedRecord<TCompletedMetadata>,
-          "id" | "completedAt" | "metadata"
-        >;
-      }
-  >;
-  pending(): Promise<Array<DurableInboundReceivePendingRecord<TPayload, TMetadata>>>;
-  complete(
-    id: string,
-    options?: { metadata?: TCompletedMetadata; completedAt?: number },
-  ): Promise<void>;
-  release(id: string, options?: { lastError?: string; releasedAt?: number }): Promise<boolean>;
-  deletePending(id: string): Promise<boolean>;
-} {
+}): DurableInboundReceiveJournal<TPayload, TMetadata, TCompletedMetadata> {
   const prune = async (protectId?: string) => {
     if (options.retention) {
       await options.queue.prune({

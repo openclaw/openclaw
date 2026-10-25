@@ -19,7 +19,7 @@ import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { commandsHandlers } from "./commands.js";
 import { withSessionDiscoveryAccess } from "./session-discovery-access.js";
-import { skillsHandlers } from "./skills.js";
+import { handleSkillsStatus } from "./skills-status.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const { discovery } = vi.hoisted(() => ({ discovery: vi.fn(async () => {}) }));
@@ -53,7 +53,7 @@ const sessionEntry = {
 } as const;
 const handlers = {
   "commands.list": commandsHandlers["commands.list"]!,
-  "skills.status": skillsHandlers["skills.status"]!,
+  "skills.status": handleSkillsStatus,
 };
 
 function participant(): GatewayClient {

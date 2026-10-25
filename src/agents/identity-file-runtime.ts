@@ -13,6 +13,16 @@ type IdentityReadWorkers = {
   identityFile: { input: IdentityFileRead; snapshot: IdentityFileSnapshot };
   localAgentAvatar: { input: LocalAgentAvatarRead; snapshot: LocalAgentAvatarSnapshot };
 };
+type IdentityReadRuntime<Worker extends keyof IdentityReadWorkers, Result, Loaded> = {
+  pool?: WorkerTaskPool<
+    IdentityReadWorkers[Worker]["input"],
+    IdentityReadWorkers[Worker]["snapshot"]
+  >;
+  closing?: Promise<void>;
+  pending: Map<string, Promise<Result>>;
+  cached: LruCache<Loaded>;
+};
+
 /** Identity metadata and avatar bytes share admission and cache settlement, not file policy. */
 export function prepareCachedIdentityRead<
   Worker extends keyof IdentityReadWorkers,
@@ -32,15 +42,7 @@ export function prepareCachedIdentityRead<
   ) => Result | undefined;
   isLoaded: (result: Result) => result is Loaded;
 }): Promise<Result> {
-  const runtime = resolveGlobalSingleton<{
-    pool?: WorkerTaskPool<
-      IdentityReadWorkers[Worker]["input"],
-      IdentityReadWorkers[Worker]["snapshot"]
-    >;
-    closing?: Promise<void>;
-    pending: Map<string, Promise<Result>>;
-    cached: LruCache<Loaded>;
-  }>(
+  const runtime = resolveGlobalSingleton<IdentityReadRuntime<Worker, Result, Loaded>>(
     params.runtimeKey,
     () => ({
       pending: new Map(),

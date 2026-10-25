@@ -1721,7 +1721,8 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: ["hasLocalWorkspaceProjectionInDatabase"],
-        evidence: "Only agents/worktrees/dispatch.worker.ts handles the retirement predicate",
+        evidence:
+          "Only agents/worktrees/registry-retirement.worker.ts:62 calls the retirement predicate",
       },
     ],
   ],

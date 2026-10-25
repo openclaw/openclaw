@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as windowsEncoding from "../infra/windows-encoding.js";
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
@@ -18,7 +20,9 @@ vi.mock("node:fs/promises", async () => {
 
 import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
-import { resolveGatewayProgramArguments, resolveNodeServiceEntrypoint } from "./program-args.js";
+import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
+import { stageScheduledTask } from "./schtasks-install.js";
+import { readScheduledTaskCommand } from "./schtasks-layout.js";
 
 const originalArgv = [...process.argv];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -56,7 +60,17 @@ function gatewayArgs(options: Partial<Parameters<typeof resolveGatewayProgramArg
     ...options,
   });
 }
+function nodeArgs(options: Partial<Parameters<typeof resolveNodeProgramArguments>[0]> = {}) {
+  return resolveNodeProgramArguments({
+    host: "gateway.example",
+    port: 18789,
+    runtime: "node",
+    runtimePath: validatedNodePath,
+    ...options,
+  });
+}
 const gatewayTail = ["gateway", "--port", "18789"];
+const nodeTail = ["node", "run", "--host", "gateway.example", "--port", "18789"];
 describe("resolveGatewayProgramArguments", () => {
   it("installs the requested start-mode override once", async () => {
     const entryPath = path.resolve("/opt/openclaw/dist/index.js");
@@ -194,7 +208,7 @@ describe("resolveGatewayProgramArguments", () => {
       process.execPath = "/usr/local/bin/bun";
     }
     await expect(
-      gatewayArgs({ runtime, dev: runtime === "node", runtimePath: " \t " }),
+      nodeArgs({ runtime, dev: runtime === "node", runtimePath: " \t " }),
     ).rejects.toThrow(error);
   });
 
@@ -221,20 +235,34 @@ describe("resolveGatewayProgramArguments", () => {
   });
 });
 
-describe("resolveNodeServiceEntrypoint", () => {
-  it.each(["src/entry.ts", "openclaw.mjs"])(
-    "keeps the node launcher in the selected package from %s",
-    async (entry) => {
+describe("resolveNodeProgramArguments", () => {
+  it.each([
+    { runtime: "node", entry: "src/entry.ts", runtimePath: validatedNodePath },
+    { runtime: "bun", entry: "openclaw.mjs", runtimePath: validatedBunPath },
+  ] as const)(
+    "keeps the $runtime launcher in the selected package from $entry",
+    async (options) => {
       const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
       const root = tempDirs.make("openclaw-node-selected-package-");
-      const entrypoint = path.join(root, entry);
+      const entrypoint = path.join(root, options.entry);
       const launcher = path.join(root, "openclaw.mjs");
       await actualFs.mkdir(path.dirname(entrypoint), { recursive: true });
       await actualFs.writeFile(entrypoint, "");
       await actualFs.writeFile(launcher, "");
       fsMocks.realpath.mockImplementation(actualFs.realpath);
       fsMocks.access.mockImplementation(actualFs.access);
-      await expect(resolveNodeServiceEntrypoint(entrypoint)).resolves.toBe(launcher);
+
+      const result = await nodeArgs({
+        cliEntrypoint: entrypoint,
+        runtime: options.runtime,
+        runtimePath: options.runtimePath,
+      });
+      expect(result.programArguments).toEqual([
+        options.runtimePath,
+        ...(options.runtime === "bun" ? ["--no-install"] : []),
+        launcher,
+        ...nodeTail,
+      ]);
     },
   );
 
@@ -247,8 +275,8 @@ describe("resolveNodeServiceEntrypoint", () => {
         throw new Error("missing");
       }
     });
-    const result = await resolveNodeServiceEntrypoint(index);
-    expect(result).toBe(entry);
+    const result = await nodeArgs();
+    expect(result.programArguments.slice(0, 2)).toEqual([validatedNodePath, entry]);
   });
 
   it("never silently installs the non-launcher entry when the launcher is missing", async () => {
@@ -259,6 +287,74 @@ describe("resolveNodeServiceEntrypoint", () => {
         throw new Error("missing");
       }
     });
-    await expect(resolveNodeServiceEntrypoint(index)).rejects.toThrow("Cannot find built CLI");
+    await expect(nodeArgs()).rejects.toThrow("Cannot find built CLI");
+  });
+
+  it("carries plaintext and command restrictions into the managed node command", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const launcherPath = path.resolve("/opt/openclaw/openclaw.mjs");
+    mockEntrypoint(entryPath);
+
+    const result = await nodeArgs({ tls: false, commands: ["fixture.list", "fixture.read"] });
+
+    expect(result.programArguments).toEqual([
+      validatedNodePath,
+      launcherPath,
+      ...nodeTail,
+      "--no-tls",
+      "--commands",
+      "fixture.list,fixture.read",
+    ]);
+  });
+
+  it("replaces persisted command restrictions with all commands while retaining node options", async () => {
+    const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    fsMocks.stat.mockImplementation(actualFs.stat);
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    mockEntrypoint(entryPath);
+    vi.spyOn(windowsEncoding, "resolveWindowsOemCodePage").mockReturnValue(437);
+    const home = tempDirs.make("openclaw-node-command-reset-");
+    const env = {
+      HOME: home,
+      USERPROFILE: home,
+      OPENCLAW_STATE_DIR: path.join(home, "state"),
+      OPENCLAW_TASK_SCRIPT_NAME: "node.cmd",
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node Fixture",
+    };
+    const stdout = new PassThrough();
+    const options = {
+      host: "gateway.example",
+      port: 18789,
+      displayName: "Fixture Node",
+      installedAppsSharing: false,
+      runtime: "node" as const,
+    };
+    try {
+      const restricted = await nodeArgs({
+        ...options,
+        commands: ["fixture.read"],
+      });
+      await stageScheduledTask({ env, stdout, ...restricted });
+      const saved = await readScheduledTaskCommand(env);
+      expect(saved?.programArguments).toEqual(
+        expect.arrayContaining(["--commands", "fixture.read"]),
+      );
+
+      const reset = await nodeArgs({ ...options, allCommands: true });
+      await stageScheduledTask({ env, stdout, ...reset });
+      const replaced = await readScheduledTaskCommand(env);
+      expect(replaced?.programArguments).toEqual(
+        expect.arrayContaining([
+          "--all-commands",
+          "--display-name",
+          "Fixture Node",
+          "--no-share-installed-apps",
+        ]),
+      );
+      expect(replaced?.programArguments).not.toContain("--commands");
+      expect(replaced?.programArguments).not.toContain("fixture.read");
+    } finally {
+      stdout.destroy();
+    }
   });
 });

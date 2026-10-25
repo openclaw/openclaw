@@ -21,6 +21,7 @@ vi.mock("node:fs/promises", async () => {
 });
 
 import * as processExec from "../process/exec.js";
+import { resolveNodeProgramArguments } from "./program-args.js";
 import {
   renderSystemNodeWarning,
   resolveBunRuntimeInfo,
@@ -152,7 +153,19 @@ describe("resolvePreferredNodePath", () => {
   it("reports an exec failure instead of advising a Node upgrade during install", async () => {
     mockNodePathPresent(linuxSystemNode);
     vi.spyOn(processExec, "runExec").mockRejectedValue(new Error("spawn EACCES"));
-    await expect(preferredNode({ platform: "linux", execPath: linuxSystemNode })).rejects.toThrow(
+    const install = async () => {
+      const runtimePath = await preferredNode({
+        platform: "linux",
+        execPath: linuxSystemNode,
+      });
+      return resolveNodeProgramArguments({
+        host: "gateway.example",
+        port: 18789,
+        runtime: "node",
+        runtimePath,
+      });
+    };
+    await expect(install()).rejects.toThrow(
       /Node runtime check failed.*\/usr\/bin\/node.*cwd.*EACCES/s,
     );
   });

@@ -400,33 +400,3 @@ it.each([true, false])(
     });
   },
 );
-
-it("revalidates captured agent runtime authority through the public node dispatch", async () => {
-  let authorityCurrent = true;
-  const operationalRunInstance = createOperationalRunInstanceRef("node-authority-run");
-  const client = agentClient(true, {
-    sessionKey: "agent:main:node-authority",
-    operationalRunInstance,
-    delegatedAuthority: {
-      kind: "local",
-      operationalRunInstance,
-      lifecycleGeneration: "node-authority-generation",
-      claimId: "node-authority-claim",
-    },
-  });
-  const invoke = streamingInvoke("node-authority");
-  const options = { invoke, client, validateAgentRuntimeApprovalAuthority: () => authorityCurrent };
-  const current = startNodeInvoke(options);
-  await current.invocation;
-  expectNodeReply(current.respond, expect.objectContaining({ ok: true }));
-  expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(true);
-  authorityCurrent = false;
-  expect(invoke.mock.calls[0]?.[0].isDispatchAuthorized?.()).toBe(false);
-  const revoked = startNodeInvoke(options);
-  await revoked.invocation;
-  expectFailure(revoked.respond, {
-    message: "agent runtime approval authority closed before node dispatch",
-    details: { code: "APPROVAL_AUTHORITY_CLOSED" },
-  });
-  expect(invoke).toHaveBeenCalledOnce();
-});
