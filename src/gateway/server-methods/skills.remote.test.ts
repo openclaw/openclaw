@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { saveSkillLibrary } from "../../skills/library/service.js";
 import { readWorkspaceSkillSources } from "../../skills/loading/workspace-skill-source-reader.js";
@@ -53,6 +57,13 @@ it("reads remote skill status, cards and binary requirements through the workspa
     requires: { bins: ["host-tool"] },
     install: [{ id: "host", kind: "node", package: "host-tool", os: [hostPlatform] }],
   });
+  await writeWorkspaceSkill(remote, "installer", {
+    install: [
+      { id: "brew", kind: "brew", formula: "fixture-tool" },
+      { id: "host", kind: "node", package: "host-tool", os: [hostPlatform] },
+      { id: "gateway", kind: "node", package: "gateway-tool", os: [process.platform] },
+    ],
+  });
   await writeWorkspaceSkill(remote, "missing", {
     requires: { bins: ["absent-tool"] },
   });
@@ -61,13 +72,13 @@ it("reads remote skill status, cards and binary requirements through the workspa
     plugins: { enabled: false },
     agents: { entries: { main: { workspace: gateway } } },
   };
-  const loadSkills = async (request: WorkspaceSkillSourceRequest) => ({
+  const loadSkills = vi.fn(async (request: WorkspaceSkillSourceRequest) => ({
     ...readWorkspaceSkillSources({
       ...request,
       sourcePlan: resolveWorkspaceSkillSourcePlan(remote, { workspaceOnly: true }),
     }),
     runtime: { platform: hostPlatform, bins: ["host-tool", "brew"] },
-  });
+  }));
   const release = registerAgentWorkspaceAccess(gateway, {
     bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
     loadSkills,
@@ -89,6 +100,7 @@ it("reads remote skill status, cards and binary requirements through the workspa
             install: [{ id: "host" }],
             skillCard: { present: true },
           },
+          { name: "installer", install: [{ id: "brew" }] },
           { name: "missing", eligible: false, missing: { bins: ["absent-tool"] } },
         ],
       },
@@ -98,6 +110,9 @@ it("reads remote skill status, cards and binary requirements through the workspa
       ok: true,
       response: { skillKey: "available", content: "# Remote card\n" },
     });
+    expect(loadSkills).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: { skillCardKey: "available" } }),
+    );
     expect(await call("skills.bins")).toMatchObject({
       ok: true,
       response: { bins: ["absent-tool", "host-tool"] },
@@ -107,80 +122,112 @@ it("reads remote skill status, cards and binary requirements through the workspa
   }
 });
 
-it("includes the shared session's pinned library in remote skill discovery", async () => {
-  await withOpenClawTestState({ label: "remote-skill-session-access" }, async (state) => {
-    const cfg = {
-      plugins: { enabled: false },
-      skills: { load: { watch: false } },
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    const alice = ensureProfileForEmail("alice@example.test");
-    const bob = ensureProfileForEmail("bob@example.test");
-    const authority = {
-      profileId: alice.id,
-      scopes: ["operator.read", "operator.write"],
-      getConfig: () => cfg,
-      assertCurrent: () => {},
-    };
-    await saveSkillLibrary(authority, {
-      slug: "private",
-      content: "---\nname: private\ndescription: Private procedure\n---\nInstructions\n",
-      expectedRevision: null,
-    });
-    const sessionKey = "agent:main:shared-skills";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: "shared-skills",
-        updatedAt: 1,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: alice.id },
-        skillLibrarySelections: await seedSkillLibrarySelection(authority),
-      },
-    );
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const context = bindSessionRowProjection({ getRuntimeConfig: () => cfg }, () => projection);
-    const release = registerAgentWorkspaceAccess(state.workspaceDir, {
-      bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-      loadSkills: async () => ({
-        entries: [],
-        executionEntries: [],
-        runtime: { platform: process.platform, bins: [] },
-        status: {
-          workspaceDir: state.workspaceDir,
-          managedSkillsDir: path.join(state.stateDir, "skills"),
-          files: [],
+it.each(["unchanged", "revoked", "replaced"] as const)(
+  "checks session access after remote discovery: %s",
+  async (change) => {
+    await withOpenClawTestState({ label: "remote-skill-session-access" }, async (state) => {
+      const cfg = {
+        plugins: { enabled: false },
+        skills: { load: { watch: false } },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const alice = ensureProfileForEmail("alice@example.test");
+      const bob = ensureProfileForEmail("bob@example.test");
+      const authority = {
+        profileId: alice.id,
+        scopes: ["operator.read", "operator.write"],
+        getConfig: () => cfg,
+        assertCurrent: () => {},
+      };
+      await saveSkillLibrary(authority, {
+        slug: "private",
+        content: "---\nname: private\ndescription: Private procedure\n---\nInstructions\n",
+        expectedRevision: null,
+      });
+      const sessionKey = "agent:main:shared-skills";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "shared-skills",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: { type: "human", source: "profile", id: alice.id },
+          skillLibrarySelections: await seedSkillLibrarySelection(authority),
         },
-      }),
-    });
-    const result = callGatewayHandler(
-      skillsHandlers,
-      "skills.status",
-      { sessionKey },
-      {
-        context,
-        client: {
-          authenticatedUserProfile: { profileId: bob.id },
-          connect: { scopes: ["operator.read", "operator.write"] },
-        } as GatewayClient,
-      },
-    );
-    try {
-      expect(await result).toMatchObject({
-        ok: true,
-        response: {
-          skills: expect.arrayContaining([
-            expect.objectContaining({
-              description: "Private procedure",
-              source: "openclaw-library",
-            }),
-          ]),
+      );
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const context = bindSessionRowProjection({ getRuntimeConfig: () => cfg }, () => projection);
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const release = registerAgentWorkspaceAccess(state.workspaceDir, {
+        bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+        loadSkills: async () => {
+          entered.resolve();
+          await resume.promise;
+          return {
+            entries: [],
+            executionEntries: [],
+            runtime: { platform: process.platform, bins: [] },
+            status: {
+              workspaceDir: state.workspaceDir,
+              managedSkillsDir: path.join(state.stateDir, "skills"),
+              files: [],
+            },
+          };
         },
       });
-    } finally {
-      projection.dispose();
-      release();
-    }
-  });
-});
+      const result = callGatewayHandler(
+        skillsHandlers,
+        "skills.status",
+        { sessionKey },
+        {
+          context,
+          client: {
+            authenticatedUserProfile: { profileId: bob.id },
+            connect: { scopes: ["operator.read", "operator.write"] },
+          } as GatewayClient,
+        },
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          result,
+          "skills.status skipped remote discovery",
+        );
+        if (change !== "unchanged") {
+          await patchSessionEntryCore({ agentId: "main", sessionKey }, () =>
+            change === "revoked" ? { visibility: "draft" } : { sessionId: "replacement" },
+          );
+        }
+        resume.resolve();
+        const response = await result;
+        if (change === "unchanged") {
+          expect(response).toMatchObject({
+            ok: true,
+            response: {
+              skills: expect.arrayContaining([
+                expect.objectContaining({
+                  description: "Private procedure",
+                  source: "openclaw-library",
+                }),
+              ]),
+            },
+          });
+        } else {
+          expect(response).toMatchObject({
+            ok: false,
+            response: undefined,
+            error: { code: "INVALID_REQUEST" },
+          });
+        }
+      } finally {
+        resume.resolve();
+        await result.finally(() => {
+          projection.dispose();
+          release();
+        });
+      }
+    });
+  },
+);

@@ -12,6 +12,10 @@ const TEST_GATEWAY_TOKEN = "test-gateway-token-1234567890";
 const WORKER_SESSION_KEY = "agent:main:subagent:worker";
 const WORKER_KILL_PATH = "/sessions/agent%3Amain%3Asubagent%3Aworker/kill";
 const ADMIN_SCOPE_HEADERS = { "x-openclaw-scopes": "operator.admin" };
+const REQUESTER_WRITE_HEADERS = {
+  "x-openclaw-scopes": "operator.write",
+  "x-openclaw-requester-session-key": "agent:main:main",
+};
 const REQUESTER_ADMIN_HEADERS = {
   "x-openclaw-scopes": "operator.admin",
   "x-openclaw-requester-session-key": "agent:other:main",
@@ -210,8 +214,14 @@ it("preserves failures from an authorized kill", async () => {
   await expect(response.text()).resolves.toBe("Internal Server Error");
 });
 
-it("rejects shared-secret scope spoofing", async () => {
-  const response = await post(undefined, TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS);
+it.each([
+  ["shared-secret scope spoofing", false, TEST_GATEWAY_TOKEN, ADMIN_SCOPE_HEADERS],
+  ["trusted-proxy requester without admin", true, "", REQUESTER_WRITE_HEADERS],
+] as const)("rejects %s", async (_name, trustedProxy, token, headers) => {
+  if (trustedProxy) {
+    allowTrustedProxyAuth();
+  }
+  const response = await post(undefined, token, headers);
   await expectError(response, 403, "forbidden", "missing scope: operator.admin");
   expect(loadSessionEntryMock).not.toHaveBeenCalled();
   expect(killSubagentRunAdminMock).not.toHaveBeenCalled();

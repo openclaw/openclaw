@@ -2,6 +2,8 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as gateway from "../agents/tools/in-process-gateway.js";
+import { createProgressCardTool } from "../agents/tools/progress-card-tool.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptIndexStatus } from "../config/sessions/session-transcript-projection-writer.js";
@@ -17,6 +19,8 @@ import * as publications from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { progressCardStore } from "./progress-card-store.js";
+import { progressCardHandlers } from "./server-methods/progress-card.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 const sessionKey = "agent:main:progress-worker";
@@ -52,22 +56,39 @@ function withCardSession(custom: boolean, run: (cfg: OpenClawConfig) => Promise<
 }
 
 it.each([false, true])(
-  "persists cards and conditional clears without caller SQL (custom=%s)",
+  "persists tool and conditional RPC clears without caller SQL (custom=%s)",
   async (custom) => {
     await withCardSession(custom, async (cfg) => {
-      const db = openOpenClawAgentDatabase({ agentId: "main", path: cfg.session?.store }).db;
+      const target = { agentId: "main", path: cfg.session?.store };
+      const db = openOpenClawAgentDatabase(target).db;
+      const handlers = progressCardHandlers;
+      const broadcast = vi.fn();
+      const invoke = async (params: unknown) => {
+        const respond = vi.fn<RespondFn>();
+        await handlers["progressCard.put"]!({
+          params,
+          respond,
+          context: { getRuntimeConfig: () => cfg, broadcast } as unknown as GatewayRequestContext,
+        } as never);
+        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+        return respond.mock.calls[0]?.[1];
+      };
+      vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(
+        async <T>(_method: string, params: Record<string, unknown>) => (await invoke(params)) as T,
+      );
+      const tool = createProgressCardTool({ agentSessionKey: sessionKey });
       const sql = observeHostDataSql();
       try {
-        await put({
+        await tool.execute("create", {
           markdown: "First",
-          steps: [{ step: "Persist", status: "in_progress" }],
+          plan: [{ step: "Persist", status: "in_progress" }],
         });
-        await put({ markdown: "Second" });
-        expect(await put({ expectedRevision: 1 })).toMatchObject({
+        await tool.execute("replace", { markdown: "Second" });
+        expect(await invoke({ sessionKey, expectedRevision: 1 })).toMatchObject({
           card: { revision: 2, markdown: "Second" },
         });
-        expect(await put({ expectedRevision: 2 })).toEqual({ card: null });
-        await put({ steps: [{ step: "Done", status: "completed" }] });
+        expect(await invoke({ sessionKey, expectedRevision: 2 })).toEqual({ card: null });
+        await tool.execute("recreate", { plan: [{ step: "Done", status: "completed" }] });
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
@@ -76,6 +97,7 @@ it.each([false, true])(
         revision: 4,
         steps: [{ step: "Done", status: "completed" }],
       });
+      expect(broadcast.mock.calls.map((call) => call[1].revision)).toEqual([1, 2, null, 4]);
     });
   },
 );
