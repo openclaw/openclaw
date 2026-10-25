@@ -144,19 +144,11 @@ describe("runCommand", () => {
 
     const prompt = "Quel est le rôle du dossier checks ?";
     it.runIf(process.platform === "win32").each([
-      {
-        name: "with trailing flags",
-        suffix: " --permission-mode plan",
-        expected: [prompt, "--permission-mode", "plan"],
-      },
-      {
-        name: "when the command begins and ends with quotes",
-        suffix: "",
-        expected: [prompt],
-      },
-    ])(
-      "delivers a quoted argument with spaces and accents whole to the child ($name)",
-      async ({ suffix, expected }) => {
+      [" --permission-mode plan", [prompt, "--permission-mode", "plan"]],
+      ["", [prompt]],
+    ] as const)(
+      "delivers quoted spaces and accents whole with suffix %j",
+      async (suffix, expected) => {
         const source =
           "process.stdout.write(encodeURIComponent(JSON.stringify(process.argv.slice(1))))";
         const result = await runCommand(
@@ -175,8 +167,7 @@ describe("runCommand", () => {
   });
 
   describe("working directory failures", () => {
-    const enoent = (message: string) =>
-      Object.assign(new Error(message), { code: "ENOENT" }) as NodeJS.ErrnoException;
+    const enoent = (message: string) => Object.assign(new Error(message), { code: "ENOENT" });
 
     async function runCommandError(error: NodeJS.ErrnoException, cwd?: string) {
       vi.spyOn(processExec, "runCommandWithTimeout").mockRejectedValueOnce(error);
@@ -201,9 +192,7 @@ describe("runCommand", () => {
       expect(await runCommandError(enoent("spawn /bin/sh ENOENT"), undefined)).toBe(
         "spawn /bin/sh ENOENT",
       );
-      const denied = Object.assign(new Error("spawn EACCES"), {
-        code: "EACCES",
-      }) as NodeJS.ErrnoException;
+      const denied = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
       expect(await runCommandError(denied, "/missing")).toBe("spawn EACCES");
     });
 
