@@ -170,14 +170,22 @@ describe("provider attribution", () => {
   });
 
   it("uses provider facts from the replacement plugin snapshot after reload", () => {
-    for (const [endpoint, family] of [
-      ["openai-public", "before-reload"],
-      ["anthropic-public", "after-reload"],
-    ]) {
-      providerMetadataState.snapshot = reloadSnapshot(endpoint, family);
-      expect(resolveProviderEndpoint("https://reload.example.com").endpointClass).toBe(endpoint);
-      expect(resolveProviderRequestPolicy({ provider: "reload" }).knownProviderFamily).toBe(family);
-    }
+    providerMetadataState.snapshot = reloadSnapshot("openai-public", "before-reload");
+    expect(resolveProviderEndpoint("https://reload.example.com").endpointClass).toBe(
+      "openai-public",
+    );
+    expect(resolveProviderRequestPolicy({ provider: "reload" }).knownProviderFamily).toBe(
+      "before-reload",
+    );
+
+    providerMetadataState.snapshot = reloadSnapshot("anthropic-public", "after-reload");
+
+    expect(resolveProviderEndpoint("https://reload.example.com").endpointClass).toBe(
+      "anthropic-public",
+    );
+    expect(resolveProviderRequestPolicy({ provider: "reload" }).knownProviderFamily).toBe(
+      "after-reload",
+    );
   });
 
   it("resolves fallback provider facts in each operation's metadata generation", () => {
@@ -236,30 +244,42 @@ describe("provider attribution", () => {
   });
 
   it.each([
-    ["opencode-go", "go/v1", "v1"],
-    ["opencode", "v1", "go/v1"],
-  ])("identifies OpenClaw only on %s native routes", (provider, path, otherPath) => {
-    const input = { provider, api: "openai-completions" };
-    const native = requestPolicy({ ...input, baseUrl: `https://opencode.ai/zen/${path}` });
-    expect(native).toMatchObject({
-      endpointClass: `${provider}-native`,
-      attributionProvider: provider,
-      allowsHiddenAttribution: false,
-    });
-    expect(native.attributionHeaders).toEqual({ "User-Agent": "openclaw/2026.3.22" });
-    for (const baseUrl of [
-      "https://proxy.example.com/v1",
-      `https://opencode.ai/zen/${otherPath}`,
-    ]) {
+    [
+      "opencode-go",
+      "https://opencode.ai/zen/go/v1",
+      "opencode-go-native",
+      "https://opencode.ai/zen/v1",
+    ],
+    ["opencode", "https://opencode.ai/zen/v1", "opencode-native", "https://opencode.ai/zen/go/v1"],
+  ])(
+    "identifies OpenClaw only on %s native routes",
+    (provider, baseUrl, endpointClass, otherUrl) => {
+      const nativeGo = requestPolicy({
+        provider,
+        api: "openai-completions",
+        baseUrl,
+      });
+
+      expect(nativeGo).toMatchObject({
+        endpointClass,
+        attributionProvider: provider,
+        allowsHiddenAttribution: false,
+      });
+      expect(nativeGo.attributionHeaders).toEqual({ "User-Agent": "openclaw/2026.3.22" });
+
+      expect(
+        requestPolicy({
+          provider,
+          api: "openai-completions",
+          baseUrl: "https://proxy.example.com/v1",
+        }).attributionHeaders,
+      ).toBeUndefined();
       expectPolicy(
-        { ...input, baseUrl },
-        {
-          attributionProvider: undefined,
-          attributionHeaders: undefined,
-        },
+        { provider, api: "openai-completions", baseUrl: otherUrl },
+        { attributionProvider: undefined, attributionHeaders: undefined },
       );
-    }
-  });
+    },
+  );
 
   it("authorizes hidden xAI attribution on api.x.ai and the default xAI route", () => {
     const native = requestPolicy({ provider: "xai", baseUrl: "https://api.x.ai/v1" });
@@ -276,6 +296,7 @@ describe("provider attribution", () => {
 
     expectPolicy({ provider: "xai" }, { endpointClass: "default", attributionProvider: "xai" });
 
+    // Custom proxy baseUrl should withhold xAI attribution.
     expectPolicy(
       { provider: "xai", baseUrl: "https://proxy.example.com/v1" },
       {
@@ -287,6 +308,11 @@ describe("provider attribution", () => {
   });
 
   it("classifies native Mistral hosts centrally", () => {
+    expect(resolveProviderEndpoint("https://api.mistral.ai/v1")).toMatchObject({
+      endpointClass: "mistral-public",
+      hostname: "api.mistral.ai",
+    });
+
     expect(
       requestCapabilities({
         provider: "mistral",
@@ -312,39 +338,49 @@ describe("provider attribution", () => {
     );
   });
 
-  it.each([
-    [
-      "or",
-      "openai-completions",
-      "https://openrouter.ai/api/v1",
-      {
+  it.each<{
+    input: Parameters<typeof requestPolicy>[0];
+    headers?: Record<string, string>;
+  }>([
+    {
+      input: { provider: "or", api: "openai-completions", baseUrl: "https://openrouter.ai/api/v1" },
+      headers: {
         "HTTP-Referer": "https://openclaw.ai",
         "X-OpenRouter-Title": "OpenClaw",
         "X-OpenRouter-Categories": "personal-agent,cli-agent",
       },
-    ],
-    ["openrouter", undefined, "https://proxy.example.com/v1", undefined],
-    [
-      "my-gateway",
-      "anthropic-messages",
-      "https://ai-gateway.vercel.sh",
-      {
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-Title": "OpenClaw",
-      },
-    ],
-    ["vercel-ai-gateway", "anthropic-messages", "https://proxy.example.com", undefined],
-    ["perplexity", undefined, undefined, { "X-Pplx-Integration": "openclaw/2026.3.22" }],
-    ["perplexity", undefined, "https://proxy.example.com/v1", undefined],
-  ] as const)(
-    "gates documented attribution for %s / %s / %s",
-    (provider, api, baseUrl, headers) => {
-      expect(
-        requestPolicy({ provider, api, baseUrl, transport: "http", capability: "other" })
-          .attributionHeaders,
-      ).toEqual(headers);
     },
-  );
+    { input: { provider: "openrouter", baseUrl: "https://proxy.example.com/v1" } },
+    {
+      input: {
+        provider: "my-gateway",
+        api: "anthropic-messages",
+        baseUrl: "https://ai-gateway.vercel.sh",
+      },
+      headers: { "HTTP-Referer": "https://openclaw.ai", "X-Title": "OpenClaw" },
+    },
+    {
+      input: {
+        provider: "vercel-ai-gateway",
+        api: "anthropic-messages",
+        baseUrl: "https://proxy.example.com",
+      },
+    },
+    {
+      input: { provider: "perplexity", transport: "http", capability: "other" },
+      headers: { "X-Pplx-Integration": "openclaw/2026.3.22" },
+    },
+    {
+      input: {
+        provider: "perplexity",
+        transport: "http",
+        capability: "other",
+        baseUrl: "https://proxy.example.com/v1",
+      },
+    },
+  ])("gates documented attribution for $input.provider at $input.baseUrl", ({ input, headers }) => {
+    expect(requestPolicy(input).attributionHeaders).toEqual(headers);
+  });
 
   it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
     const cases = [
@@ -399,26 +435,39 @@ describe("provider attribution", () => {
   );
 
   it("respects compat.supportsPromptCacheKey override on prompt cache stripping", () => {
-    for (const [
-      provider,
-      host,
-      supportsPromptCacheKey,
-      endpointClass,
-      shouldStripResponsesPromptCache,
-    ] of [
-      ["custom-proxy", "proxy.example.com", true, "custom", false],
-      ["openai", "api.openai.com", false, "openai-public", true],
-      ["custom-proxy", "proxy.example.com", undefined, "custom", true],
-    ] as const) {
-      expect(
-        requestCapabilities({
-          provider,
-          api: "openai-responses",
-          baseUrl: `https://${host}/v1`,
-          ...(supportsPromptCacheKey === undefined ? {} : { compat: { supportsPromptCacheKey } }),
-        }),
-      ).toMatchObject({ endpointClass, shouldStripResponsesPromptCache });
-    }
+    expect(
+      requestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsPromptCacheKey: true },
+      }),
+    ).toMatchObject({
+      endpointClass: "custom",
+      shouldStripResponsesPromptCache: false,
+    });
+
+    expect(
+      requestCapabilities({
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        compat: { supportsPromptCacheKey: false },
+      }),
+    ).toMatchObject({
+      endpointClass: "openai-public",
+      shouldStripResponsesPromptCache: true,
+    });
+
+    expect(
+      requestCapabilities({
+        provider: "custom-proxy",
+        api: "openai-responses",
+        baseUrl: "https://proxy.example.com/v1",
+      }),
+    ).toMatchObject({
+      shouldStripResponsesPromptCache: true,
+    });
   });
 
   it("resolves a provider capability matrix for representative native and proxied routes", () => {

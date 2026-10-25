@@ -17,6 +17,7 @@ import {
   listUpdateRuns,
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
+import { renderUpdateRunReport } from "./update-run-report.js";
 import {
   runAutoUpdateCommand,
   runCampaignUpdate,
@@ -66,26 +67,13 @@ vi.mock("./restart.js", async (importOriginal) => ({
 }));
 
 const campaigns = new Set<UpdateCampaignController>();
-const log = { info: vi.fn() };
-const rollbackOutcome = {
-  status: "not-needed" as const,
-  reason: "The handoff owner verified no package mutation",
-};
-function expectInfo(message: string) {
-  expect(log.info).toHaveBeenCalledWith(expect.stringContaining(message));
-}
-function latestRun(expected: Record<string, unknown>) {
-  const run = expectDefined(listUpdateRuns()[0], "campaign run");
-  expect(run).toMatchObject(expected);
-  return run;
-}
 const successor = {
   kind: "managed-update-handoff",
   handoffId: "auto-handoff-id",
   installRoot: "/opt/openclaw",
 };
 
-function runAdmittedUpdate(runId: string) {
+function runAdmittedUpdate(runId: string, log = { info: vi.fn() }) {
   return runAutoUpdateCommand(
     {
       runId,
@@ -137,7 +125,7 @@ function runBetaCampaign(
     tag: "beta",
     forced: false,
     root: "/opt/openclaw",
-    log,
+    log: { info: vi.fn() },
     canApply: () => true,
     onAttempt: () => {},
     ...params,
@@ -148,7 +136,6 @@ describe("automatic campaign handoff failure", () => {
   let state: OpenClawTestState;
 
   beforeEach(async () => {
-    log.info.mockClear();
     state = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-campaign-handoff-",
@@ -191,9 +178,13 @@ describe("automatic campaign handoff failure", () => {
         failureFacts: [{ check: reason, code: reason, message }],
       }),
     );
+    expectIncludes(renderUpdateRunReport(recorded).markdown, reason, message);
+    const report = await recordedFailureReport(recorded);
+    expectIncludes(report.body, reason);
   });
 
   it.each([
+    "unchanged",
     "new candidate",
     "manual update",
     "different reason",
@@ -203,6 +194,7 @@ describe("automatic campaign handoff failure", () => {
   ] as const)(
     "backs off only identical candidate Doctor failures across restart: %s",
     async (resume) => {
+      const log = { info: vi.fn() };
       const step: UpdateStepResult = {
         name: "candidate-doctor",
         command: "doctor",
@@ -220,7 +212,7 @@ describe("automatic campaign handoff failure", () => {
       const attempt = async (version = "2.0.0-beta.1") => {
         const campaign = createApplyingCampaign(version);
         try {
-          return await runBetaCampaign({ version, campaign, runAuto });
+          return await runBetaCampaign({ version, log, campaign, runAuto });
         } finally {
           campaign.clear();
         }
@@ -284,6 +276,7 @@ describe("automatic campaign handoff failure", () => {
       });
     const operation = runBetaCampaign({
       campaign,
+      onAttempt: vi.fn(),
       runAuto: async () => ({
         status: "skipped",
         message: "Already current",
@@ -319,13 +312,14 @@ describe("automatic campaign handoff failure", () => {
     "cancels a rejected transfer when %s persistence fails",
     async (failure) => {
       const { runId } = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
+      const log = { info: vi.fn() };
       cancel.mockResolvedValueOnce("restored-in-process");
       transfer.mockImplementationOnce(async () => {
         await failWorkerWrite("diagnostic ledger is read-only", failure === "diagnostics");
         throw new Error("pipe closed");
       });
 
-      const outcome = await runAdmittedUpdate(runId);
+      const outcome = await runAdmittedUpdate(runId, log);
       expect(cancel).toHaveBeenCalledExactlyOnceWith(successor);
       expect(outcome).toMatchObject({
         status: "failed",
@@ -336,10 +330,12 @@ describe("automatic campaign handoff failure", () => {
           }),
         },
       });
-      expectInfo(
-        failure === "state"
-          ? "Update failure state could not be recorded"
-          : "Update diagnostics could not be recorded (SQLITE_READONLY)",
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining(
+          failure === "state"
+            ? "Update failure state could not be recorded"
+            : "Update diagnostics could not be recorded (SQLITE_READONLY)",
+        ),
       );
     },
   );
@@ -350,29 +346,35 @@ describe("automatic campaign handoff failure", () => {
   ] as const)(
     "preserves cause and verified recovery when transfer throws=$throws and diagnostics=$diagnosticFailure",
     async ({ throws, diagnosticFailure }) => {
-      const cause = throws ? "pipe closed" : "managed update ownership transfer failed";
       if (throws) {
         transfer.mockRejectedValueOnce(new Error("pipe closed"));
       } else {
         transfer.mockResolvedValueOnce(false);
       }
+      let stepsBeforeCancellation: ReturnType<typeof listUpdateRuns>[number]["steps"] = [];
       cancel.mockImplementationOnce(async () => {
-        const run = latestRun({
+        const run = expectDefined(listUpdateRuns()[0], "admitted campaign run");
+        expect(run).toMatchObject({
           reason: "managed-service-handoff-failed",
-          steps: containingObject({
-            step: "requested",
-            status: "failed",
-            failureFacts: matchingObject({ code: "Error", message: cause }),
-          }),
+          steps: containingObject({ step: "requested", status: "failed" }),
         });
-        recordUpdateRunVerification(run.runId, { rollbackOutcome });
+        stepsBeforeCancellation = run.steps;
+        recordUpdateRunVerification(run.runId, {
+          rollbackOutcome: {
+            status: "not-needed",
+            reason: "The handoff owner verified no package mutation",
+          },
+        });
         finishUpdateRun(run.runId, { status: "failed", reason: "managed-service-handoff-failed" });
         return "restored-in-process";
       });
       const campaign = createApplyingCampaign();
+      const log = { info: vi.fn() };
+      const onAttempt = vi.fn();
 
       await expect(
         runBetaCampaign({
+          log,
           runAuto: async (params) => {
             const outcome = await runAutoUpdateCommand(params, log);
             if (diagnosticFailure) {
@@ -381,28 +383,44 @@ describe("automatic campaign handoff failure", () => {
             return outcome;
           },
           campaign,
+          onAttempt,
         }),
       ).resolves.toBe("failed");
+      expect(onAttempt).toHaveBeenCalledExactlyOnceWith("2.0.0-beta.1");
+      expect(stepsBeforeCancellation).toContainEqual(
+        expect.objectContaining({
+          step: "managed-service",
+          status: "failed",
+          failureFacts: matchingObject({ code: "Error" }),
+        }),
+      );
       expect(cancel).toHaveBeenCalledExactlyOnceWith(successor);
       expect(restart).not.toHaveBeenCalled();
-      const run = latestRun({
+      const run = expectDefined(listUpdateRuns()[0], "finished campaign run");
+      expect(run).toMatchObject({
         status: "failed",
         reason: "managed-service-handoff-failed",
         phase: "finished",
-        verification: { rollbackOutcome },
+        verification: {
+          rollbackOutcome: {
+            status: "not-needed",
+            reason: "The handoff owner verified no package mutation",
+          },
+        },
       });
       expect((await readRestartSentinel())?.payload).toMatchObject({
         status: "error",
         stats: { reason: "managed-service-handoff-failed" },
       });
-      expectIncludes(
-        (await recordedFailureReport(run)).body,
-        cause,
-        "managed-service",
-        "Rollback outcome: not needed",
+      const report = await recordedFailureReport(run);
+      expect(report.body).toContain(
+        throws ? "pipe closed" : "managed update ownership transfer failed",
       );
+      expectIncludes(report.body, "managed-service", "Rollback outcome: not needed");
       if (diagnosticFailure) {
-        expectInfo("Update diagnostics could not be recorded");
+        expect(log.info).toHaveBeenCalledWith(
+          expect.stringContaining("Update diagnostics could not be recorded"),
+        );
       }
     },
   );
@@ -412,9 +430,11 @@ describe("automatic campaign handoff failure", () => {
     async (failure) => {
       const campaign = createApplyingCampaign();
       const original = new Error("automatic update failed");
+      const log = { info: vi.fn() };
 
       await expect(
         runBetaCampaign({
+          log,
           campaign,
           runAuto: async () => {
             const fail = () => {
@@ -436,7 +456,8 @@ describe("automatic campaign handoff failure", () => {
           },
         }),
       ).rejects.toBe(original);
-      latestRun({
+      const run = expectDefined(listUpdateRuns()[0], "failed campaign run");
+      expect(run).toMatchObject({
         status: "failed",
         reason: "unexpected-error",
         ...(failure === "read"
@@ -448,10 +469,12 @@ describe("automatic campaign handoff failure", () => {
             }
           : {}),
       });
-      expectInfo(
-        failure === "read"
-          ? "Update history could not be read"
-          : "Update diagnostics could not be recorded",
+      expect(log.info).toHaveBeenCalledWith(
+        expect.stringContaining(
+          failure === "read"
+            ? "Update history could not be read"
+            : "Update diagnostics could not be recorded",
+        ),
       );
     },
   );

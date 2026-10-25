@@ -1,7 +1,7 @@
 // The non-isolated runner resets modules between files but preserves customElements.
 // A dedicated jsdom context keeps the registered pane class on this file's module graph.
 import { createEffect, createRoot, flush } from "solid-js";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
 import type {
@@ -15,6 +15,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -34,7 +35,12 @@ import {
 import { enqueueChatMessage } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
+import {
+  dismissConfirmedActionPopovers,
+  openChatRewindConfirmation,
+} from "./components/chat-message-confirmation-view.tsx";
 import * as chatThread from "./components/chat-thread-interactions.ts";
+import { handleChatDraftChange } from "./input-history.ts";
 import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
 import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
 import { isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
@@ -115,6 +121,14 @@ function stopAtAttach(pane: TestChatPane) {
   };
 }
 
+function editablePane(request: ReturnType<typeof vi.fn>) {
+  const fixture = barePane(request);
+  fixture.state.handleChatDraftChange = (next) => {
+    fixture.state.chatMessage = next;
+  };
+  return fixture;
+}
+
 function rejectedSuggestion(message: string) {
   return new GatewayRequestError({ code: "INVALID_REQUEST", message });
 }
@@ -143,14 +157,9 @@ function selectSuggestionRows(state: ChatPageHost, ...sessions: GatewaySessionRo
   state.sessionsResult = { count: sessions.length, path: "", sessions } as never;
 }
 
+const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
+const confirmationOwners = new Set<HTMLElement>();
 const runtimePanes = new Set<TestChatPane>();
-
-async function settleStartupFrames() {
-  for (let pass = 0; pass < 2; pass++) {
-    await vi.dynamicImportSettled();
-    await vi.advanceTimersByTimeAsync(160);
-  }
-}
 
 it("discovers an assigned desktop when only runner inventory becomes available", async () => {
   vi.useFakeTimers();
@@ -185,7 +194,11 @@ it("discovers an assigned desktop when only runner inventory becomes available",
   await vi.waitFor(() => expect(pane.state.chatLoading).toBe(false));
   await vi.dynamicImportSettled();
   await pane.updateComplete;
-  await settleStartupFrames();
+  // Isolate inventory publication from deferred startup frames.
+  for (let pass = 0; pass < 2; pass++) {
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(160);
+  }
   expect(isSidebarSlotVisible(pane.state.sidebarLayout, "desktop")).toBe(false);
 
   available = true;
@@ -203,7 +216,10 @@ it("publishes queued-edit retention changes while its pane is parked", async () 
   const pane = fixture.mount(key);
   const updates = vi.spyOn(pane, "render");
   await pane.updateComplete;
-  await settleStartupFrames();
+  for (let pass = 0; pass < 2; pass++) {
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(160);
+  }
   expect(pane.querySelector(".agent-chat__composer-combobox textarea")).not.toBeNull();
   expect(pane.state.chatLoading).toBe(false);
 
@@ -231,32 +247,34 @@ it("publishes a disconnected gateway snapshot through reactive page state", () =
   const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   state.client = pane.context.gateway.snapshot.client;
   state.connected = true;
-  const changes: Pick<ChatPageHost, "connected" | "canvasPluginSurfaceUrl">[] = [];
-  onTestFinished(
-    createRoot((stop) => {
-      createEffect(
-        () => ({
-          connected: state.connected,
-          canvasPluginSurfaceUrl: state.canvasPluginSurfaceUrl,
-        }),
-        (snapshot) => {
-          changes.push(snapshot);
-        },
-      );
-      return stop;
-    }),
-  );
-  flush();
-  changes.length = 0;
-  pane.applyGatewaySnapshot({
-    ...pane.context.gateway.snapshot,
-    phase: "reconnecting",
-    canvasPluginSurfaceUrl: "/canvas/reconnected",
+  const changes: Array<{
+    connected: boolean;
+    canvas: ChatPageHost["canvasPluginSurfaceUrl"];
+  }> = [];
+  const dispose = createRoot((stop) => {
+    createEffect(
+      () => ({ connected: state.connected, canvas: state.canvasPluginSurfaceUrl }),
+      (snapshot) => {
+        changes.push(snapshot);
+      },
+    );
+    return stop;
   });
-  // Transport consumers still observe connection retirement synchronously.
-  expect(state.connected).toBe(false);
-  flush();
-  expect(changes).toEqual([{ connected: false, canvasPluginSurfaceUrl: "/canvas/reconnected" }]);
+  try {
+    flush();
+    changes.length = 0;
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      phase: "reconnecting",
+      canvasPluginSurfaceUrl: "/canvas/reconnected",
+    });
+    // Transport consumers still observe connection retirement synchronously.
+    expect(state.connected).toBe(false);
+    flush();
+    expect(changes).toEqual([{ connected: false, canvas: "/canvas/reconnected" }]);
+  } finally {
+    dispose();
+  }
 });
 
 it("renews the attention cue for repeated draft prefill", () => {
@@ -452,7 +470,7 @@ it("coalesces overlapping refreshes and applies the event-invalidated follow-up"
   expect(request).toHaveBeenCalledTimes(2);
 });
 
-it("clears suggestions and typing on session rotation until the fresh list resolves", async () => {
+it("clears cached suggestions until a rotated session instance list resolves", async () => {
   const listed = createDeferred<SessionSuggestionsListResult>();
   const request = vi.fn(() => listed.promise);
   const { pane, state } = createSuggestionPane(request);
@@ -463,7 +481,23 @@ it("clears suggestions and typing on session rotation until the fresh list resol
   pane.syncSessionSuggestionTarget("main", row("session-a"));
   await pane.refreshSessionSuggestions();
   pane.collaboration.suggestions = [stale];
-  selectSuggestionRows(state, row("session-a"));
+  state.sessionsResultAgentId = "main";
+  selectSuggestionRows(state, row("session-b"));
+
+  pane.syncSessionSuggestionTarget("main", row("session-b"));
+
+  expect(pane.collaboration.suggestions).toEqual([]);
+  expect(request).toHaveBeenCalledTimes(1);
+  listed.resolve({ suggestions: [fresh], role: "owner" });
+  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([fresh]));
+});
+
+it("clears displayed typing actors when the session instance rotates", () => {
+  const { pane, state } = createSuggestionPane();
+  const row = (sessionId: string) => suggestionRow(state, sessionId);
+  const sessionA = row("session-a");
+  selectSuggestionRows(state, sessionA);
+  pane.syncSessionSuggestionTarget("main", sessionA);
   pane.handleSessionTypingEvent({
     sessionKey: state.sessionKey,
     sessionId: "session-a",
@@ -474,15 +508,11 @@ it("clears suggestions and typing on session rotation until the fresh list resol
   });
   expect(pane.typingActors.size).toBe(1);
 
-  state.sessionsResultAgentId = "main";
-  selectSuggestionRows(state, row("session-b"));
-  pane.syncSessionSuggestionTarget("main", row("session-b"));
+  const sessionB = row("session-b");
+  selectSuggestionRows(state, sessionB);
+  pane.syncSessionSuggestionTarget("main", sessionB);
 
-  expect(pane.collaboration.suggestions).toEqual([]);
   expect(pane.typingActors.size).toBe(0);
-  expect(request).toHaveBeenCalledTimes(1);
-  listed.resolve({ suggestions: [fresh], role: "owner" });
-  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([fresh]));
 });
 
 it("keeps an owner's self-authored resolved suggestion through the following list", async () => {
@@ -540,7 +570,7 @@ it("drops a resolve completion after the same session key rotates instances", as
 
 it("does not apply an edit failure after the same session key rotates instances", async () => {
   const deferred = createDeferred<never>();
-  const { pane, state } = barePane(vi.fn(() => deferred.promise));
+  const { pane, state } = editablePane(vi.fn(() => deferred.promise));
   const suggestion = pendingSuggestion(state, "edit", "suggested text");
   pane.sessionSuggestionTargetSignature = "main\0agent:main:current\0session-a";
   state.chatMessage = "original";
@@ -561,6 +591,7 @@ it.each([false, true])(
     const deferred = createDeferred<never>();
     const { pane, state } = barePane(vi.fn(() => deferred.promise));
     const suggestion = pendingSuggestion(state, "edit-rejected", "@Alex rejected suggestion");
+    state.handleChatDraftChange = (next, mentions) => handleChatDraftChange(state, next, mentions);
     state.chatMessage = "@Alex owner draft";
     state.chatMentions = [{ profileId: "original-profile", start: 0, end: 5 }];
 
@@ -584,7 +615,7 @@ it.each([false, true])(
 
 it("serializes edit resolutions so rejected suggestions cannot snapshot each other", async () => {
   const { first, second, request } = deferredPair<never>();
-  const { pane, state } = barePane(request);
+  const { pane, state } = editablePane(request);
   const suggestion = (id: string) => pendingSuggestion(state, id);
   state.chatMessage = "owner draft";
 
@@ -603,6 +634,34 @@ it("serializes edit resolutions so rejected suggestions cannot snapshot each oth
   expect(request).toHaveBeenCalledTimes(2);
   expect(state.chatMessage).toBe("owner draft");
 });
+function createConfirmationOwner() {
+  const owner = document.createElement("span");
+  owner.className = "chat-confirm-wrap";
+  const trigger = document.createElement("button");
+  owner.appendChild(trigger);
+  document.body.appendChild(owner);
+  confirmationOwners.add(owner);
+  openChatRewindConfirmation(trigger, vi.fn());
+  const popover = [...document.querySelectorAll<HTMLElement>(".chat-confirm-popover")].at(-1);
+  expect(popover).toBeInstanceOf(HTMLElement);
+  return { owner, popover: popover! };
+}
+
+function watchCapture(target: Document | Window, type: "click" | "keydown") {
+  const add = vi.spyOn(target, "addEventListener");
+  const remove = vi.spyOn(target, "removeEventListener");
+  return () => {
+    const captured = add.mock.calls.flatMap(([event, listener, options]) =>
+      event === type && options === true && listener ? [listener] : [],
+    );
+    expect(captured).toHaveLength(2);
+    return () => {
+      expect(remove).toHaveBeenCalledWith(type, captured[0], true);
+      expect(remove).not.toHaveBeenCalledWith(type, captured[1], true);
+    };
+  };
+}
+
 afterEach(() => {
   for (const pane of runtimePanes) {
     pane.disconnectedCallback();
@@ -610,7 +669,36 @@ afterEach(() => {
   runtimePanes.clear();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  for (const owner of confirmationOwners) {
+    dismissConfirmedActionPopovers(owner);
+    owner.remove();
+  }
+  confirmationOwners.clear();
   chatThread.resetThreadPresentation();
   resetChatComposerState();
+  window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
   vi.unstubAllGlobals();
+});
+
+it("dismisses only confirmations owned by the disconnected pane", () => {
+  const { frames: frameCallbacks, request } = createFrameQueue();
+  vi.stubGlobal("requestAnimationFrame", vi.fn(request));
+  const listeners = [watchCapture(document, "click"), watchCapture(window, "keydown")];
+  const { pane } = barePane();
+  window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
+  const paneConfirmation = createConfirmationOwner();
+  const siblingConfirmation = createConfirmationOwner();
+
+  for (const callback of frameCallbacks.splice(0)) {
+    callback(0);
+  }
+  const checkRemovals = listeners.map((capture) => capture());
+  pane.appendChild(paneConfirmation.owner);
+  pane.disconnectedCallback();
+
+  expect(paneConfirmation.popover.isConnected).toBe(false);
+  expect(siblingConfirmation.popover.isConnected).toBe(true);
+  for (const check of checkRemovals) {
+    check();
+  }
 });

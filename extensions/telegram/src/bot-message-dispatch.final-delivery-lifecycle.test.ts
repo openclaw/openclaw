@@ -21,6 +21,7 @@ import {
   dispatchWithContext,
   editMessageTelegram,
   emitToolStart,
+  telegramDepsForTest,
   type DispatchReplyWithBufferedBlockDispatcherArgs as DispatchArgs,
   editMessageReplyMarkupTelegram,
   emitTelegramMessageSentHooks,
@@ -44,8 +45,6 @@ const toolStart = (
   name: string,
   toolCallId: string,
 ) => emitToolStart(options, { name, toolCallId, phase: "start" });
-const sentTexts = (send: Awaited<ReturnType<typeof observeTransport>>["sendMessage"]) =>
-  send.mock.calls.map(([, text]) => text);
 function expectStatus(status: ReturnType<typeof createReactions>, error: number, done: number) {
   expect({
     error: status.setError.mock.calls.length,
@@ -243,7 +242,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
             ? "I couldn't deliver my reply because of a network problem. Please ask again."
             : failedDelivery,
       ]);
-      expect(sentTexts(sendMessage)).not.toContain(finalText);
+      expect(sendMessage.mock.calls.some(([, text]) => text === finalText)).toBe(false);
       expectStatus(failedStatus, 1, 0);
       if (failure !== "definite no-send") {
         expect(deliverInbound).toHaveBeenCalledOnce();
@@ -254,7 +253,11 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
         expect(deleteMessage).not.toHaveBeenCalled();
       }
       if (partial) {
-        expect(sentTexts(sendMessage)).toEqual([prefix, tail, failedDelivery]);
+        expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
+          prefix,
+          tail,
+          failedDelivery,
+        ]);
         return;
       }
 
@@ -282,7 +285,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
     },
   );
 
-  it.each(["replacement", "second"] as const)(
+  it.each(["recording", "replacement", "second"] as const)(
     "preserves the accepted answer across a %s failure",
     async (failure) => {
       const { bot, messages, sendMessage, editMessageText } = await observeTransport();
@@ -290,6 +293,9 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       const first = "First accepted answer";
       const preview = "Answer in progress while checking the completed result";
       const final = "Complete answer already accepted by Telegram";
+      const recordContext = vi.fn(async () => {
+        throw new Error("prompt context recording failed");
+      });
       resolveReply(
         async (_ctx, options) => {
           if (failure === "replacement") {
@@ -322,6 +328,13 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
             : { channels: { telegram: { botToken: "synthetic-test-token" } } },
         retryDispatchErrors: failure === "replacement" ? undefined : true,
         suppressFailureFallback: failure === "replacement" ? undefined : true,
+        moduleMocks:
+          failure === "recording"
+            ? {
+                ...telegramDepsForTest,
+                recordOutboundMessageForPromptContext: recordContext,
+              }
+            : undefined,
       });
       await vi.advanceTimersByTimeAsync(failure === "replacement" ? 10_000 : 5_000);
       if (failure === "second") {
@@ -335,7 +348,18 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       } else {
         expect(result).toEqual({ kind: "completed" });
         expect([...messages.values()]).toEqual([final]);
-        expect(sentTexts(sendMessage)).toEqual([preview, expect.stringContaining("Read"), final]);
+        if (failure === "recording") {
+          expect(sendMessage).toHaveBeenCalledOnce();
+          expect(recordContext).toHaveBeenCalledWith(
+            expect.objectContaining({ text: final, messageId: [...messages.keys()][0] }),
+          );
+        } else {
+          expect(sendMessage.mock.calls.map(([, text]) => text)).toEqual([
+            preview,
+            expect.stringContaining("Read"),
+            final,
+          ]);
+        }
       }
     },
   );

@@ -12,6 +12,7 @@ import {
 import * as journalModule from "./package-update-activation-journal.js";
 import {
   openPackageActivationJournal,
+  openPackageActivationSettlementJournal,
   resolvePackageActivationControl,
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
@@ -74,6 +75,10 @@ test.each([
   "settled-evidence",
   "helper-replaced",
   "anchor-replaced",
+  "journal-inode",
+  "package-inode",
+  "lease-identity",
+  "missing-lease",
   "non-linux",
   "installation-key",
   "active",
@@ -101,6 +106,24 @@ test.each([
   } else if (scenario === "anchor-replaced") {
     fs.mkdirSync(first.anchor, { mode: 0o700 });
     fs.writeFileSync(path.join(first.anchor, "note.txt"), "historical replacement");
+  } else if (scenario === "journal-inode") {
+    record.descriptor.journalIdentity = changeIdentity(record.descriptor.journalIdentity);
+  } else if (scenario === "package-inode") {
+    record.descriptor.candidate.identity = changeIdentity(record.descriptor.candidate.identity);
+    record.descriptor.preparation = record.descriptor.preparation.map((entry) =>
+      entry.name === "candidate"
+        ? { ...entry, identity: record.descriptor.candidate.identity }
+        : entry,
+    );
+  } else if (scenario === "lease-identity") {
+    record.descriptor.authority.databaseIdentity = changeIdentity(
+      record.descriptor.authority.databaseIdentity,
+    );
+  } else if (scenario === "missing-lease") {
+    fs.renameSync(
+      record.descriptor.authority.databasePath,
+      `${record.descriptor.authority.databasePath}.old`,
+    );
   } else if (scenario === "installation-key") {
     record.descriptor.authority.installKey = `${first.packageRoot}-other`;
   } else if (scenario === "settled-evidence") {
@@ -156,6 +179,7 @@ test.each([
   expect(openPackageActivationJournal(second.anchor).read().phase).toBe("prepared");
 });
 test.each([
+  "prepared",
   "candidate",
   "content",
   "launcher",
@@ -184,7 +208,7 @@ test.each([
   const liveTree = legacyPackageFingerprint(f.packageRoot);
   const launcher = fs.readFileSync(f.launcher);
   const before = fs.readFileSync(f.journalPath);
-  if (scenario === "candidate") {
+  if (scenario === "prepared" || scenario === "candidate") {
     await expect(
       settlePendingPackageActivation(f.packageRoot, undefined, undefined, { dryRun: true }),
     ).resolves.toMatchObject({ reason: "publication-not-started" });
@@ -224,6 +248,7 @@ test.each(["settle", "archive-interrupted", "journal-mode"] as const)(
     }
     const liveTree = legacyPackageFingerprint(f.packageRoot);
     const previousTree = legacyPackageFingerprint(path.join(f.anchor, "previous"));
+    const liveBytes = bytes(f.packageRoot, "package.json");
     // Verification reads the link, which may advance its atime (Linux relatime).
     const launcherState = () => {
       const { dev, ino, mode, nlink, uid, gid, size, mtimeNs, ctimeNs } = fs.lstatSync(f.launcher, {
@@ -233,13 +258,30 @@ test.each(["settle", "archive-interrupted", "journal-mode"] as const)(
       return { dev, ino, mode, nlink, uid, gid, size, mtimeNs, ctimeNs, target };
     };
     const launcher = launcherState();
+    const previousBytes = bytes(f.anchor, "previous/package.json");
     const helperBytes = fs.readFileSync(resolvePackageActivationHelper(f.anchor));
     const before = fs.readFileSync(f.journalPath);
+    expect(() =>
+      openPackageActivationSettlementJournal(f.anchor).readForAdmission(f.packageRoot),
+    ).toThrow("does not match its installation");
     expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow(
       "does not match its installation",
     );
+    const identities: [string, string, string][] = [
+      ["parent", f.historical.parentIdentity, path.dirname(f.anchor)],
+      [
+        "control dir",
+        f.historical.journalParentIdentity,
+        resolvePackageActivationControl(f.anchor),
+      ],
+      ["journal", f.historical.journalIdentity, f.journalPath],
+    ];
+    const bindings = identities.map(([name, recorded, file]) => {
+      const current = fs.lstatSync(file, { bigint: true });
+      return `${name} (recorded ${recorded}; current ${current.dev}:${current.ino}; device number changed only)`;
+    });
     expect(() => readPackageActivationReceipt(f.packageRoot)).toThrow(
-      /does not match its installation: .*device number changed only.*Run openclaw update repair/u,
+      `Package publication journal does not match its installation: ${bindings.join("; ")}. Run openclaw update repair.`,
     );
     await expect(readPackageActivationStatus(f.anchor, f.operationId)).rejects.toThrow(
       "does not match its installation",
@@ -280,7 +322,9 @@ test.each(["settle", "archive-interrupted", "journal-mode"] as const)(
     );
     expect(legacyPackageFingerprint(f.packageRoot)).toEqual(liveTree);
     expect(legacyPackageFingerprint(path.join(retained, "previous"))).toEqual(previousTree);
+    expect(bytes(f.packageRoot, "package.json")).toEqual(liveBytes);
     expect(launcherState()).toEqual(launcher);
+    expect(bytes(retained, "previous/package.json")).toEqual(previousBytes);
     expect(bytes(retained, "control/recovery.mjs")).toEqual(helperBytes);
     expect(fs.statSync(path.join(retained, "control/operation.sqlite")).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(f.journalPath)).toBe(false);
@@ -320,7 +364,11 @@ test.each(["before-commit", "before-archive"] as const)(
         },
       );
     }
-    await expect(settle(f)).rejects.toMatchObject({
+    const refusal = await settle(f).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(refusal).toMatchObject({
       message: "Update failed and executor release remains pending",
       cause: { cause: { message: "Update executor ownership is no longer current." } },
     });

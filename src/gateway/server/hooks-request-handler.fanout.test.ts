@@ -205,7 +205,13 @@ describe("hook fan-out dispatch", () => {
       fs.mkdirSync(path.join(transformsDir, "hooks", "transforms"), { recursive: true });
       fs.writeFileSync(
         path.join(transformsDir, "hooks", "transforms", "mixed.mjs"),
-        'export default ({payload:{messages:[{kind,id}]}}) => kind === "wake" ? {kind,text:"wake:"+id} : kind === "invalid-agent" ? {channel:"missing-channel"} : {};',
+        [
+          'export default (ctx) => ctx.payload.messages[0].kind === "wake"',
+          ' ? { kind: "wake", text: `wake:${ctx.payload.messages[0].id}` }',
+          ' : ctx.payload.messages[0].kind === "invalid-agent"',
+          '   ? { channel: "missing-channel" }',
+          "   : {};",
+        ].join(""),
       );
       const hooksConfig = createGmailHooksConfig({
         configDir: transformsDir,
@@ -231,24 +237,41 @@ describe("hook fan-out dispatch", () => {
         }),
       });
 
-      for (const [eventOutcome, ids, status, wakes] of [
-        ["queued", ["w1", "w2", "a1"], 200, 2],
-        ["coalesced", ["w1", "w2", "a1"], 200, 4],
-        ["queued", ["w3", "invalid-agent"], 400, 5],
-      ] as const) {
-        coalesceWakes = eventOutcome === "coalesced";
-        const messages = ids.map((id) => ({
-          id,
-          kind: id.startsWith("w") ? "wake" : id === "a1" ? "agent" : id,
-        }));
-        expect(await postGmailPayload(handler, { messages }, status)).toMatchObject({
-          ok: status === 200,
-          eventOutcome,
-          ...(status === 200 ? { runIds: ["run:hook:gmail:a1"] } : {}),
-        });
-        expect(dispatchWakeHook).toHaveBeenCalledTimes(wakes);
-        expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
-      }
+      const payload = {
+        messages: [
+          { id: "w1", kind: "wake" },
+          { id: "w2", kind: "wake" },
+          { id: "a1", kind: "agent" },
+        ],
+      };
+      expect(await postGmailPayload(handler, payload)).toMatchObject({ eventOutcome: "queued" });
+      expect(dispatchWakeHook).toHaveBeenCalledTimes(2);
+      expect(dispatchWakeHook.mock.calls[0]?.[0]).toMatchObject({ text: "wake:w1" });
+      expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
+      expect(dispatchAgentHook.mock.calls[0]?.[0]).toMatchObject({
+        message: "agent:a1",
+        sessionKey: "hook:gmail:a1",
+      });
+
+      coalesceWakes = true;
+      expect(await postGmailPayload(handler, payload)).toMatchObject({ eventOutcome: "coalesced" });
+      expect(dispatchWakeHook).toHaveBeenCalledTimes(4);
+      expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
+
+      coalesceWakes = false;
+      const invalid = await postGmailPayload(
+        handler,
+        {
+          messages: [
+            { id: "w3", kind: "wake" },
+            { id: "a2", kind: "invalid-agent" },
+          ],
+        },
+        400,
+      );
+      expect(invalid).toMatchObject({ ok: false, eventOutcome: "queued" });
+      expect(dispatchWakeHook).toHaveBeenCalledTimes(5);
+      expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
     } finally {
       fs.rmSync(transformsDir, { recursive: true, force: true });
     }
@@ -295,9 +318,7 @@ describe("hook fan-out dispatch", () => {
     expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
   });
 
-  test("retains active replay owners under cache pressure and starts TTL only at settlement", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-09-05T00:00:00.000Z"));
+  test("keeps an active admitted replay owner under terminal cache pressure", async () => {
     const completion = createDeferred<HookAgentCompletion>();
     const terminal = { status: "ok", replyDisposition: "silent" } as const;
     let activeDispatches = 0;
@@ -306,9 +327,7 @@ describe("hook fan-out dispatch", () => {
       dispatchAgentHook: (value) => {
         if (value.idempotencyKey === "active-owner") {
           activeDispatches += 1;
-          return activeDispatches === 1
-            ? { ok: true, runId: "run:active", completion: completion.promise }
-            : completedDispatch("run:duplicate");
+          return { ok: true, runId: "run:active", completion: completion.promise };
         }
         return completedDispatch(`run:${value.idempotencyKey}`);
       },
@@ -320,8 +339,6 @@ describe("hook fan-out dispatch", () => {
       await startDirect(`pressure-${index}`).handling;
     }
     await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 1);
-    await expectRun(startDirect("active-owner"), "run:active");
 
     const replay = startDirect("active-owner", true);
     await Promise.resolve();
@@ -330,12 +347,44 @@ describe("hook fan-out dispatch", () => {
     completion.resolve(terminal);
     await expectRun(replay, "run:active", terminal);
     expect(dispatchAgentHook).toHaveBeenCalledTimes(DEDUPE_MAX + 1);
-    await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS);
-    await expectRun(startDirect("active-owner"), "run:active");
-    expect(activeDispatches).toBe(1);
-    await vi.advanceTimersByTimeAsync(1);
-    await expectRun(startDirect("active-owner"), "run:duplicate");
-    expect(activeDispatches).toBe(2);
+  });
+
+  test("starts replay TTL when active completion settles", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-05T00:00:00.000Z"));
+    try {
+      const completion = createDeferred<HookAgentCompletion>();
+      let dispatches = 0;
+      const { startDirect } = createFanOutHandler({
+        hooksConfig: createHooksConfig(),
+        dispatchAgentHook: () => {
+          dispatches += 1;
+          return dispatches === 1
+            ? { ok: true, runId: "run:active", completion: completion.promise }
+            : completedDispatch("run:duplicate");
+        },
+      });
+      const replay = () => startDirect("delayed-admission");
+
+      await replay().handling;
+
+      await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS + 1);
+      await expectRun(replay(), "run:active");
+      expect(dispatches).toBe(1);
+
+      completion.resolve({ status: "ok", replyDisposition: "empty" });
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(DEDUPE_TTL_MS);
+      await expectRun(replay(), "run:active");
+      expect(dispatches).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expectRun(replay(), "run:duplicate");
+      expect(dispatches).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("rejects non-boolean direct completion observation", async () => {

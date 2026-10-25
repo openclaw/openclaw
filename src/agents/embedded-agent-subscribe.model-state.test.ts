@@ -11,7 +11,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
 import { createEmbeddedRunContextRecoveryState } from "./embedded-agent-runner/run/context-recovery-state.js";
-import { createRetryController } from "./embedded-agent-runner/run/failover-retry-controller.test-support.js";
+import { createEmbeddedRunFailoverRetryController } from "./embedded-agent-runner/run/failover-retry-controller.js";
 import { createSubscribedSessionHarness as subscribe } from "./embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { recordSessionModelUsage } from "./sessions/session-model-usage.js";
@@ -221,25 +221,33 @@ it.each(["error", "stop"] as const)(
       runId: "async-progress",
       onContextAccountingEvent: (event) => recovery.observeContextAccounting(event),
     });
-    const controller = createRetryController({
-      agentDir: "/tmp/async-progress",
-      runParams: {
-        sessionId: "async-progress",
-        sessionFile: "unused",
-        runId: "async-progress",
-        workspaceDir: "/tmp/async-progress",
-        prompt: "Continue",
-        timeoutMs: 300_000,
+    const controller = createEmbeddedRunFailoverRetryController({
+      runInput: {
+        runParams: {
+          sessionId: "async-progress",
+          sessionFile: "unused",
+          runId: "async-progress",
+          workspaceDir: "/tmp/async-progress",
+          prompt: "Continue",
+          timeoutMs: 300_000,
+        },
+        globalLane: "test",
+        agentDir: "/tmp/async-progress",
+        fallbackConfigured: false,
       },
-      runtime: {
+      preparedRuntime: {
         provider: "test-provider",
         modelId: "usage-model",
+        profileFailureStore: { version: 1, profiles: {} },
         snapshot: () => ({
           lastProfileId: undefined,
           pluginHarnessOwnsTransport: false,
           agentHarness: { id: "embedded" },
         }),
+        getApiKeyInfo: () => null,
+        advanceAttemptAuthProfile: async () => false,
       },
+      getSessionId: () => "async-progress",
     });
     const messages: string[] = [];
     try {
@@ -269,6 +277,7 @@ it.each(["error", "stop"] as const)(
       expect(controller.transientRetryCount).toBe(1);
     } finally {
       now.mockRestore();
+      harness.subscription.unsubscribe();
     }
   },
 );
@@ -349,7 +358,7 @@ it("accounts queued message_end delivery across a retry", async () => {
     ]);
   } finally {
     releaseDelivery.resolve();
-    await running;
+    await running.finally(() => subscription.unsubscribe());
   }
   expect(onBlockReply).toHaveBeenCalledTimes(2);
   expect(onBlockReplyFlush.mock.calls.map(([event]) => event.reason)).toEqual([

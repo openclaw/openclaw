@@ -7,26 +7,21 @@ import type { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import { resolveEffectiveToolInventory } from "./tools-effective-inventory.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-function makeTool(
-  name: string,
-  options: {
-    label?: string;
-    description?: string;
-    displaySummary?: string;
-    parameters?: unknown;
-    pluginMeta?: Parameters<typeof setPluginToolMeta>[1];
-  } = {},
-): AnyAgentTool {
-  const { pluginMeta, ...toolParams } = options;
+function mockTool(params: {
+  name: string;
+  label: string;
+  description: string;
+  displaySummary?: string;
+  parameters?: unknown;
+  pluginMeta?: Parameters<typeof setPluginToolMeta>[1];
+}): AnyAgentTool {
+  const { pluginMeta, ...toolParams } = params;
   const tool = {
-    name,
-    label: name,
-    description: name,
     ...toolParams,
-    parameters: Object.hasOwn(options, "parameters")
-      ? options.parameters
+    parameters: Object.hasOwn(params, "parameters")
+      ? params.parameters
       : { type: "object", properties: {} },
-    execute: async () => ({ text: name }),
+    execute: async () => ({ text: params.description }),
   } as unknown as AnyAgentTool;
   if (pluginMeta) {
     setPluginToolMeta(tool, pluginMeta);
@@ -34,13 +29,34 @@ function makeTool(
   return tool;
 }
 
-const execTool = () => makeTool("exec");
+function expectedTool(id: string, label: string, description: string, source: string, extra = {}) {
+  return { id, label, description, rawDescription: description, source, ...extra };
+}
 
-function pluginTool(name: string, pluginId: string, options: Parameters<typeof makeTool>[1] = {}) {
-  return makeTool(name, { ...options, pluginMeta: { pluginId, optional: false } });
+function pluginTool(name: string, label: string, description: string, pluginId: string) {
+  return mockTool({ name, label, description, pluginMeta: { pluginId, optional: false } });
+}
+const groupLabels = {
+  core: "Built-in tools",
+  plugin: "Connected tools",
+  channel: "Channel tools",
+  mcp: "MCP server tools",
+};
+function expectedGroup(
+  source: keyof typeof groupLabels,
+  [id, label, description, extra]: [string, string, string, Record<string, string>?],
+) {
+  return {
+    id: source,
+    label: groupLabels[source],
+    source,
+    tools: [expectedTool(id, label, description, source, extra)],
+  };
 }
 async function loadExecHarness() {
-  await loadHarness({ tools: [execTool()] });
+  await loadHarness({
+    tools: [mockTool({ name: "exec", label: "Exec", description: "Run shell commands" })],
+  });
 }
 const providerConfig = (provider: string, config: object) => ({
   models: { providers: { [provider]: config } },
@@ -56,6 +72,24 @@ const configuredRow = (id: string, name: string, contextWindow: number) => ({
 function expectNormalizedModel(api: string, model: Record<string, unknown>) {
   expect(effectiveInventoryState.normalizeToolsMock).toHaveBeenCalledWith(
     expect.objectContaining({ modelApi: api, model: expect.objectContaining(model) }),
+  );
+  expect(effectiveInventoryState.createToolsMock).toHaveBeenCalledWith(
+    expect.objectContaining({ modelApi: api }),
+  );
+}
+
+function expectTransportContext(api: string, baseUrl: string | undefined) {
+  expect(effectiveInventoryState.normalizeTransportMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      workspaceDir: "/tmp/workspace-main",
+      context: expect.objectContaining({
+        config: expect.any(Object),
+        workspaceDir: "/tmp/workspace-main",
+        provider: "openai",
+        api,
+        baseUrl,
+      }),
+    }),
   );
 }
 
@@ -120,7 +154,10 @@ async function loadHarness(options?: {
   channelMeta?: Record<string, { channelId: string } | undefined>;
   normalizeToolsMock?: typeof effectiveInventoryState.normalizeToolsMock;
 }) {
-  effectiveInventoryState.tools = options?.tools ?? [execTool()];
+  effectiveInventoryState.tools = options?.tools ?? [
+    mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+    mockTool({ name: "docs_lookup", label: "Docs Lookup", description: "Search docs" }),
+  ];
   effectiveInventoryState.channelMeta = options?.channelMeta ?? {};
   effectiveInventoryState.normalizeToolsMock =
     options?.normalizeToolsMock ?? vi.fn((normalizeOptions) => normalizeOptions.tools);
@@ -141,34 +178,47 @@ beforeEach(async () => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
-it("groups core, plugin, channel, and MCP tools from the effective runtime set", async () => {
+it("groups core, plugin, and channel tools from the effective runtime set", async () => {
   const result = await inventoryFor({
     tools: [
-      execTool(),
-      pluginTool("lookup", "docs"),
-      makeTool("actions"),
-      pluginTool("probe__tool", "bundle-mcp"),
+      mockTool({ name: "exec", label: "Exec", description: "Run shell" }),
+      pluginTool("lookup", "Lookup", "Search docs", "docs"),
+      mockTool({ name: "actions", label: "Actions", description: "Act on messages" }),
     ],
     channelMeta: { actions: { channelId: "telegram" } },
   });
 
-  expect(result).toMatchObject({ agentId: "main", profile: "full" });
-  expect(result.groups.map(({ id, tools }) => [id, tools.map((tool) => tool.id)])).toEqual([
-    ["core", ["exec"]],
-    ["plugin", ["lookup"]],
-    ["channel", ["actions"]],
-    ["mcp", ["probe__tool"]],
+  const { toolAccess: _toolAccess, ...inventory } = result;
+  expect(inventory).toEqual({
+    agentId: "main",
+    profile: "full",
+    groups: [
+      expectedGroup("core", ["exec", "Exec", "Run shell"]),
+      expectedGroup("plugin", ["lookup", "Lookup", "Search docs", { pluginId: "docs" }]),
+      expectedGroup("channel", [
+        "actions",
+        "Actions",
+        "Act on messages",
+        { channelId: "telegram" },
+      ]),
+    ],
+  });
+});
+
+it("groups bundled MCP tools separately from generic plugin tools", async () => {
+  const result = await inventoryFor({
+    tools: [pluginTool("probe__tool", "Probe", "Probe MCP", "bundle-mcp")],
+  });
+  expect(result.groups).toEqual([
+    expectedGroup("mcp", ["probe__tool", "Probe", "Probe MCP", { pluginId: "bundle-mcp" }]),
   ]);
-  expect(result.groups[1]?.tools[0]).toMatchObject({ pluginId: "docs", source: "plugin" });
-  expect(result.groups[2]?.tools[0]).toMatchObject({ channelId: "telegram", source: "channel" });
-  expect(result.groups[3]?.tools[0]).toMatchObject({ pluginId: "bundle-mcp", source: "mcp" });
 });
 
 it("disambiguates duplicate labels with source ids", async () => {
   const result = await inventoryFor({
     tools: [
-      pluginTool("docs_lookup", "docs", { label: "Lookup" }),
-      pluginTool("jira_lookup", "jira", { label: "Lookup" }),
+      pluginTool("docs_lookup", "Lookup", "Search docs", "docs"),
+      pluginTool("jira_lookup", "Lookup", "Search Jira", "jira"),
     ],
   });
   const labels = result.groups.flatMap((group) => group.tools.map((tool) => tool.label));
@@ -207,18 +257,16 @@ it("projects plugin metadata published during provider normalization", async () 
       setActivePluginRegistry(registry);
       return options.tools;
     }),
-    tools: [pluginTool("docs_lookup", "docs")],
+    tools: [pluginTool("docs_lookup", "Lookup", "Search docs", "docs")],
   });
 
-  expect(result.groups[0]?.tools[0]).toMatchObject({
-    id: "docs_lookup",
-    label: "Docs Search",
-    description: "Curated docs lookup.",
-    rawDescription: "Curated docs lookup.",
-    pluginId: "docs",
-    risk: "low",
-    tags: ["docs", "fixture"],
-  });
+  expect(result.groups[0]?.tools[0]).toEqual(
+    expectedTool("docs_lookup", "Docs Search", "Curated docs lookup.", "plugin", {
+      pluginId: "docs",
+      risk: "low",
+      tags: ["docs", "fixture"],
+    }),
+  );
 });
 
 it.each([
@@ -234,20 +282,30 @@ it.each([
   },
 ])("quarantines $name while preserving plugin ownership", async ({ parameters, reason }) => {
   const result = await inventoryFor({
-    tools: [execTool(), pluginTool("fuzzplugin_move_angles", "fuzzplugin", { parameters })],
+    tools: [
+      mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+      mockTool({
+        name: "fuzzplugin_move_angles",
+        label: "Fuzzplugin Move Angles",
+        description: "Move robot joints",
+        pluginMeta: { pluginId: "fuzzplugin", optional: false },
+        parameters,
+      }),
+    ],
   });
 
   expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
-  expect(result.notices).toMatchObject([
-    { id: "unsupported-tool-schema:fuzzplugin_move_angles", severity: "warning" },
+  expect(result.notices).toEqual([
+    {
+      id: "unsupported-tool-schema:fuzzplugin_move_angles",
+      severity: "warning",
+      message: `Tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has an unsupported runtime input schema (${reason}) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.`,
+    },
   ]);
-  expect(result.notices?.[0]?.message).toContain(
-    `from plugin "fuzzplugin" has an unsupported runtime input schema (${reason})`,
-  );
 });
 
 it("reports unreadable inventory tool entries without crashing", async () => {
-  const healthy = execTool();
+  const healthy = mockTool({ name: "exec", label: "Exec", description: "Run shell commands" });
   const tools = new Proxy([healthy] as AnyAgentTool[], {
     get(target, property, receiver) {
       if (property === "0") {
@@ -264,11 +322,12 @@ it("reports unreadable inventory tool entries without crashing", async () => {
   });
   const result = await inventoryFor({ tools });
   expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
-  expect(result.notices).toMatchObject([
+  expect(result.notices).toEqual([
     {
       id: "unsupported-tool-schema:tool[0]",
       severity: "warning",
-      message: expect.stringContaining("tool[0] is unreadable"),
+      message:
+        'Tool "tool[0]" has an unsupported runtime input schema (tool[0] is unreadable) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
     },
   ]);
 });
@@ -300,6 +359,7 @@ it("applies provider transport normalization to bundled static model context", a
     api: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
   });
+  expectTransportContext("openai-completions", "https://proxy.example.com/v1");
 });
 
 it.each([
@@ -348,6 +408,9 @@ it.each([
       modelProvider: provider,
       modelId: id,
     });
+    if (!bundled) {
+      expectTransportContext("openai-responses", undefined);
+    }
     expectNormalizedModel(api, { api, baseUrl, ...(bundled ? { name } : {}) });
   },
 );
@@ -369,7 +432,15 @@ it("uses prepared model context before quarantining runtime-normalized tools", a
     ),
   );
   await loadHarness({
-    tools: [pluginTool("parameter_free", "normalized-plugin", { parameters: undefined })],
+    tools: [
+      mockTool({
+        name: "parameter_free",
+        label: "Parameter Free",
+        description: "Runtime-normalized tool",
+        parameters: undefined,
+        pluginMeta: { pluginId: "normalized-plugin", optional: false },
+      }),
+    ],
     normalizeToolsMock,
   });
   const runtimeModel: ProviderRuntimeModel = {
@@ -399,21 +470,35 @@ it("uses prepared model context before quarantining runtime-normalized tools", a
     pluginId: "normalized-plugin",
   });
   expect(result.notices).toBeUndefined();
+  expect(normalizeToolsMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      provider: "openai",
+      modelId: "chat-latest",
+      modelApi: "openai-responses",
+      model: expect.objectContaining({
+        id: "chat-latest",
+        api: "openai-responses",
+        provider: "openai",
+      }),
+    }),
+  );
 });
 
 it("prefers displaySummary over raw description", async () => {
   const result = await inventoryFor({
     tools: [
-      makeTool("cron", {
-        description: "Long raw description\n\nACTIONS:\n- status",
+      mockTool({
+        name: "cron",
+        label: "Cron",
         displaySummary: "Schedule and manage cron jobs.",
+        description: "Long raw description\n\nACTIONS:\n- status",
       }),
     ],
   });
 
   expect(result.groups[0]?.tools[0]).toEqual({
     id: "cron",
-    label: "cron",
+    label: "Cron",
     description: "Schedule and manage cron jobs.",
     rawDescription: "Long raw description\n\nACTIONS:\n- status",
     source: "core",
@@ -423,15 +508,19 @@ it("prefers displaySummary over raw description", async () => {
 it("falls back to a sanitized summary for multi-line raw descriptions", async () => {
   const result = await inventoryFor({
     tools: [
-      makeTool("cron", {
+      mockTool({
+        name: "cron",
+        label: "Cron",
         description:
-          "Manage Gateway cron jobs. Use this for reminders and scheduled follow-ups that should execute at the requested time, including recurring tasks.\n\nACTIONS:\n- status",
+          'Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
       }),
     ],
   });
 
   const description = result.groups[0]?.tools[0]?.description ?? "";
-  expect(description).toContain("Manage Gateway cron jobs.");
+  expect(description).toContain(
+    "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.",
+  );
   expect(description).toContain("Use this for reminders");
   expect(description.endsWith("...")).toBe(true);
   expect(description.length).toBeLessThanOrEqual(120);
@@ -450,7 +539,7 @@ it("includes the resolved tool profile", async () => {
 
 it("adds an actionable notice when configured browser is filtered by the tool profile", async () => {
   await loadHarness({
-    tools: [makeTool("web_fetch")],
+    tools: [mockTool({ name: "web_fetch", label: "Web Fetch", description: "Fetch web content" })],
   });
 
   const result = await resolveEffectiveToolInventory({
@@ -461,11 +550,12 @@ it("adds an actionable notice when configured browser is filtered by the tool pr
     } as never,
   });
 
-  expect(result.notices).toMatchObject([
+  expect(result.notices).toEqual([
     {
       id: "browser-filtered-by-profile",
       severity: "info",
-      message: expect.stringContaining('tools.alsoAllow: ["browser"]'),
+      message:
+        'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"] or agents.entries.*.tools.alsoAllow: ["browser"]; tools.subagents.tools.allow alone cannot add it back after profile filtering.',
     },
   ]);
 });

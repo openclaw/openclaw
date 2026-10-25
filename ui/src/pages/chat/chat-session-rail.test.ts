@@ -3,7 +3,6 @@
 import { createMemo, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -11,44 +10,11 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   ChatSessionCompanionThreads,
-  type ChatSessionCompanionThread,
   requestSessionCompanionAnswer,
 } from "./chat-session-companion.ts";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
 import { DirectDictationControl } from "./composer-direct-dictation.ts";
 import "./components/chat-session-rail.tsx";
-
-const companion = (
-  overrides: Partial<ChatSessionCompanionThread> = {},
-): ChatSessionCompanionThread => ({
-  turns: [],
-  loading: false,
-  draft: "",
-  ...overrides,
-});
-const answered = (answer: string) => ({
-  question: "What changed?",
-  status: "answered" as const,
-  answer,
-  ts: 300_000,
-});
-const comment = (
-  id = "comment",
-  text = "Selected text",
-  annotation = "Explain this",
-  sessionKey = "agent:main:run",
-  start = 0,
-) => ({
-  id,
-  mimeType: "text/plain",
-  selectionAnnotation: { text, comment: annotation, sessionKey, start, end: start + text.length },
-});
-const submit = (element: ChatSessionRailElement) =>
-  element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
-const enter = (element: ChatSessionRailElement) =>
-  element
-    .querySelector("textarea")!
-    .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
 
 function digest(health: SessionObserverDigest["health"] = "on-track"): SessionObserverDigest {
   return {
@@ -62,11 +28,8 @@ function digest(health: SessionObserverDigest["health"] = "on-track"): SessionOb
 }
 
 describe("ChatSessionCompanionThreads", () => {
-  let threads: ChatSessionCompanionThreads;
-  beforeEach(() => {
-    threads = new ChatSessionCompanionThreads();
-  });
   it("publishes in-place answer settlement through its owner projection", async () => {
+    const threads = new ChatSessionCompanionThreads();
     let readStatuses!: () => string[];
     const dispose = createRoot((disposeRoot) => {
       const projected = projectOwner(threads, (owner) => owner);
@@ -78,15 +41,22 @@ describe("ChatSessionCompanionThreads", () => {
       );
       return disposeRoot;
     });
-    const answer = createDeferred<{ answer: string; ts: number }>();
+    let answer!: (value: { answer: string; ts: number }) => void;
     try {
       expect(readStatuses()).toEqual([]);
-      const pending = threads.submit("one", "Question", () => answer.promise);
+      const pending = threads.submit(
+        "one",
+        "Question",
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
       const turn = threads.view("one").turns[0];
       expect(turn?.status).toBe("pending");
       flush();
       expect(readStatuses()).toEqual(["pending"]);
-      answer.resolve({ answer: "Answer", ts: 1 });
+      answer({ answer: "Answer", ts: 1 });
       await pending;
       flush();
       expect(readStatuses()).toEqual(["answered"]);
@@ -97,7 +67,21 @@ describe("ChatSessionCompanionThreads", () => {
     }
   });
 
+  it("sends companion questions with the bounded RPC timeout", async () => {
+    const request = vi.fn(async () => ({ answer: "Answer", ts: 1 }));
+    const client = { request: request as GatewayBrowserClient["request"] };
+
+    await requestSessionCompanionAnswer(client, "one", "Question", "work");
+
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "sessions.companion.ask",
+      { sessionKey: "one", agentId: "work", question: "Question" },
+      { timeoutMs: 70_000 },
+    );
+  });
+
   it("carries the agent's Side chat model choices on questions", async () => {
+    const threads = new ChatSessionCompanionThreads();
     await threads.hydrate(
       "one",
       async () => ({ exchanges: [], defaultModel: "test/utility" }),
@@ -153,7 +137,17 @@ describe("ChatSessionCompanionThreads", () => {
     }));
     const client = { request: request as GatewayBrowserClient["request"] };
     await requestSessionCompanionAnswer(client, "one", "Regarding the selection", "work", [
-      comment("comment", selectedText, "Why does this matter?", "one", 2),
+      {
+        id: "comment",
+        mimeType: "text/plain",
+        selectionAnnotation: {
+          text: selectedText,
+          comment: "Why does this matter?",
+          sessionKey: "one",
+          start: 2,
+          end: selectedText.length + 2,
+        },
+      },
     ]);
     expect(request).toHaveBeenCalledWith(
       "sessions.companion.ask",
@@ -173,6 +167,7 @@ describe("ChatSessionCompanionThreads", () => {
   });
 
   it("keeps matching bare session keys isolated by agent", () => {
+    const threads = new ChatSessionCompanionThreads();
     threads.setDraft("global", "main draft", "main");
     threads.setDraft("global", "work draft", "work");
 
@@ -181,6 +176,7 @@ describe("ChatSessionCompanionThreads", () => {
   });
 
   it("maps the typed busy error to the rail hint", async () => {
+    const threads = new ChatSessionCompanionThreads();
     await threads.submit("one", "Is it stuck?", async () => {
       throw Object.assign(new Error("busy"), {
         details: { code: "SESSION_COMPANION_BUSY" },
@@ -193,7 +189,42 @@ describe("ChatSessionCompanionThreads", () => {
     ]);
   });
 
+  it("hydrates only a newly committed repeated question after a lost response", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.hydrate("one", async () => ({
+      exchanges: [{ question: "What changed?", answer: "Earlier answer.", ts: 1 }],
+    }));
+    await threads.submit("one", "What changed?", async () => {
+      throw new Error("socket closed");
+    });
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "answered", answer: "Earlier answer.", ts: 1 },
+      { question: "What changed?", status: "failed", hint: "unavailable", retryable: true },
+    ]);
+
+    await threads.hydrate("one", async () => ({
+      exchanges: [{ question: "What changed?", answer: "Earlier answer.", ts: 1 }],
+    }));
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "answered", answer: "Earlier answer.", ts: 1 },
+      { question: "What changed?", status: "failed", hint: "unavailable", retryable: true },
+    ]);
+
+    await threads.hydrate("one", async () => ({
+      exchanges: [
+        { question: "What changed?", answer: "Earlier answer.", ts: 1 },
+        { question: "What changed?", answer: "The fix committed.", ts: 4 },
+      ],
+    }));
+
+    expect(threads.view("one").turns).toMatchObject([
+      { question: "What changed?", status: "answered", answer: "Earlier answer.", ts: 1 },
+      { question: "What changed?", status: "answered", answer: "The fix committed.", ts: 4 },
+    ]);
+  });
+
   it("retires one session without clearing unrelated companion state", () => {
+    const threads = new ChatSessionCompanionThreads();
     threads.setDraft("one", "retire me", "main");
     threads.setDraft("two", "keep me", "main");
 
@@ -203,16 +234,48 @@ describe("ChatSessionCompanionThreads", () => {
     expect(threads.view("two", "main").draft).toBe("keep me");
   });
 
-  it("does not resurrect a reset request after a late rejection", async () => {
-    const answer = createDeferred<{ answer: string; ts: number }>();
-    const pending = threads.submit("one", "Will reset keep this?", () => answer.promise);
+  it("adopts an empty restarted-Gateway thread without discarding its local draft", async () => {
+    const threads = new ChatSessionCompanionThreads();
+    await threads.hydrate("one", async () => ({
+      exchanges: [{ question: "Before restart", answer: "Old answer", ts: 1 }],
+    }));
+    threads.setDraft("one", "unsent local draft");
 
-    await threads.reset("one", async () => ({ ok: true as const }));
-    answer.reject(new Error("late error"));
-    await pending;
+    await threads.hydrate("one", async () => ({ exchanges: [] }));
 
-    expect(threads.view("one").turns).toMatchObject([]);
+    expect(threads.view("one")).toMatchObject({
+      draft: "unsent local draft",
+      turns: [],
+    });
   });
+
+  it.each(["resolve", "reject"] as const)(
+    "does not resurrect a reset request after a late $outcome",
+    async (outcome) => {
+      let resolveAnswer!: (value: { answer: string; ts: number }) => void;
+      let rejectAnswer!: (error: Error) => void;
+      const threads = new ChatSessionCompanionThreads();
+      const pending = threads.submit(
+        "one",
+        "Will reset keep this?",
+        () =>
+          new Promise((resolve, reject) => {
+            resolveAnswer = resolve;
+            rejectAnswer = reject;
+          }),
+      );
+
+      await threads.reset("one", async () => ({ ok: true as const }));
+      if (outcome === "resolve") {
+        resolveAnswer({ answer: "late answer", ts: 5 });
+      } else {
+        rejectAnswer(new Error("late error"));
+      }
+      await pending;
+
+      expect(threads.view("one").turns).toMatchObject([]);
+    },
+  );
 });
 
 describe("ChatSessionRailElement", () => {
@@ -229,14 +292,12 @@ describe("ChatSessionRailElement", () => {
 
   async function mount(overrides: Partial<ChatSessionRailElement> = {}) {
     const element = document.createElement("openclaw-chat-session-rail") as ChatSessionRailElement;
-    Object.assign(element, {
-      sessionKey: "agent:main:run",
-      digest: digest(),
-      running: true,
-      activeRunId: "run-1",
-      connected: true,
-      ...overrides,
-    });
+    element.sessionKey = "agent:main:run";
+    element.digest = digest();
+    element.running = true;
+    element.activeRunId = "run-1";
+    element.connected = true;
+    Object.assign(element, overrides);
     document.body.append(element);
     await element.updateComplete;
     return element;
@@ -302,9 +363,11 @@ describe("ChatSessionRailElement", () => {
     setCurrentThemeBranding({ ...originalBranding, workingPhrases: phrases });
     try {
       const element = await mount({
-        companion: companion({
+        companion: {
           turns: [{ question: "What changed?", status: "pending", startedAt: 560_000 }],
-        }),
+          loading: false,
+          draft: "",
+        },
       });
       const phrase = element.querySelector("openclaw-working-phrase")!;
       await phrase.updateComplete;
@@ -318,13 +381,21 @@ describe("ChatSessionRailElement", () => {
     const onSubmit = vi.fn();
     const element = await mount({
       onSubmit,
-      companion: companion({
-        turns: [answered("**Only** the UI. <script>bad()</script>")],
+      companion: {
+        turns: [
+          {
+            question: "What changed?",
+            status: "answered",
+            answer: "**Only** the UI. <script>bad()</script>",
+            ts: 300_000,
+          },
+        ],
+        loading: false,
         draft: "What should I verify?",
-      }),
+      },
     });
 
-    submit(element);
+    element.querySelector("form")?.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
     expect(onSubmit).toHaveBeenCalledWith("What should I verify?");
     const answer = element.querySelector(".chat-group.assistant");
     expect(answer?.querySelector(".chat-group-messages strong")?.textContent).toBe("Only");
@@ -339,10 +410,24 @@ describe("ChatSessionRailElement", () => {
     const element = await mount({
       presented: true,
       onAttachmentsChange,
-      companion: companion({
+      companion: {
+        turns: [],
+        loading: false,
         draft: "Keep this draft",
-        attachments: [comment("rail-comment")],
-      }),
+        attachments: [
+          {
+            id: "rail-comment",
+            mimeType: "text/plain",
+            selectionAnnotation: {
+              text: "Selected text",
+              comment: "Explain this",
+              sessionKey: "agent:main:run",
+              start: 0,
+              end: 13,
+            },
+          },
+        ],
+      },
     });
     const textarea = element.querySelector("textarea")!;
     await waitForSolid(() =>
@@ -357,7 +442,18 @@ describe("ChatSessionRailElement", () => {
   it("retains selected answer text while draft and presentation props update", async () => {
     const element = await mount({
       presented: true,
-      companion: companion({ turns: [answered("**Retained answer**")] }),
+      companion: {
+        turns: [
+          {
+            question: "What changed?",
+            status: "answered",
+            answer: "**Retained answer**",
+            ts: 300_000,
+          },
+        ],
+        loading: false,
+        draft: "",
+      },
     });
     const text = element.querySelector(
       ".chat-group.assistant .chat-group-messages strong",
@@ -380,7 +476,7 @@ describe("ChatSessionRailElement", () => {
   it("offers the main composer's attachment and dictation controls", async () => {
     const element = await mount({
       client: createTestGatewayClient(async () => ({})),
-      companion: companion(),
+      companion: { turns: [], loading: false, draft: "" },
     });
     const attach = () => element.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach");
     const microphone = () => element.querySelector<HTMLButtonElement>(".chat-send-btn--voice");
@@ -399,7 +495,7 @@ describe("ChatSessionRailElement", () => {
   it("offers Side chat's own model picker instead of canned starter questions", async () => {
     const onModelSelect = vi.fn();
     const element = await mount({
-      companion: companion(),
+      companion: { turns: [], loading: false, draft: "" },
       modelControls: {
         activeRunId: null,
         agentDefaultModel: "test/model-a",
@@ -429,10 +525,10 @@ describe("ChatSessionRailElement", () => {
     const onSubmit = vi.fn();
     const element = await mount({
       onSubmit,
-      companion: companion({ draft: "Summarize" }),
+      companion: { turns: [], loading: false, draft: "Summarize" },
     });
     const finishActive = vi.fn(async () => {
-      element.companion = companion({ draft: "Summarize the spoken part" });
+      element.companion = { turns: [], loading: false, draft: "Summarize the spoken part" };
       await element.updateComplete;
       return true;
     });
@@ -442,7 +538,9 @@ describe("ChatSessionRailElement", () => {
       finishActive,
     } as never);
 
-    enter(element);
+    element
+      .querySelector("textarea")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
     expect(onSubmit).not.toHaveBeenCalled();
     await vi.waitFor(() =>
@@ -457,95 +555,141 @@ describe("ChatSessionRailElement", () => {
       const onSubmit = vi.fn();
       const element = await mount({
         onSubmit,
-        companion: companion({
-          attachments: [image ? { id: "image", mimeType: "image/png" } : comment()],
-        }),
+        companion: {
+          turns: [],
+          loading: false,
+          draft: "",
+          attachments: [
+            image
+              ? { id: "image", mimeType: "image/png" }
+              : {
+                  id: "comment",
+                  mimeType: "text/plain",
+                  selectionAnnotation: {
+                    text: "Selected text",
+                    comment: "Explain this",
+                    sessionKey: "agent:main:run",
+                    start: 0,
+                    end: 13,
+                  },
+                },
+          ],
+        },
       });
       expect(element.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(
         !image,
       );
-      submit(element);
-      enter(element);
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      element
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       expect(onSubmit.mock.calls).toEqual(
         image ? [["What does this image show?"], ["What does this image show?"]] : [],
       );
     },
   );
 
-  it("keeps a follow-up editable while answering and retains it when answered", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    threads.subscribe(() => {
-      element.companion = { ...threads.view("one") };
-    });
-    const answer = createDeferred<{ answer: string; ts: number }>();
-    const ask = vi.fn(() => answer.promise);
-    let submission: Promise<void> | undefined;
-    const element = await mount({
-      companion: threads.view("one"),
-      onDraftChange: (draft) => threads.setDraft("one", draft),
-      onSubmit: (question) => {
-        submission = threads.submit("one", question, ask);
-      },
-    });
-    const textarea = element.querySelector<HTMLTextAreaElement>("textarea")!;
-    const send = element.querySelector<HTMLButtonElement>("button[type=submit]")!;
-    const type = async (draft: string) => {
-      textarea.value = draft;
-      textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  it.each(["answered"] as const)(
+    "keeps a follow-up editable while answering and retains it when %s",
+    async (outcome) => {
+      const threads = new ChatSessionCompanionThreads();
+      threads.subscribe(() => {
+        element.companion = { ...threads.view("one") };
+      });
+      const ask = vi.fn<() => Promise<{ answer: string; ts: number }>>();
+      let resolveAnswer!: (value: { answer: string; ts: number }) => void;
+      let rejectAnswer!: (error: Error) => void;
+      ask.mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveAnswer = resolve;
+            rejectAnswer = reject;
+          }),
+      );
+      let submission: Promise<void> | undefined;
+      const element = await mount({
+        companion: threads.view("one"),
+        onDraftChange: (draft) => threads.setDraft("one", draft),
+        onSubmit: (question) => {
+          submission = threads.submit("one", question, ask);
+        },
+      });
+      const textarea = element.querySelector<HTMLTextAreaElement>("textarea")!;
+      const send = element.querySelector<HTMLButtonElement>("button[type=submit]")!;
+      const type = async (draft: string) => {
+        textarea.value = draft;
+        textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        await element.updateComplete;
+      };
+      const enter = () =>
+        textarea.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      expect(send.disabled).toBe(true);
+      await type("What changed?");
+      expect(send.disabled).toBe(false);
+      const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
+      textarea.dispatchEvent(compositionEnd);
+      const confirmingEnter = new KeyboardEvent("keydown", {
+        key: "Enter",
+        keyCode: 13,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(confirmingEnter, "timeStamp", {
+        value: compositionEnd.timeStamp - 1,
+      });
+      textarea.dispatchEvent(confirmingEnter);
+      expect(confirmingEnter.defaultPrevented).toBe(false);
+      expect(ask).not.toHaveBeenCalled();
+      expect(textarea.value).toBe("What changed?");
+      textarea.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+      enter();
       await element.updateComplete;
-    };
-    expect(send.disabled).toBe(true);
-    await type("What changed?");
-    expect(send.disabled).toBe(false);
-    const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
-    textarea.dispatchEvent(compositionEnd);
-    const confirmingEnter = new KeyboardEvent("keydown", {
-      key: "Enter",
-      keyCode: 13,
-      bubbles: true,
-      cancelable: true,
-    });
-    Object.defineProperty(confirmingEnter, "timeStamp", {
-      value: compositionEnd.timeStamp - 1,
-    });
-    textarea.dispatchEvent(confirmingEnter);
-    expect(confirmingEnter.defaultPrevented).toBe(false);
-    expect(ask).not.toHaveBeenCalled();
-    expect(textarea.value).toBe("What changed?");
-    textarea.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
-    enter(element);
-    await element.updateComplete;
-    expect(textarea.disabled).toBe(false);
-    expect(textarea.value).toBe("");
-    expect(textarea.placeholder).toBe("Ask a question");
-    await type("What should I verify next?");
-    expect(send.disabled).toBe(true);
-    enter(element);
-    submit(element);
-    expect(ask).toHaveBeenCalledTimes(1);
-    expect(textarea.value).toBe("What should I verify next?");
-    answer.resolve({ answer: "The composer changed.", ts: 42 });
-    await submission;
-    await element.updateComplete;
-    expect(threads.view("one").turns[0]?.status).toBe("answered");
-    expect(textarea.value).toBe("What should I verify next?");
-    expect(send.disabled).toBe(false);
-    element.connected = false;
-    await element.updateComplete;
-    expect(textarea.disabled).toBe(true);
-    expect(send.disabled).toBe(true);
-    submit(element);
-    expect(ask).toHaveBeenCalledTimes(1);
-    element.connected = true;
-    await element.updateComplete;
-    expect(textarea.disabled).toBe(false);
-    expect(textarea.value).toBe("What should I verify next?");
-    expect(send.disabled).toBe(false);
-  });
+      expect(textarea.disabled).toBe(false);
+      expect(textarea.value).toBe("");
+      expect(textarea.placeholder).toBe("Ask a question");
+      await type("What should I verify next?");
+      expect(send.disabled).toBe(true);
+      enter();
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      expect(ask).toHaveBeenCalledTimes(1);
+      expect(textarea.value).toBe("What should I verify next?");
+      if (outcome === "answered") {
+        resolveAnswer({ answer: "The composer changed.", ts: 42 });
+      } else {
+        rejectAnswer(new Error("Side chat timed out."));
+      }
+      await submission;
+      await element.updateComplete;
+      expect(threads.view("one").turns[0]?.status).toBe(outcome);
+      expect(textarea.value).toBe("What should I verify next?");
+      expect(send.disabled).toBe(false);
+      element.connected = false;
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(true);
+      expect(send.disabled).toBe(true);
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      expect(ask).toHaveBeenCalledTimes(1);
+      element.connected = true;
+      await element.updateComplete;
+      expect(textarea.disabled).toBe(false);
+      expect(textarea.value).toBe("What should I verify next?");
+      expect(send.disabled).toBe(false);
+    },
+  );
 
   it("shows the shared chat skeleton instead of the empty state during hydration", async () => {
     const element = await mount({
-      companion: companion({ loading: true }),
+      companion: {
+        turns: [],
+        loading: true,
+        draft: "",
+      },
     });
 
     const skeleton = element.querySelector("openclaw-panel-loading-skeleton");

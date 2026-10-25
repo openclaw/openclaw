@@ -366,6 +366,10 @@ describe("app-tool-stream approval lifecycle", () => {
     expiresAtMs: 2,
   });
 
+  const learnRun = (host: ReturnType<typeof createHost>, runId: string) => {
+    emitEvent(host, runId, 1, "lifecycle", { phase: "start" });
+  };
+
   it("clears only parked runs whose approvals leave the queue snapshot", () => {
     const host = createHost({
       waitingApprovalStatuses: new Map([
@@ -382,7 +386,7 @@ describe("app-tool-stream approval lifecycle", () => {
 
   it("clears hydrated state when the lifecycle resolution arrives", () => {
     const host = createHost({ waitingApprovalStatuses: new Map() });
-    emitEvent(host, "run-1", 1, "lifecycle", { phase: "start" });
+    learnRun(host, "run-1");
     reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")]);
 
     emitEvent(host, "run-1", 1, "lifecycle", {
@@ -397,7 +401,7 @@ describe("app-tool-stream approval lifecycle", () => {
     expect(host.waitingApprovalStatuses?.size).toBe(0);
 
     reconcileWaitingApprovalsFromSnapshot(host, []);
-    emitEvent(host, "run-1", 1, "lifecycle", { phase: "start" });
+    learnRun(host, "run-1");
     expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(true);
   });
 
@@ -458,45 +462,50 @@ describe("app-tool-stream throttled projections", () => {
   });
 });
 
-it("hides automation activity until an attention result arrives", () => {
-  useToolStreamFakeTimers();
-  const host = createHost();
-  for (const [index, phase] of ["start", "update", "result"].entries()) {
-    for (const stream of ["item", "tool"] as const) {
-      handleAgentEvent(
-        host,
-        agentEvent("run-quiet", index * 2 + (stream === "item" ? 1 : 2), stream, {
-          itemId: "tool:quiet-call",
-          toolCallId: "quiet-call",
-          kind: "tool",
-          name: "automations",
-          title: "Automations",
-          phase: stream === "item" && phase === "result" ? "end" : phase,
-          hideFromChannelProgress: true,
-          display: false,
-        }),
-      );
+it.each(["live", "history"] as const)(
+  "does not create raw tool bubbles for display-hidden automation activity (%s)",
+  (source) => {
+    useToolStreamFakeTimers();
+    const host = createHost();
+    for (const [index, phase] of ["start", "update", "result"].entries()) {
+      for (const stream of ["item", "tool"] as const) {
+        handleAgentEvent(
+          host,
+          agentEvent("run-quiet", index * 2 + (stream === "item" ? 1 : 2), stream, {
+            itemId: "tool:quiet-call",
+            toolCallId: "quiet-call",
+            kind: "tool",
+            name: "automations",
+            title: "Automations",
+            phase: stream === "item" && phase === "result" ? "end" : phase,
+            hideFromChannelProgress: true,
+            display: false,
+          }),
+          source,
+        );
+      }
     }
-  }
-  vi.advanceTimersByTime(80);
-  expect(host.chatToolMessages).toEqual([]);
-  expect(host.toolStreamOrder).toEqual([]);
-  // A later attention result has no display suppression and must still create its card.
-  handleAgentEvent(
-    host,
-    agentEvent("run-quiet", 7, "tool", {
-      toolCallId: "quiet-call",
-      name: "automations",
-      phase: "result",
-      isError: true,
-      result: "The check failed.",
-    }),
-  );
-  expect(host.chatToolMessages.flatMap(extractToolCardsCached)).toMatchObject([
-    { name: "automations", isError: true },
-  ]);
-  resetToolStream(host);
-});
+    vi.advanceTimersByTime(80);
+    expect(host.chatToolMessages).toEqual([]);
+    expect(host.toolStreamOrder).toEqual([]);
+    // A later attention result has no display suppression and must still create its card.
+    handleAgentEvent(
+      host,
+      agentEvent("run-quiet", 7, "tool", {
+        toolCallId: "quiet-call",
+        name: "automations",
+        phase: "result",
+        isError: true,
+        result: "The check failed.",
+      }),
+      source,
+    );
+    expect(host.chatToolMessages.flatMap(extractToolCardsCached)).toMatchObject([
+      { name: "automations", isError: true },
+    ]);
+    resetToolStream(host);
+  },
+);
 
 it("does not render Codex reasoning items as tool calls", () => {
   const host = createHost({ chatRunId: "run-1" });

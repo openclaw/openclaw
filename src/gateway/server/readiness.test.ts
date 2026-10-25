@@ -92,12 +92,12 @@ describe("createReadinessChecker", () => {
     expect(readiness()).toEqual(readySnapshot());
   });
   it("keeps traffic unready until saved input recovery releases chat admission", () => {
-    let available = false;
+    const unavailableMethods = new Set(["chat.send"]);
     const deps = {
       startedAt: Date.now() - FIVE_MIN_MS,
-      isChatSendAvailable: () => available,
+      isChatSendAvailable: () => !unavailableMethods.has("chat.send"),
     };
-    const { readiness } = setup(undefined, deps);
+    const { readiness, manager } = setup(undefined, deps);
 
     // Startup completion releases recovery's background-work barrier; it cannot await recovery.
     expect(createStartupChecker(deps)()).toEqual({
@@ -106,23 +106,32 @@ describe("createReadinessChecker", () => {
       uptimeMs: FIVE_MIN_MS,
     });
     expect(readiness()).toEqual(failingSnapshot(["chat-recovery"]));
-    available = true;
+    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+
+    unavailableMethods.clear();
     expect(readiness()).toEqual(readySnapshot());
-    available = false;
+    unavailableMethods.add("chat.send");
     expect(readiness()).toEqual(failingSnapshot(["chat-recovery"]));
   });
 
-  it("does not cache startup readiness", () => {
+  it.each([
+    ["startup-sidecars", "getStartupPending"],
+    ["gateway-draining", "getGatewayDraining"],
+  ] as const)("does not cache %s readiness", (reason, getter) => {
     let pending = true;
-    const { readiness } = setup(undefined, { getStartupPending: () => pending });
-    expect(readiness()).toEqual(failingSnapshot(["startup-sidecars"]));
+    const { manager, readiness } = setup(undefined, {
+      [getter]: () => pending,
+    });
+    expect(readiness()).toEqual(failingSnapshot([reason]));
+    expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     pending = false;
     expect(readiness()).toEqual(readySnapshot());
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("reports a terminal state database failure immediately and discards cached channel health", () => {
     let failure: Error | undefined;
-    const { readiness, manager } = setup(undefined, {
+    const { manager, readiness } = setup(undefined, {
       getStateDatabaseFailure: () => failure,
     });
     expect(readiness()).toEqual(readySnapshot());
@@ -132,15 +141,19 @@ describe("createReadinessChecker", () => {
       ...failingSnapshot(["state-database"]),
       stateDatabase: { reason: "newer shared-state schema" },
     });
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
 
     failure = undefined;
-    manager.getRuntimeSnapshot.mockReturnValue(snapshotWith({ running: false }));
-    expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS, true));
+    expect(readiness()).toEqual(readySnapshot());
+    expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("reports plugin replacement recovery immediately and resumes channel readiness after settlement", () => {
     let pluginReload: GatewayPluginReloadStatus | undefined;
-    const { manager, readiness } = setup({}, { getPluginReloadStatus: () => pluginReload });
+    const { manager, readiness } = setup(
+      { lastTransportActivityAt: Date.now() },
+      { getPluginReloadStatus: () => pluginReload },
+    );
     expect(readiness()).toEqual(readySnapshot());
 
     manager.getRuntimeSnapshot.mockReturnValue(snapshotWith({ running: false, connected: false }));
@@ -149,7 +162,16 @@ describe("createReadinessChecker", () => {
       phase: "recovering",
       pluginIds: ["discord"],
       deadlineAtMs: Date.now() + 5_000,
-      reason: "waiting",
+      reason: "Waiting for admitted work before restoring the previous plugin runtime.",
+    };
+    expect(readiness()).toEqual({
+      ...failingSnapshot(["plugin-reload"]),
+      pluginReload,
+    });
+    pluginReload = {
+      phase: "failed",
+      pluginIds: ["discord"],
+      reason: "Plugin recovery failed; inspect discord and restart the Gateway.",
     };
     expect(readiness()).toEqual({
       ...failingSnapshot(["plugin-reload"]),
@@ -160,20 +182,24 @@ describe("createReadinessChecker", () => {
     expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS, true));
   });
 
-  it.each([false, true])(
-    "reports warming, failed, and recovered agents before channel checks (skip: %s)",
-    (skipChannels) => {
+  it.each([
+    { skipChannels: false, channelFailed: false },
+    { skipChannels: true, channelFailed: false },
+    { skipChannels: false, channelFailed: true },
+  ])(
+    "reports warming, failed, and recovered core agents (skip channels: $skipChannels, channel failed: $channelFailed)",
+    ({ skipChannels, channelFailed }) => {
       let refusals: AgentDatabaseAdmissionRefusal[] = [];
       const { readiness } = setup(
-        { running: false, connected: false },
+        channelFailed ? { running: false, connected: false } : undefined,
         {
           shouldSkipChannelReadiness: () => skipChannels,
           getAgentDatabaseAdmissionRefusals: () => refusals,
         },
       );
-      const channelReadiness = skipChannels
-        ? readySnapshot()
-        : failingSnapshot(["discord"], FIVE_MIN_MS, true);
+      const channelReadiness = channelFailed
+        ? failingSnapshot(["discord"], FIVE_MIN_MS, true)
+        : readySnapshot();
       expect(readiness()).toEqual(channelReadiness);
 
       for (const pending of [true, false]) {
@@ -181,7 +207,9 @@ describe("createReadinessChecker", () => {
           createAgentDatabaseInspectionRefusal({
             agentId: "main",
             paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
-            reason: "unavailable",
+            reason: pending
+              ? "Startup inspection and preparation are still running."
+              : "Session identities require migration before this agent can run.",
             ...(pending ? { pending } : {}),
           }),
         ];
@@ -196,32 +224,31 @@ describe("createReadinessChecker", () => {
     },
   );
 
-  const deadIngress = { restartPending: true, ingressUnavailable: true };
-  it.each<[string, () => Partial<ChannelAccountSnapshot>, number, boolean]>([
-    ["startup grace", () => ({ connected: false }), 30_000, true],
-    ["ready skips grace", () => ({ connected: false, lifecycle: "ready" }), 30_000, false],
-    ["ingress backoff", () => ({ ...deadIngress, running: false }), THIRTY_ONE_MIN_MS, true],
-    ["dead ingress", () => deadIngress, THIRTY_ONE_MIN_MS, false],
-    [
-      "idle socket",
-      () => ({ lastTransportActivityAt: Date.now() - THIRTY_ONE_MIN_MS }),
-      THIRTY_ONE_MIN_MS,
-      true,
-    ],
-  ])("handles %s", (_name, account, age, ready) => {
-    const { readiness } = setup(
-      { lastStartAt: Date.now() - age, ...account() },
-      { startedAgoMs: age },
-    );
-    expect(readiness()).toEqual(
-      ready ? readySnapshot(age) : failingSnapshot(["discord"], age, true),
-    );
-  });
+  it.each([undefined, "ready"] as const)(
+    "applies startup grace only before lifecycle readiness (%s)",
+    (lifecycle) => {
+      const { readiness } = setup(
+        {
+          connected: false,
+          lifecycle,
+          lastStartAt: Date.now() - 30_000,
+        },
+        { startedAgoMs: 30_000 },
+      );
+      expect(readiness()).toEqual(
+        lifecycle ? failingSnapshot(["discord"], 30_000, true) : readySnapshot(30_000),
+      );
+    },
+  );
 
   it.each(["crash-loop", "ambient"] as const)(
     "reports %s suppressed stopped channels without failing readiness",
     (suppression) => {
-      const { manager, readiness } = setup({ running: false });
+      const { manager, readiness } = setup({
+        running: false,
+        restartPending: false,
+        lastError: suppression === "crash-loop" ? "safe mode" : "ambient credentials suppressed",
+      });
       if (suppression === "crash-loop") {
         manager.getAutostartSuppression.mockReturnValue({
           reason: "crash-loop-breaker",
@@ -235,6 +262,34 @@ describe("createReadinessChecker", () => {
       expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { suppressed: ["discord"] }));
     },
   );
+
+  it.each([
+    { name: "dead ingress in restart backoff", running: false, ready: true },
+    { name: "dead ingress while running", running: true, ready: false },
+  ])("checks $name independently of transport connectivity", ({ running, ready }) => {
+    const { readiness } = setup({
+      running,
+      restartPending: true,
+      ingressUnavailable: true,
+      reconnectAttempts: 3,
+      lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+      lastStopAt: Date.now() - 5_000,
+    });
+    expect(readiness()).toEqual(
+      ready ? readySnapshot() : failingSnapshot(["discord"], FIVE_MIN_MS, true),
+    );
+  });
+
+  it("treats stale-socket channels as ready to avoid pulling healthy idle pods", () => {
+    const { readiness } = setup(
+      {
+        lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+        lastTransportActivityAt: Date.now() - THIRTY_ONE_MIN_MS,
+      },
+      { startedAgoMs: THIRTY_ONE_MIN_MS },
+    );
+    expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
+  });
 
   it("caches readiness snapshots briefly to keep repeated probes cheap", () => {
     const { manager, readiness } = setup({

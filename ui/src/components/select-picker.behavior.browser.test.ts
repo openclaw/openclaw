@@ -15,10 +15,6 @@ const options: PickerOption[] = [
     label: `Model ${index}`,
   })),
 ];
-const alphabetOptions: PickerOption[] = [
-  { value: "alpha", label: "Alpha" },
-  { value: "beta", label: "Beta" },
-];
 
 afterEach(() => {
   cleanupSolid();
@@ -52,6 +48,10 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     { container: mountTarget },
   );
   const picker = container.querySelector("openclaw-select-picker")!;
+  const next = document.createElement("button");
+  next.id = "next";
+  next.textContent = "Next";
+  container.append(next);
   const update = async (patch: Partial<PickerParams<PickerOption>>) => {
     Object.assign(params, patch);
     setParams({ ...params });
@@ -90,11 +90,6 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 describe("Picker", () => {
   it("keeps closed choices unmounted across catalog refreshes and shows current choices on open", async () => {
     const p = await mount({ searchable: false });
-    p.trigger.focus();
-    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Anchor");
-    await p.update({ value: "fixture/aurora-large" });
-    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Aurora Large");
-    expect(p.params.onChange).not.toHaveBeenCalled();
     const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
     expect(p.rows()).toHaveLength(0);
     const mutations: MutationRecord[] = [];
@@ -253,8 +248,23 @@ describe("Picker", () => {
     expect(p.params.onChange).not.toHaveBeenCalled();
   });
 
+  it("names the field and current selection when the closed trigger receives focus", async () => {
+    const p = await mount();
+    p.trigger.focus();
+    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Anchor");
+    await p.update({ value: "fixture/aurora-large" });
+    expect(p.trigger.getAttribute("aria-label")).toBe("Model: Aurora Large");
+    expect(p.params.onChange).not.toHaveBeenCalled();
+  });
+
   it("retains the current short-menu choice when typeahead has no match", async () => {
-    const p = await mount({ options: alphabetOptions, value: "beta" });
+    const p = await mount({
+      options: [
+        { value: "alpha", label: "Alpha" },
+        { value: "beta", label: "Beta" },
+      ],
+      value: "beta",
+    });
     await p.open();
     await p.key("z");
     await p.key("Enter");
@@ -289,7 +299,13 @@ describe("Picker", () => {
   );
 
   it("opens a compact menu with a printable key without committing it", async () => {
-    const p = await mount({ options: alphabetOptions, value: "beta" });
+    const p = await mount({
+      options: [
+        { value: "alpha", label: "Alpha" },
+        { value: "beta", label: "Beta" },
+      ],
+      value: "beta",
+    });
     await p.key("a");
     expect(p.trigger.getAttribute("aria-expanded")).toBe("true");
     expect(p.params.onChange).not.toHaveBeenCalled();

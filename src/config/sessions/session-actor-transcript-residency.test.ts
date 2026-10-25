@@ -28,8 +28,8 @@ import {
   readSessionActorTranscriptContext,
   seedSessionActorTranscriptContext,
 } from "./session-actor-transcript-replica.js";
-import { summaryFacts } from "./session-actor-transcript.test-support.js";
-import { withActor, type Fixture } from "./session-actor-worker.test-support.js";
+import { summaryFacts, transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
+import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import {
   mutateSessionColdTranscriptInWorker,
   prepareSessionColdBatchInWorker,
@@ -37,6 +37,7 @@ import {
 } from "./session-cold-storage-worker.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
+import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 import { timedMessageEvent } from "./transcript-message.test-support.js";
 
@@ -123,6 +124,8 @@ function contextFixture(f: Fixture) {
         { ...f.scope, path: f.database.path },
         selection,
       ),
+    canonicalAnchors: () =>
+      readSessionTranscriptAnchorFactsInDatabase(f.database, f.scope, selection),
     summary: () => readActivitySummaryBatchFromReplica({ scope: f.scope }),
     read() {
       const hot = replica.read();
@@ -159,6 +162,10 @@ function expectProjections(
   events = [question, answer],
 ) {
   expect(context.anchors()).toBeUndefined();
+  expect(context.canonicalAnchors().anchors.map((anchor) => anchor.entryId)).toEqual([
+    "question",
+    "answer",
+  ]);
   expect(context.summary()?.page.events.map(({ event }) => event)).toEqual(events);
 }
 
@@ -194,39 +201,75 @@ const correlation = (steerTargetRunId: string) => ({
   message: { ...question.message, __openclaw: { steerTargetRunId } },
 });
 
-it("retains navigation across oversized metadata appends and competing actor reads", () =>
+it("keeps settled append bodies in receipts and storage without evicting navigation", () =>
   withActor((f) => {
     replace(f);
     const other = { ...f.target, sessionKey: "agent:main:other-resident" };
     runSqliteImmediateTransactionSync(f.database.db, () => {
       writeSessionEntry(f.database, other.sessionKey, { sessionId: "other", updatedAt: 1 });
     });
-    for (let index = 0; index < 6; index++) {
-      const event = {
-        type: "custom",
-        id: `large-metadata-${index}`,
-        parentId: index === 0 ? "answer" : `large-metadata-${index - 1}`,
-        timestamp: "2026-01-01T00:00:03Z",
-        customType: "openclaw.cache-ttl",
-        data: { snapshot: "synthetic".repeat(180_000) },
-      };
-      expectAppended(appendEvent(f, event), event);
+    const warn = vi.fn();
+    f.hooks.transactionOptions = { logger: { warn }, slowTransactionHoldMs: 0 };
+    const events = Array.from({ length: 6 }, (_, index) => ({
+      type: "custom",
+      id: `large-metadata-${index}`,
+      parentId: index === 0 ? "answer" : `large-metadata-${index - 1}`,
+      timestamp: "2026-01-01T00:00:03Z",
+      customType: "openclaw.cache-ttl",
+      data: { snapshot: "synthetic".repeat(180_000) },
+    }));
+    for (const [index, event] of events.entries()) {
+      const outcome = appendEvent(f, event);
+      expect(outcome.kind).toBe("committed");
+      expect(warn).toHaveBeenLastCalledWith(
+        "slow SQLite transaction hold",
+        expect.objectContaining({
+          operation: "session.actor.appendTranscriptEvent",
+          context: {
+            payloadBytes: Buffer.byteLength(JSON.stringify(event)),
+            actorResident: index > 0,
+            actorTranscriptEvents: 3 + index,
+            actorActiveEvents: 2 + index,
+            actorReadMs: expect.any(Number),
+            actorApplyMs: expect.any(Number),
+            actorProjectionMs: expect.any(Number),
+            actorReceiptMs: expect.any(Number),
+            actorReceiptBytes: expect.any(Number),
+          },
+        }),
+      );
+      if (outcome.kind === "committed") {
+        expect(outcome.receipt.transcript.appendedEvents?.[0]?.event).toEqual(event);
+      }
     }
+    const expectedBytes = [...transcript(f), ...events].reduce(
+      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
+      0,
+    );
     const reads = trackSqliteStatementExecutions(f.database.db, ["history"], (sql) =>
       /^\s*select\b/iu.test(sql) && sql.includes('"transcript_events"') ? "history" : null,
     );
-    let warm: ReturnType<Fixture["read"]>;
+    let warm;
     try {
       f.read(other);
       reads.counts.history = 0;
       warm = f.read();
-      expect(warm.transcript.projection?.contextMetadata).toBeUndefined();
       expect(reads.counts.history).toBe(0);
+      expect(warm.transcript.projection?.contextMetadata).toBeUndefined();
     } finally {
       reads.restore();
     }
+    expect(storedEvents(f)).toEqual([...transcript(f), ...events]);
     f.restartActor();
-    expect(f.read().transcript.modelContext).toEqual(warm.transcript.modelContext);
+    const cold = f.read();
+    expect(cold.transcript.modelContext).toEqual(warm.transcript.modelContext);
+    expect(cold.transcript.projection?.contextMetadata).toBeUndefined();
+    expect(
+      readSessionTranscriptBoundedActiveContextCore(f.scope, {
+        maxBytes: expectedBytes,
+        maxEvents: 100,
+      }).serializedBytes,
+    ).toBe(expectedBytes);
   }));
 
 it.each(["warm", "restarted"] as const)(
@@ -262,8 +305,7 @@ it.each(["warm", "restarted"] as const)(
         });
       };
       const expectVisibleTail = (entryId: string) => {
-        const outcome = appendMessage(replayMessage);
-        expect(outcome).toMatchObject({
+        expect(appendMessage(replayMessage)).toMatchObject({
           kind: "committed",
           value: {
             kind: "message",
@@ -329,6 +371,79 @@ it.each(["warm", "restarted"] as const)(
     });
   },
 );
+
+it("advances retained context through native actor appends and preserves it through bookkeeping", () =>
+  withContext(async (f, context) => {
+    const initial = context.seed();
+    expect(context.read()?.snapshot.events).toEqual(transcript(f));
+    const command: Mutation = {
+      type: "session.actor.appendToolResult",
+      input: {
+        target: f.target,
+        expected: initial.version,
+        ...transcriptTurnCommand(f.scope, "next-turn", [
+          { eventId: "next-question", message: { role: "user", content: "Next question" }, now: 4 },
+          {
+            eventId: "next-answer",
+            message: { role: "assistant", content: "Next answer" },
+            now: 5,
+          },
+        ]),
+      },
+    };
+    await f.prepare(command);
+    const pending = context.replica.beginCommand();
+    const appended = f.mutate(command);
+    expect(appended.kind).toBe("committed");
+    expect(pending.settle<unknown>(appended)).toBe(true);
+    const reads = trackSqliteStatementExecutions(f.database.db, ["read"], (sql) =>
+      /^\s*select\b/iu.test(sql) ? "read" : null,
+    );
+    try {
+      for (let call = 0; call < 2; call += 1) {
+        expect(context.read()?.snapshot.events).toEqual([
+          ...transcript(f),
+          expect.objectContaining({
+            id: "next-question",
+            message: expect.objectContaining({ role: "user", content: "Next question" }),
+          }),
+          expect.objectContaining({
+            id: "next-answer",
+            message: expect.objectContaining({ role: "assistant", content: "Next answer" }),
+          }),
+        ]);
+      }
+      expect(reads.counts.read).toBe(0);
+    } finally {
+      reads.restore();
+    }
+    const current = context.replica.read()!;
+    const bookkeeping = context.replica.beginCommand();
+    expect(
+      bookkeeping.settle<unknown>(
+        f.mutate({
+          type: "session.actor.patch",
+          input: {
+            target: f.target,
+            expected: current.version,
+            commandId: "accounting",
+            phaseId: "turn",
+            reducers: [{ kind: "activity", updatedAt: 6 }],
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(context.read()?.snapshot.events).toHaveLength(5);
+    expect(context.anchors()).toBeUndefined();
+    expect(context.canonicalAnchors().watermark).toEqual(
+      context.replica.read()!.transcript.watermark,
+    );
+    expect(context.summary()?.page.events).toHaveLength(4);
+    expect(context.summary()?.page.events.at(-1)?.event).toMatchObject({
+      id: "next-answer",
+      message: { content: "Next answer" },
+    });
+  }));
 
 it("settles a resident correlation rewrite once and leaves rollback payloads unchanged", () =>
   withContext((f, context) => {
