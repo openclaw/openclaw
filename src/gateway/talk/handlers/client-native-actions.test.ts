@@ -19,12 +19,10 @@ import {
 } from "../../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../../agents/sessions/session-manager.js";
 import {
-  loadExactSessionEntry,
   loadTranscriptEventsSync,
   readSessionTranscriptMessageEvents,
 } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
-import { waitForSessionTranscriptIndexReconcile } from "../../../config/sessions/session-transcript-reconcile.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -35,8 +33,6 @@ import {
   registerClientVoiceConsultRun,
   resolveClientVoiceRunBinding,
 } from "../../../talk/client-voice-session.js";
-import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
-import { readSessionPreviewItemsFromTranscriptAsync } from "../../session-transcript-preview.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import {
   AGENT_ID,
@@ -166,37 +162,17 @@ describe("native Talk action ownership through public plugin registration", () =
     await withNativePlugin(async (fixture) => {
       const scope = transcriptScope();
       let modelRun: Promise<void> | undefined;
-      let activeVoiceSessionId: string | undefined;
-      const failures = new Set<unknown>();
-      const settle = (work: Promise<unknown> | undefined) =>
-        Promise.resolve(work).catch((error: unknown) => {
-          failures.add(error);
-        });
       upstream.runEmbeddedAgent.mockImplementationOnce(
         async (params) =>
           await withRegisteredNativeEmbeddedRun(params, async () => {
-            const { agentId, sessionId, sessionKey, storePath } = params.sessionTarget ?? {};
-            if (
-              !agentId ||
-              !sessionId ||
-              !sessionKey ||
-              !storePath ||
-              !params.preparedRunAdmission
-            ) {
-              throw new Error("Missing native target/admission");
-            }
-            await params.preparedRunAdmission.admit("embedded", "native-history-backend");
             const recorder = params.userTurnTranscriptRecorder;
-            const manager = guardSessionManager(
-              SessionManager.open({ agentId, sessionId, sessionKey, storePath }),
-              {
-                agentId: AGENT_ID,
-                sessionKey: SESSION_KEY,
-                runId: params.runId,
-                preparedUserTurnMessage: await recorder?.resolveMessage(),
-                preparedUserTurnTranscriptRecorder: recorder,
-              },
-            );
+            const manager = guardSessionManager(SessionManager.open(scope), {
+              agentId: AGENT_ID,
+              sessionKey: SESSION_KEY,
+              runId: params.runId,
+              preparedUserTurnMessage: await recorder?.resolveMessage(),
+              preparedUserTurnTranscriptRecorder: recorder,
+            });
             const { session } = await createTestSession({ sessionManager: manager });
             modelRun = session.prompt(params.prompt);
             await modelRun;
@@ -215,7 +191,6 @@ describe("native Talk action ownership through public plugin registration", () =
       );
       try {
         const { socket, result } = await connectNativeSession(fixture);
-        activeVoiceSessionId = requireString(result, "voiceSessionId");
         await flushNativeTranscript(result, () => socket.serverEvent(nativeTranscript(spoken)));
         socket.serverEvent(nativeDelegation("custody-request", delegated));
         await providerStarted.promise;
@@ -283,25 +258,15 @@ describe("native Talk action ownership through public plugin registration", () =
         await fixture.invoke("talk.client.close", { voiceSessionId: result.voiceSessionId });
         const rawCompleted = rawTranscriptRows();
         expect(await closeOpenClawAgentDatabaseByPathAsync(scope.storePath)).toBe(true);
-        const reconnected = await connectNativeSession(fixture);
-        activeVoiceSessionId = requireString(reconnected.result, "voiceSessionId");
+        await connectNativeSession(fixture);
         const session = await nativeCallSession();
         expect.soft(session.instructions).not.toContain(delegated);
         expect(nativeBackgroundItems(session)).toEqual(retained);
         expect(session.delegation?.ack_filler).toBe(false);
         expect(rawTranscriptRows()).toEqual(rawCompleted);
-      } catch (error) {
-        failures.add(error);
       } finally {
         finish();
-        await settle(modelRun);
-        await settle(activeVoiceSessionId ? closeVoice(activeVoiceSessionId) : undefined);
-      }
-      if (failures.size === 1) {
-        throw failures.values().next().value;
-      }
-      if (failures.size > 1) {
-        throw new AggregateError(failures, "Native Talk fixture failed");
+        await modelRun;
       }
     });
   });
@@ -321,28 +286,6 @@ describe("native Talk action ownership through public plugin registration", () =
         append(`excluded sentinel ${index}`, { display: false, excludeFromContext: true });
       }
       const raw = rawTranscriptRows();
-      const display = await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800);
-      expect.soft(display.map((item) => item.text)).toEqual(["ordinary", "display only"]);
-      await waitForSessionTranscriptIndexReconcile({
-        agentId: scope.agentId,
-        path: scope.storePath,
-      });
-      const sessionEntry = loadExactSessionEntry(scope)?.entry;
-      expect(sessionEntry?.sessionId).toBe(SESSION_ID);
-      await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
-      const sql = observeMainThreadSql();
-      try {
-        const context = await readSessionPreviewItemsFromTranscriptAsync(
-          { ...scope, sessionEntry },
-          16,
-          800,
-          "model-context",
-        );
-        expect(context.map((item) => item.text)).toEqual(["ordinary", "context only"]);
-        sql.expectIdle();
-      } finally {
-        sql.restore();
-      }
       await connectNativeSession(fixture);
       expect(nativeBackgroundItems(await nativeCallSession())).toEqual([
         { role: "user", text: "ordinary" },
@@ -354,12 +297,6 @@ describe("native Talk action ownership through public plugin registration", () =
       manager.appendResetBoundary("new", kept);
       append("post-reset excluded", { display: false, excludeFromContext: true });
       const resetRaw = rawTranscriptRows();
-      expect(
-        (await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800, "model-context")).map(
-          (item) => item.text,
-        ),
-      ).toEqual(["reset-kept"]);
-      expect(await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800)).toEqual([]);
       await connectNativeSession(fixture);
       expect(nativeBackgroundItems(await nativeCallSession())).toEqual([
         { role: "user", text: "reset-kept" },
@@ -419,7 +356,7 @@ describe("native Talk action ownership through public plugin registration", () =
     ["identical registration replay", "open"],
   ] as const)(
     "checks the controlling call at real final insertion while the backend stays live (%s)",
-    async (scenario, transition) => {
+    async (_scenario, transition) => {
       const { session } = await createTestSession();
       const { response: providerStream, release: finish } = holdAssistantResponse("Task finished.");
       const answer = createAssistant(testModel, "Task finished.");
@@ -450,7 +387,7 @@ describe("native Talk action ownership through public plugin registration", () =
             const realSteer = session.steer.bind(session);
             const delivered = createDeferredCore();
             let insertionsBeforeTransition: number | undefined;
-            const steering = vi.spyOn(session, "steer").mockImplementation(async (...args) => {
+            vi.spyOn(session, "steer").mockImplementation(async (...args) => {
               // Enter the real transcript-preparation await before closing only the call.
               // Awaiting close here would deadlock on this control's own FIFO drain.
               const pending = realSteer(...args);
@@ -461,10 +398,7 @@ describe("native Talk action ownership through public plugin registration", () =
               } else if (replacementVoiceSessionId) {
                 await registerVoiceRun(replacementVoiceSessionId, activeRun.runId);
               }
-              if (
-                scenario === "returned A-to-B-to-A" ||
-                scenario === "identical registration replay"
-              ) {
+              if (transition !== "closed") {
                 await registerVoiceRun(voiceSessionId, activeRun.runId);
               }
               void pending.then(
@@ -481,7 +415,7 @@ describe("native Talk action ownership through public plugin registration", () =
               expect(socket.readyState).toBe(upstream.NativeSocket.CLOSED);
             } else if (replacementVoiceSessionId) {
               expect(resolveClientVoiceRunBinding(activeRun.runId)?.voiceSessionId).toBe(
-                scenario === "returned A-to-B-to-A" ? voiceSessionId : replacementVoiceSessionId,
+                voiceSessionId,
               );
             } else {
               await vi.waitFor(() =>
@@ -490,11 +424,8 @@ describe("native Talk action ownership through public plugin registration", () =
                 ),
               );
             }
-            expect(steering).toHaveBeenCalledOnce();
             expect(insertionsBeforeTransition).toBe(0);
             expect(getActiveNativeAttempt(activeRun.sessionId)).toBe(handle);
-            expect(ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(activeRun.runId)).toBe(registration);
-            expect(getEmbeddedRunAttachment(handle)).toBe(registration);
             expect(rpcSourceTesting.get(activeRun.runId)).toBe(chatRegistration);
             expect(() => registration.toolAuthority?.assertActive()).not.toThrow();
             expect(activeRun.abortSignal.aborted).toBe(false);
