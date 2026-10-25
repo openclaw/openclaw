@@ -1,18 +1,76 @@
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
+import { createRuntimeProcessScriptFile } from "../../runtime-process-scripts.generated.mjs";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  createSealedRuntimeProcessEntrypoints,
+  runtimeProcessDeployEntryFileName,
+  runtimeProcessExternalPackageEntrypoints,
+  runtimeProcessScriptEntrypoints,
+  type runtimeProcessDeployManifest,
+  type runtimeProcessSealedManifest,
+} from "./runtime-process-manifest.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 type RuntimeProcessEntrypointName = keyof typeof runtimeProcessEntrypoints;
 
+type RuntimeScriptEntrypoints = typeof runtimeProcessScriptEntrypoints;
+type RuntimeScriptFileEntrypointName = {
+  [Name in keyof RuntimeScriptEntrypoints]: RuntimeScriptEntrypoints[Name] extends { kind: "file" }
+    ? Name
+    : never;
+}[keyof RuntimeScriptEntrypoints];
+
 const sealedEntrypoints = new Map<RuntimeProcessEntrypointName, URL>();
 
-// Deploy bundles register their sibling before launch: their paths have no /dist/ marker.
-export function registerSealedRuntimeProcessEntrypoint(
-  name: RuntimeProcessEntrypointName,
-  url: URL,
+export function registerSealedRuntimeProcessEntrypoints(
+  group: keyof typeof runtimeProcessSealedManifest,
+  currentModuleUrl: string,
 ): void {
-  sealedEntrypoints.set(name, url);
+  createSealedRuntimeProcessEntrypoints(group, currentModuleUrl).forEach(({ name, url }) => {
+    sealedEntrypoints.set(name, url);
+  });
+}
+
+export function resolveExternalPackageRuntimeEntrypointUrl(
+  name: keyof typeof runtimeProcessExternalPackageEntrypoints,
+  packageRoot: string,
+): URL {
+  return pathToFileURL(path.join(packageRoot, runtimeProcessExternalPackageEntrypoints[name]));
 }
 
 export function resolveRuntimeProcessEntrypointUrl(name: RuntimeProcessEntrypointName): URL {
   return sealedEntrypoints.get(name) ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints[name]);
+}
+
+export function resolveRuntimeDeployEntrypointUrl(
+  name: keyof typeof runtimeProcessDeployManifest,
+  directory: string,
+): URL {
+  return pathToFileURL(path.join(directory, runtimeProcessDeployEntryFileName(name)));
+}
+
+export function resolveRuntimeScriptEntrypointUrl(
+  name: RuntimeScriptFileEntrypointName,
+  directory: string,
+): URL {
+  return pathToFileURL(path.join(directory, runtimeProcessScriptEntrypoints[name].fileName));
+}
+
+/** Embedded self children use the image dispatcher; foreign runtimes need a real file. */
+export function prepareRuntimeProcessScriptInvocation(
+  name: Parameters<typeof createRuntimeProcessScriptFile>[0],
+  execPath: string,
+  options?: Parameters<typeof createRuntimeProcessScriptFile>[1],
+): { argv: string[]; dispose(): void } {
+  const entry = runtimeProcessScriptEntrypoints[name];
+  if ("runtimeEntrypoint" in entry && execPath === process.execPath) {
+    const url = resolveRuntimeProcessEntrypointUrl(entry.runtimeEntrypoint);
+    if (isEmbeddedStandaloneModule(url.href)) {
+      return { argv: [execPath, ...resolveRuntimeWorkerArgv(url, execPath)], dispose() {} };
+    }
+  }
+  const file = createRuntimeProcessScriptFile(name, options);
+  return { argv: [execPath, fileURLToPath(file.url)], dispose: () => file.dispose() };
 }

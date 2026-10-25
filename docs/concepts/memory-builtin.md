@@ -282,11 +282,20 @@ the existing cache cap.
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact. The embedding cache
-is bounded before publication, not after copying excess entries into the
-shared database. When new entries would take the cache past its row cap, or it
-is already over the cap, it removes exactly as many entries as before, but first
-takes entries for the active embedding provider that no published chunk
-references and that were written before the oldest published chunk, oldest
+can miss vectors that are still in the published index. With embedding caching
+enabled, full rebuilds reuse those
+vectors in bounded source batches when provider, model, provider settings, input
+format, chunk hash, and dimensions match. Invalid vectors are embedded again.
+The embedding cache
+may temporarily hold up to twice its configured row cap during a full rebuild,
+so new embeddings do not evict cached vectors that later batches still need.
+It is pruned to the configured cap after publication or abort. A suspended
+background rebuild keeps that temporary budget until it resumes or is discarded.
+A process crash
+can leave the temporary excess until the next cache write enforces its capacity
+budget. Incremental writes keep their normal pre-insertion cap. When entries
+must be evicted, the cache first takes entries for the active embedding provider
+that no published chunk references and that were written before the oldest published chunk, oldest
 first. A full reindex rewrites every chunk, so these entries predate the index
 that dropped them. Incremental syncs keep unchanged chunks, so the oldest
 published chunk can be much older and fewer entries qualify. Newer unreferenced
@@ -308,6 +317,13 @@ in a worker, without allocating a numeric array per chunk, even when the
 optional sqlite-vec accelerator is unavailable; sqlite-vec keeps its
 separate 32-bit vector index. The keyword index uses each chunk's stable integer
 identity, so edits and deletion update the corresponding FTS rows directly.
+
+On PostgreSQL, exact path matches use three B-tree indexes of bounded digests for
+normalized paths, basenames, and extensionless basenames. The original path
+predicate rechecks candidates, preserving search results and ranking while avoiding
+a full source scan for each keyword query. Agent schema 36 installs these indexes
+through Doctor; SQLite keeps its existing keyword search, including the broader
+scan used by Unicode fallback queries.
 
 Agent schema 23 converts existing JSON vectors locally, without contacting an
 embedding provider. It preserves chunk IDs, provenance, recall metadata, and

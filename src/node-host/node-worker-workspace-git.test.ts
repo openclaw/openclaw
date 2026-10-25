@@ -2,8 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
-import { initializeNodeWorkerGitWorkspace } from "./node-worker-workspace-git.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import {
+  initializeNodeWorkerGitWorkspace,
+  prepareNodeWorkerGitResult,
+} from "./node-worker-workspace-git.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
@@ -32,14 +38,9 @@ describe("node workspace Git creation", () => {
     vi.stubEnv("GIT_CONFIG_KEY_1", "core.fsmonitor");
     vi.stubEnv("GIT_CONFIG_VALUE_1", "false");
     const baseCommit = "a".repeat(40);
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => ({
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-      stdout: argv.includes("rev-parse") ? `${baseCommit}\n` : "",
-      stderr: "",
-    }));
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) =>
+      createCommandResult({ stdout: argv.includes("rev-parse") ? `${baseCommit}\n` : "" }),
+    );
     vi.mocked(runExec).mockResolvedValue({ stdout: "pack", stderr: "" });
 
     await initializeNodeWorkerGitWorkspace({
@@ -93,4 +94,55 @@ describe("node workspace Git creation", () => {
       Object.fromEntries(Object.keys(preserved).map((key) => [key, commandOptions.baseEnv?.[key]])),
     ).toEqual(preserved);
   });
+});
+
+it("captures Git history through its declared entry and retains the upload framing", async () => {
+  const root = tempDirs.make("node-workspace-history-entry-");
+  const controller = new AbortController();
+  const history = {
+    baseCommit: "a".repeat(40),
+    headCommit: "a".repeat(40),
+    descendsFromBase: true,
+  };
+  vi.mocked(runCommandWithTimeout).mockResolvedValue(
+    createCommandResult({ stdout: JSON.stringify(history) }),
+  );
+  const packPath = path.join(root, "history.pack");
+  const result = await prepareNodeWorkerGitResult({
+    resultVersion: 2,
+    workspaceDir: root,
+    manifestHome: root,
+    baseCommit: history.baseCommit,
+    packPath,
+    signal: controller.signal,
+  });
+  expect(runCommandWithTimeout).toHaveBeenCalledWith(
+    [
+      process.execPath,
+      ...resolveRuntimeWorkerArgv(resolveRuntimeProcessEntrypointUrl("nodeWorkspaceGitHistory")),
+      root,
+      history.baseCommit,
+      packPath,
+    ],
+    expect.objectContaining({
+      cwd: root,
+      signal: controller.signal,
+      timeoutMs: 10 * 60_000,
+      maxOutputBytes: 128 * 1024,
+      maxCombinedOutputBytes: 256 * 1024,
+      baseEnv: expect.objectContaining({ HOME: root, GIT_TERMINAL_PROMPT: "0" }),
+    }),
+  );
+  if (!result) {
+    throw new Error("Version-two history must produce its upload trailer");
+  }
+  const chunks: Buffer[] = [];
+  await result.write(async (chunk) => {
+    chunks.push(chunk);
+  });
+  const trailer = Buffer.concat(chunks);
+  const length = trailer.readUInt32BE(0);
+  expect(JSON.parse(trailer.subarray(4, 4 + length).toString("utf8"))).toEqual(history);
+  expect(trailer.readBigUInt64BE(4 + length)).toBe(0n);
+  expect(result.byteLength).toBe(trailer.byteLength);
 });

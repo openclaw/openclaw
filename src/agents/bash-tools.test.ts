@@ -15,6 +15,7 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
+import type { SpawnInput } from "../process/supervisor/types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
@@ -48,10 +49,8 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 vi.mock("../infra/shell-env.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
   return {
-    ...actual,
+    ...(await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js")),
     getShellPathFromLoginShell: vi.fn(() => null),
     resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
   };
@@ -61,16 +60,7 @@ vi.mock("../infra/shell-env.js", async () => {
 vi.mock("../process/supervisor/index.js", async () => {
   const { takeHeldSupervisorExit, createRunExit } =
     await import("./bash-tools.exec-runtime.test-support.js");
-  type SpawnInput = {
-    argv?: string[];
-    env?: NodeJS.ProcessEnv;
-    onStdout?: (chunk: string) => void;
-  };
-
-  const immediate = () =>
-    new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+  const { setImmediate: immediate } = await import("node:timers/promises");
   const splitCommands = (command: string) =>
     command
       .split(";")
@@ -99,7 +89,7 @@ vi.mock("../process/supervisor/index.js", async () => {
 
   return {
     getProcessSupervisor: () => ({
-      spawn: async (input: SpawnInput) => {
+      spawn: async (input: Partial<Extract<SpawnInput, { mode: "child" }>>) => {
         const exitGate = takeHeldSupervisorExit();
         const command = input.argv?.at(-1) ?? "";
         const output = commandOutput(command, input.env);

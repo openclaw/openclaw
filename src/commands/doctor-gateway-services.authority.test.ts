@@ -19,6 +19,7 @@ import {
   parseSystemdExecStart,
 } from "../daemon/systemd-unit.js";
 import { seedCompletedRuntimePinMigration } from "../daemon/test-helpers/service-audit-runtime-pin.js";
+import { createDoctorPrompterFixture as makePrompter } from "../flows/doctor-health-context.test-support.js";
 import * as packageRootResolver from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { readSecretStoreValue } from "../secrets/store/secret-store.js";
@@ -27,7 +28,6 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
@@ -292,7 +292,10 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       }
     });
     edges.runtimeProbe.mockImplementation(async (file, args) => {
-      if (args[0] !== "-e" || !args[1]?.includes("sqliteVersion")) {
+      if (
+        path.basename(args[0] ?? "") !== "daemon-runtime-probe.mjs" ||
+        !isDeepStrictEqual(args.slice(1), ["node", ""])
+      ) {
         unexpectedProcesses.push("unexpected runtime process");
         throw new Error("Unexpected fixture runtime process");
       }
@@ -400,7 +403,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       },
       exit: vi.fn(),
     };
-    const prompter = makePrompter(true);
+    const prompter = makePrompter(true, true);
     prompter.shouldForce = update;
     Object.assign(prompter.repairMode, {
       shouldForce: update,

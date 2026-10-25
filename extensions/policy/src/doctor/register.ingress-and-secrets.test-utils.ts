@@ -5,6 +5,11 @@ import { collectPolicyEvidence } from "../policy-state.js";
 import { registerPolicyDoctorChecks } from "./register.js";
 import {
   cfgWithPolicy,
+  createSharedSandboxRequirements,
+  cfgWithPolicyAgents as configWithAgents,
+  createStandardIngressPolicy,
+  createOpenOpsGroups,
+  createDisabledOpenChannelInput,
   createNamedAllowlistAccounts,
   createInheritedAgentPolicyConfig,
   cfgWithPolicyOverrides as configWithPolicy,
@@ -24,14 +29,7 @@ const scanPolicyIngress = (cfg: Record<string, unknown>) =>
 type PolicyScenarioMode = "doctor" | "global-doctor" | "checks";
 
 const INGRESS_POLICY = {
-  ingress: {
-    session: { requireDmScope: "per-channel-peer" },
-    channels: {
-      allowDmPolicies: ["pairing", "allowlist", "disabled"],
-      denyOpenGroups: true,
-      requireMentionInGroups: true,
-    },
-  },
+  ingress: createStandardIngressPolicy(),
 };
 
 async function runPolicyScenario(
@@ -62,10 +60,6 @@ async function runIngressPolicyScenario(channels: Record<string, unknown>) {
   };
 }
 
-function configWithAgents(agents: RawLegacyDoctorConfig["agents"]) {
-  return configWithPolicy({ agents });
-}
-
 function configWithSandbox(
   sandbox: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["sandbox"],
 ) {
@@ -81,6 +75,10 @@ function workspacePolicy(allowedAccess: string[], denyTools?: string[]) {
       },
     },
   };
+}
+
+function readOnlyWorkspacePolicy() {
+  return workspacePolicy(["none", "ro"], ["exec", "process", "write", "edit", "apply_patch"]);
 }
 
 function managedSecretsPolicy(denySources?: string[], allowInsecureProviders?: boolean) {
@@ -111,12 +109,7 @@ describe("registerPolicyDoctorChecks", () => {
       telegram: {
         dmPolicy: "pairing",
         groupPolicy: "disabled",
-        groups: {
-          ops: {
-            groupPolicy: "open",
-            requireMention: false,
-          },
-        },
+        groups: createOpenOpsGroups(),
       },
     });
 
@@ -324,12 +317,7 @@ describe("registerPolicyDoctorChecks", () => {
     const { cfg, result } = await runIngressPolicyScenario({
       slack: {
         accounts: {
-          work: {
-            enabled: false,
-            dmPolicy: "open",
-            groupPolicy: "open",
-            requireMention: false,
-          },
+          work: createDisabledOpenChannelInput(),
         },
       },
     });
@@ -392,12 +380,7 @@ describe("registerPolicyDoctorChecks", () => {
       telegram: {
         dmPolicy: "pairing",
         groupPolicy: "allowlist",
-        groups: {
-          ops: {
-            groupPolicy: "open",
-            requireMention: false,
-          },
-        },
+        groups: createOpenOpsGroups(),
         accounts: {
           work: {
             botToken: "work-token",
@@ -454,12 +437,7 @@ describe("registerPolicyDoctorChecks", () => {
     const cfg = {
       channels: {
         telegram: {
-          groups: {
-            ops: {
-              groupPolicy: "open",
-              requireMention: false,
-            },
-          },
+          groups: createOpenOpsGroups(),
           accounts: {
             work: {
               groups: {},
@@ -520,12 +498,7 @@ describe("registerPolicyDoctorChecks", () => {
         botToken: "root-token",
         dmPolicy: "pairing",
         groupPolicy: "disabled",
-        groups: {
-          ops: {
-            groupPolicy: "open",
-            requireMention: false,
-          },
-        },
+        groups: createOpenOpsGroups(),
         accounts: {
           work: {
             dmPolicy: "allowlist",
@@ -969,10 +942,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const policy = workspacePolicy(
-      ["none", "ro"],
-      ["exec", "process", "write", "edit", "apply_patch"],
-    );
+    const policy = readOnlyWorkspacePolicy();
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
     const evidence = collectPolicyEvidence(cfg);
@@ -1038,10 +1008,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const policy = workspacePolicy(
-      ["none", "ro"],
-      ["exec", "process", "write", "edit", "apply_patch"],
-    );
+    const policy = readOnlyWorkspacePolicy();
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
     const evidence = collectPolicyEvidence(cfg);
@@ -1128,10 +1095,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const policy = workspacePolicy(
-      ["none", "ro"],
-      ["exec", "process", "write", "edit", "apply_patch"],
-    );
+    const policy = readOnlyWorkspacePolicy();
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
 
@@ -1182,10 +1146,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const policy = workspacePolicy(
-      ["none", "ro"],
-      ["exec", "process", "write", "edit", "apply_patch"],
-    );
+    const policy = readOnlyWorkspacePolicy();
 
     const result = await runPolicyScenario(cfg, policy, "global-doctor");
 
@@ -1449,20 +1410,7 @@ describe("registerPolicyDoctorChecks", () => {
       },
       browser: { enabled: true },
     });
-    const policy = {
-      sandbox: {
-        requireMode: ["all", "non-main"],
-        allowBackends: ["ssh"],
-        containers: {
-          denyHostNetwork: true,
-          denyContainerNamespaceJoin: true,
-          requireReadOnlyMounts: true,
-          denyContainerRuntimeSocketMounts: true,
-          denyUnconfinedProfiles: true,
-        },
-        browser: { requireCdpSourceRange: true },
-      },
-    };
+    const policy = createSharedSandboxRequirements(["ssh"]);
 
     const result = await runPolicyScenario(cfg, policy, "checks");
 

@@ -117,7 +117,12 @@ openclaw-pending-session-create {
   height: 14px;
 }
 
-.chat-error__content[open] .chat-error__chevron {
+.chat-error__content[open] .chat-error__chevron,
+.chat-workspace-conflict-notice:not([open]) .chat-workspace-conflict-notice__chevron,
+.chat-pr__checks[open] .chat-pr__checks-chevron svg,
+.chat-ci__job[open] > summary .chat-ci__chevron,
+.chat-ci__skipped[open] > summary .chat-ci__chevron,
+.chat-pr__publication-status[open] .chat-pr__publication-chevron {
   transform: rotate(180deg);
 }
 
@@ -521,10 +526,6 @@ openclaw-pending-session-create {
   transition: transform var(--duration-fast) var(--ease-out);
 }
 
-.chat-workspace-conflict-notice:not([open]) .chat-workspace-conflict-notice__chevron {
-  transform: rotate(180deg);
-}
-
 .chat-workspace-conflict-notice__content {
   display: grid;
   gap: 10px;
@@ -633,6 +634,9 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
+  /* The outer extent owns scroll height. This translated row window must not
+     contribute a second changing box when saved rows become live rows. */
+  contain: size;
   position: absolute;
   top: 0;
   left: 0;
@@ -946,7 +950,7 @@ openclaw-pending-session-create {
 }
 
 .context-ring__track {
-  stroke: color-mix(in srgb, currentColor 22%, transparent);
+  stroke: var(--context-ring-track, color-mix(in srgb, currentColor 22%, transparent));
 }
 
 .context-ring__fill {
@@ -1193,11 +1197,6 @@ openclaw-pending-session-create {
   b {
     width: 36px;
   }
-}
-.context-usage__note {
-  margin: 10px 0 0;
-  font-size: 12px;
-  color: var(--muted);
 }
 .task-suggestion__start svg,
 .chat-pr__checks-chevron svg,
@@ -2149,10 +2148,6 @@ button.chat-pr__diff {
   display: flex;
 }
 
-.chat-pr__checks[open] .chat-pr__checks-chevron svg {
-  transform: rotate(180deg);
-}
-
 .chat-pr__checks-dot {
   width: 7px;
   height: 7px;
@@ -2399,11 +2394,6 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-ci__job[open] > summary .chat-ci__chevron,
-.chat-ci__skipped[open] > summary .chat-ci__chevron {
-  transform: rotate(180deg);
-}
-
 .chat-ci__job-detail {
   padding: 0 24px 10px;
 }
@@ -2566,10 +2556,6 @@ openclaw-chat-ci-details {
 
 .chat-pr__publication-chevron {
   display: inline-flex;
-}
-
-.chat-pr__publication-status[open] .chat-pr__publication-chevron {
-  transform: rotate(180deg);
 }
 
 .chat-pr__publication-more {
@@ -2994,7 +2980,7 @@ openclaw-chat-ci-details {
     min-width: var(--chat-composer-send-size);
     height: var(--chat-composer-send-size);
     background: var(--primary);
-    color: var(--primary-foreground);
+    color: var(--chat-send-foreground);
   }
 
   .agent-chat__input--chat .chat-mobile-primary-action .chat-send-btn {
@@ -3007,10 +2993,6 @@ openclaw-chat-ci-details {
     .agent-chat__composer-footer
     :is(.chat-controls__permission-icon svg, .chat-controls__permission-lock svg) {
     stroke-width: var(--chat-mobile-row-permission-stroke);
-  }
-
-  .agent-chat__input--chat :is(.chat-send-btn--send, .chat-send-btn--talk-mode) > svg {
-    color: var(--primary-foreground);
   }
 
   .agent-chat__input--chat
@@ -3032,7 +3014,7 @@ openclaw-chat-ci-details {
   .agent-chat__input--chat .chat-send-btn--stop > svg {
     width: var(--chat-mobile-row-stop-icon-size);
     height: var(--chat-mobile-row-stop-icon-size);
-    color: var(--danger);
+    color: inherit;
     fill: currentColor;
     stroke: none;
   }
@@ -3043,6 +3025,13 @@ openclaw-chat-ci-details {
     color: var(--muted);
     opacity: var(--chat-mobile-row-mic-opacity);
     stroke-width: var(--chat-mobile-row-mic-stroke);
+  }
+
+  .agent-chat__input--chat
+    .chat-mobile-dictation-action
+    .chat-send-btn--voice:not(:disabled, [aria-disabled="true"])
+    > svg {
+    color: inherit;
   }
 
   .agent-chat__input--chat .chat-mobile-dictation-action .chat-send-btn--voice {

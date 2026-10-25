@@ -8,6 +8,7 @@ import { FAST_RESET_LINEAGE_FIXTURE } from "../../config/sessions/session-lineag
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
@@ -146,13 +147,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       isPathInside(state.root, resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path),
     ).toBe(true);
     cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
       resolveRuntimeCliBackends: () => [],
     });
     for (const mock of Object.values(mocks)) {

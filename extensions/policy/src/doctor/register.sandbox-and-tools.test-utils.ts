@@ -3,6 +3,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectPolicyEvidence } from "../policy-state.js";
 import {
   cfgWithPolicy,
+  createCustomBindInput,
+  createBackendContainerPolicy,
+  createSharedSandboxRequirements,
+  cfgWithPolicyAgents,
+  cfgWithPolicyAgentEntries,
+  createToolPosturePolicy,
+  policyForAgents,
+  createGatewayHttpInput,
   createReleaseAgentPolicyConfig,
   cfgWithPolicyOverrides,
   cfgWithPolicySandbox,
@@ -24,35 +32,33 @@ describe("registerPolicyDoctorChecks", () => {
   afterEach(teardownPolicyDoctorTest);
 
   it("ignores agent-local Docker and browser posture under shared sandbox scope", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "docker",
-            scope: "shared",
-            docker: {
-              network: "none",
-              binds: ["/shared:/shared:ro"],
-            },
-            browser: {
-              enabled: true,
-              cdpSourceRange: "172.21.0.1/32",
-              binds: ["/browser-shared:/browser-shared:ro"],
-            },
+    const cfg = cfgWithPolicyAgents({
+      defaults: {
+        sandbox: {
+          mode: "all",
+          backend: "docker",
+          scope: "shared",
+          docker: {
+            network: "none",
+            binds: ["/shared:/shared:ro"],
+          },
+          browser: {
+            enabled: true,
+            cdpSourceRange: "172.21.0.1/32",
+            binds: ["/browser-shared:/browser-shared:ro"],
           },
         },
-        entries: {
-          runner: {
-            sandbox: {
-              docker: {
-                network: "host",
-                binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
-              },
-              browser: {
-                cdpSourceRange: "",
-                binds: ["/unsafe-browser:/unsafe-browser:rw"],
-              },
+      },
+      entries: {
+        runner: {
+          sandbox: {
+            docker: {
+              network: "host",
+              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+            },
+            browser: {
+              cdpSourceRange: "",
+              binds: ["/unsafe-browser:/unsafe-browser:rw"],
             },
           },
         },
@@ -101,20 +107,18 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("treats blank agent browser CDP source range as an explicit clear", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "docker",
-            browser: { enabled: true, cdpSourceRange: "172.21.0.1/32" },
-          },
+    const cfg = cfgWithPolicyAgents({
+      defaults: {
+        sandbox: {
+          mode: "all",
+          backend: "docker",
+          browser: { enabled: true, cdpSourceRange: "172.21.0.1/32" },
         },
-        entries: {
-          runner: {
-            sandbox: {
-              browser: { cdpSourceRange: "" },
-            },
+      },
+      entries: {
+        runner: {
+          sandbox: {
+            browser: { cdpSourceRange: "" },
           },
         },
       },
@@ -146,19 +150,7 @@ describe("registerPolicyDoctorChecks", () => {
         seccompProfile: "unconfined",
       },
     });
-    const result = await runPolicyChecksFixture(
-      {
-        sandbox: {
-          allowBackends: ["openshell"],
-          containers: {
-            denyHostNetwork: true,
-            denyContainerRuntimeSocketMounts: true,
-            denyUnconfinedProfiles: true,
-          },
-        },
-      },
-      cfg,
-    );
+    const result = await runPolicyChecksFixture(createBackendContainerPolicy(["openshell"]), cfg);
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toContainEqual(
@@ -260,19 +252,7 @@ describe("registerPolicyDoctorChecks", () => {
         seccompProfile: "unconfined",
       },
     });
-    const result = await runPolicyChecksFixture(
-      {
-        sandbox: {
-          allowBackends: ["docker"],
-          containers: {
-            denyHostNetwork: true,
-            denyContainerRuntimeSocketMounts: true,
-            denyUnconfinedProfiles: true,
-          },
-        },
-      },
-      cfg,
-    );
+    const result = await runPolicyChecksFixture(createBackendContainerPolicy(["docker"]), cfg);
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toEqual(
@@ -306,19 +286,7 @@ describe("registerPolicyDoctorChecks", () => {
         seccompProfile: "unconfined",
       },
     });
-    const result = await runPolicyChecksFixture(
-      {
-        sandbox: {
-          allowBackends: ["podman"],
-          containers: {
-            denyHostNetwork: true,
-            denyContainerRuntimeSocketMounts: true,
-            denyUnconfinedProfiles: true,
-          },
-        },
-      },
-      cfg,
-    );
+    const result = await runPolicyChecksFixture(createBackendContainerPolicy(["podman"]), cfg);
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -337,31 +305,29 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("uses explicit agent sandbox scope before inherited shared scope", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "docker",
-            scope: "shared",
-            docker: {
-              network: "none",
-            },
+    const cfg = cfgWithPolicyAgents({
+      defaults: {
+        sandbox: {
+          mode: "all",
+          backend: "docker",
+          scope: "shared",
+          docker: {
+            network: "none",
           },
         },
-        entries: {
-          runner: {
-            sandbox: {
-              scope: "agent",
-              docker: {
-                network: "host",
-                binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
-              },
-              browser: {
-                enabled: true,
-                cdpSourceRange: "172.21.0.1/32",
-                binds: ["/browser:/browser:rw"],
-              },
+      },
+      entries: {
+        runner: {
+          sandbox: {
+            scope: "agent",
+            docker: {
+              network: "host",
+              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+            },
+            browser: {
+              enabled: true,
+              cdpSourceRange: "172.21.0.1/32",
+              binds: ["/browser:/browser:rw"],
             },
           },
         },
@@ -405,35 +371,15 @@ describe("registerPolicyDoctorChecks", () => {
       },
       browser: { enabled: true, cdpSourceRange: "172.21.0.1/32" },
     });
-    const result = await runPolicyChecksFixture(
-      {
-        sandbox: {
-          requireMode: ["all", "non-main"],
-          allowBackends: ["docker"],
-          containers: {
-            denyHostNetwork: true,
-            denyContainerNamespaceJoin: true,
-            requireReadOnlyMounts: true,
-            denyContainerRuntimeSocketMounts: true,
-            denyUnconfinedProfiles: true,
-          },
-          browser: { requireCdpSourceRange: true },
-        },
-      },
-      cfg,
-    );
+    const result = await runPolicyChecksFixture(createSharedSandboxRequirements(["docker"]), cfg);
 
     expect(result.findings).toEqual([]);
   });
 
   it("applies agent-scoped sandbox claims only to matching agents", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        entries: {
-          sebby: { sandbox: { mode: "off", backend: "ssh" } },
-          buddy: { sandbox: { mode: "all", backend: "docker" } },
-        },
-      },
+    const cfg = cfgWithPolicyAgentEntries({
+      sebby: { sandbox: { mode: "off", backend: "ssh" } },
+      buddy: { sandbox: { mode: "all", backend: "docker" } },
     });
     const result = await runPolicyChecksFixture(
       {
@@ -477,23 +423,14 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not apply sandbox overlays from invalid scoped policy", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        entries: { sebby: { sandbox: { mode: "off" } } },
-      },
-    });
+    const cfg = cfgWithPolicyAgentEntries({ sebby: { sandbox: { mode: "off" } } });
     const result = await runPolicyChecksFixture(
-      {
-        scopes: {
-          sebby: {
-            agentIds: ["sebby"],
-            channels: { allow: ["discord"] },
-            sandbox: {
-              requireMode: ["all"],
-            },
-          },
+      policyForAgents("sebby", ["sebby"], {
+        channels: { allow: ["discord"] },
+        sandbox: {
+          requireMode: ["all"],
         },
-      },
+      }),
       cfg,
     );
 
@@ -516,16 +453,11 @@ describe("registerPolicyDoctorChecks", () => {
   it("reports scoped container posture rules that a non-Docker agent group cannot observe", async () => {
     const cfg = createReleaseAgentPolicyConfig();
     const result = await runPolicyChecksFixture(
-      {
-        scopes: {
-          release: {
-            agentIds: ["release-agent"],
-            sandbox: {
-              containers: { requireReadOnlyMounts: true },
-            },
-          },
+      policyForAgents("release", ["release-agent"], {
+        sandbox: {
+          containers: { requireReadOnlyMounts: true },
         },
-      },
+      }),
       cfg,
     );
 
@@ -541,16 +473,11 @@ describe("registerPolicyDoctorChecks", () => {
   it("allows scoped non-Docker agent groups when container posture rules are off", async () => {
     const cfg = createReleaseAgentPolicyConfig();
     const result = await runPolicyChecksFixture(
-      {
-        scopes: {
-          release: {
-            agentIds: ["release-agent"],
-            sandbox: {
-              containers: { requireReadOnlyMounts: false },
-            },
-          },
+      policyForAgents("release", ["release-agent"], {
+        sandbox: {
+          containers: { requireReadOnlyMounts: false },
         },
-      },
+      }),
       cfg,
     );
 
@@ -558,34 +485,27 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not fall back to default browser posture for scoped browser-disabled agents", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "docker",
-            browser: { enabled: true, network: "host" },
-          },
+    const cfg = cfgWithPolicyAgents({
+      defaults: {
+        sandbox: {
+          mode: "all",
+          backend: "docker",
+          browser: { enabled: true, network: "host" },
         },
-        entries: {
-          "release-agent": {
-            sandbox: { browser: { enabled: false } },
-          },
+      },
+      entries: {
+        "release-agent": {
+          sandbox: { browser: { enabled: false } },
         },
       },
     });
     const result = await runPolicyChecksFixture(
-      {
-        scopes: {
-          release: {
-            agentIds: ["release-agent"],
-            sandbox: {
-              containers: { denyHostNetwork: true },
-              browser: { requireCdpSourceRange: true },
-            },
-          },
+      policyForAgents("release", ["release-agent"], {
+        sandbox: {
+          containers: { denyHostNetwork: true },
+          browser: { requireCdpSourceRange: true },
         },
-      },
+      }),
       cfg,
     );
     const evidence = collectPolicyEvidence(cfg);
@@ -608,27 +528,18 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies main-scoped sandbox claims to defaults when unrelated agents exist", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: { mode: "off" },
-        },
-        entries: {
-          worker: {
-            sandbox: { mode: "all" },
-          },
+    const cfg = cfgWithPolicyAgents({
+      defaults: {
+        sandbox: { mode: "off" },
+      },
+      entries: {
+        worker: {
+          sandbox: { mode: "all" },
         },
       },
     });
     const result = await runPolicyChecksFixture(
-      {
-        scopes: {
-          mainSandbox: {
-            agentIds: ["main"],
-            sandbox: { requireMode: ["all"] },
-          },
-        },
-      },
+      policyForAgents("mainSandbox", ["main"], { sandbox: { requireMode: ["all"] } }),
       cfg,
     );
 
@@ -664,19 +575,10 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const result = await runGlobalPolicyDoctorFixture(cfg, {
-      tools: {
-        profiles: { allow: ["messaging", "minimal"] },
-        fs: { requireWorkspaceOnly: true },
-        exec: {
-          allowSecurity: ["deny", "allowlist"],
-          requireAsk: ["always"],
-          allowHosts: ["sandbox"],
-        },
-        elevated: { allow: false },
-        denyTools: ["exec", "write", "edit", "apply_patch"],
-      },
-    });
+    const result = await runGlobalPolicyDoctorFixture(
+      cfg,
+      createToolPosturePolicy(["deny", "allowlist"]),
+    );
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toEqual(
@@ -761,42 +663,24 @@ describe("registerPolicyDoctorChecks", () => {
         elevated: { enabled: false },
       },
     });
-    const result = await runGlobalPolicyDoctorFixture(cfg, {
-      tools: {
-        profiles: { allow: ["messaging", "minimal"] },
-        fs: { requireWorkspaceOnly: true },
-        exec: {
-          allowSecurity: ["deny"],
-          requireAsk: ["always"],
-          allowHosts: ["sandbox"],
-        },
-        elevated: { allow: false },
-        denyTools: ["exec", "write", "edit", "apply_patch"],
-      },
-    });
+    const result = await runGlobalPolicyDoctorFixture(cfg, createToolPosturePolicy(["deny"]));
 
     expect(result.findings).toEqual([]);
   });
 
   it("accepts agent exec mode posture that matches policy", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        entries: { reviewer: { tools: { exec: { mode: "ask" } } } },
-      },
-    });
-    const result = await runGlobalPolicyDoctorFixture(cfg, {
-      scopes: {
-        reviewer: {
-          agentIds: ["reviewer"],
-          tools: {
-            exec: {
-              allowSecurity: ["allowlist"],
-              requireAsk: ["on-miss"],
-            },
+    const cfg = cfgWithPolicyAgentEntries({ reviewer: { tools: { exec: { mode: "ask" } } } });
+    const result = await runGlobalPolicyDoctorFixture(
+      cfg,
+      policyForAgents("reviewer", ["reviewer"], {
+        tools: {
+          exec: {
+            allowSecurity: ["allowlist"],
+            requireAsk: ["on-miss"],
           },
         },
-      },
-    });
+      }),
+    );
 
     expect(result.findings).toEqual([]);
   });
@@ -851,24 +735,18 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not apply agent-scoped tool claims to other agents", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        entries: {
-          sebby: { tools: { exec: { host: "sandbox" } } },
-          buddy: { tools: { exec: { host: "node" } } },
-        },
-      },
+    const cfg = cfgWithPolicyAgentEntries({
+      sebby: { tools: { exec: { host: "sandbox" } } },
+      buddy: { tools: { exec: { host: "node" } } },
     });
-    const result = await runGlobalPolicyDoctorFixture(cfg, {
-      scopes: {
-        sebby: {
-          agentIds: ["sebby"],
-          tools: {
-            exec: { allowHosts: ["sandbox"] },
-          },
+    const result = await runGlobalPolicyDoctorFixture(
+      cfg,
+      policyForAgents("sebby", ["sebby"], {
+        tools: {
+          exec: { allowHosts: ["sandbox"] },
         },
-      },
-    });
+      }),
+    );
 
     expect(result.findings).toEqual([]);
   });
@@ -1196,19 +1074,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
         tailscale: { mode: "funnel" },
         mode: "remote",
-        http: {
-          endpoints: {
-            chatCompletions: {
-              enabled: true,
-              images: { allowUrl: true },
-            },
-            responses: {
-              enabled: true,
-              files: { allowUrl: true },
-              images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
-            },
-          },
-        },
+        http: createGatewayHttpInput(),
         nodes: {
           commands: { allow: ["mcp.help", "mcp.invoke", "system.run"] },
         },
@@ -1412,36 +1278,21 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report inactive custom bind hosts", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      gateway: {
-        bind: "loopback",
-        customBindHost: "0.0.0.0",
-      },
-    });
+    const cfg = cfgWithPolicyOverrides(createCustomBindInput("loopback", "0.0.0.0"));
     const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([]);
   });
 
   it("does not report loopback custom bind hosts", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-      },
-    });
+    const cfg = cfgWithPolicyOverrides(createCustomBindInput("custom", "127.0.0.1"));
     const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([]);
   });
 
   it("reports valid non-loopback custom bind hosts", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      gateway: {
-        bind: "custom",
-        customBindHost: "192.168.1.20",
-      },
-    });
+    const cfg = cfgWithPolicyOverrides(createCustomBindInput("custom", "192.168.1.20"));
     const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([
@@ -1455,12 +1306,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report blank custom bind config as active non-loopback exposure", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      gateway: {
-        bind: "custom",
-        customBindHost: "   ",
-      },
-    });
+    const cfg = cfgWithPolicyOverrides(createCustomBindInput("custom", "   "));
     const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([]);
@@ -1469,12 +1315,7 @@ describe("registerPolicyDoctorChecks", () => {
   it.each(["localhost", "::1", "192.168.001.20"])(
     "does not report invalid custom bind host %s as active non-loopback exposure",
     async (customBindHost) => {
-      const cfg = cfgWithPolicyOverrides({
-        gateway: {
-          bind: "custom",
-          customBindHost,
-        },
-      });
+      const cfg = cfgWithPolicyOverrides(createCustomBindInput("custom", customBindHost));
       const result = await runLoopbackOnlyPolicyFixture(cfg);
 
       expect(result.findings).toEqual([]);

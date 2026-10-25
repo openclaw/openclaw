@@ -1,8 +1,8 @@
 import type { IndexHtmlTransformContext, Plugin } from "vite";
 import { collectControlUiStaticAssets } from "./control-ui-boot-preloads.ts";
 
-// Name the entries needed for the initial presentation; never walk optional
-// dynamic children such as editors, terminals, or individual board widgets.
+// Name each initial presentation or bounded next interaction explicitly; never
+// walk optional dynamic children such as editors, terminals, or board widgets.
 const entries = {
   "new-session": [
     "pages/new-session/route-loader.ts",
@@ -27,6 +27,7 @@ const entries = {
     "components/settings-sidebar-shell.tsx",
     "app/theme-catalog.ts",
   ],
+  "advanced-next": ["pages/config/security.tsx"],
   shortcuts: ["components/keyboard-shortcuts-dialog.tsx"],
   debug: [
     "pages/debug/debug-overlay.ts",
@@ -57,7 +58,11 @@ export function collectControlUiNavigationPreloads(
       }
     }
     if (assets.size) {
-      result[name] = [...assets].filter((file) => /\.(?:js|css)$/u.test(file));
+      // URL assets include worker and plugin-island scripts. They are fetched by
+      // their own runtime, not evaluated as modules in the navigation document.
+      result[name] = [...assets].filter(
+        (file) => bundle[file]?.type === "chunk" || file.endsWith(".css"),
+      );
     }
   }
   return result;

@@ -6,13 +6,6 @@ import type { ClawLifecyclePlanResult } from "../../packages/gateway-protocol/sr
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
 import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import { createClawHubArchiveFactory } from "../plugins/clawhub.test-support.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
@@ -20,6 +13,7 @@ import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-l
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
@@ -365,24 +359,13 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
       const revokedPlan = await plan(admin.client, revokedFixture);
       expect(revokedPlan.pluginReviews).toHaveLength(1);
       expect(revokedPlan.blockers).toEqual([]);
-      const identity = loadOrCreateDeviceIdentity({
-        path: state.path("revoked-identity", "client", "credentials.sqlite"),
-      });
-      const pendingPairing = await requestDevicePairing({
-        deviceId: identity.deviceId,
-        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      const { identity, issued } = await pairOperatorDeviceFixture({
+        identityPath: state.path("revoked-identity", "client", "credentials.sqlite"),
+        scopes: ["operator.read", "operator.admin"],
+        tokenScopes: ["operator.read", "operator.admin"],
         clientId: "test",
         clientMode: "test",
-        role: "operator",
-        scopes: ["operator.read", "operator.admin"],
-      });
-      await approveDevicePairing(pendingPairing.request.requestId, {
         callerScopes: ["operator.admin"],
-      });
-      const issued = await rotateDeviceToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        scopes: ["operator.read", "operator.admin"],
       });
       if (!issued.ok) {
         throw new Error("Could not issue synthetic device token");

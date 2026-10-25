@@ -339,14 +339,15 @@ export function deleteExpiredPluginStateEntries(
   db: EngineConnection,
   now: number,
   scope: { pluginId: string; namespace: string },
+  hasExpiredEntries = false,
 ): number {
   if (isRetainedPluginStateNamespace(scope.namespace)) {
     return 0;
   }
   const kysely = getPluginStateKysely(db);
   // The expiry index can prove there is nothing due without scanning the namespace.
-  // Only compilation is retained; expiry is checked in the caller's current transaction.
-  if (pluginStateExpiryQuery(db)(now).rows.length === 0) {
+  // Reuse expiry already observed by the namespace aggregate in this transaction.
+  if (!hasExpiredEntries && pluginStateExpiryQuery(db)(now).rows.length === 0) {
     return 0;
   }
   // Leave namespace scans unsorted to avoid an unbounded sort under the write lock.

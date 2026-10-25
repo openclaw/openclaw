@@ -3,7 +3,10 @@ import { createServer } from "node:http";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { streamSimpleOpenAICompletions } from "../providers/openai-completions.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
-import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import {
+  makeCompletionsModel,
+  makeCompletionsToolDelta,
+} from "./openai-completions.test-support.js";
 
 let finishReason = "length";
 let baseUrl = "";
@@ -12,16 +15,7 @@ const server = createServer((request, response) => {
   request.on("end", () => {
     const deltas = [
       { content: "<think>Unfinished private reasoning" },
-      {
-        tool_calls: [
-          {
-            index: 0,
-            id: "call_lookup",
-            type: "function",
-            function: { name: "lookup", arguments: '{"query":"example"}' },
-          },
-        ],
-      },
+      makeCompletionsToolDelta("call_lookup", "lookup", '{"query":"example"}'),
       {},
     ];
     response.writeHead(200, { "content-type": "text/event-stream" });

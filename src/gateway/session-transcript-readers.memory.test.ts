@@ -323,6 +323,39 @@ it("preserves exact-message visibility and cancellation at the Gateway reader bo
     );
   });
 });
+
+it("captures memory page and exact-read options without duplicating the Gateway snapshot", async () => {
+  const { run, scope } = await fixture("capture", "main", true);
+  await run(async () => {
+    using clones = vi.spyOn(globalThis, "structuredClone");
+    const pageOptions = { offset: 0, maxMessages: 1 };
+    const page = readPage(scope, pageOptions);
+    const pageCaptures = clones.mock.calls.filter(([value]) =>
+      isRecord(value) && "options" in value
+        ? isRecord(value.options) && "maxMessages" in value.options
+        : isRecord(value) && "maxMessages" in value,
+    );
+    pageOptions.offset = 1;
+    pageOptions.maxMessages = 2;
+    expect(await readIds(page)).toEqual(["answer"]);
+    expect.soft(pageCaptures).toHaveLength(1);
+
+    clones.mockClear();
+    const exactOptions = {
+      historyVisibility: { sessionStartedAt: Date.parse("2026-10-11T00:01:00.000Z") },
+    };
+    const exact = readById(scope, "answer", exactOptions);
+    const exactCaptures = clones.mock.calls.filter(([value]) =>
+      isRecord(value) && "options" in value
+        ? isRecord(value.options) && "historyVisibility" in value.options
+        : isRecord(value) && "historyVisibility" in value,
+    );
+    exactOptions.historyVisibility.sessionStartedAt = 0;
+    expect(await exact).toEqual({ found: false, oversized: false, historyHidden: true });
+    expect(exactCaptures).toHaveLength(2);
+  });
+});
+
 it("reads unbound Gateway transcript state after an in-process append without creating missing owners", async () => {
   const target = await fixture();
   expect(await readCount(target.scope)).toBe(2);

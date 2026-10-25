@@ -36,6 +36,7 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import { prepareLocalCapabilityAccountSecrets } from "../../cli/capability-cli/local-account-secrets.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveMergedModelProviderEntry } from "../../config/model-provider-config.js";
@@ -662,6 +663,10 @@ export async function runAuthProbes(
       const agentId = suppliedAgentId ?? resolveDefaultAgentId(cfg);
       const agentDir = suppliedAgentDir ?? resolveAgentDir(cfg, agentId);
       const workspaceDir = suppliedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
+
+      if (params.stateOwnership) {
+        await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
+      }
 
       await fs.mkdir(workspaceDir, { recursive: true });
 

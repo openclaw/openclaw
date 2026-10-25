@@ -126,9 +126,10 @@ function applyChatScroll(
   if (!target) {
     return;
   }
-  const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-  const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
-  host.chatLastScrollHeight = target.scrollHeight;
+  const scrollHeight = target.scrollHeight;
+  const distanceFromBottom = scrollHeight - target.scrollTop - target.clientHeight;
+  const contentGrew = scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
+  host.chatLastScrollHeight = scrollHeight;
   const contentChanged = options.contentChanged ?? options.source !== "resize";
   const manualScroll = options.source === "manual";
 

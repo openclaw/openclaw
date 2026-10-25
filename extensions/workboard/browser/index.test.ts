@@ -77,6 +77,31 @@ function mountAccessory(session: ReturnType<typeof createGatewaySession>) {
 }
 
 const makeBoard = (id: string, extra: Partial<WorkboardBoardSummary> = {}) => ({ id, ...extra });
+
+it("refreshes catalog labels when a deferred locale loads and when the locale changes", async () => {
+  Object.assign(fixture.host, { locale: "sv" });
+  request.mockResolvedValue({ boards: [makeBoard("default")] });
+  await activate();
+  await vi.dynamicImportSettled();
+  await tick();
+  expect(fixture.registrations.get("navigation/board-default")).toMatchObject({
+    label: "Standardtavla",
+  });
+
+  Object.assign(fixture.host, { locale: "en" });
+  fixture.notify();
+  await tick();
+  expect(fixture.registrations.get("navigation/board-default")).toMatchObject({
+    label: "Default board",
+  });
+  expect(request).toHaveBeenCalledTimes(1);
+
+  Object.assign(fixture.host, { locale: "sv" });
+  fixture.notify();
+  dispose();
+  await tick();
+  expect(fixture.registrations.has("navigation/board-default")).toBe(false);
+});
 function navigationItem(id: string, label: string, icon?: string) {
   return {
     id: `board-${id}`,

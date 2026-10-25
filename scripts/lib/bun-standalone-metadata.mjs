@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { standaloneLookupExpression } from "./bun-standalone-data.mjs";
 
 const metadataOwnerHooks = new Map([
   ["pluginCacheExistsSync", "ImageExists"],
@@ -39,13 +40,49 @@ function visit(node, callback, owner) {
 }
 
 /** Keep metadata reads on their existing owners; only immutable image bytes become build facts. */
-export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, parse }) {
+export function createStandaloneMetadataAdapter({
+  runtimeRoot,
+  embeddedPaths,
+  metadataEntries = Object.keys(embeddedPaths),
+  parse,
+  resolveImport = (specifier, importer) => path.resolve(path.dirname(importer), specifier),
+}) {
+  /** @type {Record<string, { hash: string, bytes: string }>} */
   const doctor = {};
   const imageFiles = {};
   const imageDirectories = {};
-  const secretEntrypoints = {};
-  const pluginRoots = new Set();
   const exportsByFile = new Map();
+  const metadataPaths = new Set(metadataEntries);
+  const physicalSizes = new Map();
+  const physicalSize = (entry) => {
+    if (!physicalSizes.has(entry)) {
+      const filename = path.join(runtimeRoot, entry);
+      physicalSizes.set(entry, fs.existsSync(filename) ? fs.statSync(filename).size : undefined);
+    }
+    return physicalSizes.get(entry);
+  };
+  const imageSources = new Map();
+  for (const [entry, target] of Object.entries(embeddedPaths)) {
+    if (!/\.[cm]?[jt]sx?$/.test(entry) || entry.startsWith("../")) {
+      continue;
+    }
+    const sources = imageSources.get(target) ?? [];
+    sources.push(entry);
+    imageSources.set(target, sources);
+  }
+  const imageSizes = new Map();
+  for (const [target, entries] of imageSources) {
+    // Source aliases share bytes with their typed module; the .js alias may not exist on disk.
+    const source = entries
+      .toSorted(
+        (left, right) => Number(/\.[cm]?tsx?$/.test(right)) - Number(/\.[cm]?tsx?$/.test(left)),
+      )
+      .find((entry) => physicalSize(entry) !== undefined);
+    if (!source) {
+      throw new Error(`Missing standalone image source: ${entries.join(", ")}`);
+    }
+    imageSizes.set(target, physicalSize(source));
+  }
   // Split worker bundles shorten import locals while retaining their owners in export metadata.
   const resolvesTo = (callee, expected, ast, filename) => {
     if (callee?.type !== "Identifier") {
@@ -74,7 +111,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
       if (!statement.source.value.startsWith(".") || !filename) {
         continue;
       }
-      const target = path.resolve(path.dirname(filename), statement.source.value);
+      const target = resolveImport(statement.source.value, filename);
       let exports = exportsByFile.get(target);
       if (!exports) {
         exports = new Map();
@@ -118,12 +155,8 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
     }
   }
   for (const entry of Object.keys(embeddedPaths).toSorted()) {
-    const pluginRoot = entry.match(/^(dist(?:-runtime)?\/extensions\/[^/]+)\//)?.[1];
-    if (pluginRoot) {
-      pluginRoots.add(pluginRoot);
-    }
-    if (/\.[cm]?js$/.test(entry) && !entry.startsWith("../")) {
-      imageFiles[entry] = fs.statSync(path.join(runtimeRoot, entry)).size;
+    if (/\.[cm]?[jt]sx?$/.test(entry) && !entry.startsWith("../")) {
+      imageFiles[entry] = physicalSize(entry) ?? imageSizes.get(embeddedPaths[entry]);
       let child = entry;
       for (
         let parent = path.posix.dirname(child);
@@ -139,6 +172,9 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
         child = parent;
       }
     }
+  }
+  // Legacy emitted chunks describe metadata closure, but only embeddedPaths admits image code.
+  for (const entry of metadataPaths) {
     if (
       /^dist(?:-runtime)?\/extensions\/[^/]+\/(?:dist\/)?(?:doctor-contract-api|contract-api)\.[cm]?js$/.test(
         entry,
@@ -152,37 +188,19 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
       };
     }
   }
-  for (const pluginRoot of pluginRoots) {
-    const manifestPath = path.join(runtimeRoot, pluginRoot, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
-      continue;
-    }
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    for (const integration of Object.values(manifest.secretProviderIntegrations ?? {})) {
-      const entrypoint = integration.command === "${node}" && integration.args?.[0];
-      if (typeof entrypoint !== "string" || !entrypoint.startsWith("./")) {
-        continue;
-      }
-      const entry = path.posix.normalize(`${pluginRoot}/${entrypoint}`);
-      if (entry.startsWith(`${pluginRoot}/`) && Object.hasOwn(imageFiles, entry)) {
-        secretEntrypoints[entry] = pluginRoot;
-      }
-    }
-  }
   if (!Object.keys(doctor).length) {
     throw new Error("Missing standalone Doctor metadata facts");
   }
   const bootstrap = `(() => {
-  const doctor = ${JSON.stringify(doctor)};
-  const imageFiles = ${JSON.stringify(imageFiles)};
-  const imageDirectories = ${JSON.stringify(imageDirectories)};
-  const secretEntrypoints = ${JSON.stringify(secretEntrypoints)};
+  const doctor = ${standaloneLookupExpression(doctor)};
+  const imageFiles = ${standaloneLookupExpression(imageFiles)};
+  const imageDirectories = ${standaloneLookupExpression(imageDirectories)};
   const imageFs = import.meta.require("node:fs");
   const relative = (filename) => typeof filename === "string" && path.isAbsolute(filename)
     ? path.relative(root, filename).split(path.sep).join("/") : undefined;
   const get = (table, filename) => {
     const key = relative(filename);
-    return Object.hasOwn(table, key) ? table[key] : undefined;
+    return table(key);
   };
   const stat = (filename, lstat = false) => {
     const size = get(imageFiles, filename);
@@ -294,12 +312,6 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
     const selected = scope({ rootDir: params.rootPath, relativePath: path.relative(params.rootPath, params.absolutePath) });
     return selected && { ok: true, path: selected.filename };
   };
-  globalThis.__openclawStandaloneSecretEntrypoint = (params) => {
-    const declaredRoot = get(secretEntrypoints, params.absolutePath);
-    if (declaredRoot === undefined || declaredRoot !== relative(params.rootPath)) return;
-    const selected = scope({ rootDir: params.rootPath, relativePath: path.relative(params.rootPath, params.absolutePath) });
-    return selected && { ok: true, path: selected.filename, rootRealPath: selected.rootDir, stat: stat(selected.filename) };
-  };
   globalThis.__openclawStandaloneImageRead = (params) => {
     const selected = scope(params);
     const fact = selected && get(doctor, selected.filename);
@@ -313,12 +325,16 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
   return {
     bootstrap,
     directories: Object.keys(imageDirectories)
-      .filter((directory) => !directory.split("/").includes("node_modules"))
+      .filter(
+        (directory) =>
+          !directory.split("/").includes("node_modules") &&
+          directory.split("/")[0] !== ".typed-source",
+      )
       .toSorted(),
     transform({ filename, contents }) {
       if (
         !moduleAdmissionPattern.test(contents) &&
-        !/fileContentMatches|pluginCache(?:Exists|Stat|Lstat|Realpath)Sync|readPluginCache(?:File|Directory)|checkPluginCacheEntry|collectBundledPluginPublicSurfaceArtifacts|resolveBundledPluginGeneratedPath|resolveManagedToolsMcpServerConfig|candidateDirsFromArgv1|resolveHostPackageRoot|loadHookFromDir|prepareInternalHooks|resolveNodeEntrypointArg|resolveMxcLauncherPath|resolveResolverScriptPath|resolveSqliteWorkerModuleUrl|normalizePathCandidate|resolveOpenClawCliEntryPath|isContainedPluginPath|findDependencyPackageDir|hasStalePersistedPluginMetadataFiles/.test(
+        !/fileContentMatches|pluginCache(?:Exists|Stat|Lstat|Realpath)Sync|readPluginCache(?:File|Directory)|checkPluginCacheEntry|collectBundledPluginPublicSurfaceArtifacts|resolveBundledPluginGeneratedPath|resolveManagedToolsMcpServerConfig|candidateDirsFromArgv1|resolveHostPackageRoot|loadHookFromDir|prepareInternalHooks|resolveMxcLauncherPath|resolveResolverScriptPath|resolveSqliteWorkerModuleUrl|normalizePathCandidate|resolveOpenClawCliEntryPath|isContainedPluginPath|findDependencyPackageDir|hasStalePersistedPluginMetadataFiles/.test(
           contents,
         )
       ) {
@@ -382,13 +398,10 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
           const isHookLoader =
             ownerName === "prepareInternalHooks" &&
             resolvesTo(node.callee, "openRootFile", ast, filename);
-          const isSecretEntrypoint =
-            ownerName === "resolveNodeEntrypointArg" &&
-            resolvesTo(node.callee, "openRootFileSync", ast, filename);
           const isModuleOpen =
             moduleAdmissionOwners.has(ownerName) &&
             resolvesTo(node.callee, moduleAdmissionOwners.get(ownerName), ast, filename);
-          if (isHookDiscovery || isHookLoader || isSecretEntrypoint || isModuleOpen) {
+          if (isHookDiscovery || isHookLoader || isModuleOpen) {
             const options = node.arguments[0];
             if (options?.type !== "ObjectExpression") {
               throw new Error(`Unsupported standalone admission owner: ${ownerName}`);
@@ -396,14 +409,12 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
             let fact;
             if (isModuleOpen) {
               fact = `globalThis.__openclawStandaloneModuleOpen(${slice(options)})`;
-            } else if (isSecretEntrypoint) {
-              fact = `globalThis.__openclawStandaloneSecretEntrypoint(${slice(options)})`;
             } else {
               const absolute = options.properties.find(
                 (property) => property.key?.name === "absolutePath",
               )?.value;
               const source = isHookDiscovery
-                ? `${slice(owner.params[0])}.source`
+                ? `${owner.params[0].name}.source`
                 : absolute?.type === "MemberExpression"
                   ? `${slice(absolute.object)}.source`
                   : undefined;
@@ -419,8 +430,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
             adaptedOwners.add(owner);
           }
           if (
-            (moduleAdmissionOwners.has(ownerName) ||
-              ["prepareInternalHooks", "resolveNodeEntrypointArg"].includes(ownerName)) &&
+            (moduleAdmissionOwners.has(ownerName) || ownerName === "prepareInternalHooks") &&
             node.callee.type === "MemberExpression" &&
             isFsMember(node.callee) &&
             node.callee.property.name === "closeSync" &&
@@ -473,7 +483,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
           }
         }
         if (node.type === "FunctionDeclaration" && node.params[0]?.type === "Identifier") {
-          const parameter = slice(node.params[0]);
+          const parameter = node.params[0].name;
           const hook = metadataOwnerHooks.get(node.id?.name);
           if (hook) {
             edits.push([
@@ -564,7 +574,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
             edits.push([
               cachedReturn.end,
               cachedReturn.end,
-              `\nconst __imageFile = globalThis.__openclawStandaloneImageRead(${parameter});\nif (__imageFile !== undefined) {\n${slice(cacheRoot)} = ${slice(bind)}(${slice(root.init.arguments[0])}, __imageFile.rootRealPath);\n${slice(cacheRoot)}.files.set(${slice(cacheRead.arguments[0])}, __imageFile);\nreturn ${slice(returned.argument.callee)}(__imageFile, ${slice(returned.argument.arguments[1])});\n}\n`,
+              `\nconst __imageFile = globalThis.__openclawStandaloneImageRead(${parameter});\nif (__imageFile !== undefined) {\n${cacheRoot.name} = ${slice(bind)}(${slice(root.init.arguments[0])}, __imageFile.rootRealPath);\n${cacheRoot.name}.files.set(${slice(cacheRead.arguments[0])}, __imageFile);\nreturn ${slice(returned.argument.callee)}(__imageFile, ${slice(returned.argument.arguments[1])});\n}\n`,
             ]);
             adaptedOwners.add(node);
           }
@@ -684,7 +694,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
           edits.push([
             targetDeclaration.end,
             targetDeclaration.end,
-            `\nconst __imageProjected = globalThis.__openclawStandaloneImageRealpath(${slice(targetDeclaration.declarations[0].id)});\nif (__imageProjected !== undefined) return __imageProjected;\n`,
+            `\nconst __imageProjected = globalThis.__openclawStandaloneImageRealpath(${targetDeclaration.declarations[0].id.name});\nif (__imageProjected !== undefined) return __imageProjected;\n`,
           ]);
           adaptedOwners.add(node);
         }
@@ -696,7 +706,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
                 (entry) =>
                   entry.init?.type === "CallExpression" &&
                   entry.init.arguments.length === 1 &&
-                  slice(entry.init.arguments[0]) === slice(node.params[0]) &&
+                  entry.init.arguments[0].name === node.params[0]?.name &&
                   resolvesTo(entry.init.callee, "safeFileSignature", ast, filename),
               ),
           );
@@ -704,7 +714,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
             (entry) =>
               entry.init?.type === "CallExpression" &&
               entry.init.arguments.length === 1 &&
-              slice(entry.init.arguments[0]) === slice(node.params[0]) &&
+              entry.init.arguments[0].name === node.params[0]?.name &&
               resolvesTo(entry.init.callee, "safeFileSignature", ast, filename),
           );
           if (
@@ -718,7 +728,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
           edits.push([
             declaration.start,
             declaration.start,
-            `const __imageHash = globalThis.__openclawStandaloneDoctorHash(${slice(node.params[0])});\nif (__imageHash !== undefined) return __imageHash === ${slice(node.params[1])};\n`,
+            `const __imageHash = globalThis.__openclawStandaloneDoctorHash(${node.params[0].name});\nif (__imageHash !== undefined) return __imageHash === ${node.params[1].name};\n`,
           ]);
           adaptedOwners.add(node);
         }
@@ -731,7 +741,6 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
             "fileContentMatches",
             "loadHookFromDir",
             "prepareInternalHooks",
-            "resolveNodeEntrypointArg",
             "resolveSqliteWorkerModuleUrl",
             "normalizePathCandidate",
             "resolveOpenClawCliEntryPath",

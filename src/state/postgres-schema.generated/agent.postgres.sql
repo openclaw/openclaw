@@ -652,105 +652,111 @@ CREATE TABLE "transcript_rewrite_watermarks" (
   PRIMARY KEY ("session_id")
 );
 
-CREATE INDEX "idx_agent_acp_parent_stream_run" ON "acp_parent_stream_events" (("run_id") ASC NULLS FIRST, ("seq") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_acp_parent_stream_run" ON "acp_parent_stream_events" (("run_id") ASC, ("seq") ASC);
 
-CREATE INDEX "idx_agent_board_widgets_tab_position" ON "board_widgets" (("session_key") ASC NULLS FIRST, ("tab_id") ASC NULLS FIRST, ("position") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_board_widgets_tab_position" ON "board_widgets" (("session_key") ASC, ("tab_id") ASC, ("position") ASC);
 
-CREATE INDEX "idx_agent_cache_expiry" ON "cache_entries" (("scope") ASC NULLS FIRST, ("expires_at") ASC NULLS FIRST, ("key") ASC NULLS FIRST) WHERE "expires_at" IS NOT NULL;
+CREATE INDEX "idx_agent_cache_expiry" ON "cache_entries" (("scope") ASC, ("expires_at") ASC, ("key") ASC) WHERE "expires_at" IS NOT NULL;
 
-CREATE INDEX "idx_agent_cache_updated" ON "cache_entries" (("scope") ASC NULLS FIRST, ("updated_at") DESC NULLS LAST, ("key") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_cache_updated" ON "cache_entries" (("scope") ASC, ("updated_at") DESC, ("key") ASC);
 
 CREATE INDEX "idx_agent_voice_session_open_scope" ON "cache_entries" ((CASE WHEN ("value_json" IS JSON) THEN CASE WHEN json_typeof(("value_json"::json -> 'agentId')) = 'string' THEN (("value_json"::json -> 'agentId') #>> '{}') END ELSE NULL END) ASC NULLS FIRST, (CASE WHEN ("value_json" IS JSON) THEN CASE WHEN json_typeof(("value_json"::json -> 'sessionKey')) = 'string' THEN (("value_json"::json -> 'sessionKey') #>> '{}') END ELSE NULL END) ASC NULLS FIRST, (CASE WHEN ("value_json" IS JSON) THEN CASE WHEN json_typeof(("value_json"::json -> 'origin')) = 'string' THEN (("value_json"::json -> 'origin') #>> '{}') END ELSE NULL END) ASC NULLS FIRST) WHERE ("scope" = 'talk-client-voice-sessions') AND (CASE WHEN ("value_json" IS JSON) THEN CASE WHEN json_typeof(("value_json"::json -> 'status')) = 'string' THEN (("value_json"::json -> 'status') #>> '{}') END ELSE NULL END = 'open');
 
-CREATE INDEX "idx_agent_voice_session_open_updated" ON "cache_entries" (("scope") ASC NULLS FIRST, ("updated_at") ASC NULLS FIRST) WHERE ("scope" = 'talk-client-voice-sessions') AND (CASE WHEN ("value_json" IS JSON) THEN CASE WHEN json_typeof(("value_json"::json -> 'status')) = 'string' THEN (("value_json"::json -> 'status') #>> '{}') END ELSE NULL END = 'open');
+CREATE INDEX "idx_agent_voice_session_open_updated" ON "cache_entries" (("scope") ASC, ("updated_at") ASC) WHERE ("scope" = 'talk-client-voice-sessions') AND (CASE WHEN ("value_json" IS JSON) THEN CASE WHEN json_typeof(("value_json"::json -> 'status')) = 'string' THEN (("value_json"::json -> 'status') #>> '{}') END ELSE NULL END = 'open');
 
-CREATE INDEX "idx_agent_context_engine_turn_outbox_engine" ON "context_engine_turn_outbox" (("engine_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_context_engine_turn_outbox_engine" ON "context_engine_turn_outbox" (("engine_id") ASC, ("created_at") ASC);
 
-CREATE INDEX "idx_agent_conversation_deliveries_reply" ON "conversation_deliveries" (("conversation_id") ASC NULLS FIRST, ("platform_message_id") ASC NULLS FIRST, ("prepared_message_id") ASC NULLS FIRST) WHERE ("status" IN ('queued', 'sent', 'replied'));
+CREATE INDEX "idx_agent_conversation_deliveries_reply" ON "conversation_deliveries" (("conversation_id") ASC, ("platform_message_id") ASC NULLS FIRST, ("prepared_message_id") ASC NULLS FIRST) WHERE ("status" IN ('queued', 'sent', 'replied'));
 
-CREATE INDEX "idx_agent_conversation_deliveries_updated" ON "conversation_deliveries" (("updated_at") DESC NULLS LAST, ("operation_id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_conversation_deliveries_updated" ON "conversation_deliveries" (("updated_at") DESC, ("operation_id") ASC);
 
-CREATE UNIQUE INDEX "idx_agent_conversations_identity" ON "conversations" (("channel") ASC NULLS FIRST, ("account_id") ASC NULLS FIRST, ("kind") ASC NULLS FIRST, ("peer_id") ASC NULLS FIRST, (coalesce("parent_conversation_id", '')) ASC NULLS FIRST, (coalesce("thread_id", '')) ASC NULLS FIRST);
+CREATE UNIQUE INDEX "idx_agent_conversations_identity" ON "conversations" (("channel") ASC, ("account_id") ASC, ("kind") ASC, ("peer_id") ASC, (coalesce("parent_conversation_id", '')) ASC NULLS FIRST, (coalesce("thread_id", '')) ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_conversations_lookup" ON "conversations" (("channel") ASC NULLS FIRST, ("account_id") ASC NULLS FIRST, ("kind") ASC NULLS FIRST, ("peer_id") ASC NULLS FIRST, ("thread_id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_conversations_lookup" ON "conversations" (("channel") ASC, ("account_id") ASC, ("kind") ASC, ("peer_id") ASC, ("thread_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_conversations_updated" ON "conversations" (("updated_at") DESC NULLS LAST, ("conversation_id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_conversations_updated" ON "conversations" (("updated_at") DESC, ("conversation_id") ASC);
 
-CREATE INDEX "idx_memory_embedding_cache_updated_at" ON "memory_embedding_cache" (("updated_at") ASC NULLS FIRST);
+CREATE INDEX "idx_memory_embedding_cache_updated_at" ON "memory_embedding_cache" (("updated_at") ASC);
 
-CREATE INDEX "idx_memory_index_chunks_path_source" ON "memory_index_chunks" (("path") ASC NULLS FIRST, ("source") ASC NULLS FIRST);
+CREATE INDEX "idx_memory_index_chunks_path_source" ON "memory_index_chunks" (("path") ASC, ("source") ASC);
 
-CREATE INDEX "idx_memory_index_chunks_source" ON "memory_index_chunks" (("source") ASC NULLS FIRST);
+CREATE INDEX "idx_memory_index_chunks_source" ON "memory_index_chunks" (("source") ASC);
 
-CREATE INDEX "idx_memory_index_sources_source" ON "memory_index_sources" (("source") ASC NULLS FIRST);
+CREATE INDEX "idx_memory_index_sources_source" ON "memory_index_sources" (("source") ASC);
 
-CREATE INDEX "idx_agent_message_tool_run_outcomes_occurred" ON "message_tool_run_outcomes" (("occurred_at") DESC NULLS LAST, ("id") DESC NULLS LAST);
+CREATE INDEX "idx_agent_message_tool_run_outcomes_occurred" ON "message_tool_run_outcomes" (("occurred_at") DESC, ("id") DESC);
 
-CREATE INDEX "idx_agent_session_conversations_conversation" ON "session_conversations" (("conversation_id") ASC NULLS FIRST, ("last_seen_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_conversations_conversation" ON "session_conversations" (("conversation_id") ASC, ("last_seen_at") DESC, ("session_id") ASC);
 
-CREATE UNIQUE INDEX "idx_agent_session_conversations_primary" ON "session_conversations" (("session_id") ASC NULLS FIRST) WHERE ("role" = 'primary');
+CREATE UNIQUE INDEX "idx_agent_session_conversations_primary" ON "session_conversations" (("session_id") ASC) WHERE ("role" = 'primary');
 
-CREATE INDEX "idx_agent_session_goal_operations_expiry" ON "session_goal_operations" (("expires_at") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_goal_operations_expiry" ON "session_goal_operations" (("expires_at") ASC);
 
-CREATE INDEX "idx_agent_session_members_identity" ON "session_members" (("identity_id") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_members_identity" ON "session_members" (("identity_id") ASC, ("session_key") ASC);
 
-CREATE INDEX "idx_agent_session_nodes_active" ON "session_nodes" (("session_key") ASC NULLS FIRST) WHERE "archived_at" IS NULL;
+CREATE INDEX "idx_agent_session_nodes_active" ON "session_nodes" (("session_key") ASC) WHERE "archived_at" IS NULL;
 
-CREATE INDEX "idx_agent_session_nodes_archived_at" ON "session_nodes" (("archived_at") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST) WHERE "archived_at" IS NOT NULL;
+CREATE INDEX "idx_agent_session_nodes_archived_at" ON "session_nodes" (("archived_at") ASC, ("session_key") ASC) WHERE "archived_at" IS NOT NULL;
 
-CREATE INDEX "idx_agent_session_nodes_current_session_id" ON "session_nodes" (("current_session_id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_nodes_current_session_id" ON "session_nodes" (("current_session_id") ASC);
 
-CREATE INDEX "idx_agent_session_nodes_entry_not_valid" ON "session_nodes" (("session_key") ASC NULLS FIRST) WHERE ("entry_valid" != 1);
+CREATE INDEX "idx_agent_session_nodes_entry_not_valid" ON "session_nodes" (("session_key") ASC) WHERE ("entry_valid" != 1);
 
-CREATE INDEX "idx_agent_session_nodes_entry_valid_pending" ON "session_nodes" (("session_key") ASC NULLS FIRST) WHERE ("entry_valid" = 0);
+CREATE INDEX "idx_agent_session_nodes_entry_valid_pending" ON "session_nodes" (("session_key") ASC) WHERE ("entry_valid" = 0);
 
-CREATE INDEX "idx_agent_session_nodes_label" ON "session_nodes" (("label") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST) WHERE "label" IS NOT NULL;
+CREATE INDEX "idx_agent_session_nodes_label" ON "session_nodes" (("label") ASC, ("session_key") ASC) WHERE "label" IS NOT NULL;
 
-CREATE INDEX "idx_agent_session_nodes_parent_session_key" ON "session_nodes" (("parent_session_key") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_nodes_parent_session_key" ON "session_nodes" (("parent_session_key") ASC NULLS FIRST, ("session_key") ASC);
 
-CREATE INDEX "idx_agent_session_nodes_spawned_by" ON "session_nodes" (("spawned_by") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_nodes_spawned_by" ON "session_nodes" (("spawned_by") ASC NULLS FIRST, ("session_key") ASC);
 
-CREATE INDEX "idx_agent_session_nodes_status" ON "session_nodes" (("status") ASC NULLS FIRST, ("session_key") ASC NULLS FIRST) WHERE "status" IS NOT NULL;
+CREATE INDEX "idx_agent_session_nodes_status" ON "session_nodes" (("status") ASC, ("session_key") ASC) WHERE "status" IS NOT NULL;
 
-CREATE INDEX "idx_agent_session_nodes_updated_at" ON "session_nodes" (("updated_at") DESC NULLS LAST, ("session_key") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_nodes_updated_at" ON "session_nodes" (("updated_at") DESC, ("session_key") ASC);
 
-CREATE INDEX "idx_agent_session_pending_inputs_session" ON "session_pending_inputs" (("session_key") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("seq") DESC NULLS LAST);
+CREATE INDEX "idx_agent_session_pending_inputs_session" ON "session_pending_inputs" (("session_key") ASC, ("session_id") ASC, ("seq") DESC);
 
-CREATE INDEX "idx_agent_session_suggestions_author_created" ON "session_suggestions" (("author_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_suggestions_author_created" ON "session_suggestions" (("author_id") ASC, ("created_at") ASC, ("id") ASC);
 
-CREATE INDEX "idx_agent_session_suggestions_session_state_created" ON "session_suggestions" (("session_key") ASC NULLS FIRST, ("state") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_suggestions_session_state_created" ON "session_suggestions" (("session_key") ASC, ("state") ASC, ("created_at") ASC, ("id") ASC);
 
-CREATE UNIQUE INDEX "idx_agent_transcript_active_event_seq" ON "session_transcript_active_events" (("session_id") ASC NULLS FIRST, ("event_seq") ASC NULLS FIRST);
+CREATE UNIQUE INDEX "idx_agent_transcript_active_event_seq" ON "session_transcript_active_events" (("session_id") ASC, ("event_seq") ASC);
 
-CREATE UNIQUE INDEX "idx_agent_transcript_active_messages" ON "session_transcript_active_events" (("session_id") ASC NULLS FIRST, ("message_position") ASC NULLS FIRST) WHERE "message_position" IS NOT NULL;
+CREATE UNIQUE INDEX "idx_agent_transcript_active_messages" ON "session_transcript_active_events" (("session_id") ASC, ("message_position") ASC) WHERE "message_position" IS NOT NULL;
 
-CREATE INDEX "idx_agent_transcript_context_pending" ON "session_transcript_active_events" (("session_id") ASC NULLS FIRST) WHERE "context_eligible" IS NULL;
+CREATE INDEX "idx_agent_transcript_context_pending" ON "session_transcript_active_events" (("session_id") ASC) WHERE "context_eligible" IS NULL;
 
-CREATE INDEX "idx_agent_session_transcript_archives_pending" ON "session_transcript_archives" (("created_at") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("generation") ASC NULLS FIRST) WHERE "published_at" IS NULL;
+CREATE INDEX "idx_agent_session_transcript_archives_pending" ON "session_transcript_archives" (("created_at") ASC, ("session_id") ASC, ("generation") ASC) WHERE "published_at" IS NULL;
 
-CREATE INDEX "idx_agent_session_transcript_archives_retention" ON "session_transcript_archives" (("created_at") ASC NULLS FIRST, ("session_id") ASC NULLS FIRST, ("generation") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_transcript_archives_retention" ON "session_transcript_archives" (("created_at") ASC, ("session_id") ASC, ("generation") ASC);
 
-CREATE INDEX "idx_session_transcript_fts_rows_session_message" ON "session_transcript_fts_rows" (("session_id") ASC NULLS FIRST, ("message_id") ASC NULLS FIRST);
+CREATE INDEX "idx_session_transcript_fts_rows_session_message" ON "session_transcript_fts_rows" (("session_id") ASC, ("message_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_session_windows_conversation" ON "session_windows" (("primary_conversation_id") ASC NULLS FIRST) WHERE "primary_conversation_id" IS NOT NULL;
+CREATE INDEX "idx_agent_session_windows_conversation" ON "session_windows" (("primary_conversation_id") ASC) WHERE "primary_conversation_id" IS NOT NULL;
 
-CREATE INDEX "idx_agent_session_windows_created_at" ON "session_windows" (("created_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_windows_created_at" ON "session_windows" (("created_at") DESC, ("session_id") ASC);
 
-CREATE INDEX "idx_agent_session_windows_session_key" ON "session_windows" (("session_key") ASC NULLS FIRST, ("updated_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_windows_session_key" ON "session_windows" (("session_key") ASC, ("updated_at") DESC, ("session_id") ASC);
 
-CREATE INDEX "idx_agent_session_windows_updated_at" ON "session_windows" (("updated_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_session_windows_updated_at" ON "session_windows" (("updated_at") DESC, ("session_id") ASC);
 
-CREATE INDEX "idx_standing_intents_lifecycle" ON "standing_intents" (("status") ASC NULLS FIRST, ("expires_at") ASC NULLS FIRST, ("last_fired_at") ASC NULLS FIRST);
+CREATE INDEX "idx_standing_intents_lifecycle" ON "standing_intents" (("status") ASC, ("expires_at") ASC, ("last_fired_at") ASC NULLS FIRST);
 
-CREATE INDEX "idx_standing_intents_scope" ON "standing_intents" (("status") ASC NULLS FIRST, ("channel_scope") ASC NULLS FIRST, ("sender_scope") ASC NULLS FIRST);
+CREATE INDEX "idx_standing_intents_scope" ON "standing_intents" (("status") ASC, ("channel_scope") ASC NULLS FIRST, ("sender_scope") ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_trajectory_runtime_run" ON "trajectory_runtime_events" (("session_id") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, (coalesce("event_utf8_bytes", octet_length("event_json"))) ASC NULLS FIRST);
+CREATE INDEX "idx_agent_trajectory_runtime_run" ON "trajectory_runtime_events" (("session_id") ASC, ("run_id") ASC NULLS FIRST, ("created_at") ASC, (coalesce("event_utf8_bytes", octet_length("event_json"))) ASC NULLS FIRST);
 
-CREATE INDEX "idx_agent_transcript_event_identity_sequence" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("seq") ASC NULLS FIRST);
+CREATE INDEX "idx_agent_transcript_event_identity_sequence" ON "transcript_event_identities" (("session_id") ASC, ("seq") ASC);
 
-CREATE INDEX "idx_agent_transcript_event_sequence" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("event_type") ASC NULLS FIRST, ("seq") DESC NULLS LAST);
+CREATE INDEX "idx_agent_transcript_event_sequence" ON "transcript_event_identities" (("session_id") ASC, ("event_type") ASC NULLS FIRST, ("seq") DESC);
 
-CREATE UNIQUE INDEX "idx_agent_transcript_message_idempotency" ON "transcript_event_identities" (("session_id") ASC NULLS FIRST, ("message_idempotency_key") ASC NULLS FIRST) WHERE "message_idempotency_key" IS NOT NULL;
+CREATE UNIQUE INDEX "idx_agent_transcript_message_idempotency" ON "transcript_event_identities" (("session_id") ASC, ("message_idempotency_key") ASC) WHERE "message_idempotency_key" IS NOT NULL;
+
+CREATE INDEX "idx_memory_index_sources_exact_path" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')))));
+
+CREATE INDEX "idx_memory_index_sources_basename" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.regexp_replace(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')), '^.*/', ''))));
+
+CREATE INDEX "idx_memory_index_sources_stem" ON "memory_index_sources" ((pg_catalog.md5(pg_catalog.regexp_replace(pg_catalog.regexp_replace(pg_catalog.lower(pg_catalog.normalize(pg_catalog.regexp_replace(pg_catalog.replace(pg_catalog.btrim(path), E'\\', '/'), '^\./', ''), 'NFC')), '^.*/', ''), '^(.+)\.[^.]*$', '\1'))));
 
 ALTER TABLE "acp_parent_stream_events" ADD FOREIGN KEY ("session_id") REFERENCES "session_windows" ("session_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
 

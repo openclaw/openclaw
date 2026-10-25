@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { beforeEach, describe, expect, vi } from "vitest";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
@@ -18,9 +17,12 @@ import {
   REQUEST,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { makeClaimInput } from "./placement-lifecycle.test-support.js";
 import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { placementClaim, journalOwner } from "./placement-suite.test-support.js";
 import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 import * as workspaceResultStaging from "./workspace-result-staging.js";
 
 const tempDirs = useStateDatabaseTempDirs();
@@ -436,18 +438,7 @@ describe("worker placement dispatch reclaim", () => {
     const harness = await createHarness(database, placementStore, { workspacePath });
     const active = await harness.service.dispatch(REQUEST);
 
-    const claim = await placementStore.claimTurn({
-      sessionId: active.sessionId,
-      sessionKey: active.sessionKey,
-      agentId: active.agentId,
-      claimId: "pending-move-claim",
-      runId: "pending-move-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placementStore.claimTurn(placementClaim(active, "pending-move"));
     const begun = await placementStore.beginPlacementMove({
       sessionId: active.sessionId,
       source: {
@@ -659,16 +650,9 @@ describe("worker placement dispatch reclaim", () => {
       if (active.state !== "active") {
         throw new Error("expected active worker placement");
       }
-      const claim = await placementStore.claimTurn({
-        ...REQUEST,
-        owner: {
-          kind: "worker",
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-        },
-        claimId: "retirement-worker-claim",
-        runId: "retirement-worker-run",
-      });
+      const claim = await placementStore.claimTurn(
+        makeClaimInput(active, "retirement-worker-claim", "retirement-worker-run"),
+      );
       await placementStore.markWorkspaceResultPending(claim);
       placementStore.recordWorkspaceResultConflict(claim, {
         paths: ["conflicted.txt"],
@@ -679,23 +663,12 @@ describe("worker placement dispatch reclaim", () => {
 
       const basePack = Buffer.from("retirement workspace base pack");
       await placementStore.beginWorkspaceReconciliation(
-        {
-          sessionId: active.sessionId,
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-          placementGeneration: active.generation,
-        },
-        {
-          version: 1,
+        journalOwner(active),
+        workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"d".repeat(64)}`, {
           temporaryNonce: "c".repeat(32),
-          baseManifestRef: active.workspaceBaseManifestRef,
-          currentManifestRef: `sha256:${"d".repeat(64)}`,
-          baseEntries: [],
-          appliedEntries: [],
           baseTree: "e".repeat(40),
-          basePackSha256: createHash("sha256").update(basePack).digest("hex"),
           basePack,
-        },
+        }),
       );
       const draining = await placementStore.startDrain({
         sessionId: active.sessionId,
@@ -767,16 +740,9 @@ describe("worker placement dispatch reclaim", () => {
   it("claims and cancels a reclaim workspace result atomically", async () => {
     const harness = await createHarness(database, placementStore);
     const active = await harness.service.dispatch(REQUEST);
-    const claim = await placementStore.claimReclaimWorkspaceResult({
-      ...REQUEST,
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-      claimId: "reclaim-atomic",
-      runId: "reclaim-atomic",
-    });
+    const claim = await placementStore.claimReclaimWorkspaceResult(
+      makeClaimInput(active, "reclaim-atomic"),
+    );
 
     expect(placementStore.get(active.sessionId)?.turnClaim).toMatchObject({
       claimId: claim.claimId,

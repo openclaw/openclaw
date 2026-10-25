@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, expect, it } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readProviderBody, writeToolCall } from "./gateway-provider-fixture.test-support.js";
+import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import { createSubagentModelConfig } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
@@ -45,7 +46,7 @@ function promptCalls(body: unknown): string[] {
 async function startModelServer(childReply: string) {
   const completionPrompt = createDeferred<string>();
   async function handleRequest(request: IncomingMessage, response: ServerResponse) {
-    const body = await readProviderBody(request);
+    const body = await readRequestText(request);
     const reply = (text: string, id: string) =>
       writeOpenAiResponsesText(response, { text, messageId: id, responseId: `${id}_response` });
     if (body.includes(parentPrompt)) {

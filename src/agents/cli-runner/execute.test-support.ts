@@ -3,6 +3,7 @@ import * as sessionEventHandoff from "../../auto-reply/reply/session-event-hando
 import * as processSupervisor from "../../process/supervisor/index.js";
 import type { ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
 import { withTestRunAdmission } from "../admitted-run-context.test-support.js";
+import { createRunExit } from "../bash-tools.exec-runtime.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 /** Encloses a logical test run, including retries, in the admission preparation normally owns. */
@@ -121,14 +122,5 @@ export function createManagedRun(exit: MockRunExit, pid = 1234) {
 }
 
 export function createSuccessfulProcessExit(): MockRunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 50,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-  };
+  return createRunExit({ durationMs: 50 });
 }

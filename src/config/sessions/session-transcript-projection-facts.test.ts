@@ -42,6 +42,7 @@ import { withSessionTranscriptProjectionReceipt as withReceipt } from "./session
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 // mock-isolation: These owner transactions do not exercise background entry maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -55,18 +56,8 @@ const expectedProjection = (rawSeq: number, state: Record<string, unknown>) => (
   value: { version: { rawSeq }, state },
 });
 
-const user = {
-  type: "message",
-  id: "user",
-  parentId: null,
-  message: { role: "user", content: "question" },
-};
-const assistant = {
-  type: "message",
-  id: "assistant",
-  parentId: "user",
-  message: { role: "assistant", content: "answer" },
-};
+const user = messageEvent("user", null, { role: "user", content: "question" });
+const assistant = messageEvent("assistant", "user", { role: "assistant", content: "answer" });
 
 function fixture(initialEvents: TranscriptEvent[] = [user, assistant]) {
   const { database, scope: originalScope } = createSessionCompoundWorkerFixture();

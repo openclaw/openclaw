@@ -146,7 +146,8 @@ export function scheduleGatewayRequestStart(
       (request.method === "sessions.subscribe" &&
         Object.keys(params ?? {}).some((key) => key !== "includeMessageBodies")) ||
       request.method === "models.list" ||
-      (request.method === "sessions.messages.subscribe" && params?.includeApprovals === true);
+      (request.method === "sessions.messages.subscribe" &&
+        (params?.includeApprovals === true || params?.initialHistory !== undefined));
     const lifecycle =
       frameBytes <= MAX_CONTROL_FRAME_BYTES &&
       (request.method === "gateway.suspend.prepare" ||
@@ -179,7 +180,9 @@ export function scheduleGatewayRequestStart(
       lifecycle ||
       (frameBytes <= MAX_CONTROL_FRAME_BYTES &&
         (request.method === "sessions.messages.unsubscribe" ||
-          (request.method === "sessions.messages.subscribe" && params?.includeApprovals !== true)));
+          (request.method === "sessions.messages.subscribe" &&
+            params?.includeApprovals !== true &&
+            params?.initialHistory === undefined)));
     const budget = control ? controlBudget : workBudget;
     const connection = budget.connections.get(connId);
     // Parked preparations still consume waiting capacity, never a runnable start.

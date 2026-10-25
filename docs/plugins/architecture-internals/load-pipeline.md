@@ -57,6 +57,10 @@ otherwise-rejected directory), so config referencing that id sees a blocked
 plugin tied to a path-safety warning instead of an unrelated "unknown plugin"
 error.
 
+When every candidate is rejected, installation and capability inspection surface
+the discovery warning, including the unsafe path, so you can correct permissions
+or ownership before retrying.
+
 ### Manifest-first behavior
 
 The manifest is the control-plane source of truth. OpenClaw uses it to:

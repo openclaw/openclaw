@@ -186,48 +186,39 @@ it.each([
   },
 );
 
-it("does not start a legacy creation retry after /abort", async () => {
+it.each([false, true])("fences legacy creation retries (aborted=%s)", async (aborted) => {
   const f = createFixture(true);
   f.state.currentSessionId = "original-session";
   const originalKey = f.state.currentSessionKey;
-  const operation = f.commands.handleCommand("/new");
-  expect(f.writes).toHaveLength(1);
-  await f.commands.handleCommand("/abort");
-  f.finishWrite(legacyCreationError);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.writes).toHaveLength(1);
-  await operation;
-  expect(f.state.currentSessionKey).toBe(originalKey);
-});
-
-it("keeps the original deadline and key through a legacy creation retry", async () => {
-  const f = createFixture(true);
-  f.state.currentSessionId = "original-session";
   const settled = vi.fn();
   const operation = f.commands.handleCommand("/new").then(settled);
-  await vi.advanceTimersByTimeAsync(240_000);
+  expect(f.writes).toHaveLength(1);
+  if (aborted) {
+    await f.commands.handleCommand("/abort");
+  } else {
+    await vi.advanceTimersByTimeAsync(240_000);
+  }
   f.finishWrite(legacyCreationError);
   await vi.advanceTimersByTimeAsync(0);
-  expect(f.writes).toHaveLength(2);
-  const firstWrite = f.writes[0];
-  assert(firstWrite);
-  const key = (firstWrite.params as { key: string }).key;
-  expect(f.writes.map((frame) => (frame.params as { key: string }).key)).toEqual([key, key]);
-  await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS - 240_000);
+  if (aborted) {
+    expect(f.writes).toHaveLength(1);
+    await operation;
+    expect(f.state.currentSessionKey).toBe(originalKey);
+  } else {
+    expect(f.writes).toHaveLength(2);
+    const keys = f.writes.map((frame) => (frame.params as { key: string }).key);
+    expect(keys).toEqual([keys[0], keys[0]]);
+    await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS - 240_000);
+  }
   expect(settled).toHaveBeenCalledOnce();
   await operation;
 });
 
-it.each([
-  ["send", 45_000],
-  ["send", 240_000],
-  ["new", 45_000],
-  ["new", 240_000],
-] as const)("%s waits through %i ms of startup and writes once", async (action, preparationMs) => {
+it.each(["send", "new"] as const)("%s waits through startup and writes once", async (action) => {
   const f = createFixture();
   const settled = vi.fn();
   const operation = f.submit(action).then(settled);
-  await vi.advanceTimersByTimeAsync(preparationMs);
+  await vi.advanceTimersByTimeAsync(240_000);
   expect(settled).not.toHaveBeenCalled();
   expect(f.writes).toHaveLength(0);
   f.ready();

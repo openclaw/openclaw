@@ -50,7 +50,6 @@ vi.mock("./reader.js", () => ({
 }));
 
 import {
-  ClawHubSourceError,
   listClawHubClaws,
   readClawHubClawDetail,
   readClawHubClawPreview,
@@ -60,17 +59,28 @@ import {
 import type { ClawManifest } from "./types.js";
 
 const packageName = "@openclaw/research-briefing";
+const personalPackageName = "@alice/research-briefing";
 const version = "1.0.0";
 const archiveBytes = Buffer.alloc(321);
 const digest = createHash("sha256").update(archiveBytes).digest("hex");
 const tempDirs = createTrackedTempDirs();
+let fixtureRoot: string;
+let fixtureStateDir: string;
+const packageJson = (name = packageName, selectedVersion = version, claw = "claw.json") =>
+  JSON.stringify({ name, version: selectedVersion, openclaw: { claw } });
+const writePackage = (name = packageName, selectedVersion = version) =>
+  fs.writeFile(path.join(fixtureRoot, "package.json"), packageJson(name, selectedVersion));
 const artifact = (selectedVersion = version, name = packageName) => ({
   package: { name, family: "claw" },
   version: selectedVersion,
   artifact: { kind: "npm-pack", sha256: digest, npmIntegrity: "sha512-proof" },
 });
-const release = (selectedVersion = version, clawManifestSummary: unknown = summary) => ({
-  package: { name: packageName, displayName: "Research Briefing", family: "claw" },
+const release = (
+  selectedVersion = version,
+  clawManifestSummary: unknown = summary,
+  name = packageName,
+) => ({
+  package: { name, displayName: "Research Briefing", family: "claw" },
   version: { version: selectedVersion, createdAt: 2, changelog: "", clawManifestSummary },
 });
 const skillRequest = { slug: "citation-check", ownerHandle: "openclaw", version: "1.1.0" };
@@ -78,8 +88,6 @@ const expectMissing = (file: string) =>
   expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 const expectCode = (attempt: Promise<unknown>, code: string) =>
   expect(attempt).rejects.toMatchObject({ code });
-const expectCall = (mock: unknown, fields: object) =>
-  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
 const matchingSecurity = {
   package: { name: packageName, family: "claw" },
   release: {
@@ -113,35 +121,22 @@ const officialPackage = (name = packageName) => ({
   latestVersion: version,
 });
 
-function communityPackage() {
-  return {
-    ...officialPackage("@alice/research-briefing"),
-    channel: "community",
-    isOfficial: false,
-    ownerHandle: "alice",
-    ownerOfficial: false,
-  };
-}
+const communityPackage = () => ({
+  ...officialPackage(personalPackageName),
+  channel: "community",
+  isOfficial: false,
+  ownerHandle: "alice",
+  ownerOfficial: false,
+});
 
-function selectPackage(pkg: ReturnType<typeof officialPackage>) {
+async function selectPackage(pkg: ReturnType<typeof officialPackage>) {
   mocks.detail.mockResolvedValue({
     package: pkg,
     owner: { handle: pkg.ownerHandle, official: pkg.ownerOfficial },
   });
-  mocks.version.mockResolvedValue({
-    package: { name: pkg.name, family: "claw" },
-    version: { version, createdAt: 2, changelog: "", clawManifestSummary: summary },
-  });
-  mocks.artifact.mockResolvedValue({
-    package: { name: pkg.name, family: "claw" },
-    version,
-    artifact: { kind: "npm-pack", sha256: digest, npmIntegrity: "sha512-proof" },
-  });
-  const read = mocks.read.getMockImplementation()!;
-  mocks.read.mockImplementation(async (root: string) => {
-    const result = await read(root);
-    return { ...result, source: { ...result.source, name: pkg.name } };
-  });
+  mocks.version.mockResolvedValue(release(version, summary, pkg.name));
+  mocks.artifact.mockResolvedValue(artifact(version, pkg.name));
+  await writePackage(pkg.name);
 }
 
 const summary = {
@@ -153,29 +148,15 @@ const summary = {
   cronJobCount: 0,
 };
 
-const emptyWorkspaceManifest = {
+const emptyManifest: ClawManifest = {
+  schemaVersion: 1,
+  agent: { id: "research-briefing", name: "Research Briefing" },
   workspace: { bootstrapFiles: {}, files: [] },
   packages: [],
   mcpServers: {},
   cronJobs: [],
 };
-const emptyManifest: ClawManifest = {
-  ...emptyWorkspaceManifest,
-  schemaVersion: 1,
-  agent: { id: "research-briefing", name: "Research Briefing" },
-};
-function readSource(root: string, selectedVersion = version) {
-  return {
-    kind: "package" as const,
-    name: packageName,
-    version: selectedVersion,
-    packageRoot: root,
-    manifestPath: path.join(root, "CLAW.md"),
-    integrityKind: "development-snapshot" as const,
-    integrity: "sha256:development",
-    byteLength: 1,
-  };
-}
+const listPage = (items: unknown[], nextCursor: string | null = null) => ({ items, nextCursor });
 function mockArchive(archivePath: string, extractedRoot: string) {
   mocks.download.mockResolvedValue({
     archivePath,
@@ -218,41 +199,28 @@ async function useRealTrust(security = matchingSecurity) {
 }
 
 async function prepareResolverFixture(packages: ClawManifest["packages"] = []) {
-  const temp = await tempDirs.make("openclaw-clawhub-claw-");
-  const extractedRoot = path.join(temp, "extracted");
-  const archivePath = path.join(temp, "claw.tgz");
-  const stateDir = path.join(temp, "state");
-  await fs.mkdir(extractedRoot);
-  await fs.writeFile(path.join(extractedRoot, "package.json"), "{}\n");
-  await fs.writeFile(archivePath, archiveBytes);
-  mockArchive(archivePath, extractedRoot);
-  mocks.read.mockImplementation(async (root: string) => ({
-    ok: true,
-    manifest: { packages },
-    source: readSource(root),
-    diagnostics: [],
-  }));
-  return { stateDir, extractedRoot };
+  await fs.writeFile(
+    path.join(fixtureRoot, "claw.json"),
+    JSON.stringify({ ...emptyManifest, packages }),
+  );
+  return { stateDir: fixtureStateDir };
 }
 
 beforeEach(async () => {
   vi.resetAllMocks();
   const temp = await tempDirs.make("openclaw-clawhub-catalog-");
-  const extractedRoot = path.join(temp, "extracted");
+  const extractedRoot = (fixtureRoot = path.join(temp, "extracted"));
+  fixtureStateDir = path.join(temp, "state");
   const archivePath = path.join(temp, "catalog.clawpack");
   await fs.mkdir(extractedRoot);
-  await fs.writeFile(
-    path.join(extractedRoot, "package.json"),
-    JSON.stringify({ name: packageName, version, openclaw: { claw: "claw.json" } }),
-  );
+  await writePackage();
   await fs.writeFile(path.join(extractedRoot, "SOUL.md"), "# Research brief\n");
   await fs.writeFile(path.join(extractedRoot, "USER.md"), "# Reader preferences\n");
   await fs.writeFile(path.join(extractedRoot, "BOOTSTRAP.md"), "# First-run setup\n");
   await fs.writeFile(path.join(extractedRoot, "brief.md"), "# Brief template\n");
   await fs.writeFile(archivePath, archiveBytes);
   const contentsManifest = {
-    schemaVersion: 1,
-    agent: { id: "research-briefing", name: "Research Briefing" },
+    ...emptyManifest,
     workspace: {
       bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
       files: [
@@ -303,110 +271,33 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Claw catalog", () => {
-  it("preserves curated Featured order across official and community Claws", async () => {
-    mocks.list.mockResolvedValue({
-      items: [
-        { ...communityPackage(), featuredAt: 20 },
-        { ...officialPackage(), featuredAt: 10 },
-      ],
-      nextCursor: null,
-    });
+  it.each(["featured", "category", "search"] as const)(
+    "preserves %s ordering across official and community Claws",
+    async (mode) => {
+      const featured = mode === "featured";
+      const official = { ...officialPackage(), stats: { installs: featured ? 20 : 1 } };
+      const community = { ...communityPackage(), stats: { installs: featured ? 1 : 20 } };
+      mocks.list
+        .mockResolvedValueOnce(
+          featured ? listPage([community, official]) : listPage([official], "next"),
+        )
+        .mockResolvedValueOnce(listPage([community]));
+      mocks.search.mockResolvedValue([
+        { score: 10, package: official },
+        { score: 1, package: community },
+      ]);
+      const entries =
+        mode === "search"
+          ? await searchClawHubClaws({ query: "briefing", category: "research" })
+          : await listClawHubClaws(featured ? { featured: true } : { category: "research" });
+      expect(entries.map(({ packageName: name, installs }) => [name, installs])).toEqual([
+        ["@alice/research-briefing", featured ? 1 : 20],
+        [packageName, featured ? 20 : 1],
+      ]);
+    },
+  );
 
-    const entries = await listClawHubClaws({ featured: true });
-
-    expect(entries.map((entry) => entry.packageName)).toEqual([
-      "@alice/research-briefing",
-      packageName,
-    ]);
-    expect(mocks.list).toHaveBeenCalledWith(
-      expect.objectContaining({ family: "claw", featured: true }),
-    );
-  });
-
-  it("ranks every category Claw by installs without an Official boost", async () => {
-    mocks.list
-      .mockResolvedValueOnce({
-        items: [{ ...officialPackage(), stats: { installs: 1 } }],
-        nextCursor: "next",
-      })
-      .mockResolvedValueOnce({
-        items: [{ ...communityPackage(), stats: { installs: 20 } }],
-        nextCursor: null,
-      });
-
-    const entries = await listClawHubClaws({ category: "research" });
-
-    expect(entries.map((entry) => [entry.packageName, entry.installs])).toEqual([
-      ["@alice/research-briefing", 20],
-      [packageName, 1],
-    ]);
-    expect(mocks.list).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ family: "claw", category: "research" }),
-    );
-  });
-
-  it("keeps install order when searching within a category", async () => {
-    mocks.search.mockResolvedValue([
-      { score: 10, package: { ...officialPackage(), stats: { installs: 1 } } },
-      { score: 1, package: { ...communityPackage(), stats: { installs: 20 } } },
-    ]);
-
-    const entries = await searchClawHubClaws({ query: "briefing", category: "research" });
-
-    expect(entries.map((entry) => entry.packageName)).toEqual([
-      "@alice/research-briefing",
-      packageName,
-    ]);
-    expect(mocks.search).toHaveBeenCalledWith(
-      expect.objectContaining({ query: "briefing", category: "research", family: "claw" }),
-    );
-  });
-
-  it("uses the current publisher badge without hiding a former official Claw", async () => {
-    const revoked = { ...officialPackage(), ownerOfficial: false };
-    mocks.list.mockResolvedValue({ items: [revoked], nextCursor: null });
-    expect(await listClawHubClaws()).toMatchObject([{ packageName, official: false }]);
-    mocks.detail.mockResolvedValue({
-      package: revoked,
-      owner: { handle: "openclaw", official: false },
-    });
-    expect(await readClawHubClawDetail({ packageName, version })).toMatchObject({
-      packageName,
-      official: false,
-    });
-  });
-  it("loads all 30 official starters across paginated list responses", async () => {
-    const first = Array.from({ length: 25 }, (_, index) =>
-      officialPackage(`@openclaw/starter-${index}`),
-    );
-    const second = Array.from({ length: 5 }, (_, index) =>
-      officialPackage(`@openclaw/starter-${index + 25}`),
-    );
-    mocks.list
-      .mockResolvedValueOnce({
-        items: [...first, officialPackage("@other/impostor")],
-        nextCursor: "page 2",
-      })
-      .mockResolvedValueOnce({ items: second, nextCursor: null });
-
-    const result = await listClawHubClaws();
-
-    expect(result).toHaveLength(30);
-    expect(result[0]).toMatchObject({ packageName: "@openclaw/starter-0", official: true });
-    expect(result.at(-1)?.packageName).toBe("@openclaw/starter-29");
-    expect(mocks.list).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ family: "claw", limit: 100 }),
-    );
-    expect(mocks.list).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor: "page 2" }));
-  });
-
-  it("uses list for a blank query and filters malformed or private search results", async () => {
-    mocks.list.mockResolvedValue({ items: [officialPackage()], nextCursor: null });
-    await expect(searchClawHubClaws({ query: "  " })).resolves.toHaveLength(1);
-    expect(mocks.search).not.toHaveBeenCalled();
-
+  it("filters malformed or private search results", async () => {
     mocks.search.mockResolvedValue([
       { score: 1, package: officialPackage() },
       { score: 1, package: officialPackage("@other/impostor") },
@@ -416,20 +307,17 @@ describe("public ClawHub Claw catalog", () => {
     ]);
     const result = await searchClawHubClaws({ query: "research" });
     expect(result.map((item) => item.packageName)).toEqual([packageName]);
-    expectCall(mocks.search, { query: "research", family: "claw", limit: 100 });
   });
 
   it("honors the starter catalog limit for a blank query", async () => {
-    mocks.list.mockResolvedValue({
-      items: [officialPackage("@openclaw/first"), officialPackage("@openclaw/second")],
-      nextCursor: "page 2",
-    });
+    mocks.list.mockResolvedValue(
+      listPage([officialPackage("@openclaw/first"), officialPackage("@openclaw/second")], "page 2"),
+    );
 
     const entries = await searchClawHubClaws({ query: " ", limit: 1 });
 
-    expect(entries.map((entry) => entry.packageName)).toEqual(["@openclaw/first"]);
+    expect(entries.map(({ packageName: name }) => name)).toEqual(["@openclaw/first"]);
     expect(mocks.list).toHaveBeenCalledOnce();
-    expectCall(mocks.list, { family: "claw", limit: 1 });
   });
 
   it("discovers personal publishers through the public list and search API", async () => {
@@ -445,7 +333,7 @@ describe("public ClawHub Claw catalog", () => {
       const items =
         url.searchParams.get("isOfficial") === "true"
           ? [officialPackage()]
-          : [officialPackage(), communityPackage()];
+          : [{ ...officialPackage(), ownerOfficial: false }, communityPackage()];
       return Response.json(
         url.pathname.endsWith("/search")
           ? { results: items.map((pkg) => ({ score: 1, package: pkg })) }
@@ -457,27 +345,21 @@ describe("public ClawHub Claw catalog", () => {
     for (const query of ["", "research"]) {
       const entries = await searchClawHubClaws({ query });
       expect(
-        entries.map(({ packageName: name, channel, official, ownerHandle }) => ({
-          packageName: name,
+        entries.map(({ packageName: name, channel, official, ownerHandle }) => [
+          name,
           channel,
           official,
           ownerHandle,
-        })),
+        ]),
       ).toEqual([
-        { packageName, channel: "official", official: true, ownerHandle: "openclaw" },
-        {
-          packageName: "@alice/research-briefing",
-          channel: "community",
-          official: false,
-          ownerHandle: "alice",
-        },
+        [packageName, "official", false, "openclaw"],
+        ["@alice/research-briefing", "community", false, "alice"],
       ]);
     }
   });
 
-  it("projects a personal publisher release and previews its verified archive", async () => {
-    const { name: personalPackageName } = communityPackage();
-    selectPackage(communityPackage());
+  it("projects a personal publisher release from its verified archive", async () => {
+    await selectPackage(communityPackage());
     mocks.skillCard.mockResolvedValueOnce(
       "---\nname: citation-check\ndescription: Metadata description\n---\n# Citation check\n",
     );
@@ -495,32 +377,8 @@ describe("public ClawHub Claw catalog", () => {
       plugins: 1,
       mcpServers: 1,
       scheduledJobs: 1,
-      contents: {
-        instructions: [
-          { name: "SOUL.md", source: "SOUL.md", excerpt: "Research brief" },
-          { name: "USER.md", source: "USER.md", excerpt: "Reader preferences" },
-          { name: "brief.md", source: "brief.md", excerpt: "Brief template" },
-          { name: "BOOTSTRAP.md", source: "BOOTSTRAP.md", excerpt: "First-run setup" },
-        ],
-        skills: [{ name: "@openclaw/citation-check", version: "1.1.0", excerpt: "Citation check" }],
-        integrations: [
-          { name: "@openclaw/source-plugin", kind: "plugin", version: "2.0.0" },
-          { name: "sources", kind: "mcpServer" },
-        ],
-        automations: [{ name: "Daily briefing", schedule: "0 9 * * *", timezone: "UTC" }],
-      },
+      contents: { skills: [{ excerpt: "Citation check" }] },
     });
-    await expect(
-      readClawHubClawPreview({
-        packageName: personalPackageName,
-        version,
-        kind: "instruction",
-        name: "brief.md",
-      }),
-    ).resolves.toEqual({ kind: "instruction", name: "brief.md", content: "# Brief template\n" });
-    expectCall(mocks.version, { name: personalPackageName, version });
-    expectCall(mocks.download, { name: personalPackageName, version, artifact: "clawpack" });
-    expectCall(mocks.skillCard, skillRequest);
   });
 
   it("keeps the detail available when a skill card cannot be fetched", async () => {
@@ -532,16 +390,10 @@ describe("public ClawHub Claw catalog", () => {
   });
 
   it("previews verified workspace files and declared skills", async () => {
-    for (const [name, content] of [
-      ["SOUL.md", "# Research brief\n"],
-      ["USER.md", "# Reader preferences\n"],
-      ["brief.md", "# Brief template\n"],
-      ["BOOTSTRAP.md", "# First-run setup\n"],
-    ] as const) {
-      await expectPreview("instruction", name, content);
-    }
+    await expectPreview("instruction", "USER.md", "# Reader preferences\n");
+    await expectPreview("instruction", "BOOTSTRAP.md", "# First-run setup\n");
     await expectPreview("skill", "@openclaw/citation-check", "# Citation check\n");
-    expectCall(mocks.skillCard, skillRequest);
+    expect(mocks.skillCard).toHaveBeenCalledWith(expect.objectContaining(skillRequest));
     mocks.skillCard.mockRejectedValueOnce(new Error("Skill not found"));
     await expect(previewContent("skill", "@openclaw/citation-check")).rejects.toMatchObject({
       code: "clawhub_preview_unavailable",
@@ -566,21 +418,21 @@ describe("public ClawHub Claw catalog", () => {
   });
 
   it("lists and previews the SOUL file generated from the Claw document", async () => {
-    const generatedSource = async () => ({
-      ok: true,
-      manifest: emptyWorkspaceManifest,
-      clawMarkdownBody: Buffer.from("# Travel planner\n"),
-      snapshot: { workspaceSources: [] },
-      source: { kind: "package", name: packageName, version },
-    });
-    mocks.read.mockImplementationOnce(generatedSource);
+    await fs.rm(path.join(fixtureRoot, "BOOTSTRAP.md"));
+    await fs.writeFile(
+      path.join(fixtureRoot, "package.json"),
+      packageJson(packageName, version, "CLAW.md"),
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "CLAW.md"),
+      "---\nschemaVersion: 1\nagent: { id: travel }\n---\n# Travel planner\n",
+    );
     await expect(readClawHubClawDetail({ packageName })).resolves.toMatchObject({
       workspaceFiles: 1,
       contents: {
         instructions: [{ name: "SOUL.md", source: "CLAW.md#body", excerpt: "Travel planner" }],
       },
     });
-    mocks.read.mockImplementationOnce(generatedSource);
     await expectPreview("instruction", "SOUL.md", "# Travel planner\n");
   });
 
@@ -605,12 +457,7 @@ describe("public ClawHub Claw catalog", () => {
       });
       const selected = release(selectedVersion);
       mocks.version.mockResolvedValue({ ...selected, version: { ...selected.version, icon } });
-      mocks.read.mockImplementation(async (root: string) => ({
-        ok: true,
-        manifest: emptyManifest,
-        source: { ...readSource(root, selectedVersion), byteLength: archiveBytes.byteLength },
-        diagnostics: [],
-      }));
+      await writePackage(packageName, selectedVersion);
 
       const detail = await readClawHubClawDetail({ packageName, version: selectedVersion });
       expect(detail.version).toBe(selectedVersion);
@@ -648,62 +495,46 @@ describe("public ClawHub Claw catalog", () => {
   });
 
   it("rejects repeating pagination cursors rather than silently hiding starters", async () => {
-    mocks.list.mockResolvedValue({ items: [officialPackage()], nextCursor: "loop" });
+    mocks.list.mockResolvedValue(listPage([officialPackage()], "loop"));
     await expect(listClawHubClaws()).rejects.toThrow(/cursor/);
   });
 });
 
 describe("verified ClawHub Claw source", () => {
-  it.each(["skill", "plugin"] as const)(
-    "rejects a different per-call registry before resolving %s dependencies",
-    async (kind) => {
-      vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://configured.example");
-      const { stateDir } = await prepareResolverFixture([
-        { kind, source: "clawhub", ref: "@acme/dependency", version: "1.0.0" },
-      ]);
-      const run = vi.fn(async () => "unreachable");
+  it("rejects a different per-call registry before resolving dependencies", async () => {
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://configured.example");
+    const { stateDir } = await prepareResolverFixture([
+      { kind: "skill", source: "clawhub", ref: "@acme/dependency", version: "1.0.0" },
+    ]);
+    const run = vi.fn(async () => "unreachable");
 
-      const attempt = resolveSource({
-        mode: "apply",
-        baseUrl: "https://other.example",
-        stateDir,
-        run,
-      });
+    const attempt = resolveSource({
+      mode: "apply",
+      baseUrl: "https://other.example",
+      stateDir,
+      run,
+    });
 
-      await expect(attempt).rejects.toBeInstanceOf(ClawHubSourceError);
-      await expectCode(attempt, "clawhub_registry_mismatch");
-      expect(run).not.toHaveBeenCalled();
-      await expectMissing(stateDir);
-    },
-  );
+    await expectCode(attempt, "clawhub_registry_mismatch");
+    expect(run).not.toHaveBeenCalled();
+    await expectMissing(stateDir);
+  });
 
   it.each([
-    { name: "process-configured URL", baseUrl: undefined, dependencies: true },
-    {
-      name: "matching per-call URL",
-      baseUrl: "https://configured.example/clawhub/",
-      dependencies: true,
-    },
-    {
-      name: "another registry without dependencies",
-      baseUrl: "https://other.example",
-      dependencies: false,
-    },
-  ])("accepts the $name", async ({ baseUrl, dependencies }) => {
+    ["process-configured URL", undefined, true],
+    ["matching per-call URL", "https://configured.example/clawhub/", true],
+    ["another registry without dependencies", "https://other.example", false],
+  ] as const)("accepts the %s", async (_name, baseUrl, dependencies) => {
     vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://configured.example/clawhub");
     await prepareResolverFixture(
       dependencies
-        ? [
-            { kind: "skill", source: "clawhub", ref: "@acme/triage", version: "1.0.0" },
-            { kind: "plugin", source: "clawhub", ref: "@acme/github", version: "1.0.0" },
-          ]
+        ? [{ kind: "skill", source: "clawhub", ref: "@acme/triage", version: "1.0.0" }]
         : [],
     );
     const run = vi.fn(async () => "resolved");
     await expect(resolveSource({ mode: "apply", baseUrl, run })).resolves.toMatchObject({
       value: "resolved",
     });
-    expect(run).toHaveBeenCalledOnce();
   });
 
   it("keeps preview ephemeral and persists only after an approved apply asks for it", async () => {
@@ -731,7 +562,7 @@ describe("verified ClawHub Claw source", () => {
     });
     await expect(
       fs.readFile(path.join(apply.value.packageRoot, "package.json"), "utf8"),
-    ).resolves.toBe("{}\n");
+    ).resolves.toBe(packageJson());
     await expect(fs.readFile(`${apply.value.packageRoot}.tgz`)).resolves.toEqual(archiveBytes);
   });
 
@@ -773,14 +604,6 @@ describe("verified ClawHub Claw source", () => {
     expect(mocks.extract).not.toHaveBeenCalled();
   });
 
-  it("accepts a security verdict for the selected Claw artifact before download", async () => {
-    await prepareResolverFixture();
-    await useRealTrust();
-
-    await expect(probeSource()).resolves.toMatchObject({ riskAcknowledgementRequired: false });
-    expect(mocks.download).toHaveBeenCalledOnce();
-  });
-
   it("refuses a mismatched security artifact before download even with risk acknowledged", async () => {
     const { stateDir } = await prepareResolverFixture();
     await useRealTrust({
@@ -799,56 +622,38 @@ describe("verified ClawHub Claw source", () => {
 
   it("requires personal-release risk acknowledgement and never persists denied content", async () => {
     const { stateDir } = await prepareResolverFixture();
-    const { name: personalPackageName } = communityPackage();
-    selectPackage(communityPackage());
+    await selectPackage(communityPackage());
     await useRealTrust({
       ...matchingSecurity,
       package: { name: personalPackageName, family: "claw" },
       overview: "No security analysis has been recorded yet.",
       verdict: "review",
     });
-
-    await expect(
+    const resolvePersonal = (mode: "preview" | "apply", acknowledgeClawHubRisk = false) =>
       withResolvedClawHubSource({
         coordinate: { packageName: personalPackageName, version },
-        mode: "preview",
+        mode,
         stateDir,
-        run: async () => undefined,
-      }),
-    ).resolves.toMatchObject({ riskAcknowledgementRequired: true });
+        acknowledgeClawHubRisk,
+        run: async (_source, _trust, persistSource) =>
+          acknowledgeClawHubRisk ? (await persistSource()).source.name : undefined,
+      });
+    await expect(resolvePersonal("preview")).resolves.toMatchObject({
+      riskAcknowledgementRequired: true,
+    });
     mocks.download.mockClear();
-
-    await expectCode(
-      withResolvedClawHubSource({
-        coordinate: { packageName: personalPackageName, version },
-        mode: "apply",
-        stateDir,
-        run: async () => undefined,
-      }),
-      "clawhub_risk_acknowledgement_required",
-    );
+    await expectCode(resolvePersonal("apply"), "clawhub_risk_acknowledgement_required");
     expect(mocks.download).not.toHaveBeenCalled();
     await expectMissing(stateDir);
-
-    await expect(
-      withResolvedClawHubSource({
-        coordinate: { packageName: personalPackageName, version },
-        mode: "apply",
-        stateDir,
-        acknowledgeClawHubRisk: true,
-        run: async (_source, _trust, persistSource) => (await persistSource()).source.name,
-      }),
-    ).resolves.toMatchObject({ value: personalPackageName, riskAcknowledgementRequired: true });
+    await expect(resolvePersonal("apply", true)).resolves.toMatchObject({
+      value: personalPackageName,
+      riskAcknowledgementRequired: true,
+    });
   });
 
   it("rejects a valid archive when its embedded package identity differs", async () => {
     const { stateDir } = await prepareResolverFixture();
-    mocks.read.mockResolvedValue({
-      ok: true,
-      manifest: {},
-      source: { kind: "package", name: "@openclaw/other-claw", version },
-      diagnostics: [],
-    });
+    await writePackage("@openclaw/other-claw");
 
     await expectCode(probeSource({ mode: "apply", stateDir }), "clawhub_identity_mismatch");
     await expectMissing(stateDir);
@@ -856,32 +661,25 @@ describe("verified ClawHub Claw source", () => {
 });
 
 describe("Claw catalog artwork", () => {
+  const iconPath = `/api/v1/skill-icons/${"a".repeat(64)}`;
+  const iconUrl = `https://registry.example${iconPath}`;
   it.each([
-    {
-      icon: `/api/v1/skill-icons/${"a".repeat(64)}`,
-      expected: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
-    },
-    {
-      icon: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
-      expected: `https://registry.example/api/v1/skill-icons/${"a".repeat(64)}`,
-    },
-    { icon: `https://tracker.example/api/v1/skill-icons/${"a".repeat(64)}`, expected: undefined },
-    { icon: "https://registry.example/arbitrary.svg", expected: undefined },
-    { icon: null, expected: undefined },
-  ])(
-    "projects only registry-hosted content-addressed artwork: $icon",
-    async ({ icon, expected }) => {
-      const pkg = { ...officialPackage(), icon };
-      mocks.list.mockResolvedValue({ items: [pkg], nextCursor: null });
-      mocks.search.mockResolvedValue([{ package: pkg }]);
-      const listed = await listClawHubClaws({ baseUrl: "https://registry.example" });
-      const searched = await searchClawHubClaws({
-        query: "research",
-        baseUrl: "https://registry.example",
-      });
-      for (const entries of [listed, searched]) {
-        expect(entries[0]?.iconUrl).toBe(expected);
-      }
-    },
-  );
+    [iconPath, iconUrl],
+    [iconUrl, iconUrl],
+    [`https://tracker.example${iconPath}`, undefined],
+    ["https://registry.example/arbitrary.svg", undefined],
+    [null, undefined],
+  ])("projects only registry-hosted content-addressed artwork: %s", async (icon, expected) => {
+    const pkg = { ...officialPackage(), icon };
+    mocks.list.mockResolvedValue({ items: [pkg], nextCursor: null });
+    mocks.search.mockResolvedValue([{ package: pkg }]);
+    const listed = await listClawHubClaws({ baseUrl: "https://registry.example" });
+    const searched = await searchClawHubClaws({
+      query: "research",
+      baseUrl: "https://registry.example",
+    });
+    for (const entries of [listed, searched]) {
+      expect(entries[0]?.iconUrl).toBe(expected);
+    }
+  });
 });

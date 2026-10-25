@@ -4,6 +4,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import type { GatewayServer } from "./server.js";
 import { agentCommandMock, testState } from "./test-helpers.js";
 import { startClaimedGateway } from "./test-helpers.listener.js";
@@ -70,14 +71,7 @@ export async function expectHttpForeignSessionAuthority(params: {
       const previousGatewayAuth = testState.gatewayAuth;
       const requestAuth: GatewayAuthConfig = sharedSecretOwner
         ? { mode: "token", token: "owner-secret" }
-        : {
-            mode: "trusted-proxy",
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-              requiredHeaders: ["x-forwarded-proto"],
-              allowLoopback: true,
-            },
-          };
+        : browserProxyAuth();
       testState.gatewayAuth = requestAuth;
       try {
         const guest = {

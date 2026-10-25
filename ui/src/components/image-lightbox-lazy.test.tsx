@@ -6,11 +6,8 @@ import { flush } from "../test-helpers/solid-settle.ts";
 import { ImageLightbox } from "./image-lightbox.tsx";
 
 const loading = vi.hoisted(() => {
-  let release!: () => void;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return { promise, release };
+  const { promise, resolve: release } = Promise.withResolvers<void>();
+  return { promise, release: () => release() };
 });
 vi.mock("./image-lightbox-content.tsx", async (original) => {
   await loading.promise;

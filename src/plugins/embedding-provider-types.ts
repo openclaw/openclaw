@@ -24,6 +24,8 @@ export type EmbeddingUsage = {
 export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
+  /** The host applied an explicit query instruction; skip provider query templates. */
+  queryInstructionApplied?: boolean;
   /** Report each successful upstream request before resolving; undefined means usage unavailable. */
   onUsage?: (usage: EmbeddingUsage | undefined) => void;
 } & MemorySearchDeadlineControlOptions;

@@ -464,13 +464,13 @@ function assertCurrentChatSendSession(
   if (session.sessionRoutingChanged(latest.cfg)) {
     throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
   }
-  if (
-    latest.agentId !== session.sessionTarget.agentId ||
-    (latest.legacyKey ?? latest.canonicalKey) !== session.sessionTarget.storeKey ||
-    (session.sessionTarget.readSource &&
-      !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource))
-  ) {
-    throw new Error("Session storage changed while starting work. Retry.");
+  const { agentId, storeKey, readSource } = session.sessionTarget;
+  const changed =
+    (latest.agentId !== agentId && "agent") ||
+    ((latest.legacyKey ?? latest.canonicalKey) !== storeKey && "store key") ||
+    (readSource && !isDeepStrictEqual(latest.capturedReadSource, readSource) && "store source");
+  if (changed) {
+    throw new Error(`Session storage changed while starting work (${changed}). Retry.`);
   }
 }
 

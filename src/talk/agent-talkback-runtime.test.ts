@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createRealtimeVoiceAgentTalkbackQueue } from "./agent-talkback-runtime.js";
 
 beforeEach(() => vi.useFakeTimers());
@@ -23,10 +24,7 @@ function createQueue(params: Pick<QueueParams, "consult"> & Partial<QueueParams>
 }
 
 async function createPendingQueue(debounceMs = 1) {
-  let resolve!: (value: { text: string }) => void;
-  const pending = new Promise<{ text: string }>((done) => {
-    resolve = done;
-  });
+  const { promise: pending, resolve } = createDeferred<{ text: string }>();
   const consult = vi
     .fn<QueueParams["consult"]>()
     .mockImplementationOnce(() => pending)

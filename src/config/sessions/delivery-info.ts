@@ -79,12 +79,18 @@ type DeliveryLookup = {
   agentId: string;
   sessionKeys: string[];
   baseKeys: string[];
+  exactKeys: string[];
   storePaths: string[];
 };
 
 type DeliveryStoreRead = {
   get: (sessionKey: string) => SessionEntry | undefined;
   normalizedIndex: () => Promise<Map<string, SessionEntry>>;
+};
+
+type DeliveryExactRead = {
+  entries: SessionEntrySummary[];
+  source?: { agentId: string; path: string };
 };
 
 /** Resolves one batch through the session owner; only detached delivery facts leave the read scope. */
@@ -142,6 +148,12 @@ export async function extractDeliveryInfoBatch(
       agentId,
       sessionKeys: [sessionKey, canonicalKey],
       baseKeys: [baseSessionKey, canonicalBaseKey],
+      exactKeys: deliveryLookupExactKeys([
+        sessionKey,
+        canonicalKey,
+        baseSessionKey,
+        canonicalBaseKey,
+      ]),
       storePaths: [...storePaths],
     };
   }
@@ -162,12 +174,35 @@ export async function extractDeliveryInfoBatch(
       return [];
     }
   });
-  const exactReads = new Map<
+  const firstStoreBatches = new Map<
     string,
-    Promise<{ entries: SessionEntrySummary[]; source?: { agentId: string; path: string } }>
+    {
+      keySets: Set<string>;
+      keys: Set<string>;
+      read?: Promise<
+        | { entries: Map<string, SessionEntrySummary>; source: DeliveryExactRead["source"] }
+        | undefined
+      >;
+    }
   >();
-  const readExact = (storePath: string, lookup: DeliveryLookup) => {
-    const candidateKeys = deliveryLookupExactKeys([...lookup.sessionKeys, ...lookup.baseKeys]);
+  for (const { lookup } of lookups) {
+    if (lookup.sessionKeys.some(isIncognitoSessionKey)) {
+      continue;
+    }
+    const key = JSON.stringify([lookup.agentId, lookup.storePaths[0]]);
+    let batch = firstStoreBatches.get(key);
+    if (!batch) {
+      batch = { keySets: new Set(), keys: new Set() };
+      firstStoreBatches.set(key, batch);
+    }
+    batch.keySets.add(JSON.stringify(lookup.exactKeys));
+    for (const candidateKey of lookup.exactKeys) {
+      batch.keys.add(candidateKey);
+    }
+  }
+  const exactReads = new Map<string, Promise<DeliveryExactRead>>();
+  const readIndependent = (storePath: string, lookup: DeliveryLookup) => {
+    const candidateKeys = lookup.exactKeys;
     const cacheKey = JSON.stringify([lookup.agentId, storePath, candidateKeys]);
     let read = exactReads.get(cacheKey);
     if (!read) {
@@ -193,6 +228,41 @@ export async function extractDeliveryInfoBatch(
       exactReads.set(cacheKey, read);
     }
     return read;
+  };
+  const readExact = async (
+    storePath: string,
+    lookup: DeliveryLookup,
+  ): Promise<DeliveryExactRead> => {
+    const batch =
+      !lookup.sessionKeys.some(isIncognitoSessionKey) && storePath === lookup.storePaths[0]
+        ? firstStoreBatches.get(JSON.stringify([lookup.agentId, storePath]))
+        : undefined;
+    if (batch && batch.keySets.size > 1) {
+      batch.read ??= readSessionEntriesFromStoreInWorker({
+        agentId: lookup.agentId,
+        storePath,
+        sessionKeys: [...batch.keys],
+        projection: "list",
+        snapshotFields: [],
+      })
+        .then(({ entries, source }) => ({
+          entries: new Map(entries.map((row) => [row.sessionKey, row])),
+          source,
+        }))
+        // One unreadable target must not suppress healthy targets in the same store.
+        .catch(() => undefined);
+      const combined = await batch.read;
+      if (combined) {
+        return {
+          entries: lookup.exactKeys.flatMap((key) => {
+            const row = combined.entries.get(key);
+            return row ? [row] : [];
+          }),
+          source: combined.source,
+        };
+      }
+    }
+    return readIndependent(storePath, lookup);
   };
   const indexes = new Map<string, DeliveryStoreRead["normalizedIndex"]>();
   for (const { index, sessionKey, baseSessionKey, lookup } of lookups) {

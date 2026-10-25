@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "audio transcript visibility" });
@@ -12,16 +13,13 @@ suite.define(() => {
       { viewport: { width: 1180, height: 800 }, locale: "en-US", colorScheme: "light" },
       async ({ page }) => {
         await installMockGateway(page, {
-          historyMessages: transcripts.map((text, index) => ({
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(text)}`,
-              },
-            ],
-            timestamp: 1_800_000_000_000 + index * 60_000,
-          })),
+          historyMessages: transcripts.map((text, index) =>
+            chatMessage(
+              "user",
+              `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(text)}`,
+              { timestamp: 1_800_000_000_000 + index * 60_000 },
+            ),
+          ),
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const messages = page.locator(".chat-group.user .chat-text");

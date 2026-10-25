@@ -5,6 +5,7 @@ import {
 } from "../infra/client-credential-migration.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { formatSchemaMigrationFailure } from "../infra/schema-migration-diagnostics.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
@@ -474,22 +475,26 @@ function repairOpenedStateSchema(
     }
     // Reaching this catch inside doctor means repair itself refused or failed,
     // so the runtime asserts' "run openclaw doctor --fix" advice is circular here.
+    const warning = formatSchemaMigrationFailure(
+      "Failed migrating shared state database schema",
+      pathname,
+      err,
+    );
     const reason =
       scope === "automatic"
-        ? String(err)
-        : String(err).replace(
-            /has a legacy ([a-z ]+) schema; run openclaw doctor --fix to migrate it\./u,
+        ? warning
+        : warning.replace(
+            /has a legacy ([a-z ]+) schema; run openclaw doctor --fix to migrate it\.?/u,
             "has a legacy $1 schema; automatic repair refused the unrecognized schema shape.",
           );
+    // Keep the existing fixed public classification separate from local cause details.
     const diagnostic =
       extractErrorCode(err) === "CLIENT_CREDENTIAL_SOCKET_INVALID"
-        ? "Client credential socket material is invalid. "
+        ? "Client credential socket material is invalid.\n"
         : "";
     return {
       changes: indexChanges,
-      warnings: [
-        `${diagnostic}Failed migrating shared state database schema at ${pathname}: ${reason}`,
-      ],
+      warnings: [`${diagnostic}${reason}`],
     };
   } finally {
     if (!ownershipRefused) {

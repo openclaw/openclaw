@@ -48,9 +48,12 @@ describe("prepared account catalog observations", () => {
       load,
       allowDiscovery: true,
     };
-    expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
+    const cold = await owner.acquire({ ...request, allowDiscovery: false });
+    expect(cold.outcomes).toEqual([]);
+    expect(cold.hasPublishedCatalog).toBe(false);
     expect(load).not.toHaveBeenCalled();
     const first = await owner.acquire(request);
+    expect(first.hasPublishedCatalog).toBe(true);
     await owner.acquire({ ...request, credential: { ...tokenCredential } });
     await owner.acquire({ ...request, allowDiscovery: false });
     expect(load).toHaveBeenCalledOnce();
@@ -79,6 +82,33 @@ describe("prepared account catalog observations", () => {
     retirement.abort();
     await expect(owner.acquire(request)).rejects.toThrow("changed");
     expect(load).toHaveBeenCalledTimes(5);
+  });
+
+  it("publishes changed account programs without a response-tier observation", async () => {
+    const onChanged = vi.fn();
+    const owner = createPreparedAccountCatalogAccess(() => true, undefined, {}, onChanged);
+    let programs: Array<"standard" | "daybreak_blue" | "daybreak_red"> = [
+      "standard",
+      "daybreak_blue",
+    ];
+    const load = async () => [
+      {
+        provider: "openai",
+        profileId: account.profileId,
+        status: "ready" as const,
+        modelAccessPrograms: [
+          { modelId: route.modelId, runtimeId: route.runtimeId, cyber: [...programs] },
+        ],
+      },
+    ];
+    const request = { ...account, load, allowDiscovery: true };
+    const first = await owner.acquire(request);
+    onChanged.mockClear();
+    programs = ["standard", "daybreak_red"];
+    const refreshed = await owner.acquire({ ...request, refresh: true });
+    expect(first.isCurrent()).toBe(false);
+    expect(refreshed.outcomes[0]?.modelAccessPrograms?.[0]?.cyber).toEqual(programs);
+    expect(onChanged).toHaveBeenCalledOnce();
   });
 
   it.for(["during discovery", "after publication"] as const)(

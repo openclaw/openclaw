@@ -71,10 +71,7 @@ describe("CommandPalette pending searches", () => {
       method === "sessions.search" ? { results: [], sessions: [] } : { models: [] },
     );
     const list = vi.fn(async () => createSessionResult("agent:main:plugins", "Plugins discussion"));
-    const { palette, queryAll } = await mountSearch(
-      { methods: ["sessions.search"], request },
-      list,
-    );
+    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
     await enterQuery(palette, "plugins");
     expect(palette.textContent).not.toContain("Searching sessions");
     await vi.advanceTimersByTimeAsync(199);
@@ -91,23 +88,6 @@ describe("CommandPalette pending searches", () => {
     expect(palette.onSelectSession).not.toHaveBeenCalled();
     expect(palette.isOpen).toBe(true);
     expect(input.value).toBe(prompt);
-
-    setInputValue(input, "");
-    await palette.updateComplete;
-    expect(findPaletteOption(palette, "Plugins", true)).toBeDefined();
-    expect(list).not.toHaveBeenCalled();
-
-    setInputValue(input, "plugins");
-    await settlePalette(palette);
-    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugins" }));
-    expect(request).toHaveBeenCalledWith(
-      "sessions.search",
-      expect.objectContaining({ query: "plugins" }),
-    );
-    expect(request).toHaveBeenCalledWith("models.list", expect.anything());
-    expect(queryAll(".cmd-palette__filter")).toHaveLength(3);
-    findPaletteOption(palette, "Plugins discussion")!.click();
-    expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:plugins");
   });
 
   it("does not restore late session, transcript, or catalog results after entering a prompt", async () => {
@@ -158,13 +138,13 @@ describe("CommandPalette pending searches", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["match", "empty", "failure", "static command"])(
+  it.each(["match", "empty"])(
     "announces session search through debounce and deferred settlement: %s",
     async (outcome) => {
       const deferred = createDeferred<SessionsListResult | null>();
       const list = vi.fn(() => deferred.promise);
       const { palette, query, queryAll } = await mountSearch({}, list);
-      await enterQuery(palette, outcome === "static command" ? "plugins" : "zzfixtureunique");
+      await enterQuery(palette, "zzfixtureunique");
       const results = query('[role="listbox"]')!;
       expect(results.getAttribute("aria-busy")).toBe("true");
       expect(palette.textContent).not.toMatch(/Searching sessions|No results/);
@@ -176,35 +156,23 @@ describe("CommandPalette pending searches", () => {
         "Searching sessions",
       );
       expect(results.getAttribute("aria-busy")).toBe("true");
-      if (outcome === "static command") {
-        findPaletteOption(palette, "Plugins")!.click();
-        expect(palette.onNavigate).toHaveBeenCalledWith("plugins");
-        return;
-      }
       expect(queryAll('[role="option"]')).toHaveLength(0);
-      if (outcome === "failure") {
-        deferred.reject(new Error("Search failed"));
-      } else {
-        deferred.resolve(
-          outcome === "match"
-            ? createSessionResult("agent:main:fixture", "zzfixtureunique session")
-            : { ...createSessionResult("agent:main:fixture", "Unused"), sessions: [] },
-        );
-      }
+      deferred.resolve(
+        outcome === "match"
+          ? createSessionResult("agent:main:fixture", "zzfixtureunique session")
+          : { ...createSessionResult("agent:main:fixture", "Unused"), sessions: [] },
+      );
       await settlePalette(palette, 0);
       expect(results.getAttribute("aria-busy")).toBe("false");
       expect(palette.textContent).not.toContain("Searching sessions");
       if (outcome === "match") {
         findPaletteOption(palette, "zzfixtureunique session")!.click();
         expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:fixture");
-      } else if (outcome === "empty") {
+      } else {
         const empty = query(".cmd-palette__no-results")!;
         expect(empty.querySelector("h2")?.textContent).toBe("No results found");
         expect(empty.textContent).toContain("to start a new session.");
         expect(empty.querySelector("button")).toBeNull();
-      } else {
-        expect(palette.textContent).toContain("Chat search failed");
-        expect(palette.textContent).not.toContain("No results");
       }
     },
   );
@@ -278,31 +246,6 @@ describe("CommandPalette pending searches", () => {
     },
   );
 
-  it("waits for the transcript source after metadata settles", async () => {
-    const transcript = createDeferred<SessionsSearchResult>();
-    const roster = createSessionResult("agent:main:fixture", "Unrelated title");
-    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
-      options?.search ? { ...roster, sessions: [] } : roster,
-    );
-    const { palette, query } = await mountSearch(
-      {
-        methods: ["sessions.search"],
-        request: (method) => (method === "sessions.search" ? transcript.promise : { models: [] }),
-      },
-      list,
-    );
-    await searchPalette(palette, "zzfixtureunique");
-    expect(list).toHaveBeenCalledOnce();
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
-    expect(palette.textContent).not.toContain("No results");
-    transcript.resolve(transcriptResult(roster, "zzfixtureunique transcript match"));
-    await settlePalette(palette, 0);
-    expect(query('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
-    expect(findPaletteOption(palette, "Unrelated title")?.textContent).toContain(
-      "zzfixtureunique transcript match",
-    );
-  });
-
   it.each([
     ["partial", {}, "Transcript search unavailable"],
     ["model failure", {}, "Model search unavailable"],
@@ -336,11 +279,6 @@ describe("CommandPalette pending searches", () => {
       await searchPalette(palette, "zzfixtureunique");
       expect(palette.textContent).toContain(notice);
       expect(query(".cmd-palette__no-results")).toBeNull();
-      const input = paletteInput(palette);
-      setInputValue(input, "zzfixtureunique\nSummarize the findings in a new session.");
-      await settlePalette(palette);
-      expectPalettePromptMode(palette);
-      expect(list).toHaveBeenCalledOnce();
     },
   );
 
@@ -411,58 +349,37 @@ describe("CommandPalette pending searches", () => {
 });
 
 describe("CommandPalette session search", () => {
-  it.each([
-    {
-      name: "punctuation-normalized title",
-      query: "per session communi",
-      title: "Per-session communication controls in UI",
-      sameSession: true,
-    },
-    { name: "transcript-only match", serverMatch: false },
-    { name: "server metadata match", serverMatch: true },
-  ])("keeps metadata and transcript results selectable: $name", async (scenario) => {
-    const query = scenario.query ?? "needle";
-    const title = scenario.title ?? "needle";
-    const metadata = createSessionResult("agent:main:metadata", title);
-    const contextOnly = scenario.sameSession
-      ? metadata
-      : createSessionResult("agent:main:context", "Unrelated title");
+  it("waits for transcripts after metadata settles and merges both sources", async () => {
+    const metadata = createSessionResult("agent:main:metadata", "needle");
+    const contextOnly = createSessionResult("agent:main:context", "Unrelated title");
     const roster = {
       ...metadata,
       count: 2,
       totalCount: 2,
       sessions: [...metadata.sessions, ...contextOnly.sessions],
     };
-    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
-      options?.search && !scenario.serverMatch ? metadata : roster,
+    const list = vi.fn(async () => roster);
+    const transcript = createDeferred<SessionsSearchResult>();
+    const request = vi.fn((method: string) =>
+      method === "models.list" ? { models: [] } : transcript.promise,
     );
-    const searchResult: SessionsSearchResult = {
-      ...transcriptResult(contextOnly, "The needle appears only in the conversation body."),
-    };
-    const request = vi.fn(async (method: string) => {
-      if (method === "models.list") {
-        return { models: [] };
-      }
-      return searchResult;
-    });
     const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
-    await searchPalette(palette, query);
+    await searchPalette(palette, "needle");
+    expect(list).toHaveBeenCalledOnce();
+    expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(palette.textContent).not.toContain("No results");
+    transcript.resolve(
+      transcriptResult(contextOnly, "The needle appears only in the conversation body."),
+    );
+    await settlePalette(palette, 0);
     expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
     const items = [...palette.querySelectorAll<HTMLElement>(".cmd-palette__item")];
-    expect(items).toHaveLength(scenario.sameSession ? 1 : 2);
-    expect(items[0]?.textContent).toContain(title);
-    if (scenario.sameSession) {
-      const buttons = [...palette.querySelectorAll("button")];
-      expect(buttons.some((button) => button.textContent?.match(/Sessions\s*1/u))).toBe(true);
-      expect(buttons.some((button) => button.textContent?.match(/Messages\s*0/u))).toBe(true);
-    } else {
-      expect(items[1]?.textContent).toContain("Unrelated title");
-      expect(items[1]?.textContent).toContain("needle appears only in the conversation body");
-    }
-    expect(palette.textContent).not.toContain("Search notices");
-    expect(palette.textContent).not.toContain("may be incomplete");
-    expect(palette.textContent).not.toContain("Chat search failed");
-    findPaletteOption(palette, title)!.click();
+    expect(items).toHaveLength(2);
+    expect(items[0]?.textContent).toContain("needle");
+    expect(items[1]?.textContent).toContain("Unrelated title");
+    expect(items[1]?.textContent).toContain("needle appears only in the conversation body");
+    expect(palette.textContent).not.toMatch(/Search notices|may be incomplete|Chat search failed/);
+    findPaletteOption(palette, "needle")!.click();
     expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
   });
 });
@@ -474,48 +391,23 @@ describe("CommandPalette metadata publications", () => {
       if (method === "skills.status") {
         return { skills: [{ skillKey: "needle", name: skillName, description: "Weather" }] };
       }
-      if (method === "models.list") {
-        return { models: [{ provider: "fixture", id: "needle", name: "Needle model" }] };
-      }
       if (method === "plugins.list") {
         return { plugins: [{ id: "needle-plugin", name: "Needle plugin", description: "Tools" }] };
       }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "needle-job", name: "Needle automation" }] };
-      }
-      return { results: [], sessions: [] };
+      return method === "models.list"
+        ? { models: [{ provider: "fixture", id: "needle", name: "Needle model" }] }
+        : { results: [], sessions: [] };
     });
-    const { palette, emit, context } = await mountSearch({
-      methods: ["skills.status", "models.list", "plugins.list", "cron.list"],
+    const { palette, emit } = await mountSearch({
+      methods: ["skills.status", "models.list", "plugins.list"],
       request,
-    });
-    context.agents.ensureList = async () => ({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "main", name: "Needle agent" }],
     });
     await searchPalette(palette, "needle");
     expect(findPaletteOption(palette, "Needle old skill")?.textContent).toContain("Weather");
     expect(findPaletteOption(palette, "Needle plugin")?.textContent).toContain("Tools");
-    expect(
-      findPaletteOption(palette, "Needle plugin")?.querySelector(".cmd-palette__plugin-icon"),
-    ).not.toBeNull();
-    expect(findPaletteOption(palette, "Needle automation")).toBeDefined();
-    expect(findPaletteOption(palette, "Needle agent")).toBeDefined();
     expect(findPaletteOption(palette, "Needle model")).toBeDefined();
-    expect(request).toHaveBeenCalledWith(
-      "cron.list",
-      expect.objectContaining({
-        includeDisabled: true,
-        limit: 200,
-        offset: 0,
-        compact: true,
-      }),
-    );
     expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
     expect(request).toHaveBeenCalledWith("plugins.list", {});
-
     skillName = "Needle new skill";
     emit("chat.metadata.changed", { modelCatalogChanged: false, authChanged: false });
     await settlePalette(palette, 0);

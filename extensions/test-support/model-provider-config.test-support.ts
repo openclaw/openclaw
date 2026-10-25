@@ -6,10 +6,13 @@ export function createModelProviderConfig<T extends Record<string, ModelProvider
   return { models: { providers } };
 }
 
-export function createProxyRequestModelProviderConfig(providerId: string) {
+export function createProxyRequestModelProviderConfig(
+  providerId: string,
+  baseUrl = "https://relay.example.test",
+) {
   return createModelProviderConfig({
     [providerId]: {
-      baseUrl: "https://relay.example.test",
+      baseUrl,
       models: [],
       request: {
         headers: { "X-Relay": "synthetic-route" },

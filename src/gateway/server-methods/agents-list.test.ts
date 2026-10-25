@@ -3,6 +3,7 @@ import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -39,19 +40,8 @@ function roleConfig(agents: GatewayOperatorRoleDefinition["agents"]): OpenClawCo
 
 function readerClient(system = false): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", version: "test", platform: "test", mode: "test" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: "reader-profile",
-      displayName: "Reader",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    connect: gatewayConnect(["operator.read"], { id: "test", mode: "test" }),
+    authenticatedUserProfile: gatewayProfile("reader-profile", "Reader"),
     preparedSessionProfile: {
       profileId: "reader-profile",
       aliases: new Set(["reader-profile"]),

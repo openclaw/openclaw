@@ -1,5 +1,5 @@
 /** MCP OAuth credential provider, flow coordinator, and login helpers. */
-import { auth, type FetchLike } from "@modelcontextprotocol/client";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import {
@@ -203,6 +203,8 @@ export async function resolveMcpOAuthAccessToken(
         );
       }
 
+      const { auth } = await import("@modelcontextprotocol/client");
+      await lease.assertOwned();
       const pendingChallenge = store.pendingAuthorizationChallenge;
       await mutateMcpOAuthStore({ storeKey, lease, context }, { kind: "bindTokensIssuer" });
       const boundary = createMcpOAuthRefreshBoundary({ storeKey, lease, context });
@@ -360,6 +362,7 @@ async function runMcpOAuthAuthorizationAttempt(
   lease: OpenClawStateAsyncLeaseContext,
   context: OpenClawStateWorkerContext,
 ): Promise<"authorized" | "redirect"> {
+  const { auth } = await import("@modelcontextprotocol/client");
   params.login?.assertCurrent();
   const boundary = createMcpOAuthRefreshBoundary(
     { storeKey: params.identity.storeKey, lease, context },

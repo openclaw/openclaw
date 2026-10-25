@@ -23,7 +23,7 @@ import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
-import { listTranscriptInstancesFromDatabase } from "./session-history-read.js";
+import { listSessionTranscriptInstances } from "./session-history-read.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 
@@ -118,10 +118,10 @@ it("preserves shared-window exclusion provenance across canonical replacements",
         .get("shared"),
     ).toEqual({ session_key: b, hook_external_content_source: "gmail" });
     expect(
-      listTranscriptInstancesFromDatabase({
-        database,
-        options: { sessionIds: ["shared"], includeAllWindows: true },
-      }),
+      listSessionTranscriptInstances(
+        { agentId: "main", storePath: database.path },
+        { sessionIds: ["shared"], includeAllWindows: true },
+      ),
     ).toMatchObject([
       {
         sessionKey: b,

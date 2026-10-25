@@ -9,6 +9,7 @@ import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-t
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   createApiKeyCredential,
+  createUnresolvedOAuthCredential,
   createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
@@ -409,18 +410,7 @@ describe("createModelAuthAvailabilityResolver", () => {
   it("keeps a ref-only OAuth profile indeterminate until runtime hydration", () => {
     expectAuth({
       store: authStore({
-        "openai:legacy-ref": {
-          type: "oauth",
-          provider: "openai",
-          access: "",
-          refresh: "",
-          expires: 0,
-          oauthRef: {
-            source: "openclaw-credentials",
-            provider: "openai-codex",
-            id: "00000000000000000000000000000000",
-          },
-        },
+        "openai:legacy-ref": createUnresolvedOAuthCredential(),
       }),
     }).toMatchObject({
       availability: undefined,

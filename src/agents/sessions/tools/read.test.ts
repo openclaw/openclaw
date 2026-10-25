@@ -12,6 +12,7 @@ import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
+import { readRenderContext } from "./read-render.test-support.js";
 import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 import { createWriteTool } from "./write.js";
@@ -400,20 +401,7 @@ describe("read tool", () => {
       },
       { expanded: true, isPartial: false },
       plainTheme,
-      {
-        args: { path: "notes.txt" },
-        toolCallId: "read-render",
-        invalidate: () => {},
-        lastComponent: undefined,
-        state: {},
-        cwd: "/workspace",
-        executionStarted: true,
-        argsComplete: true,
-        isPartial: false,
-        expanded: true,
-        showImages: false,
-        isError: false,
-      },
+      readRenderContext("notes.txt"),
     );
     expect(
       component

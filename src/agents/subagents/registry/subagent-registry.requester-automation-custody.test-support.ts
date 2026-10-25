@@ -40,18 +40,13 @@ import {
   markRequesterTurnYieldedWithAuthority,
 } from "./subagent-registry-requester-yield.test-support.js";
 import { registerSubagentRun } from "./subagent-registry.js";
+import type { RegistryRegistrationFixture } from "./subagent-registry.requester-completion.fixture.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-type Registration = Parameters<typeof registerSubagentRun>[0];
 
 export function registerRequesterAutomationCustodyTests({
   registration,
   updateRun,
-}: {
-  registration: (runId: string, overrides?: Partial<Registration>) => Registration;
-  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
-}) {
+}: RegistryRegistrationFixture) {
   it.each(["current", "revoked"] as const)(
     "keeps %s original completion custody after a same-human chat admission revokes automation",
     async (authority) => {

@@ -53,20 +53,15 @@ import {
   createRequesterCompletionClient,
   prepareNestedRequesterReplay,
   requesterCompletionRecoveryCases,
+  type RegistryRegistrationFixture,
 } from "./subagent-registry.requester-completion.fixture.test-support.js";
 import { resetSubagentRegistryForTests, testing } from "./subagent-registry.test-helpers.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
-
-type Registration = Parameters<typeof registerSubagentRun>[0];
 
 export function registerRequesterCompletionCustodyTests({
   registration,
   updateRun,
-}: {
-  registration: (runId: string, overrides?: Partial<Registration>) => Registration;
-  updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
-}) {
+}: RegistryRegistrationFixture) {
   it.each(requesterCompletionRecoveryCases)(
     "revalidates %s for a cold-loaded interrupted child batch without widening the parent",
     async (recovery) => {

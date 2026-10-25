@@ -120,9 +120,6 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
       reset(target, "explicit-reset");
     },
     dispose() {
-      if (disposed) {
-        return;
-      }
       disposed = true;
       sweepJob.cancel();
       unsubscribeReset();

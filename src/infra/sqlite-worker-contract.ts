@@ -2,6 +2,7 @@ import type { MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
+import type { PostgresPoolEndpoints } from "./postgres-sync/pool.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission.js";
 import {
   SQLITE_WORKER_SOURCE_FENCE,
@@ -103,6 +104,7 @@ export type SqliteWorkerStore<Operations extends SqliteWorkerOperations> = {
 export type SqliteWorkerRequest = {
   id: number;
   actor: number;
+  postgresPool?: PostgresPoolEndpoints;
   stateContext?: SqliteWorkerStateContext;
   operationAdmission?: MessagePort;
   databaseAdmissionDeadlineAtMs?: number;

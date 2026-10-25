@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
@@ -330,13 +331,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(frame(container).textContent?.trim()).toBe("");
       expect(container.querySelector(".chat-image-skeleton")).not.toBeNull();
       expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
-      response.resolve(
-        Response.json({
-          available: true,
-          mediaTicket: "test-ticket",
-          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-        }),
-      );
+      response.resolve(Response.json(mediaTicketPayload("test-ticket", 300_000)));
       await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
       const loadable = geometry(container);
       expect(loadable.height).toBeCloseTo(400 / 1.5, 1);
