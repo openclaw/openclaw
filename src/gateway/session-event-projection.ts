@@ -111,6 +111,7 @@ export function prepareSessionEventProjection(
       string,
       {
         row: GatewaySessionRow;
+        rowFields?: Array<[string, unknown]>;
         ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
         hiddenAncestors: Array<{ key: string; histories: Map<object, object> }>;
         ancestorInvalidations: Map<object, object> | undefined;
@@ -238,9 +239,9 @@ export function prepareSessionEventProjection(
         if (fieldRefs && !refs) {
           refs = { indices: [], names: new Set() };
           // Indices address the reconstructed full row, independent of patch insertion order.
-          const fields = Object.entries(row)
+          const fields = (audience.rowFields ??= Object.entries(row)
             .filter(([, value]) => value !== undefined)
-            .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+            .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
           for (let index = 0; index < fields.length; index++) {
             const [field, value] = fields[index]!;
             if (
