@@ -29,6 +29,10 @@ function scopedBind(source: string, root: string, target = "/data:ro") {
   return bindResult(`${source}:${target}`, { allowedSourceRoots: [root] });
 }
 
+function expectAllowedBind(bind: string, options?: Omit<SandboxSecurityConfig, "binds">) {
+  expect(validateBindMounts([bind], options)).toBeUndefined();
+}
+
 function directories(first: string, second: string) {
   const root = tempDirs.make("openclaw-bind-");
   const make = (name: string) => {
@@ -58,7 +62,7 @@ function expectBlockedTarget(bind: string, blockedPath?: string) {
 describe("getBlockedBindReason", () => {
   it("blocks sensitive home credential paths", () => {
     withEnv({ HOME: "/home/tester" }, () => {
-      const cases = [
+      for (const source of [
         "/home/tester/.aws/credentials",
         "/home/tester/.cargo/credentials.toml",
         "/home/tester/.config/gcloud",
@@ -67,9 +71,7 @@ describe("getBlockedBindReason", () => {
         "/home/tester/.netrc",
         "/home/tester/.npm/_logs",
         "/home/tester/.ssh/config",
-      ] as const;
-
-      for (const source of cases) {
+      ]) {
         expectBlockedTarget(`${source}:/mnt/test:ro`);
         bindResult(`${source}:/mnt/test:ro`).toThrow(/blocked path/);
       }
@@ -114,7 +116,7 @@ describe("validateBindMounts", () => {
   });
 
   it("blocks dangerous bind source paths", () => {
-    const cases = [
+    for (const [label, bind, expected] of [
       ["host root mount", "/:/mnt/host", /blocked path "\/"/],
       ["etc mount", "/etc/passwd:/mnt/passwd:ro", /blocked path "\/etc"/],
       ["proc mount", "/proc:/proc:ro", /blocked path "\/proc"/],
@@ -124,8 +126,7 @@ describe("validateBindMounts", () => {
       ["parent /var/run mount", "/var/run:/var/run", /blocked path/],
       ["traversal into /etc", "/home/user/../../etc/shadow:/mnt/shadow", /blocked path "\/etc"/],
       ["double-slash normalization into /etc", "//etc//passwd:/mnt/passwd", /blocked path "\/etc"/],
-    ] as const;
-    for (const [label, bind, expected] of cases) {
+    ] as const) {
       expect(() => validateBindMounts([bind]), label).toThrow(expected);
       expect(getBlockedBindReason(bind)?.kind).toBe(
         label === "host root mount" ? "covers" : "targets",
@@ -149,11 +150,7 @@ describe("validateBindMounts", () => {
   });
 
   it("compares Windows allowed roots case-insensitively", () => {
-    expect(
-      validateBindMounts(["d:/DATA/OpenClaw/src:/src:ro"], {
-        allowedSourceRoots: ["D:/data/openclaw"],
-      }),
-    ).toBeUndefined();
+    expectAllowedBind("d:/DATA/OpenClaw/src:/src:ro", { allowedSourceRoots: ["D:/data/openclaw"] });
     scopedBind("D:/other/project", "d:/data/openclaw", "/src:ro").toThrow(/outside allowed roots/);
   });
 
@@ -216,8 +213,7 @@ describe("validateBindMounts", () => {
   );
 
   it("rejects non-absolute source paths (relative or named volumes)", () => {
-    const cases = ["../etc/passwd:/mnt/passwd", "etc/passwd:/mnt/passwd", "myvol:/mnt"] as const;
-    for (const source of cases) {
+    for (const source of ["../etc/passwd:/mnt/passwd", "etc/passwd:/mnt/passwd", "myvol:/mnt"]) {
       expect(() => validateBindMounts([source]), source).toThrow(/non-absolute/);
     }
   });
@@ -253,9 +249,7 @@ describe("validateBindMounts", () => {
     const [root] = directories("allowed", "external");
     const allowedSourceRoots =
       name === "allowed root" || name === "outside-root override" ? [root] : undefined;
-    expect(
-      validateBindMounts([binds.replace("ROOT", root)], { allowedSourceRoots, ...options }),
-    ).toBeUndefined();
+    expectAllowedBind(binds.replace("ROOT", root), { allowedSourceRoots, ...options });
   });
 });
 
@@ -272,9 +266,7 @@ describe("validateNetworkMode", () => {
 
   it("allows container namespace joins with explicit dangerous override", () => {
     expect(
-      validateNetworkMode("container:abc123", {
-        allowContainerNamespaceJoin: true,
-      }),
+      validateNetworkMode("container:abc123", { allowContainerNamespaceJoin: true }),
     ).toBeUndefined();
   });
 });

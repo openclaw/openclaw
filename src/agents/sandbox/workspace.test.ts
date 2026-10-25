@@ -1,5 +1,3 @@
-// Sandbox workspace tests cover bootstrap file seeding into isolated workspaces
-// without following unsafe host links.
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -206,33 +204,25 @@ describe("ensureSandboxWorkspace", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")("skips symlinked bootstrap seed files", async () => {
-    const { root, seed, prepare, expectMissing } = await workspaceFixture();
-    const outside = path.join(root, "outside-secret.txt");
-    await fs.writeFile(outside, "secret", "utf-8");
-    await fs.symlink(outside, path.join(seed, DEFAULT_AGENTS_FILENAME));
-
-    await prepare();
-    await expectMissing();
-  });
-
-  it.runIf(process.platform !== "win32")("skips hardlinked bootstrap seed files", async () => {
-    const { root, seed, prepare, expectMissing } = await workspaceFixture();
-    const outside = path.join(root, "outside-agents.txt");
-    const linkedSeed = path.join(seed, DEFAULT_AGENTS_FILENAME);
-    await fs.writeFile(outside, "outside", "utf-8");
-    try {
-      await fs.link(outside, linkedSeed);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EXDEV") {
-        return;
+  it.runIf(process.platform !== "win32").each(["symlink", "link"] as const)(
+    "skips bootstrap seed files created with %s",
+    async (link) => {
+      const { root, seed, prepare, expectMissing } = await workspaceFixture();
+      const outside = path.join(root, "outside-agents.txt");
+      await fs.writeFile(outside, "outside", "utf-8");
+      try {
+        await fs[link](outside, path.join(seed, DEFAULT_AGENTS_FILENAME));
+      } catch (error) {
+        if (link === "link" && (error as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw error;
       }
-      throw error;
-    }
 
-    await prepare();
-    await expectMissing();
-  });
+      await prepare();
+      await expectMissing();
+    },
+  );
 
   it("skips an oversized seed file but still seeds the others", async () => {
     const { prepare, read, expectMissing } = await workspaceFixture({

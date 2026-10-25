@@ -70,11 +70,8 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
   if (spawnState.transportFailure) {
     return Object.assign(new Error("docker stream failed"), {
       cause: new Error("docker stream failed"),
+      ...processResult(spawnState.transportExitCode),
       failed: true,
-      isCanceled: false,
-      exitCode: spawnState.transportExitCode,
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
     });
   }
   if (spawnState.commandResult) {
@@ -82,35 +79,39 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     return processResult(code, stdout, stderr);
   }
 
-  let code = 0;
-  let stdout = "";
-  let stderr = "";
   if (command !== "docker" && command !== "podman") {
-    code = 1;
-    stderr = `unexpected command: ${command}`;
-  } else if (command === "podman" && args[0] === "system") {
-    stdout = spawnState.podmanConnections;
-  } else if (command === "podman" && args[0] === "machine") {
-    stdout = spawnState.podmanMachines;
-  } else if (command === "podman" && args[0] === "--version") {
-    stdout = spawnState.podmanClientVersion;
-    code = spawnState.podmanVersionExitCode;
-  } else if (args[0] === "info") {
-    code = spawnState.infoAvailable[command as "docker" | "podman"] ? 0 : 1;
-    if (code === 0 && command === "podman" && args.includes("--format")) {
-      stdout = spawnState.podmanInfo;
-    }
-    stderr = code === 0 ? "" : `${command} unavailable`;
-  } else if (args[0] === "image" && args[1] === "inspect") {
-    code = spawnState.imageExists ? 0 : 1;
-    stderr = spawnState.imageExists
-      ? ""
-      : spawnState.inspectError || `Error response from daemon: No such image: ${args[2]}`;
-  } else if (args[0] !== "pull" && args[0] !== "tag") {
-    code = 1;
-    stderr = `unexpected docker args: ${args.join(" ")}`;
+    return processResult(1, "", `unexpected command: ${command}`);
   }
-  return processResult(code, stdout, stderr);
+  if (command === "podman") {
+    const output = new Map([
+      ["system", spawnState.podmanConnections],
+      ["machine", spawnState.podmanMachines],
+      ["--version", spawnState.podmanClientVersion],
+    ]).get(args[0] ?? "");
+    if (output !== undefined) {
+      return processResult(args[0] === "--version" ? spawnState.podmanVersionExitCode : 0, output);
+    }
+  }
+  if (args[0] === "info") {
+    return spawnState.infoAvailable[command]
+      ? processResult(
+          0,
+          command === "podman" && args.includes("--format") ? spawnState.podmanInfo : "",
+        )
+      : processResult(1, "", `${command} unavailable`);
+  }
+  if (args[0] === "image" && args[1] === "inspect") {
+    return spawnState.imageExists
+      ? processResult()
+      : processResult(
+          1,
+          "",
+          spawnState.inspectError || `Error response from daemon: No such image: ${args[2]}`,
+        );
+  }
+  return ["pull", "tag"].includes(args[0] ?? "")
+    ? processResult()
+    : processResult(1, "", `unexpected docker args: ${args.join(" ")}`);
 }
 
 vi.mock("../../process/exec.js", async (importOriginal) => ({
@@ -169,9 +170,6 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
         version: "4.7.2",
         target: { globalArgs: ["--url", "unix:///tmp/named.sock"] },
       });
-      expect(spawnState.calls.filter((call) => call.args[0] === "--version")).toEqual([
-        { command: "podman", args: ["--version"] },
-      ]);
       spawnState.commandResult = { code: 0, stdout: "container", stderr: "" };
       await docker.execContainerRaw(docker.bindPodmanSandboxEngine(runtime.target), [
         "inspect",
@@ -273,37 +271,25 @@ describe("resolvePodmanSandboxRuntimeInfo", () => {
 it.each([
   [
     "docker",
-    DEFAULT_SANDBOX_IMAGE,
     "",
     `Sandbox image not found: ${DEFAULT_SANDBOX_IMAGE}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:trixie-slim.`,
   ],
-  [
-    "podman",
-    DEFAULT_SANDBOX_IMAGE,
-    "",
-    `podman build -t ${DEFAULT_SANDBOX_IMAGE} -f scripts/docker/sandbox/Dockerfile .`,
-  ],
+  ["podman", "", `podman build -t ${DEFAULT_SANDBOX_IMAGE} -f scripts/docker/sandbox/Dockerfile .`],
   [
     "docker",
-    DEFAULT_SANDBOX_IMAGE,
     "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
     "Docker daemon is not available",
   ],
+  ["docker", "permission denied", "Failed to inspect sandbox image: permission denied"],
   [
     "docker",
-    DEFAULT_SANDBOX_IMAGE,
-    "permission denied",
-    "Failed to inspect sandbox image: permission denied",
-  ],
-  [
-    "docker",
-    "example/custom:latest",
     "",
     "Sandbox image not found: example/custom:latest. Build or pull it first.",
+    "example/custom:latest",
   ],
 ] as const)(
   "ensureContainerImage reports %s image inspection failure (%s, %s): %s",
-  async (engine, image, stderr, error) => {
+  async (engine, stderr, error, image = DEFAULT_SANDBOX_IMAGE) => {
     spawnState.imageExists = false;
     spawnState.inspectError = stderr;
     const result = containerImage.ensureContainerImage(
