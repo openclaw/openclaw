@@ -107,6 +107,11 @@ const read = () =>
     { path: journalPath(), env: process.env },
   );
 const controlFiles = () => snapshotActivationFiles(controlPath());
+const getOperation = (record: ImmutableInstallRecord) => record.activation!.operation!;
+const expectUnchanged = (record: ImmutableInstallRecord, action: () => unknown, error: string) => {
+  expect(action).toThrow(error);
+  expectSelection(record);
+};
 
 beforeEach(() => {
   parent = fs.realpathSync(dirs.make("immutable-install-control-"));
@@ -222,22 +227,13 @@ it.each(["candidate-verification-pending", "private error: token=fixture-secret 
 );
 
 it.each([
-  ["succeeded", 4242, "fixture"],
-  ["succeeded", null, null],
-] as const)("projects a historical %s receipt from a fresh observer", (outcome, pid, prefix) => {
-  const gateway =
-    pid === null
-      ? undefined
-      : {
-          pid,
-          bootId: `${prefix}-boot`,
-          version: "2026.10.1",
-          buildId: `${prefix}-build`,
-        };
+  undefined,
+  { pid: 4242, bootId: "fixture-boot", version: "2026.10.1", buildId: "fixture-build" },
+])("projects a historical receipt from a fresh observer (%j)", (gateway) => {
   const record = beginActivation();
   const lastResult = {
-    operationId: record.activation!.operation!.operationId,
-    outcome,
+    operationId: getOperation(record).operationId,
+    outcome: "succeeded" as const,
     selectedSha: sha,
     verifiedAtMs: 1000,
     ...(gateway ? { gateway } : {}),
@@ -300,10 +296,11 @@ it("rolls back inventory publication with a failed preparation receipt", () => {
 it("refuses conflicting publication identities instead of rewriting owned provenance", () => {
   const adopted = adopt(retentionDescriptor());
   const published = prepare(adopted, prepared);
-  expect(() => prepare(published, { ...prepared, buildDigest: "9".repeat(64) })).toThrow(
+  expectUnchanged(
+    published,
+    () => prepare(published, { ...prepared, buildDigest: "9".repeat(64) }),
     "conflicts with its retained identity",
   );
-  expect(read()).toEqual(published);
 });
 
 it("rejects a stale preparation instead of replacing a newer receipt", () => {
@@ -325,14 +322,16 @@ it("rejects a stale preparation instead of replacing a newer receipt", () => {
 it("rolls back a preparation when executor authority is lost before commit", () => {
   const adopted = adopt();
   let admissions = 0;
-  expect(() =>
-    recordImmutablePreparedGeneration(adopted, prepared, () => {
-      if (++admissions === 3) {
-        throw new Error("executor ended");
-      }
-    }),
-  ).toThrow("executor ended");
-  expectSelection(adopted);
+  expectUnchanged(
+    adopted,
+    () =>
+      recordImmutablePreparedGeneration(adopted, prepared, () => {
+        if (++admissions === 3) {
+          throw new Error("executor ended");
+        }
+      }),
+    "executor ended",
+  );
 });
 
 it("preserves existing package journals for their original recovery owner", () => {
@@ -363,10 +362,11 @@ it("rejects a replacement installation and writable control without mutation", (
 
 it("refuses a prepared receipt outside its adopted release root", () => {
   const adopted = adopt();
-  expect(() => prepare(adopted, { ...prepared, path: path.join(parent, candidateSha) })).toThrow(
+  expectUnchanged(
+    adopted,
+    () => prepare(adopted, { ...prepared, path: path.join(parent, candidateSha) }),
     "outside its recorded release root",
   );
-  expect(read()).toEqual(adopted);
 });
 
 it("upgrades a slice-1 control in place only with explicit activation consent", () => {
@@ -439,10 +439,8 @@ it("retains a renamed pointer intent until recovery durably syncs it, then recon
     pointerIdentity: selectedIdentity,
     buildDigest: prepared.buildDigest,
   });
-  expect(recovered.activation?.operation?.pointerIntent).toBeUndefined();
-  expect(recovered.activation?.operation?.operationId).toBe(
-    admitted.activation?.operation?.operationId,
-  );
+  expect(getOperation(recovered).pointerIntent).toBeUndefined();
+  expect(getOperation(recovered).operationId).toBe(getOperation(admitted).operationId);
   expect(recovered.revision).toBe(interrupted.revision + 1);
   expect(publish(recovered, "candidate")).toEqual(recovered);
   expectSelection(recovered, candidateSha, selectedIdentity);
@@ -451,8 +449,7 @@ it("retains a renamed pointer intent until recovery durably syncs it, then recon
 it("refuses an old durable intent before publishing after its SQLite revision advances", () => {
   const intent = retainUnpublishedIntent(beginActivation());
   const newer = updateOperation(intent, { phase: "recovery-required" });
-  expect(() => publish(intent, "candidate")).toThrow("no longer current");
-  expectSelection(newer);
+  expectUnchanged(newer, () => publish(intent, "candidate"), "no longer current");
 });
 
 it("refuses a foreign current pointer and leaves its retained intent intact", () => {
@@ -469,8 +466,7 @@ it("refuses a replaced prepared generation before selecting its directory", () =
   const intent = retainUnpublishedIntent(beginActivation());
   fs.renameSync(prepared.path, `${prepared.path}.retained`);
   fs.mkdirSync(prepared.path, { mode: 0o755 });
-  expect(() => publish(intent, "candidate")).toThrow("target generation changed");
-  expectSelection(intent);
+  expectUnchanged(intent, () => publish(intent, "candidate"), "target generation changed");
 });
 
 it("rolls back to the recorded sealed predecessor while retaining recovery evidence", () => {
@@ -484,8 +480,8 @@ it("rolls back to the recorded sealed predecessor while retaining recovery evide
     identity: descriptor.current.identity,
     buildDigest: descriptor.current.buildDigest,
   });
-  expect(rolledBack.activation?.operation).toEqual(admitted.activation?.operation);
-  expect(rolledBack.activation?.operation?.pointerIntent).toBeUndefined();
+  expect(getOperation(rolledBack)).toEqual(getOperation(admitted));
+  expect(getOperation(rolledBack).pointerIntent).toBeUndefined();
   expect(fs.existsSync(prepared.path)).toBe(true);
 });
 
@@ -516,7 +512,7 @@ it("recovers the predecessor after rollback stops before its pointer intent comm
   expect(selectedRelease()).toBe(`releases/${sha}`);
   expect(identity(currentPointer())).toBe(retainedIdentity);
   expect(fs.existsSync(temporary)).toBe(false);
-  expect(recovered.activation?.operation?.pointerIntent).toBeUndefined();
+  expect(getOperation(recovered).pointerIntent).toBeUndefined();
   expect(publish(recovered, "previous")).toEqual(recovered);
   expect(read()).toEqual(recovered);
 });
