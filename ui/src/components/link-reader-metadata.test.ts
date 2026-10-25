@@ -30,8 +30,6 @@ const open: ControlUiLinkReaderDocument = {
   body: "Description",
   badge: { label: "Open", tone: "positive" },
   metadata: [{ label: "", value: "+42" }],
-  coAuthors: [{ name: "reviewer" }],
-  coAuthorCount: 1,
 };
 const merged: ControlUiLinkReaderDocument = {
   ...open,
@@ -59,6 +57,8 @@ async function hover(anchor: HTMLAnchorElement) {
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
   await vi.advanceTimersByTimeAsync(250);
 }
+const detailRequest = (preview: () => Promise<ControlUiLinkReaderDocument>) =>
+  vi.fn((method: string) => (method === "github.detail" ? Promise.resolve(merged) : preview()));
 async function rehover(anchor: HTMLAnchorElement, delay = 120) {
   anchor.dispatchEvent(
     new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body }),
@@ -109,9 +109,7 @@ it.each([
 ])(
   "reconciles detail metadata only in the matching $scope scope (late provider: $late)",
   async ({ scope, late }) => {
-    const request = vi.fn((method: string) =>
-      Promise.resolve(method === "github.detail" ? merged : open),
-    );
+    const request = detailRequest(() => Promise.resolve(open));
     const { host, anchor, client } = makeProvider(request);
     host.agentId = "main";
     host.sessionKey = "agent:main:pane-one";
@@ -149,9 +147,11 @@ it.each([
 it.each([false, true])(
   "shows stale metadata immediately and reads fresh facts after backoff (session scoped: %s)",
   async (sessionScoped) => {
+    const stale = { ...open, stale: true };
     const request = vi
       .fn()
-      .mockResolvedValueOnce({ ...open, stale: true })
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(stale)
       .mockResolvedValue(merged);
     const { host, anchor } = makeProvider(request);
     host.sessionKey = "agent:main:pane-one";
@@ -163,53 +163,28 @@ it.each([false, true])(
     await rehover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
     await rehover(anchor, 30_000);
+    expect(badge()).toBe("Open");
+    expect(cached()).toBe("true");
+    expect(request).toHaveBeenCalledTimes(2);
+    await rehover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    await rehover(anchor, 30_000);
     expect(badge()).toBe("Merged");
     expect(cached()).toBe("false");
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls[1]?.[1]).toEqual({
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls[2]?.[1]).toEqual({
       url,
       ...(sessionScoped ? { sessionKey: "agent:main:pane-one" } : {}),
     });
   },
 );
 
-it("labels still-stale metadata and retries only after short backoff", async () => {
-  const request = vi.fn().mockResolvedValue({ ...open, stale: true });
-  const { anchor } = makeProvider(request);
-  await hover(anchor);
-  expect(badge()).toBe("Open");
-  expect(cached()).toBe("true");
-  expect(request).toHaveBeenCalledTimes(1);
-  await rehover(anchor);
-  expect(request).toHaveBeenCalledTimes(1);
-  await rehover(anchor, 30_000);
-  expect(request).toHaveBeenCalledTimes(2);
-});
-
-it("does not let an older pending preview overwrite committed reader details", async () => {
-  const pending = Promise.withResolvers<ControlUiLinkReaderDocument>();
-  const request = vi.fn((method: string) =>
-    method === "github.detail" ? Promise.resolve(merged) : pending.promise,
-  );
-  const { anchor, client } = makeProvider(request);
-  await hover(anchor);
-  await openPanel({ client });
-  await waitForSolid(() => expect(badge()).toBe("Merged"));
-  pending.resolve(open);
-  await vi.advanceTimersByTimeAsync(0);
-  expect(badge()).toBe("Merged");
-  expect(anchor.getAttribute("aria-description")).toBe("Merged");
-});
-
 it.each([false, true])(
   "loads compact metrics without reverting fresh reader status (pending preview: %s)",
   async (pendingPreview) => {
     const pending = Promise.withResolvers<ControlUiLinkReaderDocument>();
     let previewReads = 0;
-    const request = vi.fn((method: string) => {
-      if (method === "github.detail") {
-        return Promise.resolve(merged);
-      }
+    const request = detailRequest(() => {
       previewReads += 1;
       return pendingPreview && previewReads === 1 ? pending.promise : Promise.resolve(open);
     });
@@ -219,7 +194,15 @@ it.each([false, true])(
     }
     const panel = await openPanel({ client });
     await panelMerged(panel);
+    if (pendingPreview) {
+      expect(badge()).toBe("Merged");
+    }
     pending.resolve(open);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(anchor.getAttribute("aria-description")).toBe("Merged");
+    if (pendingPreview) {
+      expect(badge()).toBe("Merged");
+    }
     await rehover(anchor);
     expect(badge()).toBe("Merged");
     expect(metadata()).toBe("+42");
@@ -230,9 +213,7 @@ it.each([false, true])(
 it("keeps reader facts visible when compact preview enrichment fails", async () => {
   const pending = Promise.withResolvers<ControlUiLinkReaderDocument>();
   let previewResponse = pending.promise;
-  const request = vi.fn((method: string) =>
-    method === "github.detail" ? Promise.resolve(merged) : previewResponse,
-  );
+  const request = detailRequest(() => previewResponse);
   const { anchor, client } = makeProvider(request);
   await openPanel({ client });
   await waitForSolid(() => expect(anchor.getAttribute("aria-description")).toBe("Merged"));

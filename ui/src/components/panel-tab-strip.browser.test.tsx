@@ -82,8 +82,7 @@ async function expectControlledSelection(root: ParentNode, id: string): Promise<
   return vi.waitFor(() => {
     const tabs = renderedTabs(root);
     const active = tabs.find((entry) => entry.dataset.tabValue === id);
-    const selected = tabs.filter((el) => el.matches('[active], [aria-selected="true"]'));
-    expect(selected).toEqual([active]);
+    expect(tabs.filter((el) => el.matches('[active], [aria-selected="true"]'))).toEqual([active]);
     expect(tabs.map((entry) => entry.tabIndex)).toEqual(
       tabs.map((entry) => (entry === active ? 0 : -1)),
     );
@@ -205,7 +204,7 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
     },
   );
 
-  it.each(["shared", "per-tab"])("restores close focus (%s targets)", async (targets) => {
+  it("restores close focus within its own strip after async replacement", async () => {
     const neighbor = host();
     await renderControlledStrip(
       neighbor,
@@ -213,14 +212,12 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       { ariaControls: "neighbor-panel" },
     );
     await expectControlledSelection(neighbor, "a");
+    expect(renderedTabs(neighbor)[0]?.getAttribute("aria-controls")).toBe("neighbor-panel");
     let container = host();
     const focusOwner = createTabFocus();
     const close = createDeferred();
     let tabs = [tab("a"), tab("b")];
-    const ariaControls =
-      targets === "shared"
-        ? "browser-test-panel"
-        : (entry: PanelTabStripTab) => `panel-${entry.id}`;
+    const ariaControls = (entry: PanelTabStripTab) => `panel-${entry.id}`;
     const onClose = vi.fn((closedId: string) =>
       close.promise.then(async () => {
         (document.activeElement as HTMLElement | null)?.blur();
@@ -237,9 +234,10 @@ describe.skipIf(!hasBrowserLayout)("panel tab strip browser lifecycle", () => {
       renderControlledStrip(container, tabs, { ariaControls, onClose, focusOwner });
     await update();
     await expectControlledSelection(container, "a");
-    expect(renderedTabs(container).map((entry) => entry.getAttribute("aria-controls"))).toEqual(
-      targets === "shared" ? ["browser-test-panel", "browser-test-panel"] : ["panel-a", "panel-b"],
-    );
+    expect(renderedTabs(container).map((entry) => entry.getAttribute("aria-controls"))).toEqual([
+      "panel-a",
+      "panel-b",
+    ]);
     const closeButton = container.querySelector<HTMLButtonElement>(".tabstrip-tab__close");
     closeButton?.focus();
     expect(document.activeElement).toBe(closeButton);

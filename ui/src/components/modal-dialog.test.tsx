@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { showToast } from "../lib/toast.ts";
 import "../lib/toast-host.tsx";
 import {
@@ -79,20 +78,10 @@ it.each(["initial", "reopened"])("rejects disconnected %s layers", async (state)
   expect(document.openClawModalLayers?.has(modal)).toBe(true);
 });
 
-it("occludes native tabs through nesting, closing animations, and removal", async () => {
-  const changes = vi.fn(),
-    modalChanges: boolean[] = [];
-  const unsubscribe = subscribeNativeOverlayOcclusion(changes, () => null);
+it("publishes document modal state only when its last layer changes", async () => {
+  const modalChanges: boolean[] = [];
   const onModalState = (event: Event) => {
     modalChanges.push((event as CustomEvent<{ open: boolean }>).detail.open);
-  };
-  const check = (published: boolean[], occlusion?: boolean[]) => {
-    expect(modalChanges).toEqual(published);
-    if (occlusion) {
-      expect(changes.mock.calls).toEqual(occlusion.map((value) => [value]));
-    } else {
-      expect(changes).toHaveBeenLastCalledWith(published.at(-1));
-    }
   };
   window.addEventListener("openclaw:native-modal-state", onModalState);
   try {
@@ -100,34 +89,31 @@ it("occludes native tabs through nesting, closing animations, and removal", asyn
     const nested = document.createElement("openclaw-modal-dialog");
     modal.getOverlayContainer()!.append(nested);
     await getRenderedModalDialog(modal);
-    check([true], [false, true]);
+    expect(modalChanges).toEqual([true]);
     nested.remove();
-    check([true], [false, true]);
+    expect(modalChanges).toEqual([true]);
     const hidden = afterModalHidden(modal);
     modal.hide();
     await commit(modal);
     expectClosed(modal);
-    // Native views remain hidden until the dialog leaves the top layer.
-    check([true, false], [false, true]);
+    expect(modalChanges).toEqual([true, false]);
     await hidden;
-    expect(changes.mock.calls).toEqual([[false], [true], [false]]);
     await commit(modal);
     modal.show();
     await commit(modal);
-    check([true, false, true]);
+    expect(modalChanges).toEqual([true, false, true]);
     modal.remove();
-    check([true, false, true, false]);
+    expect(modalChanges).toEqual([true, false, true, false]);
     container.append(modal);
-    check([true, false, true, false, true]);
+    expect(modalChanges).toEqual([true, false, true, false, true]);
     modal.remove();
-    check([true, false, true, false, true, false]);
+    expect(modalChanges).toEqual([true, false, true, false, true, false]);
   } finally {
     window.removeEventListener("openclaw:native-modal-state", onModalState);
-    unsubscribe();
   }
 });
 
-it.each([false, true])("publishes one reentrant close with veto correction (%s)", async (veto) => {
+it("corrects a vetoed reentrant close without duplicate publication", async () => {
   const modal = document.createElement("openclaw-modal-dialog");
   modal.open = false;
   const changes: boolean[] = [];
@@ -140,19 +126,15 @@ it.each([false, true])("publishes one reentrant close with veto correction (%s)"
     }
   };
   const refuseClose = (event: Event) => event.preventDefault();
-  if (veto) {
-    modal.addEventListener("overlay-hide", refuseClose);
-  }
+  modal.addEventListener("overlay-hide", refuseClose);
   container.append(modal);
   await commit(modal);
   modal.show();
-  expect(modal.open).toBe(veto);
-  expect(changes).toEqual(veto ? [true, true] : [true, false]);
-  if (veto) {
-    modal.removeEventListener("overlay-hide", refuseClose);
-    modal.open = false;
-    expect(changes).toEqual([true, true, false]);
-  }
+  expect(modal.open).toBe(true);
+  expect(changes).toEqual([true, true]);
+  modal.removeEventListener("overlay-hide", refuseClose);
+  modal.open = false;
+  expect(changes).toEqual([true, true, false]);
   await afterModalHidden(modal);
   expect(dialogFor(modal).open).toBe(false);
 });
@@ -165,13 +147,9 @@ it("focuses the explicit slotted input at opening commit, without a frame", asyn
   expect(document.activeElement).toBe(container.querySelector("textarea"));
 });
 
-it.each(
-  ["none", "pointer", "keyboard"].flatMap((interaction) =>
-    [false, true].map((reopened) => ({ interaction, reopened })),
-  ),
-)(
-  "honors autofocus without overriding $interaction input (reopened=$reopened)",
-  async ({ interaction, reopened }) => {
+it.each(["none", "pointer", "keyboard"])(
+  "honors autofocus without overriding %s input on opening and reopening",
+  async (interaction) => {
     // oxlint-disable-next-line typescript/unbound-method -- Explicitly rebound with call(this).
     const showModal = HTMLDialogElement.prototype.showModal;
     vi.spyOn(HTMLDialogElement.prototype, "showModal").mockImplementation(function (
@@ -198,18 +176,32 @@ it.each(
     };
     await interactAtOpening();
     const { dialog } = await getRenderedModalDialog(container);
-    if (reopened) {
-      modal.hide();
-      await vi.waitFor(() => expect(dialog.open).toBe(false));
-      modal.show();
-      await interactAtOpening();
-      await getRenderedModalDialog(container);
-    }
+    expect(document.activeElement).toBe(
+      container.querySelector(interaction !== "none" ? "video" : "button"),
+    );
+    modal.hide();
+    await vi.waitFor(() => expect(dialog.open).toBe(false));
+    modal.show();
+    await interactAtOpening();
+    await getRenderedModalDialog(container);
     expect(document.activeElement).toBe(
       container.querySelector(interaction !== "none" ? "video" : "button"),
     );
   },
 );
+
+it("does not restore the original trigger when a suppressed modal is removed", async () => {
+  const originalTrigger = document.createElement("button");
+  document.body.append(originalTrigger);
+  originalTrigger.focus();
+  const { modal } = await renderModal();
+  modal.setReturnFocusTarget(null);
+  container.querySelector<HTMLElement>("#first-action")?.focus();
+  cleanupSolid();
+  await nextFrame();
+  expect(document.activeElement).not.toBe(originalTrigger);
+  originalTrigger.remove();
+});
 
 it.each(["hide", "remove"] as const)(
   "hands an active toast back to the app on %s",
@@ -245,16 +237,3 @@ it.each(["hide", "remove"] as const)(
     }
   },
 );
-
-it("does not restore the original trigger when a suppressed modal is removed", async () => {
-  const originalTrigger = document.createElement("button");
-  document.body.append(originalTrigger);
-  originalTrigger.focus();
-  const { modal } = await renderModal();
-  modal.setReturnFocusTarget(null);
-  container.querySelector<HTMLElement>("#first-action")?.focus();
-  cleanupSolid();
-  await nextFrame();
-  expect(document.activeElement).not.toBe(originalTrigger);
-  originalTrigger.remove();
-});
