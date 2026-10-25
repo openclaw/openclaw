@@ -708,10 +708,9 @@ test("keeps queued token rotation before revocation in the pairing owner", async
   expect(revoked.ok).toBe(true);
   if (rotated.ok && revoked.ok) {
     expect(revoked.entry.token).toBe(rotated.entry.token);
-    await expect(verifyDeviceToken({ ...params, token: rotated.entry.token })).resolves.toEqual({
-      ok: false,
-      reason: "token-revoked",
-    });
+    await expect(
+      verifyDeviceToken({ ...params, token: rotated.entry.token, scopes: [] }),
+    ).resolves.toEqual({ ok: false, reason: "token-revoked" });
   }
 });
 
