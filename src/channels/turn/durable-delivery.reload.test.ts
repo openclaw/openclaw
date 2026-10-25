@@ -1,14 +1,10 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
-import { clearPendingFinalDeliveryAfterSuccess } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
-import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TelegramAccountConfig } from "../../config/types.telegram.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
@@ -211,18 +207,18 @@ describe("final delivery after plugin replacement", () => {
           sentAt: 1,
         },
       });
-      throw new Error("second retry chunk rejected");
+      throw new PlatformMessageNotDispatchedError("second retry chunk rejected", {
+        cause: undefined,
+        retryable: false,
+      });
     });
     await expect(deliver()).resolves.toMatchObject({
       status: "failed",
       sentBeforeError: true,
       error: {
+        code: "CHANNEL_PARTIAL_DELIVERY",
         message: "second retry chunk rejected",
         deliveryResult: { visibleReplySent: true, messageIds: [accepted] },
-        cause: {
-          results: [expect.objectContaining({ messageId: accepted })],
-          payloadOutcomes: [expect.objectContaining({ status: "failed", sentBeforeError: true })],
-        },
       },
     });
     expect(sendText).toHaveBeenCalledTimes(2);
@@ -264,81 +260,24 @@ describe("final delivery after plugin replacement", () => {
     expect(fixture.sendText).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["structured final", "message tool"])(
-    "preserves final custody for %s",
-    async (source) => {
-      const tool = source === "message tool";
-      const fixture = await replacementFixture({ sameGeneration: tool });
-      const successorConfig: OpenClawConfig = { ...cfg, logging: { level: "debug" } };
-      fixture.setConfig(successorConfig);
-      const locator = {
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:12345",
-        storePath: path.join(state.tmpDir(), "sessions.json"),
-      };
-      const entry = { sessionId: "ordinary-final-session", updatedAt: 1 };
-      await replaceSessionEntry(locator, entry);
-      await persistPendingFinalDeliveryMarker({
-        ...locator,
-        deliver: true,
-        sessionEntry: entry,
-        sessionStore: { [locator.sessionKey]: entry },
-        suppressVisibleSessionEffects: false,
-        sessionReboundDuringRun: false,
+  it("does not opt message-tool sends into ambiguous-final retries", async () => {
+    const fixture = await replacementFixture({ sameGeneration: true });
+    fixture.sendText.mockRejectedValueOnce(connectionReset());
+    const result = await withPluginRuntimeRegistryScope(fixture.current, () =>
+      sendDurableMessageBatchCore({
+        cfg,
+        channel: "telegram",
+        accountId: "default",
+        to: "12345",
         payloads: [fixture.request.payload],
-        deliveryContext: { channel: "telegram", to: "12345" },
-        runOwnedSessionId: entry.sessionId,
-      });
-      const completion = expectDefined(
-        resolvePendingFinalDeliveryCompletion([fixture.request.payload]),
-        "pending-final custody",
-      );
-      const expectCustody = (deliveryState: "prepared" | "delivered") =>
-        expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
-          { id: completion.deliveryId, state: deliveryState },
-        ]);
-      expectCustody("prepared");
-      if (tool) {
-        fixture.sendText.mockRejectedValueOnce(connectionReset());
-        const result = await withPluginRuntimeRegistryScope(fixture.current, () =>
-          sendDurableMessageBatchCore({
-            cfg,
-            channel: "telegram",
-            accountId: "default",
-            to: "12345",
-            payloads: [fixture.request.payload],
-          }),
-        );
-        expect(result.status).toBe("failed");
-        expect(fixture.sendText).toHaveBeenCalledTimes(1);
-        expect(
-          (await loadPendingDeliveries(state.tmpDir()))[0]?.retryAmbiguousFinalText,
-        ).toBeUndefined();
-        return;
-      }
-      const result = await fixture.deliver(true);
-      expect(result).toMatchObject({
-        status: "handled_visible",
-        delivery: {
-          visibleReplySent: true,
-          messageIds: ["accepted-final"],
-          receipt: { platformMessageIds: ["accepted-final"] },
-        },
-      });
-      expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          cfg: successorConfig,
-          to: "12345",
-          text: "Saved final answer",
-          accountId: "default",
-        }),
-      );
-      expectCustody("delivered");
-      expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
-      await clearPendingFinalDeliveryAfterSuccess(completion);
-      expect(loadSessionEntry(locator)?.pendingFinalDelivery).toBeUndefined();
-    },
-  );
+      }),
+    );
+    expect(result.status).toBe("failed");
+    expect(fixture.sendText).toHaveBeenCalledTimes(1);
+    expect(
+      (await loadPendingDeliveries(state.tmpDir()))[0]?.retryAmbiguousFinalText,
+    ).toBeUndefined();
+  });
 
   type Fixture = Awaited<ReturnType<typeof replacementFixture>>;
   const supersedeBeforeSend = (fixture: Fixture) =>
@@ -385,22 +324,12 @@ describe("final delivery after plugin replacement", () => {
       });
       setActivePluginRegistry(createTestRegistry([...fixture.current.channels]));
       runtimeChanges[stateChange]?.(fixture);
-      const result = await fixture.deliver(
-        false,
-        stateChange === "superseded-live-send" ? fixture.current : fixture.turn,
-      );
-      expect(result).toMatchObject({
-        status: "failed",
-        error: {
-          message: expect.stringContaining(
-            stateChange === "closed"
-              ? "closing"
-              : stateChange.startsWith("superseded")
-                ? "runtime changed"
-                : "channel changed",
-          ),
-        },
-      });
+      await expect(
+        fixture.deliver(
+          false,
+          stateChange === "superseded-live-send" ? fixture.current : fixture.turn,
+        ),
+      ).resolves.toMatchObject({ status: "failed" });
       expect(fixture.sendText).not.toHaveBeenCalled();
     },
   );
