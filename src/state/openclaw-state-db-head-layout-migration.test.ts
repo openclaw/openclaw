@@ -74,6 +74,15 @@ function heads(db: EngineConnection) {
   return db.prepare("SELECT * FROM session_state_heads ORDER BY session_key, agent_id").all();
 }
 
+function head(
+  agent_id: string,
+  last_sequence: number,
+  pruned_max_sequence: number,
+  updated_at: number,
+) {
+  return { session_key: "global", agent_id, last_sequence, pruned_max_sequence, updated_at };
+}
+
 function legacyDatabase(refusePublication = false) {
   const env = { OPENCLAW_STATE_DIR: directories.make("head-layout-v25-") };
   const pathname = resolveOpenClawStateSqlitePath(env);
@@ -235,17 +244,7 @@ it("preserves local constraints, generated values, indexes, and triggers during 
   BEGIN IMMEDIATE;`);
   migrateSqliteTableWithoutRowid(db, "session_state_heads");
   db.exec("COMMIT");
-  expect(heads(db)).toEqual([
-    {
-      session_key: "global",
-      agent_id: "main",
-      last_sequence: 3,
-      pruned_max_sequence: 0,
-      updated_at: 100,
-      label: "kept",
-      doubled: 6,
-    },
-  ]);
+  expect(heads(db)).toEqual([{ ...head("main", 3, 0, 100), label: "kept", doubled: 6 }]);
   db.exec("UPDATE session_state_heads SET last_sequence = 4");
   expect(db.prepare("SELECT * FROM head_changes").all()).toEqual([{ sequence: 4 }]);
   expect(() => db.exec("UPDATE session_state_heads SET last_sequence = 0")).toThrow(/CHECK/);
@@ -304,22 +303,7 @@ it("batches creation heads without rewinding replayed or shared-key agent heads"
       context,
     );
     const stored = heads(database.db);
-    expect(stored).toEqual([
-      {
-        session_key: "global",
-        agent_id: "main",
-        last_sequence: 5,
-        pruned_max_sequence: 1,
-        updated_at: 200,
-      },
-      {
-        session_key: "global",
-        agent_id: "other",
-        last_sequence: 2,
-        pruned_max_sequence: 0,
-        updated_at: 100,
-      },
-    ]);
+    expect(stored).toEqual([head("main", 5, 1, 200), head("other", 2, 0, 100)]);
     expect(() =>
       write(() => {
         sessionStateOperations["sessionState.record"](

@@ -54,6 +54,10 @@ function expectHealthy(database: ReturnType<typeof openNodeSqliteDatabase>) {
   expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
 }
 
+function legacyHuman(source: string | null) {
+  return { type: "legacy", actorType: "human", source };
+}
+
 describe("participant identity migration", () => {
   it("upgrades v17 during standalone import finalization", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -205,56 +209,32 @@ describe("participant identity migration", () => {
       const { db, path: databasePath } = await historicalStore(state, entry);
       db.exec(LEGACY_PARTICIPANTS_SCHEMA);
       const kinds = [
-        {
-          type: "agent",
-          source: "agent",
-          id: "helper",
-          namespace: { type: "agent" },
-          knownTime: true,
-        },
-        {
-          type: "human",
-          source: "channel",
-          id: "same-id",
-          namespace: { type: "legacy", actorType: "human", source: "channel" },
-          knownTime: true,
-        },
-        {
-          type: "human",
-          source: null,
-          id: "same-id-unknown",
-          namespace: { type: "legacy", actorType: "human", source: null },
-          knownTime: false,
-        },
-        {
-          type: "human",
-          source: "profile",
-          id: "",
-          namespace: { type: "legacy", actorType: "human", source: "profile" },
-          knownTime: false,
-        },
-      ];
-      for (const kind of kinds) {
+        ["agent", "agent", "helper", { type: "agent" }, true],
+        ["human", "channel", "same-id", legacyHuman("channel"), true],
+        ["human", null, "same-id-unknown", legacyHuman(null), false],
+        ["human", "profile", "", legacyHuman("profile"), false],
+      ] as const;
+      for (const [type, source, id] of kinds) {
         db.prepare("INSERT INTO session_participants VALUES (?, ?, ?, ?, 2, 30, 50)").run(
           sessionKey,
-          kind.type,
-          kind.id,
-          kind.source,
+          type,
+          id,
+          source,
         );
       }
       closeOpenClawAgentDatabasesForTest();
       using database = openNodeSqliteDatabase(databasePath);
       await migrate(database, databasePath, state.env);
-      for (const kind of kinds) {
+      for (const [_type, _source, id, namespace, knownTime] of kinds) {
         expect(
-          database.prepare("SELECT * FROM session_participants WHERE actor_id = ?").get(kind.id),
+          database.prepare("SELECT * FROM session_participants WHERE actor_id = ?").get(id),
         ).toEqual({
           session_key: sessionKey,
-          actor_id: kind.id,
-          identity_namespace: JSON.stringify(kind.namespace),
+          actor_id: id,
+          identity_namespace: JSON.stringify(namespace),
           contribution_count: 2,
-          first_prompted_at: kind.knownTime ? 30 : null,
-          last_prompted_at: kind.knownTime ? 50 : null,
+          first_prompted_at: knownTime ? 30 : null,
+          last_prompted_at: knownTime ? 50 : null,
         });
       }
       expect(
@@ -299,7 +279,7 @@ describe("participant identity migration", () => {
           expect.objectContaining({
             identity_namespace:
               shape === "original"
-                ? JSON.stringify({ type: "legacy", actorType: "human", source: null })
+                ? JSON.stringify(legacyHuman(null))
                 : JSON.stringify({ type: "profile" }),
             actor_id: "historical-profile",
             contribution_count: shape === "count" ? 2 : 1,

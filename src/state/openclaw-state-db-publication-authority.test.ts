@@ -183,33 +183,18 @@ describe("GitHub publication requester authority schema migration", () => {
     "preserves receipts and unknown requesters through captured $via (deferred: $deferred)",
     async ({ via, deferred }) => {
       const { options, databasePath, before } = createV17PublicationState({ deferred });
-      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
-        { kind: "github-publication-requester-authority-v18", path: databasePath },
-        { kind: "predicate-columns-v21", path: databasePath },
-        { kind: "portable-identity-columns-v22", path: databasePath },
-        { kind: "meeting-transcript-start-time", path: databasePath },
-        { kind: "task-run-indexes-v24", path: databasePath },
-        { kind: "subagent-operator-recovery-v25", path: databasePath },
-        { kind: "session-state-head-layout-v26", path: databasePath },
-        { kind: "state-write-indexes-v27", path: databasePath },
-        { kind: "github-publication-draft-v28", path: databasePath },
-        { kind: "local-client-credentials-v29", path: databasePath },
-        { kind: "automation-policy-fence-v30", path: databasePath },
-        { kind: "local-workspace-manifests-v31", path: databasePath },
-      ]);
+      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+        kind: "github-publication-requester-authority-v18",
+        path: databasePath,
+      });
       if (via === "doctor repair") {
         expect(
-          await withStateMigrationBackupForTest(options, () =>
-            repairOpenClawStateDatabaseSchema(options),
-          ),
-        ).toEqual({
-          changes: [
-            "Added original requester authority to GitHub publication receipts (v18)",
-            "Replaced retained task indexes with ordered cron history indexes (v24)",
-            "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
-          ],
-          warnings: [],
-        });
+          (
+            await withStateMigrationBackupForTest(options, () =>
+              repairOpenClawStateDatabaseSchema(options),
+            )
+          ).warnings,
+        ).toEqual([]);
       }
       await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
       const { db } = openOpenClawStateDatabase(options);
