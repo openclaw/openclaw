@@ -867,6 +867,7 @@ describe("package-openclaw-for-docker", () => {
       "cli-parent-lifetime.mjs",
       "gateway-shutdown-budget.mjs",
       "node-runtime-env.mjs",
+      "runtime-process-bootstrap.generated.mjs",
       "packages/normalization-core/src/number-coercion.ts",
       "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",
@@ -896,6 +897,8 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-taskkill.mjs",
       "src/infra/npm-command.ts",
+      "src/infra/runtime-process-dependency-url.ts",
+      "src/infra/runtime-process-manifest.ts",
       "src/shared/non-packaged-plugin-dirs.ts",
     ];
     try {

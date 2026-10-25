@@ -5,7 +5,6 @@ import {
   detectCurrentSqliteCapabilities,
   nodeRuntimeFailure,
   type SqliteCapabilities,
-  type SqliteProbeExecution,
 } from "../../node-sqlite.mjs";
 import {
   canRunOpenClawNodeDiagnostics,
@@ -57,9 +56,7 @@ export function parseSemver(version: string | null): NodeReleaseVersion | null {
   };
 }
 
-type RuntimeProbeOptions = { sqliteProbeExecution?: SqliteProbeExecution };
-
-export async function detectRuntime(options?: RuntimeProbeOptions): Promise<RuntimeDetails> {
+export async function detectRuntime(): Promise<RuntimeDetails> {
   const bunVersion = process.versions?.bun;
   const details: RuntimeDetails = {
     kind: bunVersion ? "bun" : process.versions?.node ? "node" : "unknown",
@@ -78,9 +75,7 @@ export async function detectRuntime(options?: RuntimeProbeOptions): Promise<Runt
     return details;
   }
   try {
-    const probe = await detectCurrentSqliteCapabilities({
-      execution: options?.sqliteProbeExecution,
-    });
+    const probe = await detectCurrentSqliteCapabilities();
     details.hasNodeSqlite = probe.available;
     details.sqliteVersion = probe.version;
     details.sqliteProbe = probe;
@@ -110,8 +105,8 @@ function runtimeSatisfies(details: RuntimeDetails): boolean {
   return false;
 }
 
-export async function isCurrentRuntimeSupported(options?: RuntimeProbeOptions): Promise<boolean> {
-  return runtimeSatisfies(await detectRuntime(options));
+export async function isCurrentRuntimeSupported(): Promise<boolean> {
+  return runtimeSatisfies(await detectRuntime());
 }
 
 export function isSupportedBunVersion(version: string | null): boolean {

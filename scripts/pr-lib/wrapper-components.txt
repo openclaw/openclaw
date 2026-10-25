@@ -9,7 +9,6 @@ gateway-shutdown-budget.mjs
 worker-heap-flag.mjs
 node-runtime-env.mjs
 node-sqlite-capabilities.mjs
-node-sqlite-capabilities.worker.mjs
 node-sqlite.mjs
 node-version.mjs
 runtime-process-bootstrap.generated.mjs

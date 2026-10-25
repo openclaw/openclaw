@@ -289,7 +289,6 @@ it.runIf(process.platform !== "win32")(
         "gateway-shutdown-budget.mjs",
         "node-sqlite.mjs",
         "node-sqlite-capabilities.mjs",
-        "node-sqlite-capabilities.worker.mjs",
         "runtime-process-bootstrap.generated.mjs",
         "runtime-process-scripts.generated.mjs",
       ]) {

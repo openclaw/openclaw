@@ -39,7 +39,6 @@ const runtimeFiles = collectRuntimeImportClosure(process.cwd(), [
   "node-version.mjs",
   "node-sqlite.mjs",
   "node-sqlite-capabilities.mjs",
-  "node-sqlite-capabilities.worker.mjs",
   "runtime-process-bootstrap.generated.mjs",
   "runtime-process-scripts.generated.mjs",
   "node-runtime-update.mjs",

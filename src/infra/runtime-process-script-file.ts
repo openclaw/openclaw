@@ -1,7 +1,7 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveSecureTempRoot } from "@openclaw/fs-safe/secure-temp-root";
 import type {
   RuntimeProcessScriptFile,
   RuntimeProcessScriptFileOptions,
@@ -12,14 +12,9 @@ export function materializeRuntimeProcessScriptFile(
   entry: { fileName: string; source: string },
   options: RuntimeProcessScriptFileOptions = {},
 ): RuntimeProcessScriptFile {
-  const parent =
-    options.parentDirectory ??
-    resolveSecureTempRoot({
-      fallbackPrefix: "openclaw-runtime",
-      warningPrefix: "[openclaw]",
-      unsafeFallbackLabel: "runtime script directory",
-    });
-  const directory = fs.mkdtempSync(path.join(parent, "script-"));
+  const directory = fs.mkdtempSync(
+    path.join(options.parentDirectory ?? os.tmpdir(), "openclaw-script-"),
+  );
   const filename = path.join(directory, entry.fileName);
   let disposed = false;
   const dispose = () => {

@@ -336,11 +336,16 @@ publication restore use declared module entries. Resident workspace manifest
 computation calls a generated static module with its own imports. Shell snapshots
 capture their filtered environment through a declared entry as well.
 
-Runtime version and SQLite probes execute declared program files with the selected
-external runtime. Metadata inventory uses the image's declared entry when it
-executes the image itself. The npm launcher discovery preload is a generated
-data-URL asset so delayed manager descendants can still load it after discovery
-finishes.
+Probes of an external runtime's version and SQLite support execute declared program
+files with that selected runtime. Each temporary program has a private directory
+that is removed after the process finishes. The current process checks its loaded SQLite
+binding once during boot admission, using a fixed in-memory database that closes
+before the shared result resolves. This bootstrap check stays self-contained in
+relocated CLI and portable worker builds and in sealed recovery helpers.
+
+Metadata inventory uses the image's declared entry when it executes the image
+itself. The npm launcher discovery preload is a generated data-URL asset so delayed
+manager descendants can still load it after discovery finishes.
 
 The builder embeds the application modules, bundled plugin entrypoints, worker
 programs, and generated metadata needed by the runtime. It preserves lazy module

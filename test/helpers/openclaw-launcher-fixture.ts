@@ -18,7 +18,6 @@ export async function stageLauncherFixture(root: string): Promise<void> {
     "gateway-shutdown-budget.mjs",
     "node-sqlite.mjs",
     "node-sqlite-capabilities.mjs",
-    "node-sqlite-capabilities.worker.mjs",
     "runtime-process-bootstrap.generated.mjs",
     "runtime-process-scripts.generated.mjs",
   ]) {

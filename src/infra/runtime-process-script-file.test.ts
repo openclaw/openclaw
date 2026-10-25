@@ -12,8 +12,10 @@ import { prepareRuntimeProcessScriptInvocation } from "./runtime-process-url.js"
 const directories = useAutoCleanupTempDirTracker((cleanup) => afterEach(cleanup));
 const node = resolveTestNodeExecPath();
 
-it("runs retained program assets without their source package or installed dependencies", () => {
+it("runs and removes retained programs without source neighbors", () => {
   const root = directories.make("runtime-script-bootstrap-");
+  const scriptParent = path.join(root, "scratch");
+  fs.mkdirSync(scriptParent, { mode: 0o700 });
   const copiedBootstrap = path.join(root, "runtime-process-scripts.generated.mjs");
   fs.copyFileSync(
     new URL("../../runtime-process-scripts.generated.mjs", import.meta.url),
@@ -32,7 +34,8 @@ it("runs retained program assets without their source package or installed depen
     import { fileURLToPath } from "node:url";
     const result = {};
     for (const name of ["nodeRuntimeProbe", "daemonRuntimeProbe", "updateStateSizes"]) {
-      const script = createRuntimeProcessScriptFile(name, { parentDirectory: ${JSON.stringify(root)} });
+      const script = createRuntimeProcessScriptFile(name);
+      if (process.platform !== "win32" && (fs.statSync(new URL(".", script.url)).mode & 0o777) !== 0o700) throw new Error("Script directory is not private");
       try {
         result[name] = execFileSync(process.execPath, [fileURLToPath(script.url), name === "daemonRuntimeProbe" ? "node" : ""], {
           encoding: "utf8", timeout: 5000, env: {},
@@ -47,8 +50,13 @@ it("runs retained program assets without their source package or installed depen
     process.stdout.write(JSON.stringify(result));
   `,
   );
-  const result = spawnSync(node, [driver], { encoding: "utf8", timeout: 15_000, env: {} });
+  const result = spawnSync(node, [driver], {
+    encoding: "utf8",
+    timeout: 15_000,
+    env: { TMPDIR: scriptParent, TMP: scriptParent, TEMP: scriptParent },
+  });
   expect(result.status, result.stderr).toBe(0);
+  expect(fs.readdirSync(scriptParent)).toEqual([]);
   const output = JSON.parse(result.stdout);
   expect(output.nodeRuntimeProbe).toBe(node);
   expect(JSON.parse(output.daemonRuntimeProbe)).toMatchObject({

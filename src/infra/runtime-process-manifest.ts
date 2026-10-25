@@ -18,14 +18,6 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
   }
 
   return {
-    sqliteCapabilities: {
-      currentModuleUrl,
-      sourceModulePath: "node-sqlite-capabilities.worker.mjs",
-      sourceExtension: ".mjs",
-      sourceWorkerName: "../../node-sqlite-capabilities.worker",
-      distWorkerPath: "../node-sqlite-capabilities.worker.mjs",
-      bootstrap: true,
-    },
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
     repositoryPublicationRestore: runtimeProcessEntrypoint(

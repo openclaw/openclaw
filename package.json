@@ -59,7 +59,6 @@
     "node-sqlite.d.mts",
     "node-sqlite-capabilities.mjs",
     "node-sqlite-capabilities.d.mts",
-    "node-sqlite-capabilities.worker.mjs",
     "runtime-process-bootstrap.generated.mjs",
     "runtime-process-bootstrap.generated.d.mts",
     "node-version.mjs",

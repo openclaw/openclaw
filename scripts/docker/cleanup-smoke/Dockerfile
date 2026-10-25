@@ -17,7 +17,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY openclaw.mjs ./
 COPY node-version.mjs ./
 COPY node-sqlite.mjs ./
-COPY node-sqlite-capabilities.mjs node-sqlite-capabilities.worker.mjs runtime-process-bootstrap.generated.mjs runtime-process-scripts.generated.mjs ./
+COPY node-sqlite-capabilities.mjs runtime-process-bootstrap.generated.mjs runtime-process-scripts.generated.mjs ./
 COPY node-runtime-update.mjs ./
 COPY node-runtime-recovery.mjs ./
 COPY cli-parent-lifetime.mjs ./
