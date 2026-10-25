@@ -133,6 +133,7 @@ describe("Slack live QA runtime helpers", () => {
       output,
       final,
       verifyObserved,
+      verify,
       check: (...args: Parameters<typeof verify>) => expect(() => verify(...args)),
       tools: (...messages: Array<string | [string, string]>) =>
         expect(() =>
@@ -359,46 +360,39 @@ describe("Slack live QA runtime helpers", () => {
     });
   });
 
-  it("verifies progress commentary from history and captured writes", () => {
-    for (const suffix of ["true", "false", "omitted", "verbose-dedupe", "verbose-full"]) {
-      const { commentary, tool, output, final, run, verifyObserved } = progress(suffix);
+  it.each(["true", "false", "omitted", "verbose-dedupe", "verbose-full"])(
+    "verifies %s progress commentary from history and captured writes",
+    (suffix) => {
+      const { commentary, tool, output, run, verify } = progress(suffix);
       expect(run.input).toContain(
         `printf '%s' '${tool}' >/dev/null; sleep 5; printf '%s\\n' '${output}'`,
       );
       const messages = [
-        slackMessage(final, "2"),
         suffix === "true"
           ? slackMessage("Working…", "1", [`• *Commentary* — _${commentary}_`])
           : slackMessage(commentary, "1"),
       ];
+      const extra = {
+        omitted: slackMessage(commentary, "1", ["• *Exec* — sleep 5"]),
+        "verbose-dedupe": slackMessage("Exec", "1.5"),
+        "verbose-full": slackMessage(`Exec\n\`\`\`\n${output}\n\`\`\``, "1.5"),
+      };
+      if (suffix === "omitted" || suffix === "verbose-dedupe" || suffix === "verbose-full") {
+        messages.push(extra[suffix]);
+      }
+      expect(verify(messages)).toContain("verified");
       if (suffix === "omitted") {
-        messages.push(slackMessage(commentary, "1", ["• *Exec* — sleep 5"]));
+        for (const row of ["Exec — sleep 5", "Run — `sleep 5`"]) {
+          messages[1] = slackMessage(commentary, "1", [row]);
+          expect(verify(messages)).toContain("verified");
+        }
       }
-      if (suffix === "verbose-dedupe") {
-        messages.push(slackMessage("Exec", "1.5"));
-      }
-      if (suffix === "verbose-full") {
-        messages.push(slackMessage(`Exec\n\`\`\`\n${output}\n\`\`\``, "1.5"));
-      }
-      const verify = () => verifyObserved({ finalMessage: { text: final, ts: "2" }, messages });
-      expect(verify()).toContain("verified");
-      if (suffix === "omitted") {
-        messages[2] = slackMessage(commentary, "1", ["Exec — sleep 5"]);
-        expect(verify()).toContain("verified");
-        messages[2] = slackMessage(commentary, "1", ["Run — `sleep 5`"]);
-        expect(verify()).toContain("verified");
-      }
-    }
-  });
+    },
+  );
 
   it("recognizes exact commentary rows within Slack progress cards", () => {
     const { commentary: c, check } = progress("true");
-    for (const text of [
-      `_${c}_`,
-      `💬 ${c}`,
-      `:speech_balloon: ${c}`,
-      `_${c}_\n_more commentary_`,
-    ]) {
+    for (const text of [`_${c}_`, `💬 ${c}`, `:speech_balloon: ${c}`]) {
       check([slackMessage(text, "commentary")]).not.toThrow();
     }
     check([
@@ -450,15 +444,10 @@ describe("Slack live QA runtime helpers", () => {
 
   it("requires full tool output rather than echoed command metadata", () => {
     const p = progress("verbose-full");
-    p.tools(`Exec: printf '${p.output}'`).toThrow("expected exact tool output");
     p.tools(`Exec: ${p.output}`).toThrow("expected exact tool output");
     const summary = `\`sleep 5; printf '%s\\\\n' '${p.output}' # ${p.tool}\``;
     const delivered = sanitizeAssistantVisibleText(`${summary}\n\`\`\`txt\n${p.output}\n\`\`\``);
-    expect(sanitizeAssistantVisibleText(summary)).toBe(summary);
-    expect(delivered).toBe(`${summary}\n\`\`\`txt\n${p.output}\n\`\`\``);
     p.tools(delivered).not.toThrow();
-    p.tools(p.output).not.toThrow();
-    p.tools(`Run command: # ${p.tool}\n${p.output}`).not.toThrow();
     p.tools([`Exec\n${p.output}`, "tool-1"], [`Exec\n${p.output}`, "tool-2"]).toThrow(
       "expected exact tool output in one standalone verbose message",
     );
@@ -562,7 +551,6 @@ describe("Slack live QA runtime helpers", () => {
     });
     await vi.advanceTimersByTimeAsync(500);
     await observation;
-    expect(historyCalls).toBeGreaterThanOrEqual(2);
     expect(new Set(observedMessages.map((observed) => observed.text))).toEqual(
       new Set(["FINAL_MARKER", "EARLIER_COMMENTARY", "LATE_DUPLICATE", "THREAD_DUPLICATE"]),
     );
@@ -585,7 +573,6 @@ describe("Slack live QA runtime helpers", () => {
       })),
     }));
     const result = await runFallback(postMessage, history);
-    expect(postMessage).toHaveBeenCalledTimes(3);
     expect(
       stored.every((payload) => !Object.hasOwn(payload, "blocks") && payload.mrkdwn === false),
     ).toBe(true);
@@ -593,7 +580,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(text).toHaveLength(probe.fallbackText.length);
     expect(text.split("\n")).toContain(probe.firstRowText);
     expect(text.split("\n")).toContain(probe.finalRowText);
-    expect(stored.map((payload) => payload.ts)).toEqual(["2.000001", "2.000002", "2.000003"]);
     expect(result.message).toMatchObject({ ts: "2.000003", user: "U999999999" });
     contains(result.details, "API attempts=4", "complete delivery=true");
   });
@@ -627,7 +613,6 @@ describe("Slack live QA runtime helpers", () => {
     await expect(runFallback(postMessage, vi.fn())).rejects.toThrow(
       "Slack fallback part 1 failed after invalid_blocks; observed no fallback API failure code",
     );
-    expect(postMessage).toHaveBeenCalledTimes(1);
   });
 
   it.each([

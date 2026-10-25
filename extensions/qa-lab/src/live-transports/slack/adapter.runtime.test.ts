@@ -100,10 +100,6 @@ beforeEach(() => {
     "fetch",
     vi.fn(() => Promise.reject(new Error("Unexpected Slack request"))),
   );
-  mocks.acquireCaptureStore.mockResolvedValue({
-    store: emptyCaptureReader(),
-    release: mocks.captureRelease,
-  });
   mocks.createCaptureReader.mockReturnValue(emptyCaptureReader());
   mocks.acquireCredentialLease.mockResolvedValue({
     payload: {

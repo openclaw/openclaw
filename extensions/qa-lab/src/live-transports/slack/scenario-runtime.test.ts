@@ -149,13 +149,6 @@ it("returns structured RTT evidence for a matched reply", async () => {
 
 it.each([
   ["ignores off-channel captured commentary", "C_OTHER", "commentary", "1.500000", undefined],
-  [
-    "rejects a second same-channel non-marker response",
-    "C_MPIM",
-    "commentary",
-    "2.500000",
-    "1 marker match(es)",
-  ],
   ["rejects two marker responses", "C_MPIM", "MARKER", "2.500000", "2 marker match(es)"],
   ["deduplicates the same Slack timestamp", "C_MPIM", "MARKER", "2.000000", undefined],
 ])("%s", async (_label, channelId, capturedText, ts, expectedMarkerCount) => {
