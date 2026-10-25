@@ -52,8 +52,8 @@ continues to run PostgreSQL 17. See the [qualification evidence](#server-major-q
 | Headless Linux, including Linux under WSL2        | Supported                               | Linux PostgreSQL conformance and CLI/Gateway paths.                                                                                                                                                                            |
 | Headless macOS CLI                                | Supported                               | Real PostgreSQL CLI, interactive setup and Gateway runs.                                                                                                                                                                       |
 | Native Windows + PostgreSQL                       | Supported                               | Native Windows client and PG17 server, including fresh backup restore; [qualification and limits](#native-windows-qualification).                                                                                              |
-| Native Windows managed service                    | Partially qualified                     | Installation, readiness, turns and stop cleanup exercised; graceful shutdown needs the separate owner fix. [Evidence](#native-windows-qualification).                                                                          |
-| Native Windows managed package update             | Blocked                                 | Previous-main update failed before replacement; published PostgreSQL state upgrade is not yet applicable. [Evidence](#native-windows-qualification).                                                                           |
+| Native Windows managed service                    | Supported                               | Install, readiness, turns, graceful stop, restart continuity and data-preserving uninstall; [qualification](#native-windows-qualification).                                                                                    |
+| Native Windows package update with PG state       | Not yet applicable                      | No published release selects PostgreSQL for state and agent stores; requalify when one ships. [Evidence](#native-windows-qualification).                                                                                       |
 | Native Windows database port                      | Not supported yet                       | Use fresh PostgreSQL state on Windows, or run the port on Linux/macOS; [details](#native-windows-qualification).                                                                                                               |
 | macOS app                                         | Experimental: pending signed-app proof  | Credentials stay local, runtime pins stay local, and exec approvals use the shared owner. Combined signed-app acceptance is pending.                                                                                           |
 | iOS/iPad app                                      | Not supported without real-device proof | Simulator evidence is insufficient; real-device authentication and approval flows remain unqualified.                                                                                                                          |
@@ -122,47 +122,40 @@ digests and no embedding calls during backup/restore and index rebuild. Path che
 covered spaces/non-ASCII names, drive-letter/backslash SecretRef and `sslrootcert`
 paths, and a **324-character state directory**. An unreachable DSN failed without
 credential leaks, and Gateway startup rejected invalid config with exit **78**.
-The `PGQUALWIN2` follow-up on the same Windows/Node/PostgreSQL versions
-exercised the native Scheduled Task installation with a file DSN SecretRef.
-The previous-main build `2f95e977c77d` passed installation, readiness/health,
-a scripted turn, stop with no remaining worker processes or role backends in
-`pg_stat_activity`, and restart with identical session/history and memory digests.
-Both that build and the target `5abc0c66e293` declare state **32** / agent **34**.
-The target passed installation, readiness/health, scripted turns, start/restart
-continuity and recovery after a host reboot following manual package replacement.
-After reboot the task ran automatically; a subsequent `gateway start` returned
-`already-running`, and readiness and continuity checks passed. Stop/start/restart and post-reboot readiness emitted no
-embedding calls before the search probes; those probes separately embedded their
-queries. Its stop released workers and PostgreSQL backends, but a
-supervisor child exited with code 1 and no completed graceful-stop record was
-observed. Uninstall removed the registered service while preserving all six
-canonical PostgreSQL digests. Those main builds do not qualify clean shutdown.
-The separate patched build `8f8721740bdb` completed graceful shutdown with no
-remaining worker processes or role backends; the owner fix and its evidence are
-tracked in [PR #183632](https://github.com/openclaw/openclaw/pull/183632).
 
-The managed package update from `2f95e977c77d` to `5abc0c66e293` failed before
-replacement: an 8.3 temporary-directory alias caused the local managed-update
-journal to contend with its own lock. The existing Gateway remained healthy.
-The owner fix is tracked in [PR #183622](https://github.com/openclaw/openclaw/pull/183622).
-With that fix, a managed rollback attempt reached candidate admission but refused
-heartbeat inspection with `no such table: cron_jobs`: that check opened the
-SQLite anchor instead of the configured PostgreSQL store. The installed Gateway
-remained healthy; neither managed activation nor rollback completed. That
-candidate-admission fix is tracked in
-[PR #183645](https://github.com/openclaw/openclaw/pull/183645).
-Manual package replacement followed the documented
-[recovery procedure](/install/updating/rollback-and-recovery), but is not a
-successful `openclaw update` qualification.
+The `PGQUALWIN2` follow-up on the same Windows/Node/PostgreSQL versions qualified
+native Scheduled Task service lifecycle with a file DSN SecretRef. Patched build
+`8f8721740bdb`, whose service fix landed in
+[PR #183632](https://github.com/openclaw/openclaw/pull/183632), passed installation,
+readiness/health, a scripted turn, and completed graceful shutdown. No Gateway
+worker/bridge processes or OpenClaw role backends remained in `pg_stat_activity`.
+Start and restart preserved exact six-table, session/history and memory digests.
+Uninstall removed the service registration and retained PostgreSQL data, local
+anchors and the file SecretRef. Lifecycle checks emitted no embedding calls
+before deliberate memory-search probes, which separately embedded their queries.
 
-No published PostgreSQL state/agent upgrade baseline was available in the
-2026-10-25 registry inspection. Stable **2026.10.7** lacks that support;
-**2026.10.10-beta.3** accepts PostgreSQL configuration but its bundled runtime
-selects SQLite for state and agent stores (PostgreSQL is enabled only for
-Workboard). Published stable → current with PostgreSQL state is therefore not
-yet applicable. The two tested main builds also lack the requested state 33 /
-agent 35 target, so this run does not qualify those migrations. Commands, timings,
-source pins and remaining gates are recorded in
+Host reboot recovery passed on the earlier build `5abc0c66e293`: the Scheduled
+Task ran automatically, a subsequent `gateway start` returned `already-running`,
+and readiness and continuity checks passed. Reboot was not repeated on the
+patched build. The baseline `2f95e977c77d`, target `5abc0c66e293` and patched service
+build used state **32** / agent **34**; this run does not qualify the later state
+33 / agent 35 migrations.
+
+**Package update with PostgreSQL state is not yet applicable.** No published
+release selected PostgreSQL for state and agent stores in the 2026-10-25 registry
+inspection. Stable **2026.10.7** lacks that support; **2026.10.10-beta.3** accepts
+the configuration but its bundled runtime selects SQLite for state and agent
+stores, with PostgreSQL enabled only for Workboard. Requalify published-release
+updates when a version selecting PostgreSQL state and agent stores ships.
+
+The previous-main update and managed rollback attempts did not complete.
+Separate handoff-path and candidate-admission fixes landed in
+[PR #183622](https://github.com/openclaw/openclaw/pull/183622) and
+[PR #183645](https://github.com/openclaw/openclaw/pull/183645). Manual package
+replacement followed the documented
+[recovery procedure](/install/updating/rollback-and-recovery), but does not qualify
+managed activation or rollback. Commands, source pins, continuity digests and
+timings are recorded in
 [PR #183634](https://github.com/openclaw/openclaw/pull/183634).
 
 Native Windows does not yet support SQLite ↔ PostgreSQL database port, including
