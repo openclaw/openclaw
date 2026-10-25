@@ -500,6 +500,18 @@ describe("secret ref resolver", () => {
     expect(value).toBe("my-secret-value");
   });
 
+  it("keeps trailing-space file provider paths distinct from neighbors", async () => {
+    const dir = await createCaseDir("trailing-space-path");
+    const spaced = path.join(dir, "secret ");
+    const neighbor = path.join(dir, "secret");
+    await writeSecureFile(spaced, "GOOD\n");
+    await writeSecureFile(neighbor, "WRONG\n");
+
+    // Neighbor exists to prove path identity is literal (not trimmed to neighbor).
+    const value = await resolveFileSecret(spaced, { mode: "singleValue" }, "value");
+    expect(value).toBe("GOOD");
+  });
+
   it.each(["file", "exec"] as const)(
     "fails closed on Windows when %s provider ACL source is unknown",
     async (kind) => {
