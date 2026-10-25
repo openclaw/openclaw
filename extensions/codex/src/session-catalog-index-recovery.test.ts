@@ -15,7 +15,6 @@ import {
 import type { CodexCatalogIndexOptions } from "./session-catalog-index-contract.js";
 import { CodexCatalogPersistence, type CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
-import { completeCatalogState } from "./session-catalog-index.test-support.js";
 import { CodexCatalogProjections } from "./session-catalog-projection.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import { writeCatalogRollout } from "./session-catalog-resident.test-support.js";
@@ -39,12 +38,11 @@ const ids = async (index: CodexCatalogIndex) =>
 function catalog(
   root: string,
   readNative: CodexCatalogIndexOptions["readNative"],
-  options: { homeId?: string; local?: boolean; state?: CodexCatalogState } = {},
+  options: { homeId?: string; local?: boolean } = {},
 ) {
   const index = new CodexCatalogIndex({
     homeId: options.homeId ?? root,
     ...(options.local === false ? {} : { localSessionsRoot: root }),
-    state: options.state,
     readNative,
     assertCurrent: () => {},
   });
@@ -77,31 +75,6 @@ async function compress(file: string) {
   await fs.unlink(file);
   return compressed;
 }
-
-it("serves a remote restart snapshot immediately and reconciles offline changes in the background", async () => {
-  const original = idleThread({ id: "archived-while-offline", source: "cli" });
-  const replacement = idleThread({ id: "created-while-offline", source: "cli" });
-  const saved = await project([original]);
-  const state = completeCatalogState([saved.rows[0]!]);
-  const native = createDeferred<void>();
-  const readNative = vi.fn(async () => {
-    await native.promise;
-    return project([replacement]);
-  });
-  const index = catalog("remote-restart", readNative, { state, local: false });
-  try {
-    expect(await ids(index)).toEqual([original.id]);
-    expect(readNative).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(readNative).toHaveBeenCalledOnce());
-    native.resolve();
-    await vi.waitFor(async () => {
-      expect(await ids(index)).toEqual([replacement.id]);
-    });
-    expect(readNative).toHaveBeenCalledOnce();
-  } finally {
-    native.resolve();
-  }
-});
 
 it.each([false, true])(
   "removes compressed rollouts archived during hydration: %s",

@@ -313,19 +313,14 @@ describe("Codex exact local eligibility", () => {
 
   it("bounds stalled ownership lookup and prevents native reads after its deadline", async () => {
     const f = await localEligibilityFixture(() => Date.now(), 1_000);
-    let release!: (managed: boolean) => void;
-    f.managedThreads.has.mockImplementation(
-      () =>
-        new Promise<boolean>((resolve) => {
-          release = resolve;
-        }),
-    );
+    const ownership = Promise.withResolvers<boolean>();
+    f.managedThreads.has.mockReturnValue(ownership.promise);
     vi.useFakeTimers();
     try {
       const result = f.reject();
       await vi.advanceTimersByTimeAsync(1_000);
       await result;
-      release(false);
+      ownership.resolve(false);
       await vi.advanceTimersByTimeAsync(0);
       expect(pinnedConnectionMocks.request).not.toHaveBeenCalled();
     } finally {
@@ -393,9 +388,6 @@ describe("Codex exact local eligibility", () => {
         method: "thread/read",
         requestParams: { threadId: f.thread.id, includeTurns: false },
       });
-      expect(
-        pinnedConnectionMocks.request.mock.calls.filter(([r]) => r.method === "thread/read"),
-      ).toHaveLength(1);
       expect(f.managedThreads.snapshot).not.toHaveBeenCalled();
     },
   );

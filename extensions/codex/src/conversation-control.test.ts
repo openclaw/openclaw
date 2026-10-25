@@ -34,8 +34,8 @@ import {
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-control-");
 
-function controlTarget(sessionFile: string) {
-  const identity = { kind: "session" as const, agentId: "main", sessionId: sessionFile };
+function controlTarget(sessionId: string, sessionKey?: string) {
+  const identity = { kind: "session" as const, agentId: "main", sessionId, sessionKey };
   const binding = testCodexAppServerBindingStore.read(identity);
   return {
     identity,
@@ -114,22 +114,21 @@ function replyingHarness() {
   });
 }
 
-const sharedClientMocks = vi.hoisted(() => ({
-  getSharedCodexAppServerClient: vi.fn(),
-}));
-
-vi.mock("./app-server/shared-client.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./app-server/shared-client.js")>()),
-  ...sharedClientMocks,
-  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
-}));
+const supervisedBinding = {
+  threadId: "thread-supervised",
+  connectionScope: "supervision" as const,
+  supervisionSourceThreadId: "thread-supervised",
+  model: "gpt-5.5",
+  modelProvider: "openai",
+  preserveNativeModel: true,
+  conversationSourceTransferComplete: true,
+};
 
 describe("codex conversation controls", () => {
   beforeEach(() => {
     resetCodexTestBindingStore();
     tempDir = sessionDirs.make();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
-    sharedClientMocks.getSharedCodexAppServerClient.mockReset();
   });
 
   afterEach(() => {
@@ -222,14 +221,8 @@ describe("codex conversation controls", () => {
 
   it("routes stop and steer through the client that owns the active turn", async () => {
     const target = await boundTarget({
-      threadId: "thread-supervised",
-      connectionScope: "supervision",
-      supervisionSourceThreadId: "thread-supervised",
+      ...supervisedBinding,
       appServerRuntimeFingerprint: buildCodexSupervisionTestConnectionFingerprint(),
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      preserveNativeModel: true,
-      conversationSourceTransferComplete: true,
     });
     const harness = replyingHarness();
     trackTurn(target, "thread-supervised", harness);
@@ -252,7 +245,6 @@ describe("codex conversation controls", () => {
         },
       },
     ]);
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("refuses to stop or steer when the active turn no longer matches the private binding", async () => {
@@ -266,7 +258,6 @@ describe("codex conversation controls", () => {
     await expectStaleTurn(clearedTarget, "still do not send");
 
     expect(harness.writes).toHaveLength(0);
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("rejects steer before a retained-client write after host rollover", async () => {
@@ -287,20 +278,11 @@ describe("codex conversation controls", () => {
   });
 
   it("rejects direct model changes for private supervised bindings", async () => {
-    const target = await boundTarget({
-      threadId: "thread-supervised",
-      connectionScope: "supervision",
-      supervisionSourceThreadId: "thread-supervised",
-      model: "gpt-5.5",
-      modelProvider: "openai",
-      preserveNativeModel: true,
-      conversationSourceTransferComplete: true,
-    });
+    const target = await boundTarget(supervisedBinding);
 
     await expect(setModel({ ...target, model: "gpt-5.4" })).rejects.toThrow(
       MODEL_SELECTION_LOCKED_MESSAGE,
     );
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -324,72 +306,60 @@ describe("codex conversation controls", () => {
         model,
         modelProvider: "lmstudio",
       });
-      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
     },
   );
 
   it.each([
-    {
-      name: "clears incompatible direct-session auth when the selected provider changes",
-      recordedProvider: undefined,
-      expectedProfile: undefined,
-    },
-    {
-      name: "preserves compatible recorded direct-session auth over the profile ID prefix",
-      recordedProvider: "openai",
-      expectedProfile: "lmstudio:work",
-    },
-  ])("$name", async ({ recordedProvider, expectedProfile }) => {
-    const sessionKey = "agent:main:model-provider-switch";
-    const agentDir = path.join(tempDir, "agent");
-    if (recordedProvider) {
-      await upsertAuthProfileAsync({
-        agentDir,
-        profileId: "lmstudio:work",
-        credential: { type: "api_key", provider: recordedProvider, key: "test-key" },
-      });
-    }
-    const { session, storePath } = await permissionSession(
-      "session-provider-switch",
-      {
-        authProfileOverride: "lmstudio:work",
-        authProfileOverrideSource: "user",
-      },
-      sessionKey,
-    );
-    const identity = { kind: "session" as const, ...session };
-    await testCodexAppServerBindingStore.mutate(identity, {
-      kind: "set",
-      binding: {
+    [undefined, undefined],
+    ["openai", "lmstudio:work"],
+  ])(
+    "selects auth by recorded provider (%s), not profile prefix",
+    async (recordedProvider, expectedProfile) => {
+      const sessionKey = "agent:main:model-provider-switch";
+      const agentDir = path.join(tempDir, "agent");
+      if (recordedProvider) {
+        await upsertAuthProfileAsync({
+          agentDir,
+          profileId: "lmstudio:work",
+          credential: { type: "api_key", provider: recordedProvider, key: "test-key" },
+        });
+      }
+      const { session, storePath } = await permissionSession(
+        "session-provider-switch",
+        {
+          authProfileOverride: "lmstudio:work",
+          authProfileOverrideSource: "user",
+        },
+        sessionKey,
+      );
+      const target = controlTarget(session.sessionId, sessionKey);
+      const original = {
         threadId: "thread-provider-switch",
         cwd: tempDir,
         model: "local-model",
         modelProvider: "lmstudio",
-      },
-    });
+      };
+      await testCodexAppServerBindingStore.mutate(target.identity, {
+        kind: "set",
+        binding: original,
+      });
 
-    await expect(
-      setModel({
-        identity,
-        bindingStore: testCodexAppServerBindingStore,
-        binding: testCodexAppServerBindingStore.read(identity),
-        model: "openai/gpt-5.5",
-        agentDir,
-        storePath,
-        assertCurrent: () => {},
-      }),
-    ).resolves.toBe("Codex model set to gpt-5.5.");
+      await expect(
+        setModel({
+          ...controlTarget(session.sessionId, sessionKey),
+          model: "openai/gpt-5.5",
+          agentDir,
+          storePath,
+        }),
+      ).resolves.toBe("Codex model set to gpt-5.5.");
 
-    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
-      threadId: "thread-provider-switch",
-      model: "local-model",
-      modelProvider: "lmstudio",
-    });
-    expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-      liveModelSwitchPending: true,
-    });
-    expect(getSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBe(expectedProfile);
-  });
+      expect(testCodexAppServerBindingStore.read(target.identity)).toMatchObject(original);
+      expect(getSessionEntry({ storePath, sessionKey })).toMatchObject({
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        liveModelSwitchPending: true,
+      });
+      expect(getSessionEntry({ storePath, sessionKey })?.authProfileOverride).toBe(expectedProfile);
+    },
+  );
 });

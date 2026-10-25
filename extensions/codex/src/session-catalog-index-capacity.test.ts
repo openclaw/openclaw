@@ -262,29 +262,7 @@ describe("native catalog metadata authority", () => {
     },
   );
 
-  it("refreshes the selected file's preview without replacing native workspace metadata", async () => {
-    const { file, thread, index, readNative } = await fixture((base) => [
-      {
-        ...base,
-        cwd: "/workspace/native",
-        preview: "Previous first request",
-        updatedAt: createdAt + 300,
-      },
-    ]);
-    await rewriteRollout(file, {
-      ...thread,
-      preview: "New first user request in the selected file",
-    });
-    await reconcileAt(index, file, createdAt + 400);
-    expect((await index.list({ searchTerm: "new first" })).sessions[0]).toMatchObject({
-      cwd: "/workspace/native",
-      updatedAt: createdAt + 300,
-      fallbackName: "New first user request in the selected file",
-    });
-    expect(readNative).toHaveBeenCalledOnce();
-  });
-
-  it("keeps native selections and fallback ordering when an old rollout is touched", async () => {
+  it("refreshes a selected rollout's preview while preserving native metadata and recency", async () => {
     const nativeMetadata = {
       cwd: "/workspace/native-selected",
       modelProvider: "native-provider",
@@ -294,9 +272,9 @@ describe("native catalog metadata authority", () => {
       createdAt: createdAt + 10,
       updatedAt: createdAt + 300,
     } satisfies Partial<CodexThread>;
-    const { file, index, readNative } = await fixture((thread) => {
+    const { file, thread, index, readNative } = await fixture((base) => {
       const native = {
-        ...thread,
+        ...base,
         ...nativeMetadata,
         gitInfo: { branch: "native-branch" },
         recencyAt: null,
@@ -310,12 +288,17 @@ describe("native catalog metadata authority", () => {
     };
     await index.reconcile();
     expect(await sessionIds(index)).toEqual(["newer-peer", "authority"]);
-
+    const preview = "New first user request in the selected file";
+    await rewriteRollout(file, { ...thread, preview });
     await reconcileAt(index, file, createdAt + 500);
     const touched = await index.list({});
     expect(touched.sessions.map((row) => row.threadId)).toEqual(["newer-peer", "authority"]);
     expect(touched.sessions[1]).toMatchObject(selected);
     expect((await index.list({ cwd: selected.cwd })).sessions).toEqual(touched.sessions);
+    expect((await index.list({ searchTerm: "new first" })).sessions[0]).toMatchObject({
+      ...selected,
+      fallbackName: preview,
+    });
 
     await reconcileAt(index, file, createdAt + 600, createdAt + 450);
     const started = await index.list({});

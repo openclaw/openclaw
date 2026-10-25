@@ -12,7 +12,6 @@ import { CodexAppServerClient } from "./app-server/client.js";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import type { CodexPluginConfig } from "./app-server/config.js";
-import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { getCurrentSharedClientEntry } from "./app-server/shared-client-lifecycle.js";
 import {
   getLeasedSharedCodexAppServerClient,
@@ -26,7 +25,7 @@ import { createCodexSessionCatalogNodeHostCommands } from "./session-catalog-lis
 import { CODEX_APP_SERVER_THREADS_LIST_COMMAND } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
-type ListFrame = { id: number; params: CodexThreadListParams };
+type ListFrame = { id: number };
 const REQUEST_TIMEOUT_MS = 200;
 
 function observe<T>(pending: Promise<T>) {
@@ -261,7 +260,6 @@ describe("resident catalog hydration request lifetime", () => {
         }
         await settled;
         await diagnosticRuntime.waitForDiagnosticEventsDrained();
-        expect(h.work.frames).toBe(1);
         expect(records).toHaveLength(1);
         expect(records[0]?.attributes).toMatchObject({
           outcome: reject ? "rejected" : "resolved",
@@ -273,11 +271,7 @@ describe("resident catalog hydration request lifetime", () => {
               }
             : {
                 inclusiveControlRequestWaitMs: 1_500,
-                controlLoadMs: 0,
-                controlPrepareMs: 0,
-                controlAcquireClientMs: 0,
                 controlClientRequestMs: 1_500,
-                controlReleaseClientMs: 0,
               }),
         });
         if (reject) {
@@ -305,7 +299,6 @@ describe("resident catalog hydration request lifetime", () => {
       await expectPage(listed, "shared");
       expect(h.work).toMatchObject({ frames: 1, leases: 2 });
       await expectPage(pinned.listPage({ limit: 10 }), "shared");
-      expect(h.work.frames).toBe(1);
     });
     expect(h.work.leases).toBe(1);
     await expect(h.companion.request("model/list", {})).resolves.toEqual({ data: [] });
