@@ -32,3 +32,9 @@ export const discordComponentRegistryState = resolveGlobalSingleton(
       state.persistentRegistryDisabled = false;
     }),
 );
+
+// Hot reload can reuse a pre-lock singleton without running the factory.
+// Upgrade it in place without replacing a lock that may already have queued work.
+if (discordComponentRegistryState.withRegistryLock === undefined) {
+  discordComponentRegistryState.withRegistryLock = createAsyncLock();
+}
