@@ -412,6 +412,54 @@ describe("X allowlist Gateway methods", () => {
     });
   });
 
+  it("manages an account whose config key is mixed case", async () => {
+    const { invoke, getConfig } = gateway(undefined, {
+      channels: {
+        x: { accounts: { Work: { userId: "101", username: "work_bot", allowFrom: [] } } },
+      },
+    });
+    expect(await invoke("x.allowlist.list")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        accountId: "work",
+        accounts: [{ accountId: "work", username: "work_bot" }],
+      }),
+    );
+    expect(
+      await invoke("x.allowlist.add", { accountId: "Work", username: "maintainer" }),
+    ).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        accountId: "work",
+        entries: [expect.objectContaining({ userId: "30", editable: true })],
+      }),
+    );
+    expect(
+      await invoke("x.allowlist.remove", { accountId: "work", userId: "30" }),
+    ).toHaveBeenCalledWith(true, expect.objectContaining({ accountId: "work", entries: [] }));
+    expect(await invoke("x.guests.set", { accountId: "Work", enabled: true })).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ guests: expect.objectContaining({ enabled: true }) }),
+    );
+    expect(getConfig().channels?.x).toEqual({
+      accounts: {
+        Work: { userId: "101", username: "work_bot", allowFrom: [], guests: { enabled: true } },
+      },
+    });
+  });
+
+  it("never writes a named account's guest mode to the channel root", async () => {
+    // Root guest settings apply to every account; an id without a config entry must fail instead.
+    const { invoke, getConfig } = gateway(undefined, {
+      channels: { x: { accounts: { "Work Bot": { userId: "101", username: "work_bot" } } } },
+    });
+    const before = structuredClone(getConfig());
+    expect(
+      await invoke("x.guests.set", { accountId: "work-bot", enabled: true }),
+    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "INVALID_REQUEST" }));
+    expect(getConfig()).toEqual(before);
+  });
+
   it("resolves handles, records the caller, merges config IDs, and removes only stored grants", async () => {
     const { invoke } = gateway();
     const added = await invoke("x.allowlist.add", {
