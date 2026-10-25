@@ -56,6 +56,9 @@ const reader: ControlUiLinkReaderDescriptor = {
   },
 };
 
+const toggle = (eventName: string, detail: unknown) =>
+  window.dispatchEvent(new CustomEvent(eventName, { detail }));
+
 function fixture() {
   const definitions = createDeferred<CustomElementConstructor>();
   const commit = createDeferred<boolean>();
@@ -110,8 +113,12 @@ function fixture() {
       detail: { url, open: true },
     });
   return {
+    close: () => toggle(LINK_READER_PANEL_TOGGLE_EVENT, { open: false }),
+    ready: () => {
+      definitions.resolve(HTMLElement);
+      commit.resolve(true);
+    },
     flush,
-    dispose,
     definitions,
     commit,
     deliverPanelEvent,
@@ -188,36 +195,31 @@ describe("plugin panel intent delivery", () => {
     "routes %s intents only to registered session panels",
     (delivery) => {
       const f = fixture();
-      const stop = f.dispose;
       const send = (panelId: string, open: boolean) =>
         new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
           detail: { pluginId: "review", panelId, sessionKey: "session-b", open },
         });
-      try {
-        const event = send("document", true);
-        if (delivery === "buffered") {
-          rememberSessionPanelToggle("plugin:review/document", event);
-          f.flush();
-        } else {
-          window.dispatchEvent(event);
-        }
-        expect(f.updateSidebarLayout).not.toHaveBeenCalled();
-        f.state.sessionKey = "session-b";
-        window.dispatchEvent(send("missing", true));
-        expect(f.updateSidebarLayout).not.toHaveBeenCalled();
-        if (delivery === "buffered") {
-          f.flush();
-        } else {
-          window.dispatchEvent(event);
-        }
-        expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
-        expect(f.pending.requests.size).toBe(0);
-        expect(f.deliverPanelEvent).not.toHaveBeenCalled();
-        window.dispatchEvent(send("document", false));
-        expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
-      } finally {
-        stop();
+      const event = send("document", true);
+      if (delivery === "buffered") {
+        rememberSessionPanelToggle("plugin:review/document", event);
+        f.flush();
+      } else {
+        window.dispatchEvent(event);
       }
+      expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+      f.state.sessionKey = "session-b";
+      window.dispatchEvent(send("missing", true));
+      expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+      if (delivery === "buffered") {
+        f.flush();
+      } else {
+        window.dispatchEvent(event);
+      }
+      expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
+      expect(f.pending.requests.size).toBe(0);
+      expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+      window.dispatchEvent(send("document", false));
+      expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
     },
   );
 });
@@ -235,14 +237,11 @@ describe("session link-reader intent delivery", () => {
       f.region.readPanelHost = () => recipient;
       const event = f.event();
       window.dispatchEvent(event);
-      f.definitions.resolve(HTMLElement);
-      f.commit.resolve(true);
+      f.ready();
       await vi.advanceTimersByTimeAsync(0);
       expect(f.deliverPanelEvent).not.toHaveBeenCalled();
       if (outcome === "closed") {
-        window.dispatchEvent(
-          new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
-        );
+        f.close();
       } else if (outcome === "session") {
         f.state.sessionKey = "session-b";
       }
@@ -289,8 +288,7 @@ describe("session link-reader intent delivery", () => {
     f.state.sessionKey = "session-b";
     const current = f.event("https://forge.example/items/2");
     window.dispatchEvent(current);
-    f.definitions.resolve(HTMLElement);
-    f.commit.resolve(true);
+    f.ready();
     await vi.waitFor(() => expect(f.deliverPanelEvent).toHaveBeenCalledTimes(1));
     expect(f.deliverPanelEvent).toHaveBeenCalledWith("link-reader", current);
     expect(f.pending.requests.size).toBe(0);
@@ -313,17 +311,14 @@ describe("session link-reader intent delivery", () => {
         await Promise.resolve();
       }
       if (change === "close") {
-        window.dispatchEvent(
-          new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
-        );
+        f.close();
         expect(f.pending.requests.size).toBe(0);
       } else if (change === "session") {
         f.state.sessionKey = "session-b";
       } else {
         f.owner.linkReaders = [];
       }
-      f.definitions.resolve(HTMLElement);
-      f.commit.resolve(true);
+      f.ready();
       await f.commit.promise;
       await Promise.resolve();
       await Promise.resolve();
@@ -345,8 +340,7 @@ describe("session link-reader intent delivery", () => {
     f.state.sidebarLayout = { columns: [] };
     f.flush();
     expect(f.pending.requests.size).toBe(0);
-    f.definitions.resolve(HTMLElement);
-    f.commit.resolve(true);
+    f.ready();
     await f.definitions.promise;
     expect(f.deliverPanelEvent).not.toHaveBeenCalled();
   });
@@ -358,13 +352,13 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   const url = "http://127.0.0.1:18789/assets/example.html";
   const gateway = createBrowserClient(async (request) => {
-    if (request.path === "/tabs" && request.query?.profile !== "managed") {
-      return { running: true, tabs: [] };
-    }
     if (request.path === "/tabs") {
       return {
         running: true,
-        tabs: [{ tabId: "t1", targetId: "target-1", title: "Local preview", url }],
+        tabs:
+          request.query?.profile !== "managed"
+            ? []
+            : [{ tabId: "t1", targetId: "target-1", title: "Local preview", url }],
       };
     }
     if (request.path === "/screenshot") {
@@ -408,20 +402,6 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   });
   onTestFinished(dispose);
 
-  function BrowserCard(props: { sessionKey: string; presented: boolean; refresh: boolean }) {
-    return (
-      <openclaw-browser-panel
-        ref={(element) => (browserPanel = element)}
-        data-sidebar-panel-host
-        prop:embedded={true}
-        prop:available={true}
-        prop:client={gateway.client}
-        prop:sessionKey={props.sessionKey}
-        prop:presented={props.presented}
-        prop:refreshOnPresentation={props.refresh}
-      />
-    );
-  }
   const conversation = document.createElement("main");
   conversation.textContent = "Conversation";
   const [snapshot, setSnapshot] = createSignal({
@@ -444,10 +424,15 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
           if (definition.available) {
             Object.defineProperty(definition, "panelHost", { get: () => browserPanel });
             definition.content = (
-              <BrowserCard
-                sessionKey={snapshot().sessionKey}
-                presented={isSidebarSlotVisible(snapshot().layout, "browser")}
-                refresh={snapshot().refresh}
+              <openclaw-browser-panel
+                ref={(element) => (browserPanel = element)}
+                data-sidebar-panel-host
+                prop:embedded={true}
+                prop:available={true}
+                prop:client={gateway.client}
+                prop:sessionKey={snapshot().sessionKey}
+                prop:presented={isSidebarSlotVisible(snapshot().layout, "browser")}
+                prop:refreshOnPresentation={snapshot().refresh}
               />
             );
           }
@@ -488,14 +473,10 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   document.body.append(pane);
   try {
     draw();
-    window.dispatchEvent(
-      new CustomEvent("openclaw:browser-toggle", {
-        detail: {
-          open: true,
-          browserTab: { target: "host", profile: "managed", targetId: "target-1" },
-        },
-      }),
-    );
+    toggle(BROWSER_PANEL_TOGGLE_EVENT, {
+      open: true,
+      browserTab: { target: "host", profile: "managed", targetId: "target-1" },
+    });
     await vi.advanceTimersByTimeAsync(0);
     expect(pane.querySelector("openclaw-browser-panel")).toBeNull();
     commit.resolve();

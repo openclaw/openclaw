@@ -56,7 +56,6 @@ function fixture() {
     client,
     sessionKey: "agent:main:one",
   });
-  // These events only read gateway state; new-session delivery is observed at its existing owner.
   const agentSelection = { intentRevision: 0 };
   const context = { gateway: gateway.gateway, agentSelection } as ApplicationContext;
   const state: ChatPaneMcpAppOwner["state"] & { settings: undefined } = {
@@ -106,14 +105,14 @@ function fixture() {
       entrypoint: { type: "thread" },
     },
   };
-  const dispatch = <T>(name: string, detail: T) => {
+  const dispatch = <T>(name: string, detail: T, target = element) => {
     const event = new CustomEvent(name, {
       detail,
       bubbles: true,
       composed: true,
-      cancelable: true,
+      cancelable: target === element,
     });
-    element.dispatchEvent(event);
+    target.dispatchEvent(event);
     return event;
   };
   return {
@@ -128,6 +127,25 @@ function fixture() {
     cleanup,
     launch,
     dispatch,
+    claim: <T>(name: string, detail: T) => dispatch(name, detail).defaultPrevented,
+    abortHost: (sessionKey = state.sessionKey, assistantAgentId?: string) => {
+      const host = Object.assign(makeChatHost({ client, sessionKey, assistantAgentId }), {
+        handleSendChat: state.handleSendChat,
+        handleOpenSidebar: state.handleOpenSidebar,
+        sidebarContent: state.sidebarContent,
+      });
+      owner.state = host;
+      return host;
+    },
+    newConversation: (route = "one") => {
+      const create = vi.fn(async () => null);
+      Object.assign(context, {
+        router: { getState: () => ({ location: `/chat/${route}` }) },
+        sessions: { createResult: create },
+        config: {},
+      });
+      return create;
+    },
     setCurrent: (next: ChatPaneMcpAppOwner | null) => {
       current = next;
     },
@@ -154,19 +172,17 @@ describe("MCP app pane actions", () => {
   it("claims only the presented matching owner and retains per-launch synchronization", () => {
     const f = fixture();
     f.owner.presented = false;
-    expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(false);
+    expect(f.claim(MCP_APP_OPEN_EVENT, f.launch)).toBe(false);
     f.owner.presented = true;
+    expect(f.claim(MCP_APP_OPEN_EVENT, { ...f.launch, sessionKey: "other" })).toBe(false);
     expect(
-      f.dispatch(MCP_APP_OPEN_EVENT, { ...f.launch, sessionKey: "other" }).defaultPrevented,
-    ).toBe(false);
-    expect(
-      f.dispatch(MCP_APP_OPEN_EVENT, {
+      f.claim(MCP_APP_OPEN_EVENT, {
         ...f.launch,
         owner: createTestGatewayClient(async () => ({})),
-      }).defaultPrevented,
+      }),
     ).toBe(false);
     expect(f.state.handleOpenSidebar).not.toHaveBeenCalled();
-    expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(true);
+    expect(f.claim(MCP_APP_OPEN_EVENT, f.launch)).toBe(true);
     expect(f.state.handleOpenSidebar).toHaveBeenLastCalledWith(
       expect.objectContaining({
         launch: f.launch,
@@ -195,16 +211,10 @@ describe("MCP app pane actions", () => {
       options?.onOutboxAdmitted?.();
       return pending.promise;
     });
-    expect(f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail).defaultPrevented).toBe(true);
+    expect(f.claim(MCP_APP_MESSAGE_EVENT, sent.detail)).toBe(true);
     expect(sent.respond).not.toHaveBeenCalled();
-    expect(f.state.handleSendChat).toHaveBeenCalledWith(
-      "Compare parts",
-      expect.objectContaining({
-        attachmentsOverride: expect.arrayContaining([
-          expect.objectContaining({ fileName: "Part measurements" }),
-        ]),
-      }),
-    );
+    expect(attachments).toEqual([expect.objectContaining({ fileName: "Part measurements" })]);
+    expect(vi.mocked(f.state.handleSendChat).mock.calls[0]?.[0]).toBe("Compare parts");
     f.setCurrent(null);
     f.cleanup();
     pending.resolve();
@@ -245,12 +255,7 @@ describe("MCP app pane actions", () => {
 
   it("cancels a new-conversation admission wait when the source pane receives Stop", async () => {
     const f = fixture();
-    const host = Object.assign(makeChatHost({ client: f.client, sessionKey: f.state.sessionKey }), {
-      handleSendChat: f.state.handleSendChat,
-      handleOpenSidebar: f.state.handleOpenSidebar,
-      sidebarContent: f.state.sidebarContent,
-    });
-    f.owner.state = host;
+    const host = f.abortHost();
     const sent = message(host.sessionKey, "new");
     let signal: AbortSignal | undefined;
     vi.spyOn(appMessages, "sendMcpAppNewConversation").mockImplementation(
@@ -291,7 +296,6 @@ describe("MCP app pane actions", () => {
       return pending.request(
         {
           send(raw) {
-            // The real request owner serializes this transport frame.
             const frame = JSON.parse(raw) as RequestFrame;
             frames.push(frame);
             dispatched.resolve(frame);
@@ -310,12 +314,7 @@ describe("MCP app pane actions", () => {
       config: {},
     });
     const navigate = vi.spyOn(StartedSessionNavigation.prototype, "navigate").mockResolvedValue();
-    const host = Object.assign(makeChatHost({ client: f.client, sessionKey: f.state.sessionKey }), {
-      handleSendChat: f.state.handleSendChat,
-      handleOpenSidebar: f.state.handleOpenSidebar,
-      sidebarContent: f.state.sidebarContent,
-    });
-    f.owner.state = host;
+    const host = f.abortHost();
     const sent = message(host.sessionKey, "new");
     sent.detail.content = [{ type: "text", text: "Start a conversation" }];
     f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
@@ -342,19 +341,8 @@ describe("MCP app pane actions", () => {
     "does not create a conversation after %s while its handler loads",
     async (interruption) => {
       const f = fixture();
-      const host = Object.assign(makeChatHost({ client: f.client, sessionKey: "global" }), {
-        assistantAgentId: "main",
-        handleSendChat: f.state.handleSendChat,
-        handleOpenSidebar: f.state.handleOpenSidebar,
-        sidebarContent: f.state.sidebarContent,
-      });
-      f.owner.state = host;
-      const create = vi.fn(async () => null);
-      Object.assign(f.context, {
-        router: { getState: () => ({ location: "/chat/global" }) },
-        sessions: { createResult: create },
-        config: {},
-      });
+      const host = f.abortHost("global", "main");
+      const create = f.newConversation("global");
       const sent = message("global", "new");
       sent.detail.content = [{ type: "text", text: "Start a conversation" }];
       f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
@@ -374,12 +362,7 @@ describe("MCP app pane actions", () => {
 
   it("continues a claimed new-conversation request when its pane parks during loading", async () => {
     const f = fixture();
-    const create = vi.fn(async () => null);
-    Object.assign(f.context, {
-      router: { getState: () => ({ location: "/chat/one" }) },
-      sessions: { createResult: create },
-      config: {},
-    });
+    const create = f.newConversation();
     const sent = message(f.state.sessionKey, "new");
     sent.detail.content = [{ type: "text", text: "Start a conversation" }];
     f.dispatch(MCP_APP_MESSAGE_EVENT, sent.detail);
@@ -397,23 +380,23 @@ describe("MCP app pane actions", () => {
       title: "Hex/bolt",
     };
     expect(
-      f.dispatch(MCP_APP_RESOURCE_MENTION_EVENT, {
+      f.claim(MCP_APP_RESOURCE_MENTION_EVENT, {
         sessionKey: f.state.sessionKey,
         serverName: "parts",
         agentId: "main",
         resource,
-      }).defaultPrevented,
+      }),
     ).toBe(true);
     expect(f.state.chatAttachments[0]).toMatchObject({ fileName: "Hex-bolt.txt", origin: "file" });
     const respond = vi.fn();
     expect(
-      f.dispatch(MCP_APP_FILE_OPEN_EVENT, {
+      f.claim(MCP_APP_FILE_OPEN_EVENT, {
         sessionKey: f.state.sessionKey,
         viewId: "view-one",
         path: "parts/bolt.stl",
         name: "bolt.stl",
         respond,
-      }).defaultPrevented,
+      }),
     ).toBe(true);
     expect(f.owner.openFile).toHaveBeenCalledWith("parts/bolt.stl");
     expect(respond).toHaveBeenCalledWith(true);
@@ -421,16 +404,14 @@ describe("MCP app pane actions", () => {
     const view = document.createElement("mcp-app-view");
     view.title = "Parts tray";
     f.element.append(view);
-    view.dispatchEvent(
-      new CustomEvent(MCP_APP_CONTEXT_EVENT, {
-        bubbles: true,
-        composed: true,
-        detail: {
-          sessionKey: f.state.sessionKey,
-          viewId: "view-one",
-          state: { updateId: "revision", content: [{ type: "text", text: "Selected bolt" }] },
-        },
-      }),
+    f.dispatch(
+      MCP_APP_CONTEXT_EVENT,
+      {
+        sessionKey: f.state.sessionKey,
+        viewId: "view-one",
+        state: { updateId: "revision", content: [{ type: "text", text: "Selected bolt" }] },
+      },
+      view,
     );
     expect(readMcpAppContexts(f.client, f.state.sessionKey, "main")).toMatchObject([
       { title: "Parts tray", viewId: "view-one", state: { updateId: "revision" } },
@@ -440,7 +421,7 @@ describe("MCP app pane actions", () => {
   it("retires pane listeners with their owner and reads the current owner after remount", () => {
     const f = fixture();
     f.cleanup();
-    expect(f.dispatch(MCP_APP_OPEN_EVENT, f.launch).defaultPrevented).toBe(false);
+    expect(f.claim(MCP_APP_OPEN_EVENT, f.launch)).toBe(false);
     f.dispatch(WIDGET_PROMPT_EVENT, { text: "not delivered" });
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
     const next = { ...f.owner, state: { ...f.state, handleSendChat: vi.fn(async () => {}) } };
