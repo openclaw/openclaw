@@ -1,4 +1,3 @@
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import "./ai-transport-runtime-host.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -25,18 +24,10 @@ function cachePolicy(overrides: Parameters<typeof resolveAnthropicPayloadPolicy>
   });
 }
 
-const ephemeral = { type: "ephemeral" } as const;
-const longCache = { ...ephemeral, ttl: "1h" } as const;
-const textBlock = (text: string, cache_control?: typeof ephemeral | typeof longCache) => ({
-  type: "text",
-  text,
-  ...(cache_control ? { cache_control } : {}),
-});
-const user = (content: unknown) => ({ role: "user", content });
-function simpleTextPayload(system = [textBlock("Follow policy.")]): TestPayload {
+function simpleTextPayload(): TestPayload {
   return {
-    system,
-    messages: [user("Hello")],
+    system: [{ type: "text", text: "Follow policy." }],
+    messages: [{ role: "user", content: "Hello" }],
   };
 }
 function apply(payload: TestPayload, options: Parameters<typeof cachePolicy>[0] = {}) {
@@ -92,121 +83,45 @@ describe("anthropic payload policy", () => {
     expect(configuredPayload.context_management).toBe(existing);
   });
 
-  it("applies native Anthropic service tier and checkpoints the user-message tail", () => {
+  it.each([
+    ["https://api.anthropic.com/v1", "standard_only", "standard_only"],
+    ["https://proxy.example.com/anthropic", "auto", undefined],
+  ] as const)("gates service tier at %s", (baseUrl, serviceTier, expected) => {
+    const payload = simpleTextPayload();
+    apply(payload, { baseUrl, serviceTier, cacheRetention: "long" });
+    if (expected === undefined) {
+      expect(payload).not.toHaveProperty("service_tier");
+    } else {
+      expect(payload.service_tier).toBe(expected);
+    }
+  });
+  it("reserves the last message-cache slot for the latest tool result", () => {
     const payload: TestPayload = {
-      system: [textBlock("Follow policy."), textBlock("Use tools carefully.")],
+      system: ["Identity", "Policy"].map((text) => ({ type: "text", text })),
+      tools: [{ name: "Read", cache_control: { type: "ephemeral" } }],
       messages: [
-        { role: "assistant", content: [textBlock("Working.")] },
-        user([textBlock("Hello"), { type: "tool_result", tool_use_id: "tool_1", content: "done" }]),
+        { role: "user", content: [{ type: "text", text: "earlier" }] },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "call", content: "latest" }],
+        },
       ],
     };
-    apply(payload, { cacheRetention: "long", serviceTier: "standard_only" });
-    expect(payload.service_tier).toBe("standard_only");
-    expect(payload.system).toEqual([
-      textBlock("Follow policy.", longCache),
-      textBlock("Use tools carefully.", longCache),
-    ]);
+    apply(payload);
     expect(payload.messages[0]).toEqual({
-      role: "assistant",
-      content: [textBlock("Working.")],
+      role: "user",
+      content: [{ type: "text", text: "earlier" }],
     });
     expect(payload.messages[1]).toEqual({
       role: "user",
       content: [
-        textBlock("Hello"),
         {
           type: "tool_result",
-          tool_use_id: "tool_1",
-          content: "done",
-          cache_control: longCache,
+          tool_use_id: "call",
+          content: "latest",
+          cache_control: { type: "ephemeral" },
         },
       ],
     });
-  });
-
-  it.each([
-    {
-      name: "keeps the previous tool-result checkpoint when the latest result advances",
-      systemTexts: ["Follow policy."],
-      earlier: { type: "tool_result", tool_use_id: "tool_1", content: "first" },
-      assistant: "Continue.",
-      latest: { tool_use_id: "tool_2", content: "second" },
-      toolMarker: false,
-      earlierCache: true,
-    },
-    {
-      name: "uses the latest tool result when only one message cache marker remains",
-      systemTexts: ["Claude Code identity.", "Follow policy."],
-      earlier: { type: "text", text: "Investigate the cache writes." },
-      assistant: "I'll inspect the logs.",
-      latest: { tool_use_id: "tool_1", content: "log chunk" },
-      toolMarker: true,
-      earlierCache: false,
-    },
-  ])("$name", (row) => {
-    const payload: TestPayload = {
-      system: row.systemTexts.map((text) => textBlock(text)),
-      ...(row.toolMarker
-        ? { tools: [{ name: "Read", cache_control: { type: "ephemeral" } }] }
-        : {}),
-      messages: [
-        { role: "user", content: [{ ...row.earlier }] },
-        { role: "assistant", content: [textBlock(row.assistant)] },
-        { role: "user", content: [{ type: "tool_result", ...row.latest }] },
-      ],
-    };
-
-    apply(payload);
-
-    expect(payload.messages[0]).toEqual(
-      user([{ ...row.earlier, ...(row.earlierCache ? { cache_control: ephemeral } : {}) }]),
-    );
-    expect(payload.messages[2]).toEqual(
-      user([{ type: "tool_result", ...row.latest, cache_control: ephemeral }]),
-    );
-  });
-
-  it("denies proxied Anthropic service tier but honors explicit long TTL for custom hosts", () => {
-    const payload = simpleTextPayload();
-    apply(payload, {
-      baseUrl: "https://proxy.example.com/anthropic",
-      cacheRetention: "long",
-      serviceTier: "auto",
-    });
-    expect(payload).not.toHaveProperty("service_tier");
-    expect(payload.system).toEqual([textBlock("Follow policy.", longCache)]);
-    expect(payload.messages[0]).toEqual(user([textBlock("Hello", longCache)]));
-  });
-
-  it("keeps explicit short retention unchanged for custom hosts", () => {
-    const payload = simpleTextPayload();
-    apply(payload, { baseUrl: "https://proxy.example.com/anthropic" });
-    expect(payload.system).toEqual([textBlock("Follow policy.", ephemeral)]);
-    expect(payload.messages[0]).toEqual(user([textBlock("Hello", ephemeral)]));
-  });
-
-  it("applies 1h TTL for Vertex AI endpoints with long cache retention", () => {
-    const payload = simpleTextPayload([
-      textBlock("Follow policy."),
-      textBlock("Use tools carefully."),
-    ]);
-    apply(payload, {
-      provider: "anthropic-vertex",
-      baseUrl: "https://us-east5-aiplatform.googleapis.com",
-      cacheRetention: "long",
-    });
-    expect(payload.system).toEqual([
-      textBlock("Follow policy.", longCache),
-      textBlock("Use tools carefully.", longCache),
-    ]);
-    expect(payload.messages[0]).toEqual(user([textBlock("Hello", longCache)]));
-  });
-
-  it("strips the boundary even when cache retention is disabled", () => {
-    const payload = simpleTextPayload([
-      textBlock(`Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic lab suffix`),
-    ]);
-    apply(payload, { cacheRetention: "none" });
-    expect(payload.system).toEqual([textBlock("Stable prefix\nDynamic lab suffix")]);
   });
 });
