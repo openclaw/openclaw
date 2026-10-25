@@ -251,7 +251,9 @@ export class SystemAgentChatEngine {
 
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
     const completed = this.wizard.decorateReply(reply);
-    this.history.push({ role: "user", text: userHistoryText });
+    if (!reply.policyBlocked) {
+      this.history.push({ role: "user", text: userHistoryText });
+    }
     if (completed.text) {
       this.history.push({ role: "assistant", text: completed.text });
     }
@@ -550,6 +552,10 @@ export class SystemAgentChatEngine {
         : await runTurn();
     if (!loopReply?.text) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
+    }
+    if (loopReply.policyBlocked) {
+      await this.requireVerifiedInference();
+      return { text: loopReply.text, action: "none", policyBlocked: true };
     }
     this.proposalResolution = undefined;
     if (loopReply.directive) {
