@@ -138,7 +138,7 @@ function dispatchBinding(channel: keyof typeof conversations, onMatched: () => v
         }),
         onMatched,
       });
-    case "slack":
+    default:
       return slackInteractiveDispatcher({
         ...interactionParams(channel, "codex:bind", "slack-bind", {
           kind: "button",

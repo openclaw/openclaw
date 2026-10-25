@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
+// mock-isolation: Control authentication outcomes while testing request-authority handoff.
 vi.mock("./auth.js", () => ({ authorizeHttpGatewayConnect: vi.fn() }));
 
 const defaultConfig = vi.hoisted(() => ({
