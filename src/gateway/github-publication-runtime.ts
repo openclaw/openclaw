@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import {
   listRepositoryGitHubPublicationsAsync,
   listSharedGitHubPublicationsAsync,
@@ -23,6 +24,10 @@ export function createGitHubPublicationRuntime(params: {
 }) {
   const context = captureOpenClawStateWorkerContext();
   const scope = createGitHubPublicationWorkerScope(context);
+  const recovery = {
+    shared: createGitHubPublicationRecoveryBackoff(),
+    repository: createGitHubPublicationRecoveryBackoff(),
+  };
   const pendingRequests = new Set<string>();
   let pendingKnown = false;
   let reconcileNeeded = true;
@@ -94,6 +99,7 @@ export function createGitHubPublicationRuntime(params: {
   };
   const coordinator = createGitHubPublicationCoordinator({
     ...params,
+    recovery,
     assertCurrent: scope.assertCurrent,
     signal: scope.signal,
   });
@@ -166,6 +172,8 @@ export function createGitHubPublicationRuntime(params: {
         return;
       }
       if (!reconcileNeeded && pendingRequests.size === 0) {
+        recovery.shared.clear();
+        recovery.repository.clear();
         return;
       }
       reconcileNeeded = false;
@@ -204,6 +212,8 @@ export function createGitHubPublicationRuntime(params: {
     ready,
     close: () => {
       stopFacts();
+      recovery.shared.clear();
+      recovery.repository.clear();
       return scope.close();
     },
     coordinator,
