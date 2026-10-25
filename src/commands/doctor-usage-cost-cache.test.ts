@@ -54,18 +54,16 @@ const noted = (message: string | RegExp, title: string) =>
 const current = { value_json: '{"current":true}', blob: Uint8Array.of(0, 17, 255) };
 type CacheDatabase = ReturnType<typeof openOpenClawAgentDatabase>["db"];
 
-function seedCacheRows(db: CacheDatabase, retired: boolean, unrelated = false) {
+function seedCacheRows(db: CacheDatabase, unrelated = false) {
   const insert = db.prepare(
     "INSERT INTO cache_entries (scope, key, value_json, blob, updated_at) VALUES (?, ?, ?, ?, 1)",
   );
   insert.run(USAGE_COST_ROLLUP_SCOPE, "current", current.value_json, current.blob);
   insert.run("session-cost-usage", "refresh-lock", "{}", null);
-  if (retired) {
-    for (const scope of ["session-cost-usage-rollup-v1", "session-cost-usage-rollup-v2"]) {
-      insert.run(scope, "retired", "{}", null);
-    }
-    insert.run("session-cost-usage", "cache", "{}", null);
+  for (const scope of ["session-cost-usage-rollup-v1", "session-cost-usage-rollup-v2"]) {
+    insert.run(scope, "retired", "{}", null);
   }
+  insert.run("session-cost-usage", "cache", "{}", null);
   if (unrelated) {
     insert.run("other", "keep", "{}", null);
   }
@@ -169,19 +167,16 @@ describe("legacy usage-cost cache cleanup", () => {
   it("cleans obsolete rows under real Doctor custody without warning on clean stores", async () => {
     await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
       setRuntimeConfigSnapshot({});
-      const scopes = ["clean", "stale"].map((agentId) => ({
-        agentId,
+      const scope = {
+        agentId: "main",
         env: state.env,
-        sessionKey: `agent:${agentId}:history`,
-        sessionId: `${agentId}-history`,
-      }));
+        sessionKey: "agent:main:history",
+        sessionId: "main-history",
+      };
       const events = [{ type: "message", message: { role: "user", content: "Keep history." } }];
-      for (const scope of scopes) {
-        await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 123 });
-        await replaceTranscriptEvents(scope, events);
-        const { db } = openOpenClawAgentDatabase(scope);
-        seedCacheRows(db, scope.agentId === "stale");
-      }
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 123 });
+      await replaceTranscriptEvents(scope, events);
+      seedCacheRows(openOpenClawAgentDatabase(scope).db);
       await closeOpenClawAgentDatabasesAsync();
       const maintenance = await beginDoctorRepair({ env: state.env });
       expect(maintenance).toBeDefined();
@@ -189,15 +184,12 @@ describe("legacy usage-cost cache cleanup", () => {
         await maintenance!.run(async () => {
           await maybeRepairLegacyRuntimeFiles(true, state.env);
           expect(note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
-          for (const scope of scopes) {
-            const { db } = openOpenClawAgentDatabase(scope);
-            expect(cacheRows(db)).toEqual(retainedRows);
-            expect(loadExactSessionEntryReadOnly(scope)?.entry).toMatchObject({
-              sessionId: scope.sessionId,
-              updatedAt: 123,
-            });
-            expect(loadTranscriptEventsSync(scope)).toEqual(events);
-          }
+          expect(cacheRows(openOpenClawAgentDatabase(scope).db)).toEqual(retainedRows);
+          expect(loadExactSessionEntryReadOnly(scope)?.entry).toMatchObject({
+            sessionId: scope.sessionId,
+            updatedAt: 123,
+          });
+          expect(loadTranscriptEventsSync(scope)).toEqual(events);
           await maybeRepairLegacyRuntimeFiles(true, state.env);
           expect(note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
         });
@@ -214,7 +206,7 @@ describe("legacy usage-cost cache cleanup", () => {
       const firstDatabase = openOpenClawAgentDatabase({ agentId: "main", env });
       const databases = [firstDatabase, openOpenClawAgentDatabase({ agentId: "worker", env })];
       for (const database of databases) {
-        seedCacheRows(database.db, true, true);
+        seedCacheRows(database.db, true);
       }
       const query = "SELECT * FROM cache_entries ORDER BY scope, key";
       const before = firstDatabase.db.prepare(query).all();

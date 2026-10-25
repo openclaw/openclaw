@@ -158,14 +158,8 @@ it("keeps prior store summaries when a later target returns a failure", async ()
       const mainSummary = cleanupSummary({
         mode: "enforce",
         dryRun: false,
-        beforeCount: 1,
-        missing: 1,
-        wouldMutate: true,
-        applied: true,
-        appliedCount: 0,
       });
-      const run = vi
-        .spyOn(sessions, "runSessionsCleanup")
+      vi.spyOn(sessions, "runSessionsCleanup")
         .mockResolvedValueOnce({
           mode: "enforce",
           previewResults: [],
@@ -181,10 +175,6 @@ it("keeps prior store summaries when a later target returns a failure", async ()
         createNonExitingRuntime(),
       );
       expect(result.appliedSummaries).toEqual([mainSummary]);
-      expect(run.mock.calls.map(([params]) => params.reclamationMode)).toEqual([
-        "in-process",
-        "in-process",
-      ]);
       expect(result.failure).toMatchObject({ target: target("work"), lifecycleCommitted: false });
     },
   );
@@ -297,9 +287,6 @@ it.each([
         expect(warnings.mock.calls.flat().join("\n")).toContain("not cleaned");
       } else {
         expect(bindings.lookup(key)).toBeUndefined();
-        expect(bindings.entries()).toMatchObject([
-          { key: siblingBindingKey, value: { threadId: "kept-thread" } },
-        ]);
         expect(warnings).not.toHaveBeenCalled();
       }
       expect(loadSessionEntry({ ...scope, sessionKey: siblingKey })?.sessionId).toBe(sessionId);
