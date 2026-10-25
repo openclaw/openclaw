@@ -21,7 +21,7 @@ async function importChatLiveEvents(): Promise<LiveEvents> {
   return { handleChatLiveEvent };
 }
 
-export function loadChatLiveEvents(): Promise<LiveEvents> {
+function loadChatLiveEvents(): Promise<LiveEvents> {
   return (loading ??= importChatLiveEvents().then(
     (loaded) => (runtime = loaded),
     (error: unknown) => {
