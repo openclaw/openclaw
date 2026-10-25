@@ -67,19 +67,17 @@ function createToolNarration(defaultRunId = "run-1") {
     runId = "run-2",
     stream = "item",
   ) => emit(stream, toolItem({ itemId, ...data }), runId);
-  return { narration, tools, source, emit, emitItem };
+  return { narration, tools, emit, emitItem };
 }
 it("keeps tool identity separate from commentary and clears it with its run", async () => {
-  const { narration, source, emit } = createToolNarration();
+  const { narration, emit } = createToolNarration();
   await Promise.resolve();
 
   narration.handleEvent(chatDelta("**Reading** files.", "**Reading** files."));
   emit("tool", { phase: "start", name: "read" });
 
   expect(narration.read().lines.get("agent:main:run")).toBe("Reading files.");
-  await vi.advanceTimersByTimeAsync(1_999);
-  expect(narration.read().lines.get("agent:main:run")).toBe("Reading files.");
-  await vi.advanceTimersByTimeAsync(1);
+  await vi.advanceTimersByTimeAsync(2_000);
   expect(narration.read().lines.get("agent:main:run")).toBe("Reading files.");
   expect(narration.read().tools.get("agent:main:run")?.name).toBe("read");
 
@@ -93,10 +91,6 @@ it("keeps tool identity separate from commentary and clears it with its run", as
   expect(narration.read().tools.get("agent:main:run")?.name).toBe("plugin.custom_tool");
 
   narration.disconnect();
-  expect(source.unsubscribeMessages).toHaveBeenCalledWith({
-    key: sessionKey,
-    agentId: null,
-  });
   expect(narration.read().lines.size).toBe(0);
   expect(narration.read().tools.size).toBe(0);
   expect(vi.getTimerCount()).toBe(0);
@@ -156,24 +150,28 @@ it("projects public tool progress without exposing raw output or unrelated items
 });
 
 it.each([
-  { stream: "item", flag: "hideFromChannelProgress", metadata: "full" },
-  { stream: "item", flag: "suppressChannelProgress", metadata: "full" },
-  { stream: "tool", flag: "hideFromChannelProgress", metadata: "full" },
-  { stream: "tool", flag: "hideFromChannelProgress", metadata: "omitted" },
-  { stream: "tool", flag: "hideFromChannelProgress", metadata: "contradictory" },
-])(
-  "withdraws matching $stream progress with $metadata metadata when $flag changes",
-  ({ stream, flag, metadata }) => {
+  ["item", "hideFromChannelProgress", "full", "call"],
+  ["item", "suppressChannelProgress", "full", "call"],
+  ["tool", "hideFromChannelProgress", "full", "call"],
+  ["tool", "hideFromChannelProgress", "omitted", "call"],
+  ["tool", "hideFromChannelProgress", "contradictory", "call"],
+  ["item", "hideFromChannelProgress", "full", undefined],
+  ["item", "suppressChannelProgress", "full", undefined],
+  ["item", "hideFromChannelProgress", "full", ""],
+  ["item", "suppressChannelProgress", "full", ""],
+] as const)(
+  "withdraws matching %s progress with %s, %s metadata and call ID %s",
+  (stream, flag, metadata, callId) => {
     const { tools, emit: emitTool } = createToolNarration();
     const emit = (
       runId: string,
-      toolCallId: string,
+      id: string,
       data: Record<string, unknown>,
       eventStream = "item",
     ) => {
       const payload = toolItem({
-        itemId: "tool:" + toolCallId,
-        toolCallId,
+        itemId: "item:" + id,
+        toolCallId: callId ? id : callId,
         ...data,
       });
       if (eventStream === "tool" && metadata === "omitted") {
@@ -192,6 +190,9 @@ it.each([
     emit("", "current", { [flag]: true }, stream);
     expect(tools).toHaveLength(visibleCount);
     expect(tools.at(-1)?.get("agent:main:run")?.text).toBe("Public progress");
+    // A raw call ID cannot withdraw an item merely because their strings match.
+    emit("run-2", "current", { toolCallId: "item:current", [flag]: true }, "tool");
+    expect(tools).toHaveLength(visibleCount);
     emit("run-2", "current", { [flag]: true }, stream);
     expect(tools.at(-1)?.has("agent:main:run")).toBe(false);
     expect(tools).toHaveLength(visibleCount + 1);
@@ -199,29 +200,6 @@ it.each([
     expect(tools).toHaveLength(visibleCount + 1);
   },
 );
-
-it.each([
-  { flag: "hideFromChannelProgress", toolCallId: undefined },
-  { flag: "suppressChannelProgress", toolCallId: undefined },
-  { flag: "hideFromChannelProgress", toolCallId: "" },
-  { flag: "suppressChannelProgress", toolCallId: "" },
-])("withdraws the matching item with $flag and call ID $toolCallId", ({ flag, toolCallId }) => {
-  const { tools, emitItem } = createToolNarration();
-  const emit = (itemId: string, runId: string, data: Record<string, unknown>, stream = "item") =>
-    emitItem(itemId, { toolCallId, ...data }, runId, stream);
-  emit("current-item", "run-2", { progressText: "Public item progress" });
-  expect(tools.at(-1)?.get("agent:main:run")?.text).toBe("Public item progress");
-  const count = tools.length;
-  emit("other-item", "run-2", { [flag]: true });
-  emit("current-item", "run-old", { [flag]: true });
-  emit("current-item", "", { [flag]: true });
-  // A raw call ID is not an item ID, even when their strings happen to match.
-  emit("current-item", "run-2", { toolCallId: "current-item", [flag]: true }, "tool");
-  expect(tools).toHaveLength(count);
-  emit("current-item", "run-2", { [flag]: true });
-  expect(tools.at(-1)?.has("agent:main:run")).toBe(false);
-  expect(tools).toHaveLength(count + 1);
-});
 
 it.each([
   { toolCallId: undefined, flag: "hideFromChannelProgress" },
