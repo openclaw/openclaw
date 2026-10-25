@@ -78,6 +78,7 @@ export function retainUpdateRuntimeImports(
   // CLI resource disposal runs after the update command returns. Keep this
   // process on its original generation through teardown; new code runs in children.
   if (process.versions.bun) {
+    // SAFETY: Bun exposes these documented APIs whenever process.versions.bun is set.
     const bun = (globalThis as typeof globalThis & { Bun: RetainedBunRuntime }).Bun;
     const require = Module.createRequire(import.meta.url);
     // Bun returns relative-import query suffixes in its resolved file path.
