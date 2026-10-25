@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runActivePluginPayloadSmokeCheck } from "./active-payload-verification.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
+import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { convergePluginReleaseCohort } from "./update-cohort.js";
 import {
@@ -28,12 +30,6 @@ async function withCohort(
   });
 }
 
-const emptyPayloadCheck = { checked: [], failures: [] };
-const emptyModule = "module.exports = {};\n";
-function expectUnchangedModule(directory: string, entry = "index") {
-  expect(fs.readFileSync(path.join(directory, `${entry}.js`), "utf8")).toBe(emptyModule);
-}
-
 async function withUnavailableRegistry(
   root: string,
   check: (env: NodeJS.ProcessEnv, requests: () => number) => Promise<void>,
@@ -53,82 +49,148 @@ describe("plugin release cohort real synchronization", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it.each([
-    ["stable", "path", ["index"]],
-    ["dev", "npm", ["index"]],
-    ["dev", "none", ["index"]],
-    ["stable", "npm", ["one", "two"]],
-  ] as const)("preserves explicit %s/%s ownership for %j", async (channel, source, entries) => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-cohort-linked-"));
-    const multiple = entries.length > 1;
-    const trackedPath = path.join(root, multiple ? "managed-task" : "bundled/llm-task");
-    const linkedPath = path.join(root, "linked-task");
-    for (const directory of [trackedPath, linkedPath]) {
-      writePackage(directory, "llm-task", { entries: [...entries] });
-    }
-    const record: PluginInstallRecord = {
-      source: source === "none" ? "npm" : source,
-      spec: "@example/llm-task",
-      ...(multiple ? {} : { sourcePath: linkedPath }),
-      installPath:
-        source === "npm" && channel === "dev"
-          ? path.join(root, "missing-shadowed-package")
-          : trackedPath,
-    };
-    const records = source === "none" ? {} : { "llm-task": record };
-    const config = cohortConfig(records, {
-      load: { paths: [linkedPath] },
-      ...(multiple ? {} : { entries: { "llm-task": { enabled: true } } }),
-    });
-    const ids = entries.map((entry) => (multiple ? `llm-task/${entry}` : "llm-task"));
-    await withUnavailableRegistry(root, async (env, requests) => {
+    { channel: "stable", explicit: true, source: "path" },
+    { channel: "dev", explicit: true, source: "path" },
+    { channel: "dev", explicit: false, source: "path" },
+    { channel: "stable", explicit: true, source: "npm" },
+    { channel: "dev", explicit: true, source: "npm" },
+    { channel: "stable", explicit: true, source: "none" },
+    { channel: "dev", explicit: true, source: "none" },
+  ] as const)(
+    "preserves package ownership boundaries for $source on $channel (explicit link: $explicit)",
+    async ({ channel, explicit, source }) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-cohort-linked-"));
+      const bundledRoot = path.join(root, "bundled");
+      const bundledPath = path.join(bundledRoot, "llm-task");
+      const linkedPath = path.join(root, "linked-task");
+      for (const directory of [bundledPath, linkedPath]) {
+        writePackage(directory, "llm-task");
+      }
+      const record: PluginInstallRecord = {
+        source: source === "none" ? "npm" : source,
+        spec: "@example/llm-task",
+        sourcePath: linkedPath,
+        // Retained package metadata disagrees with the explicitly selected source.
+        installPath:
+          source === "npm" && channel === "dev"
+            ? path.join(root, "missing-shadowed-package")
+            : bundledPath,
+      };
+      const config: OpenClawConfig = {
+        plugins: {
+          installs: source === "none" ? {} : { "llm-task": record },
+          load: { paths: explicit ? [linkedPath] : [] },
+          entries: { "llm-task": { enabled: true } },
+        },
+      };
+      const env = fixtureEnv(root);
       await withCohort(
         { config, channel, coreVersion: "2026.9.4", timeoutMs: 60_000, env },
         async (result) => {
-          expect(requests()).toBe(0);
-          expect(result.config).toEqual(config);
-          expect(result).toMatchObject({
-            changed: false,
-            remainingMissingPayloads: [],
-            repairOutcomes: [],
-            sync: { summary: { errors: [], switchedToBundled: [] } },
-            updateOutcomes: ids.map((pluginId) => ({
-              pluginId,
-              status: "skipped",
-              code: "plugin-operator-managed",
-              ...(source === "none"
-                ? {}
+          expect(result.sync.summary.errors).toEqual([]);
+          expect(result.remainingMissingPayloads).toEqual([]);
+          expect(result.config.plugins?.installs?.["llm-task"]).toEqual(
+            source === "none"
+              ? undefined
+              : explicit
+                ? record
                 : {
-                    shadowedInstallOwner: "llm-task",
-                    shadowedInstallRecord: record,
-                  }),
-            })),
-          });
-          expect(result.updateOutcomes[0]?.message).toContain(
-            "This copy was not updated; verify it against 2026.9.4 or remove it from plugins.load.paths",
+                    ...record,
+                    sourcePath: bundledPath,
+                    version: undefined,
+                    installedAt: expect.any(String),
+                  },
           );
-          if (source !== "none") {
+          expect(result.config.plugins?.load?.paths).toEqual([explicit ? linkedPath : bundledPath]);
+          expect(result.sync.summary.switchedToBundled).toEqual(explicit ? [] : ["llm-task"]);
+          expect(result.sync.summary.warnings).toEqual([]);
+          if (explicit) {
+            expect(result.changed).toBe(false);
+            expect(result.updateOutcomes).toEqual([
+              expect.objectContaining({
+                pluginId: "llm-task",
+                status: "skipped",
+                code: "plugin-operator-managed",
+                rootDir: linkedPath,
+                source: path.join(linkedPath, "index.js"),
+                ...(source === "none" ? {} : { shadowedInstallRecord: record }),
+              }),
+            ]);
             expect(result.updateOutcomes[0]?.message).toContain(
-              `It shadows the ${source} install @example/llm-task at ${record.installPath}`,
+              "This copy was not updated; verify it against 2026.9.4 or remove it from plugins.load.paths",
             );
-          }
-          expect(await runActivePluginPayloadSmokeCheck({ cfg: config, records, env })).toEqual(
-            emptyPayloadCheck,
-          );
-          const index = withPluginCache(createPluginCache(), () =>
-            loadInstalledPluginIndex({ config, installRecords: records, env }),
-          );
-          for (const id of ids) {
-            expect(index.plugins.find((plugin) => plugin.pluginId === id)?.rootDir).toBe(
-              linkedPath,
-            );
-          }
-          for (const directory of multiple ? [trackedPath, linkedPath] : [linkedPath]) {
-            for (const entry of entries) {
-              expectUnchangedModule(directory, entry);
+            if (source !== "none") {
+              expect(result.updateOutcomes[0]?.message).toContain(
+                `It shadows the ${source} install @example/llm-task at ${record.installPath}`,
+              );
             }
+            expect(result.repairOutcomes).toEqual([]);
+            expect(
+              await runActivePluginPayloadSmokeCheck({
+                cfg: result.config,
+                records: result.config.plugins?.installs ?? {},
+                env,
+              }),
+            ).toEqual({ checked: [], failures: [] });
           }
+          const selectedIndex = withPluginCache(createPluginCache(), () =>
+            loadInstalledPluginIndex({
+              config: result.config,
+              installRecords: result.config.plugins?.installs ?? {},
+              env,
+            }),
+          );
+          const selected = selectedIndex.plugins.find((plugin) => plugin.pluginId === "llm-task");
+          expect(selected?.rootDir).toBe(explicit ? linkedPath : bundledPath);
+          if (explicit) {
+            const ownership = createInstalledPluginOwnershipResolver(selectedIndex, env);
+            expect(ownership.resolvePackage("llm-task").ok).toBe(false);
+            expect(ownership.resolveLifecycle("llm-task").ok).toBe(false);
+          }
+          expect(fs.readFileSync(path.join(linkedPath, "index.js"), "utf8")).toBe(
+            "module.exports = {};\n",
+          );
         },
       );
+    },
+  );
+  it("retains local package children and their shadowed npm owner without registry work", async () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-cohort-local-children-"));
+    const managedPath = path.join(root, "managed-pack");
+    const localPath = path.join(root, "local-pack");
+    for (const directory of [managedPath, localPath]) {
+      writePackage(directory, "pack", { entries: ["one", "two"] });
+    }
+    const records = {
+      pack: { source: "npm", spec: "@example/pack", installPath: managedPath },
+    } satisfies Record<string, PluginInstallRecord>;
+    const config = cohortConfig(records, { load: { paths: [localPath] } });
+    await withUnavailableRegistry(root, async (env, requests) => {
+      await withCohort({ config, channel: "stable", timeoutMs: 10_000, env }, async (result) => {
+        expect(requests()).toBe(0);
+        expect(result.config).toEqual(config);
+        expect(result.updateOutcomes).toEqual(
+          ["pack/one", "pack/two"].map((pluginId) =>
+            expect.objectContaining({
+              pluginId,
+              code: "plugin-operator-managed",
+              shadowedInstallOwner: "pack",
+              shadowedInstallRecord: records.pack,
+            }),
+          ),
+        );
+        expect(await runActivePluginPayloadSmokeCheck({ cfg: config, records, env })).toEqual({
+          checked: [],
+          failures: [],
+        });
+        for (const directory of [managedPath, localPath]) {
+          for (const entry of ["one", "two"]) {
+            expect(fs.readFileSync(path.join(directory, `${entry}.js`), "utf8")).toBe(
+              "module.exports = {};\n",
+            );
+          }
+        }
+      });
     });
   });
   it.each(["none", "missing", "installed"] as const)(
@@ -164,11 +226,12 @@ describe("plugin release cohort real synchronization", () => {
             source: "path",
             installPath: bundledPath,
           });
-          for (const payloads of [result.missingPayloads, result.remainingMissingPayloads]) {
-            expect(payloads.map((entry) => entry.pluginId)).toEqual(
-              sibling === "missing" ? ["broken"] : [],
-            );
-          }
+          expect(result.remainingMissingPayloads.map((entry) => entry.pluginId)).toEqual(
+            sibling === "missing" ? ["broken"] : [],
+          );
+          expect(result.missingPayloads.map((entry) => entry.pluginId)).toEqual(
+            sibling === "missing" ? ["broken"] : [],
+          );
           if (hasSibling) {
             expect(registryRequests()).toBeGreaterThan(0);
             expect(

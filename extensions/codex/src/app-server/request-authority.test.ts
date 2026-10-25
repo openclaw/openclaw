@@ -1,6 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, vi } from "vitest";
-import { useClientHarnesses } from "./client-harness.test-support.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerScopedRequestRejectedError,
   requestCodexAppServerClientJson,
@@ -8,13 +7,14 @@ import {
 } from "./request.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 import * as sharedClient from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 
-const clientHarness = useClientHarnesses();
-type Harness = ReturnType<typeof clientHarness>;
+type Harness = ReturnType<typeof createClientHarness>;
 type WireOptions = NonNullable<Parameters<Harness["client"]["request"]>[2]>;
 type ScopeOptions = Parameters<typeof withCodexAppServerJsonClient>[0];
+const clients: Harness["client"][] = [];
 function createHarness(reply = false) {
-  const harness = clientHarness(
+  const harness = createClientHarness(
     reply
       ? {
           onWrite(line, send) {
@@ -24,7 +24,7 @@ function createHarness(reply = false) {
         }
       : {},
   );
-  vi.spyOn(sharedClient, "getLeasedSharedCodexAppServerClient").mockResolvedValue(harness.client);
+  clients.push(harness.client);
   return Object.assign(harness, {
     list: (options: WireOptions = {}) => harness.client.request("thread/list", {}, options),
     scoped: (options: ScopeOptions, assertCurrent?: () => void) =>
@@ -44,14 +44,21 @@ function authority(message: string) {
   };
   return state;
 }
+afterEach(async () => {
+  vi.useRealTimers();
+  for (const client of clients.splice(0)) {
+    await client.closeAndWait();
+  }
+  vi.restoreAllMocks();
+});
 
 describe("Codex physical request authority", () => {
   it.each([false, true])(
     "runs one fresh check after acquisition and guards the final write (revoked: %s)",
     async (revoke) => {
       const owner = authority("credential revoked");
-      const entered = createDeferred<void>();
-      const resume = createDeferred<void>();
+      const entered = createDeferred<void>(),
+        resume = createDeferred<void>();
       const freshCheck = vi.fn(async () => {
         entered.resolve();
         await resume.promise;
@@ -91,6 +98,9 @@ describe("Codex physical request authority", () => {
       const scope = authority("scope authority revoked");
       const request = authority("request authority revoked");
       const harness = createHarness(true);
+      vi.spyOn(sharedClient, "getLeasedSharedCodexAppServerClient").mockResolvedValue(
+        harness.client,
+      );
       const result = harness.scoped(
         {
           assertCurrent: scope.check,
@@ -117,12 +127,14 @@ describe("Codex physical request authority", () => {
 
   it("ignores duplicate admission of one wire request", async () => {
     const harness = createHarness();
-    const result = harness.list({
-      withCurrent: async (write) => {
-        write();
-        write();
-      },
-    });
+    const result = harness
+      .list({
+        withCurrent: async (write) => {
+          write();
+          write();
+        },
+      })
+      .catch((error: unknown) => error);
     expect(harness.writes).toHaveLength(1);
     const sent = JSON.parse(await harness.waitForWrite(0));
     harness.send({ id: sent.id, result: { data: [] } });
@@ -137,55 +149,48 @@ describe("Codex physical request authority", () => {
     const failure = await result;
     expect(failure).toBeInstanceOf(CodexAppServerScopedRequestRejectedError);
     expect(failure).toMatchObject({
-      cause: { message: "Codex request authority did not admit the wire write" },
+      cause: {
+        message: "Codex request authority did not admit the wire write",
+      },
     });
     expect(harness.writes).toHaveLength(0);
   });
 
-  const unavailable = new Error("lineage guard unavailable");
-  it.each([
-    [false, false, unavailable],
-    [false, true, unavailable],
-    [true, false, unavailable],
-    [true, true, unavailable],
-    [false, true, new CodexAppServerScopedRequestRejectedError("late authority failure")],
-    [
-      false,
-      true,
-      new CodexAppServerRpcError({ code: -32_001, message: "overloaded" }, "thread/list"),
-    ],
-  ] as const)(
-    "classifies authority rejection (helper: %s, written: %s, %s)",
-    async (helper, written, failure) => {
-      const harness = createHarness();
-      const withCurrent = vi.fn(async (write: () => void) => {
-        if (written) {
-          write();
-        }
-        throw failure;
-      });
-      const result = helper
-        ? requestCodexAppServerClientJson({
+  it.each(
+    (["client", "scoped helper"] as const).flatMap((entry) =>
+      [false, true].map((written) => ({ entry, written })),
+    ),
+  )("classifies $entry authority rejection (written: $written)", async ({ entry, written }) => {
+    const harness = createHarness();
+    const failure = new Error("lineage guard unavailable");
+    const withCurrent = vi.fn(async (write: () => void) => {
+      if (written) {
+        write();
+      }
+      throw failure;
+    });
+    const result =
+      entry === "client"
+        ? harness.list({ withCurrent })
+        : requestCodexAppServerClientJson({
             client: harness.client,
             method: "thread/list",
             requestParams: {},
             withCurrent,
-          })
-        : harness.list({ withCurrent });
-      await expect(result).rejects.toMatchObject(
-        written
-          ? {
-              name: "CodexAppServerIndeterminateTransportError",
-              code: "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE",
-              mayHaveWritten: true,
-              cause: failure,
-            }
-          : { name: "CodexAppServerScopedRequestRejectedError", cause: failure },
-      );
-      expect(harness.writes).toHaveLength(written ? 1 : 0);
-      expect(withCurrent).toHaveBeenCalledOnce();
-    },
-  );
+          });
+    await expect(result).rejects.toMatchObject(
+      written
+        ? {
+            name: "CodexAppServerIndeterminateTransportError",
+            code: "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE",
+            mayHaveWritten: true,
+            cause: failure,
+          }
+        : { name: "CodexAppServerScopedRequestRejectedError", cause: failure },
+    );
+    expect(harness.writes).toHaveLength(written ? 1 : 0);
+    expect(withCurrent).toHaveBeenCalledOnce();
+  });
 
   it.each(["authority", "prewrite assertion"] as const)(
     "preserves non-Error rejection causes from %s",
@@ -208,6 +213,32 @@ describe("Codex physical request authority", () => {
         }),
       ).rejects.toMatchObject({ name: "CodexAppServerScopedRequestRejectedError", cause });
       expect(harness.writes).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    new CodexAppServerScopedRequestRejectedError("late authority failure"),
+    new CodexAppServerRpcError(
+      { code: -32_001, message: "local authority overloaded" },
+      "thread/list",
+    ),
+  ])(
+    "does not turn a local rejection after the callback into a never-written outcome: %s",
+    async (cause) => {
+      const harness = createHarness();
+      await expect(
+        harness.list({
+          withCurrent: async (write) => {
+            write();
+            throw cause;
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: "CodexAppServerIndeterminateTransportError",
+        mayHaveWritten: true,
+        cause,
+      });
+      expect(harness.writes).toHaveLength(1);
     },
   );
 

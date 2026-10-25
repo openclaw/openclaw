@@ -58,10 +58,18 @@ it("keeps bound automation management after the old cohort is explicitly removed
     await import("../../../gateway/server-methods/cron-creator-authority-admission.js");
   const { createSyntheticPluginRuntimeClient } =
     await import("../../../gateway/server-plugin-runtime-client.js");
-  const runsApi = await import("../../../infra/agent-run-registry.js");
+  const {
+    claimAgentRunDelegatedAuthority,
+    registerAgentRunContext,
+    releaseAgentRunDelegatedAuthority,
+  } = await import("../../../infra/agent-run-registry.js");
   const { createTestAdmittedRunContext } =
     await import("../../admitted-run-context.test-support.js");
-  const cron = await import("../../cron-creator-authority-context.js");
+  const {
+    bindCronManagementGrant,
+    createCronCreatorAuthorityCapability,
+    runWithCronCreatorAuthorityCapability,
+  } = await import("../../cron-creator-authority-context.js");
   const { withGatewayToolCallerIdentity } = await import("../../tools/gateway-caller-context.js");
   const { settleRequesterTurnAfterSessionSpawns } =
     await import("../registry/subagent-registry-requester-yield.js");
@@ -77,19 +85,21 @@ it("keeps bound automation management after the old cohort is explicitly removed
   const transfer = createRequesterInitialTransferFixture(runs, () => {});
   registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
   const original = createTestAdmittedRunContext(sourceRunId).operationalRunInstance;
-  const originalAuthority = runsApi.claimAgentRunDelegatedAuthority(original);
-  runsApi.registerAgentRunContext(sourceRunId, {
+  const originalAuthority = claimAgentRunDelegatedAuthority(original);
+  registerAgentRunContext(sourceRunId, {
     sessionKey: REQUESTER,
     sessionId: "sess-main",
     agentId: "main",
   });
-  onTestFinished(() => runsApi.releaseAgentRunDelegatedAuthority(originalAuthority));
-  const originalCapability = cron.createCronCreatorAuthorityCapability(
+  onTestFinished(() => {
+    releaseAgentRunDelegatedAuthority(originalAuthority);
+  });
+  const originalCapability = createCronCreatorAuthorityCapability(
     sourceRunId,
     { kind: "unknown" },
     { source: "control-ui-admin" },
   )!;
-  await cron.runWithCronCreatorAuthorityCapability(originalCapability, () =>
+  await runWithCronCreatorAuthorityCapability(originalCapability, () =>
     withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: REQUESTER, approvalAuthority: originalAuthority },
       async () => {
@@ -123,7 +133,7 @@ it("keeps bound automation management after the old cohort is explicitly removed
   const published = runs.get(child.runId)!;
   child = copySubagentRunRuntimeOwner(published, { ...published });
   registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-  runsApi.releaseAgentRunDelegatedAuthority(originalAuthority);
+  releaseAgentRunDelegatedAuthority(originalAuthority);
   expect(originalCapability.active).toBe(false);
 
   const job = makeCronJob({
@@ -154,7 +164,7 @@ it("keeps bound automation management after the old cohort is explicitly removed
       });
       if (admission) {
         const operationalRunInstance = createTestAdmittedRunContext(runId).operationalRunInstance;
-        const authority = runsApi.claimAgentRunDelegatedAuthority(operationalRunInstance);
+        const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
         const identity: AgentRuntimeIdentity = {
           kind: "agentRuntime",
           agentId: "main",
@@ -167,7 +177,7 @@ it("keeps bound automation management after the old cohort is explicitly removed
         expect(cronJobMatchesCallerScope({ job, callerScope: readCronCallerScope(client) })).toBe(
           false,
         );
-        const capability = cron.createCronCreatorAuthorityCapability(
+        const capability = createCronCreatorAuthorityCapability(
           runId,
           admission.callerOrigin,
           admission.managementEntitlement,
@@ -175,13 +185,13 @@ it("keeps bound automation management after the old cohort is explicitly removed
         )!;
         admission.bindRunScope?.(capability);
         try {
-          await cron.runWithCronCreatorAuthorityCapability(capability, () =>
+          await runWithCronCreatorAuthorityCapability(capability, () =>
             withGatewayToolCallerIdentity(
               { agentId: "main", sessionKey: REQUESTER, approvalAuthority: authority },
               async () => {
                 child.requesterSettleWake = undefined;
                 runs.delete(child.runId);
-                const management = cron.bindCronManagementGrant(runId)!;
+                const management = bindCronManagementGrant(runId)!;
                 expect(management.managementOnly).toBe(true);
                 await withCronManagementGrant(
                   management.mint("cron.update")!,
@@ -198,7 +208,7 @@ it("keeps bound automation management after the old cohort is explicitly removed
             ),
           );
         } finally {
-          runsApi.releaseAgentRunDelegatedAuthority(authority);
+          releaseAgentRunDelegatedAuthority(authority);
         }
       }
       return { delivered: true as const, path: "direct" as const };

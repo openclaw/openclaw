@@ -14,11 +14,6 @@ const reply = {
   answers: [{ name: "q", type: "predicate", probability: 0.75 }],
   usage: { input_tokens: 4, output_tokens: 0 },
 };
-const inferencePath = "/v1/native/openai/v1/decisions";
-const paths = (seen: Seen[]) => seen.map(({ path }) => path);
-const unavailable = (reason: string) => ({ status: "unavailable", reason });
-const namedEntries = <T>(count: number, prefix: string, value: T) =>
-  Object.fromEntries(Array.from({ length: count }, (_, index) => [prefix + index, value]));
 function catalog() {
   return {
     providers: [
@@ -102,19 +97,30 @@ it("uses the selected router credential and effective route without upstream key
   await fixture(async (origin, seen) => {
     expect(await evaluate(origin + "/v1")).toMatchObject({
       status: "ok",
+      result: {
+        answers: { q: { probabilityTrue: 0.75 } },
+        usage: { inputTokens: 4, outputTokens: 0 },
+      },
     });
+    expect(seen).toHaveLength(2);
     expect(seen.map(({ path, headers }) => [path, headers.authorization])).toEqual([
       ["/v1/catalog", "Bearer synthetic-router-key"],
       ["/v1/native/openai/v1/decisions", "Bearer synthetic-router-key"],
     ]);
+    expect(seen[1]?.body).toEqual({
+      model: "gpt-6-luna",
+      input: "Only supplied evidence",
+      questions: [{ name: "q", type: "predicate", instructions: "" }],
+    });
   });
 });
 
 it("does not discover upstream OpenAI credentials when router auth is absent", async () => {
   await fixture(async (origin, seen) => {
-    expect(await evaluate(origin, { auth: { mode: "api-key" } })).toEqual(
-      unavailable("credentials-unavailable"),
-    );
+    expect(await evaluate(origin, { auth: { mode: "api-key" } })).toEqual({
+      status: "unavailable",
+      reason: "credentials-unavailable",
+    });
     expect(seen).toEqual([]);
   });
 });
@@ -129,7 +135,10 @@ it("uses prepared replacement auth for both catalog and inference and rejects re
           auth: { mode: "header", headerName: "X-Credential", value: "synthetic-override" },
         },
       );
-      expect(await evaluate(origin, { model })).toEqual(unavailable("invalid-response"));
+      expect(await evaluate(origin, { model })).toEqual({
+        status: "unavailable",
+        reason: "invalid-response",
+      });
       expect(seen).toHaveLength(2);
       for (const { headers } of seen) {
         expect(headers.authorization).toBeUndefined();
@@ -195,65 +204,92 @@ it.each(["route", "capability", "alias"] as const)(
     }
     await fixture(
       async (origin, seen) => {
-        expect(await evaluate(origin)).toEqual(unavailable("unsupported-input"));
-        expect(paths(seen)).toEqual(["/v1/catalog"]);
+        expect(await evaluate(origin)).toEqual({
+          status: "unavailable",
+          reason: "unsupported-input",
+        });
+        expect(seen.map(({ path }) => path)).toEqual(["/v1/catalog"]);
       },
       (_path, response) => response.end(JSON.stringify(body)),
     );
   },
 );
 
-it.each(["/v1/catalog", inferencePath])(
-  "classifies HTTP and JSON failures at %s without retry or credential disclosure",
+it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
+  "maps HTTP failures at %s without retry or body disclosure",
   async (failedPath) => {
-    const success = failedPath === "/v1/catalog" ? catalog() : reply;
-    for (const [status, body, outcome] of [
-      [401, "synthetic-router-key private evidence", unavailable("authentication")],
-      [
-        429,
-        "synthetic-router-key private evidence",
-        { ...unavailable("rate-limited"), retryAfterMs: 2000 },
-      ],
-      [200, "not JSON", unavailable("invalid-response")],
-      [
-        200,
-        JSON.stringify({ ...success, reflected: "synthetic-router-key" }),
-        unavailable("invalid-response"),
-      ],
+    for (const [status, reason] of [
+      [401, "authentication"],
+      [403, "authentication"],
+      [429, "rate-limited"],
     ] as const) {
       await fixture(
         async (origin, seen) => {
-          expect(await evaluate(origin)).toEqual(outcome);
-          expect(paths(seen)).toEqual(
+          expect(await evaluate(origin)).toEqual({
+            status: "unavailable",
+            reason,
+            ...(status === 429 ? { retryAfterMs: 2000 } : {}),
+          });
+          expect(seen.map(({ path }) => path)).toEqual(
             failedPath === "/v1/catalog" ? [failedPath] : ["/v1/catalog", failedPath],
           );
         },
         (path, response) => {
-          response.statusCode = path === failedPath ? status : 200;
-          response.setHeader("retry-after", "2");
-          response.end(path === failedPath ? body : JSON.stringify(catalog()));
+          if (path === failedPath) {
+            response.statusCode = status;
+            response.setHeader("retry-after", "2");
+            response.end("synthetic-router-key private evidence");
+          } else {
+            response.end(JSON.stringify(catalog()));
+          }
         },
       );
     }
   },
 );
 
-it.each(["image/png"])("inlines %s and only explicitly supplied text", async (mime) => {
-  await fixture(async (origin, seen) => {
-    expect(
-      (
-        await evaluate(
-          origin,
-          { reasoning: "auto" },
-          {
-            ...batch,
-            state: { type: "image", dataUri: `data:${mime};base64,AA==`, text: "Inspect this" },
-          },
-        )
-      ).status,
-    ).toBe("ok");
-    expect(seen[1]?.body).toEqual(
-      expect.objectContaining({
+it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
+  "rejects malformed and credential-reflecting JSON at %s",
+  async (failedPath) => {
+    for (const invalid of [
+      "not JSON",
+      JSON.stringify({
+        ...(failedPath === "/v1/catalog" ? catalog() : reply),
+        reflected: "synthetic-router-key",
+      }),
+    ]) {
+      await fixture(
+        async (origin, seen) => {
+          expect(await evaluate(origin)).toEqual({
+            status: "unavailable",
+            reason: "invalid-response",
+          });
+          expect(seen.at(-1)?.path).toBe(failedPath);
+        },
+        (path, response) => response.end(path === failedPath ? invalid : JSON.stringify(catalog())),
+      );
+    }
+  },
+);
+
+it.each(["image/png", "image/jpeg", "image/webp"])(
+  "inlines %s and only explicitly supplied text",
+  async (mime) => {
+    await fixture(async (origin, seen) => {
+      expect(
+        (
+          await evaluate(
+            origin,
+            { reasoning: "auto" },
+            {
+              ...batch,
+              state: { type: "image", dataUri: `data:${mime};base64,AA==`, text: "Inspect this" },
+            },
+          )
+        ).status,
+      ).toBe("ok");
+      expect(seen[1]?.body).toEqual({
+        model: "gpt-6-luna",
         input: [
           {
             role: "user",
@@ -263,98 +299,162 @@ it.each(["image/png"])("inlines %s and only explicitly supplied text", async (mi
             ],
           },
         ],
-      }),
-    );
-  });
-});
-
-it.each([400])("dispatches all %i questions through the native router route", async (count) => {
-  const names = Array.from({ length: count }, (_, index) => `q${index}`);
-  const answers = names.map((name) => ({ name, type: "predicate", probability: 0.75 }));
-  await fixture(
-    async (origin, seen) => {
-      const questions = namedEntries(count, "q", { type: "boolean" as const });
-      const outcome = await evaluate(origin, {}, { ...batch, questions });
-      expect(outcome).toMatchObject({ status: "ok" });
-      if (outcome.status === "ok") {
-        expect(outcome.result.answers).toEqual(
-          Object.fromEntries(
-            names.map((name) => [name, { type: "boolean", probabilityTrue: 0.75 }]),
-          ),
-        );
-      }
-      expect(paths(seen)).toEqual(["/v1/catalog", inferencePath]);
-    },
-    (path, response) =>
-      response.end(JSON.stringify(path === "/v1/catalog" ? catalog() : { ...reply, answers })),
-  );
-});
-
-it("rejects unsupported reasoning and excess questions before catalog I/O", async () => {
-  await fixture(async (origin, seen) => {
-    for (const reasoning of ["on", "off"] as const) {
-      expect(await evaluate(origin, { reasoning })).toEqual(unavailable("unsupported-input"));
-    }
-    const tooManyQuestions: DecisionBatchV2 = {
-      ...batch,
-      questions: namedEntries(401, "q", { type: "boolean" as const }),
-    };
-    expect(await evaluate(origin, {}, tooManyQuestions)).toEqual(unavailable("unsupported-input"));
-    expect(seen).toEqual([]);
-  });
-});
-
-async function withHeldResponse(
-  heldPath: string,
-  run: (
-    origin: string,
-    seen: Seen[],
-    received: Promise<void>,
-    closed: Promise<void>,
-  ) => Promise<void>,
-) {
-  const received = Promise.withResolvers<void>();
-  const closed = Promise.withResolvers<void>();
-  await fixture(
-    (origin, seen) => run(origin, seen, received.promise, closed.promise),
-    (path, response) => {
-      if (path === heldPath) {
-        response.on("close", () => closed.resolve());
-        response.write("{");
-        received.resolve();
-      } else {
-        response.end(JSON.stringify(catalog()));
-      }
-    },
-  );
-}
-
-it.each(["/v1/catalog", inferencePath])(
-  "aborts a held %s response and closes its transport",
-  async (heldPath) => {
-    const controller = new AbortController();
-    await withHeldResponse(heldPath, async (origin, seen, received, closed) => {
-      const pending = evaluate(origin, { signal: controller.signal });
-      const rejected = expect(pending).rejects.toThrow("caller cancelled");
-      await Promise.race([received, pending]);
-      controller.abort(new Error("caller cancelled"));
-      await rejected;
-      await closed;
-      expect(seen.at(-1)?.path).toBe(heldPath);
+        questions: [{ name: "q", type: "predicate", instructions: "" }],
+      });
     });
   },
 );
 
-it.each(["/v1/catalog", inferencePath])(
+it.each([201, 400])(
+  "dispatches all %i questions through the native router route",
+  async (count) => {
+    const names = Array.from({ length: count }, (_, index) => `q${index}`);
+    await fixture(
+      async (origin, seen) => {
+        const outcome = await evaluate(
+          origin,
+          {},
+          {
+            ...batch,
+            questions: Object.fromEntries(names.map((name) => [name, { type: "boolean" }])),
+          },
+        );
+        expect(outcome).toMatchObject({ status: "ok" });
+        if (outcome.status === "ok") {
+          expect(Object.keys(outcome.result.answers)).toEqual(names);
+          expect(Object.values(outcome.result.answers)).toEqual(
+            names.map(() => ({ type: "boolean", probabilityTrue: 0.75 })),
+          );
+        }
+        expect(seen.map(({ path }) => path)).toEqual([
+          "/v1/catalog",
+          "/v1/native/openai/v1/decisions",
+        ]);
+        expect(seen[1]?.body).toEqual({
+          model: "gpt-6-luna",
+          input: "Only supplied evidence",
+          questions: names.map((name) => ({ name, type: "predicate", instructions: "" })),
+        });
+      },
+      (path, response) =>
+        response.end(
+          JSON.stringify(
+            path === "/v1/catalog"
+              ? catalog()
+              : {
+                  ...reply,
+                  answers: names.map((name) => ({ name, type: "predicate", probability: 0.75 })),
+                },
+          ),
+        ),
+    );
+  },
+);
+
+it("rejects unsupported reasoning, image size, and question/choice counts before catalog I/O", async () => {
+  await fixture(async (origin, seen) => {
+    for (const reasoning of ["on", "off"] as const) {
+      expect(await evaluate(origin, { reasoning })).toEqual({
+        status: "unavailable",
+        reason: "unsupported-input",
+      });
+    }
+    const oversized: DecisionBatchV2 = {
+      ...batch,
+      state: {
+        type: "image",
+        dataUri: "data:image/png;base64," + Buffer.alloc(4_194_305).toString("base64"),
+      },
+    };
+    expect(await evaluate(origin, {}, oversized)).toEqual({
+      status: "unavailable",
+      reason: "unsupported-input",
+    });
+    expect(
+      await evaluate(
+        origin,
+        {},
+        {
+          ...batch,
+          questions: Object.fromEntries(
+            Array.from({ length: 401 }, (_, index) => ["q" + index, { type: "boolean" }]),
+          ),
+        },
+      ),
+    ).toEqual({ status: "unavailable", reason: "unsupported-input" });
+    expect(
+      await evaluate(
+        origin,
+        {},
+        {
+          ...batch,
+          questions: {
+            q: {
+              type: "choice",
+              criteria: Object.fromEntries(
+                Array.from({ length: 256 }, (_, index) => ["o" + index, "criterion"]),
+              ),
+            },
+          },
+        },
+      ),
+    ).toEqual({ status: "unavailable", reason: "unsupported-input" });
+    expect(seen).toEqual([]);
+  });
+});
+
+it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
+  "aborts a held %s response and closes its transport",
+  async (heldPath) => {
+    const received = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    const controller = new AbortController();
+    await fixture(
+      async (origin, seen) => {
+        const pending = evaluate(origin, { signal: controller.signal });
+        const rejected = expect(pending).rejects.toThrow("caller cancelled");
+        await Promise.race([received.promise, pending]);
+        controller.abort(new Error("caller cancelled"));
+        await rejected;
+        await closed.promise;
+        expect(seen.at(-1)?.path).toBe(heldPath);
+      },
+      (path, response) => {
+        if (path === heldPath) {
+          response.on("close", () => closed.resolve());
+          response.write("{");
+          received.resolve();
+        } else {
+          response.end(JSON.stringify(catalog()));
+        }
+      },
+    );
+  },
+);
+
+it.each(["/v1/catalog", "/v1/native/openai/v1/decisions"])(
   "expires a held %s response and closes its transport",
   async (heldPath) => {
-    await withHeldResponse(heldPath, async (origin, seen, received, closed) => {
-      const pending = evaluate(origin, { deadlineMonotonicMs: performance.now() + 1000 });
-      await Promise.race([received, pending]);
-      expect(await pending).toEqual(unavailable("transport"));
-      expect(seen.at(-1)?.path).toBe(heldPath);
-      await closed;
-    });
+    const received = Promise.withResolvers<void>();
+    const closed = Promise.withResolvers<void>();
+    await fixture(
+      async (origin, seen) => {
+        const pending = evaluate(origin, { deadlineMonotonicMs: performance.now() + 1000 });
+        await Promise.race([received.promise, pending]);
+        expect(await pending).toEqual({ status: "unavailable", reason: "transport" });
+        expect(seen.at(-1)?.path).toBe(heldPath);
+        await closed.promise;
+      },
+      (path, response) => {
+        if (path === heldPath) {
+          response.on("close", () => closed.resolve());
+          response.write("{");
+          received.resolve();
+        } else {
+          response.end(JSON.stringify(catalog()));
+        }
+      },
+    );
   },
 );
 
@@ -363,9 +463,10 @@ it("rechecks admission between catalog and inference and keeps thrown catalog au
   const authority = new Error("retired authority");
   await fixture(
     async (origin, seen) => {
-      expect(await evaluate(origin, { isAdmissible: () => admitted })).toEqual(
-        unavailable("transport"),
-      );
+      expect(await evaluate(origin, { isAdmissible: () => admitted })).toEqual({
+        status: "unavailable",
+        reason: "transport",
+      });
       expect(seen).toHaveLength(1);
       await expect(
         evaluate(origin, {
@@ -398,7 +499,10 @@ it("preserves terminal authority revocation after native inference", async () =>
           },
         }),
       ).rejects.toBe(authority);
-      expect(paths(seen)).toEqual(["/v1/catalog", inferencePath]);
+      expect(seen.map(({ path }) => path)).toEqual([
+        "/v1/catalog",
+        "/v1/native/openai/v1/decisions",
+      ]);
     },
     (path, response) => {
       if (path === "/v1/catalog") {

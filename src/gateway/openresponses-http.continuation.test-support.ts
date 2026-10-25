@@ -5,6 +5,7 @@ import { FailoverError } from "../agents/failover-error.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as logger from "../logger.js";
+import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -12,6 +13,7 @@ import {
 import * as authPolicy from "./auth-policy.js";
 import { findSseEvent, parseSseEvents } from "./http-stream.test-support.js";
 import type { ResponseResource } from "./open-responses.schema.js";
+import { rememberResponseSession } from "./openresponses-session-store.js";
 import * as responseSessions from "./openresponses-session-store.js";
 import { agentCommandMock } from "./test-helpers.js";
 
@@ -38,6 +40,11 @@ export function registerOpenResponsesContinuationTests({
     postResponses(getPort(), { model: "openclaw", input: "hi", ...body }, headers);
   const replyOnce = (text: string) =>
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text }] } as never);
+  const scope = {
+    authSubject: "gateway-auth:none",
+    agentId: "main",
+    sessionKey: "agent:main:openresponses:unreachable",
+  };
   const terminal = new Set(["response.completed", "response.incomplete", "response.failed"]);
 
   it.each([false, true])(
@@ -56,7 +63,31 @@ export function registerOpenResponsesContinuationTests({
       expect(firstAgentOpts(1).sessionKey).toBe(sessionKey);
 
       agentCommandMock.mockClear();
-      for (const previousId of ["missing", "", " ", "x".repeat(513), ` ${id}`]) {
+      for (const mismatch of [
+        { responseId: `foreign-agent-${stream}`, agentId: "another-agent" },
+        { responseId: `foreign-session-${stream}`, requestedSessionKey: "another-session" },
+      ]) {
+        await rememberResponseSession({ ...scope, ...mismatch }, () => {});
+      }
+      seedPluginStateEntriesForTests([
+        {
+          pluginId: "core:openresponses",
+          namespace: "response-sessions",
+          key: `expired-${stream}`,
+          value: scope,
+          expiresAt: Date.now() - 1,
+        },
+      ]);
+      for (const previousId of [
+        "missing",
+        "",
+        " ",
+        "x".repeat(513),
+        ` ${id}`,
+        `expired-${stream}`,
+        `foreign-agent-${stream}`,
+        `foreign-session-${stream}`,
+      ]) {
         const response = await post({ stream, previous_response_id: previousId });
         await expectInvalidRequest(response, /previous_response_id.*full input context/);
         expect(response.headers.get("content-type")).toContain("application/json");
@@ -114,23 +145,25 @@ export function registerOpenResponsesContinuationTests({
     result.resolve({ payloads: [{ text: "hello" }] });
     const res = await responsePromise;
     expect(res.status).toBe(200);
-    const { id } = (await res.json()) as { id: string };
+    const json = (await res.json()) as { id?: string };
+    expect(json.id).toMatch(/^resp_/);
     const stored = openOpenClawStateDatabase()
       .db.prepare(
         "SELECT value_json FROM plugin_state_entries WHERE plugin_id = 'core:openresponses' AND namespace = 'response-sessions' AND entry_key = ?",
       )
-      .get(id);
+      .get(json.id!);
+    expect(stored?.value_json).toEqual(expect.any(String));
     expect(stored?.value_json).not.toContain(bearer);
     expect(stored?.value_json).not.toContain(createHash("sha256").update(bearer).digest("hex"));
     await closeOpenClawStateDatabaseAsync();
     const foreign = await post(
-      { previous_response_id: id },
+      { previous_response_id: json.id },
       { authorization: "Bearer synthetic-different-password" },
     );
     await expectInvalidRequest(foreign, /previous_response_id/);
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     replyOnce("continued");
-    const continued = await post({ previous_response_id: id }, headers);
+    const continued = await post({ previous_response_id: json.id }, headers);
     expect(continued.status).toBe(200);
     await ensureResponseConsumed(continued);
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
@@ -212,6 +245,8 @@ export function registerOpenResponsesContinuationTests({
           expect(warnings).toHaveBeenCalledWith(expect.stringContaining(persistenceError.message));
         }
       }
+      expect(agentCommandMock).toHaveBeenCalledTimes(failures.length);
+      expect(persistence).toHaveBeenCalledTimes(failures.length);
     } finally {
       persistence.mockRestore();
       warnings.mockRestore();
