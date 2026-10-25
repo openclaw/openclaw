@@ -237,14 +237,22 @@ it.for(["missing", "drifted"] as const)(
         .readFileSync(fixture.logPath, "utf8")
         .trim()
         .split("\n")
-        .map((line): { message?: string; "1"?: { agentId?: string } } => JSON.parse(line))
+        .map((line): { message?: string; "1"?: unknown } => JSON.parse(line))
         .filter((record) => record.message?.startsWith(repairMessage));
-    // The open-timing suite owns repair log fields; startup owns once-per-agent repair.
-    expect(
-      repairs()
-        .map((record) => record["1"]?.agentId)
-        .toSorted(),
-    ).toEqual(agents.map((agent) => agent.agentId).toSorted());
+    const ordered = agents.toSorted((a, b) => a.agentId.localeCompare(b.agentId));
+    expect(repairs().toSorted((a, b) => (a.message ?? "").localeCompare(b.message ?? ""))).toEqual(
+      ordered.map((agent) =>
+        expect.objectContaining({
+          message: `${repairMessage} for ${agent.agentId} (${agent.path}): idx_agent_session_nodes_active`,
+          "1": expect.objectContaining({
+            agentId: agent.agentId,
+            path: agent.path,
+            indexes: ["idx_agent_session_nodes_active"],
+            elapsedMs: expect.any(Number),
+          }),
+        }),
+      ),
+    );
     await expect(fixture.ready(config, "gateway-restart")).resolves.toBeUndefined();
     await fixture.prepare();
     await closeOpenClawAgentDatabasesAsync();
