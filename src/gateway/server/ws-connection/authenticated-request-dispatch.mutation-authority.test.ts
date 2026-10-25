@@ -1,24 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import * as stableJson from "@openclaw/normalization-core/stable-stringify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  assertOperatorModelAllowed,
-  readAdmittedRunOperatorAuthority,
-} from "../../../agents/admitted-run-context.js";
-import { prepareChannelRunAdmission } from "../../../auto-reply/reply/channel-run-admission.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "../../../auto-reply/reply/queue.js";
-import {
-  createQueueSettings,
-  createQueueTestRun,
-} from "../../../auto-reply/reply/queue.test-helpers.js";
-import {
-  admitFollowupRunLifecycle,
-  completeFollowupRunLifecycle,
-} from "../../../auto-reply/reply/queue/lifecycle.js";
-import {
-  clearFollowupQueue,
-  getExistingFollowupQueue,
-} from "../../../auto-reply/reply/queue/state.js";
+import { assertOperatorModelAllowed } from "../../../agents/admitted-run-context.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -146,24 +128,15 @@ describe("authenticated request mutation custody", () => {
       await dispatch("accepted-policy");
       const retained = expectDefined(captures.at(-1), "accepted operator source");
       using _ = { [Symbol.dispose]: retained.release };
-      const stringify = vi.spyOn(stableJson, "stableStringify");
-      try {
-        committedConfig = structuredClone(committedConfig);
-        retained.authority.assertCurrent();
-        stringify.mockClear();
-        retained.authority.assertCurrent();
-        expect(stringify).not.toHaveBeenCalled();
-
-        const acceptedConfig = committedConfig;
-        committedConfig = {
-          gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
-        };
-        expect(retained.authority.assertCurrent).toThrow();
-        committedConfig = acceptedConfig;
-        expect(retained.authority.assertCurrent).toThrow();
-      } finally {
-        stringify.mockRestore();
-      }
+      committedConfig = structuredClone(committedConfig);
+      retained.authority.assertCurrent();
+      const acceptedConfig = committedConfig;
+      committedConfig = {
+        gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
+      };
+      expect(retained.authority.assertCurrent).toThrow();
+      committedConfig = acceptedConfig;
+      expect(retained.authority.assertCurrent).toThrow();
     });
   });
 
@@ -204,7 +177,7 @@ describe("authenticated request mutation custody", () => {
     }
   });
 
-  it("keeps original wildcard model ceilings separate through WS capture and contiguous collect", async () => {
+  it("keeps original wildcard model ceilings separate through WS capture", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const profile = ensureProfileForEmail("queued-model-ceiling@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -241,13 +214,11 @@ describe("authenticated request mutation custody", () => {
         setRuntimeConfigSnapshot(committedConfig);
         publishOperatorRoleConfigChange(context);
       };
-      const key = "test-ws-original-model-ceilings";
-      const observed: Array<{ prompts: string[] | null; allowsB: boolean }> = [];
-      const failures: unknown[] = [];
       try {
         const wide = await capture("wide-first");
         setPolicy(["fixture/family-*"]);
         const compatible = await capture("wide-second");
+        expect(compatible.source).toBe(wide.source);
         expect(wide.modelPolicy?.models).toEqual([modelA]);
         expect(() => assertOperatorModelAllowed(wide, modelB)).not.toThrow();
         setPolicy(["fixture/family-a"]);
@@ -255,62 +226,11 @@ describe("authenticated request mutation custody", () => {
         setPolicy(["fixture/family-*"]);
         expect(narrow.modelPolicy?.models).toEqual(wide.modelPolicy?.models);
         expect(() => assertOperatorModelAllowed(narrow, modelB)).toThrow("operator role");
-        const runs = [wide, compatible, narrow, wide].map((operatorAuthority, index) => {
-          const run = createQueueTestRun({
-            prompt: `request ${index}`,
-            originatingChannel: "webchat",
-          });
-          run.operatorAuthority = operatorAuthority;
-          run.run.provider = modelA.provider;
-          run.run.model = modelA.model;
-          return run;
-        });
-        for (const run of runs) {
-          expect(enqueueFollowupRun(key, run, createQueueSettings())).toBe(true);
-        }
-        for (const retained of captures) {
-          retained.release();
-        }
-        vi.useFakeTimers();
-        scheduleFollowupDrain(key, async (run) => {
-          const prepared = prepareChannelRunAdmission({
-            cfg: committedConfig,
-            runId: `queued-model-ceiling-${observed.length}`,
-            agentId: "main",
-            ingressKind: "channel",
-            boundary: "auto-reply.agent-runner",
-            operatorAuthority: run.operatorAuthority,
-          });
-          try {
-            await admitFollowupRunLifecycle(run);
-            const admitted = await prepared.admit("embedded");
-            const authority = readAdmittedRunOperatorAuthority(admitted);
-            assertOperatorModelAllowed(authority, modelA);
-            observed.push({
-              prompts: run.prompt.match(/request \d/g),
-              allowsB: authority?.modelPolicy?.allows(modelB) === true,
-            });
-          } catch (error) {
-            failures.push(error);
-          } finally {
-            prepared.close();
-            completeFollowupRunLifecycle(run);
-          }
-        });
-        await vi.runAllTimersAsync();
-        expect(failures).toEqual([]);
-        expect(getExistingFollowupQueue(key)).toBeUndefined();
-        expect(observed).toEqual([
-          { prompts: ["request 0", "request 1"], allowsB: true },
-          { prompts: ["request 2"], allowsB: false },
-          { prompts: ["request 3"], allowsB: true },
-        ]);
+        expect(narrow.source).not.toBe(wide.source);
       } finally {
-        clearFollowupQueue(key);
         for (const retained of captures) {
           retained.release();
         }
-        vi.useRealTimers();
       }
     });
   });

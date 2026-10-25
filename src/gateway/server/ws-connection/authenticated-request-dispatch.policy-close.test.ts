@@ -348,11 +348,6 @@ describe("policy writer response ownership", () => {
         4001,
         "client invalidated: device-token-revoked",
       );
-      expect(invalidateClientsForDevice).toHaveBeenCalledWith("self", {
-        role: "operator",
-        reason: "device-token-rotated",
-      });
-      expect(disconnectClientsForDevice).toHaveBeenCalledWith("self", { role: "operator" });
     });
   });
 

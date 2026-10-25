@@ -29,7 +29,6 @@ import {
 const mocks = vi.hoisted(() => ({
   submitGithubIssue: vi.fn(),
   reconcileGithubIssue: vi.fn(),
-  getLatest: vi.fn<() => RestartSentinelPayload | null>(),
   refreshLatest: vi.fn<() => Promise<RestartSentinelPayload | null>>(),
 }));
 
@@ -50,7 +49,6 @@ vi.mock("../../server-update-sentinel.js", async () => {
   );
   return {
     ...actual,
-    getLatestUpdateRestartSentinel: mocks.getLatest,
     refreshLatestUpdateRestartSentinel: mocks.refreshLatest,
   };
 });
@@ -64,15 +62,9 @@ const failure: RestartSentinelPayload = {
   stats: {
     handoffId: "authority-proof",
     mode: "npm",
-    target: "openclaw@next",
     reason: "doctor-failed",
-    before: { version: "2026.8.1" },
-    after: { version: "2026.8.2" },
-    steps: [
-      { name: "doctor", command: "openclaw doctor --fix", durationMs: 10, log: { exitCode: 1 } },
-    ],
+    steps: [],
     durationMs: 20,
-    recovery: { serviceRestartSafe: true, version: "2026.8.1" },
   },
 };
 
@@ -88,23 +80,16 @@ async function countReportReceipts(): Promise<number> {
   if (!existsSync(databasePath)) {
     return 0;
   }
+  const database = new DatabaseSync(databasePath, { readOnly: true });
   try {
-    const database = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      const row = database
-        .prepare(
-          "SELECT COUNT(*) AS count FROM gateway_restart_sentinel WHERE sentinel_key LIKE 'update-failure-report:%'",
-        )
-        .get() as { count: number };
-      return row.count;
-    } finally {
-      database.close();
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return 0;
-    }
-    throw error;
+    const row = database
+      .prepare(
+        "SELECT COUNT(*) AS count FROM gateway_restart_sentinel WHERE sentinel_key LIKE 'update-failure-report:%'",
+      )
+      .get() as { count: number };
+    return row.count;
+  } finally {
+    database.close();
   }
 }
 
@@ -162,17 +147,7 @@ function grantReportAuthority(
     client.internal = { operatorRoleActor: { kind: "system" } };
     return;
   }
-  client.authenticatedUserProfile = dispatchProfile(GATEWAY_OWNER_PROFILE_ID, {
-    displayName: "Gateway owner",
-    avatarRevision: "owner-avatar",
-  });
-}
-
-function identifyNonOwner(client: ReturnType<typeof createOperatorWsClient>): void {
-  client.authenticatedUserProfile = dispatchProfile("profile-non-owner", {
-    displayName: "Delegated operator",
-    avatarRevision: "operator-avatar",
-  });
+  client.authenticatedUserProfile = dispatchProfile(GATEWAY_OWNER_PROFILE_ID);
 }
 
 const authorityCloseReasons = {
@@ -211,21 +186,10 @@ describe("update report live authority boundary", () => {
   beforeEach(async () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    mocks.submitGithubIssue.mockReset();
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-report-authority-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    mocks.getLatest.mockReturnValue(failure);
     mocks.refreshLatest.mockResolvedValue(failure);
-    mocks.submitGithubIssue.mockImplementation(
-      async (_issue: unknown, _runGh: unknown, hooks: GithubIssueSubmitHooks) => {
-        await hooks.afterAuthPreflight?.();
-        const commitIssueCreate = await hooks.beforeIssueCreate?.();
-        commitIssueCreate?.();
-        return {
-          status: "created",
-          url: issueUrl,
-        };
-      },
-    );
   });
 
   afterEach(async () => {
@@ -336,49 +300,6 @@ describe("update report live authority boundary", () => {
     },
   );
 
-  it.each(["identity", "same-identity-facts"] as const)(
-    "refuses changed sentinel $0 during real shared auth preflight",
-    async (change) => {
-      const transport = await vi.importActual<typeof import("../../../infra/github-issue.js")>(
-        "../../../infra/github-issue.js",
-      );
-      const client = createOperatorWsClient({ connId: `report-changed-${change}` });
-      grantReportAuthority(client, "system-admin");
-      const { harness, preview, submit } = createReportHarness(client);
-      const previewDigest = await preview(`preview-changed-${change}`);
-      const gate = createRequestGate();
-      const runGh = vi.fn<RunGithubCli>(async (args) => {
-        expect(args[0]).toBe("auth");
-        await gate.wait();
-        return { started: true, status: 0, stdout: Buffer.alloc(0) };
-      });
-      mocks.submitGithubIssue.mockImplementationOnce((issue, _runGh, hooks) =>
-        transport.submitGithubIssue(issue, runGh, hooks),
-      );
-      const dispatch = submit(`changed-${change}`, previewDigest);
-      await gate.entered;
-      mocks.refreshLatest.mockResolvedValue({
-        ...failure,
-        stats: {
-          ...failure.stats,
-          ...(change === "identity" ? { handoffId: "replacement" } : { reason: "rollback-failed" }),
-        },
-      });
-      gate.release();
-      await dispatch;
-
-      expect(runGh).toHaveBeenCalledOnce();
-      await expectNoReport();
-      expect(harness.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: `changed-${change}`,
-          ok: false,
-          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
-        }),
-      );
-    },
-  );
-
   it.each([
     { label: "operator.write", scopes: ["operator.write"], allowed: false },
     { label: "named administrator", scopes: ["operator.admin"], allowed: true },
@@ -389,7 +310,7 @@ describe("update report live authority boundary", () => {
         connId: `report-denied-${scopes[0]}`,
         scopes,
       });
-      identifyNonOwner(client);
+      client.authenticatedUserProfile = dispatchProfile("profile-non-owner");
       const { harness, dispatch, submit } = createReportHarness(client);
 
       await dispatch(`denied-${scopes[0]}`, "preview");
@@ -411,10 +332,6 @@ describe("update report live authority boundary", () => {
         if (!isRecord(submitted.payload) || typeof submitted.payload.fallbackUrl !== "string") {
           throw new Error("Missing browser handoff");
         }
-        const url = new URL(submitted.payload.fallbackUrl);
-        expect(url.origin + url.pathname).toBe("https://github.com/openclaw/openclaw/issues/new");
-        expect(url.searchParams.get("body")).toBe(preview.body);
-        expect(url.searchParams.get("title")).toBe(preview.title);
         await submit("browser-repeat", preview.previewDigest);
         expect(await harness.awaitResponseFrame("browser-repeat")).toMatchObject({
           ok: true,

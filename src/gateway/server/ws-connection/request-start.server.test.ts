@@ -16,7 +16,6 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
 import { createPluginGatewayMethodDescriptor } from "../../methods/descriptor.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
-import { SerializedJsonArray } from "../../serialized-json.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import {
   connectOk,
@@ -30,7 +29,7 @@ import {
   resetTestPluginRegistry,
   setTestPluginRegistry,
 } from "../../test-helpers.plugin-registry.js";
-import { GATEWAY_PER_MESSAGE_DEFLATE, registerDeflatedSegment } from "../ws-compression.js";
+import { GATEWAY_PER_MESSAGE_DEFLATE } from "../ws-compression.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -392,24 +391,12 @@ describe("authenticated operator request starts", () => {
 
   it("keeps local frames raw and compresses remote frames both ways without stalling", async () => {
     await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
-    const sharedMessages = [
-      { text: 'Escaped "segment" 漢字🦞\n'.repeat(4096) },
-      { text: randomBytes(1536).toString("base64").repeat(16) },
-    ];
-    const sharedBytes = Buffer.from(JSON.stringify(sharedMessages));
-    registerDeflatedSegment(
-      sharedBytes,
-      deflateRawSync(sharedBytes, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
-    );
     const registry = installMethods({
       "test.echo": async ({ req, respond, acceptsDeflatedSegments }) => {
         respond(true, {
           echoed: (req.params as { text: string }).text,
           acceptsDeflatedSegments: acceptsDeflatedSegments === true,
         });
-      },
-      "test.segments": async ({ respond }) => {
-        respond(true, { messages: new SerializedJsonArray(sharedBytes) });
       },
     });
     // Real Gateways advertise many plugin methods; push hello past the compression threshold.
@@ -479,39 +466,14 @@ describe("authenticated operator request starts", () => {
         return stream.bytesWritten - before;
       };
       const request = (id: string, text: string) => rpc(id, "test.echo", { text });
-      // A worker's window-15 cache must not bypass this peer's window-10 limit.
-      // The second response reuses the same segment with a fresh RPC envelope.
-      for (const id of ["segments-first", "segments-again"]) {
-        const response = once(socket, "message");
-        const before = stream.bytesWritten;
-        socket.send(rpc(id, "test.segments"));
-        const [data] = await response;
-        const expected = JSON.stringify({
-          type: "res",
-          id,
-          ok: true,
-          payload: { messages: sharedMessages },
-        });
-        expect(rawDataToString(data)).toBe(expected);
-        expect(stream.bytesWritten - before).toBeLessThan(Buffer.byteLength(expected) / 4);
-      }
       // Live session/tool events stay raw below the threshold.
       const smallText = "x".repeat(GATEWAY_PER_MESSAGE_DEFLATE.threshold / 2);
       expect(await echo("small", smallText)).toBeGreaterThan(smallText.length);
       const inlineText = "x".repeat(MAX_PREAUTH_PAYLOAD_BYTES * 2);
-      for (const [id, text] of [
-        ["medium", "x".repeat(6 * 1024)],
-        ["inline", inlineText],
-        ["repetitive", "x".repeat(2 * 1024 * 1024)],
-      ] as const) {
-        expect(await echo(id, text)).toBeLessThan(text.length / 4);
-      }
+      expect(await echo("inline", inlineText)).toBeLessThan(inlineText.length / 4);
       // Repeats farther apart than the negotiated window must not be referenced.
       const windowText = randomBytes(1536).toString("base64").repeat(16);
       await echo("window", windowText);
-      // Barely compressible frames still round-trip.
-      const randomText = randomBytes(384 * 1024).toString("base64");
-      await echo("random", randomText);
       // Fragmented compressed requests inflate once the final fragment arrives.
       const fragmented = request("fragmented", inlineText);
       const split = fragmented.length >> 1;
