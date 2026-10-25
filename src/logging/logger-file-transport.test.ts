@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
-import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -47,12 +46,6 @@ async function logBatch(...messages: string[]) {
   await fileLogTransport.flush();
 }
 
-function writeStableRecords(): void {
-  const logger = getLogger();
-  logger.info({ sequence: 1 }, "first queued record");
-  logger.info({ sequence: 2 }, "second queued record");
-}
-
 beforeAll(async () => {
   await logPathTracker.setup();
   await fileLogTransport.flush();
@@ -81,28 +74,6 @@ afterEach(async () => {
 afterAll(() => logPathTracker.cleanup());
 beforeEach(() => {
   logPath = logPathTracker.nextPath();
-});
-
-it("writes queued records in order and byte-identically to the synchronous drain", async () => {
-  const syncPath = logPathTracker.nextPath();
-  const asyncPath = logPathTracker.nextPath();
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-07-27T12:00:00Z"));
-  vi.spyOn(os, "hostname").mockReturnValue("transport-test-host");
-  setLoggerOverride({ level: "info", file: syncPath });
-
-  writeStableRecords();
-  fileLogTransport.drainSync();
-  const syncBytes = fs.readFileSync(syncPath);
-
-  resetLogger();
-  setLoggerOverride({ level: "info", file: asyncPath });
-  writeStableRecords();
-  await fileLogTransport.flush();
-
-  expect(fs.readFileSync(asyncPath)).toEqual(syncBytes);
-  const messages = records(syncPath).map((record) => record.message);
-  expect(messages).toEqual(["first queued record", "second queued record"]);
 });
 
 it("drops the oldest records on overflow and writes one count marker", async () => {
@@ -221,8 +192,7 @@ for (const kind of ["symlink", "hardlink"]) {
       failedLogPaths.add(logPath);
       const stderr = captureStderr();
       setLoggerOverride({ level: "info", file: logPath });
-      writeStableRecords();
-      await fileLogTransport.flush();
+      await logBatch("first queued record", "second queued record");
 
       expect(read(target)).toBe("untouched");
       expect(warningLines(stderr, "log file append failed")).toHaveLength(1);

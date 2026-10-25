@@ -195,56 +195,39 @@ describe("diagnostic run activity listener lifecycle", () => {
 });
 
 describe("argument-churn liveness", () => {
-  it("keeps frequently observed churn stale across mechanical model progress", () => {
+  it.each([true, false])("tracks churn continuity (observation refreshed=%s)", (refreshed) => {
     const startedAt = setClock("2026-07-27T00:00:00Z");
     startRun();
     markDiagnosticArgumentChurnObservation({ ...run, active: true });
-
-    for (let step = 1; step <= 12; step += 1) {
-      vi.setSystemTime(startedAt + step * 30_000);
+    for (let step = 1; step <= (refreshed ? 12 : 1); step += 1) {
+      vi.setSystemTime(startedAt + step * (refreshed ? 30_000 : 120_000));
       markDiagnosticRunProgress({ ...run, reason: "model_call:stream" });
-      markDiagnosticArgumentChurnObservation({ ...run, active: true });
+      if (refreshed) {
+        markDiagnosticArgumentChurnObservation({ ...run, active: true });
+      }
     }
-
-    expectProgress(ref, 6 * 60_000, "tool_loop:argument_churn", true);
-    markDiagnosticArgumentChurnObservation({ ...run, active: false });
-    expectProgress(ref, 0, "model_call:stream");
+    expectProgress(
+      ref,
+      refreshed ? 6 * 60_000 : 0,
+      refreshed ? "tool_loop:argument_churn" : "model_call:stream",
+      true,
+    );
+    markDiagnosticArgumentChurnObservation({ ...run, active: !refreshed });
+    expectProgress(ref, 0, refreshed ? "model_call:stream" : "tool_loop:argument_churn");
   });
 
-  it("lets later model progress supersede churn after tool activity stops", () => {
-    const startedAt = setClock("2026-07-27T00:00:00Z");
-    startRun();
-    markDiagnosticArgumentChurnObservation({ ...run, active: true });
-
-    vi.setSystemTime(startedAt + 2 * 60_000);
-    markDiagnosticRunProgress({ ...run, reason: "model_call:stream" });
-    expectProgress(ref, 0, "model_call:stream");
-
-    // If churn later resumes, its clock restarts instead of inheriting the old age.
-    markDiagnosticArgumentChurnObservation({ ...run, active: true });
-    expectProgress(ref, 0, "tool_loop:argument_churn");
-  });
-
-  it("preserves same-timestamp progress ordering when session refs merge", () => {
-    const startedAt = setClock("2026-07-27T00:00:00Z");
-
-    markDiagnosticEmbeddedRunStarted({ sessionId, runId });
-    markDiagnosticArgumentChurnObservation({ sessionId, runId, active: true });
-    markDiagnosticRunProgress({ sessionKey, reason: "model_call:stream" });
-
-    vi.setSystemTime(startedAt + 60_000);
-    expectProgress(ref, 60_000, "model_call:stream");
-  });
-
-  it("keeps a later same-timestamp churn clear when session refs merge", () => {
+  it.each([false, true])("preserves same-timestamp alias ordering (churn cleared=%s)", (clear) => {
     const startedAt = setClock("2026-07-27T00:00:00Z");
     markDiagnosticEmbeddedRunStarted({ sessionId, runId });
     markDiagnosticArgumentChurnObservation({ sessionId, runId, active: true });
-    markDiagnosticArgumentChurnObservation({ sessionKey, active: true });
-    markDiagnosticArgumentChurnObservation({ sessionKey, active: false });
-
+    if (clear) {
+      markDiagnosticArgumentChurnObservation({ sessionKey, active: true });
+      markDiagnosticArgumentChurnObservation({ sessionKey, active: false });
+    } else {
+      markDiagnosticRunProgress({ sessionKey, reason: "model_call:stream" });
+    }
     vi.setSystemTime(startedAt + 60_000);
-    expectProgress({ sessionId, sessionKey }, 60_000, "embedded_run:started");
+    expectProgress(ref, 60_000, clear ? "embedded_run:started" : "model_call:stream");
   });
 
   it("keeps overlapping policy waits suspended until every call releases its token", () => {

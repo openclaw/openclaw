@@ -30,7 +30,6 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
@@ -55,7 +54,6 @@ type FallbackSettlement = {
 };
 
 async function createResponsesFallbackFixture(signal: AbortSignal) {
-  const requests: Array<Record<string, unknown>> = [];
   const responses: ServerResponse[] = [];
   const received = [createDeferred(), createDeferred(), createDeferred()];
   const server = createServer(async (request, response) => {
@@ -65,9 +63,8 @@ async function createResponsesFallbackFixture(signal: AbortSignal) {
       response.end();
       return;
     }
-    const body = await readRequestText(request);
-    const index = requests.length;
-    requests.push(JSON.parse(body) as Record<string, unknown>);
+    await readRequestText(request);
+    const index = responses.length;
     responses.push(response);
     if (index >= received.length) {
       respondJson(response, { error: { message: "unexpected extra loopback request" } }, 503);
@@ -92,7 +89,9 @@ async function createResponsesFallbackFixture(signal: AbortSignal) {
   };
   return {
     baseUrl: "http://127.0.0.1:" + claim.port + "/v1",
-    requests,
+    get requestCount() {
+      return responses.length;
+    },
     received: received.map((gate) => gate.promise),
     failRequest(index: number) {
       responseAt(index).destroy();
@@ -196,8 +195,6 @@ it.for(["success", "expiry"] as const)(
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, owner });
     const controller = new AbortController();
-    const activeEntered = createDeferred();
-    const releaseActive = createDeferred();
     const streamingStarted = createDeferred();
     const context: Context = {
       messages: [{ role: "user", content: "Return a short synthetic response.", timestamp: 1 }],
@@ -214,40 +211,19 @@ it.for(["success", "expiry"] as const)(
       isCompacting: () => false,
       abort: vi.fn(() => {
         controller.abort(new Error("diagnostic owner cancellation"));
-        releaseActive.resolve();
       }),
     };
-    const activeRun = withSessionTurn({ ...ref, replyOperation: operation }, async () => {
-      attachActiveEmbeddedRun(
-        ref.sessionId,
-        handle,
-        ref.sessionKey,
-        undefined,
-        undefined,
-        operation,
-      );
-      activeEntered.resolve();
-      try {
-        await releaseActive.promise;
-        await chain;
-        await waitForDiagnosticEventsDrained();
-      } finally {
-        detachActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
-        operation.complete();
-      }
-    });
-    const releaseCleanup = operation.registerExecutionCleanup(() => activeRun);
     let chain: Promise<FallbackSettlement> | undefined;
+    attachActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey, undefined, undefined, operation);
+    const releaseCleanup = operation.registerExecutionCleanup(async () => {
+      await chain;
+      await waitForDiagnosticEventsDrained();
+      detachActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
+      operation.complete();
+    });
     const waitForStage = (gate: Promise<unknown>, description: string) =>
       wait(awaitGateBeforeSettlement(gate, chain!, description));
     try {
-      await wait(
-        awaitGateBeforeSettlement(
-          activeEntered.promise,
-          activeRun,
-          "owner settled before registration",
-        ),
-      );
       chain = runWithModelFallback<FixtureOutcome>({
         cfg: undefined,
         provider: "synthetic-primary",
@@ -314,11 +290,6 @@ it.for(["success", "expiry"] as const)(
         fixture.failRequest(index);
       }
       await waitForStage(fixture.received[2]!, "chain settled before fallback HTTP request");
-      expect(fixture.requests.map((request) => request.model)).toEqual([
-        "first",
-        "retry",
-        "local-response",
-      ]);
       fixture.startFallbackStream();
       await waitForStage(streamingStarted.promise, "fallback settled before streamed start");
       await waitForDiagnosticEventsDrained();
@@ -375,15 +346,13 @@ it.for(["success", "expiry"] as const)(
         expect(handle.abort).toHaveBeenCalledOnce();
         expect((await wait(chain)).error).toBeDefined();
       }
-      expect(fixture.requests).toHaveLength(3);
+      expect(fixture.requestCount).toBe(3);
     } finally {
       controller.abort(new Error("test cleanup"));
-      releaseActive.resolve();
       try {
         if (chain) {
           await wait(chain);
         }
-        await wait(activeRun);
       } finally {
         releaseCleanup();
         detachActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);

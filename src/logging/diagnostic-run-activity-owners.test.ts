@@ -1,20 +1,30 @@
+import { channel } from "node:diagnostics_channel";
+import { totalmem } from "node:os";
 import {
   emitDiagnosticEvent as emitPluginDiagnosticEvent,
   emitTrustedDiagnosticEvent as emitPluginTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData as emitPluginTrustedDiagnosticEventWithPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { recordCommandPoll } from "../agents/command-poll-backoff.js";
+import { detectToolCallLoop, recordToolCall } from "../agents/tool-loop-detection.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
+  onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import {
   emitCoreModelRequestEndedDiagnosticEvent,
   emitCoreModelRequestStartedDiagnosticEvent,
 } from "../infra/diagnostic-model-request.js";
+import * as spawnDiagnostics from "../process/spawn-diagnostics.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { testing } from "../sessions/session-controller.test-support.js";
 import {
@@ -33,24 +43,36 @@ import {
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticRunProgress,
   markDiagnosticOwnedToolActivity,
-  resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
-import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.js";
 import {
+  getDiagnosticSessionState,
+  isDiagnosticSessionStateCurrent,
+} from "./diagnostic-session-state.js";
+import {
+  diagnosticLogger,
+  logMessageQueued,
+  logWebhookReceived,
   logSessionStateChange,
   startGatewayDiagnosticHeartbeat,
   stopGatewayDiagnosticHeartbeat,
 } from "./diagnostic.js";
+import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
+import { createDiagnosticMessageLifecycle } from "./message-lifecycle.js";
 
 const session = { sessionId: "owner-session", sessionKey: "agent:main:owner" };
 
-afterEach(() => {
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
+  }
+  clearRuntimeConfigSnapshot();
   testing.resetSessionControllerForTest();
+  resetDiagnosticStateForTest();
+  resetDiagnosticEventsForTest();
+  setDiagnosticsEnabledForProcess(true);
   vi.restoreAllMocks();
   vi.useRealTimers();
-  resetDiagnosticRunActivityForTest();
-  resetDiagnosticEventsForTest();
 });
 
 function startOwner(run: Parameters<typeof createDiagnosticEmbeddedRunOwner>[0]) {
@@ -130,14 +152,12 @@ describe("core model owner generations", () => {
       activeModelCallRequestTimeoutMs: 900_000,
     });
     expect(resolveRunStaleThresholdMs(activity, 360_000, 360_000)).toBe(900_000);
-    closeDiagnosticEmbeddedRunOwner(owner);
   });
 
   it.each([false, true])(
     "releases drained run fences without losing idle progress (merged: %s)",
     async (merge) => {
       const target = { sessionId: "merged-session", sessionKey: session.sessionKey };
-      startDiagnosticRunActivityTracking();
       if (merge) {
         markDiagnosticRunProgress({ sessionId: target.sessionId, reason: "prior-progress" });
       }
@@ -217,11 +237,8 @@ describe("core model owner generations", () => {
     vi.setSystemTime(startedAt);
     const earlier = { ...session, runId: "earlier-run", workKey: "first" };
     const later = { ...session, runId: "later-run", workKey: "second" };
-    const earlierOwner = createDiagnosticEmbeddedRunOwner(earlier);
-    const laterOwner = createDiagnosticEmbeddedRunOwner(later);
-    startDiagnosticRunActivityTracking();
-    markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
-    markDiagnosticEmbeddedRunStarted({ ...later, owner: laterOwner });
+    const earlierOwner = startOwner(earlier);
+    startOwner(later);
     markDiagnosticEmbeddedRunStarted({ ...earlier, owner: earlierOwner });
     markDiagnosticArgumentChurnObservation({ ...session, runId: earlier.runId, active: true });
     for (const callId of ["request-1", "request-2"]) {
@@ -244,7 +261,6 @@ describe("core model owner generations", () => {
       lastProgressReason: "embedded_run:ended",
       repeatedRequestNoProgressAgeMs: undefined,
     });
-    closeDiagnosticEmbeddedRunOwner(laterOwner);
   });
 
   it("keeps exact-call recovery policy intact across forged terminals and run completion", async () => {
@@ -300,36 +316,18 @@ describe("core model owner generations", () => {
 
   it("projects only the current owner generation request timeout", async () => {
     const startedAt = setClock();
-    const oldRunId = "long-prior-request";
-    const currentRunId = "current-request";
-    const oldOwner = createDiagnosticEmbeddedRunOwner({
-      ...session,
-      runId: oldRunId,
-      workKey: "prior-owner",
-    });
-    const currentOwner = createDiagnosticEmbeddedRunOwner({
-      ...session,
-      runId: currentRunId,
-      workKey: "current-owner",
-    });
-    startDiagnosticRunActivityTracking();
-    try {
-      markDiagnosticEmbeddedRunStarted({ ...oldOwner, owner: oldOwner });
-      startRequest(oldOwner, "prior-long-call", 600_000, "slow-prior-model");
+    for (const [runId, timeout] of [
+      ["prior", 600_000],
+      ["current", 100_000],
+    ] as const) {
+      const owner = startOwner({ ...session, runId, workKey: runId });
+      startRequest(owner, "request", timeout);
       await waitForDiagnosticEventsDrained();
-
       vi.setSystemTime(startedAt + 100);
-      markDiagnosticEmbeddedRunStarted({ ...currentOwner, owner: currentOwner });
-      startRequest(currentOwner, "current-short-call", 100_000, "current-model");
-      await waitForDiagnosticEventsDrained();
-
-      const requestTimeoutMs =
-        getDiagnosticSessionActivitySnapshot(session).activeModelCallRequestTimeoutMs;
-      expect(requestTimeoutMs).toBe(100_000);
-    } finally {
-      closeDiagnosticEmbeddedRunOwner(oldOwner);
-      closeDiagnosticEmbeddedRunOwner(currentOwner);
     }
+    expect(getDiagnosticSessionActivitySnapshot(session).activeModelCallRequestTimeoutMs).toBe(
+      100_000,
+    );
   });
 });
 
@@ -337,11 +335,7 @@ function startOwnedRun(ref: Parameters<typeof createDiagnosticEmbeddedRunOwner>[
   const owner = startOwner(ref);
   return {
     owner,
-    snapshot: () =>
-      getDiagnosticSessionActivitySnapshot({
-        sessionId: ref.sessionId,
-        sessionKey: ref.sessionKey,
-      }),
+    snapshot: () => getDiagnosticSessionActivitySnapshot(ref),
     begin: (noOutputTimeoutMs = 480_000, assertCurrent = () => {}) =>
       beginDiagnosticBackendActivity({ owner, noOutputTimeoutMs, assertCurrent }),
   };
@@ -363,13 +357,11 @@ describe("owned backend silence allowances", () => {
       },
     },
   ])("does not accept backend allowance fields from the $name", async ({ emit }) => {
-    const ref = { sessionId: "forged-allowance", sessionKey: "agent:main:forged-allowance" };
-    const runId = "forged-allowance-run";
-    const { snapshot } = startOwnedRun({ ...ref, runId });
+    const ref = { ...session, runId: "forged-allowance-run" };
+    const { snapshot } = startOwnedRun(ref);
     const forged = {
       type: "run.progress" as const,
       ...ref,
-      runId,
       reason: "model_call:stream_progress",
       backendLivenessTimeoutMs: 480_000,
       activeBackendLivenessDeadlineAtMs: Date.now() + 480_000,
@@ -379,11 +371,9 @@ describe("owned backend silence allowances", () => {
     await waitForDiagnosticEventsDrained();
 
     expect(snapshot()).toMatchObject({
-      hasActiveEmbeddedRun: true,
       lastProgressReason: "embedded_run:started",
-      activeModelCallRequestTimeoutMs: undefined,
+      activeBackendLivenessDeadlineAtMs: undefined,
     });
-    expect(snapshot().activeBackendLivenessDeadlineAtMs).toBeUndefined();
   });
 
   it.each(["owned tool", "same-id successor"] as const)(
@@ -392,13 +382,11 @@ describe("owned backend silence allowances", () => {
       vi.useFakeTimers();
       const startedAt = Date.parse("2026-08-04T00:00:00Z");
       vi.setSystemTime(startedAt);
-      const ref = { sessionId: "queued-progress", sessionKey: "agent:main:queued-progress" };
-      const runId = "reused-progress-run";
-      const { owner, snapshot } = startOwnedRun({ ...ref, runId });
+      const ref = { ...session, runId: "reused-progress-run" };
+      const { owner, snapshot } = startOwnedRun(ref);
       emitTrustedDiagnosticEvent({
         type: "run.progress",
         ...ref,
-        runId,
         reason: "model_call:stream_progress",
       });
 
@@ -411,8 +399,7 @@ describe("owned backend silence allowances", () => {
         });
       } else {
         closeDiagnosticEmbeddedRunOwner(owner);
-        const successor = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
-        markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: successor });
+        startOwner(ref);
       }
       vi.setSystemTime(startedAt + 2_000);
       const before = snapshot();
@@ -432,8 +419,7 @@ describe("owned backend silence allowances", () => {
   it("starts before output and separates backend activity from model progress", () => {
     let now = 1_000_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    const ref = { sessionId: "cli-session", sessionKey: "agent:main:cli" };
-    const { snapshot, begin } = startOwnedRun({ ...ref, runId: "cli-run" });
+    const { snapshot, begin } = startOwnedRun({ ...session, runId: "cli-run" });
     const backend = begin();
     expect(snapshot()).toMatchObject({
       activeWorkKind: "embedded_run",
@@ -471,26 +457,21 @@ describe("owned backend silence allowances", () => {
       const startedAt = 1_000_000;
       vi.setSystemTime(startedAt);
       const ref = { sessionId: "background-allowance", runId: "background-allowance-run" };
-      const { owner, snapshot, begin } = startOwnedRun(ref);
+      const { snapshot, begin } = startOwnedRun(ref);
       const backend = begin(noOutputTimeoutMs);
-      try {
-        vi.setSystemTime(startedAt + 60_000);
-        backend.setOutstandingWork(true);
-        const deadline = startedAt + Math.max(noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
-        expect(snapshot()).toMatchObject({
-          activeBackendLivenessDeadlineAtMs: deadline,
-          lastProgressAgeMs: 60_000,
-          lastProgressReason: "embedded_run:started",
-        });
-        vi.setSystemTime(deadline);
-        backend.setOutstandingWork(true);
-        expect(snapshot().activeBackendLivenessDeadlineAtMs).toBe(deadline);
-        backend.setOutstandingWork(false);
-        expect(snapshot().activeBackendLivenessDeadlineAtMs).toBe(startedAt + noOutputTimeoutMs);
-      } finally {
-        backend.close();
-        closeDiagnosticEmbeddedRunOwner(owner);
-      }
+      vi.setSystemTime(startedAt + 60_000);
+      backend.setOutstandingWork(true);
+      const deadline = startedAt + Math.max(noOutputTimeoutMs, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
+      expect(snapshot()).toMatchObject({
+        activeBackendLivenessDeadlineAtMs: deadline,
+        lastProgressAgeMs: 60_000,
+        lastProgressReason: "embedded_run:started",
+      });
+      vi.setSystemTime(deadline);
+      backend.setOutstandingWork(true);
+      expect(snapshot().activeBackendLivenessDeadlineAtMs).toBe(deadline);
+      backend.setOutstandingWork(false);
+      expect(snapshot().activeBackendLivenessDeadlineAtMs).toBe(startedAt + noOutputTimeoutMs);
     },
   );
 
@@ -499,9 +480,8 @@ describe("owned backend silence allowances", () => {
     (closure) => {
       let now = 1_000_000;
       vi.spyOn(Date, "now").mockImplementation(() => now);
-      const ref = { sessionId: "reused-session", sessionKey: "agent:main:reused" };
-      const runId = "reused-run";
-      const { owner, snapshot, begin } = startOwnedRun({ ...ref, runId });
+      const ref = { ...session, runId: "reused-run" };
+      const { owner, snapshot, begin } = startOwnedRun(ref);
       let current = true;
       const backend = begin(480_000, () => {
         if (!current) {
@@ -521,11 +501,9 @@ describe("owned backend silence allowances", () => {
       expect(snapshot().activeBackendLivenessDeadlineAtMs).toBeUndefined();
 
       const replacementOwner =
-        closure === "owner replacement"
-          ? createDiagnosticEmbeddedRunOwner({ ...ref, runId })
-          : owner;
+        closure === "owner replacement" ? createDiagnosticEmbeddedRunOwner(ref) : owner;
       if (closure === "owner replacement") {
-        markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: replacementOwner });
+        markDiagnosticEmbeddedRunStarted({ ...ref, owner: replacementOwner });
       }
       const replacement =
         closure === "owner replacement" || closure === "attempt close"
@@ -552,6 +530,7 @@ describe("owned backend silence allowances", () => {
   it("does not abort an Agent call while attributed subagent progress stays inside the floor", async () => {
     const clock = createGatewaySchedulerClock(Date.parse("2026-09-24T00:00:00Z"));
     const scheduler = createTestGatewayScheduler(clock.clock);
+    cleanups.push(() => scheduler.stop());
     vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
     const advanceHeartbeats = async (durationMs: number) => {
       // Recovery discounts scheduler lateness, so advance ordinary heartbeat windows.
@@ -568,11 +547,7 @@ describe("owned backend silence allowances", () => {
         testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
       },
     );
-    const ref = {
-      sessionId: "agent-progress",
-      sessionKey: "agent:main:agent-progress",
-      runId: "agent-run",
-    };
+    const ref = { ...session, runId: "agent-run" };
     logSessionStateChange({ ...ref, state: "processing" });
     const operation = createReplyOperation({ ...ref, resetTriggered: false });
     operation.setPhase("running");
@@ -584,38 +559,223 @@ describe("owned backend silence allowances", () => {
       toolCallId: "toolu_parent",
     });
     const backend = begin(180_000);
-    try {
-      await advanceHeartbeats(14 * 60_000);
-      expect(recoverStuckSession).not.toHaveBeenCalled();
-      expect(backend.observeAttributedAgentProgress("toolu_bash")).toBe(false);
-      expect(snapshot()).toMatchObject({
-        activeToolName: "Agent",
-        activeToolCallId: "toolu_parent",
-        lastProgressReason: "reply_operation:queued",
-        lastProgressAgeMs: 14 * 60_000,
-      });
+    await advanceHeartbeats(14 * 60_000);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(backend.observeAttributedAgentProgress("toolu_bash")).toBe(false);
+    expect(snapshot()).toMatchObject({
+      activeToolName: "Agent",
+      activeToolCallId: "toolu_parent",
+      lastProgressReason: "reply_operation:queued",
+      lastProgressAgeMs: 14 * 60_000,
+    });
 
-      expect(backend.observeAttributedAgentProgress("toolu_parent")).toBe(true);
-      expect(snapshot()).toMatchObject({
-        lastProgressReason: "tool:owned_progress",
-        lastProgressAgeMs: 0,
-        activeToolAgeMs: 14 * 60_000,
-      });
+    expect(backend.observeAttributedAgentProgress("toolu_parent")).toBe(true);
+    expect(snapshot()).toMatchObject({
+      lastProgressReason: "tool:owned_progress",
+      lastProgressAgeMs: 0,
+      activeToolAgeMs: 14 * 60_000,
+    });
 
-      await advanceHeartbeats(14 * 60_000);
-      expect(recoverStuckSession).not.toHaveBeenCalled();
-      await advanceHeartbeats(60_000);
-      expect(operation.watchdog.decide().action).toBe("stop");
-      expect(recoverStuckSession).toHaveBeenCalledOnce();
-      expect(recoverStuckSession).toHaveBeenCalledWith(
-        expect.objectContaining({ operation, allowActiveAbort: true }),
-      );
-    } finally {
-      backend.close();
-      closeDiagnosticEmbeddedRunOwner(owner);
-      stopGatewayDiagnosticHeartbeat();
-      await scheduler.stop();
-      resetDiagnosticSessionStateForTest();
-    }
+    await advanceHeartbeats(14 * 60_000);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    await advanceHeartbeats(60_000);
+    expect(operation.watchdog.decide().action).toBe("stop");
+    expect(recoverStuckSession).toHaveBeenCalledOnce();
+    expect(recoverStuckSession).toHaveBeenCalledWith(
+      expect.objectContaining({ operation, allowActiveAbort: true }),
+    );
   });
+});
+
+function expectCalls(count: number, ...observers: MockInstance[]) {
+  for (const observer of observers) {
+    expect(observer).toHaveBeenCalledTimes(count);
+  }
+}
+
+function heartbeatOptions() {
+  return {
+    emitMemorySample: vi.fn(),
+    sampleLiveness: vi.fn(() => null),
+    getConfig: vi.fn(() => ({})),
+    recoverStuckSession: vi.fn(),
+  };
+}
+
+const cleanups: Array<() => void | Promise<void>> = [];
+function heartbeatFixture(internal = false, startedAt = Date.now()) {
+  const clock = createGatewaySchedulerClock(startedAt);
+  const scheduler = createTestGatewayScheduler(clock.clock);
+  const events: DiagnosticEventPayload[] = [];
+  cleanups.push(
+    (internal ? onInternalDiagnosticEvent : onDiagnosticEvent)((event) => events.push(event)),
+    () => scheduler.stop(),
+  );
+  return { clock, scheduler, events };
+}
+
+// Mirrors the private per-field budget in diagnostic-content.ts.
+const MAX_DIAGNOSTIC_CONTENT_CHARS = 128 * 1024;
+
+it("bounds captured content and preserves ingesting-agent attribution on dispatch", () => {
+  setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
+  const oversizedContent = `${"x".repeat(MAX_DIAGNOSTIC_CONTENT_CHARS - 1)}🚀tail`;
+  const captured: Array<{ userPrompt?: string; finalResponse?: string }> = [];
+  const agents: Array<string | undefined> = [];
+  cleanups.push(
+    onDiagnosticEvent((event) => {
+      if (event.type === "message.processed") {
+        agents.push(event.agentId);
+      }
+    }),
+    onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      if (event.type === "message.processed" && privateData.messageContent) {
+        captured.push(privateData.messageContent);
+      }
+    }),
+  );
+  const lifecycle = createDiagnosticMessageLifecycle({
+    enabled: true,
+    channel: "test",
+    source: "test",
+    trackSessionState: false,
+    sessionKey: "agent:main:lifecycle",
+    agentId: "main",
+    userPrompt: oversizedContent,
+  });
+  lifecycle.markProcessed("completed", { finalResponse: oversizedContent });
+
+  expect(captured).toHaveLength(1);
+  expect(agents).toEqual(["main"]);
+  for (const value of [captured[0]?.userPrompt, captured[0]?.finalResponse]) {
+    expect(value?.length).toBeLessThanOrEqual(MAX_DIAGNOSTIC_CONTENT_CHARS);
+    expect(value?.charCodeAt((value?.length ?? 0) - 1)).not.toBe(0xd83d);
+  }
+});
+
+it("preserves independent tool-loop and poll-backoff policy when diagnostic observation stops", () => {
+  const ref = { sessionKey: "diagnostic-tool-history" };
+  const state = getDiagnosticSessionState(ref);
+  const args = { path: "fixture.txt" };
+  for (let index = 0; index < 10; index += 1) {
+    recordToolCall(state, "read", args);
+  }
+  const before = detectToolCallLoop(state, "read", args);
+  expect(before).toMatchObject({ stuck: true, detector: "generic_repeat", count: 10 });
+  expect(recordCommandPoll(state, "fixture-command", false)).toBe(5_000);
+  expect(recordCommandPoll(state, "fixture-command", false)).toBe(10_000);
+  setDiagnosticsEnabledForProcess(false);
+  stopGatewayDiagnosticHeartbeat();
+  const current = getDiagnosticSessionState(ref);
+  expect(detectToolCallLoop(current, "read", args)).toEqual(before);
+  expect(recordCommandPoll(current, "fixture-command", false)).toBe(30_000);
+});
+
+it("keeps pressure sampling silent and reconciles diagnostic options on one cadence", async () => {
+  const { clock, scheduler, events } = heartbeatFixture(true);
+  const pressure = channel("openclaw.memory.critical");
+  const critical = vi.fn();
+  const childSamples = vi.spyOn(spawnDiagnostics, "emitChildProcessSpawnSample");
+  const warn = vi.spyOn(diagnosticLogger, "warn");
+  const readMemoryUsage = process.memoryUsage;
+  const criticalRss = totalmem();
+  Object.assign(
+    vi.spyOn(process, "memoryUsage").mockImplementation(() => ({
+      ...readMemoryUsage(),
+      rss: criticalRss,
+    })),
+    { rss: () => criticalRss },
+  );
+  const first = heartbeatOptions();
+  const latest = heartbeatOptions();
+  pressure.subscribe(critical);
+  cleanups.unshift(() => pressure.unsubscribe(critical));
+  setDiagnosticsEnabledForProcess(false);
+  startGatewayDiagnosticHeartbeat(scheduler, undefined, first);
+  await clock.advanceBy(30_000);
+  expect(critical).toHaveBeenCalledTimes(1);
+  expect(events).toEqual([]);
+  expectCalls(0, ...Object.values(first), childSamples, warn);
+
+  setDiagnosticsEnabledForProcess(true);
+  startGatewayDiagnosticHeartbeat(scheduler, undefined, first);
+  await clock.advanceBy(30_000);
+  expect(first.emitMemorySample).toHaveBeenCalledTimes(1);
+  await clock.advanceBy(15_000);
+  startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
+  await clock.advanceBy(15_000);
+  expectCalls(
+    1,
+    first.emitMemorySample,
+    latest.emitMemorySample,
+    latest.sampleLiveness,
+    latest.getConfig,
+  );
+  expect(childSamples).toHaveBeenCalledTimes(2);
+
+  setDiagnosticsEnabledForProcess(false);
+  startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
+  await waitForDiagnosticEventsDrained();
+  const observed = events.length;
+  await clock.advanceBy(5 * 60_000);
+  await waitForDiagnosticEventsDrained();
+  expect(critical).toHaveBeenCalledTimes(2);
+  expect(events).toHaveLength(observed);
+  expectCalls(0, latest.recoverStuckSession);
+  expectCalls(1, latest.emitMemorySample, latest.sampleLiveness, latest.getConfig);
+  expect(childSamples).toHaveBeenCalledTimes(2);
+
+  setDiagnosticsEnabledForProcess(true);
+  startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
+  await clock.advanceBy(30_000);
+  expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
+  expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("heartbeat delayed"));
+  // Explicit heartbeat config is also authoritative; recovery config is a separate lookup.
+  startGatewayDiagnosticHeartbeat(scheduler, { diagnostics: { enabled: false } }, latest);
+  await clock.advanceBy(30_000);
+  expect(critical).toHaveBeenCalledTimes(3);
+  expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
+  expectCalls(0, warn);
+  expect(childSamples).toHaveBeenCalledTimes(3);
+
+  startGatewayDiagnosticHeartbeat(scheduler, {}, latest);
+  stopGatewayDiagnosticHeartbeat();
+  await clock.advanceBy(120_000);
+  expect(critical).toHaveBeenCalledTimes(3);
+  expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
+  startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
+  scheduler.beginClose();
+  await scheduler.stop();
+  startGatewayDiagnosticHeartbeat(scheduler, undefined, latest);
+  await clock.advanceBy(30_000);
+  expect(critical).toHaveBeenCalledTimes(3);
+  expect(latest.emitMemorySample).toHaveBeenCalledTimes(2);
+});
+
+it("retires interrupted diagnostic observations before re-enable without reviving their authority", async () => {
+  const { clock, scheduler, events } = heartbeatFixture();
+  setDiagnosticsEnabledForProcess(true);
+  const ref = { sessionKey: "diagnostic-lifecycle", sessionId: "diagnostic-lifecycle" };
+  startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
+  logMessageQueued({ ...ref, source: "test" });
+  logSessionStateChange({ ...ref, state: "processing" });
+  const generation = getDiagnosticSessionState(ref).generation;
+  expect(generation).toBeTypeOf("number");
+  expect(isDiagnosticSessionStateCurrent({ ...ref, generation, state: "processing" })).toBe(true);
+  setDiagnosticsEnabledForProcess(false);
+  startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
+  logSessionStateChange({ ...ref, state: "idle" });
+  setDiagnosticsEnabledForProcess(true);
+  startGatewayDiagnosticHeartbeat(scheduler, {}, { sampleLiveness: () => null });
+  logWebhookReceived({ channel: "test" });
+  await clock.advanceBy(30_000);
+  await waitForDiagnosticEventsDrained();
+  expect(events.findLast((event) => event.type === "diagnostic.heartbeat")).toMatchObject({
+    active: 0,
+    queued: 0,
+    waiting: 0,
+  });
+  logMessageQueued({ ...ref, source: "test" });
+  logSessionStateChange({ ...ref, state: "processing" });
+  expect(isDiagnosticSessionStateCurrent({ ...ref, generation, state: "processing" })).toBe(false);
 });

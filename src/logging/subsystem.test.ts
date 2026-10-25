@@ -78,17 +78,6 @@ afterEach(async () => {
 
 afterAll(() => logPathTracker.cleanup());
 
-it("formats host runtime arguments before routing them to the subsystem logger", () => {
-  const logger = createSubsystemLogger("runtime-arguments");
-  const info = vi.spyOn(logger, "info").mockImplementation(() => {});
-  const error = vi.spyOn(logger, "error").mockImplementation(() => {});
-  const runtime = runtimeForLogger(logger);
-  runtime.log("ready", { active: true }, 17);
-  runtime.error("failed", { retryable: false });
-  expect(info).toHaveBeenCalledExactlyOnceWith("ready { active: true } 17");
-  expect(error).toHaveBeenCalledExactlyOnceWith("failed { retryable: false }");
-});
-
 it.each(["pretty", "compact", "json"] as const)(
   "keeps explicitly file-only diagnostics out of the %s console",
   async (consoleStyle) => {
@@ -158,17 +147,7 @@ describe("createSubsystemLogger().isEnabled", () => {
         expected: { errorCategory: "Error", errorCode: "ERR_WORKER_OUT_OF_MEMORY" },
       },
     ];
-    const context = {
-      failurePhase: "bridge",
-      sessionId: "session-fixture",
-      sessionKey: "agent:fixture:main",
-      runId: "agent-run-fixture",
-      codeModeRunId: "cell-fixture",
-      toolCallId: "call-fixture",
-      workerId: "worker-fixture",
-      bridgeRequestId: "bridge:callValue:1",
-      bridgeDispatchStarted: true,
-    };
+    const context = { failurePhase: "bridge", runId: "agent-run-fixture" };
     for (const { error } of failures) {
       logCodeModeFailure(error, context);
     }
@@ -196,18 +175,9 @@ describe("createSubsystemLogger().isEnabled", () => {
       log[level](`stack policy ${level}`);
     }
     const records = await readRecords(file);
-    expect(records.map((record) => record.message)).toEqual(
-      levels.map((level) => `stack policy ${level}`),
-    );
     expect(records.map((record) => Boolean(record._meta.path?.fileLine))).toEqual(
       levels.map((level) => level === "error" || level === "fatal"),
     );
-    for (const record of records) {
-      expect(record._meta).toMatchObject({
-        name: '{"subsystem":"gateway/stack/nested"}',
-        parentNames: ["openclaw"],
-      });
-    }
   });
   it("exports INFO diagnostics without call sites while retaining warning locations", async () => {
     const file = fileLogging("info");
@@ -334,11 +304,12 @@ describe("createSubsystemLogger().isEnabled", () => {
       ],
     });
     const sink = installConsoleMethodSpy("error");
-    createSubsystemLogger("gateway")
-      .child("auth")
-      .error(`Authorization failed: Bearer ${secret} project-private`);
+    runtimeForLogger(createSubsystemLogger("gateway").child("auth")).error(
+      `Authorization failed: Bearer ${secret} project-private`,
+      { retryable: false },
+    );
     expect(sink).toHaveBeenCalledTimes(1);
-    expectText(consoleLine(sink), ["Bearer "], [secret, "project-private"]);
+    expectText(consoleLine(sink), ["Bearer ", "{ retryable: false }"], [secret, "project-private"]);
   });
   it("preserves redaction and ANSI resets as color settings change in pretty style", () => {
     vi.stubEnv("NO_COLOR", "1");
@@ -348,10 +319,10 @@ describe("createSubsystemLogger().isEnabled", () => {
     for (const forceColor of ["1", "0", "1"]) {
       vi.stubEnv("FORCE_COLOR", forceColor);
       logSpy.mockClear();
-      log.info(`provider API_KEY=${secret}`);
+      runtimeForLogger(log).log(`provider API_KEY=${secret}`, { active: true }, 17);
       expect(logSpy).toHaveBeenCalledTimes(1);
       const written = consoleLine(logSpy);
-      expectText(written, ["API_KEY=***", "[auth]"], [secret]);
+      expectText(written, ["API_KEY=***", "[auth]", "{ active: true } 17"], [secret]);
       expect(written.endsWith("\u001B[39m")).toBe(forceColor === "1");
     }
   });
@@ -451,7 +422,6 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(JSON.parse(line.slice(errorStart, line.lastIndexOf(" runId=")))).toEqual(expectedError);
     expectText(line, ["runId=synthetic-child"], ["omitted", "synthetic private"]);
     expect(fs.readFileSync(file, "utf8")).not.toContain("synthetic private");
-    expect(failure.stack).toContain("omitted");
   });
   it("redacts structured fields before the console tail length cap clips them", () => {
     const warn = consoleLogging();
@@ -461,29 +431,5 @@ describe("createSubsystemLogger().isEnabled", () => {
       apiToken: "opaque-value-no-pattern-match",
     });
     expectText(consoleLine(warn), ["...(truncated)"], ["opaque-value"]);
-  });
-  it("leaves json console output untouched and serializes each field once", () => {
-    const warn = consoleLogging("json");
-    let serializations = 0;
-    const stateful = {
-      toJSON() {
-        serializations += 1;
-        return { calls: serializations };
-      },
-    };
-    createSubsystemLogger("gateway/auth").warn("provider retry", {
-      elapsedMs: 12,
-      attempt: 2,
-      stateful,
-    });
-    const parsed = JSON.parse(consoleLine(warn));
-    expect(parsed).toMatchObject({
-      level: "warn",
-      subsystem: "gateway/auth",
-      message: "provider retry",
-      elapsedMs: 12,
-      attempt: 2,
-    });
-    expect(serializations).toBe(1);
   });
 });

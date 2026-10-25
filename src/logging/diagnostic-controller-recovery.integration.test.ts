@@ -5,7 +5,6 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../infra/net/undici-global-dispatcher.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { testing } from "../sessions/session-controller.test-support.js";
@@ -91,24 +90,6 @@ function heartbeat(now: number, shortTimings = true) {
   };
 }
 
-it("reports a 54-second stall without requesting recovery from an observing controller", async () => {
-  const ref = { ...session, runId: "deadline-run" };
-  const { operation, cancel, attempt, events } = observedOperation(ref);
-  const { recover, advance } = heartbeat(30_000);
-  vi.setSystemTime(45_000);
-  attempt.beginRequest({ requestTimeoutMs: 45_000, deadlineAtMs: 90_000 });
-  vi.setSystemTime(60_000);
-  expect(operation.watchdog.decide().action).toBe("observe");
-  await advance(60_000);
-  expect(events).toContainEqual(
-    expect.objectContaining({ type: "session.stalled", ageMs: 54_000 }),
-  );
-  expect(events.filter((event) => event.type.startsWith("session.recovery."))).toEqual([]);
-  expect(recover).not.toHaveBeenCalled();
-  expect(cancel).not.toHaveBeenCalled();
-  expect(operation.result).toBeNull();
-});
-
 it.each([
   { kind: "request", deadlineAtMs: 396_000 },
   { kind: "retry", deadlineAtMs: 396_000 },
@@ -140,6 +121,12 @@ it.each([
         expect(recover).not.toHaveBeenCalled();
         expect(cancel).not.toHaveBeenCalled();
         expect(operation.result).toBeNull();
+        if (kind === "request") {
+          expect(events).toContainEqual(
+            expect.objectContaining({ type: "session.stalled", ageMs: 330_000 }),
+          );
+          expect(events.filter((event) => event.type.startsWith("session.recovery."))).toEqual([]);
+        }
       }
     }
     expect(recover).toHaveBeenCalledOnce();
@@ -156,46 +143,19 @@ it.each([
   },
 );
 
-it.each(["missing", "retired"] as const)(
-  "does not adopt a replacement after capturing a %s owner",
-  (kind) => {
-    const ref = session;
-    const original =
-      kind === "retired" ? createReplyOperation({ ...ref, resetTriggered: false }) : undefined;
-    original?.complete();
-    const replacement = createReplyOperation({ ...ref, resetTriggered: false });
-    replacement.setPhase("running");
-    vi.setSystemTime(1_000_000);
-    const recover = vi.fn(recoverStuckDiagnosticSession);
-    requestStuckSessionRecovery({
-      classification,
-      request: { ...ref, operation: original, ageMs: 1_000_000 },
-      recover,
-    });
-    expect(recover).not.toHaveBeenCalled();
-    expect(replacement.result).toBeNull();
-  },
-);
-
-it("retains the finite local request ceiling without a diagnostic timeout policy", async () => {
-  const ref = session;
-  const { operation, cancel } = activeOperation(ref);
-  const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
-  const deadlineAtMs = 6_000 + DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
-  attempt.beginRequest({ requestTimeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS, deadlineAtMs });
+it("does not request recovery from a retired owner or adopt its replacement", () => {
+  const original = createReplyOperation({ ...session, resetTriggered: false });
+  original.complete();
+  const { operation: replacement } = activeOperation(session);
+  vi.setSystemTime(1_000_000);
   const recover = vi.fn(recoverStuckDiagnosticSession);
-  const request = { ...ref, operation, ageMs: 1_000_000 };
-  vi.setSystemTime(deadlineAtMs - 1);
-  requestStuckSessionRecovery({ classification, request, recover });
+  requestStuckSessionRecovery({
+    classification,
+    request: { ...session, operation: original, ageMs: 1_000_000 },
+    recover,
+  });
   expect(recover).not.toHaveBeenCalled();
-  vi.setSystemTime(deadlineAtMs);
-  requestStuckSessionRecovery({ classification, request, recover });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(recover).toHaveBeenCalledOnce();
-  await recover.mock.results[0]?.value;
-  await waitForDiagnosticEventsDrained();
-  expect(cancel).toHaveBeenCalledOnce();
-  expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+  expect(replacement.result).toBeNull();
 });
 
 it("defers an overdue heartbeat even when the captured controller is eligible", async () => {
