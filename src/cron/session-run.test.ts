@@ -1,9 +1,12 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createOperatorRecoveryAuthority } from "../agents/operator-recovery.test-support.js";
 import type {
   SessionEventOptions,
   SessionEventOutcome,
 } from "../auto-reply/reply/session-event-contract.js";
+import type * as SessionHandoff from "../auto-reply/reply/session-event-handoff.js";
 import type { RestoredGatewayOperatorAuthority } from "../gateway/operator-run-recovery.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronSourceDeliveryPlan } from "./isolated-agent/source-delivery-plan.js";
@@ -13,14 +16,8 @@ import { runCronSessionTurn } from "./session-run.js";
 
 const fixture = vi.hoisted(() => ({
   config: {},
-  capture:
-    vi.fn<
-      typeof import("../auto-reply/reply/session-event-handoff.js").captureSessionEventTargetForHost
-    >(),
-  enqueue:
-    vi.fn<
-      typeof import("../auto-reply/reply/session-event-handoff.js").enqueueSessionEventForHost
-    >(),
+  capture: vi.fn<typeof SessionHandoff.captureSessionEventTargetForHost>(),
+  enqueue: vi.fn<typeof SessionHandoff.enqueueSessionEventForHost>(),
   delivery:
     vi.fn<typeof import("./isolated-agent/run-delivery-trace.js").resolveCronDeliveryContext>(),
   restore: vi.fn<typeof import("../gateway/cron-operator-source.js").restoreCronOperatorSource>(),
@@ -115,21 +112,11 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
           ...target,
           sourceRunId: "original-request",
           snapshot: {
-            profileId: "requester",
-            scopes: ["operator.read"],
-            assignedRole: null,
-            githubLogin: null,
-            grant: null,
-            aliasBindingIds: [],
-            authPolicy: {
-              generation: "",
-              grantGeneration: "original-grant",
-              role: "operator",
-              authMethod: "token",
-            },
+            ...expectDefined(
+              createOperatorRecoveryAuthority("requester", "original-grant").recoverySnapshot,
+              "operator recovery fixture",
+            ),
             controlUiAdmin: true,
-            localOperator: false,
-            sourceIngress: "control-ui",
           },
         },
       },

@@ -59,8 +59,13 @@ function writeDefinition(jobId: string, value: Record<string, unknown>) {
 
 async function savedAuthority(jobId: string, overrides: Partial<Job> = {}) {
   const { storePath } = await makeStorePath();
-  const store = makeAuthorityStore(jobId);
-  Object.assign(store.jobs[0], overrides);
+  const store = makeStore(jobId, true);
+  Object.assign(store.jobs[0], {
+    sessionTarget: "isolated",
+    payload: turn(["read", "cron"], true),
+    runtimeAuthority: authority("calendar"),
+    ...overrides,
+  });
   await saveCronStore(storePath, store);
   return { storePath, store, job: store.jobs[0], database: openOpenClawStateDatabase().db };
 }
@@ -84,27 +89,6 @@ function saveGuarded(
       beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, expected),
     },
   });
-}
-
-function makeAuthorityStore(jobId: string) {
-  const store = makeStore(jobId, true);
-  const job = store.jobs[0];
-  job.owner = {
-    agentId: "main",
-    sessionKey: "agent:main:discord:group:ops",
-    accountId: "work",
-  };
-  job.sessionTarget = "isolated";
-  job.payload = turn(["read", "cron"], true);
-  job.scheduledToolPolicy = {
-    version: 1,
-    mode: "account",
-    ownerSessionKey: "agent:main:discord:group:ops",
-    ownerAccountId: "work",
-  };
-  job.toolsAllowProvenance = { version: 1, source: "final-executable-surface" };
-  job.runtimeAuthority = authority("calendar");
-  return store;
 }
 
 it("preserves separately stored authority through reads and older-writer edits", async () => {

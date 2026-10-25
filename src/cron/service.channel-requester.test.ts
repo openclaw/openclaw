@@ -1,10 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  createOperationalRunInstanceRef,
-  getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
+import { getAdmittedRunDelegatedAuthority } from "../agents/admitted-run-context.js";
 import {
   captureCronRequesterGrantIssuer,
   createCronCreatorAuthorityCapability,
@@ -21,6 +17,7 @@ import {
   resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
 } from "../gateway/mcp-grant-store.js";
+import { prepareAdmission } from "../gateway/mcp-http-request.test-support.js";
 import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
@@ -109,14 +106,9 @@ const requesterDeclaration = (overrides: Partial<CronJobCreate> = {}): CronJobCr
 it("rejects a minted requester token at commit after its MCP capture is deactivated", async () => {
   const runId = "cron-requester-mcp-commit";
   const config = {};
-  const admission = prepareAgentRunAdmission({
+  const admission = prepareAdmission(runId, "cron-requester-mcp-test", {
     cfg: config,
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: requesterOwner.agentId,
-      ingress: { kind: "system", boundary: "cron-requester-mcp-test", state: "present" },
-    },
+    agentId: requesterOwner.agentId,
   });
   let loopbackToken: string | undefined;
   try {
@@ -289,18 +281,10 @@ it.each(["update", "declaration"] as const)(
     if (mutation === "update") {
       await cron.update(created.id, { payload }, options);
     } else {
-      expect(await repeat()).toMatchObject({
-        id: created.id,
-        created: false,
-        updated: true,
-      });
+      expect(await repeat()).toMatchObject({ id: created.id, created: false, updated: true });
       expect(commitGuard).toHaveBeenCalled();
       commitGuard.mockClear();
-      expect(await repeat()).toMatchObject({
-        id: created.id,
-        created: false,
-        updated: false,
-      });
+      expect(await repeat()).toMatchObject({ id: created.id, created: false, updated: false });
     }
     expect(commitGuard).toHaveBeenCalled();
     const stored = (await readJob())!;

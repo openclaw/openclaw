@@ -27,15 +27,13 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { realCronSession } from "./isolated-agent/run.session.test-support.js";
 import {
   ensureAgentWorkspaceMock,
   loadRunCronIsolatedAgentTurn,
-  loadSessionEntryMock,
   mockRunCronFallbackPassthrough,
-  patchSessionEntryMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronDeliveryPlanMock,
-  resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
 import { cronTestDeps } from "./service.fixture-builders.test-support.js";
@@ -61,12 +59,8 @@ await Promise.all([
   ),
 ]);
 const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
-const session = await vi.importActual<typeof import("./isolated-agent/session.js")>(
-  "./isolated-agent/session.js",
-);
-const accessor = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
-  "../config/sessions/session-accessor.js",
-);
+const session = await realCronSession();
+const { accessor } = session;
 const addCron = expectDefined(cronHandlers["cron.add"], "cron.add");
 const patchSession = expectDefined(sessionMutationHandlers["sessions.patch"], "sessions.patch");
 const replacementSession = "replacement-session";
@@ -78,9 +72,7 @@ installRequesterCronAuthorityTestHooks();
 beforeEach(() => {
   resetRunCronIsolatedAgentTurnHarness();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-  resolveCronSessionMock.mockImplementation(session.prepareCronSession);
-  loadSessionEntryMock.mockImplementation(session.loadCronSessionEntryLatest);
-  patchSessionEntryMock.mockImplementation(accessor.patchSessionEntryCore);
+  session.install();
   ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({ dir }));
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   mockRunCronFallbackPassthrough();
