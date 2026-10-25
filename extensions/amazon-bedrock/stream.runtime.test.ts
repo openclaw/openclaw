@@ -144,6 +144,11 @@ describe("Bedrock tool-result replay", () => {
           content: [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
         },
       ],
+      // Tools present so the request carries toolConfig and tool history stays
+      // in native blocks; without tools the same history replays as text.
+      tools: [
+        { name: "listen", description: "Listen", parameters: { type: "object", properties: {} } },
+      ],
     } as never);
     const messages = input.messages;
 
@@ -163,6 +168,15 @@ describe("Bedrock tool-result replay", () => {
       messages: [
         toolResult("call_husk", [{ type: "image", mimeType: "image/png", data: "" }], "screenshot"),
         toolResult("call_text", [{ type: "text", text: "actual tool output" }], "read"),
+      ],
+      // Tools present so the request carries toolConfig and tool history stays
+      // in native blocks; without tools the same history replays as text.
+      tools: [
+        {
+          name: "screenshot",
+          description: "Screenshot",
+          parameters: { type: "object", properties: {} },
+        },
       ],
     } as never);
     const messages = input.messages;
@@ -198,6 +212,11 @@ it("normalizes invalid stored arguments at the Bedrock request boundary", async 
         timestamp: 1,
       },
       { role: "user", content: "continue", timestamp: 2 },
+    ],
+    // Tools present so the request carries toolConfig and the stored call
+    // stays a native toolUse block for argument normalization to act on.
+    tools: [
+      { name: "read", description: "Read a file", parameters: { type: "object", properties: {} } },
     ],
   } as never;
   const originalContext = JSON.stringify(context);

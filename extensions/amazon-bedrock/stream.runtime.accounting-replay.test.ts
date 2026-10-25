@@ -226,6 +226,14 @@ describe("Bedrock prompt cache ownership", () => {
           Array.from({ length: 21 }, (_, index) => `Attached document block ${index}`),
         ),
       ],
+      // Tool blocks require a toolConfig on the request; this context sends one.
+      tools: [
+        {
+          name: "read",
+          description: "Read a file",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
     };
     const first = await captureMessages(model, context, { cacheRetention: "short" });
     expect([first[0]?.content?.at(-1), first[2]?.content?.at(-1)]).toEqual([
@@ -285,6 +293,14 @@ describe("Bedrock prompt cache ownership", () => {
             runtimeContextCarrier: true,
           },
           toolResult("call_follow_up", [textBlock("later stable tool output")], "read", false, 2),
+        ],
+        // Tool blocks require a toolConfig on the request; this context sends one.
+        tools: [
+          {
+            name: "read",
+            description: "Read a file",
+            parameters: { type: "object", properties: {} },
+          },
         ],
       } as never,
       { cacheRetention: "long" },
@@ -350,6 +366,11 @@ it("lifts tool images into user content for OpenAI while preserving result assoc
       toolResult("call_first", [textBlock("first result"), image, image]),
       toolResult("call_second", [image], "inspect", true),
       toolResult("call_text", [textBlock("plain result")], "read"),
+    ],
+    // Tools present so the request carries toolConfig and tool results stay in
+    // native blocks for the image-lifting path to act on.
+    tools: [
+      { name: "inspect", description: "Inspect", parameters: { type: "object", properties: {} } },
     ],
   };
   const before = structuredClone(context);
