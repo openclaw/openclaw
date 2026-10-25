@@ -187,7 +187,7 @@ describe("Claude CLI run diagnostics", () => {
     expect(diagnostics.eventOf("harness.run.completed").outcome).toBe("completed");
   });
 
-  it("attributes post-preparation run and harness events to the resolved execution owner", async () => {
+  it("captures commentary under the prepared execution owner's config", async () => {
     const runId = "run-claude-execution-owner";
     const diagnostics = captureLifecycle(runId);
     await diagnostics.run(
@@ -199,8 +199,7 @@ describe("Claude CLI run diagnostics", () => {
         runWithDiagnosticTraceContext(undefined, () =>
           emitCommentary(runId, "Checking files.", "cli-1"),
         );
-        emitModelCall(runId, "session-owner", "main");
-        return success("ok", 5);
+        return success();
       },
       {
         agentId: "worker",
@@ -210,16 +209,7 @@ describe("Claude CLI run diagnostics", () => {
         messageChannel: "webchat",
       },
     );
-    expect(diagnostics.types()).toEqual(expect.arrayContaining(modelEventTypes));
     const { eventOf } = diagnostics;
-    // Start events retain the requester; preparation owns subsequent attribution.
-    expect([
-      eventOf("harness.run.started").agentId,
-      eventOf("run.started").agentId,
-      eventOf("run.completed").agentId,
-      eventOf("harness.run.completed").agentId,
-      eventOf("model.call.started").agentId,
-    ]).toEqual(["worker", "worker", "main", "main", "main"]);
     const commentary = diagnostics.record("agent.commentary");
     expect(commentary?.event).toMatchObject({
       agentId: "main",

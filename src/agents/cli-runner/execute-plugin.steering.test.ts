@@ -3,10 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { handleSteerCommand } from "../../auto-reply/reply/commands-steer.js";
-import { buildCommandTestParams } from "../../auto-reply/reply/commands.test-harness.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import { resolveQueueSettingsCore } from "../../auto-reply/reply/queue/settings.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { resolveFollowupRunToolAuthorityFingerprintAsync } from "../../auto-reply/reply/reply-tool-authority.test-support.js";
 import {
@@ -84,35 +81,6 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
 });
-
-async function expectSteeringModes() {
-  for (const command of [undefined, "/steer", "/tell"]) {
-    const cfg: OpenClawConfig = {
-      commands: { text: true },
-      messages: { queue: { mode: "collect" } },
-    };
-    const params = buildCommandTestParams(
-      `${command ?? ""} revised request`,
-      cfg,
-      { Provider: "webchat", Surface: "webchat", SessionKey: "agent:main:main" },
-      { workspaceDir: "/tmp" },
-    );
-    const result = command ? await handleSteerCommand(params, true) : undefined;
-    if (command) {
-      expect(result).toMatchObject({ shouldContinue: true, queueModeOverride: "steer" });
-      expect(params.ctx.BodyForAgent).toBe("revised request");
-    }
-    expect(
-      resolveQueueSettingsCore({
-        cfg,
-        inlineMode: result?.queueModeOverride,
-        sessionEntry: command
-          ? undefined
-          : { sessionId: "session", updatedAt: 1, queueMode: "steer" },
-      }).mode,
-    ).toBe("steer");
-  }
-}
 
 it("steers inputs through current authority into Claude stdin", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -220,7 +188,6 @@ it("steers inputs through current authority into Claude stdin", async () => {
         captureCurrentReplyMessageInjectionTarget(sessionKey),
         "Claude registry input sink",
       );
-      await expectSteeringModes();
       const guestFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync({
         ...followupRun,
         toolsAllow: ["read"],

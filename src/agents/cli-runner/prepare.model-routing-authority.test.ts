@@ -38,40 +38,31 @@ const auditConfig = {
 type AuthorityLoss = "close" | "replace";
 type Producer = "normal" | "side-question";
 
-function createInterleavedAdmission(params: { kind: AuthorityLoss; runId: string }): {
-  admission: PreparedAgentRunAdmission;
-  close: () => void;
-} {
+function createInterleavedAdmission(params: { kind: AuthorityLoss; runId: string }) {
   let replacement: PreparedAgentRunAdmission | undefined;
-  const loseAuthority = () => {
-    if (params.kind === "close") {
-      admission.close();
-      return;
-    }
-    replacement = prepareAgentRunAdmission({
+  const prepare = (boundary: string, onAdmitted?: () => void) =>
+    prepareAgentRunAdmission({
       cfg: auditConfig,
       operationalRunInstance: createOperationalRunInstanceRef(params.runId),
       facts: {
         runId: params.runId,
         agentId: "main",
-        ingress: { kind: "system", boundary: "cli-authority-replacement", state: "present" },
+        ingress: { kind: "system", boundary, state: "present" },
       },
+      onAdmitted,
     });
+  const loseAuthority = () => {
+    if (params.kind === "close") {
+      admission.close();
+      return;
+    }
+    replacement = prepare("cli-authority-replacement");
     void replacement.admit("embedded").catch(() => undefined);
   };
-  const admission = prepareAgentRunAdmission({
-    cfg: auditConfig,
-    operationalRunInstance: createOperationalRunInstanceRef(params.runId),
-    facts: {
-      runId: params.runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "cli-authority-test", state: "present" },
-    },
-    onAdmitted: () => {
-      // Cross both admission promise continuations, then retire the exact claim
-      // before the CLI producer resumes from its awaited resolver.
-      queueMicrotask(() => queueMicrotask(() => queueMicrotask(loseAuthority)));
-    },
+  const admission = prepare("cli-authority-test", () => {
+    // Cross both admission promise continuations, then retire the exact claim
+    // before the CLI producer resumes from its awaited resolver.
+    queueMicrotask(() => queueMicrotask(() => queueMicrotask(loseAuthority)));
   });
   return {
     admission,
