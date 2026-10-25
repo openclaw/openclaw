@@ -389,7 +389,8 @@ it("keeps failed event drafts private and admits a duplicate only after rollback
   await gate.entered;
   const second = manager.processEvent({ ...event });
   expect(manager.getCall(call.callId)).toBe(call);
-  expect(call).toMatchObject({ state: "initiated", answeredAt: undefined });
+  expect(call.state).toBe("initiated");
+  expect(call.answeredAt).toBeUndefined();
   expect(call.processedEventIds).not.toContain(event.id);
   gate.fail();
   await expect(first).rejects.toThrow("Synthetic delayed persistence failure");

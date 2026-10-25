@@ -2524,7 +2524,6 @@
 ["src/auto-reply/reply/commands-gating.test.ts","../../channels/registry.js","f2074348f39ca45d014fc970696694233233648615a391ce372bf82fb50fc5f8",1]
 ["src/auto-reply/reply/commands-gating.test.ts","../../config/runtime-overrides.js","442ca14d0bca6b3e494dcd4810521bbb63ffb56a464c18f5ff0d25598fce9b59",1]
 ["src/auto-reply/reply/commands-gating.test.ts","../../globals.js","b2052917e7b8db225000a5dd1972848b358407d02eca9b093a080a65ebdb3713",1]
-["src/auto-reply/reply/commands-gating.test.ts","../../utils/message-channel.js","104f40ad5005907149e712e49823da9456860ecc4d57e43cc70f94cfe8c33101",1]
 ["src/auto-reply/reply/commands-gating.test.ts","./channel-context.js","549f031ba189555a3be8bc4f06db823d08be92feb1f8ebe2406991f5fa9a1a59",1]
 ["src/auto-reply/reply/commands-gating.test.ts","./config-write-authorization.js","b5763ae898429b1e5cce4ef3850d95dabae4af13e7b7c0b3126a7d03f883924c",1]
 ["src/auto-reply/reply/commands-gating.test.ts","./mentions.js","a5a6cc3f3689f3f168decbdafb0f03262b8ac63cc8ec0173dc60ea7fe20d4bfb",1]
