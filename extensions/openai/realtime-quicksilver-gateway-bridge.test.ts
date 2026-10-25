@@ -130,8 +130,22 @@ describe("GPT-Live gateway relay bridge", () => {
     expect(harness.peer.close).toHaveBeenCalledOnce();
   });
 
-  it.each(["peer rejection", "reentrant close", "throw"])(
-    "discards queued audio and settles peer startup after %s",
+  it("discards queued microphone audio when media peer creation fails", async () => {
+    const { bridge, connection, peer, rejectPeer, waitForPeerStart, testBridge } =
+      createPendingPeerBridge();
+    await waitForPeerStart();
+    bridge.sendAudio(Buffer.from([0x41, 0x42]));
+    rejectPeer(new Error("media peer unavailable"));
+
+    await expect(connection).rejects.toThrow("OpenAI GPT-Live gateway relay failed");
+    expect(testBridge.pendingAudio).toHaveLength(0);
+    bridge.sendAudio(Buffer.from([0x43, 0x44]));
+    expect(testBridge.pendingAudio).toHaveLength(0);
+    expect(peer.sendAudio).not.toHaveBeenCalled();
+  });
+
+  it.each(["reentrant close", "throw"])(
+    "settles the failed peer when onError performs %s",
     async (mode) => {
       const callbackError = new Error("error callback failed");
       const onClose = vi.fn();
@@ -141,9 +155,7 @@ describe("GPT-Live gateway relay bridge", () => {
           if (mode === "throw") {
             throw callbackError;
           }
-          if (mode === "reentrant close") {
-            void harness.bridge.close();
-          }
+          void harness.bridge.close();
         },
       });
       await harness.waitForPeerStart();
@@ -155,22 +167,19 @@ describe("GPT-Live gateway relay bridge", () => {
       const fail = () => harness.triggerPeerError(new Error("media peer failed"));
       if (mode === "throw") {
         expect(fail).toThrow(callbackError);
-      } else if (mode === "peer rejection") {
-        harness.rejectPeer(new Error("media peer unavailable"));
-        await connectionRejected;
       } else {
         fail();
       }
       expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
-      expect(harness.testBridge.pendingAudio).toHaveLength(0);
-      harness.bridge.sendAudio(Buffer.from([0x43, 0x44]));
-      expect(harness.testBridge.pendingAudio).toHaveLength(0);
+      const retainedAudioBytes = harness.testBridge.pendingAudio.length;
+      const closeReason = onClose.mock.calls[0]?.[0];
       await harness.bridge.close();
-      if (mode !== "peer rejection") {
-        harness.resolvePeer();
-        await vi.waitFor(() => expect(harness.peer.close).toHaveBeenCalledOnce());
-      }
+      harness.resolvePeer();
+
       await connectionRejected;
+      await vi.waitFor(() => expect(harness.peer.close).toHaveBeenCalledOnce());
+      expect(retainedAudioBytes).toBe(0);
+      expect(closeReason).toBe("error");
       expect(harness.peer.sendAudio).not.toHaveBeenCalled();
     },
   );
@@ -237,9 +246,14 @@ describe("GPT-Live gateway relay bridge", () => {
       vi.fn(async () => ({ text: "Delegated result" })),
       { claimAppend: vi.fn(() => true) },
     );
+    const handleDelegationInput = vi.fn((text: string): "control" | "consult" =>
+      text === "Status?" ? "control" : "consult",
+    );
     const { bridge, peer, createSocket, fetchImpl, ...observed } = createBridge({
       model: "gpt-live-1-codex",
-      handleDelegationInput: () => "consult",
+      voice: "cove",
+      instructions: "Speak briefly.",
+      handleDelegationInput,
       runAgentConsult,
       resolveAuth: async () => ({ type: "api-key", token: "test-api-key" }),
     });
@@ -261,8 +275,21 @@ describe("GPT-Live gateway relay bridge", () => {
     });
     expect(body).toContain('"delegation":{"type":"client","ack_filler":false}');
     expect(body).toContain("Wait for the host control result");
+    expect(peer.createOffer).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
     expect(peer.applyAnswer).toHaveBeenCalledWith("v=answer\r\n");
+    expect(peer.adoptPendingAudio).not.toHaveBeenCalled();
+    expect(parseSent(connectedSocket).some((event) => event.type === "session.update")).toBe(false);
     expect(observed.onReady).toHaveBeenCalledOnce();
+    bridge.sendUserMessage("Ready for the next task");
+    expect(parseSent(connectedSocket)).toEqual([
+      {
+        type: "session.context.append",
+        channel: "speakable",
+        content: [{ type: "input_text", text: "Ready for the next task" }],
+      },
+    ]);
+
     emitSideband(connectedSocket, { type: "output_audio.delta", audio: "ignored-media-copy" });
     expect(observed.onEvent).toHaveBeenCalledWith({
       direction: "server",
@@ -273,7 +300,13 @@ describe("GPT-Live gateway relay bridge", () => {
     emitSideband(connectedSocket, { type: "output_audio_buffer.cleared" });
     expect(observed.onClearAudio).toHaveBeenCalledWith("barge-in");
 
+    delegate(connectedSocket, "status-control", "Status?");
+    expect(handleDelegationInput).toHaveBeenCalledExactlyOnceWith("Status?", expect.any(Function));
+    expect(runAgentConsult).not.toHaveBeenCalled();
+    expect(connectedSocket.sent).toHaveLength(1);
+
     delegate(connectedSocket, "delegation-1", "Check the lights");
+    await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
     await vi.waitFor(() =>
       expect(parseSent(connectedSocket)).toContainEqual({
         type: "delegation.context.append",
@@ -282,6 +315,11 @@ describe("GPT-Live gateway relay bridge", () => {
         content: [{ type: "input_text", text: "Delegated result" }],
       }),
     );
+    expect(
+      parseSent(connectedSocket).filter((event) => event.type === "session.context.append"),
+    ).toHaveLength(2);
+    expect(connectedSocket.sent[1]).toContain("in your own words");
+
     await bridge.close();
     expect(peer.close).toHaveBeenCalledOnce();
     expect(connectedSocket.closed).toBe(true);
@@ -290,8 +328,10 @@ describe("GPT-Live gateway relay bridge", () => {
 
   it("treats a normal upstream sideband close as completion", async () => {
     const { bridge, createSocket, onClose, onError } = createBridge();
+
     await bridge.connect();
-    createSocket.mock.results[0]!.value.close(1000, "complete");
+    const socket = createSocket.mock.results[0]!.value;
+    socket.close(1000, "complete");
     expect(onError).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith("completed");
   });
