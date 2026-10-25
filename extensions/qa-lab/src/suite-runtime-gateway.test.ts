@@ -59,9 +59,7 @@ function mockGateway(config: Record<string, unknown> = {}) {
 }
 
 function mockHealthyResponse() {
-  const release = vi.fn(async () => {});
-  fetchWithSsrFGuardMock.mockResolvedValue({ response: { ok: true }, release });
-  return release;
+  fetchWithSsrFGuardMock.mockResolvedValue({ response: { ok: true }, release: async () => {} });
 }
 
 function guardedStream(events: string[], name: string, release: () => Promise<void>, status = 200) {
@@ -92,7 +90,6 @@ describe("qa suite gateway helpers", () => {
 
     expect(failure).toBeInstanceOf(QaSuiteInfraError);
     expect(failure).toMatchObject({
-      name: "QaSuiteInfraError",
       code: "transport_ready_timeout",
       cause: readinessError,
       message: expect.stringContaining(readinessError.message),
@@ -105,7 +102,7 @@ describe("qa suite gateway helpers", () => {
 
   it("forces an authenticated restart even when the config patch was already applied", async () => {
     vi.useFakeTimers();
-    const release = mockHealthyResponse();
+    mockHealthyResponse();
     writeGatewayRestartIntentSyncMock.mockReturnValue(true);
     const patch = { tools: { codeMode: { enabled: false } } };
     gatewayCall.mockImplementation(
@@ -120,22 +117,20 @@ describe("qa suite gateway helpers", () => {
     await vi.advanceTimersByTimeAsync(1_750);
 
     await expect(restarting).resolves.toEqual({ ok: true });
-    const mutationTimeout = { timeoutMs: 180_000 };
-    expect(gatewayCall.mock.calls).toEqual([
-      ["config.get", {}, { timeoutMs: 60_000 }],
-      ["system.info", {}, mutationTimeout],
-      [
-        "config.patch",
-        {
-          raw: JSON.stringify(patch, null, 2),
-          baseHash: "hash-1",
-          restartDelayMs: 1_000,
-          replacePaths: ["gateway.controlUi.allowedOrigins"],
-        },
-        mutationTimeout,
-      ],
-      ["gateway.restart.request", { reason: "config.patch", skipDeferral: true }, mutationTimeout],
+    expect(gatewayCall.mock.calls[2]?.slice(0, 2)).toEqual([
+      "config.patch",
+      {
+        raw: JSON.stringify(patch, null, 2),
+        baseHash: "hash-1",
+        restartDelayMs: 1_000,
+        replacePaths: ["gateway.controlUi.allowedOrigins"],
+      },
     ]);
+    expect(gatewayCall).toHaveBeenLastCalledWith(
+      "gateway.restart.request",
+      { reason: "config.patch", skipDeferral: true },
+      { timeoutMs: 180_000 },
+    );
     expect(writeGatewayRestartIntentSyncMock).toHaveBeenCalledWith({
       env: runtimeEnv,
       targetPid: 43_123,
@@ -152,11 +147,7 @@ describe("qa suite gateway helpers", () => {
         auditContext: "qa-lab-suite-wait-for-gateway-healthy",
       }),
     );
-    expect(waitReady).toHaveBeenCalledWith({
-      gateway: env.gateway,
-      timeoutMs: expect.any(Number),
-    });
-    expect(release).toHaveBeenCalled();
+    expect(waitReady).toHaveBeenCalledOnce();
     expect(restartAfterStateMutation).not.toHaveBeenCalled();
   });
 

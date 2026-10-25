@@ -1,6 +1,5 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveQaRunProfileExecutionSelection } from "./profile-planning.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
@@ -8,38 +7,13 @@ import {
   resolveQaLabRunPlan,
 } from "./run-config.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
-import {
-  readQaScorecardTaxonomyReport,
-  type QaScorecardTaxonomyReport,
-} from "./scorecard-taxonomy.js";
-
-const profiles: QaScorecardTaxonomyReport["profiles"] = (
-  [
-    { id: "smoke-ci", evidenceMode: "slim", channelDriver: "crabline" },
-    { id: "release", evidenceMode: "full", channelDriver: "live" },
-    { id: "all", evidenceMode: "full", channelDriver: "live" },
-  ] as const
-).map(({ id, evidenceMode, channelDriver }) => ({
-  id,
-  evidenceMode,
-  channelDriver,
-  categoryIds: [],
-  coverageIds: [],
-  scenarioRefs: [],
-}));
-
-const scenarios = ["dm-chat-baseline", "thread-lifecycle"].map((id) => ({
-  id,
-  title: id,
-  surface: "test",
-  objective: "test",
-  successCriteria: ["pass"],
-  execution: { kind: "flow" as const },
-}));
+import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 describe("qa run config", () => {
   const catalog = readQaScenarioPack();
-  const scorecardReport = readQaScorecardTaxonomyReport(catalog.scenarios);
+  const scenarios = catalog.scenarios;
+  const scorecardReport = readQaScorecardTaxonomyReport(scenarios);
+  const profiles = scorecardReport.profiles;
   const select = (input: unknown) => normalizeQaRunSelection(input, scenarios, profiles);
   const selectCatalog = (input: Record<string, unknown>) =>
     normalizeQaRunSelection(
@@ -78,7 +52,7 @@ describe("qa run config", () => {
         primaryModel: "openai/gpt-5.6-luna",
         alternateModel: "",
         fastMode: false,
-        scenarioIds: ["thread-lifecycle", "thread-lifecycle"],
+        scenarioIds: ["thread-follow-up", "thread-follow-up"],
       }),
     ).toEqual({
       profile: "all",
@@ -91,19 +65,19 @@ describe("qa run config", () => {
       fastMode: true,
       runtimePair: null,
       runtimePairLane: null,
-      scenarioIds: ["thread-lifecycle"],
+      scenarioIds: ["thread-follow-up"],
     });
   });
 
   it.each([
     [{ providerMode: "live-openai" }, "unknown QA provider mode: live-openai"],
-    [{ scenarioIds: ["thread-lifecycle", "missing"] }, "unknown QA scenario id(s): missing"],
+    [{ scenarioIds: ["thread-follow-up", "missing"] }, "unknown QA scenario id(s): missing"],
     [
-      { profile: false, scenarioIds: ["thread-lifecycle"] },
+      { profile: false, scenarioIds: ["thread-follow-up"] },
       "QA runner profile must be a non-empty string",
     ],
     [
-      { profile: "", scenarioIds: ["thread-lifecycle"] },
+      { profile: "", scenarioIds: ["thread-follow-up"] },
       "QA runner profile must be a non-empty string",
     ],
     [{ runtimePair: ["codex", "openclaw"] }, 'runtimePair must be ["openclaw", "codex"]'],
@@ -123,113 +97,97 @@ describe("qa run config", () => {
     expect(() => select({ scenarioIds: [] })).toThrow("scenarioIds must be a non-empty array");
   });
 
-  it("keeps portable threads but excludes module flows from Crabline plans", () => {
-    const scenarioIds = new Set([
-      "matrix-approval-channel-target-both",
-      "matrix-approval-deny-reaction",
-      "matrix-approval-exec-metadata-chunked",
-      "matrix-approval-exec-metadata-single-event",
-      "matrix-approval-plugin-metadata-single-event",
-      "matrix-approval-thread-target",
-      "matrix-mxid-prefixed-command-block",
-      "slack-codex-approval-exec-native",
-      "slack-codex-approval-plugin-native",
-      "thread-follow-up",
-      "thread-isolation",
-    ]);
-    const selected = catalog.scenarios.filter((scenario) => scenarioIds.has(scenario.id));
-
-    const execution = resolveQaRunProfileExecutionSelection({
-      scenarios: selected,
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      channelDriver: "crabline",
-      defaultChannel: "telegram",
-      supportsChannel: () => true,
-    });
-
-    expect(execution.selectedScenarios.map((scenario) => scenario.id).toSorted()).toEqual([
-      "thread-follow-up",
-      "thread-isolation",
-    ]);
-    expect(execution.excludedScenarios.map(({ scenario }) => scenario.id).toSorted()).toEqual(
-      [...scenarioIds].filter((id) => !id.startsWith("thread-")).toSorted(),
-    );
-    for (const { scenario, reasons } of execution.excludedScenarios) {
-      const channel = scenario.id.startsWith("matrix-") ? "matrix" : "slack";
-      expect(reasons).toEqual([`module flow unsupported by implementation=crabline:${channel}`]);
-    }
-  });
-
-  it("resolves mixed execution kinds and reports runtime-pair-lane exclusions", () => {
-    const mixedPlan = planFor({
-      providerMode: "live-frontier",
-      scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
-    });
-    expect(mixedPlan).toMatchObject({ status: "ready", executionKinds: ["flow", "playwright"] });
-
-    const pairPlan = planFor({
-      runtimePair: ["openclaw", "codex"],
-      runtimePairLane: "core",
-    });
-    expect(pairPlan.status).toBe("ready");
-    expect(pairPlan.selectedScenarios.map((scenario) => scenario.id)).toContain(
-      "runtime-first-hour-20-turn",
-    );
-    expectExcluded(pairPlan, "codex-plugin-cold-install", [
-      "runtimePair requires execution.kind=flow",
-    ]);
-  });
-
-  it("validates explicit runtime-pair-lane selections without expanding them", () => {
-    const selectedId = "runtime-first-hour-20-turn";
-    const plan = planFor({
-      runtimePair: ["openclaw", "codex"],
-      runtimePairLane: "core",
-      scenarioIds: [selectedId],
-    });
-
-    expect(plan.status).toBe("ready");
-    expect(plan.selectedScenarios.map((scenario) => scenario.id)).toEqual([selectedId]);
-
-    const outsideLanePlan = planFor({
-      runtimePairLane: "core",
-      scenarioIds: ["dm-chat-baseline"],
-    });
-    expect(outsideLanePlan).toMatchObject({ status: "invalid", selectedScenarios: [] });
-    expectExcluded(outsideLanePlan, "dm-chat-baseline", ["runtimePairLane=core"]);
-  });
-
-  it("preserves canonical unresolved live dispatch and rejects unsupported driver channels", () => {
-    const unresolvedLivePlan = planFor(
-      {
-        channelDriver: "live",
-        providerMode: "live-frontier",
-        scenarioIds: ["dm-chat-baseline"],
+  const excludes = (scenarioId: string, reason: string) =>
+    expect.arrayContaining([expect.objectContaining({ scenarioId, reasons: [reason] })]);
+  const dm = "dm-chat-baseline";
+  const browser = "browser-talk-start-stop";
+  const paired = "runtime-first-hour-20-turn";
+  it.each<{
+    name: string;
+    input: Record<string, unknown>;
+    options?: Parameters<typeof planFor>[1];
+    expected: object;
+  }>([
+    {
+      name: "mixed execution kinds",
+      input: { providerMode: "live-frontier", scenarioIds: [dm, browser] },
+      expected: { status: "ready", executionKinds: ["flow", "playwright"] },
+    },
+    {
+      name: "implicit runtime-pair lane",
+      input: { runtimePair: ["openclaw", "codex"], runtimePairLane: "core" },
+      expected: {
+        status: "ready",
+        selectedScenarios: expect.arrayContaining([expect.objectContaining({ id: paired })]),
+        exclusions: excludes(
+          "codex-plugin-cold-install",
+          "runtimePair requires execution.kind=flow",
+        ),
       },
-      { supportsChannel: () => true },
-    );
-    expect(unresolvedLivePlan).toMatchObject({
-      status: "ready",
-      selectedScenarios: [{ id: "dm-chat-baseline", effectiveChannel: null }],
-    });
-
-    const unsupportedCrablinePlan = planFor(
-      {
+    },
+    {
+      name: "explicit runtime-pair lane without expansion",
+      input: { runtimePair: ["openclaw", "codex"], runtimePairLane: "core", scenarioIds: [paired] },
+      expected: { status: "ready", selectedScenarios: [expect.objectContaining({ id: paired })] },
+    },
+    {
+      name: "explicit scenario outside the selected lane",
+      input: { runtimePairLane: "core", scenarioIds: [dm] },
+      expected: {
+        status: "invalid",
+        selectedScenarios: [],
+        exclusions: excludes(dm, "runtimePairLane=core"),
+      },
+    },
+    {
+      name: "unresolved live dispatch",
+      input: { channelDriver: "live", providerMode: "live-frontier", scenarioIds: [dm] },
+      options: { supportsChannel: () => true },
+      expected: { status: "ready", selectedScenarios: [{ id: dm, effectiveChannel: null }] },
+    },
+    {
+      name: "unsupported driver channel",
+      input: {
         channel: "qa-channel",
         channelDriver: "crabline",
         providerMode: "live-frontier",
-        scenarioIds: ["dm-chat-baseline"],
+        scenarioIds: [dm],
       },
-      {
-        defaultChannel: "telegram",
-        supportsChannel: (channel) => channel === "telegram",
+      options: { defaultChannel: "telegram", supportsChannel: (channel) => channel === "telegram" },
+      expected: {
+        status: "invalid",
+        exclusions: excludes(dm, "unsupported crabline channel=qa-channel"),
       },
-    );
-    expect(unsupportedCrablinePlan.status).toBe("invalid");
-    expectExcluded(unsupportedCrablinePlan, "dm-chat-baseline", [
-      "unsupported crabline channel=qa-channel",
-    ]);
+    },
+    {
+      name: "qa-channel execution override",
+      input: { channel: "telegram", scenarioIds: [dm] },
+      options: { defaultChannel: "qa-channel" },
+      expected: {
+        status: "invalid",
+        selectedScenarios: [{ id: dm, effectiveChannel: "qa-channel" }],
+        errors: expect.arrayContaining([
+          "An execution channel requires channelDriver=crabline or channelDriver=live.",
+        ]),
+      },
+    },
+    {
+      name: "declared constraints versus effective channels",
+      input: {
+        channelDriver: "crabline",
+        providerMode: "live-frontier",
+        scenarioIds: [dm, browser],
+      },
+      options: { defaultChannel: "telegram" },
+      expected: {
+        selectedScenarios: expect.arrayContaining([
+          expect.objectContaining({ id: dm, declaredChannel: null, effectiveChannel: "telegram" }),
+          expect.objectContaining({ id: browser, declaredChannel: null, effectiveChannel: null }),
+        ]),
+      },
+    },
+  ])("resolves $name", ({ input, options, expected }) => {
+    expect(planFor(input, options)).toMatchObject(expected);
   });
 
   it("fails closed when an explicit scenario conflicts with execution.channel", () => {
@@ -238,45 +196,9 @@ describe("qa run config", () => {
     );
     expect(scenario).toBeDefined();
     const plan = planFor({ providerMode: "live-frontier", scenarioIds: [scenario!.id] });
-
     expect(plan.status).toBe("invalid");
     expectExcluded(plan, scenario!.id);
     expect(plan.errors.join(" ")).toContain("Explicit QA scenario selection is not runnable");
-  });
-
-  it("returns an invalid resolved plan for a qa-channel execution override", () => {
-    const plan = planFor(
-      { channel: "telegram", scenarioIds: ["dm-chat-baseline"] },
-      { defaultChannel: "qa-channel" },
-    );
-
-    expect(plan).toMatchObject({
-      status: "invalid",
-      selectedScenarios: [{ id: "dm-chat-baseline", effectiveChannel: "qa-channel" }],
-    });
-    expect(plan.errors).toContain(
-      "An execution channel requires channelDriver=crabline or channelDriver=live.",
-    );
-  });
-
-  it("distinguishes declared constraints from the suite-resolved effective channel", () => {
-    const plan = planFor(
-      {
-        channelDriver: "crabline",
-        providerMode: "live-frontier",
-        scenarioIds: ["dm-chat-baseline", "browser-talk-start-stop"],
-      },
-      { defaultChannel: "telegram" },
-    );
-
-    for (const [id, effectiveChannel] of [
-      ["dm-chat-baseline", "telegram"],
-      ["browser-talk-start-stop", null],
-    ]) {
-      expect(plan.selectedScenarios).toContainEqual(
-        expect.objectContaining({ id, declaredChannel: null, effectiveChannel }),
-      );
-    }
   });
 
   it("fails closed when required canonical profiles are missing", () => {

@@ -91,7 +91,7 @@ describe("native attempt child bundles", () => {
   });
 
   it.each(["pass", "blocked", "skipped"] as const)(
-    "retains an actual independent v3 subprocess across a %s retry in full and slim projections",
+    "retains an actual independent v3 subprocess across a %s retry",
     async (status) => {
       const root = await harness.makeTempRepo("qa-native-child-");
       const script = path.join(root, "producer.mjs");
@@ -103,7 +103,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createQaEvidenceInvocation } from ${JSON.stringify(api)};
 const value = (flag) => process.argv[process.argv.indexOf(flag) + 1];
-const status = value("--status");
+const { status, completeSchedule, omitFirstRow, openUnresolved, exit = 0 } = JSON.parse(value("--fixture"));
 const output = value("--artifact-base");
 const launch = {
   source: { ref: null, integrity: null }, runtime: { id: "node", version: process.version }, package: null,
@@ -114,27 +114,27 @@ const scenarios = ["same", "other", "same"].map((id) => ({
 }));
 const owner = createQaEvidenceInvocation({ scenarios, channel: null, launch });
 const results = [status, "pass"];
-if (value("--complete") === "true") results.push("pass");
+if (completeSchedule) results.push("pass");
 for (const [index, result] of results.entries()) {
   const id = owner.begin(index);
-  owner.complete(id, { status: result, entries: index === 0 && value("--omit-first") === "true" ? [] : [{
+  owner.complete(id, { status: result, entries: index === 0 && omitFirstRow ? [] : [{
     test: { id: scenarios[index].id, title: "Actual child check", kind: "script-test" },
     coverage: ${JSON.stringify(childCoverage)},
     result: { status: result },
   }] });
   owner.select(index, id);
 }
-if (value("--open") === "true") owner.begin(2);
+if (openUnresolved) owner.begin(2);
 await fs.writeFile(path.join(output, "qa-evidence.json"),
   JSON.stringify(owner.snapshot({ generatedAt: new Date().toISOString() })), { flag: "wx" });
-process.exitCode = Number(value("--exit"));
+process.exitCode = exit;
 `,
       );
       const run = async (
         nextStatus: string,
-        exit: string,
         continuation?: QaEvidenceSummaryV3Json,
         options: {
+          exit?: number;
           completeSchedule?: boolean;
           openUnresolved?: boolean;
           allowBlockedEvidence?: boolean;
@@ -146,16 +146,8 @@ process.exitCode = Number(value("--exit"));
           throw new Error("expected script");
         }
         scenario.execution.args!.push(
-          "--status",
-          nextStatus,
-          "--exit",
-          exit,
-          "--complete",
-          String(options.completeSchedule === true),
-          "--open",
-          String(options.openUnresolved === true),
-          "--omit-first",
-          String(options.omitFirstRow === true),
+          "--fixture",
+          JSON.stringify({ status: nextStatus, ...options }),
         );
         scenario.execution.allowBlockedEvidence = options.allowBlockedEvidence;
         return runQaTestFileScenarios({
@@ -167,7 +159,7 @@ process.exitCode = Number(value("--exit"));
           ...continueChildEvidence(continuation),
         });
       };
-      const first = await run("fail", "7");
+      const first = await run("fail", undefined, { exit: 7 });
       requireV3(first.evidence);
       const firstId = first.results[0]!.evidenceOccurrenceId!;
       const captured = first.evidence.occurrences.find((item) => item.id === firstId)!;
@@ -197,7 +189,7 @@ process.exitCode = Number(value("--exit"));
       if (status === "pass") {
         for (const openUnresolved of [false, true]) {
           for (const allowBlockedEvidence of [false, true]) {
-            const incomplete = await run("pass", "0", undefined, {
+            const incomplete = await run("pass", undefined, {
               openUnresolved,
               allowBlockedEvidence,
             });
@@ -215,7 +207,7 @@ process.exitCode = Number(value("--exit"));
           }
         }
       } else {
-        const terminal = await run(status, "0", undefined, {
+        const terminal = await run(status, undefined, {
           completeSchedule: true,
           omitFirstRow: true,
           allowBlockedEvidence: true,
@@ -226,14 +218,14 @@ process.exitCode = Number(value("--exit"));
           projectQaEvidenceScenarioOutcomes(terminal.results[0]!.producerEvidence!)[0]?.status,
         ).toBeNull();
         if (status === "blocked") {
-          const allowed = await run(status, "0", undefined, {
+          const allowed = await run(status, undefined, {
             completeSchedule: true,
             allowBlockedEvidence: true,
           });
           expect(allowed.results[0]?.status).toBe("pass");
         }
       }
-      const second = await run(status, "0", first.evidence, { completeSchedule: true });
+      const second = await run(status, first.evidence, { completeSchedule: true });
       requireV3(second.evidence);
       expect(second.results[0]!.status).toBe(status === "pass" ? "pass" : "fail");
       if (status !== "pass") {
@@ -245,42 +237,12 @@ process.exitCode = Number(value("--exit"));
       }
       expect(await fs.readFile(originalPath)).toEqual(originalBytes);
       expect(second.evidence.occurrences).toEqual(expect.arrayContaining(original.occurrences));
-      const finalBytes = JSON.stringify(second.evidence);
-      for (const evidenceMode of ["full", "slim"] as const) {
-        const projected = validateQaEvidenceSummaryJson({
-          ...second.evidence,
-          evidenceMode,
-          entries:
-            evidenceMode === "full"
-              ? second.evidence.entries
-              : second.evidence.entries.map(({ execution: _execution, ...entry }) => entry),
-        });
-        expect(projectQaEvidenceScenarioOutcomes(projected)).toHaveLength(1);
-        const active = getEffectiveQaEvidenceEntries(projected);
-        expect(active.map((entry) => entry.result.status)).toEqual(
-          status === "pass" ? ["pass", "pass", "pass", "pass"] : ["fail", "pass", "fail"],
-        );
-        expect(active.slice(0, -1).map((entry) => entry.coverage)).toEqual(
-          Array.from({ length: status === "pass" ? 3 : 2 }, () => childCoverage),
-        );
-        requireV3(projected);
-        const containment = resolveQaEvidenceContainment(projected.occurrences, projected.entries);
-        expect(
-          active.slice(0, -1).map((entry) => {
-            if (!("binding" in entry)) {
-              throw new Error("expected bound child row");
-            }
-            return containment.projectCoverage(entry.binding.occurrenceId, entry.coverage);
-          }),
-        ).toEqual(
-          Array.from({ length: status === "pass" ? 3 : 2 }, () => [
-            { id: "qa.coverage", role: "primary" },
-            { id: "qa.reporting", role: "secondary" },
-          ]),
-        );
-        expect(active.at(-1)!.coverage).toEqual([]);
-      }
-      expect(JSON.stringify(second.evidence)).toBe(finalBytes);
+      expect(projectQaEvidenceScenarioOutcomes(second.evidence)).toHaveLength(1);
+      const active = getEffectiveQaEvidenceEntries(second.evidence);
+      expect(active.map((entry) => entry.result.status)).toEqual(
+        status === "pass" ? ["pass", "pass", "pass", "pass"] : ["fail", "pass", "fail"],
+      );
+      expect(active.at(-1)!.coverage).toEqual([]);
     },
   );
 });

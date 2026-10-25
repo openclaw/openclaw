@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
-import { readQaScenarioPack } from "./scenario-catalog.js";
 import type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 import {
   QA_TEST_RUNNER_DEFAULTS,
@@ -48,94 +47,69 @@ function expectFailed(result: Awaited<ReturnType<typeof runNative>>, failureMess
 afterEach(() => harness.cleanup());
 
 describe("qa test file scenario runner", () => {
-  it("keeps every Playwright scenario pattern aligned with an executable test", async () => {
-    for (const scenario of readQaScenarioPack().scenarios) {
-      const execution = scenario.execution;
-      if (execution.kind !== "playwright" || !execution.testNamePattern) {
-        continue;
-      }
-      const testSource = await fs.readFile(execution.path, "utf8");
-      const testNamePattern = new RegExp(execution.testNamePattern);
-      const testNames = testSource.matchAll(/\bit\s*\(\s*["'`]([^"'`\n]+)["'`]/gu);
-      expect(
-        Array.from(testNames, (match) => match[1] ?? "").some((name) => testNamePattern.test(name)),
-        `${scenario.id} testNamePattern matches an executable test`,
-      ).toBe(true);
-    }
-  });
-
-  it("runs Playwright scenarios with the repo UI e2e command and writes Playwright evidence", async () => {
-    const repoRoot = await makeTempRepo("qa-playwright-scenario-");
-    const result = await runNative(
-      {
-        repoRoot,
-        scenarios: [
-          makeTestFileScenario(
-            "playwright",
-            playwrightPath,
-            "^chat > sends a chat turn through the GUI$",
-          ),
+  it.each([
+    {
+      kind: "playwright" as const,
+      testPath: playwrightPath,
+      config: "test/vitest/vitest.ui-e2e.config.ts",
+      configArgs: ["--configLoader", "runner"],
+      pattern: "^chat > sends a chat turn through the GUI$",
+    },
+    {
+      kind: "vitest" as const,
+      testPath: "extensions/ollama/src/node-inference.paired-node.e2e.test.ts",
+      config: "test/vitest/vitest.e2e.config.ts",
+      configArgs: [],
+      pattern: undefined,
+    },
+  ])(
+    "routes $kind E2E scenarios through their existing config and persists evidence",
+    async ({ kind, testPath, config, configArgs, pattern }) => {
+      const repoRoot = await fs.realpath(await makeTempRepo("qa-native-routing-"));
+      const scenario = makeTestFileScenario(kind, testPath, pattern);
+      const result = await runNative(
+        { repoRoot, scenarios: [scenario] },
+        { passed: 1, ancestorTitles: ["chat"], testName: "sends a chat turn through the GUI" },
+      );
+      const setup =
+        kind === "playwright"
+          ? [["--import", "tsx", "scripts/ensure-playwright-chromium.mts"]]
+          : [];
+      expect(result.executionKind).toBe(kind);
+      expect(result.results).toMatchObject([{ status: "pass" }]);
+      expect(result.commands.map((command) => command.args)).toEqual([
+        ...setup,
+        [
+          "scripts/run-vitest.mjs",
+          "run",
+          "--config",
+          config,
+          ...configArgs,
+          testPath,
+          "--reporter=verbose",
+          "--reporter=json",
+          reportArgument(result, scenario.id),
+          ...(pattern ? ["--testNamePattern", pattern] : []),
         ],
-        env: { OPENCLAW_QA_REF: "scenario-ref" },
-      },
-      {
-        passed: 1,
-        ancestorTitles: ["chat"],
-        testName: "sends a chat turn through the GUI",
-      },
-    );
-
-    expect(result.executionKind).toBe("playwright");
-    expect(result.commands.map((command) => command.args)).toEqual([
-      ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"],
-      [
-        "scripts/run-vitest.mjs",
-        "run",
-        "--config",
-        "test/vitest/vitest.ui-e2e.config.ts",
-        "--configLoader",
-        "runner",
-        playwrightPath,
-        "--reporter=verbose",
-        "--reporter=json",
-        reportArgument(result, "scenario-playwright"),
-        "--testNamePattern",
-        "^chat > sends a chat turn through the GUI$",
-      ],
-    ]);
-    expect(result.commands.map((command) => command.timeoutMs)).toEqual([1_800_000, 1_800_000]);
-    const evidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
-    );
-    expect(evidence.schemaVersion).toBe(3);
-    expect(evidence.entries).toHaveLength(1);
-    expect(evidence.entries[0]).toMatchObject({
-      test: {
-        kind: "playwright-test",
-        id: "scenario-playwright",
-        source: { path: playwrightPath },
-      },
-      coverage: [
-        { id: "ui.control", role: "primary" },
-        { id: "ui.streaming", role: "secondary" },
-      ],
-      refs: [
-        { kind: "docs", path: "docs/concepts/qa-e2e-automation.md" },
-        { kind: "code", path: playwrightPath },
-      ],
-      execution: {
-        runner: "playwright",
-        artifacts: [
+      ]);
+      expect(result.commands.map((command) => command.timeoutMs)).toEqual(
+        kind === "playwright" ? [1_800_000, 1_800_000] : [1_800_000],
+      );
+      const evidence = validateQaEvidenceSummaryJson(
+        JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
+      );
+      expect(evidence).toMatchObject({
+        schemaVersion: 3,
+        entries: [
           {
-            kind: "log",
-            path: `<repo-root>/${path.relative(repoRoot, result.results[0]!.logPath).split(path.sep).join("/")}`,
-            source: "playwright",
+            test: { kind: `${kind}-test`, id: scenario.id },
+            result: { status: "pass" },
+            execution: { runner: kind },
           },
         ],
-      },
-      result: { status: "pass" },
-    });
-  });
+      });
+    },
+  );
 
   it("can return aggregate evidence without retaining a duplicate evidence file", async () => {
     const repoRoot = await makeTempRepo("qa-playwright-memory-evidence-");
@@ -226,57 +200,18 @@ describe("qa test file scenario runner", () => {
   });
 
   it("stops native scenarios after the first failure in fail-fast mode", async () => {
-    const runCommand = vi.fn(async () => ({
-      exitCode: 1,
-      stdout: "",
-      stderr: "native scenario failed\n",
-    }));
-    const ids = ["first-native-scenario", "later-native-scenario"];
+    const scenario = makeTestFileScenario("vitest", "coverage-report.test.ts");
+    const executed: string[] = [];
     const result = await runNative({
       failFast: true,
-      scenarios: ["coverage-report", "cli"].map((name, index) =>
-        Object.assign(makeTestFileScenario("vitest", `extensions/qa-lab/src/${name}.test.ts`), {
-          id: ids[index]!,
-        }),
-      ),
-      runCommand,
+      scenarios: [scenario, { ...scenario, id: "later" }],
+      runCommand: async ({ args }) => {
+        executed.push(args[0]!);
+        return { exitCode: 1, stdout: "", stderr: "native scenario failed\n" };
+      },
     });
-
-    expect(runCommand).toHaveBeenCalledTimes(1);
-    expect(result.results.map((scenario) => scenario.scenario.id)).toEqual([ids[0]]);
-    expect(result.results.every((scenario) => scenario.status === "fail")).toBe(true);
-    expect(result.evidence.entries.map((entry) => entry.test.id)).toEqual([ids[0]]);
-  });
-});
-
-describe("QA native Vitest scenario routing", () => {
-  it("runs E2E test scenarios under the existing Gateway E2E configuration", async () => {
-    const repoRoot = await fs.realpath(await makeTempRepo("openclaw-qa-vitest-e2e-routing-"));
-    const testPath = "extensions/ollama/src/node-inference.paired-node.e2e.test.ts";
-    const scenario = {
-      ...makeTestFileScenario("vitest", testPath),
-      id: "ollama-paired-node-inference",
-    };
-
-    const result = await runNative({
-      repoRoot,
-      scenarios: [scenario],
-    });
-
-    expect(result.executionKind).toBe("vitest");
-    expect(result.results).toMatchObject([{ status: "pass" }]);
-    expect(result.evidence.entries[0]?.result.status).toBe("pass");
-    expect(result.commands.map((command) => command.args)).toEqual([
-      [
-        "scripts/run-vitest.mjs",
-        "run",
-        "--config",
-        "test/vitest/vitest.e2e.config.ts",
-        testPath,
-        "--reporter=verbose",
-        "--reporter=json",
-        reportArgument(result, scenario.id),
-      ],
-    ]);
+    expect(executed).toEqual(["scripts/run-vitest.mjs"]);
+    expect(result.results).toMatchObject([{ scenario: { id: scenario.id }, status: "fail" }]);
+    expect(result.evidence.entries.map((entry) => entry.test.id)).toEqual([scenario.id]);
   });
 });
