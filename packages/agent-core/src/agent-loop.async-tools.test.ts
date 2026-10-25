@@ -10,7 +10,7 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import {
   captureToolLoop,
   expectedToolResult,
-  finishMessageStream,
+  finishMessageStream as finish,
   startToolCalls,
   makeAssistantMessage,
   model as baseModel,
@@ -55,22 +55,6 @@ function pushCall(
   partial: AssistantMessage,
 ) {
   stream.push({ type: "toolcall_end", contentIndex, toolCall, partial });
-}
-
-function finish(
-  stream: ReturnType<typeof createAssistantMessageEventStream>,
-  message: AssistantMessage,
-  reason: "stop" | "toolUse" | "length" = "stop",
-) {
-  finishMessageStream(stream, message, reason);
-}
-
-function fail(
-  stream: ReturnType<typeof createAssistantMessageEventStream>,
-  error: AssistantMessage,
-  reason: "error" | "aborted" = "error",
-) {
-  finishMessageStream(stream, error, reason);
 }
 
 function completedResponse() {
@@ -229,9 +213,7 @@ it("keeps the live assistant visible while an async tool result starts and ends"
   let requests = 0;
   const agent = new Agent({
     initialState: { model, tools: [tool("lookup", execute)] },
-    streamFn: () => {
-      return ++requests === 1 ? response : completedResponse();
-    },
+    streamFn: () => (++requests === 1 ? response : completedResponse()),
   });
   const resultStates: Array<AgentMessage | undefined> = [];
   agent.subscribe((event) => {
@@ -421,7 +403,7 @@ it("preserves external cancellation when an output-limited async batch hits the 
   try {
     startCalls(response, [loop]);
     await beforeBatch.promise;
-    fail(response, outputLimitFailure([loop]));
+    finish(response, outputLimitFailure([loop]));
     releaseBatch.resolve();
     const messages = await run;
     expect(execute).not.toHaveBeenCalled();
@@ -480,7 +462,7 @@ it.each(["aborted", "output-limit"] as const)(
           : assistant([first, second], stopReason)),
         errorMessage: "stream failed",
       };
-      fail(response, failure, stopReason);
+      finish(response, failure, stopReason);
       closed = true;
       if (outputLimit) {
         gate.resolve();
@@ -508,11 +490,10 @@ it.each(["aborted", "output-limit"] as const)(
       gate.resolve();
       persistTerminal.resolve();
       if (!closed) {
-        const failure = {
+        finish(response, {
           ...assistant([first, second], stopReason),
           errorMessage: "stream failed",
-        };
-        fail(response, failure, stopReason);
+        });
       }
       await run;
     }
@@ -555,7 +536,7 @@ it.each([
     );
     const onYield = vi.fn(() => {
       controller.abort(new Error("sessions_yield"));
-      fail(
+      finish(
         inputs.length === 1 ? first : second,
         {
           ...assistant([], "aborted", "yielded"),

@@ -15,13 +15,7 @@ import {
 } from "../../ai/src/providers/openai-chatgpt-responses.test-helpers.js";
 import { streamOpenAIResponses } from "../../ai/src/providers/openai-responses.js";
 import { makeProviderModel } from "../../ai/src/providers/provider-model.test-support.js";
-import {
-  captureAgentLoop,
-  config,
-  makeTool,
-  model as baseModel,
-  user,
-} from "./agent-loop.test-support.js";
+import { captureToolLoop, makeTool, model as baseModel, user } from "./agent-loop.test-support.js";
 import type { Model } from "./llm.js";
 import type { AgentEvent } from "./types.js";
 
@@ -77,22 +71,21 @@ it("Responses continues end_turn:false text through a tool result to the final a
     details: {},
   }));
   try {
-    const run = captureAgentLoop(
-      [user("Check the result and report it.")],
-      { systemPrompt: "", messages: [], tools: [{ ...makeTool("check"), execute }] },
-      { ...config, model },
-      undefined,
-      (_model, context, options) =>
+    const { run, events } = captureToolLoop({
+      prompt: user("Check the result and report it."),
+      tools: [{ ...makeTool("check"), execute }],
+      config: { model },
+      streamFn: (_model, context, options) =>
         streamOpenAICodexResponses(model, context, {
           ...options,
           apiKey,
           transport: "websocket",
         }),
-    );
-    const result = await run.result;
+    });
+    const result = await run;
     expect(requests).toHaveLength(3);
     expect(execute).toHaveBeenCalledTimes(1);
-    expect(run.events.filter((event) => event.type === "agent_end")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "agent_end")).toHaveLength(1);
     const assistants = result
       .filter((message) => message.role === "assistant")
       .filter((message) => message.responseId !== undefined);
@@ -131,8 +124,6 @@ it("Responses continues end_turn:false text through a tool result to the final a
   }
 });
 
-// Closing snapshots hide aliased text-delta doubling; inspect live updates through real SSE.
-
 const WIRE_TEXT = "夜班巡检记录：雾笛、备用灯与无线电均正常。";
 const DELTAS = ["夜班巡检记录：", "雾笛、备用灯与无", "线电均正常。"];
 
@@ -144,36 +135,18 @@ function providerEvents(): Record<string, unknown>[] {
     content: [{ type: "output_text", text: WIRE_TEXT }],
   };
   const textPart = { item_id: "msg_1", content_index: 0 };
+  const event = (type: string, fields: object) => ({ type: `response.${type}`, ...fields });
+  const textEvent = (type: string, fields: object) => event(type, { ...textPart, ...fields });
+  const itemEvent = (type: string, output: object) =>
+    event(type, { output_index: 0, item: output });
   return [
-    { type: "response.created", response: { id: "resp_1", status: "in_progress" } },
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { type: "message", id: "msg_1", status: "in_progress" },
-    },
-    {
-      type: "response.content_part.added",
-      ...textPart,
-      part: { type: "output_text", text: "" },
-    },
-    ...DELTAS.map((delta) => ({
-      type: "response.output_text.delta",
-      item_id: "msg_1",
-      content_index: 0,
-      delta,
-    })),
-    {
-      type: "response.output_text.done",
-      ...textPart,
-      text: WIRE_TEXT,
-    },
-    {
-      type: "response.output_item.done",
-      output_index: 0,
-      item,
-    },
-    {
-      type: "response.completed",
+    event("created", { response: { id: "resp_1", status: "in_progress" } }),
+    itemEvent("output_item.added", { type: "message", id: "msg_1", status: "in_progress" }),
+    textEvent("content_part.added", { part: { type: "output_text", text: "" } }),
+    ...DELTAS.map((delta) => textEvent("output_text.delta", { delta })),
+    textEvent("output_text.done", { text: WIRE_TEXT }),
+    itemEvent("output_item.done", item),
+    event("completed", {
       response: {
         id: "resp_1",
         status: "completed",
@@ -181,7 +154,7 @@ function providerEvents(): Record<string, unknown>[] {
         output: [item],
         usage: { input_tokens: 5, output_tokens: 12, total_tokens: 17 },
       },
-    },
+    }),
   ];
 }
 
@@ -213,17 +186,17 @@ it("openai-responses live message updates grow strictly, never doubling the open
       contextWindow: 8192,
       maxTokens: 256,
     };
-    const run = captureAgentLoop(
-      [user("Report the night watch log.")],
-      { systemPrompt: "", messages: [], tools: [] },
-      { ...config, model },
-      undefined,
-      (_loopModel, context, options) =>
+    const { run, events } = captureToolLoop({
+      prompt: user("Report the night watch log."),
+      tools: [],
+      config: { model },
+      streamFn: (_loopModel, context, options) =>
         streamOpenAIResponses(model, context, { ...options, apiKey: "test-key" }),
-    );
-    await run.result;
+    });
+    await run;
 
-    const updates = messageUpdateTexts(run.events);
+    // Closing snapshots hide aliased text-delta doubling; inspect live updates through real SSE.
+    const updates = messageUpdateTexts(events);
     expect(updates.length).toBeGreaterThan(0);
     for (const [index, text] of updates.entries()) {
       expect(WIRE_TEXT.startsWith(text)).toBe(true);
