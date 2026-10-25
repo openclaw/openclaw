@@ -58,3 +58,62 @@ describe("Computer Use request deadline", () => {
     }
   });
 });
+
+describe("Computer Use marketplace discovery deadline", () => {
+  it.each([-120_000, 120_000])("keeps its budget after a %i ms wall-clock step", async (offset) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const controller = new AbortController();
+    const harness = createClientHarness({
+      onWrite: (line, send) => {
+        const message = JSON.parse(line) as { id?: unknown; method?: string };
+        if (message.id === undefined) {
+          return;
+        }
+        send({
+          id: message.id,
+          result:
+            message.method === "experimentalFeature/list"
+              ? { data: [{ name: "plugins", enabled: true }] }
+              : message.method === "plugin/list"
+                ? { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] }
+                : {},
+        });
+      },
+    });
+    let settled = false;
+    const operation = installCodexComputerUse({
+      client: harness.client,
+      pluginConfig: { computerUse: { autoInstall: true, marketplaceDiscoveryTimeoutMs: 4_000 } },
+      timeoutMs: 30_000,
+      signal: controller.signal,
+    })
+      .catch((error: unknown) => error)
+      .then((result) => {
+        settled = true;
+        return result;
+      });
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        harness.writes.some(
+          (line) => (JSON.parse(line) as { method?: string }).method === "plugin/list",
+        ),
+      ).toBe(true);
+      vi.setSystemTime(Date.now() + offset);
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(await operation).toMatchObject({
+        name: "CodexComputerUseSetupError",
+        status: { reason: "marketplace_missing" },
+      });
+    } finally {
+      controller.abort();
+      harness.client.close();
+      harness.process.emit("exit", 0, null);
+      await vi.advanceTimersByTimeAsync(0);
+      await operation;
+    }
+  });
+});

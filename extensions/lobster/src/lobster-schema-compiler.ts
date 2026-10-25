@@ -3,12 +3,12 @@ import { createJsonSchemaValidatorProvider } from "openclaw/plugin-sdk/json-sche
 type SchemaProvider = ReturnType<typeof createJsonSchemaValidatorProvider>;
 type JsonSchema = Parameters<SchemaProvider["getValidator"]>[0];
 
-export type LobsterSchemaError = {
+type LobsterSchemaError = {
   instancePath: string;
   message: string;
 };
 
-export type LobsterSchemaValidator = {
+type LobsterSchemaValidator = {
   (value: unknown): boolean;
   errors: LobsterSchemaError[] | null;
 };

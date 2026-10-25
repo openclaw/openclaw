@@ -29,11 +29,21 @@ import {
 import { prepareCliRunTerminalReply } from "./terminal-reply.js";
 
 type RunResultParams = Parameters<typeof buildCliRunResult>[0];
+function replyContext(
+  expectation?: RunResultParams["context"]["params"]["terminalReplyExpectation"],
+) {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  if (expectation !== undefined) {
+    context.params.terminalReplyExpectation = expectation;
+  }
+  return context;
+}
+
 function testRunResult({
-  context,
+  context = buildPreparedCliRunContext(),
   output,
   ...overrides
-}: Pick<RunResultParams, "context" | "output"> & Partial<RunResultParams>) {
+}: Pick<RunResultParams, "output"> & Partial<RunResultParams>) {
   return buildCliRunResult({
     context,
     output,
@@ -172,8 +182,7 @@ describe("isCliBindingFlushed", () => {
 it.each(["required", "result-required", "optional"] as const)(
   "preserves the %s reply obligation through classification",
   (terminalReplyExpectation) => {
-    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-    context.params.terminalReplyExpectation = terminalReplyExpectation;
+    const context = replyContext(terminalReplyExpectation);
     const result = testRunResult({
       context,
       output: { text: "" },
@@ -194,63 +203,45 @@ it.each(["required", "result-required", "optional"] as const)(
 );
 
 it.each([
-  {
-    name: "a required hidden acknowledgement",
-    terminalReplyExpectation: "result-required" as const,
-    output: { text: "HEARTBEAT_OK" },
-    trigger: "user" as const,
-    expectedError: true,
-  },
-  {
-    name: "an optional hidden acknowledgement",
-    terminalReplyExpectation: "optional" as const,
-    output: { text: "HEARTBEAT_OK" },
-    trigger: "user" as const,
-    expectedError: false,
-  },
-  {
-    name: "a required acknowledgement with media",
-    terminalReplyExpectation: "result-required" as const,
-    output: { text: "HEARTBEAT_OK", toolMediaUrls: ["https://example.invalid/chart.png"] },
-    trigger: "user" as const,
-    expectedError: false,
-  },
-])("settles $name at the message-presentation boundary", (testCase) => {
-  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-  context.params.terminalReplyExpectation = testCase.terminalReplyExpectation;
-  context.params.trigger = testCase.trigger;
-
-  const result = testRunResult({ context, output: testCase.output });
-
-  if (testCase.expectedError) {
-    expect(result.payloads).toBeUndefined();
-    expect(result.meta.error).toMatchObject({
-      kind: "incomplete_turn",
-      message: "No answer was returned. Ask again if you still need one.",
-      fallbackSafe: false,
+  ["result-required", undefined, true],
+  ["optional", undefined, false],
+  ["result-required", ["https://example.invalid/chart.png"], false],
+] as const)(
+  "settles %s acknowledgement (media=%j) at presentation",
+  (expectation, media, error) => {
+    const context = replyContext(expectation);
+    context.params.trigger = "user";
+    const result = testRunResult({
+      context,
+      output: { text: "HEARTBEAT_OK", ...(media ? { toolMediaUrls: [...media] } : {}) },
     });
-    expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
-    expect(result.meta.finalAssistantVisibleText).toBeUndefined();
-    expect(result.meta.finalAssistantRawText).toBe("HEARTBEAT_OK");
-    return;
-  }
+    if (error) {
+      expect(result.payloads).toBeUndefined();
+      expect(result.meta.error).toMatchObject({
+        kind: "incomplete_turn",
+        message: "No answer was returned. Ask again if you still need one.",
+        fallbackSafe: false,
+      });
+      expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
+      expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+      expect(result.meta.finalAssistantRawText).toBe("HEARTBEAT_OK");
+      return;
+    }
 
-  expect(result.meta.error).toBeUndefined();
-  expect(result.meta.terminalReply).toEqual({
-    disposition: "visible",
-    text: "HEARTBEAT_OK",
-  });
-  expect(result.payloads?.[0]?.text).toBe("HEARTBEAT_OK");
-  if (testCase.output.toolMediaUrls) {
-    expect(result.payloads?.flatMap((payload) => payload.mediaUrls ?? [])).toContain(
-      testCase.output.toolMediaUrls[0],
-    );
-  }
-});
+    expect(result.meta.error).toBeUndefined();
+    expect(result.meta.terminalReply).toEqual({
+      disposition: "visible",
+      text: "HEARTBEAT_OK",
+    });
+    expect(result.payloads?.[0]?.text).toBe("HEARTBEAT_OK");
+    if (media) {
+      expect(result.payloads?.flatMap((payload) => payload.mediaUrls ?? [])).toContain(media[0]);
+    }
+  },
+);
 
 it("preserves confirmed final delivery of an acknowledgement-only CLI result", () => {
-  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-  context.params.terminalReplyExpectation = "result-required";
+  const context = replyContext("result-required");
   const result = testRunResult({
     context,
     output: {
@@ -267,8 +258,7 @@ it("preserves confirmed final delivery of an acknowledgement-only CLI result", (
 });
 
 it("preserves an accepted completion-message child over a hidden CLI acknowledgement", () => {
-  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
-  context.params.terminalReplyExpectation = "result-required";
+  const context = replyContext("result-required");
   const acceptedSessionSpawns = [
     {
       runId: "child-run",
@@ -298,7 +288,7 @@ it.each([
 ] as const)(
   "projects only explicit native continuity from a %s result",
   (kind, resultSessionId, bindingSessionId) => {
-    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+    const context = replyContext();
     context.params.modelProvider = "anthropic";
     const previousCursor = {
       localSessionId: context.params.sessionId,
@@ -347,7 +337,7 @@ it.each(
 )(
   "$kind preserves model provider=$modelProvider and backend identity",
   async ({ modelProvider, kind }) => {
-    const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+    const context = replyContext();
     if (modelProvider !== undefined) {
       context.params.modelProvider = modelProvider;
     }
@@ -426,7 +416,7 @@ it.each(["Done", ""])("captures only the final CLI result %j after narration", (
   const textParts = rawFinalText ? ["Checking now", rawFinalText] : undefined;
   const text = textParts?.join("\n") ?? "Checking now";
   const output = transformCliResultText({ text, textParts, rawFinalText });
-  const result = testRunResult({ context: buildPreparedCliRunContext(), output });
+  const result = testRunResult({ output });
   expect(result.meta.finalAssistantRawText).toBe(text);
   expect(resolveDiagnosticModelResponse(result)).toBe(rawFinalText || undefined);
 });
@@ -441,13 +431,12 @@ it("never captures host-synthesized optional silence as model output", async () 
 });
 
 it("preserves completed result boundaries for independent final delivery", async () => {
-  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
   const output = {
     text: "First answer.\nLast answer.",
     textParts: ["First answer.", "Last answer."],
   };
   const result = testRunResult({
-    context,
+    context: replyContext(),
     output,
     assistantTranscriptOwned: true,
     assistantTranscriptIdempotencyKey: "synthetic-turn",

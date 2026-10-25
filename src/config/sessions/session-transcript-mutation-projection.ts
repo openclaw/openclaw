@@ -17,6 +17,7 @@ export type TranscriptMutationOptions = {
   publicationAssistant?: SessionTranscriptAuthority["lastAssistantMessage"];
   persistActorMutation?: boolean;
   writeActorMutation?: (update: TranscriptWindowUpdate) => void;
+  projectionReady?: boolean;
 };
 
 export function projectTranscriptMutationPublication(

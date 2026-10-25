@@ -5046,7 +5046,6 @@
 ["src/gateway/server-methods/board.runtime-boundaries.test.ts","../../agents/exec-auto-reviewer.js","dd9dcc01f002395a4c06baeab069568698f762ad5aad7d8e5c4cdb708637f372",1]
 ["src/gateway/server-methods/board.runtime-boundaries.test.ts","./cron.js","03f300feee8b0a2173ccf5465b50347b327f5cc44335bd3c96e46708615526d5",1]
 ["src/gateway/server-methods/board.runtime-boundaries.test.ts","./sessions-read.js","2b249fc4af115292b13e60c45987f92f2c49ba63de0a666b66e5d97bae7a9dcb",1]
-["src/gateway/server-methods/board.runtime-boundaries.test.ts","./sessions.runtime.js","d8fce365b137ffe26a06a9048d79628103a8e6c9293a6993cc6093aed0c7d701",1]
 ["src/gateway/server-methods/canvas.test.ts","../../canvas/documents.js","ecf3bc98bba2641fb76d36fe2d1982810ed39dcbdca8c93572e5a28da9943bc9",1]
 ["src/gateway/server-methods/channel-pairing.test.ts","../../commands/doctor-command-owner.js","a3e374e7f2452427a96d9761bd2cfe15f179d330400001a80d06e3e969bb447b",1]
 ["src/gateway/server-methods/channel-pairing.test.ts","../../pairing/command-owner.js","e5d619236829f944202da3a76e060b1166238c743098f92baa7b11efc0f74557",1]

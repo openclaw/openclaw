@@ -43,19 +43,15 @@ function captureCalls(owner) {
 }
 
 /** The compiled image already owns bundled bytes; editable plugins retain their capture owner. */
-export function createStandaloneArtifactAdapter({
-  runtimeRoot,
-  embeddedPaths,
-  parse,
-  buildIdentity,
-}) {
-  if (typeof buildIdentity !== "string" || !buildIdentity) {
-    throw new Error("Standalone artifacts require an immutable build identity");
-  }
+export function createStandaloneArtifactAdapter({ runtimeRoot, embeddedPaths, parse }) {
   if (!Object.keys(embeddedPaths).some((entry) => entry.startsWith("dist/extensions/"))) {
     throw new Error("Standalone artifacts require embedded bundled plugin entries");
   }
   const bootstrap = `(() => {
+  const buildIdentity = globalThis.__openclawStandaloneBuildInfo?.build?.id;
+  if (typeof buildIdentity !== "string" || !buildIdentity) {
+    throw new Error("Standalone artifacts require an immutable build identity");
+  }
   const bundledEntries = new Set(Object.keys(entries).filter((entry) =>
     /^dist(?:-runtime)?\\/extensions\\/[^/]+\\/.+\\.[cm]?js$/.test(entry)));
   const pluginRoots = new Set([...bundledEntries].map((entry) => entry.split("/").slice(0, 3).join("/")));
@@ -118,7 +114,7 @@ export function createStandaloneArtifactAdapter({
       : undefined;
     if (record.source && (!bundledEntries.has(source) || !source.startsWith(pluginRoot + "/"))) return;
     const key = JSON.stringify([pluginRoot, source ?? null]);
-    return ${JSON.stringify(buildIdentity)} + ":" + key;
+    return buildIdentity + ":" + key;
   };
 })();
 `;

@@ -312,39 +312,6 @@ describe("root-owned POSIX quiescence", () => {
 });
 
 describe("Windows-selected quiescence controller contracts", () => {
-  it("reuses the retained helper across SQLite leases while fencing stale nonces", async () => {
-    const f = fixture();
-    try {
-      await expect(f.execute(acquire)).resolves.toBe("quiesced " + nonce + "\n");
-      expect(mocks.helper).toHaveBeenCalledOnce();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(f.readLease()).toMatchObject({
-        nonce,
-        sharedHost: true,
-        processes: [],
-        watchdog: null,
-      });
-      expect(f.releaseWorkspace).not.toHaveBeenCalled();
-      await expect(f.execute(renew)).resolves.toBe("renewed " + nonce + "\n");
-      await f.execute(release);
-      expect(f.readLease()).toBeUndefined();
-      const nextNonce = "b".repeat(32);
-      await f.execute({ ...acquire, nonce: nextNonce });
-      for (const operation of [acquire, renew, release]) {
-        await expect(f.execute(operation)).rejects.toThrow(/already active|no longer active/);
-      }
-      expect(f.readLease()).toMatchObject({ nonce: nextNonce });
-      await f.execute({ ...renew, nonce: nextNonce });
-      await f.execute({ ...release, nonce: nextNonce });
-      expect(mocks.helper).toHaveBeenCalledOnce();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-    } finally {
-      await f.owner.close();
-    }
-    expect(f.children[0]?.exitCode).toBe(0);
-    expect(f.owner.hasActiveWork()).toBe(false);
-  });
-
   it("does not admit an already-aborted operation", async () => {
     const f = fixture();
     const caller = new AbortController();

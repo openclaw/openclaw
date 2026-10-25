@@ -19,7 +19,6 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -30,13 +29,12 @@ import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
+import {
+  EXPECTED_IMPLICIT_CODEX_RUNTIME,
+  EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+} from "./models-runtime.fixtures.test-support.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
-
-const OPENCLAW_DEVICE_PLACEMENT: NonNullable<GatewayAgentRuntime["devicePlacement"]> = {
-  requiredNodeCommands: [],
-  consumesWorkerSlot: true,
-};
 
 const FILE_SECRETS: NonNullable<OpenClawConfig["secrets"]> = {
   providers: {
@@ -46,22 +44,6 @@ const FILE_SECRETS: NonNullable<OpenClawConfig["secrets"]> = {
       mode: "json",
     },
   },
-};
-
-const EXPECTED_IMPLICIT_CODEX_RUNTIME: GatewayAgentRuntime = {
-  id: "codex",
-  cloudPlacementSupported: false,
-  devicePlacementSupported: false,
-  source: "implicit",
-};
-
-const EXPECTED_IMPLICIT_OPENCLAW_RUNTIME: GatewayAgentRuntime = {
-  id: "openclaw",
-  cloudPlacementSupported: true,
-  cloudPlacementExecutionMode: "worker-turn",
-  devicePlacement: OPENCLAW_DEVICE_PLACEMENT,
-  devicePlacementSupported: true,
-  source: "implicit",
 };
 
 const EXPECTED_DEMO_IDENTITY = {
@@ -858,6 +840,7 @@ describe("models.list", () => {
               id: "llama-secure",
               name: "Llama Secure",
               provider: "vllm",
+              local: false,
               input: ["text", "image", "document"],
               tags: ["default"],
             },
@@ -902,6 +885,7 @@ describe("models.list", () => {
               name: "GPT Test",
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+              local: false,
               available: false,
               unavailableReason: "missing-auth",
               tags: ["default"],
@@ -949,6 +933,7 @@ describe("models.list", () => {
               name: "GPT Test",
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+              local: false,
               available: false,
               unavailableReason: "missing-auth",
               tags: ["default"],
@@ -1042,6 +1027,7 @@ describe("models.list", () => {
             id: "llama-local",
             name: "Llama Local",
             provider: "vllm",
+            local: false,
             tags: ["default"],
           },
         ],
@@ -1087,6 +1073,7 @@ describe("models.list", () => {
             id: "llama-secure",
             name: "Llama Secure",
             provider: "vllm",
+            local: false,
             available: false,
             tags: ["default"],
           },
@@ -1186,6 +1173,7 @@ describe("models.list", () => {
               name: "GPT-5.4 Codex",
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+              local: false,
               available: true,
             },
             {
@@ -1193,6 +1181,7 @@ describe("models.list", () => {
               name: "GPT Codex Test",
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+              local: false,
               available: true,
             },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
@@ -1228,6 +1217,7 @@ describe("models.list", () => {
               name: "GPT-5.4 Codex",
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+              local: false,
               available: true,
             },
             {
@@ -1235,6 +1225,7 @@ describe("models.list", () => {
               name: "GPT Codex Test",
               provider: "openai",
               agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+              local: false,
               available: true,
             },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
@@ -1287,6 +1278,7 @@ describe("models.list", () => {
                 id: "llama-configured",
                 name: "Llama Configured",
                 provider: "vllm",
+                local: true,
                 available: true,
                 tags: ["default"],
               },
@@ -1294,6 +1286,7 @@ describe("models.list", () => {
                 id: "llama-discovered",
                 name: "Llama Discovered",
                 provider: "vllm",
+                local: true,
                 available: true,
               },
             ],
@@ -1353,6 +1346,7 @@ describe("models.list", () => {
                 name: "GPT-5.4 Codex",
                 provider: "openai",
                 agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+                local: false,
                 available: true,
               },
             ],
@@ -1984,6 +1978,7 @@ describe("models.list", () => {
             id: "demo-model",
             name: "Demo Model",
             provider: "demo-provider",
+            local: false,
             available: false,
             unavailableReason: "missing-auth",
           },
