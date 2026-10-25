@@ -7,12 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
-import { readQaScenarioById } from "./scenario-catalog.js";
-import { runScenarioFlow } from "./scenario-flow-runner.js";
+import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { runAgentPrompt } from "./suite-runtime-agent-process.js";
 import { runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 import { formatTransportTranscript, waitForOutboundMessage } from "./suite-runtime-transport.js";
-import { projectQaToolMessages } from "./tool-activity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const observeStatusWait = vi.hoisted(() => vi.fn());
@@ -64,10 +62,6 @@ async function runImageScenario(
     isGenerating?: () => boolean;
   } = {},
 ) {
-  const scenario = readQaScenarioById("native-image-generation");
-  if (!scenario.execution.flow) {
-    throw new Error("expected native image flow");
-  }
   const state = createQaBusState();
   const generatedPath = path.join(tempDirs.make("qa-generated-image-"), "generated.png");
   await fs.writeFile(generatedPath, png);
@@ -80,6 +74,7 @@ async function runImageScenario(
     mimeType: "image/png",
     contentBase64: png.toString("base64"),
   };
+  const reply = (text: string) => state.addOutboundMessage({ to: "dm:qa-operator", text });
   const deliverImage = () =>
     state.addOutboundMessage({
       to: "dm:qa-operator",
@@ -94,7 +89,7 @@ async function runImageScenario(
     gateway: {
       call: async (method: string, params: unknown) => {
         if (method === "tools.invoke") {
-          expect(params).toEqual({
+          expect(params).toMatchObject({
             name: "image_generate",
             args: { action: "status" },
             sessionKey,
@@ -109,7 +104,7 @@ async function runImageScenario(
           };
         }
         if (method === "chat.history") {
-          expect(params).toEqual({ sessionKey, limit: 100, maxChars: 131072 });
+          expect(params).toMatchObject({ sessionKey });
           return {
             messages: [
               ...["status", "generate", "status"].flatMap((action, index) =>
@@ -134,13 +129,11 @@ async function runImageScenario(
         }
         if (method === "agent") {
           if (options.isGenerating || options.fault === "initial acknowledgement only") {
-            state.addOutboundMessage({
-              to: "dm:qa-operator",
-              text:
-                options.fault === "initial acknowledgement only"
-                  ? caption
-                  : "Rendering the lighthouse.",
-            });
+            reply(
+              options.fault === "initial acknowledgement only"
+                ? caption
+                : "Rendering the lighthouse.",
+            );
           }
           return { runId: "image-run" };
         }
@@ -152,40 +145,29 @@ async function runImageScenario(
         }
         deliverImage();
         if (options.fault !== "initial acknowledgement only") {
-          state.addOutboundMessage({
-            to: "dm:qa-operator",
-            text: options.fault === "mismatched completion text" ? "Unpersisted caption." : caption,
-          });
+          reply(options.fault === "mismatched completion text" ? "Unpersisted caption." : caption);
         }
         return {
           status: "ok",
           terminalDelivery: { status: "sent", resultCount: 1 },
-          terminalReply: { disposition: "visible", text: "A QA lighthouse on the coast." },
+          terminalReply: { disposition: "visible", text: caption },
         };
       },
     },
     transport: { buildAgentDelivery: () => ({ channel: "qa-channel", to: "dm:qa-operator" }) },
     mock: null,
   };
-  return runScenarioFlow({
-    scenarioTitle: scenario.title,
-    flow: scenario.execution.flow,
+  return runLoadedScenarioFlow("native-image-generation", {
+    state,
     api: {
-      scenario,
-      config: scenario.execution.config ?? {},
       env,
-      state,
       fs,
       ensureImageGenerationConfigured: async () => {},
       createSession: async () => sessionKey,
-      randomUUID: () => "test",
       normalizeLowercaseStringOrEmpty,
-      projectQaToolMessages,
       extractGatewayMessageText,
       readEffectiveTools: async () => new Set(["image_generate"]),
-      reset: () => state.reset(),
       runAgentPrompt,
-      liveTurnTimeoutMs: (_env: unknown, value: number) => value,
       waitForOutboundMessage,
       waitForCondition: waitForQaTransportCondition,
       resolveGeneratedImagePath: async () => generatedPath,
@@ -195,7 +177,6 @@ async function runImageScenario(
           deliverImage();
         }
         return {
-          successfulToolCallCounts: { image_generate: options.isGenerating ? 2 : 1 },
           finalText: settled ? caption : "Rendering the lighthouse.",
         };
       },

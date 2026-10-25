@@ -1,3 +1,5 @@
+import { Readable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { jsonResponse, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -161,31 +163,20 @@ describe("qa credential admin runtime", () => {
     await withServer(
       (_req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
-        let nextChunkTimer: ReturnType<typeof setTimeout> | undefined;
+        const stream = Readable.from(
+          (async function* () {
+            while (chunksSent < totalChunks) {
+              chunksSent += 1;
+              yield chunk;
+              await delay(2);
+            }
+          })(),
+        );
         res.once("close", () => {
           responseClosed = true;
-          if (nextChunkTimer) {
-            clearTimeout(nextChunkTimer);
-          }
+          stream.destroy();
         });
-        const scheduleNext = () => {
-          nextChunkTimer = setTimeout(sendNext, 2);
-        };
-        const sendNext = () => {
-          if (res.destroyed || chunksSent >= totalChunks) {
-            if (!res.destroyed) {
-              res.end();
-            }
-            return;
-          }
-          chunksSent += 1;
-          if (res.write(chunk)) {
-            scheduleNext();
-          } else {
-            res.once("drain", scheduleNext);
-          }
-        };
-        sendNext();
+        stream.pipe(res);
       },
       async (baseUrl) => {
         const error = await listQaCredentialSets({

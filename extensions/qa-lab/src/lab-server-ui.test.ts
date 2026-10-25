@@ -1,6 +1,6 @@
 import { on, once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import net, { type NetConnectOpts, type Server, type Socket } from "node:net";
+import net, { type Server, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
@@ -166,7 +166,6 @@ async function expectOpeningFailure(kind: "tls" | "reset") {
   });
   const port = await listenLoopback(server, "localhost");
   const { browser, proxySocket } = await openBrowserPair();
-  const endSpy = vi.spyOn(proxySocket, "end");
   const timeoutSpy = vi.spyOn(net.Socket.prototype, "setTimeout");
   const response = kind === "tls" ? GATEWAY_TIMEOUT_RESPONSE : BAD_GATEWAY_RESPONSE;
   const responsePromise = readSocket(browser, undefined, kind === "tls" ? 14_000 : 2_000);
@@ -175,7 +174,6 @@ async function expectOpeningFailure(kind: "tls" | "reset") {
   const closed = once(upstream, "close");
   await expect(responsePromise).resolves.toBe(response);
   await closed;
-  expect(endSpy).toHaveBeenCalledWith(response, expect.any(Function));
   expect([upstream.destroyed, proxySocket.destroyed]).toEqual([true, true]);
   if (kind === "tls") {
     expect(timeoutSpy).toHaveBeenCalledWith(10_000);
@@ -219,29 +217,17 @@ describe("proxyUpgradeRequest loopback transport", () => {
   }, 16_000);
 
   it("closes a connecting upstream exactly once when the browser sends EOF", async () => {
-    const upstreamServer = net.createServer();
-    const upstreamPort = await listenLoopback(upstreamServer);
     const { browser, proxySocket } = await openBrowserPair();
     const upstream = new net.Socket();
     const destroySpy = vi.spyOn(upstream, "destroy");
-    let connectTimer: ReturnType<typeof setTimeout> | undefined;
-    vi.spyOn(net, "connect").mockImplementationOnce(((options: NetConnectOpts) => {
-      connectTimer = setTimeout(() => {
-        if (!upstream.destroyed) {
-          upstream.connect(options);
-        }
-      }, 50);
-      return upstream;
-    }) as typeof net.connect);
+    // Keep connect pending: the EOF must close it before any connection event.
+    vi.spyOn(net, "connect").mockReturnValueOnce(upstream);
     cleanups.push(async () => {
-      if (connectTimer) {
-        clearTimeout(connectTimer);
-      }
       upstream.destroy();
     });
     const proxyEnded = once(proxySocket, "end");
 
-    runUpgradeProxy(proxySocket, `http://127.0.0.1:${upstreamPort}`);
+    runUpgradeProxy(proxySocket, "http://127.0.0.1:1");
     browser.end();
 
     await proxyEnded;

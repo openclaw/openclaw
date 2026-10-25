@@ -213,26 +213,21 @@ export function buildScriptProducerEvidence(
 
 export async function writeScriptProducerEvidence(
   params: ScriptProducerEvidenceParams & {
-    evidenceLocation?: "run" | "scenario-root";
-    latestRun?: "absolute" | "none" | "relative";
+    latestRun?: "absolute" | "relative";
     outputDir: string;
     scenarioId?: string;
   },
 ) {
   const scenarioArtifactBase = path.join(params.outputDir, params.scenarioId ?? "scenario-script");
-  const evidenceDir =
-    params.evidenceLocation === "scenario-root"
-      ? scenarioArtifactBase
-      : path.join(scenarioArtifactBase, "run-1");
+  const evidenceDir = path.join(scenarioArtifactBase, "run-1");
   const evidencePath = path.join(evidenceDir, QA_EVIDENCE_FILENAME);
   await fs.mkdir(evidenceDir, { recursive: true });
   await writeFixtureJson(evidencePath, buildScriptProducerEvidence(params));
-  const latestRun = params.latestRun ?? "absolute";
-  if (latestRun !== "none") {
-    await writeFixtureJson(path.join(scenarioArtifactBase, "latest-run.json"), {
-      qaEvidence:
-        latestRun === "relative" ? path.relative(scenarioArtifactBase, evidencePath) : evidencePath,
-    });
-  }
-  return { evidenceDir, evidencePath, scenarioArtifactBase };
+  await writeFixtureJson(path.join(scenarioArtifactBase, "latest-run.json"), {
+    qaEvidence:
+      params.latestRun === "relative"
+        ? path.relative(scenarioArtifactBase, evidencePath)
+        : evidencePath,
+  });
+  return { evidenceDir, evidencePath };
 }

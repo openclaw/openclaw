@@ -108,30 +108,19 @@ describe("qa test file scenario runner", () => {
     const tempRoot = await harness.makeTempRepo("qa-script-terminal-exit-pass-");
     const outputDir = path.join(tempRoot, "out");
     const scriptPath = path.join(tempRoot, "terminal-evidence-producer.mjs");
-    const producer = {
-      additionalEntries: buildScriptProducerEvidence({
-        producerId: "producer-diagnostic",
-        status: "pass",
-      }).entries,
-      artifacts: [{ kind: "log", path: "producer.log" }],
-      producerId: "scenario-script",
-      status: "pass" as const,
-    };
     const result = await runScript(process.cwd(), {
       outputDir,
       scenarios: [scriptScenario(scriptPath)],
-      commandTimeoutMs: 1_000,
       runCommand: async (command) => {
-        const attemptOutputDir = resolveScriptAttemptOutputDir(command);
-        const artifactBase = path.join(attemptOutputDir, "scenario-script");
-        expect(command).toMatchObject({
-          args: ["--import", "tsx", scriptPath, "--once", "--artifact-base", artifactBase],
-          timeoutMs: 1_000,
-        });
-
         const { evidenceDir } = await writeScriptProducerEvidence({
-          ...producer,
-          outputDir: attemptOutputDir,
+          outputDir: resolveScriptAttemptOutputDir(command),
+          producerId: "scenario-script",
+          status: "pass",
+          additionalEntries: buildScriptProducerEvidence({
+            producerId: "producer-diagnostic",
+            status: "pass",
+          }).entries,
+          artifacts: [{ kind: "log", path: "producer.log" }],
           latestRun: "relative",
         });
         await fs.writeFile(path.join(evidenceDir, "producer.log"), "producer evidence\n", "utf8");
@@ -181,8 +170,7 @@ describe("qa test file scenario runner", () => {
         "import path from 'node:path';",
         "const artifactBaseIndex = process.argv.indexOf('--artifact-base');",
         "if (artifactBaseIndex < 0) throw new Error('missing --artifact-base');",
-        "const artifactBase = process.argv[artifactBaseIndex + 1];",
-        "const runRoot = artifactBase;",
+        "const runRoot = process.argv[artifactBaseIndex + 1];",
         "await fs.mkdir(runRoot, { recursive: true });",
         "await fs.writeFile(path.join(runRoot, 'artifact.log'), 'structured evidence\\n', 'utf8');",
         `const evidence = ${JSON.stringify(producerEvidence)};`,

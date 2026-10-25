@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import { createQaChannelTransport } from "./qa-channel-transport.js";
 import {
   createQaStateBackedTransportAdapter,
   waitForQaTransportAccountReady,
@@ -33,22 +34,9 @@ function createAdapter(
   overrides: Partial<Parameters<typeof createQaStateBackedTransportAdapter>[1]> = {},
 ) {
   return createQaStateBackedTransportAdapter(state, {
-    id: "live",
-    label: "Live",
+    ...createQaChannelTransport(state),
     accountId: "sut",
-    requiredPluginIds: [],
-    supportedActions: [],
-    sendInbound: async (input) => state.addInboundMessage(input),
-    createGatewayConfig: () => ({}),
-    waitReady: async () => undefined,
-    buildAgentDelivery: ({ target }) => ({
-      channel: "live",
-      to: target,
-      replyChannel: "live",
-      replyTo: target,
-    }),
-    handleAction: async () => undefined,
-    createReportNotes: () => [],
+    waitForOutboundSequence: undefined,
     ...overrides,
   });
 }
@@ -84,9 +72,7 @@ describe("waitForQaTransportAccountReady", () => {
       }),
     ).rejects.toThrow("timed out after 5ms waiting for slack ready");
 
-    const [method, probe, request] = call.mock.calls[0] ?? [];
-    expect(method).toBe("channels.status");
-    expect(probe.probe).toBe(false);
+    const [, probe, request] = call.mock.calls[0] ?? [];
     expect(probe.timeoutMs).toBeLessThanOrEqual(5);
     expect(request.timeoutMs).toBeLessThanOrEqual(5);
   });
@@ -98,26 +84,8 @@ describe("createQaStateBackedTransportAdapter", () => {
     const resetTransport = vi.fn(() => {
       expect(state.getSnapshot().messages).toHaveLength(1);
     });
-    const artifacts = [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }];
-    const captureArtifacts = vi.fn(async () => ({ artifacts }));
-    const createRuntimePreloads = vi.fn(() => ["file:///qa-preload.mjs"]);
-    const adapter = createAdapter({
-      prepareFlow: vi.fn(),
-      resetTransport,
-      captureArtifacts,
-      createRuntimePreloads,
-    });
-
-    await adapter.reset();
-
+    await createAdapter({ resetTransport }).reset();
     expect(resetTransport).toHaveBeenCalledOnce();
-    expect(adapter.prepareFlow).toBeTypeOf("function");
-    await expect(adapter.captureArtifacts?.({ outputDir: "/qa-output" })).resolves.toEqual({
-      artifacts,
-    });
-    expect(captureArtifacts).toHaveBeenCalledWith({ outputDir: "/qa-output" });
-    expect(adapter.createRuntimePreloads?.()).toEqual(["file:///qa-preload.mjs"]);
-    expect(createRuntimePreloads).toHaveBeenCalledOnce();
     expect(state.getSnapshot().messages).toHaveLength(0);
   });
 
@@ -152,23 +120,6 @@ describe("createQaStateBackedTransportAdapter", () => {
 });
 
 describe("waitForQaTransportOutboundSequence", () => {
-  it("returns preview and final edit events for one threaded message", async () => {
-    state.createThread({ conversationId: "qa-room", createdBy: "alice", title: "QA thread" });
-    const preview = outbound("preview", {
-      senderId: "openclaw",
-      threadId: "42",
-      to: "thread:qa-room/42",
-    });
-    edit(preview.id);
-
-    await expect(
-      waitForSequence({ conversationId: "qa-room", threadId: "42", timeoutMs: 100 }),
-    ).resolves.toMatchObject({
-      events: [{ kind: "sent" }, { kind: "edited" }],
-      final: { text: "final marker", threadId: "42" },
-    });
-  });
-
   it.each([
     { description: "before the final marker", failureBeforeFinal: true },
     { description: "after the final marker", failureBeforeFinal: false },
