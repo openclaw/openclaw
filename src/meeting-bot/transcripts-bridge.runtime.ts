@@ -57,6 +57,7 @@ export function createMeetingDurableTranscriptBridge<
   options: MeetingDurableTranscriptsOptions;
 }): MeetingDurableTranscriptBridge<TSession> {
   const config = resolveTranscriptsConfig(params.options.config);
+  const runInBackground = params.options.runInBackground ?? (<T>(run: () => T) => run());
   const isEnabled = params.isEnabled ?? (() => config.enabled);
   const stateDir = params.options.stateDir ?? resolveStateDir();
   const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
@@ -157,26 +158,41 @@ export function createMeetingDurableTranscriptBridge<
             }
           }
         };
-        const timer = setInterval(() => {
-          // polling covers both initialize() and capture, so session writes are
-          // single-flight too. A skipped tick is followed within CAPTURE_INTERVAL_MS.
-          if (!isEnabled() || active.polling || active.closing) {
-            return;
-          }
-          active.polling = true;
-          void lifecycleTasks
-            .enqueue(session.id, async () => {
-              if (captures.get(session.id) !== active || active.closing || !isEnabled()) {
-                return;
-              }
-              await initialize();
-              await capture();
-            })
-            .catch((error: unknown) => reportCaptureError(session.id, error))
-            .finally(() => {
+        // The join request that starts capture ends long before capture does. Install the
+        // timer and deliver each tick in the plugin's background context, so captures run
+        // with the plugin instance's authority instead of that request's.
+        const timer = runInBackground(() =>
+          setInterval(() => {
+            // polling covers both initialize() and capture, so session writes are
+            // single-flight too. A skipped tick is followed within CAPTURE_INTERVAL_MS.
+            if (!isEnabled() || active.polling || active.closing) {
+              return;
+            }
+            active.polling = true;
+            let tick: Promise<void>;
+            try {
+              tick = runInBackground(() =>
+                lifecycleTasks.enqueue(session.id, async () => {
+                  if (captures.get(session.id) !== active || active.closing || !isEnabled()) {
+                    return;
+                  }
+                  await initialize();
+                  await capture();
+                }),
+              );
+            } catch (error) {
+              // The runner refuses new work synchronously once the plugin stops admitting it.
+              reportCaptureError(session.id, error);
               active.polling = false;
-            });
-        }, CAPTURE_INTERVAL_MS);
+              return;
+            }
+            void tick
+              .catch((error: unknown) => reportCaptureError(session.id, error))
+              .finally(() => {
+                active.polling = false;
+              });
+          }, CAPTURE_INTERVAL_MS),
+        );
         timer.unref?.();
         active.timer = timer;
         active.polling = true;

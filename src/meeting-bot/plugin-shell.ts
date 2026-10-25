@@ -161,6 +161,7 @@ type MeetingPluginShellEntryOptions<
     fullConfig: OpenClawPluginApi["config"];
     logger: OpenClawPluginApi["logger"];
     runtime: OpenClawPluginApi["runtime"];
+    runInBackground?: OpenClawPluginApi["lifecycle"]["runInBackgroundContext"];
   }) => Runtime;
   transcriptSource: { aliases?: readonly string[]; id: string };
 };
@@ -195,6 +196,7 @@ export function createMeetingPluginShellEntry<
         fullConfig: api.config,
         runtime: api.runtime,
         logger: api.logger,
+        runInBackground: api.lifecycle.runInBackgroundContext,
       }),
     registerCli: (api, config) => {
       api.registerCli(async ({ program }) => (await loadCli())({ program, config }), {
