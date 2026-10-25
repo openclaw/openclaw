@@ -1,5 +1,7 @@
+import { resolveOAuthApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { createHuggingfaceOAuthAuthMethod, refreshHuggingfaceOAuth } from "./oauth.js";
 import { applyHuggingfaceConnectionConfig, HUGGINGFACE_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildHuggingfaceProvider } from "./provider-catalog.js";
@@ -25,6 +27,8 @@ export default defineSingleProviderPluginEntry({
       defaultModel: HUGGINGFACE_DEFAULT_MODEL_REF,
       applyConfig: applyHuggingfaceConnectionConfig,
     },
+    extraAuth: [createHuggingfaceOAuthAuthMethod()],
+    refreshOAuth: refreshHuggingfaceOAuth,
     catalog: {
       run: async (ctx) => {
         const pluginConfig = ctx.config?.plugins?.entries?.[PROVIDER_ID]?.config as
@@ -33,7 +37,9 @@ export default defineSingleProviderPluginEntry({
         if (pluginConfig?.discovery?.enabled === false) {
           return null;
         }
-        const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderApiKey(PROVIDER_ID);
+        const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderAuth(PROVIDER_ID, {
+          oauthMarker: resolveOAuthApiKeyMarker(PROVIDER_ID),
+        });
         if (!apiKey) {
           return null;
         }
