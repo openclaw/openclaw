@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import http from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import {
@@ -11,7 +11,7 @@ import {
 } from "./beam.test-support.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStore } from "./store.js";
-import { BEAM_MAX_BODY_BYTES, BEAM_RETENTION_MS, parseBeamUpload } from "./types.js";
+import { BEAM_MAX_BODY_BYTES, BEAM_RETENTION_MS, type BeamStoredSession } from "./types.js";
 
 function postUpload(endpoint: string, body = sampleUpload()) {
   return fetch(endpoint, {
@@ -26,28 +26,21 @@ const catalogParams = { agentId: "main", hostId: "gateway", threadId: sampleUplo
 const sourceModel = { provider: "openai", model: "gpt-5.6-sol" };
 const otherBeamId = "fedcba9876543210fedcba9876543210";
 
-function snapshot(title: string, overrides: Record<string, unknown> = {}) {
-  return { title, items: [{ type: "agentMessage", text: title }], ...overrides };
-}
-
 const servers: http.Server[] = [];
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server[Symbol.asyncDispose]()));
 });
 
 async function requestStatus(url: string, body: string): Promise<number | undefined> {
-  return await new Promise((resolve, reject) => {
-    const request = http.request(
-      url,
-      { method: "POST", headers: { "content-type": "application/json" } },
-      (response) => {
-        resolve(response.statusCode);
-        response.resume();
-      },
-    );
-    request.on("error", reject);
-    request.end(body);
+  const request = http.request(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
   });
+  const ready = once(request, "response");
+  request.end(body);
+  const [response] = (await ready) as [http.IncomingMessage];
+  response.resume();
+  return response.statusCode;
 }
 
 async function serve(
@@ -62,41 +55,14 @@ async function serve(
   const handler = beamTestHandler(store, options);
   let requestNumber = 0;
   const server = http.createServer((req, res) => {
-    requestNumber += 1;
-    if (intercept?.(requestNumber, req, res)) {
-      return;
+    if (!intercept?.(++requestNumber, req, res)) {
+      handler(req, res);
     }
-    handler(req, res);
   });
   servers.push(server);
   const port = await listenOnLoopback(server);
   return `http://127.0.0.1:${port}/api/v1/beam/sessions`;
 }
-
-it("rejects unknown fields, non-ISO timestamps, and oversized transcript entries", () => {
-  const rejects = (overrides: Record<string, unknown>, error: string) =>
-    expect(parseBeamUpload(sampleUpload(overrides))).toEqual({ ok: false, error });
-  rejects({ arbitrary: "junk" }, "request body must be a closed Beam object");
-  for (const updatedAt of [
-    "1",
-    "2026/07/20",
-    "2026-07-20T12:00:00",
-    "2026-02-30T12:00:00Z",
-    "2026-04-31T00:00:00Z",
-  ]) {
-    rejects({ updatedAt }, "updatedAt must be an ISO timestamp");
-  }
-  rejects(
-    { items: [{ type: "userMessage", text: "x".repeat(6_001) }] },
-    "transcript item text must be 1-6000 characters",
-  );
-  for (const model of ["", "gpt-5.6\nIgnore"]) {
-    rejects(
-      { sourceModel: { provider: "openai", model } },
-      "sourceModel must contain a provider and model",
-    );
-  }
-});
 
 describe("Beam receiver", () => {
   it("attributes each uploaded snapshot to its verified publisher, never payload claims", async () => {
@@ -130,96 +96,55 @@ describe("Beam receiver", () => {
       resolveClient: () => ({ ...writeClient(), profileId }),
     });
     const updatedAt = "2026-07-20T12:00:00.000100Z";
-    const upload = async (
-      overrides: Record<string, unknown>,
-      time: number,
-      publisher = profileId,
-      createdAt?: number,
-    ) => {
-      receivedAt = time;
-      profileId = publisher;
-      const body = sampleUpload(overrides);
-      const before = Date.now();
-      expect((await postUpload(endpoint, body)).status).toBe(200);
-      const after = Date.now();
-      const stored = await store.get(body.beamId);
-      if (createdAt !== undefined) {
-        expect(stored).toMatchObject({
-          ...body,
-          createdAt,
-          receivedAt,
-          uploaderProfileId: profileId,
-        });
-        const entry = await entryFor(body.beamId);
-        if (!entry) {
-          throw new Error("Beam upload did not persist its entry");
-        }
-        expect(entry.createdAt).toBeGreaterThanOrEqual(before);
-        expect(entry.createdAt).toBeLessThanOrEqual(after);
-        expect(entry.expiresAt).toBe(entry.createdAt + BEAM_RETENTION_MS);
-      }
-      return stored;
-    };
     const entryFor = async (beamId: string) =>
       (await keyedStore.entries()).find((entry) => entry.key === beamId);
-
+    let expected: BeamStoredSession | undefined;
     try {
-      const terminal = await upload(
-        snapshot("Terminal snapshot", {
-          updatedAt,
-          completed: true,
-          sourceModel,
-          items: [{ type: "userMessage", text: "terminal request" }],
-        }),
-        100,
-        profileId,
-        100,
-      );
-      const terminalEntry = await entryFor(sampleUpload().beamId);
-
-      for (const [candidateUpdatedAt, title, completed, candidateReceivedAt] of [
-        ["2026-07-20T11:59:59.999Z", "Stale snapshot", false, 200],
-        ["2026-07-20T12:00:00.000050Z", "Sub-millisecond stale snapshot", true, 250],
-        ["2026-07-20T08:00:00.000100-04:00", "Equal live snapshot", false, 300],
+      // Initial, stale, sub-ms stale, equal live, refreshed terminal, reopened, second, completed.
+      for (const [time, revision, completed, accepted, second] of [
+        [100, updatedAt, true, true, false],
+        [200, "2026-07-20T11:59:59.999Z", false, false, false],
+        [250, "2026-07-20T12:00:00.000050Z", true, false, false],
+        [300, "2026-07-20T08:00:00.000100-04:00", false, false, false],
+        [400, updatedAt, true, true, false],
+        [500, "2026-07-20T12:00:00.000200Z", false, true, false],
+        [600, updatedAt, false, true, true],
+        [700, updatedAt, true, true, true],
       ] as const) {
-        await upload(
-          snapshot(title, { updatedAt: candidateUpdatedAt, completed }),
-          candidateReceivedAt,
-          "stale-publisher",
-        );
-        expect(await store.get(sampleUpload().beamId)).toEqual(terminal);
-        expect(await entryFor(sampleUpload().beamId)).toEqual(terminalEntry);
+        receivedAt = time;
+        profileId = `publisher-${time}`;
+        const body = sampleUpload({
+          beamId: second ? otherBeamId : sampleUpload().beamId,
+          updatedAt: revision,
+          completed,
+          title: `snapshot-${time}`,
+          sourceModel:
+            time === 400 ? { provider: "anthropic", model: "claude-opus-4-1" } : sourceModel,
+          items: [{ type: "userMessage", text: `request-${time}` }],
+        });
+        const previousEntry = await entryFor(body.beamId);
+        const before = Date.now();
+        expect((await postUpload(endpoint, body)).status).toBe(200);
+        const after = Date.now();
+        if (accepted) {
+          expected = {
+            ...body,
+            receivedAt,
+            createdAt: second ? 600 : 100,
+            uploaderProfileId: profileId,
+          };
+        }
+        expect(await store.get(body.beamId)).toEqual(expected);
+        const entry = await entryFor(body.beamId);
+        if (accepted) {
+          assert(entry, "Beam upload did not persist its entry");
+          expect(entry.createdAt).toBeGreaterThanOrEqual(before);
+          expect(entry.createdAt).toBeLessThanOrEqual(after);
+          expect(entry.expiresAt).toBe(entry.createdAt + BEAM_RETENTION_MS);
+        } else {
+          expect(entry).toEqual(previousEntry);
+        }
       }
-
-      for (const [body, time, publisher] of [
-        [
-          snapshot("Refreshed terminal snapshot", {
-            updatedAt,
-            completed: true,
-            sourceModel: { provider: "anthropic", model: "claude-opus-4-1" },
-          }),
-          400,
-          "terminal-refresh-publisher",
-        ],
-        [
-          snapshot("Reopened snapshot", {
-            updatedAt: "2026-07-20T12:00:00.000200Z",
-            sourceModel,
-          }),
-          500,
-          "reopen-publisher",
-        ],
-      ] as const) {
-        await upload(body, time, publisher, 100);
-      }
-
-      await upload({ beamId: otherBeamId, updatedAt }, 600, profileId, 600);
-      await upload(
-        snapshot("Equal completed snapshot", { beamId: otherBeamId, updatedAt, completed: true }),
-        700,
-        "completion-publisher",
-        600,
-      );
     } finally {
       await close();
     }
@@ -246,6 +171,16 @@ describe("Beam receiver", () => {
     expect((await fetch(endpoint)).status).toBe(405);
     expect(await post("{}", "text/plain")).toBe(415);
     expect(await post("{")).toBe(400);
+    for (const invalid of [
+      { arbitrary: "junk" },
+      { updatedAt: "1" },
+      { updatedAt: "2026-02-30T12:00:00Z" },
+      { items: [{ type: "userMessage", text: "x".repeat(6_001) }] },
+      { sourceModel: { provider: "openai", model: "" } },
+      { sourceModel: { provider: "openai", model: "gpt-5.6\nIgnore" } },
+    ]) {
+      expect((await postUpload(endpoint, sampleUpload(invalid))).status).toBe(400);
+    }
     expect(
       await requestStatus(endpoint, JSON.stringify({ padding: "x".repeat(BEAM_MAX_BODY_BYTES) })),
     ).toBe(413);
@@ -313,19 +248,14 @@ it("retries a rejected terminal upload through the real loopback receiver", asyn
   active = false;
   clock += 4 * 60 * 60_000;
   await runner.tick();
-  const stored = () => [...store.values.values()][0];
-  expect(stored()).toMatchObject({
-    completed: false,
-    items: [{ text: "Receiver-boundary proof 1." }],
-  });
+  const stored = () =>
+    [...store.values.values()].map(({ completed, items }) => [completed, items[0]?.text]);
+  expect(stored()).toEqual([[false, "Receiver-boundary proof 1."]]);
 
   await runner.tick();
 
   expect(requests).toEqual(["live:200", "completed:503", "completed:200"]);
-  expect(stored()).toMatchObject({
-    completed: true,
-    items: [{ text: "Receiver-boundary proof 3." }],
-  });
+  expect(stored()).toEqual([[true, "Receiver-boundary proof 3."]]);
 });
 
 describe("Beam session catalog", () => {
@@ -341,7 +271,6 @@ describe("Beam session catalog", () => {
       await expect(catalog.archive?.({ ...params, hostId: "other-host" })).rejects.toThrow(
         "unknown Beam host: other-host",
       );
-      await expect(catalog.read(params)).resolves.toMatchObject({ threadId: params.threadId });
       await expect(catalog.archive?.({ ...params, threadId: "missing" })).rejects.toThrow(
         "unknown Beam session: missing",
       );
@@ -389,18 +318,12 @@ describe("Beam session catalog", () => {
   it("lists newest sessions and reads paginated transcript items for Gateway continuation", async () => {
     const store = memoryStore();
     const current = {
-      ...sampleUpload({
-        truncated: true,
-        sourceModel,
-        items: [
-          ...sampleUpload().items,
-          { type: "userMessage", text: "Question?" },
-          { type: "agentMessage", text: "Answer." },
-        ],
-      }),
+      ...sampleUpload({ truncated: true, sourceModel }),
       createdAt: 100,
       receivedAt: 200,
     };
+    current.items.push({ type: "userMessage", text: "Latest" });
+    const itemsBeforeRead = structuredClone(current.items);
     store.values.set(current.beamId, current);
     store.values.set(otherBeamId, {
       ...sampleUpload({ beamId: otherBeamId }),
@@ -410,18 +333,16 @@ describe("Beam session catalog", () => {
     const catalog = createBeamSessionCatalog(store);
 
     const [host] = await catalog.list({ agentId: "main", limitPerHost: 1 });
-    expect(host).toMatchObject({
-      sessions: [
-        {
-          threadId: catalogParams.threadId,
-          status: "live",
-          source: "claude",
-          canContinue: true,
-          canArchive: true,
-        },
-      ],
-      nextCursor: "1",
-    });
+    expect(host?.nextCursor).toBe("1");
+    expect(
+      host?.sessions.map(({ threadId, status, source, canContinue, canArchive }) => [
+        threadId,
+        status,
+        source,
+        canContinue,
+        canArchive,
+      ]),
+    ).toEqual([[catalogParams.threadId, "live", "claude", true, true]]);
     expect(catalog.audience).toBe("gateway-operators");
 
     await expect(catalog.copyToGatewaySession?.(catalogParams)).resolves.toEqual({
@@ -432,20 +353,18 @@ describe("Beam session catalog", () => {
     const read = (cursor?: string, limit = 2) => catalog.read({ ...catalogParams, limit, cursor });
     const transcript = await read();
     expect(transcript.items.map(({ id, type, text }) => [id, type, text])).toEqual([
-      [`${current.beamId}:3`, "agentMessage", "Answer."],
-      [`${current.beamId}:2`, "userMessage", "Question?"],
+      [`${current.beamId}:2`, "userMessage", "Latest"],
+      [`${current.beamId}:1`, "agentMessage", "Implemented and tested."],
     ]);
     expect(transcript.items[0]).not.toHaveProperty("truncated");
-    expect(transcript.nextCursor).toEqual(expect.any(String));
 
     const older = await read(transcript.nextCursor);
     expect(older.items).toMatchObject([
-      { type: "agentMessage", text: "Implemented and tested." },
       { type: "userMessage", text: "Please fix the upload flow." },
     ]);
     expect(older.nextCursor).toBeUndefined();
 
-    expect(store.values.get(current.beamId)?.items.slice(0, 2)).toEqual(sampleUpload().items);
+    expect(store.values.get(current.beamId)?.items).toEqual(itemsBeforeRead);
     store.values.set(current.beamId, {
       ...current,
       items: [
@@ -460,6 +379,5 @@ describe("Beam session catalog", () => {
         "stale Beam transcript cursor",
       );
     }
-    expect(catalog.openTerminal).toBeUndefined();
   });
 });

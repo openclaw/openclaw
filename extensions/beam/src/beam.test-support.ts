@@ -192,18 +192,8 @@ export function createBeamTestRunner({
 export function createScheduledBeamTestRunner(options: Parameters<typeof createBeamTestRunner>[0]) {
   const scheduler = createTestPluginServiceScheduler();
   const runner = createBeamTestRunner({ ...options, signal: scheduler.signal });
-  const settled = createDeferred<void>();
-  scheduler.schedule({
-    id: "mirror",
-    delayMs: 0,
-    everyMs: 30_000,
-    run: () => runner.tick().finally(() => settled.resolve()),
-  });
-  return {
-    tick: () => vi.advanceTimersByTimeAsync(0),
-    stop: scheduler.stop,
-    settled: settled.promise,
-  };
+  scheduler.schedule({ id: "mirror", delayMs: 0, everyMs: 30_000, run: runner.tick });
+  return { tick: () => vi.advanceTimersByTimeAsync(0), stop: scheduler.stop };
 }
 
 export function beamMirrorTestFixture() {
@@ -219,7 +209,7 @@ export function beamMirrorTestFixture() {
     } = {},
   ) => {
     const testCatalog = createBeamTestCatalog(catalog);
-    const fetchFn = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+    vi.stubGlobal("fetch", async (_url: RequestInfo | URL, init?: RequestInit) => {
       assert(typeof init?.body === "string", "expected Beam JSON request body");
       const payload = JSON.parse(init.body) as BeamUpload;
       const headers = (init.headers ?? {}) as Record<string, string>;
@@ -229,19 +219,12 @@ export function beamMirrorTestFixture() {
         : "{}";
       return new Response(body, { status: response.status?.(payload) ?? 200 });
     });
-    vi.stubGlobal("fetch", fetchFn);
-    return {
-      logger,
-      listCatalogs: () => [testCatalog],
-      ...overrides,
-    };
+    return { logger, listCatalogs: () => [testCatalog], ...overrides };
   };
   return {
     sent,
     warnings,
     logger,
     runner: (...args: Parameters<typeof options>) => createBeamTestRunner(options(...args)),
-    scheduled: (...args: Parameters<typeof options>) =>
-      createScheduledBeamTestRunner(options(...args)),
   };
 }
