@@ -122,6 +122,14 @@ export function registerOriginalCaptureTests({
           .run("fixture.original", '{"message":"acknowledged before update"}', 1);
       }
       const captureRoot = refused ? dirs.make("managed-refused-update-") : fixture.root;
+      const expectCapture = (runId: string, manifestPath: string) =>
+        expectOriginalCapture({
+          runId,
+          manifestPath,
+          installRoot: captureRoot,
+          databasePath: fixture.databasePath,
+          previousRunId,
+        });
       if (refused) {
         fs.mkdirSync(path.join(captureRoot, "dist"));
         writeFreshJson(path.join(captureRoot, "package.json"), {
@@ -212,13 +220,7 @@ export function registerOriginalCaptureTests({
           expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
           const ref = run.originalRecoveryCapture;
           assert(ref);
-          expectOriginalCapture({
-            runId: run.runId,
-            manifestPath: ref.manifestPath,
-            installRoot: captureRoot,
-            databasePath: fixture.databasePath,
-            previousRunId,
-          });
+          expectCapture(run.runId, ref.manifestPath);
           finishUpdateRun(
             run.runId,
             { status: "skipped", reason: "fixture-before-forward-migration" },
@@ -281,13 +283,7 @@ export function registerOriginalCaptureTests({
           (set) => isRecord(set) && set.runId === result.runId,
         );
         assert(isRecord(capture) && typeof capture.manifestPath === "string");
-        expectOriginalCapture({
-          runId: result.runId,
-          manifestPath: capture.manifestPath,
-          installRoot: captureRoot,
-          databasePath: fixture.databasePath,
-          previousRunId,
-        });
+        expectCapture(result.runId, capture.manifestPath);
         expectNoFreshCalls(
           execute,
           packageUpdate.stagePackageInstallUpdate,

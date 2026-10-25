@@ -13,6 +13,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createCommandResult as processResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { expectNoCalls } from "../daemon-cli/lifecycle-assertions.test-support.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import {
   finishParams,
   updateResult,
@@ -50,6 +51,24 @@ export function observeMigratedStateOpens(databasePath: string, opened: string[]
     }
     return open(...args);
   });
+}
+
+export function withMigratedTerminalResult(
+  run: NonNullable<UpdateCommandOptions["run"]>,
+  operation: () => ReturnType<typeof continueMigratedUpdateInFreshProcess>,
+  onResult: UpdateCommandOptions["onResult"],
+) {
+  return withUpdateCommandTerminalResult(
+    async (registerRun) => {
+      registerRun(run);
+      const result = await operation();
+      if (result.preparedFailure) {
+        throw result.preparedFailure;
+      }
+      return result;
+    },
+    { json: true, onResult },
+  );
 }
 
 export async function expectMigratedPackageFinalization(
@@ -217,8 +236,9 @@ export async function expectMigratedPackageFinalization(
     },
   );
 
-  const continueUpdate = () =>
-    continueMigratedUpdateInFreshProcess(
+  let continuedResult: Awaited<ReturnType<typeof continueMigratedUpdateInFreshProcess>> | undefined;
+  const continueUpdate = async () =>
+    (continuedResult = await continueMigratedUpdateInFreshProcess(
       finishParams({
         result: updateResult({ root: packageRoot }),
         root: packageRoot,
@@ -247,21 +267,10 @@ export async function expectMigratedPackageFinalization(
         updateStepTimeoutMs: 90_000,
       }),
       [],
-    );
-  let continuedResult: Awaited<ReturnType<typeof continueUpdate>> | undefined;
+    ));
   const operation = diagnostics
     ? continueUpdate()
-    : withUpdateCommandTerminalResult(
-        async (registerRun) => {
-          registerRun(run);
-          continuedResult = await continueUpdate();
-          if (continuedResult.preparedFailure) {
-            throw continuedResult.preparedFailure;
-          }
-          return continuedResult;
-        },
-        { json: true, onResult },
-      );
+    : withMigratedTerminalResult(run, continueUpdate, onResult);
   const settled = await operation.catch((error: unknown) => error);
   if (diagnostics) {
     expect(observedProgress).toEqual(expectedProgress);
