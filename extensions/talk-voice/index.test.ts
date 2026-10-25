@@ -63,7 +63,12 @@ function talkConfig(provider: string, config: Record<string, unknown> = {}) {
   return { talk: { provider, providers: { [provider]: config } } };
 }
 
-const claudia = [{ id: "voice-a", name: "Claudia" }];
+const voice = (id: string, name: string): SpeechVoiceOption => ({ id, name });
+const selectionVoices = (first: string, second: string) => [
+  voice("voice-a", first),
+  voice("voice-b", second),
+];
+const claudia = [voice("voice-a", "Claudia")];
 const elevenlabs = talkConfig("elevenlabs", { apiKey: "sk-eleven" });
 
 function createCommandContext(
@@ -130,11 +135,11 @@ it.each(["owner", "revoked owner", "gateway admin"])(
 );
 
 it.each([
-  { action: "list", method: "talk.voice.get", request: {} },
-  { action: "set", method: "talk.voice.set", request: { voice: "marin" } },
-])(
-  "executes $action for the host session despite model targets and waits for the Gateway result",
-  async ({ action, method, request }) => {
+  ["list", "talk.voice.get", {}],
+  ["set", "talk.voice.set", { voice: "marin" }],
+] satisfies [string, string, Record<string, string>][])(
+  "executes %s for the host session despite model targets and waits for the Gateway result",
+  async (action, method, request) => {
     const { tool, runtime } = createHarness({});
     const rpc = createDeferred<Record<string, unknown>>();
     const started = createDeferred<void>();
@@ -186,59 +191,47 @@ it("reports active provider status", async () => {
     talkConfig("microsoft", { voiceId: "en-US-AvaNeural", apiKey: "secret-token" }),
   );
   expect(await run("")).toEqual({
-    text: `Talk voice status:
-- provider: microsoft
-- talk.providers.microsoft.voiceId: en-US-AvaNeural
-- microsoft.apiKey: secret…`,
+    text: "Talk voice status:\n- provider: microsoft\n- talk.providers.microsoft.voiceId: en-US-AvaNeural\n- microsoft.apiKey: secret…",
   });
 });
 
-it.each([
-  {
-    name: "does not coerce partial voice list limits",
-    args: "list 1x",
-    voices: Array.from({ length: 13 }, () => ({ id: "voice", name: "Voice" })),
-    text: expect.stringContaining("(showing first 12)"),
-  },
-  {
-    name: "surfaces richer provider voice metadata when available",
-    args: "list",
-    voices: [
-      {
-        id: "en-US-AvaNeural",
-        name: "Ava",
-        category: "General",
-        locale: "en-US",
-        gender: "Female",
-        personalities: ["Friendly", "Positive"],
-        description: "Friendly, Positive",
-      },
-    ],
-    text: `Microsoft voices: 1
+it("does not coerce partial voice list limits", async () => {
+  const { run } = createHarness(
+    talkConfig("microsoft"),
+    Array.from({ length: 13 }, () => voice("voice", "Voice")),
+  );
+  expect(await run("list 1x")).toEqual({ text: expect.stringContaining("(showing first 12)") });
+});
 
-- Ava · General
-  id: en-US-AvaNeural
-  meta: en-US · Female · Friendly, Positive
-  note: Friendly, Positive`,
-  },
-  {
-    name: "returns provider lookup errors cleanly",
-    args: "list",
-    voices: new Error("speech provider microsoft does not support voice listing"),
-    text: "Microsoft voice list failed: speech provider microsoft does not support voice listing",
-  },
-])("$name", async ({ args, voices, text }) => {
-  const { run } = createHarness(talkConfig("microsoft"), voices);
-  expect(await run(args)).toEqual({ text });
+it("surfaces richer provider voice metadata when available", async () => {
+  const { run } = createHarness(talkConfig("microsoft"), [
+    {
+      ...voice("en-US-AvaNeural", "Ava"),
+      category: "General",
+      locale: "en-US",
+      gender: "Female",
+      personalities: ["Friendly", "Positive"],
+      description: "Friendly, Positive",
+    },
+  ]);
+  expect(await run("list")).toEqual({
+    text: "Microsoft voices: 1\n\n- Ava · General\n  id: en-US-AvaNeural\n  meta: en-US · Female · Friendly, Positive\n  note: Friendly, Positive",
+  });
+});
+
+it("returns provider lookup errors cleanly", async () => {
+  const message = "speech provider microsoft does not support voice listing";
+  const { run } = createHarness(talkConfig("microsoft"), new Error(message));
+  expect(await run("list")).toEqual({ text: `Microsoft voice list failed: ${message}` });
 });
 
 it.each([
-  { channel: "telegram", scopes: ["operator.write"], senderIsOwner: undefined },
-  { channel: "discord", scopes: undefined, senderIsOwner: undefined },
-  { channel: "discord", scopes: ["operator.write"], senderIsOwner: true },
-])(
-  "rejects unauthorized voice writes on $channel (owner=$senderIsOwner)",
-  async ({ channel, scopes, senderIsOwner }) => {
+  ["telegram", ["operator.write"], undefined],
+  ["discord", undefined, undefined],
+  ["discord", ["operator.write"], true],
+] satisfies [string, string[] | undefined, boolean | undefined][])(
+  "rejects unauthorized voice writes on %s (scopes=%j, owner=%s)",
+  async (channel, scopes, senderIsOwner) => {
     const { mutate, run, listVoices } = createHarness(elevenlabs, claudia);
     const result = await run("set Claudia", {
       channel,
@@ -252,36 +245,12 @@ it.each([
 );
 
 it.each([
-  {
-    query: "voice-b",
-    voices: [
-      { id: "voice-a", name: "voice-b" },
-      { id: "voice-b", name: "Claudia" },
-    ],
-    voiceId: "voice-b",
-    name: "Claudia",
-  },
-  {
-    query: "CLAUDIA",
-    voices: [
-      { id: "voice-a", name: "Claudia bright" },
-      { id: "voice-b", name: "Claudia" },
-    ],
-    voiceId: "voice-b",
-    name: "Claudia",
-  },
-  {
-    query: "bright",
-    voices: [
-      { id: "voice-a", name: "Claudia bright" },
-      { id: "voice-b", name: "Bright second" },
-    ],
-    voiceId: "voice-a",
-    name: "Claudia bright",
-  },
-])(
-  "selects voice $voiceId for $query by ID, exact name, then first partial name",
-  async ({ query, voices, voiceId, name }) => {
+  ["voice-b", selectionVoices("voice-b", "Claudia"), "voice-b", "Claudia"],
+  ["CLAUDIA", selectionVoices("Claudia bright", "Claudia"), "voice-b", "Claudia"],
+  ["bright", selectionVoices("Claudia bright", "Bright second"), "voice-a", "Claudia bright"],
+] satisfies [string, SpeechVoiceOption[], string, string][])(
+  "selects %s by ID, exact name, then first partial name",
+  async (query, voices, voiceId, name) => {
     const { run, runtime } = createHarness(talkConfig("microsoft"), voices);
     expect(await run(`set ${query}`, { senderIsOwner: true })).toEqual({
       text: `✅ Microsoft Talk voice set to ${name}\n${voiceId}`,
