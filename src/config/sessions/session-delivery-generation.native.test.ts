@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { expect, it, onTestFinished } from "vitest";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -31,6 +32,30 @@ async function fixture(initialSettings?: typeof settings) {
 }
 const generationError = (code = "UNAVAILABLE") =>
   expect.objectContaining({ code: `SESSION_DELIVERY_GENERATION_${code}` });
+
+it.each(["runtime", "automation"])(
+  "retains generation facts across metadata but invalidates broad %s changes",
+  async (scope) => {
+    const { generation } = await fixture();
+    for (const metadata of [
+      "profiles",
+      "catalog",
+      "acp",
+      "agent-runs",
+      "subagent-runs",
+      "worker-placements",
+      "worker-environments",
+      "config",
+      "config-presentation",
+      "config-profiles",
+    ]) {
+      sessionChanges.emit({ all: true, scope: metadata });
+      expect(generation.assertCurrent).not.toThrow();
+    }
+    sessionChanges.emit({ all: true, scope });
+    expect(generation.assertCurrent).toThrow(generationError());
+  },
+);
 
 it.each([
   { field: "lifecycleRevision", value: "raw-successor", code: "REVOKED" },

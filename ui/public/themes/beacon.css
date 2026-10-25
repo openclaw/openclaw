@@ -20,6 +20,7 @@
   --github-item-hover-bg: color-mix(in srgb, var(--text) 7%, var(--bg));
   --overlay-shadow: var(--shadow-md);
   --overlay-border: var(--border-strong);
+  --navigation-selected-border: var(--border-strong);
 
   /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
      the accessibility contract, not an accent (see styles fonts/atkinson-hyperlegible.css). */

@@ -184,6 +184,9 @@ function finishedSessionDetails(sessionId: string, finished: ProcessSession) {
 }
 
 function finishedSessionText(finished: ProcessSession): string {
+  if (finished.exitReason === "memory-limit") {
+    return "Process killed for exceeding its host memory bound. Reduce concurrency or input size, or split the work.";
+  }
   if (isConfirmedRequestedStop(finished)) {
     return `Process stopped by request (${renderExecExitLabel(finished)}).`;
   }
@@ -432,7 +435,7 @@ export function createProcessTool(
             while (
               !scopedSession.exited &&
               !hasPendingPollDelivery(scopedSession) &&
-              scopedSession.pendingOutput.length === 0 &&
+              scopedSession.pendingStdoutChars + scopedSession.pendingStderrChars === 0 &&
               !scopedSession.pendingOutputDropped &&
               performance.now() < deadline
             ) {

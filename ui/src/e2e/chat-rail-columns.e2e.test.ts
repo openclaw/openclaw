@@ -9,6 +9,7 @@ import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { textContent } from "./chat-flow.test-support.ts";
 import {
   activateChatHeaderPanelAction,
   dockChatSidePanel,
@@ -58,12 +59,9 @@ beforeEach(() => {
 const historyMessages = Array.from({ length: 10 }, (_, index) => ({
   id: `rail-tabs-${index}`,
   role: index % 2 === 0 ? "user" : "assistant",
-  content: [
-    {
-      type: "text",
-      text: `Checkpoint ${index + 1}: keep the conversation visible while working with session tools.`,
-    },
-  ],
+  content: textContent(
+    `Checkpoint ${index + 1}: keep the conversation visible while working with session tools.`,
+  ),
   timestamp: Date.now() - (10 - index) * 60_000,
 }));
 
@@ -74,6 +72,7 @@ function scenario(): ControlUiMockGatewayScenario {
       "desktop.observe",
       "environments.list",
       "environments.status",
+      "sessions.companion.state",
       "sessions.diff",
       "terminal.open",
     ],
@@ -740,7 +739,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await clear.waitFor({ state: "hidden" });
         await gateway.resolveDeferred("sessions.companion.ask");
-        await openChatPanels(page);
+        await openChatPanels(page, "mobile");
         await companion
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
@@ -757,7 +756,7 @@ suite.define(() => {
         await captureRichPanel(page, "rails-side-chat-mobile-light");
         await page.keyboard.press("Escape");
         await clear.waitFor({ state: "hidden" });
-        await openChatPanels(page);
+        await openChatPanels(page, "mobile");
         await companion.waitFor();
         expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets);
         await companion
@@ -777,7 +776,7 @@ suite.define(() => {
         expect(reset.params).toEqual({ sessionKey, agentId: "main" });
         expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets + 1);
         await clear.waitFor({ state: "hidden" });
-        await openChatPanels(page);
+        await openChatPanels(page, "mobile");
         await companion
           .getByText("Answers come from this session's transcript and its project files.", {
             exact: true,

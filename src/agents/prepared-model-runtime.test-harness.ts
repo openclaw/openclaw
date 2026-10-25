@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -31,6 +30,12 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     plugins: [],
     pluginIds: [],
     index: { plugins: [] },
+    get registryIndex() {
+      return this.index;
+    },
+    set registryIndex(index) {
+      this.index = index;
+    },
     manifestRegistry: { plugins: [], diagnostics: [] },
     registryDiagnostics: [],
     declaredProviderOwners: new Map(),
@@ -421,24 +426,6 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal
     preparedModelRuntimeMocks.createStaticCatalogResolver(...args),
 }));
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: (subsystem: string) => {
-    const logger: SubsystemLogger = {
-      subsystem,
-      child: () => logger,
-      isEnabled: () => false,
-      trace: vi.fn(),
-      debug: vi.fn(),
-      error: vi.fn(),
-      info: vi.fn(),
-      warn: preparedModelRuntimeMocks.warn,
-      fatal: vi.fn(),
-      raw: vi.fn(),
-    };
-    return logger;
-  },
-}));
-
 type PreparedModelRuntimeTestApi = {
   getPreparedModelRuntimeOwnerCountForTest(): number;
   resetPreparedModelRuntimeSnapshotsForTest(): Promise<void>;
@@ -505,11 +492,9 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
   preparedModelRuntimeMocks.credentialsRevision = 0;
   preparedModelRuntimeMocks.usePersistedAuthProfiles = false;
   preparedModelRuntimeMocks.preparedAuthMaterializations = [];
-  preparedModelRuntimeMocks.modelRegistry.fork
-    .mockReset()
-    .mockImplementation((authStorage: AuthStorage) => ({ authStorage }));
+  preparedModelRuntimeMocks.modelRegistry.fork.mockReset();
   preparedModelRuntimeMocks.modelRegistry.getAll.mockReset().mockReturnValue([]);
-  preparedModelRuntimeMocks.modelRegistry.find.mockReset().mockReturnValue(null);
+  preparedModelRuntimeMocks.modelRegistry.find.mockReset();
   preparedModelRuntimeMocks.buildPreparedModelCatalogSnapshot
     .mockReset()
     .mockResolvedValue({ entries: [], routeVariants: [] });
@@ -518,29 +503,21 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
     .mockReset()
     .mockImplementation(() => preparedModelRuntimeMocks.authStorage);
   preparedModelRuntimeMocks.discoverModels.mockReset();
-  preparedModelRuntimeMocks.ensureOpenClawModelsJson
-    .mockReset()
-    .mockImplementation(async (_config, _agentDir) => ({}));
+  preparedModelRuntimeMocks.ensureOpenClawModelsJson.mockReset();
   preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
     .mockImplementation(() => createEmptyPluginRegistry());
   preparedModelRuntimeMocks.loadStaticCatalog.mockReset().mockResolvedValue([]);
-  preparedModelRuntimeMocks.planOpenClawModelsJsonSource
-    .mockReset()
-    .mockImplementation(async (_config, agentDir) => ({
-      agentDir: String(agentDir),
-      modelsJsonContents: null,
-      pluginCatalogs: [],
-    }));
+  preparedModelRuntimeMocks.planOpenClawModelsJsonSource.mockReset();
   preparedModelRuntimeMocks.prepareStaticCatalog.mockReset().mockResolvedValue({ entries: [] });
   preparedModelRuntimeMocks.runPreparedModelCatalogWorker.mockReset().mockResolvedValue({
     entries: [],
     routeVariants: [],
   });
   preparedModelRuntimeMocks.runtimeSyntheticAuthProviderRefs = [];
-  preparedModelRuntimeMocks.resolveNativeModelPrimary.mockReset().mockReturnValue(undefined);
+  preparedModelRuntimeMocks.resolveNativeModelPrimary.mockReset();
   preparedModelRuntimeMocks.resolveAmbientCredentials.mockReset().mockReturnValue({});
-  preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset().mockReturnValue(undefined);
+  preparedModelRuntimeMocks.resolveStaticCatalogModel.mockReset();
   preparedModelRuntimeMocks.createStaticCatalogResolver
     .mockReset()
     .mockReturnValue(preparedModelRuntimeMocks.resolveStaticCatalogModel);

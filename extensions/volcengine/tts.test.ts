@@ -1,5 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
+import { createClosedChunkStream } from "../test-support/streaming-error-response.js";
 import { buildVolcengineSpeechProvider } from "./speech-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -36,16 +38,7 @@ function mockResponse(
   return release;
 }
 
-const directivePolicy = {
-  enabled: true,
-  allowText: true,
-  allowProvider: true,
-  allowVoice: true,
-  allowModelId: true,
-  allowVoiceSettings: true,
-  allowNormalization: true,
-  allowSeed: true,
-};
+const directivePolicy = createSpeechDirectivePolicy();
 
 const TTS_ENV_KEYS = [
   "BYTEPLUS_SEED_SPEECH_API_KEY",
@@ -78,13 +71,7 @@ async function synthesize(providerConfig: Record<string, unknown>) {
 
 function makeOversizedStreamResponse(): Response {
   return new Response(
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array(PROVIDER_RESPONSE_MAX_BYTES));
-        controller.enqueue(new Uint8Array(1));
-        controller.close();
-      },
-    }),
+    createClosedChunkStream([new Uint8Array(PROVIDER_RESPONSE_MAX_BYTES), new Uint8Array(1)]),
   );
 }
 

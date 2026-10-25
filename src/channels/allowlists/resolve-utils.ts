@@ -59,21 +59,6 @@ export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutio
   return { resolvedMap, mapping, unresolved, additions };
 }
 
-function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(params: {
-  existing: Array<string | number>;
-  resolvedMap: Map<string, T>;
-}): string[] {
-  const additions: string[] = [];
-  for (const entry of params.existing) {
-    const trimmed = normalizeOptionalString(entry) ?? "";
-    const resolved = params.resolvedMap.get(trimmed);
-    if (resolved?.resolved && resolved.id) {
-      additions.push(resolved.id);
-    }
-  }
-  return additions;
-}
-
 /** Replaces resolvable user entries with canonical ids while preserving unresolved entries and `*`. */
 export function canonicalizeAllowlistWithResolvedIds<
   T extends AllowlistUserResolutionLike,
@@ -118,20 +103,25 @@ export function patchAllowlistUsersInConfigEntries<
       continue;
     }
     // `merge` keeps original user text and appends resolved ids; `canonicalize` replaces it.
-    const resolvedUsers =
-      params.strategy === "canonicalize"
-        ? canonicalizeAllowlistWithResolvedIds({
-            existing: users,
-            resolvedMap: params.resolvedMap,
-            entryKey: params.entryKey,
-          })
-        : mergeAllowlist({
-            existing: users,
-            additions: resolveAllowlistIdAdditions({
-              existing: users,
-              resolvedMap: params.resolvedMap,
-            }),
-          });
+    let resolvedUsers: string[];
+    if (params.strategy === "canonicalize") {
+      resolvedUsers = canonicalizeAllowlistWithResolvedIds({
+        existing: users,
+        resolvedMap: params.resolvedMap,
+        entryKey: params.entryKey,
+      });
+    } else {
+      const resolvedMap = params.resolvedMap;
+      const additions: string[] = [];
+      for (const entry of users) {
+        const trimmed = normalizeOptionalString(entry) ?? "";
+        const resolved = resolvedMap.get(trimmed);
+        if (resolved?.resolved && resolved.id) {
+          additions.push(resolved.id);
+        }
+      }
+      resolvedUsers = mergeAllowlist({ existing: users, additions });
+    }
     nextEntries[entryKey] = {
       ...entryConfig,
       users: resolvedUsers,

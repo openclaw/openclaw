@@ -1,5 +1,6 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { trackPromiseFulfillment as track } from "../../test-support/async-gate.test-support.js";
 import type { PendingFaceTimeDial } from "../src/outbound-call.js";
 import { PendingFaceTimeDialStore } from "../src/pending-dial-store.js";
 import { pendingDial as makePendingDial } from "./fixtures.test-support.js";
@@ -9,16 +10,6 @@ type StoredDial = Omit<PendingFaceTimeDial, "callUUIDAliases"> & {
 };
 
 const deferred = () => Promise.withResolvers<void>();
-function track<T>(promise: Promise<T>) {
-  const tracked = {
-    settled: false,
-    promise: promise.then((result) => {
-      tracked.settled = true;
-      return result;
-    }),
-  };
-  return tracked;
-}
 
 const pendingDial = (dialID = "dial-a") =>
   makePendingDial({

@@ -62,6 +62,8 @@ describe("diagnostic memory", () => {
     // Cumulative Worker history survives earlier test files even when no Worker remains alive.
     vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
       workerCount: 0,
+      postgresBridgeCount: 0,
+      postgresPoolSelfRootCount: 0,
       workerHeapSampledCount: 0,
       workerHeapTotalBytes: 0,
       workerHeapUsedBytes: 0,
@@ -279,6 +281,8 @@ describe("diagnostic memory", () => {
           heapSpaces: process.versions.bun ? undefined : expect.any(Array),
           arrayBuffersBytes: 5,
           workerCount: 0,
+          postgresBridgeCount: 0,
+          postgresPoolSelfRootCount: 0,
           workerHeapSampledCount: 0,
           workerHeapTotalBytes: 0,
           workerHeapUsedBytes: 0,
@@ -292,6 +296,7 @@ describe("diagnostic memory", () => {
           workerTaskMetrics: [],
           workerLifecycle,
           workerMessages: [],
+          sessionRowSelections: expect.any(Object),
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -311,6 +316,8 @@ describe("diagnostic memory", () => {
         memory: {
           arrayBuffersBytes: 5,
           workerCount: 0,
+          postgresBridgeCount: 0,
+          postgresPoolSelfRootCount: 0,
           workerHeapSampledCount: 0,
           workerHeapTotalBytes: 0,
           workerHeapUsedBytes: 0,
@@ -324,6 +331,7 @@ describe("diagnostic memory", () => {
           workerTaskMetrics: [],
           workerLifecycle,
           workerMessages: [],
+          sessionRowSelections: expect.any(Object),
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,

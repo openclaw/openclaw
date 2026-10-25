@@ -4,18 +4,14 @@ import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
-import { Type } from "typebox";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createLiveValueTool } from "../test-support/live-value-tool.test-support.js";
 import { registerModel, toolReplayMessages } from "./baseten.test-support.js";
 import basetenPlugin from "./index.js";
 
 const TEST_VALUE = "resolved-marker";
 const DEEPSEEK_V41_FLASH_MODEL_ID = "deepseek-ai/DeepSeek-V4.1-Flash";
-const probeTool = {
-  name: "live_probe",
-  description: "Return the supplied value.",
-  parameters: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-};
+const probeTool = createLiveValueTool("live_probe");
 const resolveProviderAuth = () => ({
   apiKey: TEST_VALUE,
   discoveryApiKey: TEST_VALUE,

@@ -423,7 +423,10 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
         );
       }
       const expectedSessionId = opts?.expectedTargetSessionId ?? access.expectedSessionId;
-      if (mode === "notify" && expectedSessionId) {
+      // A durable parent's binding is not temporary, but explicit invocation ceilings remain.
+      const persistentChildAccess =
+        access.basis === "parent-lineage" && opts?.expectedTargetSessionId === undefined;
+      if (mode === "notify" && expectedSessionId && !persistentChildAccess) {
         return sendFailure(
           "forbidden",
           "Notifications cannot outlive an exact-session access grant. Use steer or followup.",
@@ -502,6 +505,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 watch: params.watch === true,
                 requesterOwned: visibleSession.requesterOwned,
                 authorizationTargetSessionKey: authorizationTargetKey,
+                controllerOnly: access.basis === "live-controller",
                 expectedSessionId,
               },
               assertSourceCurrent: opts?.assertSourceCurrent,
@@ -657,8 +661,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               await dispatchSessionsSendFollowup(startParams, replyContext, {
                 message,
                 ownChild,
+                persistentChildAccess,
                 nativeChild: !targetAcpMeta,
-                claimRequesterTurnCompletion: timeoutSeconds === 0,
                 requesterSessionKey: requesterSession.canonicalKey,
                 requesterAgentId,
                 requesterTurnRunId: opts?.requesterTurnRunId,
@@ -670,6 +674,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               start,
               completion,
               registryCompletion,
+              requesterTurnRunId: opts?.requesterTurnRunId,
               watchField,
               replyContext,
               targetSession,

@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import type { getCredentialUnavailableDiagnostics } from "../channels/account-snapshot-fields.js";
 import type { ChannelGatewayAdapterV2 } from "../channels/plugins/types.adapters.js";
 import type {
@@ -5,6 +6,7 @@ import type {
   ChannelId,
   ChannelPlugin,
 } from "../channels/plugins/types.public.js";
+import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
@@ -22,6 +24,16 @@ export type TestAccount = {
   configured?: boolean;
   credentialDiagnostics?: ReturnType<typeof getCredentialUnavailableDiagnostics>;
 };
+
+export function createTestNativeApprovalRuntime(): GatewayNativeApprovalRuntime {
+  return {
+    getRuntimeConfig: () => ({}),
+    request: vi.fn(),
+    requestRoute: vi.fn(),
+    routeCoordinator: {} as never,
+    subscribe: vi.fn(),
+  };
+}
 
 export function healthOf(account: ChannelAccountSnapshot | undefined) {
   return evaluateChannelHealth(account ?? {}, {
@@ -96,6 +108,20 @@ export async function flushMicrotasks(times = 8): Promise<void> {
   for (let i = 0; i < times; i += 1) {
     await Promise.resolve();
   }
+}
+
+export async function waitForMicrotaskCondition(
+  check: () => boolean,
+  message: string,
+  attempts = 100,
+): Promise<void> {
+  for (let i = 0; i < attempts; i += 1) {
+    if (check()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error(message);
 }
 
 export function createTestChannelRegistry(

@@ -38,4 +38,64 @@ describe("cli/nodes-cli/pairing-render", () => {
     expect(table).toContain("Phone");
     expect(table).toContain("10.0.0.1");
   });
+
+  it("shows recorded and legacy approval requirements", () => {
+    const { pending } = parsePairingList({
+      pending: [
+        {
+          requestId: "recorded",
+          nodeId: "n1",
+          requiredApproveScopes: ["operator.pairing", "operator.write"],
+        },
+        { requestId: "legacy", nodeId: "n2", commands: ["system.run"] },
+        {
+          requestId: "default",
+          nodeId: "n3",
+          requiredApproveScopes: ["operator.pairing"],
+          commands: ["system.run"],
+        },
+        { requestId: "empty", nodeId: "n4" },
+      ],
+    });
+    const { table } = renderPendingPairingRequestsTable({
+      pending,
+      now: 1000,
+      tableWidth: 120,
+      theme,
+    });
+    expect(table).toContain("Approval scopes");
+    expect(table).toContain("operator.pairing, operator.write");
+    expect(table).toContain("operator.pairing, operator.admin");
+    expect(table).toMatch(/empty.*operator.pairing/);
+    expect(table).toMatch(/default.*operator.pairing, operator.admin/);
+  });
+
+  it("keeps untrusted scope text safe in a narrow terminal", () => {
+    const { pending } = parsePairingList({
+      pending: [
+        {
+          requestId: "r1",
+          nodeId: "n1",
+          requiredApproveScopes: ["operator.admin\u001b[2J\nnext\u0007"],
+        },
+        {
+          requestId: "r2",
+          nodeId: "n2",
+          requiredApproveScopes: "invalid",
+          commands: ["system.run"],
+        },
+      ],
+    });
+    const { table } = renderPendingPairingRequestsTable({
+      pending,
+      now: 1000,
+      tableWidth: 70,
+      theme,
+    });
+    expect(table).toContain("Approval scopes");
+    expect(table).toContain("operator.admin");
+    expect(table).not.toContain("\u001b");
+    expect(table).not.toContain("\u0007");
+    expect(table.split("\n").every((line) => line.length <= 70)).toBe(true);
+  });
 });

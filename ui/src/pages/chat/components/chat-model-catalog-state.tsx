@@ -1,14 +1,23 @@
-import { createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { restoreChatModelRefreshFocus } from "./chat-model-picker-search.ts";
-import type { ChatModelCatalogStateProps } from "./chat-model-types.ts";
+import { restoreChatModelRefreshFocus } from "./chat-model-picker-search-view.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
+
+type ChatModelCatalogStateProps = {
+  state: ModelCatalogState | undefined;
+  hasOptions: boolean;
+  hasSelectableOptions: boolean;
+  onModelSetup?: () => void;
+  errorLabel?: string;
+  retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown };
+  emptyLabel?: string;
+};
 
 export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | undefined }) {
   const label = createMemo(() => {
@@ -28,7 +37,7 @@ export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | unde
     <Show when={label()}>
       {(text) => {
         let indicator: HTMLSpanElement | undefined;
-        onCleanup(() => {
+        onSettled(() => () => {
           // Capture focus before this disappearing control is removed from the DOM.
           if (indicator?.contains(indicator.ownerDocument.activeElement)) {
             restoreChatModelRefreshFocus(
@@ -62,8 +71,32 @@ export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | unde
   );
 }
 
-function createCatalogPresentation(props: ChatModelCatalogStateProps) {
-  return createMemo(() => {
+function CatalogAction(props: ChatModelCatalogStateProps & { action: "retry" | "setup" }) {
+  return (
+    <button
+      class="chat-controls__model-catalog-action"
+      data-chat-model-target-retry={
+        props.action === "retry" ? props.retryTarget?.groupId : undefined
+      }
+      data-chat-model-setup={props.action === "setup" ? "true" : undefined}
+      type="button"
+      disabled={props.action === "retry" && props.retryTarget?.disabled}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (props.action === "retry") {
+          props.retryTarget?.onRetry(props.retryTarget.groupId);
+        } else {
+          props.onModelSetup?.();
+        }
+      }}
+    >
+      {t(props.action === "retry" ? "common.retry" : "chat.modelControls.emptyModelsAction")}
+    </button>
+  );
+}
+
+export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
+  const presentation = createMemo(() => {
     const state = props.state;
     if (!state) {
       return undefined;
@@ -94,34 +127,6 @@ function createCatalogPresentation(props: ChatModelCatalogStateProps) {
             : t("chat.modelControls.loadingModels");
     return { status, checking, label };
   });
-}
-
-function CatalogAction(props: ChatModelCatalogStateProps & { action: "retry" | "setup" }) {
-  return (
-    <button
-      class="chat-controls__model-catalog-action"
-      data-chat-model-target-retry={
-        props.action === "retry" ? props.retryTarget?.groupId : undefined
-      }
-      data-chat-model-setup={props.action === "setup" ? "true" : undefined}
-      type="button"
-      disabled={props.action === "retry" && props.retryTarget?.disabled}
-      onClick={(event) => {
-        event.stopPropagation();
-        if (props.action === "retry") {
-          props.retryTarget?.onRetry(props.retryTarget.groupId);
-        } else {
-          props.onModelSetup?.();
-        }
-      }}
-    >
-      {t(props.action === "retry" ? "common.retry" : "chat.modelControls.emptyModelsAction")}
-    </button>
-  );
-}
-
-export function ChatModelCatalogState(props: ChatModelCatalogStateProps) {
-  const presentation = createCatalogPresentation(props);
   return (
     <Show when={presentation()}>
       {(value) => (

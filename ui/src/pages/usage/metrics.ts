@@ -13,12 +13,6 @@ registerUsageEnglish();
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
 
-type UsageCostWindowSummary = {
-  days: number;
-  endDate: string;
-  totals: UsageTotals;
-};
-
 function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
@@ -112,7 +106,11 @@ function buildUsageCostWindows(
   daily: Array<UsageTotals & { date: string }>,
   rangeStartDate: string,
   rangeEndDate: string,
-): UsageCostWindowSummary[] {
+): {
+  days: number;
+  endDate: string;
+  totals: UsageTotals;
+}[] {
   const rangeStartDay = parseIsoDayIndex(rangeStartDate);
   const rangeEndDay = parseIsoDayIndex(rangeEndDate);
   if (rangeStartDay === null || rangeEndDay === null || rangeStartDay > rangeEndDay) {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFailed, onTestFinished, vi } from "vitest";
 import {
   createGatewayHarness,
   createSessions,
@@ -10,6 +10,7 @@ import {
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/load-styles.ts";
+import { registryFor } from "./overlay-registry.ts";
 
 afterEach(() => document.body.replaceChildren());
 
@@ -34,6 +35,15 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
     sidebar.hostElement.style.cssText = "display:block;width:340px;height:880px";
     sidebar.connected = true;
     await sidebar.updateComplete;
+    const events: Record<string, unknown>[] = [];
+    onTestFailed(() => console.error("[rail-menu-escape]", JSON.stringify(events)));
+    const identify = (target: EventTarget | null) =>
+      target instanceof Element
+        ? (target.tagName + "#" + target.id + "." + (target.getAttribute("class") ?? "")).slice(
+            0,
+            200,
+          )
+        : null;
     const rail = sidebar.querySelector<HTMLElement>(".sidebar-rail")!;
     expect(rail).not.toBeNull();
     for (const [triggerSelector, panelSelector, edge] of [
@@ -72,10 +82,81 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
         expect(panelBox.bottom).toBeLessThanOrEqual(triggerBox.bottom + 1);
       }
       expect(panel()!.contains(document.activeElement)).toBe(true);
-      await userEvent.keyboard("{Escape}");
-      await sidebar.updateComplete;
-      expect(panel()).toBeNull();
-      expect(document.activeElement).toBe(trigger);
+      const surface = panel()!;
+      const registry = registryFor(document);
+      const overlay = [...registry.members.keys()].find((entry) => entry.surface === surface);
+      let escape: KeyboardEvent | undefined;
+      const record = (stage: string, detail: Record<string, unknown> = {}) => {
+        const top = registry.stack.at(-1);
+        if (events.length === 64) {
+          events.shift();
+        }
+        events.push({
+          stage,
+          menu: panelSelector,
+          at: performance.now(),
+          trigger: identify(trigger),
+          panel: identify(surface),
+          present: panel() === surface,
+          connected: surface.isConnected,
+          phase: surface.dataset.phase,
+          open: overlay?.open,
+          agentMenuOpen: sidebar.sidebarMenus.agentMenuPosition !== null,
+          hasFocus: document.hasFocus(),
+          active: identify(document.activeElement),
+          top: top && {
+            id: top.id,
+            open: top.open,
+            phase: top.phase,
+            connected: top.surface.isConnected,
+          },
+          ...detail,
+        });
+      };
+      const keydown = (event: KeyboardEvent) => {
+        if (event.key === "Escape") {
+          escape = event;
+          record("escape-capture", {
+            target: identify(event.target),
+            trusted: event.isTrusted,
+            composing: event.isComposing,
+            defaultPrevented: event.defaultPrevented,
+          });
+        }
+      };
+      const lifecycle = (event: Event) => record(event.type);
+      const lifecycleEvents = ["overlay-hide", "beforetoggle", "toggle"] as const;
+      const unsubscribe = overlay?.subscribe((open) => record("accepted-open", { open }));
+      document.addEventListener("keydown", keydown, { capture: true, passive: true });
+      for (const type of lifecycleEvents) {
+        surface.addEventListener(type, lifecycle, { passive: true });
+      }
+      const stop = () => {
+        document.removeEventListener("keydown", keydown, true);
+        lifecycleEvents.forEach((type) => surface.removeEventListener(type, lifecycle));
+        unsubscribe?.();
+        escape = undefined;
+      };
+      onTestFinished(stop);
+      try {
+        // Escape belongs to an active tooltip first; test menu dismissal without one.
+        await page.elementLocator(surface).hover({ position: { x: 4, y: 4 } });
+        await expect.poll(() => document.querySelector("openclaw-tooltip[open]")).toBeNull();
+        record("before-keyboard");
+        await userEvent.keyboard("{Escape}");
+        record("after-keyboard", {
+          escapeReceived: Boolean(escape),
+          defaultPrevented: escape?.defaultPrevented,
+        });
+        escape = undefined;
+        await sidebar.updateComplete;
+        record("after-sidebar-update");
+        expect(panel()).toBeNull();
+        expect(document.activeElement).toBe(trigger);
+      } finally {
+        // Freeze live-state evidence before afterEach removes the fixture; failure hooks run later.
+        stop();
+      }
     }
   });
 });

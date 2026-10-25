@@ -28,6 +28,11 @@ not rewrite configuration. Restart preserves the installed service definition wh
 config needs repair; its health check still reports whether the Gateway came back.
 `gateway start` continues to validate configuration before starting the Gateway.
 
+Restart warns when a recorded managed environment value differs from its
+current durable configuration, naming only affected keys. Run
+`openclaw gateway install --force` to refresh that snapshot. Unrecorded values and
+systemd's runtime managed-environment loading keep their existing precedence.
+
 If a Gateway holds state ownership for more than five minutes without recording
 that its listener bound, `openclaw gateway stop` can recover the stalled startup,
 including one frozen before publishing its owner identity. Recovery verifies the

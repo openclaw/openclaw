@@ -35,6 +35,8 @@ it("rejects unsafe ports and refuses to overwrite existing state", async () => {
     ["--projects", "0", "--worktree-files", "1"],
     ["--projects", "0", "--nested-repository"],
     ["--projects", "0", "--github-options-connected"],
+    ["--cron-announce-last", "--cron", "0"],
+    ["--cron-announce-last", "--sessions", "1", "--runs", "0"],
   ]) {
     expect(() => parseTeamShapeOptions(["--state-dir", "/unused", ...args])).toThrow();
   }
@@ -168,6 +170,7 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
     retainedRuns: 20,
     approvals: 3,
     cronJobs: 2,
+    cronAnnounceLast: false,
     projects: 1,
     githubOptionsConnected: false,
     logicalTranscriptBytes: 1024 * 1024,
@@ -215,4 +218,88 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
     gateway: { bind: "loopback", port: 40967 },
     cron: { enabled: false },
   });
+});
+
+it("retains settled history and seeds disabled announce/last jobs without delivery routes", async () => {
+  const stateDir = path.join(temporary.make("team-shape-settled-"), "state");
+  const { summary } = await generateTeamShapeFixture(
+    options(
+      stateDir,
+      "--sessions 20 --runs 60 --settled-runs --approvals 0 --cron 40 --cron-announce-last --projects 0 --transcript-mib 0",
+    ),
+  );
+  await flushLogger();
+  expect(summary).toMatchObject({
+    sessionCount: 20,
+    retainedRuns: 60,
+    settledRuns: true,
+    cronJobs: 40,
+    cronAnnounceLast: true,
+    retainedRunStates: { successful: 51, failed: 9, pending: 0, interrupted: 0 },
+  });
+  using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
+  expectCounts(state, {
+    subagent_runs: 60,
+    "subagent_runs WHERE json_extract(payload_json, '$.execution.status') = 'terminal' AND json_extract(payload_json, '$.delivery.status') = 'delivered' AND json_extract(payload_json, '$.cleanupHandled') = 1": 60,
+  });
+  const jobs = state.prepare("SELECT job_json FROM cron_jobs").all();
+  expect(jobs).toHaveLength(40);
+  for (const row of jobs) {
+    expect(JSON.parse(String(row.job_json))).toMatchObject({
+      enabled: false,
+      sessionTarget: "isolated",
+      sessionKey: "agent:main:team-shape-session-1",
+      payload: { kind: "agentTurn", message: expect.stringContaining("Synthetic inspection") },
+      delivery: { mode: "announce", channel: "last" },
+      failureAlert: false,
+    });
+  }
+  using agent = openDb(path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"));
+  const target = agent
+    .prepare("SELECT archived_at, entry_json FROM session_nodes WHERE session_key = ?")
+    .get("agent:main:team-shape-session-1");
+  expect(target?.archived_at).toBeNull();
+  expect(JSON.parse(String(target?.entry_json))).not.toHaveProperty("deliveryContext");
+});
+
+it("seeds the stress category mix with readable targets and settled unarchived subagents", async () => {
+  const stateDir = path.join(temporary.make("team-shape-load-"), "state");
+  const { summary } = await generateTeamShapeFixture(
+    options(
+      stateDir,
+      "--sessions 108 --runs 43 --settled-runs --team-stress --approvals 0 --cron 0 --projects 0 --transcript-mib 1",
+    ),
+  );
+  expect(summary.stressCounts).toMatchObject({
+    subagent: 43,
+    archivedDashboard: 44,
+    dashboard: 4,
+    explicit: 2,
+  });
+  using agent = openDb(path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"));
+  using state = openDb(path.join(stateDir, "state/openclaw.sqlite"));
+  expectCounts(agent, {
+    "session_nodes WHERE entry_valid = 1": 108,
+    "session_nodes WHERE session_key LIKE 'agent:main:subagent:%' AND archived_at IS NULL": 43,
+    "session_nodes WHERE session_key LIKE 'agent:main:dashboard:%' AND archived_at IS NOT NULL": 44,
+    "session_nodes WHERE session_key LIKE 'agent:main:dashboard:%' AND archived_at IS NULL": 4,
+  });
+  expectCounts(state, {
+    "subagent_runs WHERE child_session_key LIKE 'agent:main:subagent:%' AND json_extract(payload_json, '$.execution.status') = 'terminal' AND json_extract(payload_json, '$.delivery.status') = 'delivered'": 43,
+  });
+  expect(summary.stressTargets?.length).toBeGreaterThan(0);
+  for (const target of summary.stressTargets ?? []) {
+    const row = agent
+      .prepare(
+        "SELECT json_extract(entry_json, '$.sessionId') AS session_id, archived_at FROM session_nodes WHERE session_key = ?",
+      )
+      .get(target.sessionKey);
+    expect(row?.archived_at).toBeNull();
+    const transcript = agent
+      .prepare("SELECT count(*) AS n FROM transcript_events WHERE session_id = ?")
+      .get(String(row?.session_id));
+    expect(Number(transcript?.n)).toBeGreaterThan(1);
+  }
+  const agents = readJson(path.join(stateDir, "openclaw.json")).agents.entries;
+  expect(Object.keys(agents).toSorted()).toEqual(["main", "planner", "researcher", "reviewer"]);
 });

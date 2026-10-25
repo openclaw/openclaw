@@ -297,6 +297,16 @@ If restart cancellation finishes a collected run before that record commits,
 shutdown retains its recovery custody unless the session or run owner changes.
 Backend-owned restart aborts retain the same custody even when the caller's
 abort signal stays open and lifecycle persistence finishes after reply cleanup.
+Recovery follows the interrupted turn, including later turns in a child whose
+original subagent task has finished. Channel, group, cross-agent, and nested
+parents do not exclude those turns. Active subagent tasks retain their registry
+recovery owner; independent child turns use the ordinary session recovery cycle
+and can be resumed with `sessions.recover`.
+Delegated recovery rechecks the recorded parent identity and current cross-agent
+spawn policy. If that authority cannot be restored, the child records why it
+stopped, and its unchanged parent receives a local transcript notice. A deleted,
+archived, or replaced parent cannot receive that notice. A fresh authenticated
+message to the child from the TUI, Control UI, or a channel carries its own authority.
 Startup discovery excludes archived sessions, recovery tombstones, and rows without
 recovery obligations before preparing targets. Completed sessions with pending
 recovery obligations still settle. Other skipped candidates are logged with a
@@ -358,8 +368,8 @@ TUI or Control UI, for user-owned work that must resume automatically. Paired
 clients must retain the original device-token generation: reissuing that token
 under a different authentication path can prevent recovery even for the same user.
 
-This also covers parent turns started by subagent completion or pause notices.
-An interrupted parent continues independently of later child completions, and a
+This also covers public parent turns started by subagent completion or pause notices.
+An interrupted public parent turn continues independently of later child completions, and a
 retry of the same notice joins that recovery instead of starting the turn again.
 Parents still waiting after yielding to children remain owned by their child batch.
 Once a parent turn has its own recorded operator source, recovery revalidates that
@@ -373,6 +383,13 @@ available for a fresh authenticated message; recovery never substitutes system
 authority. Temporary startup, binding, or access-policy availability failures keep
 their recovery claims and retry.
 
+Private completion turns retain their original accepted input with the child batch
+that owns its processing receipt. After a restart, that owner replays the same input
+once and records its result; ordinary recovery does not start a second copy.
+While automatic recovery owns that input, `sessions.recover` reports that it is
+already queued. Restoring the private turn still requires current sender and parent
+authority. An unavailable source produces a recorded interruption instead.
+
 If a delegated turn's sender authority cannot be reconstructed and no pending
 reply, harness completion, or independent run remains owed, recovery ends only that
 turn. One local interruption notice and terminal source receipt prevent replay;
@@ -383,6 +400,13 @@ does not authorize replay after restart.
 Turns with remaining custody retain the existing recovery block. **Resume** in
 WebChat supplies current operator authority to continue the saved task in the same
 session after its outstanding delivery settles.
+
+If a child finishes before its restart-tombstoned parent can accept the result, it stays
+pending with the child owner. The parent receives one local notice that the result
+is waiting for **Resume**. The pending completion does not reserve the parent's
+message queue or grant permission to restart it. After an authorized in-place
+Resume, the same completion can continue once. Resetting or replacing the parent
+does not deliver the old child's result into the replacement session.
 
 Messages sent while restart recovery is waiting to start stay pending. Once
 recovery starts, they follow the session's normal message queue policy. You do
@@ -409,6 +433,10 @@ apply to the continuation.
 A session already recovered into a replacement opens that replacement instead;
 resuming both could duplicate the task. If a CLI runtime cannot enforce the
 required restart-safe tools, WebChat offers **Resume in new session** instead.
+For SQLite-backed sessions, this copies the complete transcript, including large
+histories, without loading the entire conversation into memory. The replacement
+and its recovery link are saved together; a failed copy leaves the original
+session available for retry.
 An unresolved final-delivery record must
 settle before an in-place continuation, and missing transcripts require repair.
 In other channels, `/new` or `/reset` still starts a replacement session.
@@ -427,6 +455,9 @@ sessions must be restored before reset.
 Archive discovery uses the selected store, recorded transcript paths, and agent
 directories. The pre-agent `~/.openclaw/sessions/` directory is no longer an
 implicit fallback; explicitly configured paths still work.
+
+State directories reached through symlinks are supported on SQLite and PostgreSQL,
+including session deletion, transcript archiving, and retained cron history reads.
 
 The session rows in the per-agent SQLite database keep separate lifecycle
 timestamps:

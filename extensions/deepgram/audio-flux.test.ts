@@ -1,6 +1,5 @@
 import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -12,6 +11,8 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
+import { commandResult } from "../test-support/command-result.test-support.js";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { isDeepgramFluxModel } from "./audio-flux.js";
 import plugin from "./index.js";
 
@@ -69,10 +70,7 @@ async function createFluxServer(onFlush = (socket: WebSocket) => socket.close())
       }
     });
   });
-  await new Promise<void>((resolve) => {
-    listener.listen(0, "127.0.0.1", resolve);
-  });
-  const port = (listener.address() as AddressInfo).port;
+  const port = await listenOnLoopback(listener);
   cleanups.push(
     async () =>
       await new Promise<void>((resolve, reject) => {
@@ -106,11 +104,9 @@ function turn(transcript?: unknown): string {
 async function writeDecodedPcm(argv: string[], pcm: Buffer) {
   await writeFile(expectDefined(argv.at(-1), "decoder output path"), pcm);
   return {
+    ...commandResult(),
     stdout: Buffer.alloc(0),
     stderr: Buffer.alloc(0),
-    code: 0,
-    signal: null,
-    killed: false,
     termination: "exit" as const,
   };
 }

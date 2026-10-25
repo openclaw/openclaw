@@ -217,6 +217,10 @@ function dispatchSeg<T extends object, Child extends object>(
   context: WalkContext,
   memoIdentity: object = node,
 ): void {
+  if (i >= subs.length) {
+    context.onMatch(walked);
+    return;
+  }
   // Different recursive routes can reach the same node and remaining pattern.
   const remaining = subs.slice(i);
   let key: string;
@@ -327,7 +331,7 @@ const jsoncOps: WalkOps<JsoncValue> = {
         : { keySub: key === lookupKey ? quoteSeg(e.key) : key, child: e.value };
     }
     if (node.kind === "array") {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
@@ -352,10 +356,6 @@ const jsoncOps: WalkOps<JsoncValue> = {
   },
   walk(node, subs, i, walked, context) {
     checkDepth(walked);
-    if (i >= subs.length) {
-      context.onMatch(walked);
-      return;
-    }
     dispatchSeg(node, jsoncOps, subs, i, walked, context);
   },
 };
@@ -453,7 +453,7 @@ const yamlOps: WalkOps<Node> = {
         : { keySub: key === lookupKey ? quoteSeg(lookupKey) : key, child: pair.value as Node };
     }
     if (isSeq(node)) {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
@@ -479,10 +479,6 @@ const yamlOps: WalkOps<Node> = {
   },
   walk(node, subs, i, walked, context) {
     checkDepth(walked);
-    if (i >= subs.length) {
-      context.onMatch(walked);
-      return;
-    }
     dispatchSeg(node, yamlOps, subs, i, walked, context);
   },
 };

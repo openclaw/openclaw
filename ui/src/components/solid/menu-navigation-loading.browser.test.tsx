@@ -1,8 +1,9 @@
 import { cleanup, render } from "@solidjs/testing-library";
-import { flush } from "solid-js";
+import { createSignal, flush, Show } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { MultiSelect } from "../multi-select.tsx";
 import { Menu, type MenuHandle, type MenuProps } from "./menu.tsx";
+import { Popover, type PopoverHandle } from "./popover.tsx";
 
 afterEach(cleanup);
 
@@ -94,6 +95,20 @@ it.each([
   }
 });
 
+it.each(["Enter", " "])(
+  "commits a focused cold leaf with %j before immediate overlay close",
+  (value) => {
+    const selections: string[] = [];
+    const { handle, surface } = mountMenu({ onSelect: (entry) => selections.push(entry.id) });
+    expect(handle.open()).toBe(true);
+    const target = surface.querySelector<HTMLElement>('[data-value="beta"]')!;
+    target.focus();
+    expect(key(target, value).defaultPrevented).toBe(true);
+    handle.close();
+    expect(selections).toEqual(["beta"]);
+  },
+);
+
 it("continues from the entry row when focus returns to the trigger during first load", async () => {
   const { handle, trigger, surface } = mountMenu();
   expect(handle.open()).toBe(true);
@@ -141,6 +156,35 @@ it("bubbles parent navigation from an open submenu trigger during first load", a
   child.trigger!.focus();
   key(child.trigger!, "ArrowDown");
   await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe("next");
+});
+
+it("leaves Escape to the open child when focus stays on its cold parent trigger", () => {
+  let help!: PopoverHandle;
+  const [showHelp, setShowHelp] = createSignal(false);
+  const { handle } = mountMenu({
+    children: (
+      <Show when={showHelp()}>
+        <Popover id="cold-help" label="Help" ref={(value) => (help = value)}>
+          Menu help
+        </Popover>
+      </Show>
+    ),
+  });
+  expect(handle.open()).toBe(true);
+  setShowHelp(true);
+  flush();
+  expect(help.overlay.parent).toBe(handle.overlay);
+  expect(help.show()).toBe(true);
+  help.overlay.trigger!.focus();
+
+  // No await: the navigation import cannot settle before the first Escape.
+  expect(key(help.overlay.trigger!, "Escape").defaultPrevented).toBe(true);
+  expect(help.overlay.open).toBe(false);
+  expect(handle.overlay.open).toBe(true);
+  expect(document.activeElement).toBe(help.overlay.trigger);
+
+  key(help.overlay.trigger!, "Escape");
+  expect(handle.overlay.open).toBe(false);
 });
 
 it("admits and focuses synchronously, retires old keys, and replays input after first load", async () => {

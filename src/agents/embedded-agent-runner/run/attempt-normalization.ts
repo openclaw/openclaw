@@ -6,7 +6,7 @@ import {
 import { resolveSqliteSessionKey } from "../../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import {
   readSessionEntrySummariesInWorker,
-  withSessionEntryReadOnlyInWorker,
+  readSessionEntryReadOnlyInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import { isSqliteTranscriptMutationConflict } from "../../../config/sessions/session-mutation-conflict-error.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
@@ -208,19 +208,13 @@ export async function normalizeEmbeddedRunAttempt(input: {
         sessionPromptState.sessionTarget &&
         resolveAgentIdFromSessionKey(sessionFileUsed) === sessionPromptState.sessionTarget.agentId
       ) {
-        const keyedEntry = await withSessionEntryReadOnlyInWorker(
+        const keyedEntry = await readSessionEntryReadOnlyInWorker(
           {
             agentId: sessionPromptState.sessionTarget.agentId,
             sessionKey: sessionFileUsed,
             storePath: sessionPromptState.sessionTarget.storePath,
           },
           assertCurrent,
-          async (read) => {
-            if (!read.ok) {
-              throw read.error;
-            }
-            return read.value;
-          },
         );
         assertCurrent();
         if (!keyedEntry?.sessionId || keyedEntry.sessionId !== sessionIdUsed) {

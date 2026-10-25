@@ -116,13 +116,13 @@
   .agent-chat__composer-lead
   > :first-child {
   grid-column: 1;
-  grid-row: 2;
+  grid-row: var(--chat-composer-action-row, 2);
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__composer-actions {
   grid-column: 3;
-  grid-row: 2;
+  grid-row: var(--chat-composer-action-row, 2);
   justify-self: end;
 }
 
@@ -150,13 +150,10 @@
    Reserve their intrinsic height here; editing uses the native content flow. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
   .agent-chat__input:has(.agent-chat__composer-combobox[data-prediction]) {
-  grid-template-rows: max-content max-content 36px;
-}
+  /* Keep :has() on the subject; a descendant selector invalidates unrelated subtrees. */
+  --chat-composer-action-row: 3;
 
-.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
-  .agent-chat__input:has(.agent-chat__composer-combobox[data-prediction])
-  :is(.agent-chat__composer-lead > :first-child, .agent-chat__composer-actions) {
-  grid-row: 3;
+  grid-template-rows: max-content max-content 36px;
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]

@@ -3,7 +3,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ReplyLine } from "./chat-reply-attribution.ts";
-import { ReplyConnector, type ReplyConnectorElements } from "./chat-reply-connector.ts";
+import { ReplyConnector, type ReplyConnectorElements } from "./chat-reply-connector.tsx";
 
 type ReplyLineActions = {
   onOpenReply?: (id: string) => void;

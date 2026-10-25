@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -239,14 +240,8 @@ export function createBeamMirrorRunner(params: {
   ) => {
     tracked.delete(key);
     tracked.set(key, { candidate, fingerprint, expiresAt: now() + BEAM_RETENTION_MS });
-    if (tracked.size <= MIRROR_RETRY_CAP) {
-      return;
-    }
     // At capacity, retry order is best effort; retain the just-acknowledged upload.
-    for (const oldest of tracked.keys()) {
-      tracked.delete(oldest);
-      break;
-    }
+    pruneMapToMaxSize(tracked, MIRROR_RETRY_CAP);
   };
 
   const warnThrottled = (message: string) => {

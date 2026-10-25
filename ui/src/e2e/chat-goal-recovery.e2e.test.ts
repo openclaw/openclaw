@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { SessionGoal } from "../../../packages/gateway-protocol/src/schema/sessions-goal.ts";
+import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails } from "./chat-details.test-support.ts";
 import { chatMessage, exactButton, requireRecord } from "./chat-flow.test-support.ts";
@@ -10,18 +11,12 @@ const viewport = { width: 1440, height: 900 };
 const pageOptions = { viewport, colorScheme: "light" } as const;
 
 function goalFixture(now: number, id: string, overrides: Partial<SessionGoal> = {}): SessionGoal {
-  return {
-    schemaVersion: 1,
-    id,
-    objective: "Verify the sample deployment",
+  return createSessionGoalFixture(id, "Verify the sample deployment", {
     status: "paused",
     createdAt: now,
     updatedAt: now,
-    tokenStart: 0,
-    tokensUsed: 0,
-    continuationTurns: 0,
     ...overrides,
-  };
+  });
 }
 
 function goalSessions(

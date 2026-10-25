@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as cleanupTimeout from "../plugins/host-hook-cleanup-timeout.js";
@@ -68,9 +69,9 @@ it("reports plugin reload status and serves metadata throughout an admitted call
   const drainObservations: Array<{ mockRestore: () => void }> = [];
   const deadline = createDeferredCore<false>();
   const deadlineScope = new AsyncLocalStorage<boolean>();
-  let deadlineObservations = 0;
   try {
     await server.startupSettled;
+    await waitForGatewayStartup(claim.port);
     socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
     const connected = socket;
     // Complete catalog acquisition before holding a call: retained acquisition
@@ -84,10 +85,9 @@ it("reports plugin reload status and serves metadata throughout an admitted call
     const reads = async () =>
       await Promise.all(
         ["models.list", "chat.metadata"].map(async (method) => {
-          const start = performance.now();
           const response = await rpcReq(connected, method, { agentId: "main" }, 120_000);
           expect(response.ok, `${method}: ${JSON.stringify(response)}`).toBe(true);
-          return { method, durationMs: performance.now() - start, payload: response.payload };
+          return response.payload;
         }),
       );
     const readReloadStatus = async () => {
@@ -105,34 +105,6 @@ it("reports plugin reload status and serves metadata throughout an admitted call
     const instance = getPluginInstance(record);
     assert(instance);
     const draining = createDeferredCore();
-    let ordinaryCallsQuiesced = false;
-    const quiesce = instance.quiesce.bind(instance);
-    drainObservations.push(
-      vi.spyOn(instance, "quiesce").mockImplementation(() => {
-        const accepting = quiesce();
-        ordinaryCallsQuiesced = true;
-        return accepting;
-      }),
-    );
-    const wait = instance.waitForRetainedWork.bind(instance);
-    drainObservations.push(
-      vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
-        const pending = wait(...args);
-        // The earlier retained-work wait preserves ordinary call admission.
-        if (args[1]?.includeCalls) {
-          draining.resolve();
-        }
-        return pending;
-      }),
-    );
-    const drain = instance.drain.bind(instance);
-    drainObservations.push(
-      vi.spyOn(instance, "drain").mockImplementation((...args) => {
-        const pending = drain(...args);
-        draining.resolve();
-        return pending;
-      }),
-    );
     // Expire only this drain observation; native Gateway owners keep their clocks.
     const within = settlement.settlesWithin;
     const withCleanupDeadline = cleanupTimeout.withPluginHostCleanupTimeout;
@@ -141,7 +113,6 @@ it("reports plugin reload status and serves metadata throughout an admitted call
         if (!deadlineScope.getStore()) {
           return within(pending, timeoutMs);
         }
-        deadlineObservations += 1;
         expect(timeoutMs).toBeGreaterThan(0);
         expect(timeoutMs).toBeLessThanOrEqual(60_000);
         return Promise.race([pending.then(() => true), deadline.promise]);
@@ -149,10 +120,13 @@ it("reports plugin reload status and serves metadata throughout an admitted call
       vi
         .spyOn(cleanupTimeout, "withPluginHostCleanupTimeout")
         .mockImplementation(
-          <T>(label: string, cleanup: () => T | Promise<T>, timeoutMs?: number) =>
-            label === "retained plugin work" && ordinaryCallsQuiesced
-              ? deadlineScope.run(true, () => withCleanupDeadline(label, cleanup, timeoutMs))
-              : withCleanupDeadline(label, cleanup, timeoutMs),
+          <T>(label: string, cleanup: () => T | Promise<T>, timeoutMs?: number) => {
+            if (label === "retained plugin work" && !instance.acceptingCalls) {
+              draining.resolve();
+              return deadlineScope.run(true, () => withCleanupDeadline(label, cleanup, timeoutMs));
+            }
+            return withCleanupDeadline(label, cleanup, timeoutMs);
+          },
         ),
     );
     held = rpcReq(connected, "instanceBinding.hold", {}, 120_000);
@@ -198,8 +172,7 @@ it("reports plugin reload status and serves metadata throughout an admitted call
     const during = await withinTest(reads(), signal);
     expect(reloadSettled).toBe(false);
     expect(getActivePluginRegistry()).toBe(registry);
-    expect(during.map((entry) => entry.payload)).toEqual(before.map((entry) => entry.payload));
-    expect(deadlineObservations).toBe(1);
+    expect(during).toEqual(before);
     deadline.resolve(false);
     expect(await reloading).toMatchObject({
       ok: false,
@@ -209,15 +182,7 @@ it("reports plugin reload status and serves metadata throughout an admitted call
     expect(instance.acceptingCalls).toBe(true);
     expect(await readReloadStatus()).toBeUndefined();
     const after = await reads();
-    expect(after.map((entry) => entry.payload)).toEqual(before.map((entry) => entry.payload));
-    console.info(
-      "PLUGIN_DRAIN_READER_LATENCY " +
-        JSON.stringify({
-          before: before.map(({ method, durationMs }) => ({ method, durationMs })),
-          during: during.map(({ method, durationMs }) => ({ method, durationMs })),
-          after: after.map(({ method, durationMs }) => ({ method, durationMs })),
-        }),
-    );
+    expect(after).toEqual(before);
     release.resolve();
     expect((await held).ok).toBe(true);
   } finally {

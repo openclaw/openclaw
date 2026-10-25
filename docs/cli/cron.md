@@ -165,6 +165,24 @@ An isolated agent-turn job created from a conversation also captures that conver
   </Accordion>
 </AccordionGroup>
 
+### Binding older jobs to their conversation
+
+Jobs created before OpenClaw recorded the creating conversation's incarnation name
+their conversation only by session key. They keep their existing behavior, with
+the run session's board, memory, and workspace, until someone binds them. To bind
+one, ask the agent in that conversation to bind it (the automations tool's `bind`
+action) from an authenticated owner turn: a Control UI administrator or the
+configured channel owner. The binding records the
+conversation's current incarnation, and later runs use that conversation's
+resources as a linked child run. Bind refuses a job whose recorded conversation is
+another one, a job that is already bound or is not linked by key alone, and turns
+without owner authority. Run from a shell, `openclaw automations bind` has no
+conversation and is refused with that instruction.
+
+A bind from an authenticated Control UI turn also stores that turn's operator
+source, as creation from that turn would, so each occurrence rechecks the device
+and access grant. Other owner turns keep the job's recorded requester.
+
 When an operator removes an automation with an active run, OpenClaw requests cancellation of that run. An admitted automation can remove its own job without cancelling the active run. If the caller cannot be confirmed as the job's exact live run, self-removal fails without deleting the job or cancelling the active run. The JSON removal response includes `activeRunCancellationRequested: true` when cancellation was requested. For an isolated automation, reusable-session cleanup then waits for the active run to stop and reports `sessionCleanup: "pending"` while cleanup is deferred. Run history is retained.
 
 If session cleanup fails, the error is logged. A removal with no active run also returns the cleanup error to the caller. Use `openclaw sessions list --json` to find the remaining session, then `openclaw sessions delete <key> --yes` to retry cleanup after the Gateway or worker recovers.
@@ -384,7 +402,7 @@ later Doctor runs do not overwrite edits or recreate a deleted migrated job.
 Use `automations show`, `runs`, `enable`, and `disable` to manage the jobs.
 Legacy `system heartbeat` controls apply only to converted/default jobs. See [Heartbeat migration](/gateway/heartbeat).
 
-The `cron.*` Gateway methods and protocol v4 remain compatible. The deprecated
+The `cron.*` Gateway methods remain compatible. The deprecated
 `--wake now|next-heartbeat` field remains accepted, but scheduled jobs execute
 their payload through ordinary session execution when the job is due. It does
 not add another wake or deferral step. Use the job's schedule to control timing.

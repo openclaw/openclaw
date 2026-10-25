@@ -3,17 +3,12 @@ import { isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPathInside } from "../infra/path-guards.js";
-import {
-  resolveBundledSharedModule,
-  type BundledPluginReloadSource,
-} from "./plugin-bundled-reload.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
 import {
   createPluginGenerationFileCapture,
   createPluginSourceLinkCapture,
   linkPluginGenerationDependency,
-  linkPluginGenerationHostModule,
 } from "./plugin-generation-file-capture.js";
 import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import {
@@ -69,7 +64,6 @@ function createPluginGenerationArtifact(
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
   dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
-  bundledReloadSource?: BundledPluginReloadSource,
   retained?: PluginSourceCustodyFork,
   captureForCustody = false,
 ): PluginGenerationArtifact {
@@ -257,17 +251,15 @@ function createPluginGenerationArtifact(
       resolveDependency,
       (name, dependency) => linkDependency(name, dependency, true),
     );
+    // References share a capture destination; real paths track filesystem ancestry.
     const scannedDirectories = new Set<string>();
-    const captureFile = (source: string): void => {
+    const captureFile = (source: string, directoryAncestors?: Set<string>): void => {
       const existingSource = capturedPaths.get(path.resolve(source));
       if (existingSource) {
         assertModuleAvailable(existingSource);
-      }
-      if (
-        existingSource &&
-        (!/\.[cm]?[jt]sx?$/.test(source) || moduleCaptures.has(existingSource))
-      ) {
-        return;
+        if (!/\.[cm]?[jt]sx?$/.test(source) || moduleCaptures.has(existingSource)) {
+          return;
+        }
       }
       const target = existingSource ?? path.join(destination, path.relative(root, source));
       if (!existingSource) {
@@ -283,16 +275,21 @@ function createPluginGenerationArtifact(
           return;
         }
         if (fs.statSync(real).isDirectory()) {
-          if (scannedDirectories.has(real)) {
+          if (directoryAncestors?.has(real)) {
             throw new Error("Standalone plugin input contains a directory cycle");
           }
-          scannedDirectories.add(real);
-          for (const name of fs.readdirSync(real).toSorted()) {
-            if (isPluginSourceEntry(name)) {
-              captureFile(path.join(source, name));
+          if (!scannedDirectories.has(target)) {
+            const ancestors = directoryAncestors ?? new Set<string>();
+            ancestors.add(real);
+            scannedDirectories.add(target);
+            for (const name of fs.readdirSync(real).toSorted()) {
+              if (isPluginSourceEntry(name)) {
+                captureFile(path.join(source, name), ancestors);
+              }
             }
+            ancestors.delete(real);
+            scannedDirectories.delete(target);
           }
-          scannedDirectories.delete(real);
           return;
         }
         copy(source, target);
@@ -307,7 +304,10 @@ function createPluginGenerationArtifact(
         resolveDependency,
         linkDependency,
       );
-      const resolver = resolution.get(source);
+      // Configured tsconfig mappings must be pinned before later source edits.
+      if (process.env.JITI_TSCONFIG_PATHS !== undefined) {
+        resolution.get(source);
+      }
       const captureReference = (
         reference: string,
         kind: "asset" | "import" | "require",
@@ -364,7 +364,7 @@ function createPluginGenerationArtifact(
               : resolve(value);
           const input = resolved?.startsWith("file:") ? fileURLToPath(resolved) : resolved;
           if (
-            resolver.options.tsconfigPaths &&
+            resolution.get(source).options.tsconfigPaths &&
             name !== "openclaw" &&
             name !== "@openclaw/plugin-sdk" &&
             resolved?.startsWith("file:") &&
@@ -418,19 +418,6 @@ function createPluginGenerationArtifact(
           module && path.isAbsolute(value) && isPathInside(lexicalBoundary, requested)
             ? path.join(boundary, path.relative(lexicalBoundary, requested))
             : requested;
-        const shared =
-          module && resolveBundledSharedModule(bundledReloadSource, rootDir, source, local);
-        if (shared) {
-          // Native Workers do not inherit the parent resolver. Their relative imports
-          // must reach the same host modules without capturing another SDK identity.
-          if (value.startsWith(".") && isPathInside(boundary, local)) {
-            const sharedLink = path.join(destination, path.relative(boundary, local));
-            if (linkPluginGenerationHostModule(sharedLink, shared)) {
-              additions.add(sharedLink);
-            }
-          }
-          return undefined;
-        }
         if (module && !isPathInside(boundary, local)) {
           if (!conditions || !execute) {
             return null;
@@ -520,7 +507,12 @@ function createPluginGenerationArtifact(
           !specifier.startsWith(".") &&
           !path.isAbsolute(specifier) &&
           !specifier.startsWith("file:");
-        if (resolver.options.tsconfigPaths && bare && !self && !specifier.startsWith("#")) {
+        if (
+          bare &&
+          !self &&
+          !specifier.startsWith("#") &&
+          resolution.get(source).options.tsconfigPaths
+        ) {
           // Jiti still owns configured source paths; package maps below use captured metadata.
           const mapped = captureObservedReference(
             specifier,
@@ -589,7 +581,7 @@ function createPluginGenerationArtifact(
         moduleCapture.staticImports = visitPluginSourceReferences(
           source,
           fs.readFileSync(target, "utf8"),
-          resolver,
+          resolution.get(source),
           entry && !executableEntry
             ? captureObservedReference
             : (reference, kind) => observed.set(`${kind}\0${reference}`, null),
@@ -601,16 +593,15 @@ function createPluginGenerationArtifact(
       if (!entry && !capturedPaths.has(manifestPath)) {
         return;
       }
-      const manifest = capturePluginDependencies({
+      capturePluginDependencies({
         root,
-        manifestFile: entry ? undefined : path.join(destination, "package.json"),
+        plan: entry
+          ? undefined
+          : metadataCapture.dependencyPlan(path.join(destination, "package.json")),
         references,
         resolve: resolveDependency,
         capture: linkDependency,
       });
-      if (!entry) {
-        metadataCapture.setManifest(path.join(destination, "package.json"), manifest);
-      }
     };
     if (metadataOnly) {
       const manifest = capturePluginPackageMetadata(
@@ -672,10 +663,6 @@ function createPluginGenerationArtifact(
     });
     return {
       sourceRoot,
-      sharedModule: bundledReloadSource
-        ? (importer, specifier) =>
-            resolveBundledSharedModule(bundledReloadSource, root, importer, specifier)
-        : undefined,
       rootDir: root,
       sourceAliases,
       linkHost: (hostRoot: string) => {

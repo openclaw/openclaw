@@ -190,6 +190,18 @@ Omitting the ID retains the legacy single-observer behavior.
 Older clients remain compatible with the updated Gateway; the updated SDK's
 ownership fields require an updated Gateway.
 
+Foreground readers can include `initialHistory` to receive the first `chat.startup`
+snapshot in the same acknowledgment. It accepts `cursor`, `knownState`, `limit`,
+`maxBytes`, `toolResultMaxChars`, and `inputRunIds`; the subscription's normalized
+session and agent select the transcript. The Gateway admits the observer before
+reading history, so subsequent live events cover activity after the snapshot.
+The response adds `initialHistory: { ok: true, payload }` or
+`initialHistory: { ok: false, error }`. A history error leaves the successful
+subscription active: retry the history read or release the returned observer.
+Clients that omit `initialHistory` keep the existing acknowledgment shape. This
+optional request requires a Gateway that supports it; it does not change wire
+protocol v4.
+
 Background narration consumers declare `mode: "narration"`. The Gateway replaces
 their token-level `chat` deltas and raw `agent` assistant events with
 `session.narration` snapshots. Each snapshot contains `sessionKey`, optional
@@ -387,7 +399,7 @@ or protocol-version change.
   happens to match. Missing rows, generation or revision mismatches, and uncertain
   presentation ownership require the existing authoritative refresh path.
   The Gateway bounds this per-connection record and sends full rows after first
-  delivery, a successful list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
+  delivery, a successful legacy list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
   eviction, or uncertain delivery. Unsubscribe and disconnect clear the record;
   session deletion invalidates remembered ancestors.
   Recap-only (`reason: "activity-summary"`) events keep their ancestor payloads,
@@ -525,8 +537,13 @@ wrapper sends `full`. Both ends retain at most 1,024 rows in delivery-order LRU.
 The server also bounds its field-hash vectors to 2 MiB per connection; `retain:
 false` on a full wrapper instructs both ends to discard that baseline. No row-byte
 charge is sent. Subscription changes, ordinary fact updates (including broad
-notifications), hidden ancestors, and list reads invalidate ancestor certification
-but preserve wire baselines. Those baselines describe the last row delivered to
+notifications) and hidden ancestors invalidate ancestor certification but preserve
+wire baselines. For clients negotiating row deltas, list reads preserve ancestor
+certification too: replies cannot replace the socket's retained event rows. Before
+referencing an unchanged ancestor, the server checks that its wire baseline is
+still retained; eviction or `retain: false` requires a full ancestor again.
+Legacy clients keep the list-read reset because their ancestor receipts belong
+to admitted roster rows. Wire baselines describe the last row delivered to
 the socket; current authorized fields still determine every patch. A response can
 follow a newly delivered row on the same socket.
 Connection retirement clears the state. A dropped event invalidates server

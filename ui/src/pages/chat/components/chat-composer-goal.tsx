@@ -1,5 +1,4 @@
-import type { JSX } from "@solidjs/web";
-import { For, Show, createSignal } from "solid-js";
+import { For, Show } from "solid-js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
@@ -7,7 +6,7 @@ import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalRecovery } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { createInterval } from "../../../lib/reactive/timers.ts";
+import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -36,14 +35,9 @@ const goalStatusIcons = {
   complete: "check",
 } as const;
 
-// Keep the one-second clock local to its span; it must not invalidate the composer.
+// Keep the shared clock local to its span; it must not invalidate the composer.
 function GoalElapsed(props: { goal: SessionGoal; class?: string }) {
-  // Resuming samples the current clock before the next interval tick.
-  const [now, setNow] = createSignal(() => (props.goal.status === "active" ? Date.now() : 0));
-  createInterval(
-    () => setNow(Date.now()),
-    () => (props.goal.status === "active" ? 1000 : undefined),
-  );
+  const now = () => (props.goal.status === "active" ? readVisibleTime(1_000) : 0);
   return <span class={props.class}>{formatGoalElapsed(goalElapsedMs(props.goal, now()))}</span>;
 }
 
@@ -267,22 +261,16 @@ export function ChatGoal(props: ChatGoalProps) {
   );
 }
 
-export function renderChatGoalRecoverySolid(
-  recovery: ChatGoalRecovery | undefined,
-  connected: boolean,
-): JSX.Element {
-  if (!recovery) {
-    return null;
-  }
+export function ChatGoalRecoveryNotice(props: { recovery: ChatGoalRecovery; connected: boolean }) {
   return (
     <div class="chat-composer-neighbor-card chat-composer-neighbor-card--warn" role="status">
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
         <Icon name="alertTriangle" />
       </span>
       <div class="chat-composer-neighbor-card__copy">
-        <ChatGoalRecoveryMessage recovery={recovery} />
+        <ChatGoalRecoveryMessage recovery={props.recovery} />
       </div>
-      <ChatGoalRecoveryAction recovery={recovery} connected={connected} />
+      <ChatGoalRecoveryAction recovery={props.recovery} connected={props.connected} />
     </div>
   );
 }

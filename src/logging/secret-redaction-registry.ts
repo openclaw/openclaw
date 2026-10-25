@@ -8,6 +8,7 @@ const MAX_SECRET_VALUES = 512;
 
 type SecretValueRedactor = (text: string, mask: (value: string, index: number) => string) => string;
 type SecretRedactionRegistryState = {
+  revision: number;
   registeredValues: Map<string, true>;
   registeredValueRedactor: SecretValueRedactor | undefined;
 };
@@ -16,6 +17,7 @@ type SecretRedactionRegistryState = {
 const state = resolveGlobalSingleton<SecretRedactionRegistryState>(
   Symbol.for("openclaw.secretRedactionRegistry"),
   () => ({
+    revision: 0,
     registeredValues: new Map<string, true>(),
     registeredValueRedactor: undefined,
   }),
@@ -23,7 +25,13 @@ const state = resolveGlobalSingleton<SecretRedactionRegistryState>(
 
 type SecretRedactionRegistrySnapshot = { values: readonly string[] };
 function invalidateMatcher(): void {
+  state.revision += 1;
   state.registeredValueRedactor = undefined;
+}
+
+/** Invalidates prepared redacted facts when exact secret membership changes. */
+export function getSecretRedactionRegistryRevision(): number {
+  return state.revision;
 }
 
 function registerOneSecretValue(value: string): void {

@@ -90,7 +90,6 @@ async function runGatewayCronFailureRepair(
   // The cron run may retire its async scope before this independent repair settles.
   await runWithGatewayDetachedWorkContinuation(async () => {
     await dispatchGatewayLifecycleMethod(
-      "agent",
       {
         ...(request.agentId ? { agentId: request.agentId } : {}),
         sessionKey: request.sessionKey,

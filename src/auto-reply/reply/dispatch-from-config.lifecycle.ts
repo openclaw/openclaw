@@ -28,6 +28,7 @@ import {
 } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import { isActiveRunSafeCommandTurn } from "../commands-registry.js";
+import { waitForReplyDispatcherSettlement } from "../dispatch-dispatcher.js";
 import {
   createAbortAwareDispatcher,
   DispatchReplyOperationAbortedError,
@@ -45,6 +46,7 @@ import type {
 import { restoreArchivedDispatchSession } from "./dispatch-session-archive.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { isExplicitSteerCommandTurn } from "./explicit-steer-routing.js";
+import type { ReplyDispatchDeliveryOutcome } from "./reply-dispatch-outcome.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
@@ -114,6 +116,10 @@ export function createDispatchReplyOperationCoordinator(
     await Promise.allSettled(Array.from(dispatchLifecycleWork.delivery));
     await waitForReplyDispatcherIdle(params.dispatcher);
   };
+  const waitForDispatchSettlement = async (): Promise<void> => {
+    await Promise.allSettled(Array.from(dispatchLifecycleWork.delivery));
+    await waitForReplyDispatcherSettlement(params.dispatcher);
+  };
 
   const releasePreDispatchLifecycleAdmission = async (
     afterWorkBarrier?: () => PromiseLike<unknown>,
@@ -161,7 +167,7 @@ export function createDispatchReplyOperationCoordinator(
     removePreDispatchLifecycleAbortListener?.();
     const onAbort = () => {
       void releasePreDispatchLifecycleAdmission(() =>
-        waitForReplyDispatcherIdle(params.dispatcher),
+        waitForReplyDispatcherSettlement(params.dispatcher),
       );
     };
     abortSignal.addEventListener("abort", onAbort, { once: true });
@@ -585,6 +591,21 @@ export function createDispatchReplyOperationCoordinator(
     params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
   let agentRunTerminalOutcome: "completed" | "failed" | undefined;
+  const observeDeliveryProgress = (
+    deliveryOutcome: Promise<ReplyDispatchDeliveryOutcome> | undefined,
+    event: string,
+  ) => {
+    const operation = dispatchReplyOperation;
+    void deliveryOutcome?.then(
+      (outcome) => {
+        if (outcome === "delivered") {
+          operation?.watchdog.progress("finalization", event);
+        }
+      },
+      () => {},
+    );
+  };
+
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -640,7 +661,7 @@ export function createDispatchReplyOperationCoordinator(
   };
 
   const completeDispatchReplyOperation = () => {
-    void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
+    void releasePreDispatchLifecycleAdmission(waitForDispatchSettlement);
     const operation = dispatchReplyOperation;
     if (!operation) {
       return;
@@ -649,10 +670,14 @@ export function createDispatchReplyOperationCoordinator(
     const complete = () => {
       if (params.replyOptions?.internalEventExecution) {
         // Source-owned effects retain the admitted operation until delivery settles.
-        const settle = () => operation.complete();
+        const settle = () =>
+          operation.completeWithAfterClearBarrier(
+            waitForReplyDispatcherSettlement(params.dispatcher),
+            timeoutPolicy,
+          );
         void waitForDispatchDelivery().then(settle, settle);
       } else {
-        operation.completeWithAfterClearBarrier(waitForDispatchDelivery(), timeoutPolicy);
+        operation.completeWithAfterClearBarrier(waitForDispatchSettlement(), timeoutPolicy);
       }
     };
     // Abort races the resolver, not its bookkeeping. Retain this exact owner
@@ -715,6 +740,7 @@ export function createDispatchReplyOperationCoordinator(
     isDispatchOperationAborted,
     isPreDispatchOperationAborted,
     markObservedReplyDelivery,
+    observeDeliveryProgress,
     releasePreDispatchLifecycleAdmission,
     runWithDispatchLifecycleAdmission,
     throwIfDispatchOperationAborted,

@@ -69,6 +69,60 @@ it.each([
   expect(parseControlUiGitHubPreviewTarget({ ...previewTarget(1), [field]: value })).toBeNull();
 });
 
+it("shares repeated commit previews while keeping different revisions separate", async () => {
+  const target = {
+    kind: "commit",
+    owner: "openclaw",
+    repo: "openclaw",
+    sha: "abcdef0123456789",
+  } as const;
+  const url = "https://api.github.com/repos/openclaw/openclaw/commits/abcdef0123456789?per_page=1";
+  const fetchMock = responses(
+    githubJson({
+      sha: "abcdef0123456789abcdef0123456789abcdef01",
+      url,
+      commit: {
+        message: "Fix commit previews\n\nDetails stay in the reader.",
+        author: { date: "2026-10-24T00:00:00Z" },
+        comment_count: 2,
+      },
+      author: { login: "octocat" },
+      stats: { additions: 3, deletions: 2 },
+    }),
+  );
+  const [first, second] = await Promise.all([
+    loadPreview(target, undefined, fetchMock),
+    loadPreview(target, undefined, fetchMock),
+  ]);
+  expect(first).toMatchObject({
+    ...target,
+    title: "Fix commit previews",
+    login: "octocat",
+    state: "committed",
+    additions: 3,
+    deletions: 2,
+    comments: 2,
+  });
+  expect(second).toEqual(first);
+  expect(await loadPreview(target, undefined, fetchMock)).toEqual(first);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(requestUrl(fetchMock.mock.calls[0]?.[0])).toBe(url);
+  fetchMock.mockResolvedValueOnce(
+    githubJson({
+      sha: "b".repeat(40),
+      url,
+      commit: { message: "Another commit", author: { date: "2026-10-24T01:00:00Z" } },
+    }),
+  );
+  expect(await loadPreview({ ...target, sha: "b".repeat(40) }, undefined, fetchMock)).toMatchObject(
+    {
+      sha: "b".repeat(40),
+      title: "Another commit",
+    },
+  );
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
 describe("loadControlUiGitHubPreview", () => {
   beforeEach(() => {
     vi.stubEnv("GH_TOKEN", "ignored-ambient-preview-token");
@@ -209,10 +263,7 @@ describe("loadControlUiGitHubPreview", () => {
         ) {
           changed = true;
           if (stage !== "final visibility check") {
-            return new Response(null, {
-              status: 301,
-              headers: { Location: url.replace("/openclaw/openclaw", "/openclaw/renamed") },
-            });
+            return githubRedirect(url.replace("/openclaw/openclaw", "/openclaw/renamed"));
           }
         }
         return githubJson(

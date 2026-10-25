@@ -508,6 +508,17 @@ when an absent physical database has a defined result, including explicit
 `undefined`; the host returns that value without creating the database or
 executing the handler. An absent source without `missingValue` refuses the call.
 
+Read-only operations may supply `ifEmpty: { store, value }` when an empty namespace
+determines the result. The worker first reads that namespace in autocommit mode;
+when empty, it returns `value` without calling the handler. With an explicitly
+selected SQLite owner, later calls on that prepared operation reuse the confirmed
+empty namespace until an owner write invalidates it. PostgreSQL keeps the physical
+probe so external commits remain visible. Otherwise the handler rereads its inputs
+inside the normal snapshot. The shortcut uses the same namespace scope and expiry
+rules, and retains `watchStores` and receipt invalidation. A write after an empty
+read is observed by the next operation; callers must permit that ordinary read
+boundary. This option cannot be combined with nonempty `writeStores`.
+
 The Gateway owns online database mutation. Operation receipts use its in-process
 write publications, pending-mutation invalidation, expiry, and lifecycle state.
 They do not poll SQLite for foreign commits or reread rows on the main thread.

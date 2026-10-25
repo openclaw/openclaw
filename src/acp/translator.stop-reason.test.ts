@@ -371,6 +371,25 @@ it("recovers visible text before rejecting a failed run", async () => {
   expect(h.chunks()).toEqual(["final answer", "[OpenClaw interruption] boom"]);
 });
 
+it.each(["length", "max_tokens"])(
+  "recovers visible text before reporting a failed %s run as max_tokens",
+  async (stopReason) => {
+    const h = await recoveryHarness({
+      ...visibleReply("Recovered summary", "error"),
+      stopReason,
+      error: "The original turn reached its output limit.",
+    });
+    h.reconnect();
+    await expect(h.promptPromise).resolves.toEqual({ stopReason: "max_tokens" });
+    const expected = [
+      "Recovered summary",
+      "[OpenClaw interruption] The original turn reached its output limit.",
+    ];
+    expect(h.chunks()).toEqual(expected);
+    expect(await h.replay()).toEqual(expected);
+  },
+);
+
 it("claims recovery before a late final event can emit the suffix twice", async () => {
   const h = await recoveryHarness();
   await h.chat("final");

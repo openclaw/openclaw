@@ -3,16 +3,19 @@ import { createDeferred } from "@solidjs/signals";
 import { createMemo, createSignal, Errored, isPending, Loading, onSettled, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerPluginManagementEnglish } from "../../../i18n/locales/en-plugin-management.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { loadPluginDiscoveryDetail } from "../../../lib/plugins/index.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../../plugins/plugin-icon-owner.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
+import { subscribeClawHubCardUpdates } from "./chat-clawhub-card-updates.ts";
 import type { ChatClawHubCardProps } from "./chat-clawhub-card.tsx";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 type CardPresentation = Pick<
   ClawHubRecommendation,
@@ -217,17 +220,7 @@ export function ChatClawHubCardBody(
   }
   onSettled(() => {
     // Connection edges retire request generations and icon URLs before later replies arrive.
-    const stop = context.gateway.subscribe(() => load());
-    const activate = () => {
-      if (
-        context.gateway.snapshot.phase === "connected" &&
-        document.visibilityState === "visible"
-      ) {
-        load(true);
-      }
-    };
-    const stopVisibility = listen(document, "visibilitychange", activate);
-    const stopFocus = listen(globalThis, "focus", activate);
+    const stop = subscribeClawHubCardUpdates(context.gateway, document, load);
     return () => {
       active = false;
       ++generation;
@@ -235,8 +228,6 @@ export function ChatClawHubCardBody(
       stop();
       connection.dispose();
       resetIcons();
-      stopVisibility();
-      stopFocus();
     };
   });
   const card = (): CardPresentation | undefined => read().presentation ?? props.recommendation;

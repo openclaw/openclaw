@@ -2,6 +2,7 @@ import path from "node:path";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it } from "vitest";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { isCodexAppServerLiveThreadProtected } from "./client-runtime.js";
 import { ownCodexInferenceClient } from "./inference-routing.js";
 import { itemNotification } from "./protocol.test-helpers.js";
@@ -17,11 +18,17 @@ import {
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
+  threadStartResult,
 } from "./run-attempt-test-harness.js";
+import { writeNativeCatalogFixture } from "./thread-lifecycle.test-fixtures.js";
 
 setupRunAttemptTestHooks();
 
 it("delivers fresh prompt-hook parent context on the same protected thread", async () => {
+  const agentDir = path.join(tempDir, "wire-agent");
+  const codexHome = resolveCodexAppServerHomeDir(agentDir);
+  const rolloutPath = path.join(codexHome, "sessions", "hook-parent.jsonl");
+  let nativeTools: unknown;
   const contexts = ["Synthetic first-turn recall", "Synthetic second-turn recall"];
   let context = contexts[0];
   let systemPrompt: string | undefined;
@@ -48,12 +55,18 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
       if (method === "thread/backgroundTerminals/list") {
         return { data: [{ itemId: command.id, processId: command.processId }], nextCursor: null };
       }
+      if (method === "thread/start") {
+        nativeTools = (request as { dynamicTools?: unknown }).dynamicTools;
+        const result = threadStartResult();
+        return { ...result, thread: { ...result.thread, path: rolloutPath } };
+      }
       if (method === "turn/start") {
+        await writeNativeCatalogFixture(rolloutPath, "thread-1", nativeTools);
         received.push(readManagedInstructions(harness.client, request));
       }
       return undefined;
     },
-    { persistedThreads: [] },
+    { persistedThreads: [], codexHome },
   );
   ownCodexInferenceClient(harness.client);
   const unsubscribe = { method: "thread/unsubscribe", params: { threadId: "thread-1" } };
@@ -64,6 +77,7 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
         runId: `run-${index}`,
         prompt: index === 0 ? "Start a callback listener" : "Explain the callback setup",
       });
+      params.agentDir = agentDir;
       params.skillsSnapshot = {
         prompt: "<available_skills><skill><name>synthetic-skill</name></skill></available_skills>",
         skills: [],
@@ -98,11 +112,13 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
     }
     expect(received[1]).not.toContain("Synthetic first-turn recall");
     systemPrompt = "Changed persistent thread policy";
-    await expect(
-      runCodexAppServerAttempt(
-        createParams(path.join(tempDir, "session.jsonl"), tempDir, { runId: "changed-policy" }),
-      ),
-    ).rejects.toThrow("Codex thread thread-1 is claimed by active work; stop it first.");
+    const changedPolicy = createParams(path.join(tempDir, "session.jsonl"), tempDir, {
+      runId: "changed-policy",
+    });
+    changedPolicy.agentDir = agentDir;
+    await expect(runCodexAppServerAttempt(changedPolicy)).rejects.toThrow(
+      "Codex thread thread-1 is claimed by active work; stop it first.",
+    );
     expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
     expect(harness.requests).not.toContainEqual(unsubscribe);
     expect(

@@ -81,12 +81,8 @@ describe("resolveFeishuBotName", () => {
   });
 
   it("deduplicates concurrent lookups for one account and bot", async () => {
-    let release: ((value: unknown) => void) | undefined;
-    requestMock.mockReturnValue(
-      new Promise((resolve) => {
-        release = resolve;
-      }),
-    );
+    const { promise, resolve: release } = Promise.withResolvers<unknown>();
+    requestMock.mockReturnValue(promise);
 
     const first = resolveFeishuBotName({ account, openId: "ou_peer", log });
     const second = resolveFeishuBotName({ account, openId: "ou_peer", log });

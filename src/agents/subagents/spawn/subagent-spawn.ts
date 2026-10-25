@@ -57,6 +57,7 @@ import {
   createSubagentSpawnLifecycleEmitter,
   recordSubagentSessionSetup,
 } from "./subagent-spawn-lifecycle.js";
+import { applySubagentProfile } from "./subagent-spawn-profile.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
@@ -66,9 +67,10 @@ import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
 
 export async function spawnSubagentDirect(
-  params: SpawnSubagentParams,
-  ctx: SpawnSubagentContext,
+  input: SpawnSubagentParams,
+  context: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
+  const { params, ctx, profileReceipt, systemPrompt } = applySubagentProfile(input, context);
   let assertDelegationCurrent: (() => void) | undefined;
   const assertActive = composeSessionSourceAssertion([ctx.assertActive], (assertSource) => {
     assertSource();
@@ -326,7 +328,7 @@ export async function spawnSubagentDirect(
       childDepth,
       maxSpawnDepth,
     });
-    let childSystemPrompt = envelope.systemPrompt;
+    let childSystemPrompt = systemPrompt(envelope.systemPrompt);
     if (params.outputSchema) {
       childSystemPrompt = `${childSystemPrompt}\n\nCall structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.`;
     }
@@ -344,10 +346,7 @@ export async function spawnSubagentDirect(
     );
     if (materializedAttachments && materializedAttachments.status !== "ok") {
       await cleanupCreatedSession(threadBindingReady);
-      return {
-        status: materializedAttachments.status,
-        error: materializedAttachments.error,
-      };
+      return materializedAttachments;
     }
     const attachmentId = materializedAttachments?.attachmentId;
     if (materializedAttachments) {
@@ -550,6 +549,7 @@ export async function spawnSubagentDirect(
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
           nativePluginOwner: params.collect ? ctx.nativePluginOwner : undefined,
+          subagentProfile: profileReceipt,
           ...childTarget,
           controllerSessionKey: ownership.controllerSessionKey,
           sessionEntry: childEntry,
@@ -676,6 +676,8 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
+      ...(label ? { label } : {}),
+      ...(swarmGroupId ? { groupId: swarmGroupId } : {}),
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
       runId: childRunId,
       mode: spawnMode,

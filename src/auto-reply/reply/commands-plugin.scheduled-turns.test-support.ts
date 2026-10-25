@@ -1,5 +1,4 @@
-// Shared real-loader fixture for requester-admitted scheduled command tests. Test files own
-// their module mocks; see commands-plugin.scheduled-turns.test.ts.
+// Real-loader fixture; callers own their module mocks.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -9,7 +8,6 @@ import { expect, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import {
-  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -23,13 +21,12 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agen
 import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
-import { createGatewayCronAgentJobRunner } from "../../gateway/server-cron-agent-run.js";
+import { createGatewayCronAgentDeps } from "../../gateway/server-cron-agent-run.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
-import { listPluginCommandScheduleHosts } from "../../plugins/plugin-command-schedule-hosts.js";
 import { getPluginInstanceIncarnation } from "../../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
@@ -39,17 +36,17 @@ import {
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginCommandContext, PluginCommandResult } from "../../plugins/types.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
-import { handlePluginCommand } from "./commands-plugin.js";
+import {
+  createPersistedPluginCommandParams,
+  createPluginCommandInvocation,
+} from "./commands-plugin.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
-import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
-import { finalizeInboundContext } from "./inbound-context.js";
 export const pluginId = "command-controller";
 
 type Handler = (ctx: PluginCommandContext) => PluginCommandResult | Promise<PluginCommandResult>;
@@ -74,43 +71,45 @@ export type Fixture = {
   assistantOutputs: () => Promise<unknown[]>;
   restrictParentTools: () => Promise<unknown>;
   revokeOwner: () => void;
-  /** Commits a role downgrade and publishes it, as the `users.setRole` Gateway method does. */
   demoteOwner: () => void;
-  /** Unlinks the requester's channel identity from its operator profile, then publishes it. */
   removeOwner: () => void;
-  /** Lets a launched child reach its agent turn through the real Gateway instance runtime. */
   installAgentTurnFacade: () => void;
   readJobs: () => Promise<import("../../cron/types.js").CronStoredJob[]>;
   /** The scheduler of the current Gateway process; replaced by `restart`. */
   readonly cron: CronService;
-  /**
-   * Restarts the Gateway in-process: the scheduler stops, plugin instances retire, `change` may
-   * edit config or plugin files (and the caller's mocked process identity), then plugins load and
-   * a new scheduler starts on the same state database through its startup recovery.
-   */
+  /** Retires the old runtime, applies changes, then recovers a scheduler on the same database. */
   restart: (
     change?: (cfg: OpenClawConfig, pluginDir: string) => Promise<void> | void,
   ) => Promise<void>;
   /** The live loaded instance identity of the fixture plugin. */
   pluginIncarnation: () => string | undefined;
+  /** For a `bundled` fixture, the build record of the package that ships the plugin. */
+  bundledBuildInfoPath?: string;
   scheduledResults: Array<Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>>;
   resetParent: () => Promise<unknown>;
   reloadPlugin: () => Promise<void>;
   onExecutionStarted?: (info: CronAgentExecutionStarted) => void;
 };
 
-// The fixture is a third-party plugin loaded from disk, not an injected registry record.
-// Only its application handler crosses this bridge; registration, selection, authority,
-// native tool policy, and command lifetime all use their production owners.
+// Only the application handler crosses the bridge; registration and authority use real owners.
+// Bundled fixtures are discovered in a built package's dist/extensions.
 export async function withCommandPlugin(
   run: (fixture: Fixture) => Promise<void>,
   options: {
     commands?: CommandMetadata[];
     manifestCapabilities?: unknown;
     scheduledContract?: boolean;
+    bundled?: boolean;
   } = {},
 ) {
   await withAdminIngress(async ({ cfg, state, admins, context, gateway }) => {
+    // The test state restores both bundled-plugin variables when it ends.
+    const bundledDist = options.bundled ? state.path("openclaw-package", "dist") : undefined;
+    if (bundledDist) {
+      await fs.mkdir(path.join(bundledDist, "extensions"), { recursive: true });
+      setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(bundledDist, "extensions"));
+      deleteTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS");
+    }
     const bridge = Symbol.for(`openclaw.command-native-test.${randomUUID()}`);
     const handler = vi.fn<Handler>((ctx) => ({
       text: JSON.stringify({
@@ -119,7 +118,9 @@ export async function withCommandPlugin(
       }),
     }));
     Reflect.set(globalThis, bridge, handler);
-    const pluginDir = state.path("controller-plugin");
+    const pluginDir = bundledDist
+      ? path.join(bundledDist, "extensions", pluginId)
+      : state.path("controller-plugin");
     await fs.mkdir(pluginDir);
     const pluginFile = path.join(pluginDir, "index.cjs");
     await fs.writeFile(
@@ -141,16 +142,10 @@ export async function withCommandPlugin(
     const commands = options.commands ?? [declaredCommand, { name: "ordinary" }];
     await fs.writeFile(
       pluginFile,
-      `module.exports = { id: ` +
-        JSON.stringify(pluginId) +
-        `, register(api) {
-        for (const command of ` +
-        JSON.stringify(commands) +
-        `) {
+      `module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
+        for (const command of ${JSON.stringify(commands)}) {
           api.registerCommand({ ...command, description: "Synthetic review command", acceptsArgs: true,
-            handler(ctx) { return globalThis[Symbol.for(` +
-        JSON.stringify(Symbol.keyFor(bridge)) +
-        `)](ctx); }
+            handler(ctx) { return globalThis[Symbol.for(${JSON.stringify(Symbol.keyFor(bridge))})](ctx); }
           });
         }
       } };`,
@@ -173,11 +168,29 @@ export async function withCommandPlugin(
     cfg.session = { ...cfg.session, store: storePath };
     cfg.plugins = {
       allow: [pluginId],
-      load: { paths: [pluginFile] },
+      ...(bundledDist ? {} : { load: { paths: [pluginFile] } }),
       entries: { [pluginId]: { enabled: true } },
     };
     const cronStorePath = state.path("cron/jobs.json");
     let registry: PluginRegistry | undefined;
+    const loadPlugin = () => {
+      registry = loadOpenClawPlugins({
+        config: cfg,
+        workspaceDir: state.workspaceDir,
+        cache: false,
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      });
+      setActivePluginRegistry(registry);
+      return registry;
+    };
+    const disposePlugin = () =>
+      expect(
+        disposePluginRegistryInstances(expectDefined(registry, "previous registry")),
+      ).resolves.toMatchObject({ failures: [] });
+    const reloadPlugin = async () => {
+      await disposePlugin();
+      loadPlugin();
+    };
     let agentTurnRuntime: ReturnType<typeof createGatewayInstanceRuntime> | undefined;
     const scheduledResults: Fixture["scheduledResults"] = [];
     const sessionEventPrompts: string[] = [];
@@ -186,7 +199,7 @@ export async function withCommandPlugin(
       () => gateway,
       () => registry,
     );
-    const runAgentJob = createGatewayCronAgentJobRunner({
+    const gatewayCronAgentDeps = createGatewayCronAgentDeps({
       deps: {},
       storePath: cronStorePath,
       resolveCronAgent: () => ({ agentId: "main", cfg }),
@@ -208,9 +221,9 @@ export async function withCommandPlugin(
           sessionEventPrompts.push(text);
           return { status: "error", error: "ordinary session prompt" };
         },
-        resolvePluginCommandScheduleHosts: () => listPluginCommandScheduleHosts(registry),
+        resolvePluginCommandScheduleHosts: gatewayCronAgentDeps.resolvePluginCommandScheduleHosts,
         runIsolatedAgentJob: async (request) => {
-          const result = await runAgentJob({
+          const result = await gatewayCronAgentDeps.runIsolatedAgentJob({
             ...request,
             onExecutionStarted: (info) => {
               if (info) {
@@ -254,30 +267,7 @@ export async function withCommandPlugin(
       },
     );
     await state.writeConfig(cfg);
-    const params = (body = "/review-panel") => {
-      const value = buildCommandTestParams(
-        body,
-        cfg,
-        {
-          ...inbound,
-          Body: body,
-          CommandBody: body,
-          RawBody: body,
-          // The fixture ingress was created with plain text; project this as the
-          // authenticated command turn, as real command dispatch does.
-          CommandAuthorized: true,
-          CommandTurn: undefined,
-        },
-        { workspaceDir: state.workspaceDir },
-      );
-      value.sessionKey = sessionKey;
-      value.storePath = storePath;
-      value.sessionEntry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath }),
-        "persisted command requester",
-      );
-      return value;
-    };
+    const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
     const transcriptContents = async (role: "user" | "assistant") => {
       const events = await loadTranscriptEvents({
         agentId: "main",
@@ -292,115 +282,90 @@ export async function withCommandPlugin(
       });
     };
     try {
-      registry = loadOpenClawPlugins({
-        config: cfg,
-        workspaceDir: state.workspaceDir,
-        cache: false,
-        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-      });
-      setActivePluginRegistry(registry);
+      const loadedRegistry = loadPlugin();
       if (
         options.commands === undefined &&
         options.manifestCapabilities === undefined &&
         options.scheduledContract !== false
       ) {
         expect(
-          registry.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
+          loadedRegistry.diagnostics.filter((diagnostic) => diagnostic.pluginId === pluginId),
           "the valid declaring plugin must load without registration refusals",
         ).toEqual([]);
       }
+      const fixture: Fixture = {
+        cfg,
+        get cron() {
+          return cron;
+        },
+        scheduledResults,
+        bundledBuildInfoPath: bundledDist && path.join(bundledDist, "build-info.json"),
+        restart: async (change) => {
+          cron.stop();
+          await cron.waitForIdle();
+          await disposePlugin();
+          await change?.(cfg, pluginDir);
+          loadPlugin();
+          cron = createCron();
+          bindGateway();
+          await cron.start();
+        },
+        pluginIncarnation: () => {
+          const record = registry?.plugins.find((plugin) => plugin.id === pluginId);
+          return record && getPluginInstanceIncarnation(record);
+        },
+        resetParent: () =>
+          upsertSessionEntryCore(
+            { agentId: "main", sessionKey, storePath },
+            {
+              sessionId: "replacement-parent",
+              lifecycleRevision: "revision-2",
+              updatedAt: Date.now(),
+            },
+          ),
+        registry: loadedRegistry,
+        reloadPlugin,
+        params,
+        handler,
+        userInputs: () => transcriptContents("user"),
+        assistantOutputs: () => transcriptContents("assistant"),
+        restrictParentTools: () =>
+          upsertSessionEntryCore(
+            { agentId: "main", sessionKey, storePath },
+            { toolOverrides: { webSearch: false }, updatedAt: Date.now() },
+          ),
+        readJobs: async () => (await loadCronStore(cronStorePath)).jobs,
+        revokeOwner: () => setUserProfileRole(admins[0]!.profile.id, "member"),
+        removeOwner: () => {
+          unlinkUserChannelIdentity(admins[0]!.profile.id, admins[0]!.identity);
+          invalidateOperatorRolePolicy(admins[0]!.profile.id);
+        },
+        demoteOwner: () => {
+          setUserProfileRole(admins[0]!.profile.id, "member");
+          invalidateOperatorRolePolicy(admins[0]!.profile.id);
+        },
+        installAgentTurnFacade: () => {
+          const methodRegistry = createRequestGatewayMethodRegistry();
+          const runtime = createGatewayInstanceRuntime({
+            getContext: () => gateway,
+            getMethodRegistry: () => methodRegistry,
+            isDispatchAvailable: () => true,
+          });
+          agentTurnRuntime = runtime;
+          gateway.createAgentTurnFacade = runtime.createAgentTurnFacade;
+          gateway.recoveryRuntime = runtime.recovery;
+          gateway.getGatewayMethodRegistry = () => methodRegistry;
+        },
+      };
+      fixtureRef = fixture;
       await withPluginRuntimeGatewayRequestScope(
         {
           context: gateway,
           resolveGatewayContext: () => gateway,
-          pluginRegistry: registry,
+          pluginRegistry: loadedRegistry,
           isWebchatConnect: () => false,
         },
-        () =>
-          run(
-            (fixtureRef = {
-              cfg,
-              get cron() {
-                return cron;
-              },
-              scheduledResults,
-              restart: async (change) => {
-                cron.stop();
-                await cron.waitForIdle();
-                await expect(
-                  disposePluginRegistryInstances(expectDefined(registry, "previous registry")),
-                ).resolves.toMatchObject({ failures: [] });
-                await change?.(cfg, pluginDir);
-                registry = loadOpenClawPlugins({
-                  config: cfg,
-                  workspaceDir: state.workspaceDir,
-                  cache: false,
-                  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-                });
-                setActivePluginRegistry(registry);
-                cron = createCron();
-                bindGateway();
-                await cron.start();
-              },
-              pluginIncarnation: () => {
-                const record = registry?.plugins.find((plugin) => plugin.id === pluginId);
-                return record && getPluginInstanceIncarnation(record);
-              },
-              resetParent: () =>
-                upsertSessionEntryCore(
-                  { agentId: "main", sessionKey, storePath },
-                  {
-                    sessionId: "replacement-parent",
-                    lifecycleRevision: "revision-2",
-                    updatedAt: Date.now(),
-                  },
-                ),
-              registry: expectDefined(registry, "loaded registry"),
-              reloadPlugin: async () => {
-                await expect(
-                  disposePluginRegistryInstances(expectDefined(registry, "previous registry")),
-                ).resolves.toMatchObject({ failures: [] });
-                registry = loadOpenClawPlugins({
-                  config: cfg,
-                  workspaceDir: state.workspaceDir,
-                  cache: false,
-                  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-                });
-                setActivePluginRegistry(registry);
-              },
-              params,
-              handler,
-              userInputs: () => transcriptContents("user"),
-              assistantOutputs: () => transcriptContents("assistant"),
-              restrictParentTools: () =>
-                upsertSessionEntryCore(
-                  { agentId: "main", sessionKey, storePath },
-                  { toolOverrides: { webSearch: false }, updatedAt: Date.now() },
-                ),
-              readJobs: async () => (await loadCronStore(cronStorePath)).jobs,
-              revokeOwner: () => setUserProfileRole(admins[0]!.profile.id, "member"),
-              removeOwner: () => {
-                unlinkUserChannelIdentity(admins[0]!.profile.id, admins[0]!.identity);
-                invalidateOperatorRolePolicy(admins[0]!.profile.id);
-              },
-              demoteOwner: () => {
-                setUserProfileRole(admins[0]!.profile.id, "member");
-                invalidateOperatorRolePolicy(admins[0]!.profile.id);
-              },
-              installAgentTurnFacade: () => {
-                const methodRegistry = createRequestGatewayMethodRegistry();
-                const runtime = createGatewayInstanceRuntime({
-                  getContext: () => gateway,
-                  getMethodRegistry: () => methodRegistry,
-                  isDispatchAvailable: () => true,
-                });
-                agentTurnRuntime = runtime;
-                gateway.createAgentTurnFacade = runtime.createAgentTurnFacade;
-                gateway.recoveryRuntime = runtime.recovery;
-                gateway.getGatewayMethodRegistry = () => methodRegistry;
-              },
-            }),
-          ),
+        () => run(fixture),
       );
       expect(sessionEventPrompts, "no ordinary session prompt").toEqual([]);
     } finally {
@@ -411,9 +376,7 @@ export async function withCommandPlugin(
       resetGlobalHookRunner();
       resetPluginRuntimeStateForTest();
       if (registry) {
-        await expect(disposePluginRegistryInstances(registry)).resolves.toMatchObject({
-          failures: [],
-        });
+        await disposePlugin();
       }
       await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
     }
@@ -421,50 +384,12 @@ export async function withCommandPlugin(
 }
 
 export function commandInvocation(fixture: Fixture, body = "/review-panel") {
-  const params = fixture.params(body);
-  const state = commandDispatchState(params);
-  const recorder = expectDefined(state.params.replyOptions?.userTurnTranscriptRecorder, "recorder");
-  params.opts = {
-    withCommandNativeSubagents: (binding, run) =>
-      runWithCommandNativeSubagents(state, binding, run),
-  };
-  return { params, state, recorder, run: () => handlePluginCommand(params, true) };
-}
-
-function commandDispatchState(
-  params: HandleCommandsParams,
-): Parameters<typeof runWithCommandNativeSubagents>[0] {
-  const entry = expectDefined(params.sessionEntry, "command session");
-  return {
-    cfg: params.cfg,
-    ctx: finalizeInboundContext(params.ctx),
-    sessionAgentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionStoreEntry: { sessionKey: params.sessionKey, entry },
-    params: {
-      replyOptions: {
-        runId: "command-turn",
-        operatorAuthority: getCommandOwnerAuthority(params.ctx)?.operatorAuthority,
-        toolsAllow: ["sessions_spawn", "agents_wait", "automations", "read"],
-        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-          input: { text: params.command.commandBodyNormalized },
-          target: {
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sessionId: entry.sessionId,
-            sessionEntry: entry,
-            storePath: params.storePath,
-            config: params.cfg,
-          },
-        }),
-      },
-    },
-    turnAdoption: undefined,
-    getPreDispatchAbortSignal: () => undefined,
-    getDispatchAbortSignal: () => params.opts?.abortSignal,
-    assertProgressCurrent: () => {},
-    assertCurrentBindingRoute: async () => {},
-  };
+  return createPluginCommandInvocation(fixture.params(body), [
+    "sessions_spawn",
+    "agents_wait",
+    "automations",
+    "read",
+  ]);
 }
 
 export function scheduleRequest(overrides: { requestId?: string; maxRuns?: number } = {}) {

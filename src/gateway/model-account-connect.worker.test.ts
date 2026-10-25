@@ -54,11 +54,11 @@ import {
 } from "./model-account-connect-errors.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import type { RespondFn } from "./server-methods/types.js";
-import { usersAuthConnectHandlers } from "./server-methods/users-auth-connect.js";
 import {
   preparePersonalModelAccountSelection,
   prepareUserModelAccountAction,
 } from "./server-methods/users-model-account-access.js";
+import { usersHandlers as usersAuthConnectHandlers } from "./server-methods/users.js";
 import {
   createContext,
   createOperatorClient,
@@ -804,3 +804,22 @@ it("does not replay a committed account mutation whose worker reply is lost", ()
       emitted.mockRestore();
     }
   }));
+
+it("leaves the writer free while the host decides account admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const owner = ensureProfileForEmail("contention@example.test").id;
+    using contention = probe.writerLock(resolveOpenClawStateSqlitePath());
+    probe.admission(workerAdmission, (request, grant, admit) => {
+      if (isRecord(request.facts) && request.facts.kind === "model-account-links") {
+        contention.observe(request.stage);
+      }
+      admit(request, grant);
+    });
+    const { authProfileId } = await connectAccount(owner);
+    expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+    expect(readUserModelAuthProfile(authProfileId)?.credential).toEqual(credential);
+    expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toContainEqual(
+      expect.objectContaining({ authProfileId }),
+    );
+  });
+});

@@ -46,7 +46,7 @@ const UNDICI_REQUIRE_BOOTSTRAP = [
 ] as const;
 const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici/index.js";';
 const FACADE_ACTIVATION_LOADER =
-  "function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {";
+  /^(function loadFacadeActivationCheckRuntime\(\): FacadeActivationCheckRuntimeModule \{)\n[\s\S]*?^\}/gmu;
 const WS_DIRECT_RUNTIME_FRAGMENTS = [
   'require.resolve("ws/package.json")',
   '"lib/websocket.js"',
@@ -101,10 +101,8 @@ export function isUnstagedWorkerDeployRuntimeArtifact(
 /** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
 export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const require = createRequire(import.meta.url);
-  const resolveWsWrapperUrl = () =>
-    pathToFileURL(
-      fs.realpathSync(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")),
-    ).href;
+  const resolveWsPackageRoot = () =>
+    path.dirname(fs.realpathSync(require.resolve("ws/package.json")));
   const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
   const coreBundlePath = fs.realpathSync(path.join(playwrightRoot, "lib/coreBundle.js"));
   const photonRuntimePath = fs.realpathSync(
@@ -200,7 +198,14 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         ? 'throw new Error("optional host-native dependency unavailable in portable worker runtime");'
         : null;
     },
-    transform(this: { error(message: string): never }, code: string, id: string) {
+    transform(
+      this: {
+        error(message: string): never;
+        meta?: { rollupVersion?: string; watchMode?: boolean; openclawStandaloneSource?: boolean };
+      },
+      code: string,
+      id: string,
+    ) {
       const fsSafeTransform = fsSafeAssets.transform.call(this, code, id);
       if (fsSafeTransform !== null) {
         return transformWorkerDarwinNativeLoader(fsSafeTransform, nativeAssets);
@@ -227,6 +232,21 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         );
       }
       if (resolvedId === browserRuntimeBridgePath) {
+        if (this.meta?.openclawStandaloneSource === true) {
+          const placeholder = `  async createAttachedBrowserToolRuntime() {
+    throw new Error("worker deploy Browser runtime was not composed by the build");
+  }`;
+          if (code.split(placeholder).length !== 2) {
+            this.error("Browser runtime placeholder changed; update the worker deploy transform");
+          }
+          return code.replace(
+            placeholder,
+            `  async createAttachedBrowserToolRuntime(params) {
+    const { createAttachedBrowserToolRuntime } = await import("../../extensions/browser/runtime-api.js");
+    return createAttachedBrowserToolRuntime(params);
+  }`,
+          );
+        }
         return WORKER_BROWSER_RUNTIME_COMPOSITION;
       }
       if (resolvedId === fsSafeWatchIoPath) {
@@ -251,19 +271,21 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         );
       }
       if (resolvedId === facadeRuntimePath) {
-        if (code.split(FACADE_ACTIVATION_LOADER).length !== 2) {
+        if (code.match(FACADE_ACTIVATION_LOADER)?.length !== 1) {
           this.error("facade activation loader changed; update the worker deploy transform");
         }
         // Workers ship no activation sidecar. A literal require keeps activation
         // lazy inside the sealed graph instead of resolving a host module.
+        // Replace the full host body; unreachable guards lose TypeScript narrowing.
         return code.replace(
           FACADE_ACTIVATION_LOADER,
-          `${FACADE_ACTIVATION_LOADER}
+          `$1
   try {
     return require("./facade-activation-check.runtime.js");
   } catch (error) {
     return throwFacadeActivationCheckRuntimeUnavailable(error);
-  }`,
+  }
+}`,
         );
       }
       if (resolvedId === playwrightRuntimePath) {
@@ -309,9 +331,43 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
         if (WS_DIRECT_RUNTIME_FRAGMENTS.some((fragment) => !code.includes(fragment))) {
           this.error("ws bootstrap changed; update the worker deploy transform");
         }
-        const wsWrapperUrl = resolveWsWrapperUrl();
-        return `import * as bundledWebSocket from ${JSON.stringify(wsWrapperUrl)};
+        const wsPackageRoot = resolveWsPackageRoot();
+        if (this.meta?.openclawStandaloneSource !== true) {
+          const wsWrapperUrl = pathToFileURL(
+            fs.realpathSync(path.join(wsPackageRoot, "wrapper.mjs")),
+          ).href;
+          return `import * as bundledWebSocket from ${JSON.stringify(wsWrapperUrl)};
 export const { WebSocket, WebSocketServer, createWebSocketStream } = bundledWebSocket;`;
+        }
+        // The standalone compiler also consumes source types; replace only loader expressions.
+        const replacements: readonly (readonly [string, string])[] = [
+          ['import { createRequire } from "node:module";', ""],
+          ['import path from "node:path";', ""],
+          [
+            'const require = createRequire(import.meta.url);\nconst wsPackageRoot = path.dirname(require.resolve("ws/package.json"));',
+            "",
+          ],
+          [
+            'require(\n  path.join(wsPackageRoot, "lib/websocket.js"),\n)',
+            `require(${JSON.stringify(path.join(wsPackageRoot, "lib/websocket.js"))})`,
+          ],
+          [
+            'require(\n  path.join(wsPackageRoot, "lib/websocket-server.js"),\n)',
+            `require(${JSON.stringify(path.join(wsPackageRoot, "lib/websocket-server.js"))})`,
+          ],
+          [
+            'require(\n  path.join(wsPackageRoot, "lib/stream.js"),\n)',
+            `require(${JSON.stringify(path.join(wsPackageRoot, "lib/stream.js"))})`,
+          ],
+        ];
+        let transformed = code;
+        for (const [before, after] of replacements) {
+          if (transformed.split(before).length !== 2) {
+            this.error("ws bootstrap changed; update the worker deploy transform");
+          }
+          transformed = transformed.replace(before, after);
+        }
+        return transformed;
       }
       if (resolvedId === undiciDispatcherOptionsPath) {
         if (UNDICI_REQUIRE_BOOTSTRAP.some((fragment) => !code.includes(fragment))) {

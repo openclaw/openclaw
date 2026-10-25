@@ -127,9 +127,13 @@ it("merges sidecar consolidation without lending its recall authorization", asyn
     recallToolNames: ["memory_search", "memory_get"],
     deterministicRecallToolName: "memory_search",
     supportsPrivateTranscriptRecall: true,
+    learnToolNames: ["memory_save"],
+    learnGuidanceBuilder: () => ["sidecar learn"],
   });
   const owner = selected();
   expect(owner?.capability.recallToolNames).toEqual(["acme_recall"]);
+  expect(owner?.capability.learnToolNames).toBeUndefined();
+  expect(owner?.capability.learnGuidanceBuilder).toBeUndefined();
   expect(owner?.capability.providerRuntime).toBeUndefined();
   expect(owner?.capability.deterministicRecallToolName).toBeUndefined();
   expect(owner?.capability.supportsPrivateTranscriptRecall).toBeUndefined();

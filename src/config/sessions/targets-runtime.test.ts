@@ -33,7 +33,7 @@ it("discovers committed owners and stores without executing host SQL", async () 
   await withOpenClawTestState({ label: "target-discovery-worker" }, async (state) => {
     const storePath = state.path("shared.sqlite");
     const cfg = config({ main: {}, ops: {} }, storePath);
-    const existing = () => existingTargets(cfg, "ops", state);
+    const existing = () => existingTargets(cfg, "ops");
     await write("main", { env: state.env, storePath });
     expect(await existing()).toEqual([]);
     await write("ops", { env: state.env, storePath });

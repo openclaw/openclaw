@@ -1,6 +1,6 @@
 import { zstdDecompressSync } from "node:zlib";
 import { getAiTransportHost } from "@openclaw/ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
@@ -10,6 +10,7 @@ import {
 } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
+import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -169,20 +170,9 @@ function completedResponse(model: string): Response {
     content: [{ type: "output_text", text: "same authorized account", annotations: [] }],
   };
   const response = { id: "resp_synthetic", model, status: "in_progress", output: [] };
-  const position = { item_id: item.id, output_index: 0, content_index: 0 };
   const events = [
     { type: "response.created", response },
     { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
-    {
-      type: "response.content_part.added",
-      ...position,
-      part: { type: "output_text", text: "", annotations: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      ...position,
-      delta: "same authorized account",
-    },
     { type: "response.output_item.done", output_index: 0, item },
     {
       type: "response.completed",
@@ -208,173 +198,154 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("persisted cron inference identity through the real embedded runner", () => {
-  it.each([
-    {
-      mode: "API key",
-      profileId: platformId,
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      credential: platformKey,
-      scheduledModel: false,
-    },
-    {
-      mode: "OAuth",
-      profileId: subscriptionId,
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      credential: subscriptionToken,
-      scheduledModel: false,
-    },
-    {
-      mode: "scheduled-model OAuth",
-      profileId: subscriptionId,
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      credential: subscriptionToken,
-      scheduledModel: true,
-    },
-  ] as const)(
-    "keeps the selected $mode account across fresh runs and default changes",
-    async ({ profileId, api, baseUrl, credential, scheduledModel }) => {
-      await withAuthState("cron-real-auth-continuity", async (state) => {
-        // Only provider HTTP is substituted; unexpected network requests fail closed.
-        const requests: Array<{
-          url: string;
-          authorization: string | null;
-          account: string | null;
-          model: unknown;
-        }> = [];
-        const providerFetch: typeof fetch = async (input, init) => {
-          const request = new Request(input, init);
-          if (request.url !== `${baseUrl}/responses` || request.method !== "POST") {
-            throw new Error(`Unexpected external I/O in cron credential fixture: ${request.url}`);
-          }
-          const bytes = Buffer.from(await request.arrayBuffer());
-          const json =
-            request.headers.get("content-encoding") === "zstd"
-              ? zstdDecompressSync(bytes).toString("utf8")
-              : bytes.toString("utf8");
-          const body: unknown = JSON.parse(json);
-          if (
-            !body ||
-            typeof body !== "object" ||
-            !("model" in body) ||
-            typeof body.model !== "string"
-          ) {
-            throw new Error("Expected a serialized provider model request");
-          }
-          requests.push({
-            url: request.url,
-            authorization: request.headers.get("authorization"),
-            account: request.headers.get("chatgpt-account-id"),
-            model: body.model,
-          });
-          return completedResponse(body.model);
-        };
-        interceptProvider(providerFetch);
-        const other = profileId === platformId ? otherPlatformId : otherSubscriptionId;
-        function config(model: string, selected?: string): OpenClawConfig {
-          const preferred = selected ?? profileId;
-          return configure(
-            state,
-            {
-              model: scheduledModel
-                ? `openai/gpt-4.1@${other}`
-                : `openai/${model}${selected ? `@${selected}` : ""}`,
-              ...(scheduledModel ? { subagents: { model: `openai/${model}@${preferred}` } } : {}),
-              models: runtimeModels("openai/gpt-4.1", "openai/gpt-4o"),
-            },
-            { openai: provider(baseUrl, api, modelIds) },
-            {
-              profiles: {
-                [platformId]: { provider: "openai", mode: "api_key" },
-                [subscriptionId]: { provider: "openai", mode: "oauth" },
-                [otherPlatformId]: { provider: "openai", mode: "api_key" },
-                [otherSubscriptionId]: { provider: "openai", mode: "oauth" },
-              },
-              order: {
-                openai: [preferred, preferred === platformId ? subscriptionId : platformId],
-              },
-            },
-          );
+it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
+  "keeps the selected %s account across fresh runs and default changes",
+  async (mode) => {
+    const isApiKey = mode === "API key";
+    const scheduledModel = mode === "scheduled-model OAuth";
+    const profileId = isApiKey ? platformId : subscriptionId;
+    const credential = isApiKey ? platformKey : subscriptionToken;
+    const api = isApiKey ? "openai-responses" : "openai-chatgpt-responses";
+    const baseUrl = isApiKey
+      ? "https://api.openai.com/v1"
+      : "https://chatgpt.com/backend-api/codex";
+    await withAuthState("cron-real-auth-continuity", async (state) => {
+      // Only provider HTTP is substituted; unexpected network requests fail closed.
+      const requests: Array<{
+        url: string;
+        authorization: string | null;
+        account: string | null;
+        model: unknown;
+      }> = [];
+      const providerFetch: typeof fetch = async (input, init) => {
+        const request = new Request(input, init);
+        if (request.url !== `${baseUrl}/responses` || request.method !== "POST") {
+          throw new Error(`Unexpected external I/O in cron credential fixture: ${request.url}`);
         }
-        await persistAuthProfileBatch({
-          profiles: [
-            keyProfile(platformId, platformKey),
-            keyProfile(otherPlatformId, "synthetic-other-platform-key"),
-            oauthProfile(otherSubscriptionId, "other-token", "other-refresh", "other-account"),
-            oauthProfile(subscriptionId, subscriptionToken),
-          ],
-        });
-        const originalConfig = config("gpt-4.1");
-        await writeConfig(state, originalConfig);
-        const binding = await captureCronInferenceBinding({
-          cfg: originalConfig,
-          agentId: "main",
-          sessionEntry: {
-            sessionId: "creator",
-            updatedAt: 1,
-            modelProvider: "openai",
-            model: "gpt-4.1",
-            authProfileOverride: scheduledModel ? other : profileId,
-            authProfileOverrideSource: "auto",
-          },
-        });
-        expect(binding).toMatchObject({ profileId, source: scheduledModel ? "user" : "auto" });
-        const job: CronStoredJob = {
-          ...storedJob("real-auth-continuity", "Reply with the account continuity result."),
-          inferenceBinding: binding,
-        };
-        const storePath = state.statePath("cron", "jobs.json");
-        await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-        await setAuthProfileOrder({
-          agentDir: state.agentDir(),
-          provider: "openai",
-          order: [other, profileId],
-        });
-        await updateAuthProfileStoreWithLock({
-          agentDir: state.agentDir(),
-          updater(store) {
-            store.lastGood = { openai: other };
-            return true;
-          },
-        });
-        const sessionIds: string[] = [];
-        try {
-          for (const model of modelIds) {
-            await resetPreparedModelRuntimeSnapshotsForTest();
-            clearRuntimeAuthProfileStoreSnapshots();
-            await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-            const reloaded = (await loadCronJobsStore(storePath)).jobs[0];
-            expect(reloaded?.inferenceBinding).toEqual(binding);
-            if (!reloaded) {
-              throw new Error("Persisted automation missing");
-            }
-            const changed = config(model, other);
-            await writeConfig(state, changed);
-            const result = await runStoredTurn(changed, reloaded);
-            expect(result.status, result.error).toBe("ok");
-            expect(result.summary).toContain("same authorized account");
-            expect(result.sessionId).toBeTruthy();
-            sessionIds.push(result.sessionId!);
-          }
-          expect(new Set(sessionIds).size).toBe(2);
-          expect(requests).toEqual(
-            modelIds.map((model) => ({
-              url: `${baseUrl}/responses`,
-              model,
-              authorization: `Bearer ${credential}`,
-              account: profileId === subscriptionId ? "synthetic-account" : null,
-            })),
-          );
-        } finally {
-          await resetPreparedModelRuntimeSnapshotsForTest();
+        const bytes = Buffer.from(await request.arrayBuffer());
+        const json =
+          request.headers.get("content-encoding") === "zstd"
+            ? zstdDecompressSync(bytes).toString("utf8")
+            : bytes.toString("utf8");
+        const body: unknown = JSON.parse(json);
+        if (
+          !body ||
+          typeof body !== "object" ||
+          !("model" in body) ||
+          typeof body.model !== "string"
+        ) {
+          throw new Error("Expected a serialized provider model request");
         }
+        requests.push({
+          url: request.url,
+          authorization: request.headers.get("authorization"),
+          account: request.headers.get("chatgpt-account-id"),
+          model: body.model,
+        });
+        return completedResponse(body.model);
+      };
+      interceptProvider(providerFetch);
+      const other = profileId === platformId ? otherPlatformId : otherSubscriptionId;
+      function config(model: string, selected?: string): OpenClawConfig {
+        const preferred = selected ?? profileId;
+        return configure(
+          state,
+          {
+            model: scheduledModel
+              ? `openai/gpt-4.1@${other}`
+              : `openai/${model}${selected ? `@${selected}` : ""}`,
+            ...(scheduledModel ? { subagents: { model: `openai/${model}@${preferred}` } } : {}),
+            models: runtimeModels("openai/gpt-4.1", "openai/gpt-4o"),
+          },
+          { openai: provider(baseUrl, api, modelIds) },
+          {
+            profiles: {
+              [platformId]: { provider: "openai", mode: "api_key" },
+              [subscriptionId]: { provider: "openai", mode: "oauth" },
+              [otherPlatformId]: { provider: "openai", mode: "api_key" },
+              [otherSubscriptionId]: { provider: "openai", mode: "oauth" },
+            },
+            order: {
+              openai: [preferred, preferred === platformId ? subscriptionId : platformId],
+            },
+          },
+        );
+      }
+      await persistAuthProfileBatch({
+        profiles: [
+          keyProfile(platformId, platformKey),
+          keyProfile(otherPlatformId, "synthetic-other-platform-key"),
+          oauthProfile(otherSubscriptionId, "other-token", "other-refresh", "other-account"),
+          oauthProfile(subscriptionId, subscriptionToken),
+        ],
       });
-    },
-  );
-});
+      const originalConfig = config("gpt-4.1");
+      await writeConfig(state, originalConfig);
+      const binding = await captureCronInferenceBinding({
+        cfg: originalConfig,
+        agentId: "main",
+        sessionEntry: {
+          sessionId: "creator",
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-4.1",
+          authProfileOverride: scheduledModel ? other : profileId,
+          authProfileOverrideSource: "auto",
+        },
+      });
+      expect(binding).toMatchObject({ profileId, source: scheduledModel ? "user" : "auto" });
+      const job: CronStoredJob = {
+        ...storedJob("real-auth-continuity"),
+        inferenceBinding: binding,
+      };
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
+      await setAuthProfileOrder({
+        agentDir: state.agentDir(),
+        provider: "openai",
+        order: [other, profileId],
+      });
+      await updateAuthProfileStoreWithLock({
+        agentDir: state.agentDir(),
+        updater(store) {
+          store.lastGood = { openai: other };
+          return true;
+        },
+      });
+      const sessionIds: string[] = [];
+      try {
+        for (const model of modelIds) {
+          await resetPreparedModelRuntimeSnapshotsForTest();
+          clearRuntimeAuthProfileStoreSnapshots();
+          await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+          const reloaded = (await loadCronJobsStore(storePath)).jobs[0];
+          expect(reloaded?.inferenceBinding).toEqual(binding);
+          if (!reloaded) {
+            throw new Error("Persisted automation missing");
+          }
+          const changed = config(model, other);
+          await writeConfig(state, changed);
+          const result = await runStoredTurn(changed, reloaded);
+          expect(result.status, result.error).toBe("ok");
+          expect(result.summary).toContain("same authorized account");
+          expect(result.sessionId).toBeTruthy();
+          sessionIds.push(result.sessionId!);
+        }
+        expect(new Set(sessionIds).size).toBe(2);
+        expect(requests).toEqual(
+          modelIds.map((model) => ({
+            url: `${baseUrl}/responses`,
+            model,
+            authorization: `Bearer ${credential}`,
+            account: profileId === subscriptionId ? "synthetic-account" : null,
+          })),
+        );
+      } finally {
+        await resetPreparedModelRuntimeSnapshotsForTest();
+      }
+    });
+  },
+);
 
 it.each([
   ["configured key", undefined],
@@ -452,3 +423,167 @@ it.each([
     }
   });
 });
+
+it.each([
+  { label: "refreshable control", refresh: "synthetic-refresh" },
+  { label: "access-only", refresh: undefined },
+])(
+  "adopts then executes $label OAuth through Gateway, SQLite and HTTP 180757",
+  async ({ refresh }) => {
+    await withAuthState("cron-adoption-http-180757", async (state) => {
+      const requests: Array<{ authorization: string | undefined; url: string | undefined }> = [];
+      const http = await import("node:http");
+      const responseBody = await completedResponse("gpt-4.1").text();
+      const server = http.createServer((req, res) => {
+        req.resume();
+        requests.push({ authorization: req.headers.authorization, url: req.url });
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(responseBody);
+      });
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Expected loopback TCP server");
+      }
+      const cfg = configure(
+        state,
+        { model: "openai/gpt-4.1", models: runtimeModels("openai/gpt-4.1") },
+        {
+          openai: {
+            ...provider(`http://127.0.0.1:${address.port}/v1`, "openai-responses"),
+            apiKey: "synthetic-bootstrap-key",
+          },
+        },
+        { profiles: { [subscriptionId]: { provider: "openai", mode: "oauth" } } },
+      );
+      await writeConfig(state, cfg);
+      const { CronService } = await import("./service.js");
+      const { createNoopLogger } = await import("./service.test-harness.js");
+      const { createTestGatewayScheduler } =
+        await import("../test-utils/gateway-scheduler-clock.js");
+      const { createDirectChatContext } =
+        await import("../gateway/server-chat.agent-events.test-helpers.js");
+      const { cronHandlers } = await import("../gateway/server-methods/cron.js");
+      const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
+      const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db.js");
+      const storePath = state.statePath("cron", "jobs.json");
+      const finished: Array<{ status?: string; error?: string }> = [];
+      const summaries: Array<string | undefined> = [];
+      const makeCron = () =>
+        new CronService({
+          scheduler: createTestGatewayScheduler(),
+          storePath,
+          cronEnabled: false,
+          defaultAgentId: "main",
+          log: createNoopLogger(),
+          enqueueSystemEvent() {},
+          onEvent(event) {
+            if (event.action === "finished") {
+              finished.push(event);
+            }
+          },
+          runIsolatedAgentJob: async (params) => {
+            const result = await runCronIsolatedAgentTurn({
+              ...params,
+              cfg,
+              deps: {},
+              sessionKey: `cron:${params.job.id}`,
+            });
+            summaries.push(result.summary);
+            return result;
+          },
+        });
+      let cron = makeCron();
+      async function invoke(method: "cron.add" | "cron.update", params: Record<string, unknown>) {
+        const respond = vi.fn();
+        await cronHandlers[method]!({
+          req: { type: "req", id: "adoption-http-preflight", method, params },
+          params,
+          respond,
+          context: createDirectChatContext({
+            cron,
+            cronStorePath: storePath,
+            getRuntimeConfig: () => cfg,
+          }),
+          client: null,
+          isWebchatConnect: () => false,
+        });
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
+      }
+      try {
+        await invoke("cron.add", {
+          name: "access-only-adoption",
+          enabled: false,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message: "Reply with the account continuity result.",
+            lightContext: true,
+            toolsAllow: [],
+          },
+          delivery: { mode: "none" },
+        });
+        const [before] = (await loadCronJobsStore(storePath)).jobs;
+        expect(before?.inferenceBinding).toBeUndefined();
+        expect(before).toBeDefined();
+        cfg.models!.providers!.openai!.api = "openai-chatgpt-responses";
+        delete cfg.models!.providers!.openai!.apiKey;
+        await writeConfig(state, cfg);
+        await persistAuthProfileBatch({
+          profiles: [
+            {
+              profileId: subscriptionId,
+              credential: {
+                type: "oauth",
+                provider: "openai",
+                access: subscriptionToken,
+                ...(refresh === undefined ? {} : { refresh }),
+                expires: Date.now() + 3_600_000,
+                accountId: "synthetic-account",
+                // Persisted access-only input intentionally lacks the writer type's refresh field.
+              } as OAuthCredential,
+            },
+          ],
+        });
+        await invoke("cron.update", {
+          id: before!.id,
+          patch: {
+            payload: {
+              kind: "agentTurn",
+              model: `openai/gpt-4.1@${subscriptionId}`,
+            },
+          },
+        });
+        cron.stop();
+        await cron.waitForIdle();
+        clearRuntimeAuthProfileStoreSnapshots();
+        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawStateDatabaseAsync();
+        cron = makeCron();
+        const [reloaded] = (await loadCronJobsStore(storePath)).jobs;
+        expect(reloaded?.inferenceBinding).toMatchObject({
+          profileId: subscriptionId,
+          source: "user",
+        });
+        await expect(cron.run(before!.id, "force")).resolves.toEqual({ ok: true, ran: true });
+        expect(finished).toHaveLength(1);
+        expect(finished[0]?.status, finished[0]?.error).toBe("ok");
+        expect(summaries).toEqual([expect.stringContaining("same authorized account")]);
+        expect(requests).toEqual([
+          { authorization: `Bearer ${subscriptionToken}`, url: "/v1/codex/responses" },
+        ]);
+      } finally {
+        cron.stop();
+        await cron.waitForIdle();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    });
+  },
+);

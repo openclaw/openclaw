@@ -9,10 +9,6 @@ import {
   type LobsterRunnerParams,
 } from "./lobster-runner.js";
 
-type RuntimeLoader = NonNullable<
-  NonNullable<Parameters<typeof createEmbeddedLobsterRunner>[0]>["loadRuntime"]
->;
-type Runtime = Awaited<ReturnType<RuntimeLoader>>;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const success = {
   ok: true,
@@ -40,8 +36,8 @@ it("resolves relative Lobster paths inside the repo root", () => {
 });
 
 describe("createEmbeddedLobsterRunner", () => {
-  const runRequest = vi.fn<Runtime["runToolRequest"]>();
-  const resumeRequest = vi.fn<Runtime["resumeToolRequest"]>();
+  const runRequest = vi.fn<(params: { ctx?: { signal?: AbortSignal } }) => Promise<unknown>>();
+  const resumeRequest = vi.fn<() => Promise<unknown>>();
   const loadRuntime = vi
     .fn()
     .mockResolvedValue({ runToolRequest: runRequest, resumeToolRequest: resumeRequest });
@@ -59,7 +55,8 @@ describe("createEmbeddedLobsterRunner", () => {
     runRequest.mockReset();
     resumeRequest.mockReset();
     loadRuntime.mockClear();
-    runner = createEmbeddedLobsterRunner({ loadRuntime });
+    vi.doMock("@clawdbot/lobster/core", loadRuntime);
+    runner = createEmbeddedLobsterRunner();
   });
 
   it("bounds the model-visible result for an embedded workflow request", async () => {

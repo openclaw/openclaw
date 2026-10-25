@@ -94,6 +94,7 @@ it.each([
               ? `
               ${owner.pathname.endsWith(".ts") ? `await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
               const {withDelegatedUpdateCommandExecutor}=await import(${JSON.stringify(owner.href)});
+              if (input.fullIntegrityCheck !== true) throw new Error("Doctor lost full integrity request");
               await withDelegatedUpdateCommandExecutor(input.executor,input.runId,input.root,async fence=>{
                 fence.assertCurrent();
                 fs.appendFileSync(${JSON.stringify(marker)},"native-doctor\\n");
@@ -117,8 +118,15 @@ it.each([
         vi.spyOn(fs, "lstat").mockImplementation(async (pathname) => {
           const result = await lstat(pathname);
           if (
-            pathname ===
-            path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath)
+            pathname instanceof URL &&
+            pathname.href ===
+              pathToFileURL(
+                path.join(
+                  root,
+                  "dist",
+                  runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+                ),
+              ).href
           ) {
             current = false;
           }
@@ -139,6 +147,7 @@ it.each([
       const opts: UpdateCommandOptions = {
         yes: true,
         json: true,
+        fullIntegrityCheck: target === "modern",
         run: {
           runId: record.runId,
           env: state.env,

@@ -64,6 +64,42 @@
     "target": "radius"
   },
   {
+    "source": "Requesty",
+    "target": "Requesty"
+  },
+  {
+    "source": "Requesty (unified router)",
+    "target": "Requesty（统一路由）"
+  },
+  {
+    "source": "Requesty plugin reference",
+    "target": "Requesty 插件参考"
+  },
+  {
+    "source": "requesty",
+    "target": "requesty"
+  },
+  {
+    "source": "Abliteration",
+    "target": "Abliteration"
+  },
+  {
+    "source": "Abliteration plugin reference",
+    "target": "Abliteration 插件参考"
+  },
+  {
+    "source": "abliteration",
+    "target": "abliteration"
+  },
+  {
+    "source": "All providers",
+    "target": "所有提供商"
+  },
+  {
+    "source": "Thinking modes",
+    "target": "思考模式"
+  },
+  {
     "source": "Omarchy",
     "target": "Omarchy"
   },
@@ -766,6 +802,10 @@
   {
     "source": "Neon AI Gateway",
     "target": "Neon AI Gateway"
+  },
+  {
+    "source": "Liquid Inference",
+    "target": "Liquid Inference"
   },
   {
     "source": "Mistral",
@@ -5110,5 +5150,17 @@
   {
     "source": "PostgreSQL operator guide",
     "target": "PostgreSQL 运维指南"
+  },
+  {
+    "source": "Plugin runtime compatibility",
+    "target": "插件运行时兼容性"
+  },
+  {
+    "source": "Runtime compatibility",
+    "target": "运行时兼容性"
+  },
+  {
+    "source": "Runtime compatibility lint",
+    "target": "运行时兼容性静态检查"
   }
 ]

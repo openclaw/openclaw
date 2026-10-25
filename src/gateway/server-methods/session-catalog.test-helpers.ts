@@ -10,6 +10,7 @@ import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import type { GatewayClient } from "./types.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<
@@ -112,7 +113,8 @@ export function startCall(
   method: keyof typeof sessionCatalogHandlers,
   params: unknown,
   config: Record<string, unknown> = {},
-  client?: { connect?: { scopes?: string[] }; connId?: string; connectionSignal?: AbortSignal },
+  client?: Pick<GatewayClient, "connect"> &
+    Partial<Pick<GatewayClient, "connId" | "connectionSignal">>,
   contextOverrides: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();

@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
+  clearWorkingProgress,
   resetWorkingProgress,
   resolveTurnRecap,
   resolveWorkingProgress,
@@ -11,9 +12,12 @@ const SESSION = "agent:main:main";
 
 describe("resolveWorkingProgress", () => {
   beforeEach(() => resetWorkingProgress());
-  afterEach(() => resetWorkingProgress());
+  afterEach(() => {
+    resetWorkingProgress();
+    vi.useRealTimers();
+  });
 
-  it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
+  it.each(["failed", "held", "waiting-idle"] as const)(
     "does not let an older %s send identify an unknown active turn",
     (sendState) => {
       expect(
@@ -54,7 +58,7 @@ describe("resolveWorkingProgress", () => {
     });
   });
 
-  it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
+  it.each(["failed", "held", "waiting-idle"] as const)(
     "retains matching durable timing from a %s send after the run is identified",
     (sendState) => {
       const queue = ["old-run", "active-run"].map((sendRunId, index) => ({
@@ -141,6 +145,26 @@ describe("resolveWorkingProgress", () => {
         [],
       ),
     ).toMatchObject({ runId: "active-run", startedAt: 1_000 });
+  });
+
+  it("infers a new run only from activity received after the pane was idle", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(30_000);
+    clearWorkingProgress(SESSION);
+    vi.setSystemTime(61_000);
+    expect(
+      resolveWorkingProgress(
+        SESSION,
+        null,
+        null,
+        [],
+        [{ ts: 800 }, { runId: "first-run", ts: 900 }],
+        [
+          { runId: "first-run", __openclawToolStreamReceivedAt: 1_100 },
+          { runId: "second-run", __openclawToolStreamReceivedAt: 60_300 },
+        ],
+      ),
+    ).toMatchObject({ runId: "second-run", startedAt: 60_300 });
   });
 });
 

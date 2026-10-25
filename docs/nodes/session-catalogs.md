@@ -13,10 +13,11 @@ Cold catalog listing waits up to one second per provider, concurrently. Provider
 finish within that budget return normally. When a page is already available for
 the same caller and query, listing returns it promptly while discovery refreshes
 in the background; an already-settled refresh returns its fresh page instead.
-A slow provider returns
-`catalog.error.code: "catalog_pending"`; when available, its latest available page
-for the same caller and query is included with hosts marked `pending: true` and
-a stale-results message. A failed catalog enumeration can likewise return that page with
+A slow provider returns `catalog.pending: true` without treating healthy discovery
+as an error; when available, its latest available page for the same caller and query
+is included with hosts marked `pending: true`. A pending refresh retains the last
+catalog failure until a successful enumeration clears it, including an empty result.
+A failed catalog enumeration can return that page with
 `catalog.error.code: "catalog_stale"` and the underlying error in its message.
 Completed host results are authoritative, including offline or unavailable hosts;
 the Gateway does not replace those results with older rows, even while another
@@ -87,8 +88,11 @@ updates the same OpenClaw session. Only previously unseen transcript items are
 appended; an unchanged source adds zero items. This is an explicit sync: later
 native messages are preserved when you import again.
 
-Import preserves the catalog's projected transcript text, not the original native
-files or raw provider records. Each import retains up to 50,000 transcript items
+Import preserves the catalog's projected transcript text and available tool display
+facts, not the original native files or raw provider records. Display facts let
+the Control UI use the same conversion before import and after reopening the copy;
+stored reference text keeps its untrusted-content framing. Existing copies made
+without these facts keep their original presentation. Each import retains up to 50,000 transcript items
 or 64 MiB of projected history, whichever comes first, starting with the most
 recent history. Provider truncation and the existing per-item text limit still
 apply. Pagination also stops on a repeated continuation cursor or after 50,000
@@ -135,7 +139,21 @@ header to flatten or restore the project groups. The same grouping applies to
 the Claude sessions catalog.
 By default, selecting a row opens the normal Chat pane and reads its persisted transcript
 through bounded, cursor-paginated
-`thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
+native item or `thread/turns/list` calls with full item projection. Available
+invocations and outputs appear in ordinary tool cards. Missing outcomes stay
+unknown instead of implying success or completion. Assistant messages stay
+visible in source order. Browsing and newly
+imported copies share this display conversion; importing adds a provenance notice
+and the normal OpenClaw session controls. Tool output previews remain text-only and limited to 500 characters; expanding
+activity does not fetch full native output. Structured inputs and recorded result
+details use the ordinary renderer's command and diff presentation. Recorded
+activity summaries reuse the harness presentation, and assistant message phases
+survive import. Very large commands retain their full input but skip optional
+semantic summary analysis above 10,000 characters. Inputs omitted to satisfy transport or import bounds are labeled.
+Recorded Canvas, MCP app, and embed directives remain inert.
+Older nodes retain their own projected text; upgrading only the Gateway cannot
+restore text their reader omitted or mislabeled.
+Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
 
 The terminal relay is separate from paired-node Chat continuation. A connected
 node that advertises and permits both catalog commands plus

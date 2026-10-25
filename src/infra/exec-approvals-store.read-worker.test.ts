@@ -377,9 +377,7 @@ it.each(["commit", "rollback", "unknown commit"] as const)(
         : undefined;
     const write = () =>
       runOpenClawStateWriteTransaction(() => {
-        updateExecApprovalsForMaintenance({
-          update: (file) => ({ ...file, defaults: { ask: "always" } }),
-        });
+        updateExecApprovalsForMaintenance((file) => ({ ...file, defaults: { ask: "always" } }));
         expect(use.assertCurrent).toThrow("policy changed");
         if (outcome === "rollback") {
           throw new Error("synthetic rollback");
@@ -477,18 +475,14 @@ it("keeps cron policy uses current through real worker grant and usage writes wi
 it("publishes native restoration and scopes policy retirement to the original physical source", async () => {
   const { root, env } = fixture(true);
   const original = readExecApprovalsSnapshot();
-  updateExecApprovalsForMaintenance({
-    update: (file) => ({ ...file, defaults: { ask: "always" } }),
-  });
+  updateExecApprovalsForMaintenance((file) => ({ ...file, defaults: { ask: "always" } }));
   const denied = readExecApprovalsSnapshot();
   await restoreExecApprovalsSnapshotLocked(original, denied.hash);
   const use = await prepareCronPolicy(env);
   const foreign = fixture();
   seed(foreign.env);
   vi.stubEnv("OPENCLAW_STATE_DIR", foreign.root);
-  updateExecApprovalsForMaintenance({
-    update: (file) => ({ ...file, defaults: { security: "deny" } }),
-  });
+  updateExecApprovalsForMaintenance((file) => ({ ...file, defaults: { security: "deny" } }));
   expect(use.assertCurrent).not.toThrow();
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   await restoreExecApprovalsSnapshotLocked(denied, original.hash);
@@ -516,9 +510,7 @@ it.each(["fulfilled", "throwing launch", "unknown"] as const)(
     const use = await prepareCronPolicy(env);
     const acknowledgement = createDeferred();
     const deny = () =>
-      updateExecApprovalsForMaintenance({
-        update: (file) => ({ ...file, defaults: { security: "deny" } }),
-      });
+      updateExecApprovalsForMaintenance((file) => ({ ...file, defaults: { security: "deny" } }));
     const launch = vi.fn(() => {
       if (outcome === "throwing launch") {
         throw new Error("synthetic native launch failure");
@@ -536,9 +528,10 @@ it.each(["fulfilled", "throwing launch", "unknown"] as const)(
       use.release();
       expect(deny).toThrow("native launch acknowledgement is pending");
       expect(
-        updateExecApprovalsForMaintenance({
-          update: (file) => ({ ...file, socket: { path: "/synthetic-metadata" } }),
-        }),
+        updateExecApprovalsForMaintenance((file) => ({
+          ...file,
+          socket: { path: "/synthetic-metadata" },
+        })),
       ).not.toBeNull();
       expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).not.toBe("deny");
       if (outcome === "unknown") {

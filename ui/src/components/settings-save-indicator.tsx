@@ -13,6 +13,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import type { ConfigAutoSaveStatus } from "../lib/config/config-state-model.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -20,6 +21,8 @@ import { createTimeout } from "../lib/reactive/timers.ts";
 import { ConfigError } from "./config-error.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
+
+registerSettingsEnglish();
 
 const SAVED_VISIBLE_MS = 2_000;
 

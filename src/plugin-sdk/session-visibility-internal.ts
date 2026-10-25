@@ -177,6 +177,8 @@ export type SessionVisibilityDecisionRow = {
   ownerSessionKey?: string;
   spawnedBy?: string;
   parentSessionKey?: string;
+  /** Canonical Gateway relationship projection; raw display lineage is not a fallback when present. */
+  childOwnerSessionKeys?: readonly string[];
 };
 export type SessionVisibilityDenialReason =
   | "agent_to_agent_disabled"
@@ -246,6 +248,9 @@ function rowOwnedByRequester(
   row: SessionVisibilityDecisionRow,
   requesterSessionKey: string,
 ): boolean {
+  if (row.childOwnerSessionKeys !== undefined) {
+    return row.childOwnerSessionKeys.includes(requesterSessionKey);
+  }
   return (
     row.ownerSessionKey === requesterSessionKey ||
     row.spawnedBy === requesterSessionKey ||

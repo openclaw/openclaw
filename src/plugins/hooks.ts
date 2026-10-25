@@ -14,7 +14,6 @@ import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js
 import { finalizeGroupThreadToolReply } from "../auto-reply/group-thread-context.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { projectModelContextMessages } from "../shared/model-context-message.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import {
   projectAgentEndEvent,
@@ -28,7 +27,12 @@ import {
   type InputGateDecision,
   isHookDecision,
 } from "./hook-decision-types.js";
-import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
+import { HOOK_REPLACED, HookDispatchSelection } from "./hook-dispatch-replacement.js";
+import {
+  cloneHookIsolationValue,
+  clonePromptHookEvent,
+  HookIsolationError,
+} from "./hook-isolation.js";
 import { createPluginSystemContextLimiter, mergeAgentTurnPrepare } from "./hook-prompt-context.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
@@ -534,25 +538,38 @@ export function createHookRunner(
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
 
+    const selection = new HookDispatchSelection(hooks, () =>
+      getHooksForName(registry, hookName, undefined, matcherToolName),
+    );
     const promises = hooks.map(async (hook) => {
-      const projected = projectContext?.(hook, ctx);
-      try {
-        const invoke = () =>
-          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(
-            event,
-            projected?.context ?? ctx,
-          );
-        const handlerPromise = Promise.resolve(
-          hookName === "gateway_stop" ? runPluginCleanup(hook.handler, invoke) : invoke(),
-        );
-        const promise = projected ? handlerPromise.finally(projected.dispose) : handlerPromise;
-        await awaitHook(hook, promise, voidHookTimeoutMsByHook[hookName], {
-          unref: optionsValue.unrefTimeout ?? true,
-        });
-      } catch (err) {
-        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
-      } finally {
-        projected?.dispose();
+      // A handler a reload refused runs once more as its replacement, with context
+      // projected for that registration rather than the retired one.
+      for (let registration = selection.current(hook); registration;) {
+        const current = registration;
+        registration = undefined;
+        const projected = projectContext?.(current, ctx);
+        try {
+          const invoke = () =>
+            (current.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(
+              event,
+              projected?.context ?? ctx,
+            );
+          const handlerPromise =
+            hookName === "gateway_stop"
+              ? Promise.resolve(runPluginCleanup(current.handler, invoke))
+              : selection.invoke(current, invoke);
+          const promise = projected ? handlerPromise.finally(projected.dispose) : handlerPromise;
+          const outcome = await awaitHook(current, promise, voidHookTimeoutMsByHook[hookName], {
+            unref: optionsValue.unrefTimeout ?? true,
+          });
+          if (outcome === HOOK_REPLACED) {
+            registration = selection.current(hook);
+          }
+        } catch (err) {
+          handleHookError({ hookName, pluginId: current.pluginId, error: err });
+        } finally {
+          projected?.dispose();
+        }
       }
     });
 
@@ -605,80 +622,94 @@ export function createHookRunner(
       (hookName === "before_prompt_build" || hookName === "agent_turn_prepare") &&
       "messages" in event &&
       Array.isArray(event.messages)
-        ? cloneHookIsolationValue(hookName, {
-            ...event,
-            messages: projectModelContextMessages(event.messages),
-          })
+        ? clonePromptHookEvent(hookName, { ...event, messages: event.messages })
         : event;
 
     logger?.debug?.(`[hooks] running ${hookName} (${selectedHooks.length} handlers, sequential)`);
 
     let result: HookResult<K> | undefined;
 
+    const selection = new HookDispatchSelection(selectedHooks, () => {
+      const current = getHooksForName(registry, hookName, undefined, matcherToolName);
+      return policy.includeRegistration ? current.filter(policy.includeRegistration) : current;
+    });
     for (const hook of selectedHooks) {
-      policy.assertHandlerBoundaryActive?.();
-      readClaimingHookAdmission(ctx)?.assertCurrent?.();
       let shouldStop = false;
-      try {
-        const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<HookResult<K>>;
-        const handlerEvent = policy.eventForHandler
-          ? policy.eventForHandler(dispatchEvent, result)
-          : policy.isolateEventPerHandler
-            ? cloneHookIsolationValue(hookName, dispatchEvent)
-            : dispatchEvent;
-        const invocation = hookName === "before_prompt_build" ? { active: true } : undefined;
-        const handlerContext = invocation
-          ? {
-              ...ctx,
-              hookInvocation: Object.freeze({
-                assertActive() {
-                  if (!invocation.active) {
-                    throw new Error("prompt hook invocation is no longer active");
-                  }
-                },
-              }),
-            }
-          : ctx;
-        let handlerResult: HookResult<K> | undefined;
+      // A handler a reload refused runs once more as its replacement, after the
+      // same boundary and admission checks as any other handler.
+      for (let registration = selection.current(hook); registration;) {
+        const current = registration;
+        registration = undefined;
+        policy.assertHandlerBoundaryActive?.();
+        readClaimingHookAdmission(ctx)?.assertCurrent?.();
         try {
-          const promise = Promise.resolve(handler(handlerEvent, handlerContext));
-          handlerResult = await awaitHook(hook, promise, modifyingHookTimeoutMsByHook[hookName]);
-        } finally {
-          // Expiry closes this handler even while its work or a later handler continues.
-          if (invocation) {
-            invocation.active = false;
-          }
-        }
-
-        policy.onHandlerResult?.({ hook, result: handlerResult });
-
-        const shouldMergeResult =
-          handlerResult !== undefined && (handlerResult !== null || policy.mergeNullResults);
-        if (shouldMergeResult) {
-          if (policy.mergeResults) {
-            result = policy.mergeResults(result, handlerResult, hook, dispatchEvent);
-          } else {
-            result = handlerResult;
-          }
-          if (result && policy.shouldStop?.(result)) {
-            const terminalLabel = policy.terminalLabel ? ` ${policy.terminalLabel}` : "";
-            const priority = hook.priority ?? 0;
-            logger?.debug?.(
-              `[hooks] ${hookName}${terminalLabel} decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
+          const handlerEvent = policy.eventForHandler
+            ? policy.eventForHandler(dispatchEvent, result)
+            : policy.isolateEventPerHandler
+              ? cloneHookIsolationValue(hookName, dispatchEvent)
+              : dispatchEvent;
+          const invocation = hookName === "before_prompt_build" ? { active: true } : undefined;
+          const handlerContext = invocation
+            ? {
+                ...ctx,
+                hookInvocation: Object.freeze({
+                  assertActive() {
+                    if (!invocation.active) {
+                      throw new Error("prompt hook invocation is no longer active");
+                    }
+                  },
+                }),
+              }
+            : ctx;
+          let outcome: HookResult<K> | typeof HOOK_REPLACED | undefined;
+          try {
+            const promise = selection.invoke(current, () =>
+              (current.handler as (event: unknown, ctx: unknown) => Promise<HookResult<K>>)(
+                handlerEvent,
+                handlerContext,
+              ),
             );
-            shouldStop = true;
+            outcome = await awaitHook(current, promise, modifyingHookTimeoutMsByHook[hookName]);
+          } finally {
+            // Expiry closes this handler even while its work or a later handler continues.
+            if (invocation) {
+              invocation.active = false;
+            }
           }
+          if (outcome === HOOK_REPLACED) {
+            registration = selection.current(hook);
+            continue;
+          }
+          const handlerResult = outcome;
+
+          policy.onHandlerResult?.({ hook: current, result: handlerResult });
+
+          if (handlerResult !== undefined && (handlerResult !== null || policy.mergeNullResults)) {
+            if (policy.mergeResults) {
+              result = policy.mergeResults(result, handlerResult, current, dispatchEvent);
+            } else {
+              result = handlerResult;
+            }
+            if (result && policy.shouldStop?.(result)) {
+              const terminalLabel = policy.terminalLabel ? ` ${policy.terminalLabel}` : "";
+              const priority = current.priority ?? 0;
+              logger?.debug?.(
+                `[hooks] ${hookName}${terminalLabel} decided by ${current.pluginId} (priority=${priority}); skipping remaining handlers`,
+              );
+              shouldStop = true;
+            }
+          }
+        } catch (err) {
+          const failOpen = !(err instanceof HookIsolationError) && shouldCatchHookErrors(hookName);
+          policy.onHandlerError?.(current, failOpen);
+          if (err instanceof HookIsolationError) {
+            throw err;
+          }
+          handleHookError({ hookName, pluginId: current.pluginId, error: err });
         }
-      } catch (err) {
-        const failOpen = !(err instanceof HookIsolationError) && shouldCatchHookErrors(hookName);
-        policy.onHandlerError?.(hook, failOpen);
-        if (err instanceof HookIsolationError) {
-          throw err;
-        }
-        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+        policy.assertHandlerBoundaryActive?.();
+        readClaimingHookAdmission(ctx)?.assertCurrent?.();
       }
-      policy.assertHandlerBoundaryActive?.();
-      readClaimingHookAdmission(ctx)?.assertCurrent?.();
       if (shouldStop) {
         break;
       }
@@ -722,29 +753,48 @@ export function createHookRunner(
     | { status: "error"; error: string }
   > {
     const admission = readClaimingHookAdmission(ctx);
+    const selection = new HookDispatchSelection(hooks, () =>
+      getHooksForName(registry, hookName, ctx),
+    );
     let firstError: string | undefined;
     for (const hook of hooks) {
-      // Host admission failures end dispatch; plugin fail-open policy cannot swallow them.
-      if (admission?.prepare) {
-        await admission.prepare();
-      }
-      admission?.assertCurrent?.();
-      let handlerResult: TResult | void = undefined;
-      try {
-        const invokeHandler = async (): Promise<TResult | void> => {
-          const promise = Promise.resolve(
-            (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
-          );
-          return await awaitHook(hook, promise);
-        };
-        handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
-      } catch (err) {
-        firstError ??= sanitizeHookError(err);
-        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
-      }
-      admission?.assertCurrent?.();
-      if (handlerResult?.handled) {
-        return { status: "handled", result: handlerResult };
+      // A handler a reload refused runs once more as its replacement, only after
+      // host admission (including binding ownership) is prepared and checked again.
+      for (let registration = selection.current(hook); registration;) {
+        const current = registration;
+        registration = undefined;
+        // Host admission failures end dispatch; plugin fail-open policy cannot swallow them.
+        if (admission?.prepare) {
+          await admission.prepare();
+        }
+        admission?.assertCurrent?.();
+        let handlerResult: TResult | void = undefined;
+        let replaced = false;
+        try {
+          const invokeHandler = async (): Promise<TResult | void> => {
+            const promise = selection.invoke(current, () =>
+              (current.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(
+                event,
+                ctx,
+              ),
+            );
+            const outcome = await awaitHook(current, promise);
+            replaced = outcome === HOOK_REPLACED;
+            return outcome === HOOK_REPLACED ? undefined : outcome;
+          };
+          handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
+        } catch (err) {
+          firstError ??= sanitizeHookError(err);
+          handleHookError({ hookName, pluginId: current.pluginId, error: err });
+        }
+        if (replaced) {
+          registration = selection.current(hook);
+          continue;
+        }
+        admission?.assertCurrent?.();
+        if (handlerResult?.handled) {
+          return { status: "handled", result: handlerResult };
+        }
       }
     }
     return firstError ? { status: "error", error: firstError } : { status: "declined" };

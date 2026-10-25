@@ -6,7 +6,8 @@ import type { GatewayProtocolRequestOptions } from "../../../../packages/gateway
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import { gatewayRequest } from "./session-fixtures.test-support.ts";
+import { useFakeClock as fakeTimers } from "../../test-helpers/fake-clock.ts";
+import { sessionRequest as gatewayRequest } from "./hydration-family.test-support.ts";
 import {
   deleteSessionPlacementDraft,
   startSessionPlacementInitialTurn,
@@ -15,6 +16,7 @@ import {
 const targetKey = { key: "agent:cloud:test", agentId: "cloud" };
 const params = {
   ...targetKey,
+  sessionId: "physical-startup-session",
   target: { kind: "profile", profileId: "aws" } as const,
   message: "run remotely",
   mode: "dispatch" as const,
@@ -64,19 +66,12 @@ function placement(state: string, environmentId = "environment-1") {
   return { placement: { state, environmentId } };
 }
 
-function fakeTimers() {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
-}
-
 function expectReclaim(request: ReturnType<typeof vi.fn>, call: number) {
   expect(request).toHaveBeenNthCalledWith(call, "sessions.reclaim", targetKey);
 }
 
 function expectNotSent(request: ReturnType<typeof vi.fn>) {
-  expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
+  expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
 }
 
 function pendingSend(
@@ -95,7 +90,7 @@ function pendingSend(
   onTestFinished(() => pending.flush(new Error("test disposed")));
   const request = vi.fn(
     (method: string, input?: unknown, options?: GatewayProtocolRequestOptions) => {
-      if (method !== "sessions.send") {
+      if (method !== "chat.send") {
         return Promise.resolve(method === "sessions.dispatch" ? placement("active") : {});
       }
       return pending.request(
@@ -146,7 +141,7 @@ describe("session placement startup", () => {
               message: "Agent is preparing",
               retryable: true,
               retryAfterMs: 500,
-              details: { reason: "startup-sidecars", method: "sessions.send" },
+              details: { reason: "startup-sidecars", method: "chat.send" },
             },
           });
         }
@@ -290,7 +285,7 @@ describe("session placement startup", () => {
     expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
     expect(request).toHaveBeenNthCalledWith(
       4,
-      "sessions.send",
+      "chat.send",
       expect.objectContaining({ message: params.message, attachments }),
       expect.objectContaining({ timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS }),
     );
@@ -320,7 +315,7 @@ describe("session placement startup", () => {
     await vi.runAllTimersAsync();
     await expect(outcome).resolves.toMatchObject({ status: "started" });
     expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());
-    expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });
 
   it.each([
@@ -443,24 +438,35 @@ describe("session placement startup", () => {
     });
   });
 
-  it("reclaims the worker after a definitive first-turn rejection", async () => {
-    const request = replies(
-      placement("active"),
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "message rejected",
-        retryable: false,
-      }),
-      { ok: true },
-    );
+  it.each([false, true])(
+    "reclaims only the same worker after a first-turn rejection (replaced=%s)",
+    async (replaced) => {
+      const request = replies(
+        placement("active"),
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "message rejected",
+          retryable: false,
+          ...(replaced ? { details: { reason: "active-leaf-changed" } } : {}),
+        }),
+        { ok: true },
+      );
 
-    await expect(start(request)).resolves.toEqual({
-      status: "send-definitive-rejected",
-      error: "message rejected",
-      messageId: expect.any(String),
-    });
-    expectReclaim(request, 3);
-  });
+      await expect(start(request)).resolves.toEqual({
+        status: "send-definitive-rejected",
+        error: "message rejected",
+        messageId: expect.any(String),
+      });
+      if (replaced) {
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "sessions.dispatch",
+          "chat.send",
+        ]);
+      } else {
+        expectReclaim(request, 3);
+      }
+    },
+  );
 
   it("reclaims the worker without sending when recovery cannot enter the sending phase", async () => {
     const request = replies(placement("active"), { ok: true });
@@ -479,7 +485,7 @@ describe("session placement startup", () => {
   it("preserves send-not-started classification when cleanup fails", async () => {
     const request = gatewayRequest({
       "sessions.dispatch": () => placement("active"),
-      "sessions.send": () => {
+      "chat.send": () => {
         throw new Error("gateway not connected");
       },
       "sessions.reclaim": () => {
@@ -493,7 +499,7 @@ describe("session placement startup", () => {
     });
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "sessions.dispatch",
-      "sessions.send",
+      "chat.send",
       "sessions.reclaim",
     ]);
   });
@@ -575,9 +581,9 @@ describe("session placement startup", () => {
     expect(outcome).toMatchObject({ status: "send-rejected", error: "transport closed" });
     expect(request).toHaveBeenNthCalledWith(
       2,
-      "sessions.send",
+      "chat.send",
       expect.objectContaining({
-        key: params.key,
+        sessionKey: params.key,
         message: params.message,
         idempotencyKey: (outcome as { messageId: string }).messageId,
       }),

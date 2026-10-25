@@ -11,17 +11,6 @@ import { inheritOptionFromParent, listExplicitOptionFlagsExcept } from "../comma
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatDocsHelp } from "../help-format.js";
 
-function resolveInstallDaemonFlag(command: Command): boolean | undefined {
-  // Explicit --skip-daemon wins over either install-daemon flag.
-  if (command.getOptionValueSource("skipDaemon") === "cli") {
-    return false;
-  }
-  if (command.getOptionValueSource("installDaemon") === "cli") {
-    return Boolean(command.getOptionValue("installDaemon"));
-  }
-  return undefined;
-}
-
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "modern",
   "workspace",
@@ -232,7 +221,13 @@ export async function runOnboardCommand(
     tailscale: opts.tailscale as OnboardOptions["tailscale"],
     reset: Boolean(opts.reset),
     resetScope: opts.resetScope as OnboardOptions["resetScope"],
-    installDaemon: resolveInstallDaemonFlag(command),
+    // Explicit --skip-daemon wins over either install-daemon flag.
+    installDaemon:
+      command.getOptionValueSource("skipDaemon") === "cli"
+        ? false
+        : command.getOptionValueSource("installDaemon") === "cli"
+          ? Boolean(command.getOptionValue("installDaemon"))
+          : undefined,
     daemonRuntime: opts.daemonRuntime as OnboardOptions["daemonRuntime"],
     skipChannels: Boolean(opts.skipChannels),
     skipSkills: Boolean(opts.skipSkills),

@@ -612,17 +612,7 @@ describe("WorkboardView", () => {
         createWorkboardCard({
           title: "Watch stale run",
           status: "running",
-          execution: {
-            id: "exec-1",
-            kind: "agent-session",
-            engine: "codex",
-            mode: "autonomous",
-            status: "running",
-            model: "openai/gpt-5.5",
-            sessionKey: "agent:main:dashboard:1",
-            startedAt: 1,
-            updatedAt: 1,
-          },
+          execution: createWorkboardExecution(),
         }),
       ];
       const { container, renderView } = createWorkboardView(

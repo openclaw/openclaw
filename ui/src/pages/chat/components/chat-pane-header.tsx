@@ -8,7 +8,7 @@ import {
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { canRetryGatewayStatus } from "../../../components/gateway-status.ts";
-import { StandalonePersonLink } from "../../../components/person-activity-link-solid.tsx";
+import { PersonAvatarLink } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { renderSessionOwnerChip } from "../../../components/solid/session-presentation.tsx";
@@ -28,7 +28,7 @@ import {
   ChatPaneLayoutMenu,
 } from "./chat-header-panel-actions.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import { AgentCrumb, IdentityCrumbs } from "./chat-pane-header-identity.tsx";
+import { AgentCrumb, IdentityCrumbs, ProjectCrumb } from "./chat-pane-header-identity.tsx";
 import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileComposition } from "./chat-pane-mobile-composition.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
@@ -151,6 +151,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
           machineName={machineName()}
         />
       )}
+      project={!props.catalog && props.workspaceLabel ? <ProjectCrumb {...props} /> : undefined}
     />
   );
 }
@@ -265,7 +266,11 @@ function ChatPaneHeaderChrome(
                   />
                 </Show>
               </Show>
-              <Show when={props.gatewayStatus?.kind}>
+              <Show
+                when={
+                  props.gatewayStatus?.kind ?? (props.savedConversation ? "reconnecting" : null)
+                }
+              >
                 {(kind) => (
                   <openclaw-tooltip
                     prop:content={
@@ -318,7 +323,9 @@ function ChatPaneHeaderChrome(
                             />
                           </Show>
                         </span>
-                        {t(`connection.${kind()}`)}
+                        {props.savedConversation
+                          ? t("chat.savedConversation", { status: t(`connection.${kind()}`) })
+                          : t(`connection.${kind()}`)}
                       </span>
                       <Show when={canRetryGatewayStatus(kind()) && props.gatewayStatus?.onRetry}>
                         <span class="chat-pane__connection-divider" aria-hidden="true" />
@@ -359,7 +366,8 @@ function ChatPaneHeaderChrome(
             {(indicator) => <ChatSessionPublicIndicator {...indicator()} />}
           </Show>
           {props.mergedChrome || props.detailsControl || hasSharingControl() ? undefined : (
-            <StandalonePersonLink
+            <PersonAvatarLink
+              standalone
               link={
                 props.showOwnerChip
                   ? personActivityLink(
@@ -378,7 +386,7 @@ function ChatPaneHeaderChrome(
                 props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
                 props.ownerViewing,
               )}
-            </StandalonePersonLink>
+            </PersonAvatarLink>
           )}
           {!props.mergedChrome &&
           !props.detailsControl &&
@@ -516,6 +524,19 @@ function ChatPaneHeaderChrome(
               </openclaw-tooltip>
             </Show>
           </div>
+          {/* Inactive panes hide session actions, but must keep their close control. */}
+          <Show when={!props.mergedChrome && props.onClosePane}>
+            <button
+              type="button"
+              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close"
+              aria-label={t("chat.splitView.closePane")}
+              title={t("chat.splitView.closePane")}
+              disabled={props.actionsDisabled}
+              onClick={() => props.onClosePane?.(props.paneId)}
+            >
+              <Icon name="x" />
+            </button>
+          </Show>
         </div>
         <Show when={props.narrow && (props.mergedChrome || !props.detailsControl)}>
           <RunningSubagents count={props.runningSubagentCount} />

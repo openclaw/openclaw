@@ -249,6 +249,19 @@ export async function prepareGatewayLifecycle(params: {
     },
   });
   // Kernel methods are the only writers for readiness and advertised-method state.
+  let readyAnnounced = false;
+  const announceReady = () => {
+    if (
+      !readyAnnounced &&
+      !unavailableGatewayMethods.has("chat.send") &&
+      startupState.sidecarsReady &&
+      runtime.getReadiness().ready
+    ) {
+      readyAnnounced = true;
+      runtime.startupTrace.mark("ready");
+      log.info("gateway ready");
+    }
+  };
   const kernel = {
     pluginRuntimeGeneration,
     pluginMetadata: params.pluginMetadata,
@@ -259,22 +272,18 @@ export async function prepareGatewayLifecycle(params: {
       startupState.sidecarsReady = true;
     },
     unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => {
-      const chatWasUnavailable = unavailableGatewayMethods.has("chat.send");
       for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
         if (method !== "chat.send" || !options?.keepChatSendUnavailable) {
           unavailableGatewayMethods.delete(method);
         }
       }
-      if (
-        chatWasUnavailable &&
-        !unavailableGatewayMethods.has("chat.send") &&
-        startupState.sidecarsReady &&
-        runtime.getReadiness().ready
-      ) {
-        runtime.startupTrace.mark("ready");
-        log.info("gateway ready");
+      if (!options?.keepChatSendUnavailable) {
+        runtime.inputRecovery.releaseInitial();
       }
+      announceReady();
     },
+    trackInputRecovery: (progress: Parameters<typeof runtime.inputRecovery.track>[0]) =>
+      runtime.inputRecovery.track(progress, announceReady),
     publishMethodSurface: (methods: readonly string[]) => {
       runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
     },
@@ -492,7 +501,7 @@ export async function prepareGatewayLifecycle(params: {
         getEventLoopHealth: readinessEventLoopHealth.snapshot,
         getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
         getSessionRowProjection: runtime.getSessionRowProjection,
-        getCronStorePath: () => runtimeState.cronState.storePath,
+        getCronState: () => runtimeState.cronState,
       }),
     );
   };

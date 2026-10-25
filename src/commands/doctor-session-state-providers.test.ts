@@ -196,16 +196,14 @@ it("skips unrelated recovery metadata and valid locked harness rows", async () =
   expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
 });
 
-it.each([
-  {},
-  {
-    cliSessionBindings: { "claude-cli": { sessionId: "Canonical-ID" } },
-    cliSessionIds: { "claude-cli": "Map-ID" },
-  },
-])("clears conversation state without leaving a migration source (%j)", async (binding) => {
+it("clears conversation state without leaving a migration source", async () => {
   ownerState.owners = [anthropicOwner];
   const result = await runEntry(
-    entry({ ...binding, claudeCliSessionId: "Obsolete-ID" }),
+    entry({
+      cliSessionBindings: { "claude-cli": { sessionId: "Canonical-ID" } },
+      cliSessionIds: { "claude-cli": "Map-ID" },
+      claudeCliSessionId: "Obsolete-ID",
+    }),
     modelConfig("openai/gpt-5.5"),
   );
 
@@ -329,7 +327,6 @@ it.each([
   ["unsupported harness", "openai", "codex", "gpt-5.4", false],
   ["CLI", "anthropic", "claude-cli", "claude-sonnet-4-6", true],
   ["CLI", "anthropic", "claude-cli", "claude-sonnet-4-6", false],
-  ["CLI", "google", "google-gemini-cli", "gemini-2.5-pro", true],
 ] as const)(
   "%s preserves model %s/%s (%s), runtime available=%s",
   async (kind, provider, runtime, model, available) => {

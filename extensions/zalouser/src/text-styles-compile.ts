@@ -2,7 +2,6 @@ import {
   normalizeCodeBlockLeadingWhitespace,
   projectOffset,
   UNICODE_SEPARATOR_PATTERN,
-  type MarkdownBlockSpan,
   type MarkdownIRWithMetadata,
   type TextEdit,
 } from "./text-styles-shared.js";
@@ -95,7 +94,31 @@ export function collectBlockEdits(
       (candidate) =>
         candidate.kind === "code_block" && candidate.sourceStartLine === block.sourceStartLine,
     );
-    const normalized = normalizeCodeBlock(ir.text.slice(block.start, block.end), block, context);
+    const text = ir.text.slice(block.start, block.end);
+    const { codeOrigin: origin, sourceStartLine, blockquoteDepth = 0 } = block;
+    const trimTerminalNewline =
+      !source.endsWith("\n") && block.sourceEndLine === sourceLines.length;
+    const indent = origin === "indented" ? "\u00A0".repeat(4) : "";
+    const codeText = text
+      .split("\n")
+      .map((line, index) => {
+        if (line) {
+          return indent + normalizeCodeBlockLeadingWhitespace(line);
+        }
+        if (origin !== "indented" || sourceStartLine === undefined) {
+          return line;
+        }
+        const lineIndex = sourceStartLine + index;
+        const rawLine = sourceLines[lineIndex] ?? "";
+        const prefixLength = sourceContainerProjection(context, lineIndex, blockquoteDepth).offset;
+        const sourceContent = rawLine.slice(prefixLength);
+        return /^[ \t]+$/u.test(sourceContent)
+          ? normalizeCodeBlockLeadingWhitespace(sourceContent)
+          : line;
+      })
+      .join("\n");
+    const normalized =
+      trimTerminalNewline && codeText.endsWith("\n") ? codeText.slice(0, -1) : codeText;
     const sourceHasNbsp = sourceLines
       .slice(
         (block.sourceStartLine ?? 0) + (block.codeOrigin === "fenced" ? 1 : 0),
@@ -113,13 +136,29 @@ export function collectBlockEdits(
           item.contentStart <= block.start &&
           item.end >= block.end,
       );
+    let blockText = normalized;
+    if (block.codeOrigin === "fenced" && block.codeClosed === false && sourceBlock) {
+      const openingSourceLine = sourceBlock.sourceStartLine ?? 0;
+      const openingLine = sourceLines[openingSourceLine] ?? "";
+      const projection = sourceContainerProjection(
+        context,
+        openingSourceLine,
+        sourceBlock.blockquoteDepth ?? 0,
+      );
+      const opening =
+        sourceBlock.depth > 1
+          ? `${" ".repeat(projection.residual)}${openingLine.slice(projection.offset)}`
+          : openingLine;
+      if ((sourceBlock.sourceEndLine ?? 0) - (sourceBlock.sourceStartLine ?? 0) <= 1) {
+        blockText = `${opening}${normalized.endsWith("\n") ? "\n" : ""}`;
+      } else {
+        blockText = normalized ? `${opening}\n${normalized}` : opening;
+      }
+    }
     edits.push({
       start,
       end,
-      text:
-        block.codeOrigin === "fenced" && block.codeClosed === false && sourceBlock
-          ? renderUnclosedCodeBlock(sourceBlock, context, normalized)
-          : normalized,
+      text: blockText,
       ...(!listOwnsBlock &&
       ((block.codeOrigin === "fenced" && block.codeClosed === false) ||
         block.codeOrigin === "indented") &&
@@ -260,29 +299,6 @@ export function collectBlockEdits(
     );
 }
 
-function renderUnclosedCodeBlock(
-  block: MarkdownBlockSpan,
-  context: MarkdownSource,
-  payload: string,
-): string {
-  const { lines: sourceLines } = context;
-  const sourceStartLine = block.sourceStartLine ?? 0;
-  const openingLine = sourceLines[sourceStartLine] ?? "";
-  const projection = sourceContainerProjection(
-    context,
-    sourceStartLine,
-    block.blockquoteDepth ?? 0,
-  );
-  const opening =
-    block.depth > 1
-      ? `${" ".repeat(projection.residual)}${openingLine.slice(projection.offset)}`
-      : openingLine;
-  if ((block.sourceEndLine ?? 0) - (block.sourceStartLine ?? 0) <= 1) {
-    return `${opening}${payload.endsWith("\n") ? "\n" : ""}`;
-  }
-  return payload ? `${opening}\n${payload}` : opening;
-}
-
 function collectSourceSpacingEdits(
   ir: MarkdownIRWithMetadata,
   offsets: number[],
@@ -392,34 +408,4 @@ function sourceContainerContent(line: string): string {
     break;
   }
   return line.slice(cursor);
-}
-
-function normalizeCodeBlock(
-  text: string,
-  block: MarkdownBlockSpan,
-  context: MarkdownSource,
-): string {
-  const { source, lines: sourceLines } = context;
-  const { codeOrigin: origin, sourceStartLine, blockquoteDepth = 0 } = block;
-  const trimTerminalNewline = !source.endsWith("\n") && block.sourceEndLine === sourceLines.length;
-  const indent = origin === "indented" ? "\u00A0".repeat(4) : "";
-  const normalized = text
-    .split("\n")
-    .map((line, index) => {
-      if (line) {
-        return indent + normalizeCodeBlockLeadingWhitespace(line);
-      }
-      if (origin !== "indented" || sourceStartLine === undefined) {
-        return line;
-      }
-      const lineIndex = sourceStartLine + index;
-      const rawLine = sourceLines[lineIndex] ?? "";
-      const prefixLength = sourceContainerProjection(context, lineIndex, blockquoteDepth).offset;
-      const sourceContent = rawLine.slice(prefixLength);
-      return /^[ \t]+$/u.test(sourceContent)
-        ? normalizeCodeBlockLeadingWhitespace(sourceContent)
-        : line;
-    })
-    .join("\n");
-  return trimTerminalNewline && normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized;
 }

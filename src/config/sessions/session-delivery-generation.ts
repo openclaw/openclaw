@@ -16,6 +16,7 @@ import { isSessionMutationActive } from "../../sessions/session-controller.lifec
 import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isSessionStoreTopologyChange,
+  sessionChangeScopeAffectsStoredRows,
   sessionChanges,
   type SessionRowChange,
 } from "../../sessions/session-row-changes.js";
@@ -174,18 +175,10 @@ async function prepareSessionGenerationLease(
           return;
         }
       } else if (
-        [
-          "profiles",
-          "catalog",
-          "acp",
-          "agent-runs",
-          "subagent-runs",
-          "worker-placements",
-          "worker-environments",
-          "config",
-          "config-presentation",
-          "config-profiles",
-        ].includes(change.scope)
+        // Runtime and automation still invalidate this retained authority.
+        !sessionChangeScopeAffectsStoredRows(change) &&
+        change.scope !== "runtime" &&
+        change.scope !== "automation"
       ) {
         return;
       }

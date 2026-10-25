@@ -1,10 +1,13 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, onCleanup, refresh, untrack, useContext } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { ChatImageActions } from "./chat-image-actions.tsx";
+import { imageTitle } from "./chat-image-presentation.ts";
 import {
   MIN_CHAT_IMAGE_PREVIEW_WIDTH,
   resolveChatImagePreviewSize,
@@ -28,7 +31,7 @@ import {
   readCachedManagedImageUrl,
   resolveManagedImageResource,
 } from "./chat-message-image-loading.ts";
-import { imageTitle, openMessageImage, readImageOriginalBlob } from "./chat-message-image-open.ts";
+import { openMessageImage, readImageOriginalBlob } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
   isCanonicalInboundMediaSource,
@@ -37,11 +40,13 @@ import {
 import {
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,
-  type ImageBlock,
-  type ImageRenderOptions,
-  type MessageMediaAction,
 } from "./chat-message-media.ts";
+import type { ImageBlock, ImageRenderOptions, MessageMediaAction } from "./chat-message-media.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 const CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS = 30_000;
 
@@ -51,9 +56,8 @@ type RetainedInlineImage = {
   timeout?: ReturnType<typeof setTimeout>;
 };
 
-function isInlineImageSource(source: string | undefined): source is string {
-  return source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
-}
+const isInlineImageSource = (source: string | undefined): source is string =>
+  source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
 
 type ImagePresentation = {
   image: ImageBlock;
@@ -172,13 +176,12 @@ function createMessageImagePresentation(props: MessageImageProps) {
     }
     currentImage = image;
     currentOptions = options;
-    if (!active) {
+    if (!active || (options?.mediaReadAllowed === false && !isInlineImageSource(image.url))) {
       releaseRetainedImage();
       releaseChatMediaResourceOwner(refreshImage);
       return renderImagePlaceholder(image);
     }
-    // A warm preview needs no network admission. Native images retain their
-    // decoded node only within the existing metadata cache and ticket lifetime.
+    // Reuse decoded images only within the metadata cache and ticket lifetime.
     if (!admitted) {
       if (managed) {
         admitted = Boolean(
@@ -424,22 +427,23 @@ function createMessageImagePresentation(props: MessageImageProps) {
       state: reason === undefined ? "loading" : "unavailable",
       reason,
       actions: {
-        onRetry: managed
-          ? () => {
-              resolveManagedImageResource(
-                image.url,
-                currentOptions?.mediaOwner !== undefined ||
-                  currentOptions?.onMediaChange !== undefined
-                  ? { ...currentOptions, onMediaChange: refreshImage }
-                  : currentOptions,
-                image.artifactId,
-                managedImageInlineVariant(image),
-                true,
-                previewWidth,
-              );
-              refreshImage();
-            }
-          : undefined,
+        onRetry:
+          managed && currentOptions?.mediaReadAllowed !== false
+            ? () => {
+                resolveManagedImageResource(
+                  image.url,
+                  currentOptions?.mediaOwner !== undefined ||
+                    currentOptions?.onMediaChange !== undefined
+                    ? { ...currentOptions, onMediaChange: refreshImage }
+                    : currentOptions,
+                  image.artifactId,
+                  managedImageInlineVariant(image),
+                  true,
+                  previewWidth,
+                );
+                refreshImage();
+              }
+            : undefined,
         ...actions,
       },
     };
@@ -621,11 +625,10 @@ function MessageImage(props: MessageImageProps): JSX.Element {
 }
 
 function MessageImageContent(props: MessageImageProps): JSX.Element {
-  const presentation = createMessageImagePresentation(props);
-  const model = presentation.model;
+  const view = createMessageImagePresentation(props);
   return (
-    <Show when={model().key} keyed>
-      {(_key) => <ImageFrame model={model()} presentation={presentation} options={props.options} />}
+    <Show when={view.model().key} keyed>
+      {(_key) => <ImageFrame model={view.model()} presentation={view} options={props.options} />}
     </Show>
   );
 }

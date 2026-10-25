@@ -11,6 +11,7 @@ import {
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createMobileRootContentFixture as rootContent } from "../chat-mobile-host.test-support.ts";
 import { SessionAutomationMobileList } from "./chat-automation-mobile.tsx";
 import { ChatDetailsMobileContent } from "./chat-details-mobile-content.tsx";
 import {
@@ -199,6 +200,55 @@ it("updates a held automation's runtime state without rereading its inventory", 
   });
   await current.ready("Every 10 minutes");
   expect(current.element.textContent).not.toContain("Running");
+  expect(current.request).toHaveBeenCalledTimes(1);
+  current.unmount();
+});
+
+it("keeps the last meaningful result while a quiet check advances freshness", async () => {
+  const checkedAt = Date.now() - 120_000;
+  const result = {
+    outcome: "blocked" as const,
+    summary: "Waiting for Windows CI",
+    atMs: checkedAt,
+  };
+  const current = component(
+    sequence(
+      page([
+        job({
+          lastMeaningfulResult: result,
+          lastRunAtMs: checkedAt,
+          lastDurationMs: 500,
+        }),
+      ]),
+    ),
+  );
+  await current.ready("Waiting for Windows CI");
+  const before = current.find("time")?.getAttribute("datetime");
+  current.cron("finished", {
+    jobId: "summary-job",
+    durationMs: 1_000,
+    job: {
+      id: "summary-job",
+      name: "Check the task",
+      agentId: "ops",
+      enabled: true,
+      updatedAtMs: checkedAt + 60_000,
+      state: {
+        lastRunAtMs: checkedAt + 60_000,
+        lastDurationMs: 1_000,
+        lastRunStatus: "ok",
+        lastMeaningfulResult: result,
+      },
+    },
+  });
+  await current.ready("Checked");
+  await waitForSolid(() => {
+    expect(current.find("time")?.getAttribute("datetime")).toBe(
+      new Date(checkedAt + 61_000).toISOString(),
+    );
+  });
+  expect(current.find("time")?.getAttribute("datetime")).not.toBe(before);
+  expect(current.element.textContent).toContain("Waiting for Windows CI");
   expect(current.request).toHaveBeenCalledTimes(1);
   current.unmount();
 });
@@ -562,8 +612,24 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   expect(current.element.textContent).not.toContain("Retired automation");
 });
 
-it("shares the session inventory with consumers without starting another catalog", async () => {
-  const current = source(createGatewayRequestMock(async () => page([job()])));
+it("shares the mobile session inventory with consumers without starting another catalog", async () => {
+  const checkedAt = Date.now() - 30_000;
+  const current = source(
+    createGatewayRequestMock(async () =>
+      page([
+        job({
+          lastMeaningfulResult: {
+            outcome: "blocked",
+            summary: "Waiting for Windows CI",
+            atMs: checkedAt,
+          },
+          lastRunStatus: "error",
+          lastRunAtMs: checkedAt - 60_000,
+          lastTriggerEvalAtMs: checkedAt,
+        }),
+      ]),
+    ),
+  );
   const view = mountSolid(() => {
     let host!: HTMLElement;
     const props = { gateway: current.gateway, sessionKey: "agent:ops:task", presented: true };
@@ -572,7 +638,7 @@ it("shares the session inventory with consumers without starting another catalog
       <section ref={(element) => (host = element)}>
         {inventory.lifecycle}
         <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>
-        <ChatSummaryAutomations {...props} inventory={inventory} />
+        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
       </section>
     );
   });
@@ -581,6 +647,11 @@ it("shares the session inventory with consumers without starting another catalog
     expect(view.container.querySelector('[aria-busy="false"]')).not.toBeNull();
   });
   expect(view.container.querySelector("output")?.textContent).toBe("1");
+  expect(view.container.textContent).toContain("Waiting for Windows CI");
+  expect(view.container.textContent).toContain("Check failed");
+  expect(view.container.querySelector("time")?.getAttribute("datetime")).toBe(
+    new Date(checkedAt).toISOString(),
+  );
   expect(current.request).toHaveBeenCalledTimes(1);
   current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
   await waitForSolid(() => {
@@ -591,7 +662,8 @@ it("shares the session inventory with consumers without starting another catalog
   view.unmount();
 });
 
-it("shares pending reads, retained rows, and failed refresh recovery with mobile", async () => {
+it("shares pending reads, retained results, and failed refresh recovery between the mobile list and overview", async () => {
+  const checkedAt = Date.now() - 30_000;
   const first = createDeferred<Page>();
   const refresh = createDeferred<Page>();
   const recovery = createDeferred<Page>();
@@ -603,7 +675,6 @@ it("shares pending reads, retained rows, and failed refresh recovery with mobile
     return (
       <section ref={(element) => (host = element)}>
         {inventory.lifecycle}
-        <ChatSummaryAutomations {...props} inventory={inventory} />
         <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
         <ChatDetailsMobileContent
           details={{
@@ -616,29 +687,7 @@ it("shares pending reads, retained rows, and failed refresh recovery with mobile
           page={{
             kind: "root",
             content: {
-              entries: {
-                labels: {
-                  people: "People",
-                  taskProgress: "Task progress",
-                  subagents: "Subagents",
-                  processes: "Processes",
-                  environment: "Environment",
-                  context: "Context",
-                  pullRequests: "Pull requests",
-                  automations: "Automations",
-                  generatedFiles: "Generated files",
-                  session: "Session",
-                },
-                people: { label: "People" },
-                versions: { label: "Versions", metadata: 1 },
-                onNavigate: vi.fn(),
-              },
-              processes: undefined,
-              subagents: {
-                workingLabel: "Working",
-                onOpenSubagent: vi.fn(),
-                onOpenSubagents: vi.fn(),
-              },
+              ...rootContent(),
               automations: { inventory, summary: { label: "Automations" } },
             },
           }}
@@ -653,37 +702,55 @@ it("shares pending reads, retained rows, and failed refresh recovery with mobile
       view.container.querySelector('.chat-details-mobile-root [data-details-group="automations"]'),
     ).toBeNull();
   });
-  first.resolve(page([job()]));
+  first.resolve(
+    page([
+      job({
+        lastMeaningfulResult: {
+          outcome: "blocked",
+          summary: "Waiting for mobile review",
+          atMs: checkedAt - 60_000,
+        },
+        lastRunStatus: "error",
+        lastRunAtMs: checkedAt,
+      }),
+    ]),
+  );
   const rows = () => view.container.querySelectorAll<HTMLAnchorElement>("a");
-  await waitForSolid(() => expect(rows()).toHaveLength(2));
+  await waitForSolid(() => expect(rows()).toHaveLength(1));
+  const overview = view.container.querySelector(
+    '.chat-details-mobile-root [data-details-destination="automation"]',
+  );
+  expect(overview?.textContent).toContain("Waiting for mobile review");
+  expect(overview?.textContent).toContain("Check failed");
+  expect(overview?.querySelector("time")?.getAttribute("datetime")).toBe(
+    new Date(checkedAt).toISOString(),
+  );
   const retainedRows = [...rows()];
-  retainedRows[1]!.focus();
+  retainedRows[0]!.focus();
   current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
   await waitForSolid(() =>
-    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(2),
+    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(1),
   );
   expect(current.request).toHaveBeenCalledTimes(2);
   retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
   refresh.reject(new Error("private inventory failure"));
   await waitForSolid(() => {
-    expect(view.container.querySelector(".chat-summary__automation-error")).toBeNull();
     expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
       "Couldn't update automations.",
     );
     expect(view.container.querySelector('[aria-busy="true"]')).toBeNull();
   });
   retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
-  expect(document.activeElement).toBe(retainedRows[1]);
+  expect(document.activeElement).toBe(retainedRows[0]);
   expect(view.container.textContent).not.toContain("private inventory failure");
   view.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
   await waitForSolid(() =>
-    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(2),
+    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(1),
   );
   expect(current.request).toHaveBeenCalledTimes(3);
   recovery.resolve(page([job({ name: "Recovered automation" })]));
   await waitForSolid(() => {
     expect(rows()[0]?.textContent).toContain("Recovered automation");
-    expect(rows()[1]?.textContent).toContain("Recovered automation");
     expect(view.container.querySelector('[role="alert"]')).toBeNull();
   });
   retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
@@ -802,9 +869,11 @@ it("describes cron weekdays and non-uniform minute steps without inventing a fix
   await current.ready("Weekday review");
   const weekday = current.element.querySelector<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
   const minutes = current.element.querySelector<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
-  expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
-  expect(minutes.textContent).toContain(
-    "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
-  );
+  await waitForSolid(() => {
+    expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
+    expect(minutes.textContent).toContain(
+      "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
+    );
+  });
   expect(minutes.textContent).not.toContain("Every 7 minutes");
 });

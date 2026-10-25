@@ -4,9 +4,9 @@ import {
   buildSessionCostSummaryFromRollup,
   createSessionUsageRollupData,
 } from "../../../../src/infra/session-cost-usage-rollup.js";
-import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
 import { buildProviderSeries } from "./provider-series.ts";
+import { usageTotals } from "./view.test-support.ts";
 
 it.each([
   {
@@ -58,13 +58,7 @@ it.each([
           model: models[index],
           toolNames: [],
           toolResultCounts: { total: 0, errors: 0 },
-          usageTotals: {
-            ...createEmptyCostUsageTotals(),
-            input: 100,
-            totalTokens: 100,
-            totalCost: 1,
-            inputCost: 1,
-          },
+          usageTotals: usageTotals(100, 1),
         });
       }
       accumulator.add({

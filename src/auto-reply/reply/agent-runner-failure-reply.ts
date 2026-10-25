@@ -5,7 +5,6 @@ import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
-  formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
@@ -57,6 +56,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
 } from "../../infra/errors.js";
+import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
@@ -198,18 +198,15 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
   });
 }
 
-function resolveExternalRunFailureDetail(message: string): string | undefined {
+function formatForwardedExternalRunFailureText(message: string): string {
   const sanitized = message
     .trim()
     .replace(/^⚠️\s*/u, "")
     .replace(/\s+/gu, " ");
-  return sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-    ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
-    : sanitized || undefined;
-}
-
-function formatForwardedExternalRunFailureText(message: string): string {
-  const detail = resolveExternalRunFailureDetail(message);
+  const detail =
+    sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
+      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+      : sanitized || undefined;
   return detail
     ? `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`
     : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
@@ -300,7 +297,7 @@ export function buildExternalRunFailureReply(
     const loginCommand = buildOAuthRefreshFailureLoginCommand(oauthRefreshFailure.provider, {
       profileId: options?.includeAuthProfileId ? oauthRefreshFailure.profileId : undefined,
     });
-    const loginCommandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(loginCommand);
+    const loginCommandMarkdown = formatInlineCodeSpan(loginCommand);
     const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
     const retryLoginHint = providerLoginRecovery
       ? "send `/login` from a private chat or Control UI session to choose a provider, or re-auth"

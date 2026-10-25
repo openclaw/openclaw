@@ -170,14 +170,14 @@ describe("check-workflows", () => {
 
   it.each<[string, number, string[]]>([
     ["bootstrap", 0, []],
-    ["old-python", 1, ["python3 is 3.9.6", "pre-commit 4.6.2 requires Python >=3.10"]],
+    ["old-python", 1, ["python3 is 3.9.6", "pre-commit 4.7.0 requires Python >=3.10"]],
     [
       "missing-venv",
       1,
       [
         "python venv unavailable",
         "missing pre-commit runtime for actionlint",
-        "Python venv support for pre-commit 4.6.2",
+        "Python venv support for pre-commit 4.7.0",
       ],
     ],
     ["hook-failure", 13, ["hook failed"]],
@@ -222,7 +222,7 @@ describe("check-workflows", () => {
       const pythonArgs = readFileSync(markerPath, "utf8");
       expectContains(
         pythonArgs,
-        "-m pip install --disable-pip-version-check pre-commit==4.6.2",
+        "-m pip install --disable-pip-version-check pre-commit==4.7.0",
         "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
         "-m pre_commit run --config .pre-commit-config.yaml zizmor --files",
       );

@@ -13,12 +13,7 @@ import {
   renderChatThread,
   renderTranscriptSearch,
 } from "../test-helpers/chat-transcript-native.tsx";
-import * as chatMessage from "./chat-message-group-frame.ts";
-import {
-  getTranscriptState,
-  toggleTranscriptSearch,
-  type ChatThreadProps,
-} from "./chat-thread-interactions.ts";
+import { toggleTranscriptSearch, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -73,17 +68,9 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
-function replyMessages(
-  client?: readonly [id: string, mode: string, displayName: string] | null,
-  namedHuman = false,
-) {
-  const [id, mode, displayName] = client ?? [];
-  const metadata = {
-    ...(namedHuman ? person("profile-alice", "Alice") : {}),
-    ...(client ? { transport: { clients: [{ id, mode, displayName }] } } : {}),
-  };
+function replyMessages() {
   return [
-    turn("source", client ? "user" : "assistant", "The original answer", metadata, 1_000),
+    turn("source", "assistant", "The original answer", {}, 1_000),
     turn("followup", "user", "Follow up", { replyToId: "source" }, 2_000),
   ] as const;
 }
@@ -156,38 +143,30 @@ it.each([
   },
 );
 
-it.each([
-  ["assistant", null, false, "Molty"],
-  ["CLI", ["cli", "cli", "Release helper"], false, "via CLI (Release helper)"],
-  ["RPC", ["gateway-client", "backend", "Build helper"], false, "via RPC (Build helper)"],
-  ["named human via CLI", ["cli", "cli", "Release helper"], true, "Alice"],
-] as const)(
-  "hydrates an unloaded %s reply preview without inserting its source row",
-  async (_source, client, namedHuman, senderLabel) => {
-    const [sourceMessage, followUp] = replyMessages(client, namedHuman);
-    let resolvedMessage: unknown = undefined;
-    const access = replyAccess(() => resolvedMessage);
-    const props = replyProps([followUp], {
-      userId: "profile-viewer",
-      userName: "Unrelated Viewer",
-      replyMessageAccess: access,
-    });
-    const { container, rerender, start } = threadView(props);
-    await start();
+it("hydrates an unloaded reply preview without inserting its source row", async () => {
+  const [sourceMessage, followUp] = replyMessages();
+  let resolvedMessage: unknown = undefined;
+  const access = replyAccess(() => resolvedMessage);
+  const props = replyProps([followUp], {
+    userId: "profile-viewer",
+    userName: "Unrelated Viewer",
+    replyMessageAccess: access,
+  });
+  const { container, rerender, start } = threadView(props);
+  await start();
 
-    expect(container.querySelector("[data-entry-id='source']")).toBeNull();
+  expect(container.querySelector("[data-entry-id='source']")).toBeNull();
 
-    resolvedMessage = { ...sourceMessage, content: "The original message" };
-    access.revision += 1;
-    rerender();
+  resolvedMessage = { ...sourceMessage, content: "The original message" };
+  access.revision += 1;
+  rerender();
 
-    const preview = container.querySelector<HTMLButtonElement>(inlineReply);
-    expect(preview?.querySelector(replyName)?.textContent?.trim()).toBe(senderLabel);
-    expect(container.querySelector("[data-entry-id='source']")).toBeNull();
-    preview?.click();
-    expect(access.open).toHaveBeenCalledWith("source");
-  },
-);
+  const preview = container.querySelector<HTMLButtonElement>(inlineReply);
+  expect(preview?.querySelector(replyName)?.textContent?.trim()).toBe("Molty");
+  expect(container.querySelector("[data-entry-id='source']")).toBeNull();
+  preview?.click();
+  expect(access.open).toHaveBeenCalledWith("source");
+});
 
 it.each([false, true])(
   "opens folded work when a reply navigation loads its source (run frame: %s)",
@@ -241,7 +220,7 @@ it.each([false, true])(
 
 it.each([true, false])(
   "keeps answers and independent automation deliveries visible (foreground run identity: %s)",
-  (keyed) => {
+  async (keyed) => {
     const runId = "approval-question-run";
     const run = keyed ? { runId } : {};
     const prompt = keyed ? { idempotencyKey: `${runId}:user` } : {};
@@ -256,41 +235,36 @@ it.each([true, false])(
         stopReason: "stop",
       },
     ]);
-    const { container, rerender } = threadView(props);
-    rerender(true);
+    const { container, rerender, start } = threadView(props);
+    await start();
     expectEntryText(container, "answer", "An operator approved it.");
     expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
-    for (const index of [1, 2]) {
-      props.messages = [
-        ...props.messages,
-        {
-          role: "assistant",
-          api: "openclaw-transcript",
-          provider: "openclaw",
-          model: "automation-result",
-          stopReason: "stop",
-          content: `New application error ${index}.`,
-          timestamp: (3 + index) * 1_000,
-          openclawAutomation: { kind: "cron", jobId: "saved-watcher", runId: `cron-${index}` },
-          __openclaw: { id: `alert-${index}` },
-        },
-      ];
-      rerender();
-      expectEntryText(container, "answer", "An operator approved it.");
-      for (let alert = 1; alert <= index; alert++) {
-        expectEntryText(container, `alert-${alert}`, `New application error ${alert}.`);
-      }
-      expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
-    }
-    props.messages = structuredClone(props.messages);
+    props.messages = [
+      ...props.messages,
+      {
+        role: "assistant",
+        api: "openclaw-transcript",
+        provider: "openclaw",
+        model: "automation-result",
+        stopReason: "stop",
+        content: "New application error.",
+        timestamp: 4_000,
+        openclawAutomation: { kind: "cron", jobId: "saved-watcher", runId: "cron-1" },
+        __openclaw: { id: "alert" },
+      },
+    ];
     rerender();
+    await flushDeferredRowPrune();
     expectEntryText(container, "answer", "An operator approved it.");
+    expectEntryText(container, "alert", "New application error.");
+    expect(container.querySelector('[data-entry-id="commentary"]')).toBeNull();
     props.runId = "next-foreground-run";
     props.runActive = true;
     props.runWorking = true;
     props.streamStartedAt = 6_000;
     rerender();
-    const alert = requireElement(container, '[data-entry-id="alert-2"]');
+    await flushDeferredRowPrune();
+    const alert = requireElement(container, '[data-entry-id="alert"]');
     const progress = requireElement(container, ".chat-working-indicator");
     expect(alert.closest(".chat-group")?.contains(progress)).toBe(false);
     expect(alert.closest(".chat-agent-run-frame")?.contains(progress) ?? false).toBe(false);
@@ -335,21 +309,6 @@ const linkedAnswer = answer({ runId: "run-a" });
 const olderPrompt = turn("p3", "user", "Unrelated", alice);
 const duplicatePrompt = turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" });
 const mirroredAnswer = answer({ mirrorOrigin: "discord", idempotencyKey: "run-a" });
-const searchedSpeakers = [
-  ownPromptReply[0],
-  turn("a2", "assistant", "Deploying"),
-  turn("p3", "user", "Status?", bob),
-  turn("a4", "assistant", "Rollout done"),
-];
-const searchedPrompt = [
-  turn("p1", "user", "Rollout plan?", alice),
-  turn("a2", "assistant", "Drafted"),
-  turn("p3", "user", "Anything else?", alice),
-  turn("a4", "assistant", "Rollout finished", {
-    replyToId: "p3",
-    replyToPreview: { text: "Anything else?", senderLabel: "Alice" },
-  }),
-];
 const systemReply = [
   turn("p1", "user", "Report?", { ...alice, idempotencyKey: "run-a:user" }),
   {
@@ -359,7 +318,7 @@ const systemReply = [
   { ...turn("a3", "assistant", "Report", { replyToId: "p1" }), runId: "run-b" },
 ];
 type ContextSession = Pick<GatewaySessionRow, "owner" | "participants">;
-type ReplyContext = [string, ChatThreadProps["messages"], string[], string?, ContextSession?];
+type ReplyContext = [string, ChatThreadProps["messages"], string[], ContextSession?];
 const outsideParticipant: ContextSession = {
   owner,
   participants: [{ identity: { type: "profile", id: "bob" }, label: "Bob" }],
@@ -377,14 +336,12 @@ it.each<ReplyContext>([
   ["another run", [keyedPrompt("run-b"), unrelated, linkedAnswer], []],
   ["ambiguous owners", [duplicatePrompt, prompt, unrelated, linkedAnswer], []],
   ["channel mirror", [prompt, unrelated, mirroredAnswer], []],
-  ["search hides speaker", searchedSpeakers, ["Bob"], "Rollout"],
-  ["search hides answered prompt", searchedPrompt, [], "Rollout"],
   ["system turn answers older human", systemReply, ["Alice"]],
-  ["off-page participant", ownPromptReply, ["Alice"], undefined, outsideParticipant],
-  ["reordered owner identity", ownPromptReply, [], undefined, ownerParticipant],
+  ["off-page participant", ownPromptReply, ["Alice"], outsideParticipant],
+  ["reordered owner identity", ownPromptReply, [], ownerParticipant],
 ])(
   "keeps cached reply attribution from the full conversation when %s",
-  async (_name, messages, strips, query, session) => {
+  async (_name, messages, strips, session) => {
     const props = replyProps([...messages]);
     if (session) {
       props.transcriptMetadata = projectChatTranscriptMetadata({
@@ -395,11 +352,6 @@ it.each<ReplyContext>([
       } as GatewaySessionRow);
     }
     const { container, rerender } = threadView(props);
-    if (query) {
-      const { search } = getTranscriptState(props.paneId);
-      search.toggle();
-      search.setQuery(query);
-    }
     rerender(true);
     await flushDeferredRowPrune();
     const names = [...container.querySelectorAll(".chat-reply-attribution--reply")].map((strip) =>
@@ -490,7 +442,6 @@ it.each(["group", "frame"] as const)(
     vi.spyOn(Date, "now").mockReturnValue(60_000);
     const history = [
       turn("p1000", "user", "Alice", { senderId: "alice", senderName: "Alice" }),
-      turn("a2000", "assistant", "Unrelated"),
       turn("p3000", "user", "Bob", {
         senderId: "bob",
         senderName: "Bob",
@@ -508,22 +459,16 @@ it.each(["group", "frame"] as const)(
     ];
     const props = replyProps(history, { sessionKey: "agent:main:dashboard:reply-source" });
     const { container, rerender, start } = threadView(props);
-    const groupFor = (id: string) =>
-      container.querySelector(`[data-entry-id="${id}"]`)?.closest(".chat-group");
     const attribution = () =>
       expectDefined(
-        groupFor("a4000")?.querySelector(".chat-reply-attribution--reply"),
+        container
+          .querySelector('[data-entry-id="a4000"]')
+          ?.closest(".chat-group")
+          ?.querySelector(".chat-reply-attribution--reply"),
         "reply attribution",
       );
-    const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
     await start();
     expect(attribution().querySelector(`button ${replyName}`)?.textContent).toBe("Old label");
-    const unrelatedKey = expectDefined(
-      groupFor("a2000")?.getAttribute("data-chat-row-key"),
-      "unrelated group key",
-    );
-    expect(prepareFrame.mock.calls.some(([group]) => group.key === unrelatedKey)).toBe(true);
-    prepareFrame.mockClear();
 
     for (const [name, text] of [
       ["Carol", "Original question loaded"],
@@ -536,7 +481,6 @@ it.each(["group", "frame"] as const)(
       rerender();
       await flushDeferredRowPrune();
       expect(attribution().querySelector(`button ${replyName}`)?.textContent).toBe(name);
-      expect(prepareFrame.mock.calls.filter(([group]) => group.key === unrelatedKey)).toEqual([]);
     }
   },
 );

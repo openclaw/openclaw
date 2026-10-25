@@ -67,7 +67,6 @@ type TerminalAttemptState = Pick<
   | "clientToolCalls"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
-  | "lastToolError"
   | "toolMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
@@ -89,9 +88,9 @@ type TerminalAttemptState = Pick<
     toolMetas?: readonly { asyncStarted?: boolean }[];
   };
 
+/** A failed tool is not delivery or durable progress for the turn. */
 export function hasAttemptTerminalState(attempt: TerminalAttemptState): boolean {
   return Boolean(
-    attempt.lastToolError ||
     attempt.clientToolCalls ||
     attempt.yieldDetected ||
     attempt.didSendDeterministicApprovalPrompt ||

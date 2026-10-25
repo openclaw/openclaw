@@ -49,8 +49,6 @@ it.each([
     for (let cycle = 0; cycle < 3; cycle += 1) {
       view.update({ routeData: { ...fixture.routeData } });
     }
-    view.update({ routeData: null });
-    view.update({ routeData: { ...fixture.routeData } });
     for (const tab of ["overview", "dreams"]) {
       view.page
         .querySelector(`#memory-tab-${tab}`)

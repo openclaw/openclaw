@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import * as snapshots from "../config/runtime-snapshot.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import * as normalization from "../plugins/config-normalization-shared.js";
 import { normalizePluginsConfig as readNormalizedPluginsConfig } from "../plugins/config-state.js";
 import type { OpenClawConfig } from "./config-contracts.js";
@@ -13,23 +14,70 @@ const configFor = (entries: NonNullable<OpenClawConfig["plugins"]>["entries"]): 
 it("reuses captured plugin policy across reads and keeps revisions independent", () => {
   using normalize = vi.spyOn(normalization, "normalizePluginsConfigWithResolverCore");
   const config = configFor({ " CODEX ": { config: { revision: 1 } } });
-  snapshots.setRuntimeConfigSnapshot(config);
-  const captured = snapshots.getRuntimeConfigSnapshot({ capture: true })!;
+  const captured = captureRuntimeConfig(config);
   const payload = captured.plugins!.entries![" CODEX "]!.config;
-  normalize.mockClear();
   for (let i = 0; i < 10; i++) {
     expect(runtime.resolvePluginConfigObject(captured, "codex")).toBe(payload);
+    expect(readNormalizedPluginsConfig(captured.plugins).entries.codex?.config).toBe(payload);
+  }
+  expect(normalize).toHaveBeenCalledTimes(1);
+
+  config.plugins!.entries![" CODEX "]!.config = { revision: 2 };
+  normalize.mockClear();
+  const next = captureRuntimeConfig(config);
+  expect(runtime.resolvePluginConfigObject(next, "codex")).toEqual({ revision: 2 });
+  expect(readNormalizedPluginsConfig(next.plugins).entries.codex?.config).toEqual({ revision: 2 });
+  expect(runtime.resolvePluginConfigObject(captured, "codex")).toBe(payload);
+  expect(payload).toEqual({ revision: 1 });
+  expect(normalize).toHaveBeenCalledTimes(1);
+});
+
+it("resolves live enablement from prepared policy and refreshes same-object publications", () => {
+  using normalize = vi.spyOn(normalization, "normalizePluginsConfigWithResolverCore");
+  const config = configFor({ " CODEX ": { enabled: true } });
+  snapshots.setRuntimeConfigSnapshot(config);
+  const resolve = () =>
+    runtime.resolveEffectiveEnableState({ id: "codex", origin: "bundled", rootConfig: config });
+  normalize.mockClear();
+  for (let i = 0; i < 10; i++) {
+    expect(resolve()).toEqual({ enabled: true });
   }
   expect(normalize).not.toHaveBeenCalled();
 
-  config.plugins!.entries![" CODEX "]!.config = { revision: 2 };
+  config.plugins!.entries![" CODEX "]!.enabled = false;
   snapshots.setRuntimeConfigSnapshot(config);
-  const next = snapshots.getRuntimeConfigSnapshot({ capture: true })!;
-  snapshots.clearRuntimeConfigSnapshot();
   normalize.mockClear();
-  expect(runtime.resolvePluginConfigObject(next, "codex")).toEqual({ revision: 2 });
-  expect(runtime.resolvePluginConfigObject(captured, "codex")).toBe(payload);
-  expect(payload).toEqual({ revision: 1 });
+  expect(resolve()).toEqual({ enabled: false, reason: "disabled in config" });
+  expect(normalize).not.toHaveBeenCalled();
+
+  expect(
+    runtime.resolveEffectiveEnableState({
+      id: "codex",
+      origin: "bundled",
+      rootConfig: config,
+      config: runtime.normalizePluginsConfig({ entries: { codex: { enabled: true } } }),
+    }),
+  ).toEqual({ enabled: true });
+});
+
+it("shares absent plugin policy without borrowing a later publication's entries", () => {
+  using normalize = vi.spyOn(normalization, "normalizePluginsConfigWithResolverCore");
+  const captured = captureRuntimeConfig({});
+  for (let i = 0; i < 3; i++) {
+    expect(runtime.resolvePluginConfigObject(captured, "demo")).toBeUndefined();
+    expect(readNormalizedPluginsConfig(captured.plugins).entries).toEqual({});
+  }
+  expect(normalize.mock.calls.length).toBeLessThanOrEqual(1);
+
+  const published = configFor({ demo: { config: { revision: 1 } } });
+  snapshots.setRuntimeConfigSnapshot(published);
+  expect(runtime.resolvePluginConfigObject(published, "demo")).toEqual({ revision: 1 });
+  expect(runtime.resolvePluginConfigObject(captured, "demo")).toBeUndefined();
+
+  snapshots.setRuntimeConfigSnapshot({});
+  normalize.mockClear();
+  expect(runtime.resolvePluginConfigObject(captured, "demo")).toBeUndefined();
+  expect(readNormalizedPluginsConfig().entries).toEqual({});
   expect(normalize).not.toHaveBeenCalled();
 });
 

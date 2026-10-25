@@ -17,7 +17,6 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
-import type { OptionalCustomElement } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
 import { isNativeEmbedHost, nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
@@ -47,18 +46,16 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
-  readonly execApprovalElement: OptionalCustomElement;
-  readonly onboardingMemoryImportElement: OptionalCustomElement;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
   readonly shellLayout: ShellLayoutOwner;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly routeState: ShellRouteState;
-  readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   readonly settingsSearchQuery: string;
   readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
+  readonly workspaceChromeVisible: boolean;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
@@ -166,7 +163,6 @@ export function readShellView(host: ShellViewHost) {
       onboarding,
       compact: mergedChatChrome,
     });
-  const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
   // A route query is navigation input, not an owner record. Let it override the
   // live selection only after the roster proves that agent exists.
   const requestedRouteAgentId = host.shellNavigation.newSessionRouteAgentId();
@@ -231,7 +227,6 @@ export function readShellView(host: ShellViewHost) {
     onUpdateSidebarEntries: callbacks.updateSidebarEntries,
     onPairMobile: callbacks.openDevicePairSetup,
     onNavigate: host.shellNavigation.navigate,
-    onPreloadRoute: callbacks.preloadRoute,
   };
   const embedNavigation =
     nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");
@@ -280,6 +275,7 @@ export function readShellView(host: ShellViewHost) {
   return {
     nowMs: Date.now(),
     routeReady: host.routeState.routeId !== undefined || host.routeState.routeFailed,
+    workspaceChromeVisible: host.workspaceChromeVisible,
     context,
     runtime,
     callbacks,
@@ -315,7 +311,10 @@ export function readShellView(host: ShellViewHost) {
     expandedNavWidth,
     navigationSurfaceHidden,
     floatingAttentionVisible,
-    shellWidth,
+    // Only the visible desktop divider needs viewport geometry.
+    get shellWidth() {
+      return Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
+    },
     selectedAgentId,
     newSessionDisabledReason,
     workspacePluginsEnabled,

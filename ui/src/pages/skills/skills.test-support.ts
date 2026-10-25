@@ -1,6 +1,7 @@
 import type { SkillLibraryEntry, SkillsLibraryListResult } from "@openclaw/gateway-protocol";
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 
@@ -28,17 +29,15 @@ export function connectedGateway(
   request: (method: string, params?: unknown) => Promise<unknown>,
   methods: string[],
 ) {
-  return createApplicationGateway({
-    client: { request } as unknown as GatewayBrowserClient,
-    phase: "connected",
-    hello: gatewayHelloForMethods(methods),
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  return createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client: { request } as unknown as GatewayBrowserClient,
+      phase: "connected",
+      hello: gatewayHelloForMethods(methods),
+      assistantAgentId: "main",
+      sessionKey: "main",
+    }),
+  );
 }
 
 export function libraryEntry(overrides: Partial<SkillLibraryEntry> = {}): SkillLibraryEntry {

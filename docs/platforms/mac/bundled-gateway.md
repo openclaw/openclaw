@@ -462,6 +462,12 @@ installation diagnostics. Use **Retry setup** after failed setup, or open
 **Recheck** after repairing it. The Connection window remains available when
 the Dashboard cannot reach the Gateway.
 
+For a bundled app, Connection reports the connected local Gateway's version,
+or the installed service's version when disconnected—not just the app's bundled
+version. An older Gateway exposes **Update Gateway…**; unfinished preparation or
+recovery exposes **Repair Gateway…**, including when the Gateway is newer than
+the app. A healthy compatible newer Gateway does not offer a downgrade.
+
 ## State directory on macOS
 
 Keep OpenClaw state on a local, non-synced disk. Avoid iCloud Drive and other

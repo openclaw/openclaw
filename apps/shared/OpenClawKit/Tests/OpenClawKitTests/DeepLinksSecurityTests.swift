@@ -40,6 +40,13 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
         }
     }
 
+    @Test func gatewayEndpointRejectsEmbeddedPortInHost() {
+        let endpoint = GatewayConnectEndpoint(host: "gateway.example.com:8443", port: 18789, tls: true)
+
+        #expect(endpoint.host == "gateway.example.com:8443")
+        #expect(endpoint.websocketURL == nil)
+    }
+
     @Test func setupResultInitializerDefaultsOptionalFields() {
         let result = DevicePairSetupCodeResult(
             setupid: "setup-1",

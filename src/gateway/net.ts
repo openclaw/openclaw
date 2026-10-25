@@ -314,10 +314,7 @@ async function canBindToHost(host: string): Promise<boolean> {
   });
 }
 
-export async function resolveGatewayListenHosts(
-  bindHost: string,
-  opts?: { canBindToHost?: (host: string) => Promise<boolean> },
-): Promise<string[]> {
+export async function resolveGatewayListenHosts(bindHost: string): Promise<string[]> {
   const requiredHosts = resolveGatewayRequiredListenHosts(bindHost);
   if (bindHost !== "127.0.0.1") {
     return requiredHosts;
@@ -328,8 +325,7 @@ export async function resolveGatewayListenHosts(
   if (process.platform === "win32") {
     return [bindHost];
   }
-  const canBind = opts?.canBindToHost ?? canBindToHost;
-  if (await canBind("::1")) {
+  if (await canBindToHost("::1")) {
     return [bindHost, "::1"];
   }
   return [bindHost];

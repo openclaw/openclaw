@@ -64,16 +64,22 @@ Unknown targets retain a default weight. Inspect any assignment with
 runs as the suite changes. The latest two file samples track recent workload
 changes; configuration and preparation costs use observed medians. These are
 estimates, including inferred import/hook costs from verbose logs, not exact
-per-file profiler measurements. Rebalancing adds no jobs or per-job setup.
+per-file profiler measurements. Refresh weights when adding expensive files:
+the unknown-target default preserves coverage but can underestimate their cost
+enough to unbalance a shard. Rebalancing adds no jobs or per-job setup.
 The combined inventory matches the local full suite; a failure in one shard leaves
 the others running and fails the aggregate gate.
 
-The PostgreSQL Weekly Qualification workflow runs the same three conformance shards on
-digest-pinned PostgreSQL 16 and 18 images every Monday at 06:43 UTC, or by manual dispatch on main.
-Its six hosted jobs use the same measured shard allocator with a 50-minute job budget,
-with at most three running at once. PR CI keeps only the existing three PostgreSQL 17 shards.
+The PostgreSQL Scheduled Qualification workflow (`postgres-conformance-weekly.yml`) runs
+the same three conformance shards on main with digest-pinned images: PostgreSQL 17 daily
+at 07:17 UTC, and PostgreSQL 16 and 18 every Monday at 06:43 UTC. Manual dispatch accepts
+`versions=all` (the default), `pg16`, `pg17`, or `pg18`. PostgreSQL 17 uses the same image
+pin as PR CI. The daily run adds three hosted jobs at roughly 25 minutes each
+(75 runner-minutes per day); Monday's weekly run retains six jobs. All runs use the same
+measured shard allocator with a 50-minute job budget and at most three jobs running at once.
+PR CI keeps its existing path selection and three PostgreSQL 17 shards.
 All versions start with `max_locks_per_transaction=512` for the conformance workload.
-Weekly failures surface through the workflow's failed jobs, like other standalone scheduled audits;
+Scheduled failures are visible in Actions through the workflow's failed jobs, with no additional notifications;
 the PR failure classifier continues to compare against hourly main CI's matching PostgreSQL 17 jobs.
 
 Full hybrid extension lint packs the same standard chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
@@ -109,6 +115,10 @@ Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmit
 path. Successful 16-class jobs reached 19:04, leaving too little margin under the
 former 20-minute limit. Hosted and retry paths retain their 40-minute budget;
 runner size, worker count, shard split, and individual test deadlines are unchanged.
+Current targets overlap desktop transport proof with the one-worker serial UI
+phase, then join both cleanup owners before running qualified fixtures with the
+existing two-worker ceiling. One-worker overrides, desktop-only selections, and
+frozen targets retain sequential execution.
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
@@ -258,6 +268,8 @@ The WebKit project requires every selected assertion to pass, with no expected-f
 Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 15.2.0 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
 
 Browser extension CI launches the installed, patched Chrome MCP dependency directly, on Node and on the pinned Bun fork.
+
+When the public artifact build is already selected, current-target browser extension E2E runs in `checks-ui-browser-extension` and restores that exact checkout's runtime instead of rebuilding it. The producer archives the runtime before mutable built-artifact verifiers run; the consumer checks its digest and source commit. This replaces the extension matrix row without adding a runner. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation.
 
 Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports, including the same seven Control UI seed files on Node and the pinned Bun fork in both Linux cache backends; ordinary CI remains restore-only.
 

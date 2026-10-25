@@ -142,6 +142,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     const result = await runCliAgent({
       admittedRunContext,
       sessionManager: params.sessionManager,
+      disableTrajectory: params.disableTrajectory,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,

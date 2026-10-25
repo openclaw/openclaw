@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { UpdateFinalizationLifecycle } from "../cli/update-cli/update-finalization-lifecycle.js";
 import { GatewayServiceStopUnsafeError } from "../daemon/service-inspection-error.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -32,6 +33,35 @@ import * as nocow from "./doctor-sqlite-nocow.js";
 
 const settlement = await import("./doctor-maintenance.settlement.test-support.js");
 const { begin, boundary, cleanupBarrier, root, tempDirs } = settlement;
+
+it.each([false, true])(
+  "settles interrupted original-state capture (restart fails: %s)",
+  async (restartFails) => {
+    let drain: Promise<unknown> | undefined;
+    const runtimeError = vi.fn();
+    if (restartFails) {
+      boundary.restart.mockRejectedValueOnce(new Error("synthetic service start failure"));
+    }
+    const admission = beginDoctorMaintenance({
+      root,
+      options: { repair: true, nonInteractive: true },
+      runtime: { log: boundary.log, error: runtimeError, exit: vi.fn() },
+      beforeStateMutation: async ({ signal }) => {
+        drain = waitForSignalExitBarriers("SIGINT").catch((error: unknown) => error);
+        signal.throwIfAborted();
+      },
+    });
+    await expect(admission).rejects.toThrow(
+      restartFails ? "synthetic service start failure" : "Doctor interrupted by SIGINT",
+    );
+    await drain;
+    expect(boundary.restart).toHaveBeenCalledOnce();
+    expect(boundary.health).toHaveBeenCalledTimes(restartFails ? 0 : 1);
+    if (restartFails) {
+      expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("openclaw gateway start"));
+    }
+  },
+);
 
 type BoundaryMock = Exclude<keyof typeof boundary, "scopeAssert">;
 
@@ -486,6 +516,73 @@ it("waits for the stopped Gateway to release lifecycle ownership", async () => {
   await maintenance!.finish({});
   expect(loaded).toBe(true);
   expect(boundary.restart).toHaveBeenCalledOnce();
+});
+
+it("releases ownership acquired after the parent deadline without starting repair", async () => {
+  let elapsedMs = 0;
+  vi.spyOn(Date, "now").mockReturnValue(1_000);
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  const acquire = boundary.gatewayAcquire.getMockImplementation()!;
+  boundary.gatewayAcquire.mockImplementationOnce(async () => {
+    elapsedMs = 501;
+    return acquire();
+  });
+  const prepare = vi.fn();
+
+  const refusal = await beginDoctorMaintenance({
+    root,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    serviceInspectionDeadlineAtMs: 1_500,
+    beforeStateMutation: prepare,
+  }).catch((error: unknown) => error);
+
+  expect(prepare).not.toHaveBeenCalled();
+  expect(String(refusal)).toContain("Doctor service-inspection deadline has expired.");
+  expect(boundary.release).toHaveBeenCalledOnce();
+  expect(boundary.stop).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ phase: "inspect" }),
+  );
+  expectCalls(0, "repair", "restart", "health");
+});
+
+it("restores a stopped service when post-stop ownership admission exceeds the parent deadline", async () => {
+  let wallNow = 1_000;
+  let elapsedMs = 0;
+  const deadlineAtMs = wallNow + 500;
+  vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  boundary.owner.mockReturnValue({ state: "live", mode: "supervised" });
+  const acquire = boundary.gatewayAcquire.getMockImplementation()!;
+  boundary.gatewayAcquire
+    .mockImplementationOnce(() => {
+      throw new GatewayStateOwnerContentionError("/synthetic/doctor-state/state/openclaw.sqlite");
+    })
+    .mockImplementationOnce(() => {
+      throw new GatewayStateOwnerContentionError("/synthetic/doctor-state/state/openclaw.sqlite");
+    })
+    .mockImplementationOnce(acquire);
+  boundary.sleep.mockImplementation(async () => {
+    elapsedMs = 501;
+    wallNow -= 90_000;
+  });
+  let prepared = false;
+
+  const refusal = await beginDoctorMaintenance({
+    root,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: boundary.log, error: vi.fn(), exit: vi.fn() },
+    serviceInspectionDeadlineAtMs: deadlineAtMs,
+    beforeStateMutation: async () => {
+      prepared = true;
+    },
+  }).catch((error: unknown) => error);
+
+  expect(String(refusal)).toContain("Doctor service-inspection deadline has expired.");
+  expect(prepared).toBe(false);
+  expect(boundary.repair).not.toHaveBeenCalled();
+  expect(boundary.restart).toHaveBeenCalledOnce();
+  expect(boundary.health).toHaveBeenCalledOnce();
 });
 
 it("restores a service after state ownership fails without retaining a partial maintenance scope", async () => {

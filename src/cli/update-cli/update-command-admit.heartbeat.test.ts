@@ -5,12 +5,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { retireHeartbeatWithDoctor } from "../../commands/doctor-heartbeat-retirement.js";
+import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   type UpdateAdmissionContext,
 } from "../../infra/update-admission-contract.js";
 import { parseUpdateAdmissionVerdict } from "../../infra/update-run-schema.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as stateReadOnly from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withStateMigrationBackupForTest } from "../../state/openclaw-state-schema.test-support.js";
 import * as schemaPreflight from "./schema-preflight.js";
@@ -31,6 +34,7 @@ const operatorScratch = "Operator-owned checklist.\n";
 type Scenario = {
   name: string;
   scratch: string;
+  source?: string;
   invalidSource?: boolean;
   message?: string;
 };
@@ -53,7 +57,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
   if (scenario.invalidSource) {
     fs.mkdirSync(sourcePath);
   } else {
-    fs.writeFileSync(sourcePath, source);
+    fs.writeFileSync(sourcePath, scenario.source ?? source);
   }
   for (const key of Object.keys(process.env)) {
     if (isUpdateAdmissionAuthorityEnvKey(key)) {
@@ -130,8 +134,8 @@ function fixture(scenario: Scenario, withDatabase = true) {
     }
   }
   const snapshot = () =>
-    fs
-      .readdirSync(home, { recursive: true, withFileTypes: true })
+    listDirectoryTreeStrictSync(home)
+      .map((walkEntry) => walkEntry.dirent)
       .filter((entry) => entry.isFile())
       .map((entry) => {
         const filename = path.join(entry.parentPath, entry.name);
@@ -150,6 +154,11 @@ it.each<Scenario>([
     scratch: operatorScratch,
   },
   { name: "matching operator scratch", scratch: source },
+  {
+    name: "incomplete tasks in a retained source beside operator scratch",
+    scratch: operatorScratch,
+    source: "tasks:\n- name: retained\n  interval: 1h\n",
+  },
   {
     name: "unreadable source shape",
     scratch: operatorScratch,
@@ -189,7 +198,7 @@ it.each<Scenario>([
       retireHeartbeatWithDoctor(f.config),
     );
     expect(next.agents?.entries?.main?.heartbeat).toBeUndefined();
-    expect(fs.readFileSync(f.sourcePath)).toEqual(Buffer.from(source));
+    expect(fs.readFileSync(f.sourcePath)).toEqual(Buffer.from(scenario.source ?? source));
     const database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
     try {
       expect(database.prepare("SELECT * FROM cron_job_scratch").all()).toEqual([
@@ -304,3 +313,105 @@ it.each([
   expect(f.snapshot()).toEqual(before);
   expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
 });
+
+it.each([
+  ["file", false],
+  ["imported scratch", false],
+  ["file", true],
+  ["imported scratch", true],
+] as const)(
+  "checks task conversion in %s (incomplete: %s) before activation without mutating the source",
+  async (location, incomplete) => {
+    const content = incomplete
+      ? "tasks:\n- name: inbox\n  interval: 1h\n"
+      : "# Checklist\n\ntasks:\n- check the queue\n- review alerts\n";
+    const f = fixture({ name: location, scratch: content }, location === "imported scratch");
+    if (location === "file") {
+      fs.writeFileSync(f.sourcePath, content);
+    } else {
+      fs.unlinkSync(f.sourcePath);
+    }
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const before = f.snapshot();
+
+    await updateAdmitCommand(f.contextPath);
+
+    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+      verdict: incomplete ? "refuse" : "admit",
+      reasons: incomplete
+        ? [
+            expect.objectContaining({
+              code: "heartbeat-migration",
+              message: expect.stringContaining("no complete name/interval/prompt entries"),
+            }),
+          ]
+        : [],
+    });
+    expect(process.exitCode).toBe(incomplete ? 3 : 0);
+    expect(f.snapshot()).toEqual(before);
+  },
+);
+
+it.each([false, true])(
+  "inspects configured PostgreSQL heartbeat scratch before activation (incomplete: %s)",
+  async (incomplete) => {
+    const f = fixture({
+      name: "postgres",
+      scratch: incomplete ? "tasks:\n- name: inbox\n  interval: 1h\n" : source,
+    });
+    fs.unlinkSync(f.sourcePath);
+    const anchorPath = resolveOpenClawStateSqlitePath();
+    const storePath = path.join(path.dirname(anchorPath), "postgres-fixture.sqlite");
+    fs.renameSync(anchorPath, storePath);
+    const anchor = new DatabaseSync(anchorPath);
+    anchor.exec("CREATE TABLE openclaw_engine_anchor (engine TEXT)");
+    anchor.close();
+    vi.stubEnv("TEST_DATABASE_DSN", "postgresql://127.0.0.1:1/heartbeat_admission");
+    fs.writeFileSync(
+      f.configPath,
+      JSON.stringify({
+        ...f.config,
+        database: {
+          engine: "postgres",
+          postgres: {
+            connection: { source: "env", provider: "default", id: "TEST_DATABASE_DSN" },
+          },
+        },
+      }),
+    );
+    vi.spyOn(schemaPreflight, "checkTargetDatabaseSchemasForContexts").mockResolvedValue({
+      incompatible: [],
+      indeterminate: [],
+    });
+    // Substitute only storage transport; run the real heartbeat queries against retained rows.
+    vi.spyOn(stateReadOnly, "withExistingOpenClawStateDatabaseReadOnly").mockImplementation(
+      (operation) => {
+        const selectedPath = getDatabaseEngineInput("state") ? storePath : anchorPath;
+        const db = new DatabaseSync(selectedPath, { readOnly: true });
+        try {
+          return operation({ db, path: selectedPath });
+        } finally {
+          db.close();
+        }
+      },
+    );
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    const before = f.snapshot();
+
+    await updateAdmitCommand(f.contextPath);
+
+    expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+      verdict: incomplete ? "refuse" : "admit",
+      reasons: incomplete
+        ? [
+            expect.objectContaining({
+              code: "heartbeat-migration",
+              message: expect.stringContaining("no complete name/interval/prompt entries"),
+            }),
+          ]
+        : [],
+    });
+    expect(process.exitCode).toBe(incomplete ? 3 : 0);
+    expect(f.snapshot()).toEqual(before);
+  },
+);

@@ -1,4 +1,4 @@
-import { createMemo, flush, onCleanup, refresh } from "solid-js";
+import { createMemo, onCleanup, onSettled, refresh } from "solid-js";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import {
@@ -189,30 +189,29 @@ export function createPositionRail(props: PositionRailParams) {
       const focusedId =
         focused instanceof HTMLElement ? focused.dataset.positionMarkerId : undefined;
       refreshingWindow = true;
-      try {
-        void refresh(view);
-        // Native keyboard focus needs the virtualized rail target committed synchronously.
-        flush();
-      } finally {
+      void refresh(view);
+      onSettled(() => {
         refreshingWindow = false;
-      }
-      // A virtual window change can move the retained marker out of DOM order.
-      // Restore that focus without treating it as new navigation or recentering.
-      if (
-        !pendingFocusId &&
-        focusedId &&
-        focused instanceof HTMLElement &&
-        scroller?.contains(focused) &&
-        scroller.ownerDocument.activeElement === scroller.ownerDocument.body
-      ) {
-        interactionState.focusedId = focusedId;
-        restoringFocus = true;
-        try {
-          focused.focus({ preventScroll: true });
-        } finally {
-          restoringFocus = false;
+        // A virtual window change can move the retained marker out of DOM order.
+        // Restore its focus after commit without treating it as new navigation.
+        if (
+          connected &&
+          scroller === scrollElement &&
+          !pendingFocusId &&
+          focusedId &&
+          focused instanceof HTMLElement &&
+          scroller?.contains(focused) &&
+          scroller.ownerDocument.activeElement === scroller.ownerDocument.body
+        ) {
+          interactionState.focusedId = focusedId;
+          restoringFocus = true;
+          try {
+            focused.focus({ preventScroll: true });
+          } finally {
+            restoringFocus = false;
+          }
         }
-      }
+      });
     }
   }
 
@@ -225,11 +224,23 @@ export function createPositionRail(props: PositionRailParams) {
   }
 
   function focusMarker(id: string): void {
+    const scroller = scrollElement;
+    const focused = scroller?.ownerDocument.activeElement;
     pendingFocusId = id;
     revealMarker(id);
     refreshWindow();
-    markerElements.get(id)?.focus({ preventScroll: true });
-    pendingFocusId = undefined;
+    onSettled(() => {
+      if (connected && pendingFocusId === id) {
+        pendingFocusId = undefined;
+        const active = scroller?.ownerDocument.activeElement;
+        if (
+          scroller === scrollElement &&
+          (active === focused || active === scroller?.ownerDocument.body)
+        ) {
+          markerElements.get(id)?.focus({ preventScroll: true });
+        }
+      }
+    });
   }
 
   function disconnectVisibility() {
@@ -596,7 +607,7 @@ export function createPositionRail(props: PositionRailParams) {
               );
       event.preventDefault();
       event.stopPropagation();
-      // Commit a distant logical target before focusing it; keyboard input never waits a frame.
+      // A distant logical target receives focus as soon as its marker commits, without a frame.
       if (!(event.currentTarget instanceof HTMLButtonElement)) {
         return;
       }
@@ -605,7 +616,7 @@ export function createPositionRail(props: PositionRailParams) {
     return {
       assistant,
       markers,
-      liveMarkers: positions.liveMarkers,
+      resolveLiveMessage: positions.resolveLiveMessage,
       renderedIndexes,
       activeId: currentActiveId,
       visibleIds,

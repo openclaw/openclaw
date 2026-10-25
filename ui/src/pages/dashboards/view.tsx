@@ -5,6 +5,7 @@ import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -16,6 +17,8 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
 import { DashboardPreview } from "./dashboard-preview.tsx";
+
+registerDashboardsEnglish();
 
 export type DashboardsRouteData = {
   result: SessionsListResult | null;

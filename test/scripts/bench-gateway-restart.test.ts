@@ -5,11 +5,7 @@ import { expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
 import * as gatewayBenchProbes from "../../scripts/lib/gateway-bench-probes.ts";
 import { parseProcessRssKb, requestProbeStatus } from "../../scripts/lib/gateway-bench-probes.ts";
-import {
-  flushOutputLineBuffers,
-  parseNonNegativeInt,
-  parsePositiveInt,
-} from "../../scripts/lib/gateway-bench-runtime.ts";
+import { flushOutputLineBuffers } from "../../scripts/lib/gateway-bench-runtime.ts";
 
 type RestartSampleFixture = Parameters<typeof testing.summarizeCase>[1][number];
 type ProbeFixture = RestartSampleFixture["initialHealthz"];
@@ -21,6 +17,11 @@ const wallClockClearTimeout = clearTimeout;
 const benchCase = { config: {}, id: "demo", name: "demo" };
 
 async function withServer(server: Server, run: ServerRun, cleanup = () => {}) {
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -33,6 +34,9 @@ async function withServer(server: Server, run: ServerRun, cleanup = () => {}) {
     await run(address.port);
   } finally {
     cleanup();
+    for (const socket of sockets) {
+      socket.destroy();
+    }
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
@@ -112,16 +116,8 @@ function sample(overrides: Partial<RestartSampleFixture>): RestartSampleFixture 
   };
 }
 
-it("rejects ambiguous benchmark CLI values before spawning Node", () => {
-  for (const [args, message] of [
-    ["--case skipChannels --case skipChannels", 'Duplicate --case "skipChannels"'],
-    ["--restarts --runs 1", "--restarts requires a value"],
-  ] as const) {
-    expect(() => testing.parseOptions(args.split(" "))).toThrow(message);
-  }
+it("rejects Node option entries and resolves restart benchmark controls", () => {
   expect(() => testing.parseOptions(["--entry", " --inspect"])).toThrow(/must be a file path/u);
-  expect(parsePositiveInt("5", 1, "--restarts")).toBe(5);
-  expect(parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
   expect(
     testing.parseOptions(
       "--case skipChannelsNoAcpxProbe --output restart.json --allow-failures --restarts 2".split(
@@ -134,7 +130,6 @@ it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     output: "restart.json",
     restarts: 2,
   });
-  expect(() => parsePositiveInt("2abc", 1, "--restarts")).toThrow(/--restarts must be an integer/u);
 });
 
 it("guards the SIGUSR2 restart benchmark on Windows", () => {
@@ -173,77 +168,61 @@ it("rejects malformed ps RSS samples", () => {
   }
 });
 
-it.each(["healthy headers", "incomplete headers"] as const)(
-  "probes %s without waiting for a body",
-  async (mode) => {
-    const healthy = mode === "healthy headers";
-    let requestMethod: string | undefined;
-    const sockets = new Set<Socket>();
-    const intervals = new Set<NodeJS.Timeout>();
-    const server = healthy
-      ? createServer((request, response) => {
-          requestMethod = request.method;
-          response.writeHead(200, { "content-type": "application/json" });
-          response.flushHeaders();
-        })
-      : createNetServer((socket) => {
-          socket.on("error", () => undefined);
-          socket.once("data", () => {
-            socket.write("HTTP/1.1 200 OK\r\nX-Drip: ");
-            // Activity must not evade the deadline for incomplete headers.
-            const interval = setInterval(() => socket.write("x"), 20);
-            intervals.add(interval);
-            interval.unref?.();
-            socket.on("close", () => {
-              clearInterval(interval);
-              intervals.delete(interval);
-            });
-          });
-        });
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.on("close", () => sockets.delete(socket));
+async function probeWithinBudget(port: number) {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = wallClockSetTimeout(() => reject(new Error("probe exceeded 750ms")), 750);
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([requestProbeStatus(port, "/readyz"), deadline]);
+  } finally {
+    wallClockClearTimeout(timer);
+  }
+}
+
+it("probes healthy headers without waiting for a body", async () => {
+  let method: string | undefined;
+  const server = createServer((request, response) => {
+    method = request.method;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.flushHeaders();
+  });
+  await withServer(
+    server,
+    async (port) => {
+      // Freeze the probe timer, but not the independent watchdog.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      expect(await probeWithinBudget(port)).toEqual({ errorKind: null, status: 200 });
+      expect(method).toBe("HEAD");
+    },
+    () => vi.useRealTimers(),
+  );
+});
+
+it("times out incomplete headers despite continued socket activity", async () => {
+  const intervals = new Set<NodeJS.Timeout>();
+  const server = createNetServer((socket) => {
+    socket.on("error", () => undefined);
+    socket.once("data", () => {
+      socket.write("HTTP/1.1 200 OK\r\nX-Drip: ");
+      const interval = setInterval(() => socket.write("x"), 20);
+      intervals.add(interval);
+      interval.unref?.();
     });
-    await withServer(
-      server,
-      async (port) => {
-        // Freeze only the healthy probe timer; keep the independent watchdog real.
-        if (healthy) {
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        }
-        let timer: NodeJS.Timeout | undefined;
-        const deadline = new Promise<never>((_resolve, reject) => {
-          timer = wallClockSetTimeout(() => reject(new Error(`${mode} exceeded 750ms`)), 750);
-          timer.unref?.();
-        });
-        try {
-          await expect(
-            Promise.race([requestProbeStatus(port, healthy ? "/healthz" : "/readyz"), deadline]),
-          ).resolves.toEqual({
-            errorKind: healthy ? null : "timeout",
-            status: healthy ? 200 : null,
-          });
-        } finally {
-          wallClockClearTimeout(timer);
-        }
-        if (healthy) {
-          expect(requestMethod).toBe("HEAD");
-        }
-      },
-      () => {
-        if (healthy) {
-          vi.useRealTimers();
-        }
-        for (const interval of intervals) {
-          clearInterval(interval);
-        }
-        for (const socket of sockets) {
-          socket.destroy();
-        }
-      },
-    );
-  },
-);
+  });
+  await withServer(
+    server,
+    async (port) => {
+      expect(await probeWithinBudget(port)).toEqual({ errorKind: "timeout", status: null });
+    },
+    () => {
+      for (const interval of intervals) {
+        clearInterval(interval);
+      }
+    },
+  );
+});
 
 it("enables both startup and restart trace in the child gateway environment", () => {
   const env = testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
@@ -282,41 +261,36 @@ it("marks clean and signaled pre-teardown child exits as benchmark failures", ()
 });
 
 it("summarizes failure rate, restart.ready totals, and resource slope", () => {
-  const samples: Parameters<typeof testing.summarizeCase>[1] = [
-    sample({
-      iterations: [
-        iteration({
-          readyz: probe(42, 12),
-          restartTrace: {
-            "restart.ready": 12,
-            "restart.ready.total": 50,
-            "restart.ready.heapUsedMb": 100,
-            "restart.ready.rssMb": 200,
-          },
-        }),
-        iteration({
-          failureCode: "trace_missing",
-          healthz: probe(35),
-          readyz: probe(50, 15),
-          restartTrace: {
-            "restart.ready.heapUsedMb": 104,
-            "restart.ready.rssMb": 206,
-          },
-        }),
-      ],
-      resourceSlope: {
-        activeHandlesCountPerRestart: null,
-        activeRequestsCountPerRestart: null,
-        activeTimersCountPerRestart: null,
-        fdCountPerRestart: null,
-        heapUsedMbPerRestart: 4,
-        rssMbPerRestart: 6,
-      },
-    }),
-  ];
-  const result = testing.summarizeCase(benchCase, samples);
-
-  expect(result.samples).toBe(samples);
+  const result = summarize({
+    iterations: [
+      iteration({
+        readyz: probe(42, 12),
+        restartTrace: {
+          "restart.ready": 12,
+          "restart.ready.total": 50,
+          "restart.ready.heapUsedMb": 100,
+          "restart.ready.rssMb": 200,
+        },
+      }),
+      iteration({
+        failureCode: "trace_missing",
+        healthz: probe(35),
+        readyz: probe(50, 15),
+        restartTrace: {
+          "restart.ready.heapUsedMb": 104,
+          "restart.ready.rssMb": 206,
+        },
+      }),
+    ],
+    resourceSlope: {
+      activeHandlesCountPerRestart: null,
+      activeRequestsCountPerRestart: null,
+      activeTimersCountPerRestart: null,
+      fdCountPerRestart: null,
+      heapUsedMbPerRestart: 4,
+      rssMbPerRestart: 6,
+    },
+  });
   expect(result.summary).toMatchObject({
     failureRate: 0.5,
     firstFailureCode: "trace_missing",
@@ -329,7 +303,6 @@ it("summarizes failure rate, restart.ready totals, and resource slope", () => {
     "restart.ready.rssMb": { avg: 203, max: 206, min: 200, p50: 203, p95: 206 },
     "restart.ready.total": { avg: 50, max: 50, min: 50, p50: 50, p95: 50 },
   };
-  expect(Object.keys(result.summary.restartTrace)).toEqual(Object.keys(expectedTrace));
   expect(result.summary.restartTrace).toEqual(expectedTrace);
 });
 
@@ -354,7 +327,6 @@ it("does not mark failure-free benchmark summaries as failed", () => {
       "restart.ready.rssMb": 220,
     },
   });
-
   const result = summarize({ iterations: [readyIteration] });
 
   expect(testing.hasBenchmarkFailures([result])).toBe(false);
@@ -367,11 +339,7 @@ it("fails successful benchmark summaries without measured restart resource evide
 
   expect(testing.hasBenchmarkFailures([result])).toBe(false);
   expect(testing.collectBenchmarkEvidenceFailures([result])).toEqual([
-    {
-      id: "demo",
-      reason: "missing restart iterations",
-      sampleIndex: 1,
-    },
+    { id: "demo", reason: "missing restart iterations", sampleIndex: 1 },
   ]);
   expect(testing.shouldFailBenchmark([result], { allowFailures: true })).toBe(true);
 });

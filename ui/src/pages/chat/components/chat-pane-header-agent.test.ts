@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
+import { makeBootRoster } from "../../../app/bootstrap.test-support.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { createPaneHeaderWorkspaceFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import { mountChatPaneHeader, renderPaneHeaderInto } from "./chat-pane-header.test-support.ts";
@@ -27,15 +28,12 @@ function fixture() {
   const navigate = vi.fn();
   Object.defineProperty(pane.context, "navigate", { configurable: true, value: navigate });
   state.settings = { ...state.settings, sidebarAgentsMode: "roster" };
-  pane.context.agents.state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
+  pane.context.agents.state.agentsList = makeBootRoster({
     agents: [
       { id: "main", name: "Chief of Staff", identity: { emoji: "🦊" } },
       { id: "research", name: "Research lead", identity: { emoji: "🔬" } },
     ],
-  };
+  });
   const container = document.createElement("div");
   document.body.append(container);
   containers.push(container);
@@ -110,7 +108,7 @@ it("uses the pane agent on direct navigation and retained agent switches, only i
 
   state.settings = { ...state.settings, sidebarAgentsMode: "chip" };
   draw();
-  expect(leading().textContent).toContain("workspace-research");
+  expect(leading().textContent).not.toContain("workspace-research");
   expect(leading().textContent).toContain("What can you do?");
   expect(centered()).toBeNull();
   expect(find(leading(), "agent-identity")).toBeNull();
@@ -130,12 +128,9 @@ it("keeps the requested agent ID while its roster is loading or missing", () => 
   expect(find(container, "agent-identity")?.textContent).toContain("research");
   expect(find(container, "header-leading")?.textContent).not.toContain("Wrong agent");
 
-  pane.context.agents.state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
+  pane.context.agents.state.agentsList = makeBootRoster({
     agents: [{ id: "main", name: "Wrong agent" }],
-  };
+  });
   draw();
   expect(find(container, "agent-identity")?.textContent).toContain("research");
   expect(find(container, "header-leading")?.textContent).not.toContain("Wrong agent");

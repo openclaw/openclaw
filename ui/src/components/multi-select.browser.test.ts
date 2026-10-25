@@ -4,8 +4,9 @@ import { normalizeAgentModelRefForConfig } from "../../../src/config/model-input
 import { createPrimaryModelExclusion } from "../lib/agents/display.ts";
 import { mountSolid } from "../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { MultiSelectOption, MultiSelectProps } from "./multi-select-types.ts";
 import { MultiSelect } from "./multi-select.tsx";
+type MultiSelectInput = Parameters<typeof MultiSelect>[0];
+type MultiSelectOption = NonNullable<MultiSelectInput["options"]>[number];
 const primary = "openai/gpt-5.4";
 const sonnet = "anthropic/claude-sonnet-4-6";
 const opus = "anthropic/claude-opus-4-7";
@@ -23,7 +24,7 @@ afterEach(() => {
 function fixtureOptions(...rows: Array<[string, string, boolean?]>): MultiSelectOption[] {
   return rows.map(([value, label, disabled]) => ({ value: `fixture/${value}`, label, disabled }));
 }
-async function createMultiSelect(overrides: Partial<MultiSelectProps> = {}) {
+async function createMultiSelect(overrides: MultiSelectInput = {}) {
   const props = {
     options,
     value: [sonnet],
@@ -41,7 +42,7 @@ async function createMultiSelect(overrides: Partial<MultiSelectProps> = {}) {
   return {
     element,
     props,
-    update: (next: Partial<MultiSelectProps>) => view.update({ ...props, ...next }),
+    update: (next: MultiSelectInput) => view.update({ ...props, ...next }),
   };
 }
 function input(element: HTMLElement): HTMLInputElement {
@@ -236,7 +237,9 @@ it("keeps a bare fallback separate from a real alternate model", async () => {
   await clickField(element);
   expect(values(element, "option")).toEqual([alternate]);
   await pressKey(element, "Enter");
-  expect(props.onChange).toHaveBeenCalledExactlyOnceWith([existing, alternate]);
+  await waitForSolid(() =>
+    expect(props.onChange).toHaveBeenCalledExactlyOnceWith([existing, alternate]),
+  );
 });
 it("selects the visible highlight when a catalog refresh shortens the open list", async () => {
   const { element, props, update } = await createMultiSelect();
@@ -293,6 +296,8 @@ it("keeps the scroll position when the pointer highlights a clipped edge row", a
   const list = element.querySelector<HTMLElement>(".multi-select__menu")!;
   await waitForSolid(() => expect(list.scrollHeight).toBeGreaterThan(list.clientHeight));
   const rows = [...element.querySelectorAll<HTMLElement>(".multi-select__option")];
+  // Opening reveals the initial highlight; finish that scroll before simulating a wheel scroll.
+  await waitForSolid(() => expect(rows[0]!.getAttribute("aria-selected")).toBe("true"));
   const bounds = list.getBoundingClientRect();
   const rowHeight = rows[1]!.offsetTop - rows[0]!.offsetTop;
   // Leave half a row clipped at the bottom edge, as a wheel or trackpad scroll does.
@@ -301,6 +306,7 @@ it("keeps the scroll position when the pointer highlights a clipped edge row", a
   await settle();
   const top = list.scrollTop;
   const rect = edgeRow.getBoundingClientRect();
+  expect(rect.top).toBeLessThan(bounds.bottom);
   expect(rect.bottom).toBeGreaterThan(bounds.bottom);
   // Hover the menu at the clipped row's visible sliver; hovering the row
   // itself would let Playwright scroll it into view before moving.

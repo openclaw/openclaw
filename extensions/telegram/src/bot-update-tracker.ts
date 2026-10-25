@@ -154,11 +154,10 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     const updateId = resolveTelegramUpdateId(ctx);
     const updateKey = buildTelegramUpdateKey(ctx);
     if (typeof updateId === "number") {
-      if (failedUpdateIds.has(updateId)) {
-        failedUpdateIds.delete(updateId);
-      } else if (
-        (initialUpdateId !== null && updateId <= initialUpdateId) ||
-        acceptedUpdateIds.has(updateId)
+      if (
+        !failedUpdateIds.delete(updateId) &&
+        ((initialUpdateId !== null && updateId <= initialUpdateId) ||
+          acceptedUpdateIds.has(updateId))
       ) {
         // Pending middleware is not a terminal processing fact for a spool retry.
         options.onSkip?.(`update:${updateId}`);

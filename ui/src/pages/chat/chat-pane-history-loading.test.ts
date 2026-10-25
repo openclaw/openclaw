@@ -56,7 +56,7 @@ describe("chat pane history loading", () => {
     const hydration = loadChatHistory(state);
     await vi.waitFor(() => expect(state.chatLoading).toBe(true));
     const loading = historyAction();
-    expect(loading.disabled).toBe(true);
+    expect(loading.getAttribute("aria-disabled")).toBe("true");
     expect(loading.textContent?.trim()).toBe("Loading earlier…");
     expect(loading.getAttribute("aria-label")).toBe("Loading earlier…");
     expect(loading.getAttribute("aria-busy")).toBe("true");

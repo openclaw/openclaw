@@ -1,7 +1,6 @@
 import * as engineSessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeSessionDeliveryState } from "openclaw/plugin-sdk/session-store-runtime";
-import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
 import * as sessionVisibility from "openclaw/plugin-sdk/session-visibility";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
@@ -54,12 +53,12 @@ const crossAgentStore: Record<string, TestSessionEntry> = {
 };
 let combinedSessionStore: Record<string, TestSessionEntry> = crossAgentStore;
 
-vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGatewayAsync: vi.fn(async () => ({
+    loadMemorySearchSessionStore: vi.fn(async () => ({
       storePath: "(test)",
       store: combinedSessionStore,
     })),
@@ -69,7 +68,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 describe("filterMemorySearchHitsBySessionVisibility", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).mockClear();
+    vi.mocked(engineSessions.loadMemorySearchSessionStore).mockClear();
     combinedSessionStore = crossAgentStore;
   });
 
@@ -126,6 +125,53 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toStrictEqual([]);
   });
 
+  it("retains channel requester routing when transcript inventory is limited to the search", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:1.001";
+    const sibling = "agent:main:slack:channel:c111:thread:1.002";
+    const channelEntry = (id: string) =>
+      sessionEntry(id, 1, `/tmp/sessions/${id}.jsonl`, {
+        chatType: "channel",
+        space: "t111",
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "slack", accountId: "default", to: "channel:c111" },
+          origin: {
+            provider: "slack",
+            accountId: "default",
+            chatType: "channel",
+            to: "channel:c111",
+          },
+        }),
+      });
+    const inventory = { [requester]: channelEntry("current"), [sibling]: channelEntry("past") };
+    const selectedInventory: typeof engineSessions.loadMemorySearchSessionStore = async (
+      _cfg,
+      selection,
+    ) => ({
+      storePath: "(test)",
+      store: Object.fromEntries(
+        Object.entries(inventory).filter(
+          ([key, row]) =>
+            selection.sessionKeys.includes(key) || selection.sessionIds.includes(row.sessionId),
+        ),
+      ),
+    });
+    vi.mocked(engineSessions.loadMemorySearchSessionStore)
+      .mockImplementationOnce(selectedInventory)
+      .mockImplementationOnce(selectedInventory);
+    const hit = searchHit("sessions/past.jsonl", "sessions", "same channel");
+
+    await expect(
+      filterMemorySearchHitsBySessionVisibility({
+        cfg: asOpenClawConfig({ tools: { sessions: { visibility: "channel" } } }),
+        agentId: "main",
+        requesterSessionKey: requester,
+        sandboxed: false,
+        hits: [hit],
+        captureChannelTargets: () => {},
+      }),
+    ).resolves.toEqual([hit]);
+  });
+
   it("does not load session history for memory-only hits with configured recall", async () => {
     const guard = vi.spyOn(sessionVisibility, "createSessionVisibilityGuard");
     const hits: MemorySearchResult[] = [searchHit("memory/foo.md", "memory", "x")];
@@ -135,7 +181,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       conversationRecall: recallContext("agent:main:main", "configured"),
     });
     expect(filtered).toEqual(hits);
-    expect(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).not.toHaveBeenCalled();
+    expect(engineSessions.loadMemorySearchSessionStore).not.toHaveBeenCalled();
     expect(guard).not.toHaveBeenCalled();
   });
 
@@ -228,7 +274,6 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     });
 
     expect(filtered).toStrictEqual([]);
-    expect(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).toHaveBeenCalledOnce();
   });
 
   it("denies the shared global session as a recall source despite direct metadata", async () => {
@@ -459,7 +504,7 @@ describe("reset-generation session search visibility", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).mockClear();
+    vi.mocked(engineSessions.loadMemorySearchSessionStore).mockClear();
     combinedSessionStore = crossAgentStore;
   });
 

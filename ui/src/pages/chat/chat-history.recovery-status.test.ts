@@ -116,3 +116,16 @@ it.each([
     expect(label()).toBeUndefined();
   }
 });
+
+it("keeps the current model wait when compact history omits its replay events", async () => {
+  const state = createState(activeHistory("run-live"));
+  await loadChatHistory(state);
+  handleAgentEvent(state, event(1, "lifecycle", { phase: "start" }));
+  handleAgentEvent(state, event(2, "run_status", { phase: "waiting_for_model", reason: "slot" }));
+
+  await loadChatHistory(state);
+
+  expect(chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null)).toBe(
+    "Waiting for a free model slot",
+  );
+});

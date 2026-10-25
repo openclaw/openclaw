@@ -8,11 +8,11 @@ import { projectSource } from "../../../lib/reactive/projection.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import {
   createAsyncQuestionPresentation,
   createAsyncQuestionPanelProps as panelProps,
-  readAsyncQuestions,
   subscribeAsyncQuestionState,
 } from "./chat-async-question.ts";
 import type {
@@ -549,7 +549,7 @@ it("projects answer delivery from the outbox, retries its payload, and waits for
   container.querySelector<HTMLButtonElement>("button")!.click();
   expect(retry).toHaveBeenCalledExactlyOnceWith("answer-row");
   expect(state.transcriptRenderContext.onAsyncQuestionSubmit).not.toHaveBeenCalled();
-  showDelivery("unconfirmed", "Delivery unconfirmed");
+  showDelivery("failed", "Answer not sent");
   const retainedRetry = container.querySelector<HTMLButtonElement>("button")!;
   state.asyncQuestionScope = "another-context";
   retainedRetry.click();

@@ -294,6 +294,10 @@ export async function waitForTextContaining(
   }
 }
 
+export function readMcpAppModule(): Promise<string> {
+  return fs.readFile(require.resolve("@modelcontextprotocol/ext-apps/app-with-deps"), "utf8");
+}
+
 export function appHtml(appModuleUrl: string): string {
   return `<!doctype html>
 <meta charset="utf-8" />

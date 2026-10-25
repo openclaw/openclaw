@@ -23,6 +23,7 @@ export function elementRef<T extends Element>(
   let release: void | (() => void);
   onCleanup(() => release?.());
   return (element) => {
+    release?.();
     release = register?.(element);
   };
 }

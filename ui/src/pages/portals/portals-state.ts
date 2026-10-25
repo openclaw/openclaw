@@ -5,7 +5,7 @@ import type {
   PortalSummary,
   UiPortalPresentation,
 } from "@openclaw/gateway-protocol";
-import { onCleanup } from "solid-js";
+import { onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
@@ -152,9 +152,11 @@ export function createPortals(
     lifecycle.dispose();
     resetGatewayState();
   });
-  if (state.connected) {
-    void loadPresentation();
-  }
+  onSettled(() => {
+    if (state.connected) {
+      void loadPresentation();
+    }
+  });
   function pollEnvironment(enabled: boolean) {
     if (!enabled) {
       clearInterval(environmentTimer);

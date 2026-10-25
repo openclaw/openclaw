@@ -21,6 +21,10 @@ vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
 vi.mock("../../state/openclaw-state-db.js", () => {
   throw new Error("Skill discovery must not load the writable shared-state database owner");
 });
+// mock-isolation: Skill scans do not read or validate interactive preview bundles.
+vi.mock("../loading/plugin-skill-bundle.js", () => {
+  throw new Error("Skill discovery must not load plugin skill preview readers");
+});
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());

@@ -23,9 +23,15 @@ describe("plugin retained reference diagnostics", () => {
       payload: "private-prompt",
       secret: "private-secret",
     };
-    const first = withPluginRetentionOwner(owner, () =>
-      instance.retainWork("registry-construction"),
-    );
+    const first = withPluginRetentionOwner(owner, () => {
+      const release = instance.retainWork("registry-construction");
+      instance.run(() => {
+        const [work, call] = instance.retentionSnapshot().references;
+        expect(Object.isFrozen(work!.owner)).toBe(true);
+        expect(call!.owner).toBe(work!.owner);
+      });
+      return release;
+    });
     owner.sessionKey = "mutated";
     const second = withPluginRetentionOwner({ sessionKey: "session-b", runId: "run-b" }, () =>
       instance.retainWork("prepared-generation-lease"),
@@ -60,6 +66,27 @@ describe("plugin retained reference diagnostics", () => {
     first();
     second();
     expect(instance.retentionSnapshot()).toMatchObject({ total: 0, references: [] });
+  });
+
+  it("copies explicit consumer owners and preserves empty overrides", () => {
+    const instance = new PluginInstance("fixture");
+    const owner = { runId: "r".repeat(300), payload: "private-prompt" };
+    const [consumer, empty] = withPluginRetentionOwner({ runId: "scope-run" }, () => [
+      instance.retainConsumer(undefined, undefined, "work", { owner }),
+      instance.retainConsumer(undefined, undefined, "work", { owner: {} }),
+    ]);
+    owner.runId = "mutated";
+    const snapshot = instance.retentionSnapshot();
+    expect(snapshot.references[0]!.owner).toEqual({
+      agentId: undefined,
+      sessionKey: undefined,
+      runId: "r".repeat(256),
+      serviceId: undefined,
+    });
+    expect(snapshot.references[1]!.owner).toBe("unknown");
+    expect(JSON.stringify(snapshot)).not.toMatch(/private-prompt|mutated|scope-run/);
+    consumer!.release();
+    empty!.release();
   });
 
   it("bounds all references while making unknown owners explicit", () => {

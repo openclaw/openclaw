@@ -183,6 +183,9 @@ describe("session roster presentation", () => {
           h.sessions.dispose();
         }
         expect(h.sessions.presentation).toEqual({ result: null, agentId: null });
+        if (boundary !== "dispose") {
+          expect(observed.length).toBeGreaterThan(0);
+        }
         expect(observed.every((result) => result === null)).toBe(true);
       } finally {
         reconnect.resolve(sessionsResult([], 2));

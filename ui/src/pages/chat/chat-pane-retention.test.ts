@@ -1,6 +1,7 @@
-/* @vitest-environment jsdom */
-
 import { describe, expect, it } from "vitest";
+/* @vitest-environment jsdom */
+import type { BoardProvider } from "../../lib/board/provider.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
@@ -37,13 +38,7 @@ describe("chat pane retained full messages", () => {
         sessionId: state.currentSessionId,
         lifecycleRevision: "revision-1",
       };
-      state.sessionsResult = {
-        ts: 1,
-        path: "",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [session],
-      };
+      state.sessionsResult = sessionListResult(1, [session]);
       context.gateway.snapshot.selfUser = { id: "alice", name: "Alice" };
       const load = createSidebarFullMessageLoader(state, context.gateway)!;
       const request = { sessionKey: "agent:main:example", messageId: "answer" };
@@ -69,4 +64,25 @@ describe("chat pane retained full messages", () => {
       expect(requests).toBe(2);
     },
   );
+});
+
+describe("chat pane empty boards", () => {
+  it("releases replaced session providers while keeping the current fallback", async () => {
+    const { pane: base, state } = createRefreshChatPane();
+    // SAFETY: The existing runtime fixture forwards protected board operations.
+    const pane = base as typeof base & { resolveBoardProvider(): BoardProvider };
+    const retired = ["first", "second"].map((session) => {
+      state.sessionKey = `agent:main:retired-board-${session}`;
+      return new WeakRef(pane.resolveBoardProvider());
+    });
+    state.sessionKey = "agent:main:current-board";
+    const current = new WeakRef(pane.resolveBoardProvider());
+    const collectionControl = new WeakRef({ unowned: true });
+
+    await collectGarbageForTest();
+
+    expect(collectionControl.deref()).toBeUndefined();
+    expect(retired.map((reference) => reference.deref())).toEqual([undefined, undefined]);
+    expect(current.deref()).toBe(pane.resolveBoardProvider());
+  });
 });

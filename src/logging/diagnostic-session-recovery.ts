@@ -54,6 +54,11 @@ type DiagnosticSessionRecoveryBaseOutcome = {
 
 export type StuckSessionRecoveryOutcome =
   | (DiagnosticSessionRecoveryBaseOutcome & {
+      status: "noop";
+      action: "reconcile_state";
+      reason: "no_active_work" | "pending_session_work";
+    })
+  | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "aborted";
       action: "abort_embedded_run";
       aborted: boolean;

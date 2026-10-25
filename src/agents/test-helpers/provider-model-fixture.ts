@@ -1,6 +1,10 @@
 /** Complete provider model fixtures with typed scenario overrides. */
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 
+type FixtureModel<TApi extends Api> = Omit<Model<TApi>, "headers"> & {
+  headers?: Record<string, string>;
+};
+
 type ProviderModelFixture<TApi extends Api> = Partial<
   Omit<Model<TApi>, "id" | "provider" | "api" | "baseUrl">
 > &
@@ -11,6 +15,12 @@ type ProviderModelFixture<TApi extends Api> = Partial<
     requestTimeoutMs?: number;
   };
 
+export function makeProviderModelFixture<TApi extends Api>(
+  overrides: ProviderModelFixture<TApi> & { headers?: Record<string, string> },
+): FixtureModel<TApi>;
+export function makeProviderModelFixture<TApi extends Api>(
+  overrides: ProviderModelFixture<TApi>,
+): Model<TApi>;
 export function makeProviderModelFixture<TApi extends Api>(
   overrides: ProviderModelFixture<TApi>,
 ): Model<TApi> {

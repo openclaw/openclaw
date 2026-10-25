@@ -106,6 +106,29 @@ function expectRequest(
 }
 
 describe("xai video generation provider", () => {
+  it("releases the submitted request before polling and downloading its video", async () => {
+    const events: string[] = [];
+    postJsonRequestMock.mockResolvedValue({
+      response: Response.json({ request_id: "req" }),
+      release: async () => {
+        events.push("release");
+      },
+    });
+    fetchWithTimeoutMock
+      .mockImplementationOnce(async () => {
+        events.push("poll");
+        return Response.json({ status: "done", video: { url: "https://cdn.x.ai/video.mp4" } });
+      })
+      .mockImplementationOnce(async () => {
+        events.push("download");
+        return new Response("video-bytes", { headers: { "content-type": "video/mp4" } });
+      });
+
+    await generate();
+
+    expect(events).toEqual(["release", "poll", "download"]);
+  });
+
   it("rejects a duration that rounds to zero before submission", async () => {
     await expect(generate({ durationSeconds: 0.4 })).rejects.toThrow(
       "durationSeconds must be a positive duration",
@@ -195,7 +218,7 @@ describe("xai video generation provider", () => {
     resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => ({
       baseUrl: params.baseUrl ?? params.defaultBaseUrl,
       allowPrivateNetwork: true,
-      headers: new Headers(params.defaultHeaders),
+      headers: new Headers(omitNullRequestHeaders(params.defaultHeaders)),
       dispatcherPolicy: dispatcherPolicy as never,
     }));
     mockXaiVideoTask();
@@ -367,3 +390,4 @@ describe("xai video generation provider", () => {
     );
   });
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

@@ -43,10 +43,6 @@ type WorkspaceFileRead = {
   onIdentity?: (identity: string) => void;
 };
 
-function localPath(root: string, relative: string): string {
-  return path.join(root, ...relative.split("/"));
-}
-
 export function isPortableRootContainedSymlink(
   root: string,
   entryPath: string,
@@ -60,7 +56,7 @@ export function isPortableRootContainedSymlink(
   ) {
     return false;
   }
-  const resolved = path.resolve(path.dirname(localPath(root, entryPath)), target);
+  const resolved = path.resolve(path.dirname(path.join(root, entryPath)), target);
   return resolved === root || resolved.startsWith(`${root}${path.sep}`);
 }
 
@@ -284,7 +280,7 @@ export async function scanActualWorkspaceManifest(
   const addFile = async (relative: string): Promise<void> => {
     let identity: string | undefined;
     const snapshot = await readWorkspaceFileSnapshotWithLimit(
-      localPath(root, relative),
+      path.join(root, relative),
       (size) => {
         addBytes(size);
         return size;
@@ -346,7 +342,7 @@ export async function scanActualWorkspaceManifest(
   };
   const addIncludedPath = async (
     relative: string,
-    includedNodes: ReadonlySet<string>,
+    includedParents: ReadonlySet<string>,
     derivedOnlyDirectories: ReadonlySet<string>,
   ): Promise<"included" | "derived-only" | "absent"> => {
     if (
@@ -359,7 +355,7 @@ export async function scanActualWorkspaceManifest(
       return "derived-only";
     }
     checkTraversal(relative);
-    const absolute = localPath(root, relative);
+    const absolute = path.join(root, relative);
     const stats = await fs.lstat(absolute, { bigint: true }).catch((error: unknown) => {
       if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
         return undefined;
@@ -370,12 +366,10 @@ export async function scanActualWorkspaceManifest(
       return "absent";
     }
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
-      if (params.preserveDirectories?.has(relative)) {
+      if (params.preserveDirectories?.has(relative) || includedParents.has(relative)) {
         addEntry({ path: relative, type: "directory" });
         return "included";
       }
-      let hasDerivedEntry = false;
-      let hasIncludedEntry = false;
       for await (const entry of await fs.opendir(absolute)) {
         scanSignal.throwIfAborted();
         const child = `${relative}/${entry.name}`;
@@ -387,23 +381,18 @@ export async function scanActualWorkspaceManifest(
           ) ||
           derivedOnlyDirectories.has(child)
         ) {
-          hasDerivedEntry = true;
-        } else if (includedNodes.has(child)) {
-          hasIncludedEntry = true;
+          return "derived-only";
         }
       }
-      if (hasIncludedEntry || !hasDerivedEntry) {
-        addEntry({ path: relative, type: "directory" });
-        return "included";
-      }
-      return "derived-only";
+      addEntry({ path: relative, type: "directory" });
+      return "included";
     }
     return (await addLeaf(relative, absolute, stats)) ? "included" : "absent";
   };
   const walk = async (
     relativeDirectory: string,
   ): Promise<{ hasDerivedEntry: boolean; included: boolean }> => {
-    const absoluteDirectory = relativeDirectory ? localPath(root, relativeDirectory) : root;
+    const absoluteDirectory = relativeDirectory ? path.join(root, relativeDirectory) : root;
     let hasDerivedEntry = false;
     let hasNonDerivedEntry = false;
     for await (const directoryEntry of await fs.opendir(absoluteDirectory)) {
@@ -423,7 +412,7 @@ export async function scanActualWorkspaceManifest(
         hasDerivedEntry = true;
         continue;
       }
-      const absolute = localPath(root, relative);
+      const absolute = path.join(root, relative);
       const stats = await fs.lstat(absolute, { bigint: true });
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         const child = await walk(relative);
@@ -448,13 +437,14 @@ export async function scanActualWorkspaceManifest(
     };
   };
   if (params.includePaths) {
-    const includedNodes = new Set<string>();
+    const includedParents = new Set<string>();
     const derivedOnlyDirectories = new Set<string>();
-    const paths = [...params.includePaths]
-      .map((relative) => ({ relative, depth: relative.split("/").length }))
-      .toSorted(
-        (left, right) => right.depth - left.depth || left.relative.localeCompare(right.relative),
-      );
+    const paths = Array.from(params.includePaths, (relative) => ({
+      relative,
+      depth: relative.split("/").length,
+    })).toSorted(
+      (left, right) => right.depth - left.depth || left.relative.localeCompare(right.relative),
+    );
     // Siblings are independent, but parent classification needs every deeper
     // membership result. Join each depth before admitting the next one.
     for (let start = 0; start < paths.length;) {
@@ -464,9 +454,9 @@ export async function scanActualWorkspaceManifest(
       }
       await runScans(start, end, async (index) => {
         const { relative } = paths[index]!;
-        const state = await addIncludedPath(relative, includedNodes, derivedOnlyDirectories);
+        const state = await addIncludedPath(relative, includedParents, derivedOnlyDirectories);
         if (state === "included") {
-          includedNodes.add(relative);
+          includedParents.add(path.posix.dirname(relative));
         } else if (state === "derived-only") {
           derivedOnlyDirectories.add(relative);
         }

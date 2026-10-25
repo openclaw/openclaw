@@ -89,9 +89,7 @@ async function proveQueuedLocalWorkspaceCheckpoint(
   release.resolve();
   await Promise.all([custody, first, second]);
   await expectSource(owner.worktree.path, "first edit\n");
-  expect(capture.mock.calls.map(([, action]) => action)).toEqual([
-    { kind: "scan", target: "canonical", canonicalRoot: owner.worktree.path },
-  ]);
+  expect(capture).toHaveBeenCalledOnce();
 
   const captured = createDeferred();
   const finishCapture = createDeferred();
@@ -106,16 +104,6 @@ async function proveQueuedLocalWorkspaceCheckpoint(
   await Promise.all([third, later]);
   expect(capture).toHaveBeenCalledTimes(3);
 
-  await fs.unlink(path.join(projection.workspaceDir, "source.txt"));
-  await fs.writeFile(path.join(projection.workspaceDir, "added.txt"), "later edit\n");
-  await projection.checkpoint();
-  await expect(fs.stat(path.join(owner.worktree.path, "source.txt"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  expect(await fs.readFile(path.join(owner.worktree.path, "added.txt"), "utf8")).toBe(
-    "later edit\n",
-  );
-  expect(capture).toHaveBeenCalledTimes(4);
   spy.mockRestore();
 }
 

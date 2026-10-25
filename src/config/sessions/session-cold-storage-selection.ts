@@ -15,8 +15,10 @@ import type {
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import { MAX_COLD_ARCHIVE_BYTES } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import type { SessionColdOversized } from "./session-cold-storage.types.js";
 import { collectSessionAdmissionReferences } from "./session-history-eviction-candidates.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 
@@ -95,7 +97,44 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
                     .limit(input.maxTranscripts - externalizations.length),
                 ).rows
               : [];
+          const oversizedTranscripts: SessionColdOversized[] = [];
+          // UTF-16 stores leave event_utf8_bytes null; half the stored bytes bounds UTF-8 below.
+          const utf16Storage =
+            candidates.length > 0 &&
+            !isPostgresSqlConnection(database.db) &&
+            executeSqliteQuerySync(
+              database.db,
+              getNodeSqliteKysely<{ pragma_encoding: { encoding: string } }>(database.db)
+                .selectFrom("pragma_encoding")
+                .select("encoding"),
+            ).rows[0]?.encoding !== "UTF-8";
           const plans = candidates.flatMap(({ session_id: sessionId }) => {
+            const sizes = executeSqliteQuerySync(
+              database.db,
+              db
+                .selectFrom("transcript_events")
+                .select((eb) => [
+                  eb.fn.sum<number>("event_utf8_bytes").as("known"),
+                  eb.fn
+                    .sum<number>(
+                      eb
+                        .case()
+                        .when("event_utf8_bytes", "is", null)
+                        .then(eb.fn<number>("octet_length", ["event_json"]))
+                        .end(),
+                    )
+                    .as("stored"),
+                ])
+                .where("session_id", "=", sessionId),
+            ).rows[0];
+            const stored = sizes?.stored ?? 0;
+            const lowerBoundBytes =
+              (sizes?.known ?? 0) + (utf16Storage ? Math.ceil(stored / 2) : stored);
+            // The uncompressed envelope contains every original event body plus restore metadata.
+            if (lowerBoundBytes > MAX_COLD_ARCHIVE_BYTES) {
+              oversizedTranscripts.push({ sessionId, lowerBoundBytes });
+              return [];
+            }
             const snapshot = readSessionStateDeleteSnapshot(database.db, sessionId);
             return snapshot.generation && snapshot.lastSeq !== null
               ? [
@@ -117,7 +156,7 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
               database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
             );
           }
-          return { plans, externalizations, freePages };
+          return { plans, externalizations, oversizedTranscripts, freePages };
         },
         { databaseLabel: database.path, operationLabel: "cold transcript selection" },
       ),

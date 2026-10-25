@@ -1,4 +1,5 @@
 import path from "node:path";
+import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -19,6 +20,90 @@ describe("WhatsApp inbound and outbound response-prefix boundary", () => {
   beforeAll(() => {
     setWhatsAppRuntime(createPluginRuntimeMock());
   });
+
+  it.each(["group sender", "quote", "unknown quote sender", "timestamps"])(
+    "formats the inbound envelope at the reply boundary (%s)",
+    async (scenario) => {
+      await withTempHome(
+        async (root) => {
+          const kind = scenario === "group sender" ? "group" : "direct";
+          const peer = kind === "group" ? "123@g.us" : boundaryPeer;
+          const boundary = await createReplyBoundary(root, peer, {
+            kind,
+            account: { allowFrom: [boundaryPeer], groupPolicy: "open", contextVisibility: "all" },
+            agents: { defaults: { workspace: path.join(root, "workspace"), userTimezone: "UTC" } },
+          });
+          const replyResolver = vi.fn<ReplyResolver>(async () => undefined);
+          const unexpectedDelivery = async () => {
+            throw new Error("Unexpected delivery for a silent reply resolver");
+          };
+          const registration = registerReplyBoundary({
+            sendMessage: unexpectedDelivery,
+            sendComposingTo: async () => {},
+            sendPoll: unexpectedDelivery,
+            sendReaction: unexpectedDelivery,
+          });
+          const bodies =
+            scenario === "timestamps"
+              ? ["first", "second"]
+              : [scenario === "quote" ? "hello" : "ping"];
+          try {
+            expect(registration.registration).not.toBeNull();
+            for (const [index, body] of bodies.entries()) {
+              const timestamp = 1735689600000 + index * 3_600_000;
+              const msg = createTestWebInboundMessage({
+                event: { id: `envelope-${scenario}-${index}`, timestamp },
+                payload: { body },
+                platform: {
+                  chatJid: peer,
+                  recipientJid: self,
+                  senderName: "Bob",
+                  senderE164: "+15550001111",
+                  senderJid: "111@s.whatsapp.net",
+                },
+                admission: { accountId, conversation: { kind, id: peer } },
+                quote:
+                  scenario === "quote"
+                    ? { id: "q1", body: "original", sender: { displayName: "+1999" } }
+                    : scenario === "unknown quote sender"
+                      ? { body: "original" }
+                      : undefined,
+              });
+              expect(await boundary.process(msg, replyResolver)).toBe(false);
+              await Promise.all(boundary.backgroundTasks);
+              const envelope = replyResolver.mock.calls[index]?.[0].Body;
+              if (scenario === "group sender") {
+                expect(envelope).toContain("Bob (+15550001111):");
+                expect(envelope).toContain("ping");
+              } else if (scenario === "quote") {
+                expect(envelope).toContain("[Replying to +1999 id:q1]");
+                expect(envelope).toContain("original");
+                expect(envelope).toContain("[/Replying]");
+              } else if (scenario === "unknown quote sender") {
+                expect(envelope).toContain("[Replying to unknown sender]\noriginal\n[/Replying]");
+              } else {
+                const expectedTimestamp = formatEnvelopeTimestamp(new Date(timestamp), "utc");
+                expect(envelope).toMatch(
+                  new RegExp(
+                    `\\[WhatsApp ${escapeRegExp(peer)} (\\+\\d+[smhd] )?${escapeRegExp(expectedTimestamp)}\\] ${escapeRegExp(peer)}: ${body}`,
+                  ),
+                );
+                expect(envelope).not.toContain(index === 0 ? "second" : "first");
+              }
+            }
+            expect(replyResolver).toHaveBeenCalledTimes(bodies.length);
+          } finally {
+            await Promise.allSettled(boundary.backgroundTasks);
+            registration.dispose();
+          }
+        },
+        {
+          prefix: "whatsapp-envelope-boundary-",
+          env: { OPENCLAW_CONFIG_PATH: (root) => path.join(root, ".openclaw", "openclaw.json") },
+        },
+      );
+    },
+  );
 
   it.each([
     {
