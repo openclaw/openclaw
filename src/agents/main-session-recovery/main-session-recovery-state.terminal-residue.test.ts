@@ -99,6 +99,7 @@ function unfinishedEntry(overrides: Partial<SessionEntry> = {}) {
 
 describe("main session recovery terminal-only residue", () => {
   it("releases an ownerless killed fence without reviving it or discarding delivery custody", async () => {
+    const startupCheckedStorePaths = new Set<string>();
     await withStore(async ({ read, write, mark, storePath }) => {
       const killed: SessionEntry = {
         sessionId: "killed-session",
@@ -167,7 +168,7 @@ describe("main session recovery terminal-only residue", () => {
         projectSessionActive: true,
       });
       try {
-        await mark();
+        await mark({ startupCheckedStorePaths });
         expect(read("agent:main:orphan")).toMatchObject({
           sessionId: "orphan",
           status: "killed",
@@ -190,13 +191,22 @@ describe("main session recovery terminal-only residue", () => {
         clearAgentRunContext("active-run");
         work.release();
       }
+      await expect(mark({ startupCheckedStorePaths })).resolves.toEqual({ marked: 0, skipped: 0 });
+      expect(read("agent:main:live")).toEqual(before.get("live"));
     });
   });
 
   it.each([false, true])(
-    "retires foreground residue only if every fence is terminal (%s)",
+    "inspects and retires foreground residue only if every fence is terminal (%s)",
     (live) => {
       const entry = fencedEntry(live);
+      expect(
+        transition(entry, {
+          kind: "inspect",
+          lifecycleGeneration: "standalone-generation",
+          sessionKey,
+        }),
+      ).toEqual({ kind: "observed", view: { status: live ? "blocked" : "inactive" } });
       expect(claimForeground(entry)).toEqual({ kind: live ? "no_change" : "applied" });
       if (live) {
         expect(entry.mainRestartRecovery).toBeDefined();
@@ -321,60 +331,4 @@ describe("main session recovery terminal-only residue", () => {
       });
     },
   );
-
-  it("retires terminal residue before orphan marking without touching a current owner", async () => {
-    const liveSessionKey = "agent:main:live";
-    const startupCheckedStorePaths = new Set<string>();
-    await withStore(async ({ storePath, read, write, mark }) => {
-      await write(settledEntry());
-      await write(
-        settledEntry({
-          sessionId: "live-session",
-          restartRecoveryDeliveryRunId: "live-run",
-          restartRecoveryRuns: [{ runId: "live-run", lifecycleGeneration: "current-generation" }],
-          restartRecoveryTerminalRunIds: [],
-        }),
-        liveSessionKey,
-      );
-
-      const liveWork = await beginSessionEffect({
-        scope: storePath,
-        identities: [liveSessionKey, "live-session"],
-        assertAllowed: () => {},
-      });
-      try {
-        await expect(mark({ startupCheckedStorePaths })).resolves.toEqual({
-          marked: 0,
-          skipped: 1,
-        });
-      } finally {
-        liveWork.release();
-      }
-      await expect(mark({ startupCheckedStorePaths })).resolves.toEqual({ marked: 0, skipped: 0 });
-
-      const terminal = read();
-      const live = read(liveSessionKey);
-      expectRetired(terminal);
-      expect(live).toMatchObject({
-        sessionId: "live-session",
-        restartRecoveryDeliveryRunId: "live-run",
-        restartRecoveryRuns: [{ runId: "live-run" }],
-      });
-    });
-  });
-
-  it.each([false, true])("standalone inspect blocks only live recovery fences (%s)", (live) => {
-    const entry = live ? fencedEntry(true) : settledEntry();
-
-    const result = transition(entry, {
-      kind: "inspect",
-      lifecycleGeneration: "standalone-generation",
-      sessionKey,
-    });
-
-    expect(result).toMatchObject({
-      kind: "observed",
-      view: { status: live ? "blocked" : "inactive" },
-    });
-  });
 });
