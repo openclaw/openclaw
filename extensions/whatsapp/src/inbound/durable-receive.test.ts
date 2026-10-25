@@ -55,6 +55,8 @@ async function completed(ids: string[]) {
     });
   }
 }
+const pending = () => queue.listPending({ limit: "all" });
+const claims = async () => (await queue.listClaims()).map((row) => row.id).toSorted();
 const transportId = (inbound: WhatsAppIngressAdmission) => {
   const id = inbound.message.key.id;
   if (!id) {
@@ -91,12 +93,12 @@ describe("WhatsApp durable receive", () => {
       throw new Error("downstream callback rejected");
     });
     await active.waitForIdle();
-    expect(
-      (await queue.enqueue(eventId("msg-1"), payload("msg-1"), { laneKey: JID })).kind,
-    ).not.toBe("completed");
-    expect(
-      (await queue.listPending({ limit: "all" })).some((row) => row.id === eventId("msg-1")),
-    ).toBe(true);
+    await expect(
+      queue.enqueue(eventId("msg-1"), payload("msg-1"), { laneKey: JID }),
+    ).resolves.not.toMatchObject({ kind: "completed" });
+    expect(await pending()).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: eventId("msg-1") })]),
+    );
   });
   it("retains individual same-lane claims until idempotent adoption", async () => {
     const ids = ["msg-4a", "msg-4b"] as const;
@@ -111,17 +113,13 @@ describe("WhatsApp durable receive", () => {
     });
     await active.waitForIdle();
     expect(dispatched).toEqual(ids);
-    expect((await queue.listClaims()).map((row) => row.id).toSorted()).toEqual(
-      ids.map(eventId).toSorted(),
-    );
-    expect(await queue.listPending({ limit: "all" })).toEqual([]);
+    expect(await claims()).toEqual(ids.map(eventId).toSorted());
+    expect(await pending()).toEqual([]);
     expect(adoptions).toHaveLength(2);
     for (const [index, adopt] of adoptions.entries()) {
       await adopt();
       await adopt();
-      expect((await queue.listClaims()).map((row) => row.id)).toEqual(
-        index === 0 ? [eventId(ids[1])] : [],
-      );
+      expect(await claims()).toEqual(index === 0 ? [eventId(ids[1])] : []);
       await completed(ids.slice(index, index + 1));
     }
     expect(dispatched).toEqual(ids);
@@ -169,7 +167,7 @@ describe("WhatsApp durable receive", () => {
       await active.waitForIdle();
       expect(bodies).toEqual([]);
       expect(await queue.listClaims()).toHaveLength(3);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      expect(await pending()).toEqual([]);
       expect(markRead).not.toHaveBeenCalled();
       await debouncer.drain();
       await active.waitForIdle();
@@ -178,7 +176,7 @@ describe("WhatsApp durable receive", () => {
         ["first", "second", "third"].map((id) => [{ remoteJid: JID, id }]),
       );
       expect(onError).not.toHaveBeenCalled();
-      expect(await queue.listClaims()).toEqual([]);
+      expect(await claims()).toEqual([]);
       await completed(["first", "second", "third"]);
     } finally {
       await active.pause();
@@ -204,7 +202,7 @@ describe("WhatsApp durable receive", () => {
       return { kind: "completed" };
     }).waitForIdle();
     expect(dispatched.toSorted()).toEqual(ids.toSorted());
-    expect(await queue.listPending({ limit: "all" })).toEqual([]);
+    expect(await pending()).toEqual([]);
   });
   it("serializes Long-like protobuf timestamps as seconds", () => {
     const timestamp = 1_700_000_000;

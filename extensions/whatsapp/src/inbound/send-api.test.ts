@@ -27,6 +27,8 @@ const DM_JID = "1555@s.whatsapp.net";
 const GROUP_JID = "120363000000000000@g.us";
 const LID_JID = "277038292303944@lid";
 const MEDIA = Buffer.from("media");
+const THUMBNAIL = Buffer.from("thumb");
+const PREVIEW = { jpegThumbnail: THUMBNAIL.toString("base64"), width: 640, height: 480 };
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
 const imageOps = vi.hoisted(() => ({
@@ -44,17 +46,15 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...imageOps,
 }));
 
-function createSocket() {
-  return {
-    sendMessage: vi.fn<Parameters<typeof createWebSendApi>[0]["sock"]["sendMessage"]>(
-      async () => ({ key: { id: "msg-1" } }) as WAMessage,
+const acceptedMessage = (id: string): WAMessage => ({ key: { id } });
+
+describe("createWebSendApi", () => {
+  const sock = {
+    sendMessage: vi.fn<Parameters<typeof createWebSendApi>[0]["sock"]["sendMessage"]>(async () =>
+      acceptedMessage("msg-1"),
     ),
     sendPresenceUpdate: vi.fn(async () => {}),
   };
-}
-
-describe("createWebSendApi", () => {
-  const sock = createSocket();
   const { sendMessage } = sock;
   let api: ReturnType<typeof createWebSendApi>;
 
@@ -64,18 +64,6 @@ describe("createWebSendApi", () => {
     imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     api = createWebSendApi({ sock, defaultAccountId: "main" });
   });
-  function withMentions(
-    participants: Parameters<typeof resolveWhatsAppOutboundMentions>[0]["participants"] = [
-      { id: "15551234567@s.whatsapp.net" },
-    ],
-  ) {
-    return createWebSendApi({
-      sock,
-      defaultAccountId: "main",
-      resolveOutboundMentions: ({ jid, text }) =>
-        resolveWhatsAppOutboundMentions({ chatJid: jid, text, participants }),
-    });
-  }
   function expectPartial(failure: unknown, ids: string[], cause: unknown, calls: number) {
     expect(isChannelPartialDeliveryError(failure)).toBe(true);
     expect(failure).toMatchObject({
@@ -89,7 +77,7 @@ describe("createWebSendApi", () => {
     expect(sendMessage.mock.calls[0]?.slice(0, 2)).toMatchObject([jid, fields]);
   }
 
-  function expectAccepted(result: WhatsAppSendResult, kind: string, messageId: string) {
+  function expectAccepted(result: WhatsAppSendResult, kind: string, messageId = "msg-1") {
     expect(result).toMatchObject({ kind, messageId, providerAccepted: true });
   }
 
@@ -120,7 +108,7 @@ describe("createWebSendApi", () => {
     ],
     ["sticker", () => api.sendSticker("+1555", sticker), { sticker, mimetype: "image/webp" }],
   ] as const)("sends structured %s messages", async (kind, send, content) => {
-    expectAccepted(await send(), kind, "msg-1");
+    expectAccepted(await send(), kind);
     expect(sendMessage).toHaveBeenCalledWith(DM_JID, content);
     expectOutboundActivityOnce();
   });
@@ -156,7 +144,19 @@ describe("createWebSendApi", () => {
   ])(
     "native mentions %#",
     async (participants, text, expected, mentions, media, to = GROUP_JID) => {
-      api = withMentions(participants);
+      api = createWebSendApi({
+        sock,
+        defaultAccountId: "main",
+        resolveOutboundMentions: ({ jid, text: mentionText }) =>
+          resolveWhatsAppOutboundMentions({ chatJid: jid, text: mentionText, participants }),
+      });
+      if (media === "image") {
+        imageOps.getImageMetadata.mockResolvedValueOnce({
+          width: PREVIEW.width,
+          height: PREVIEW.height,
+        });
+        imageOps.resizeToJpeg.mockResolvedValueOnce(THUMBNAIL);
+      }
       await api.sendMessage(
         to,
         text,
@@ -170,6 +170,7 @@ describe("createWebSendApi", () => {
             ? { [media]: MEDIA, caption: expected, mimetype: "image/jpeg" }
             : { text: expected }),
           ...(media === "document" ? { fileName: "promo.jpg" } : {}),
+          ...(media === "image" ? PREVIEW : {}),
           ...(mentions.length ? { mentions } : {}),
         },
         to,
@@ -192,30 +193,13 @@ describe("createWebSendApi", () => {
     expectSend({ [kind]: MEDIA, caption: "cap", mimetype, ...options });
   });
 
-  it("sends image thumbnails and dimensions", async () => {
-    const thumbnail = Buffer.from("thumb");
-    imageOps.getImageMetadata.mockResolvedValueOnce({ width: 640, height: 480 });
-    imageOps.resizeToJpeg.mockResolvedValueOnce(thumbnail);
-    await api.sendMessage("+1555", "cap", MEDIA, "image/png");
-    expectSend({
-      image: MEDIA,
-      caption: "cap",
-      mimetype: "image/png",
-      jpegThumbnail: thumbnail.toString("base64"),
-      width: 640,
-      height: 480,
-    });
-  });
-
   it("sends voice text separately and combines both receipts", async () => {
     sendMessage
-      .mockResolvedValueOnce({ key: { id: "voice-1" } })
-      .mockResolvedValueOnce({ key: { id: "voice-text-1" } });
+      .mockResolvedValueOnce(acceptedMessage("voice-1"))
+      .mockResolvedValueOnce(acceptedMessage("voice-text-1"));
     const res = await voice();
     expectSend({ audio: MEDIA, ptt: true, mimetype: "audio/ogg" });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, DM_JID, {
-      text: "voice text",
-    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, DM_JID, { text: "voice text" });
     expectAccepted(res, "media", "voice-1");
     expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toEqual([
       "voice-1",
@@ -226,11 +210,8 @@ describe("createWebSendApi", () => {
 
   it("combines voice and nested partial-caption receipts", async () => {
     const bookkeepingError = new Error("caption bookkeeping failed");
-    const acceptedCaption = normalizeWhatsAppSendResult(
-      { key: { id: "caption" } } as WAMessage,
-      "text",
-    );
-    sendMessage.mockResolvedValueOnce({ key: { id: "voice" } }).mockRejectedValueOnce(
+    const acceptedCaption = normalizeWhatsAppSendResult(acceptedMessage("caption"), "text");
+    sendMessage.mockResolvedValueOnce(acceptedMessage("voice")).mockRejectedValueOnce(
       createChannelPartialDeliveryError(bookkeepingError, {
         messageIds: [acceptedCaption.messageId],
         receipt: acceptedCaption.receipt,
@@ -241,7 +222,7 @@ describe("createWebSendApi", () => {
   });
 
   it("retains voice receipts when the caption is unaccepted", async () => {
-    sendMessage.mockResolvedValueOnce({ key: { id: "voice" } }).mockResolvedValueOnce(undefined);
+    sendMessage.mockResolvedValueOnce(acceptedMessage("voice")).mockResolvedValueOnce(undefined);
     expectPartial(await failedVoice(), ["voice"], expect.any(PlatformMessageNotDispatchedError), 2);
   });
 
@@ -252,7 +233,7 @@ describe("createWebSendApi", () => {
     "retains the first accepted %s receipt when activity recording fails",
     async (kind, send) => {
       const activityError = new Error("channel activity bookkeeping disconnected");
-      sendMessage.mockResolvedValueOnce({ key: { id: `${kind}-accepted` } });
+      sendMessage.mockResolvedValueOnce(acceptedMessage(`${kind}-accepted`));
       recordChannelActivity.mockImplementationOnce(() => {
         throw activityError;
       });
@@ -275,14 +256,14 @@ describe("createWebSendApi", () => {
       participant: "1999@s.whatsapp.net",
     };
     expectSend({ react: { text: "👍", key } });
-    expectAccepted(res, "reaction", "msg-1");
+    expectAccepted(res, "reaction");
   });
 
   it("rejects an unaccepted Baileys voice send without recording outbound activity", async () => {
     sendMessage.mockResolvedValueOnce(undefined);
-    await expect(
-      api.sendMessage("+1555", "", Buffer.from("voice"), "audio/ogg"),
-    ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    await expect(api.sendMessage("+1555", "", MEDIA, "audio/ogg")).rejects.toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
     expect(recordChannelActivity).not.toHaveBeenCalled();
   });
 
@@ -362,7 +343,7 @@ describe("WhatsApp send receipts", () => {
       fromMe: true,
       participant: "456@s.whatsapp.net",
     };
-    const accepted = normalizeWhatsAppSendResult({ key } as WAMessage, "text");
+    const accepted = normalizeWhatsAppSendResult({ key }, "text");
     const receipt = accepted.receipt;
     if (!receipt) {
       throw new Error("missing provider receipt");
