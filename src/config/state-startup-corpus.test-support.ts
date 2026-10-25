@@ -6,7 +6,9 @@ import type stateManifest from "../../test/fixtures/state-corpus/2026.9.2/manife
 import { createFixtureDiagnostics } from "../../test/helpers/fixture-diagnostics.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { stateStartupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
+import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
 import { applyLegacyCompatibilityStep } from "../commands/doctor/shared/config-flow-steps.js";
 import { normalizeCompatibilityConfigValues } from "../commands/doctor/shared/legacy-config-core-migrate.js";
@@ -254,6 +256,42 @@ export function createStateStartupCorpusFixture() {
               expect(getUserPreferences(fixture.controlUi.userId)).toMatchObject(
                 fixture.controlUi.settings,
               );
+              phase("model-inspection");
+              for (const agentId of listAgentIds(config)) {
+                signal.throwIfAborted();
+                const lease = await acquireReadOnlyPreparedModelRuntime(
+                  {
+                    config,
+                    agentId,
+                    agentDir: path.join(stateDir, "agents", agentId, "agent"),
+                    workspaceDir: path.join(home, "workspaces", agentId),
+                    env: process.env,
+                    readOnly: true,
+                    skipCredentials: true,
+                  },
+                  {
+                    catalogMode: "static",
+                    pluginMetadataSnapshot: startup.pluginMetadataSnapshot,
+                  },
+                );
+                const leaseErrors: unknown[] = [];
+                try {
+                  signal.throwIfAborted();
+                  if (configName === "generic-github-token.json") {
+                    expect(lease.snapshot.modelCatalog.entries).toEqual([]);
+                  } else {
+                    expect(lease.snapshot.modelCatalog.entries.length).toBeGreaterThan(0);
+                  }
+                } catch (error) {
+                  leaseErrors.push(error);
+                }
+                try {
+                  await lifetime.verifyCleanup(() => lease[Symbol.asyncDispose]());
+                } catch (error) {
+                  leaseErrors.push(error);
+                }
+                throwFailures(leaseErrors, "Model inspection and cleanup failed");
+              }
               phase("database-close");
               await lifetime.verifyCleanup(() => closeOpenClawAgentDatabasesAsync(stateDir));
               await lifetime.verifyCleanup(() => closeOpenClawStateDatabaseAsync());
