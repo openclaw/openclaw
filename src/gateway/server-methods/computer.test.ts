@@ -142,40 +142,25 @@ describe("Gateway computer RPC", () => {
     const client = createClient();
     delete client.connId;
     client.internal = { syntheticClient: true };
-    expect(await invoke("computer.status", {}, undefined, { client })).toEqual(unavailableStatus);
+    const status = vi.fn(async () => ({ available: false, configured: false }));
+    expect(
+      await invoke("computer.status", { probe: true }, { status, invoke: vi.fn() }, { client }),
+    ).toEqual(unavailableStatus);
+    expect(status).toHaveBeenCalledExactlyOnceWith({ probe: true });
   });
 
   it.each([
-    ["false", false],
-    [true, true],
-  ] as const)("validates status probe %s", async (probe, valid) => {
-    const params = { probe };
-    const status = vi.fn(async () => ({ configured: false, available: false }));
-    const result = await invoke("computer.status", params, { status, invoke: vi.fn() });
-    expect(result?.[0]).toBe(valid);
-    if (valid) {
-      expect(status).toHaveBeenCalledWith(params);
-    } else {
-      expect(status).not.toHaveBeenCalled();
-    }
-  });
-
-  it.each([
-    [{ ...snapshot, command: "system.run" }, false],
-    [{ ...snapshot, owner: "forged-operator" }, false],
-    [snapshot, true],
-  ] as const)("rejects malformed or unadmitted invocations: %j", async (params, synthetic) => {
+    ["computer.status", { probe: "false" }, false],
+    ["computer.invoke", { ...snapshot, command: "system.run" }, false],
+    ["computer.invoke", { ...snapshot, owner: "forged-operator" }, false],
+    ["computer.invoke", snapshot, true],
+  ] as const)("rejects malformed or unadmitted %s: %j", async (method, params, synthetic) => {
     const client = createClient();
     if (synthetic) {
       client.internal = { syntheticClient: true };
     }
     const dispatch = vi.fn();
-    const result = await invoke(
-      "computer.invoke",
-      params,
-      { status: vi.fn(), invoke: dispatch },
-      { client },
-    );
+    const result = await invoke(method, params, { status: dispatch, invoke: dispatch }, { client });
     expect(result).toMatchObject([
       false,
       undefined,

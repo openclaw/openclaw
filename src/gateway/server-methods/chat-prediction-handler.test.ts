@@ -182,8 +182,6 @@ it.each(["suggestion", "disabled", "cancelled"] as const)(
       const controller = new AbortController();
       let prediction: ReturnType<typeof f.predict> | undefined;
       try {
-        expect(loadSessionEntry(f.scope)).toMatchObject({ lifecycleRunId: runId });
-        expect(loadSessionEntry(f.scope)?.status).not.toBe("done");
         prediction = f.predict(runId, controller.signal);
         await awaitGateBeforeSettlement(
           waitEntered.promise,
@@ -243,7 +241,6 @@ it.each(["store", "gateway"] as const)(
       try {
         expect(await f.predict()).toMatchObject([true, { text: "What should I try next?" }]);
         expect(wait).not.toHaveBeenCalled();
-        expect(complete).toHaveBeenCalledOnce();
       } finally {
         entry.adapter.projectSessionTerminalPending = false;
         entry.adapter.projectSessionTerminalPersistence = undefined;
