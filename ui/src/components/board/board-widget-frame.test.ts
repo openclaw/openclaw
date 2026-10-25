@@ -117,7 +117,7 @@ describe("board widget frame message lifetime", () => {
     const firstHeight = vi.fn();
     const secondHeight = vi.fn();
     let firstActive = true;
-    const mountFrame = (name: string, reportContentHeight: typeof firstHeight) => {
+    const mountActiveFrame = (name: string, reportContentHeight: typeof firstHeight) => {
       const widget = boardWidget({ name });
       const owner = createFrameOwner(() => widget, {
         active: () => name !== "first" || firstActive,
@@ -129,8 +129,8 @@ describe("board widget frame message lifetime", () => {
       mountBoardWidgetFrame(owner, widget, root, disposers);
       return { owner, frame: root.querySelector("iframe")! };
     };
-    const first = mountFrame("first", firstHeight);
-    const second = mountFrame("second", secondHeight);
+    const first = mountActiveFrame("first", firstHeight);
+    const second = mountActiveFrame("second", secondHeight);
     expect(add.mock.calls.filter(([type]) => type === "message")).toHaveLength(1);
     dispatchFrameMessage(first.frame, { data: { type: "openclaw:widget-size", height: 360 } });
     expect(firstHeight).toHaveBeenCalledExactlyOnceWith("first", 360);
