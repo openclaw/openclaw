@@ -1,4 +1,3 @@
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
@@ -8,6 +7,10 @@ import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-sur
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { AuthStorage } from "../../sessions/auth-storage.js";
 import { ModelRegistry } from "../../sessions/model-registry.js";
+import {
+  createClientToolDefinition as clientTool,
+  createStubTool as tool,
+} from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
@@ -15,17 +18,6 @@ import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-const tool = (name: string): AnyAgentTool => ({
-  name,
-  label: name,
-  description: "Tool inventory fixture",
-  parameters: Type.Object({}),
-  execute: async () => ({ content: [], details: undefined }),
-});
-const clientTool = (name: string) => ({
-  type: "function" as const,
-  function: { name, parameters: { type: "object", properties: {} } },
-});
 const clientTools = [clientTool("client_pick_file")];
 async function plan(
   options: {
@@ -236,36 +228,32 @@ describe("embedded attempt tool catalog", () => {
   });
 
   it.each([
-    { name: "an explicit allowlist", tools: { allow: ["read"] } },
-    { name: "additive plugin grants", tools: { alsoAllow: ["optional_plugin_tool"] } },
-  ])("allows a deny-all agent to run without tools under $name", async ({ tools }) => {
-    const result = await plan({
-      visibleTools: [],
-      clientTools: [],
-      allow: null,
-      config: {
-        tools,
-        agents: { entries: { main: { tools: { deny: ["*"] } } } },
-      },
-    });
-    expect(result.hasCallableTools).toBe(false);
-    expect(result.visibleAllowedToolNames.size).toBe(0);
-    expect(result.emptyExplicitToolAllowlistError).toBeNull();
-  });
-
-  it("still rejects a command-time tool request denied by the agent", async () => {
-    const result = await plan({
-      visibleTools: [],
-      clientTools: [],
-      allow: ["read"],
-      config: {
-        tools: { allow: ["read"] },
-        agents: { entries: { main: { tools: { deny: ["*"] } } } },
-      },
-    });
-    expect(result.hasCallableTools).toBe(false);
-    expect(result.emptyExplicitToolAllowlistError?.message).toContain("runtime toolsAllow: read");
-  });
+    ["an explicit allowlist", { allow: ["read"] }, null],
+    ["additive plugin grants", { alsoAllow: ["optional_plugin_tool"] }, null],
+    ["a denied command-time request", { allow: ["read"] }, ["read"]],
+  ] satisfies Array<[string, NonNullable<OpenClawConfig["tools"]>, string[] | null]>)(
+    "resolves a deny-all agent under %s",
+    async (_name, tools, allow) => {
+      const result = await plan({
+        visibleTools: [],
+        clientTools: [],
+        allow,
+        config: {
+          tools,
+          agents: { entries: { main: { tools: { deny: ["*"] } } } },
+        },
+      });
+      expect(result.hasCallableTools).toBe(false);
+      expect(result.visibleAllowedToolNames.size).toBe(0);
+      if (allow) {
+        expect(result.emptyExplicitToolAllowlistError?.message).toContain(
+          "runtime toolsAllow: read",
+        );
+      } else {
+        expect(result.emptyExplicitToolAllowlistError).toBeNull();
+      }
+    },
+  );
 
   it("carries native catalog capabilities without widening direct execution authority", async () => {
     const foreignTool = tool("sessions_yield");

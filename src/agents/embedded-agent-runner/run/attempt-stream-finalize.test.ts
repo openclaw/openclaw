@@ -196,7 +196,7 @@ function createRewindFixture(withTrailingEntries = false) {
 }
 
 describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
-  it("does not settle a provider failure before partial presentation finishes", async () => {
+  it("drains partial presentation before settlement, state publication, and after-turn work", async () => {
     const partial = createDeferredCore();
     const onPartialReply = vi.fn(() => partial.promise);
     const { emit, subscription } = createSubscribedSessionHarness({
@@ -216,26 +216,48 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
     });
     emit({ type: "message_end", message: failedAssistant });
     emit({ type: "agent_end", messages: [failedAssistant], willRetry: false });
-
+    const pendingError = new Error("pending event failed");
     const fixture = createFixture({
-      waitForPendingEvents: subscription.waitForPendingEvents,
-      getBeforeAgentFinalizeRevisionReason: () => undefined,
+      getBeforeAgentFinalizeRevisionReason: vi
+        .fn<() => string | undefined>()
+        .mockReturnValueOnce("revision changed")
+        .mockReturnValueOnce(undefined),
+      waitForPendingEvents: async () => {
+        await subscription.waitForPendingEvents();
+        fixture.order.push("pending-events");
+        fixture.state.terminal = { kind: "failed", error: pendingError, source: "prompt" };
+      },
     });
-    mocks.settleStream.mockResolvedValue(
-      settledResult({
-        promptError: new Error("provider failed after partial"),
-        promptErrorSource: "prompt",
-      }),
-    );
-
+    const settledStream = settledResult({
+      sessionIdUsed: "settled-session",
+      promptCache: { retention: "short" },
+    });
+    mocks.settleStream.mockImplementation(async (input: SettleMockInput) => {
+      fixture.order.push("settle");
+      expect(input.state).toMatchObject({ promptError: pendingError, promptErrorSource: "prompt" });
+      expect(input.shouldFlushForContextEngine).toBe(true);
+      fixture.markYieldAborted();
+      return settledStream;
+    });
+    mocks.completeAfterTurn.mockImplementation(async (_input, _settled, prompt) => {
+      expect(fixture.sessionRuntimeState.promptCache).toEqual({ retention: "short" });
+      expect(prompt).toMatchObject({
+        beforeAgentFinalizeRevisionReason: "revision changed",
+        yieldAborted: true,
+      });
+      fixture.order.push("settled-published", "after-turn");
+    });
     const finalize = runEmbeddedAttemptSettledPhase(fixture.input);
     await vi.waitFor(() => expect(onPartialReply).toHaveBeenCalledOnce());
     await Promise.resolve();
     expect(mocks.settleStream).not.toHaveBeenCalled();
-
     partial.resolve();
-    await finalize;
-    expect(mocks.settleStream).toHaveBeenCalledOnce();
+    await expect(finalize).resolves.toEqual({
+      sessionIdUsed: "settled-session",
+      sessionFileUsed: "initial.jsonl",
+    });
+    expect(fixture.activeSession.agent.state.messages).toBe(fixture.repairedMessages);
+    expect(fixture.order).toEqual(["pending-events", "settle", "settled-published", "after-turn"]);
   });
 
   it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
@@ -259,59 +281,6 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
         expect.objectContaining({ type: "custom", customType: "trailing-metadata" }),
         expect.objectContaining({ type: "compaction" }),
       ]),
-    );
-  });
-
-  it("settles the stream before publishing state and running after-turn work", async () => {
-    const pendingError = new Error("pending event failed");
-    const reason = vi
-      .fn<() => string | undefined>()
-      .mockReturnValueOnce("revision changed")
-      .mockReturnValueOnce(undefined);
-    const fixture = createFixture({
-      getBeforeAgentFinalizeRevisionReason: reason,
-      waitForPendingEvents: vi.fn(async () => {
-        fixture.order.push("pending-events");
-        fixture.state.terminal = { kind: "failed", error: pendingError, source: "prompt" };
-      }),
-    });
-    const settledStream = settledResult({
-      sessionIdUsed: "settled-session",
-      promptCache: { retention: "short" },
-    });
-    mocks.settleStream.mockImplementation(async (settleInput: SettleMockInput) => {
-      fixture.order.push("settle");
-      expect(settleInput.state.promptError).toBe(pendingError);
-      expect(settleInput.state.promptErrorSource).toBe("prompt");
-      fixture.markYieldAborted();
-      return settledStream;
-    });
-    mocks.completeAfterTurn.mockImplementation(async () => {
-      expect(fixture.sessionRuntimeState.promptCache).toEqual({ retention: "short" });
-      fixture.order.push("settled-published", "after-turn");
-    });
-
-    await expect(runEmbeddedAttemptSettledPhase(fixture.input)).resolves.toEqual({
-      sessionIdUsed: "settled-session",
-      sessionFileUsed: "initial.jsonl",
-    });
-
-    expect(fixture.activeSession.agent.state.messages).toBe(fixture.repairedMessages);
-    expect(fixture.order).toEqual(["pending-events", "settle", "settled-published", "after-turn"]);
-    expect(mocks.settleStream).toHaveBeenCalledWith(
-      expect.objectContaining({
-        getRunAbortDeadlineAtMs:
-          fixture.input.preparedStreamRuntime.timeout.getRunAbortDeadlineAtMs,
-        shouldFlushForContextEngine: true,
-      }),
-    );
-    expect(mocks.completeAfterTurn).toHaveBeenCalledWith(
-      fixture.input,
-      settledStream,
-      expect.objectContaining({
-        beforeAgentFinalizeRevisionReason: "revision changed",
-        yieldAborted: true,
-      }),
     );
   });
 

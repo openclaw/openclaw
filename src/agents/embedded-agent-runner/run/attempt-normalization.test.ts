@@ -8,7 +8,6 @@ import {
   makeNormalizationInput,
   makePromptState,
 } from "./attempt-normalization.test-support.js";
-import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
   assertAgentHarnessRunAdmission,
@@ -79,26 +78,18 @@ it.each([0, 2])(
       setLifecycleGeneration: vi.fn(),
     });
     const cancelled = new Error("cancelled while user persistence was pending");
-    const contextRecoveryState = createEmbeddedRunContextRecoveryState();
+    const input = makeNormalizationInput(
+      makeAttempt(undefined, { compactionCount: 2, compactionTokensAfter: 40.9 }),
+      makePromptState(() => persistence.promise),
+    );
+    input.runInput.runParams = params;
+    input.runInput.laneController = laneController;
+    input.recordedCompactionCount = recordedCompactionCount;
+    input.sessionPromptState.activePrompt.persisted = true;
+    const contextRecoveryState = input.contextRecoveryState;
     contextRecoveryState.autoCompactionCount = recordedCompactionCount;
     contextRecoveryState.lastCompactionTokensAfter = recordedCompactionCount > 0 ? 60 : undefined;
-    // Cancellation exits before model normalization; only the completed-attempt boundary is live.
-    const normalization = normalizeEmbeddedRunAttempt({
-      runInput: {
-        runParams: params,
-        laneController,
-      },
-      preparedRuntime: { snapshot: () => ({}) },
-      recordedCompactionCount,
-      dispatchedAttempt: {
-        rawAttempt: { compactionCount: 2, compactionTokensAfter: 40.9 },
-      },
-      sessionPromptState: {
-        activePrompt: { persisted: true },
-        waitForCurrentUserMessagePersistence: () => persistence.promise,
-      },
-      contextRecoveryState,
-    } as never);
+    const normalization = normalizeEmbeddedRunAttempt(input);
 
     controller.abort(cancelled);
     persistence.resolve();
@@ -113,24 +104,18 @@ it.each([0, 2])(
 describe("buildContextEngineCompactionSessionTarget", () => {
   it.each([
     {
-      name: "unmapped marker",
-      input: {
-        sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
-        sessionId: "stale-outer-session",
-      },
+      sessionFile: "sqlite:main:marker-session:/tmp/sessions.json",
+      sessionId: "stale-outer-session",
       expected: { agentId: "main", sessionId: "marker-session", storePath: "/tmp/sessions.json" },
     },
     {
-      name: "explicit agent owner",
-      input: {
-        agentId: "worker",
-        config: {
-          agents: { ownership: "explicit" as const, entries: { main: {}, worker: {} } },
-          session: { store: "/tmp/{agentId}/sessions.json" },
-        },
-        sessionFile: "compat-session",
-        sessionId: "compat-session",
+      agentId: "worker",
+      config: {
+        agents: { ownership: "explicit" as const, entries: { main: {}, worker: {} } },
+        session: { store: "/tmp/{agentId}/sessions.json" },
       },
+      sessionFile: "compat-session",
+      sessionId: "compat-session",
       expected: {
         agentId: "worker",
         sessionId: "compat-session",
@@ -138,19 +123,16 @@ describe("buildContextEngineCompactionSessionTarget", () => {
       },
     },
     {
-      name: "adopted session identity",
-      input: {
-        sessionFile: "",
-        sessionId: "previous-session",
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "adopted-session",
-          storePath: "/tmp/sessions.json",
-        },
+      sessionFile: "",
+      sessionId: "previous-session",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "adopted-session",
+        storePath: "/tmp/sessions.json",
       },
       expected: { agentId: "main", sessionId: "adopted-session", storePath: "/tmp/sessions.json" },
     },
-  ])("does not invent a session key for $name", async ({ input, expected }) => {
+  ])("resolves target without inventing a session key: %j", async ({ expected, ...input }) => {
     expect(await buildContextEngineCompactionSessionTarget(input)).toEqual(expected);
   });
 

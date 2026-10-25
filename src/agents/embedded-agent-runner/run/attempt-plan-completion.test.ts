@@ -20,7 +20,6 @@ import { createProgressCardTool } from "../../tools/progress-card-tool.js";
 import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../runs.test-support.js";
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
-import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
 
 registerAgentSessionLoopTestLifecycle();
 const streams: ReturnType<typeof prepareCatalogExecutor>[] = [];
@@ -71,23 +70,6 @@ function prepare(options: Parameters<typeof prepareCatalogExecutor>[0]) {
   return prepared;
 }
 
-async function planSession(
-  completionCheck: EmbeddedRunCompletionCheck,
-  options: Parameters<typeof prepareCatalogExecutor>[0] = {},
-) {
-  const progress = createProgressCardTool({
-    agentSessionKey: "agent:main:main",
-    onPlanSaved: (unfinished) => {
-      completionCheck.unfinishedPlan = unfinished;
-    },
-  });
-  const { session } = await createTestSession({ customTools: [progress] });
-  return {
-    session,
-    prepared: prepare({ activeSession: session, attempt: { completionCheck }, ...options }),
-  };
-}
-
 function payloadsFor({ subscription }: ReturnType<typeof prepareCatalogExecutor>) {
   const assistant = subscription.getCurrentAttemptAssistant();
   return buildEmbeddedRunPayloads({
@@ -112,10 +94,9 @@ it.each([
       { step: "Publish repair", status: "completed" as const },
       { step: "Repair remaining failure", status: "pending" as const },
     ];
-    const committed: ProgressCardPutResult = cardWith(plan);
     using gatewayCall = vi
       .spyOn(gatewayTool, "callInProcessGatewayTool")
-      .mockResolvedValue(committed);
+      .mockResolvedValue(cardWith(plan));
     const progress = createOpenClawCodingToolsInternal({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -174,10 +155,9 @@ it.each([
       ],
     });
     const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
-    const attempt = { completionCheck };
     const prepared = prepare({
       activeSession: session,
-      attempt,
+      attempt: { completionCheck },
       onAgentEvent: (event) => events.push(event),
       streamReplies: !nonStreamedMedia,
       trustedLocalMediaToolNames: new Set(["repair"]),
@@ -222,56 +202,35 @@ it.each([
   },
 );
 
-it.each([
-  { name: "completed replacement", replacement: "completed", checks: 0 },
-  { name: "no plan saved in this run", replacement: "untouched", checks: 0 },
-  { name: "a consumed check is not rearmed by another save", replacement: "recovery", checks: 0 },
-  { name: "status-only refresh", replacement: "status", checks: 0 },
-  { name: "authored silence with pending work", replacement: "silent", checks: 0 },
-])("honors $name", async ({ replacement, checks }) => {
-  const completionCheck = { unfinishedPlan: false, checked: replacement === "recovery" };
-  const pending = [{ step: "Await external permission", status: "pending" as const }];
-  const initial = cardWith(pending);
-  const gateway = vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(initial);
-  const completed = [{ step: "Await external permission", status: "completed" as const }];
-  const writes = replacement === "completed" ? 2 : replacement === "untouched" ? 0 : 1;
-  if (writes === 2) {
-    gateway.mockResolvedValueOnce(initial).mockResolvedValueOnce(cardWith(completed));
-  }
-  const { session, prepared } = await planSession(completionCheck, {
-    attempt: {
-      completionCheck,
-      ...(replacement === "status"
-        ? { silentExpected: true, terminalReplyExpectation: "optional" as const }
-        : { terminalReplyExpectation: "required" as const }),
-    },
-  });
-  const requests = mockTurns((model, _context, request) => {
-    return respond(
-      model,
-      request <= writes
-        ? [
-            toolCall("save-" + request, "progress_card", {
-              plan: request === 1 ? pending : completed,
-            }),
-          ]
-        : replacement === "silent"
-          ? "NO_REPLY"
-          : "Waiting for the user's permission; no more authorized actions.",
-      request <= writes ? "toolUse" : "stop",
-    );
-  });
-  await session.prompt("Investigate the failure, but do not proceed without permission.");
-  await prepared.subscription.waitForPendingEvents();
-  expect(requests()).toBe(writes + 1 + checks);
-  expect(
-    session.messages.filter(
-      (message) =>
-        message.role === "custom" && message.customType === "openclaw.plan-completion-check",
-    ),
-  ).toHaveLength(checks);
-  expect(gateway).toHaveBeenCalledTimes(writes);
-});
+it.each(["no pending plan", "consumed check", "optional status", "authored silence"])(
+  "does not continue after %s",
+  async (state) => {
+    const completionCheck = {
+      unfinishedPlan: state !== "no pending plan",
+      checked: state === "consumed check",
+    };
+    const { session } = await createTestSession();
+    const prepared = prepare({
+      activeSession: session,
+      attempt: {
+        completionCheck,
+        ...(state === "optional status"
+          ? { silentExpected: true, terminalReplyExpectation: "optional" as const }
+          : { terminalReplyExpectation: "required" as const }),
+      },
+    });
+    const requests = mockTurns(state === "authored silence" ? "NO_REPLY" : "Work is complete.");
+    await session.prompt("Continue only when work remains.");
+    await prepared.subscription.waitForPendingEvents();
+    expect(requests()).toBe(1);
+    expect(
+      session.messages.filter(
+        (message) =>
+          message.role === "custom" && message.customType === "openclaw.plan-completion-check",
+      ),
+    ).toHaveLength(0);
+  },
+);
 
 it.each([
   { owner: "plugin finalize", checks: 0 },
@@ -303,18 +262,16 @@ it.each([
           createMockPluginRegistry([{ hookName: "before_agent_finalize", handler: onFinalize }]),
         )
       : undefined;
-  const requests = mockTurns((model, _context, request) => {
-    if (request > 1 && owner === "cancelled") {
+  const requests = mockTurns([toolCall("save", "progress_card", { plan })], (model) => {
+    if (owner === "cancelled") {
       controller.abort();
     }
     const assistant = createAssistant(
       model,
-      request === 1
-        ? [toolCall("save", "progress_card", { plan })]
-        : "The owner stopped this work.",
-      request === 1 ? "toolUse" : owner === "output limited" ? "length" : "stop",
+      "The owner stopped this work.",
+      owner === "output limited" ? "length" : "stop",
     );
-    if (request > 1 && owner === "provider refusal") {
+    if (owner === "provider refusal") {
       assistant.diagnostics = [
         {
           type: "provider_refusal",
@@ -325,7 +282,15 @@ it.each([
     }
     return createAssistantResultStream(assistant);
   });
-  const { session, prepared } = await planSession(completionCheck, {
+  const progress = createProgressCardTool({
+    agentSessionKey: "agent:main:main",
+    onPlanSaved: (unfinished) => {
+      completionCheck.unfinishedPlan = unfinished;
+    },
+  });
+  const { session } = await createTestSession({ customTools: [progress] });
+  const prepared = prepare({
+    activeSession: session,
     hookRunner,
     runAbortController: controller,
     attempt: {

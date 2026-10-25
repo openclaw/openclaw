@@ -4,12 +4,7 @@ import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
 import { observeReplyDelivery } from "../../reply-completion.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
-import type { ProcessTerminalDiagnostic, ToolErrorSummary } from "../../tool-error-summary.js";
-import {
-  buildPayloads,
-  expectSinglePayloadText,
-  expectSingleToolErrorPayload,
-} from "./payloads.test-helpers.js";
+import { buildPayloads, expectSinglePayloadText } from "./payloads.test-helpers.js";
 
 function signedText(text: string, id: string, phase?: "final_answer", type = "text") {
   return { type, text, textSignature: JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) }) };
@@ -23,17 +18,6 @@ function expectImagePayload(payloads: ReturnType<typeof buildPayloads>) {
       mediaUrls: ["/tmp/reply-image.png"],
     },
   ]);
-}
-
-function processError(
-  reason: ProcessTerminalDiagnostic["reason"],
-  error?: string,
-): ToolErrorSummary {
-  return {
-    toolName: "process",
-    error,
-    terminalDiagnostic: { kind: "process", sessionId: "wild-lagoon", reason },
-  };
 }
 
 const stopped = (content: AssistantMessage["content"]) =>
@@ -134,12 +118,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("uses the kept answer instead of pre-tool text for an empty terminal answer", () => {
     const payloads = buildPayloads({
       assistantTexts: ["I will read the file.", "Checking the next file."],
-      lastAssistant: makeAgentAssistantMessage({
-        api: "ollama",
-        provider: "ollama",
-        stopReason: "stop",
-        content: [],
-      }),
+      lastAssistant: stopped([]),
       keptAnswer: {
         assistant: textAssistant("Completed answer."),
         messageIndex: 1,
@@ -344,45 +323,52 @@ describe("buildEmbeddedRunPayloads delivery recovery", () => {
 });
 
 describe("buildEmbeddedRunPayloads process-error warnings", () => {
-  it("surfaces safe terminal diagnostics when verbose mode is off", () => {
-    const dummyTelegramToken = `123456:${"A".repeat(28)}WXYZ`;
-    const lastToolError = processError(
-      { kind: "exit", exitCode: 7 },
-      `SAFE_PROCESS_STDERR ${dummyTelegramToken}`,
-    );
-    const payloads = buildPayloads({ lastToolError, verboseLevel: "off" });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Process",
-      absentDetail: "SAFE_PROCESS_STDERR",
-    });
-    expect(payloads[0]?.text).not.toContain("wild-lagoon");
-    expect(payloads[0]?.text).not.toContain(dummyTelegramToken);
-    expect(payloads[0]?.text).toContain("exit 7");
-    expect(payloads[0]?.text).not.toContain("/verbose");
-  });
-
-  it("shows a sanitized bounded error only at full verbosity", () => {
-    const payloads = buildPayloads({
-      lastToolError: processError({ kind: "exit", exitCode: 7 }, "SAFE_PROCESS_STDERR"),
-      verboseLevel: "full",
-    });
-
-    expect(payloads[0]?.text).toContain("SAFE_PROCESS_STDERR");
-    expect(payloads[0]?.text).not.toContain("/verbose full");
-  });
-
   it.each([
-    [{ kind: "signal", signal: "SIGKILL" }, "signal SIGKILL"],
-    [{ kind: "timeout", timeoutKind: "overall-timeout" }, "timed out"],
-    [{ kind: "timeout", timeoutKind: "no-output-timeout" }, "timed out waiting for output"],
-  ] as const)("renders %j without fabricating an exit code", (reason, expected) => {
-    const payloads = buildPayloads({
-      lastToolError: processError(reason),
-      verboseLevel: "off",
-    });
-
-    expect(payloads[0]?.text).toContain(expected);
-    expect(payloads[0]?.text).not.toMatch(/exit -?\d+/u);
-  });
+    [
+      { kind: "exit", exitCode: 7 },
+      "off",
+      `SAFE_PROCESS_STDERR 123456:${"A".repeat(28)}WXYZ`,
+      "⚠️ Process failed (exit 7).",
+    ],
+    [
+      { kind: "exit", exitCode: 7 },
+      "full",
+      "SAFE_PROCESS_STDERR",
+      "⚠️ Process: wild-lagoon failed (exit 7): SAFE_PROCESS_STDERR.",
+    ],
+    [
+      { kind: "signal", signal: "SIGKILL" },
+      "off",
+      undefined,
+      "⚠️ Process failed (signal SIGKILL).",
+    ],
+    [
+      { kind: "timeout", timeoutKind: "overall-timeout" },
+      "off",
+      undefined,
+      "⚠️ Process failed (timed out).",
+    ],
+    [
+      { kind: "timeout", timeoutKind: "no-output-timeout" },
+      "off",
+      undefined,
+      "⚠️ Process failed (timed out waiting for output).",
+    ],
+  ] as const)(
+    "renders %j at %s verbosity without leaking extra detail",
+    (reason, verboseLevel, error, expected) => {
+      expectSinglePayloadText(
+        buildPayloads({
+          lastToolError: {
+            toolName: "process",
+            error,
+            terminalDiagnostic: { kind: "process", sessionId: "wild-lagoon", reason },
+          },
+          verboseLevel,
+        }),
+        expected,
+        true,
+      );
+    },
+  );
 });

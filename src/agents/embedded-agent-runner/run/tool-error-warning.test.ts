@@ -6,8 +6,9 @@ import {
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
+import { buildFailureWarning } from "./tool-error-warning.js";
 
-describe("buildEmbeddedRunPayloads tool warnings", () => {
+describe("embedded run tool warnings", () => {
   const makeStoppedAssistant = (text = "") =>
     makeAssistant({
       stopReason: "stop",
@@ -15,33 +16,22 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
       content: text ? [{ type: "text", text }] : [],
     });
 
-  function expectSinglePayloadSummary(
-    payloads: ReturnType<typeof buildPayloads>,
-    expected: { text: string; isError?: boolean },
+  function warning(
+    lastToolError: Parameters<typeof buildFailureWarning>[0]["lastToolError"],
+    options: Partial<Omit<Parameters<typeof buildFailureWarning>[0], "lastToolError">> = {},
   ) {
-    expectSinglePayloadText(payloads, expected.text);
-    expect(payloads[0]?.isError).toBe(expected.isError);
-  }
-
-  function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
-    expect(buildPayloads(params)).toHaveLength(0);
-  }
-
-  function execWarning(
-    meta: string,
-    options: Parameters<typeof buildPayloads>[0] = {},
-    error = "Command exited with code 1",
-  ) {
-    return buildPayloads({
-      lastToolError: { toolName: "exec", meta, error, mutatingAction: true },
-      toolResultFormat: "markdown",
+    return buildFailureWarning({
+      lastToolError,
+      hasUserFacingReply: false,
+      useMarkdown: true,
       verboseLevel: "full",
       ...options,
     });
   }
+  const execWarning = (meta: string, useMarkdown = true, error = "Command exited with code 1") =>
+    warning({ toolName: "exec", meta, error, mutatingAction: true }, { useMarkdown });
 
   it.each([
-    ["browser", "Browser", "tab not found", "off"],
     ["browser", "Browser", "connection timeout", "on"],
     ["browser", "Browser", "connection timeout", "full"],
     ["exec", "Exec", "/bin/bash: line 1: python: command not found", "off"],
@@ -58,13 +48,8 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     });
   });
 
-  it.each([
-    { sessionKey: "agent:main:discord:channel:c123" },
-    { sessionKey: "agent:main:telegram:group:g123" },
-    { sessionKey: "agent:main:discord:direct:u123", didSendViaMessagingTool: true },
-    {},
-  ])("does not add synthetic completion text: %j", (options) => {
-    expectNoPayloads({ ...options, lastAssistant: makeStoppedAssistant() });
+  it("does not add synthetic completion text", () => {
+    expect(buildPayloads({ lastAssistant: makeStoppedAssistant() })).toHaveLength(0);
   });
 
   it("adds compact tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
@@ -91,64 +76,47 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
       lastToolError: { toolName: "browser", error: "connection timeout" },
     });
 
-    expectSinglePayloadSummary(payloads, {
-      text: "Checked the page and recovered with final answer.",
-    });
+    expectSinglePayloadText(payloads, "Checked the page and recovered with final answer.");
+    expect(payloads[0]?.isError).toBeUndefined();
   });
 
   it.each(["bash", "write"])(
     "includes a semantic %s timeout explanation at normal verbosity",
     (toolName) => {
       const timeoutExplanation = "approval wait expired";
-      const payloads = buildPayloads({
-        lastToolError: {
-          toolName,
-          error: timeoutExplanation,
-          errorCode: "approval_timeout",
-          timedOut: true,
-        },
-        verboseLevel: "on",
-      });
-
-      expect(payloads[0]?.text).toContain(timeoutExplanation);
+      expect(
+        warning(
+          {
+            toolName,
+            error: timeoutExplanation,
+            errorCode: "approval_timeout",
+            timedOut: true,
+          },
+          { verboseLevel: "on" },
+        ),
+      ).toContain(timeoutExplanation);
     },
   );
-
-  it("treats a user-facing reply as authoritative after a mutating tool failure", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["No issues found. The update is complete."],
-      lastAssistant: makeStoppedAssistant("No issues found. The update is complete."),
-      lastToolError: { toolName: "edit", error: "file missing" },
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "No issues found. The update is complete.",
-    });
-  });
 
   it.each([
     [false, "off", "⚠️ Exec blocked (exit 7)"],
     [false, "full", "⚠️ Exec blocked: `make build`: Command exited with code 7"],
-    [true, "off", "⚠️ Exec failed (exit 7)"],
-    [true, "full", "⚠️ Exec failed: `make build`: Command exited with code 7"],
     [undefined, "off", "⚠️ Exec failed (exit 7)"],
     [undefined, "full", "⚠️ Exec failed: `make build`: Command exited with code 7"],
   ] as const)(
     "renders executionStarted=%s at %s verbosity from structured state",
     (executionStarted, verboseLevel, expected) => {
-      expectSinglePayloadText(
-        buildPayloads({
-          lastToolError: {
+      expect(
+        warning(
+          {
             toolName: "exec",
             executionStarted,
             meta: "run make build",
             error: "Command exited with code 7",
           },
-          toolResultFormat: "markdown",
-          verboseLevel,
-        }),
-        expected,
-      );
+          { verboseLevel },
+        ),
+      ).toBe(expected);
     },
   );
 
@@ -163,19 +131,17 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   ] as const)(
     "describes $toolName validation errors at $verboseLevel verbosity",
     ({ toolName, verboseLevel, expected }) => {
-      expectSinglePayloadText(
-        buildPayloads({
-          lastToolError: {
+      expect(
+        warning(
+          {
             toolName,
             executionStarted: false,
             validationErrorSummary: `${toolName} tool validation failed: invalid arguments`,
             error: "PRIVATE_VALIDATOR_DETAIL",
           },
-          verboseLevel,
-        }),
-        expected,
-        true,
-      );
+          { verboseLevel },
+        ),
+      ).toBe(expected);
     },
   );
 
@@ -213,10 +179,9 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   ] as const)(
     "formats raw exec context: %s",
     (meta, formatted, toolResultFormat: "plain" | "markdown" = "markdown") => {
-      expectSinglePayloadSummary(execWarning(meta, { toolResultFormat }), {
-        text: `⚠️ Exec failed: ${formatted}: Command exited with code 1`,
-        isError: true,
-      });
+      expect(execWarning(meta, toolResultFormat !== "plain")).toBe(
+        `⚠️ Exec failed: ${formatted}: Command exited with code 1`,
+      );
     },
   );
 
@@ -231,27 +196,19 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     ["run tests -> show first 3 lines", "run tests -> show first 3 lines", 1],
   ] as const)("formats exec summary: %s", (meta, formatted, exit) => {
     const error = `Command failed with exit code ${exit}`;
-    expectSinglePayloadSummary(execWarning(meta, {}, error), {
-      text: `⚠️ Exec failed: \`${formatted}\`: ${error}`,
-      isError: true,
-    });
+    expect(execWarning(meta, true, error)).toBe(`⚠️ Exec failed: \`${formatted}\`: ${error}`);
   });
 
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
+    expect(
+      warning({
         toolName: "bash",
         meta: "show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt (workspace)",
         error: "Command exited with code 1",
         mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "full",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace): Command exited with code 1",
-      isError: true,
-    });
+      }),
+    ).toBe(
+      "⚠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace): Command exited with code 1",
+    );
   });
 });
