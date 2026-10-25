@@ -85,17 +85,26 @@ function start(run: Parameters<typeof withCodexAppServerJsonClient>[1], options:
   ).catch((error: unknown) => error);
 }
 
+function pendingOperation<T = void>() {
+  const entered = createDeferred<void>();
+  const finish = createDeferred<T>();
+  return {
+    entered: entered.promise,
+    finish: finish.resolve,
+    run: async () => {
+      entered.resolve();
+      return await finish.promise;
+    },
+  };
+}
+
 describe("scoped Codex timeout diagnostics", () => {
   it("reports acquisition without guessing startup, authentication, a client, or a method", async () => {
-    const entered = createDeferred<void>();
-    const acquired = createDeferred<ReturnType<typeof client>>();
-    shared.acquire.mockImplementation(() => {
-      entered.resolve();
-      return acquired.promise;
-    });
+    const acquisition = pendingOperation<ReturnType<typeof client>>();
+    shared.acquire.mockImplementation(acquisition.run);
     const run = vi.fn(async () => undefined);
     const result = start(run);
-    await entered.promise;
+    await acquisition.entered;
     await vi.advanceTimersByTimeAsync(150);
     expect(await result).toMatchObject({ name: "AgentHarnessPreflightError" });
     expect((await record()).attributes).toMatchObject({
@@ -105,7 +114,7 @@ describe("scoped Codex timeout diagnostics", () => {
     });
     expect(records[0]?.attributes).not.toHaveProperty("clientInstanceId");
     expect(shared.acquire.mock.calls[0]?.[0].abandonSignal.aborted).toBe(true);
-    acquired.resolve(client());
+    acquisition.finish(client());
     await vi.advanceTimersByTimeAsync(0);
     expect(run).not.toHaveBeenCalled();
     expect(shared.release).toHaveBeenCalledOnce();
@@ -151,9 +160,7 @@ describe("scoped Codex timeout diagnostics", () => {
     expect(await result).toMatchObject({ message: "codex app-server request timed out" });
     const logged = await record();
     expect(logged.trace).toMatchObject(trace);
-    expect(logged.attributes).toMatchObject({
-      phase: "client-request",
-    });
+    expect(logged.attributes).toMatchObject({ phase: "client-request" });
     expect(JSON.stringify(logged)).not.toContain(privateText);
     expect(JSON.stringify(logged)).not.toContain("account/read");
     expect(logged.attributes).not.toHaveProperty("runId");
@@ -167,31 +174,25 @@ describe("scoped Codex timeout diagnostics", () => {
   });
 
   it("reports release separately and preserves isolated shutdown budgets", async () => {
-    const closing = createDeferred<void>();
-    const finish = createDeferred<void>();
+    const closing = pendingOperation();
     const acquired = client();
-    acquired.closeAndWait.mockImplementation(async () => {
-      closing.resolve();
-      await finish.promise;
-    });
+    acquired.closeAndWait.mockImplementation(closing.run);
     shared.acquire.mockResolvedValue(acquired);
     const result = start(async (send) => send({ method: "model/list" }), {
       isolated: true,
       timeoutMessage: "custom timeout",
       isolatedShutdown: { exitTimeoutMs: 200, forceKillDelayMs: 300 },
     });
-    await closing.promise;
+    await closing.entered;
     await vi.advanceTimersByTimeAsync(50);
     expect(await result).toMatchObject({ message: "custom timeout" });
-    expect((await record()).attributes).toMatchObject({
-      phase: "release-client",
-    });
+    expect((await record()).attributes).toMatchObject({ phase: "release-client" });
     expect(acquired.closeAndWait).toHaveBeenCalledExactlyOnceWith({
       exitTimeoutMs: 200,
       forceKillDelayMs: 300,
     });
     expect(shared.release).not.toHaveBeenCalled();
-    finish.resolve();
+    closing.finish();
   });
 
   it.each(["default deadline", "disabled", "throwing sink"] as const)(
@@ -204,18 +205,13 @@ describe("scoped Codex timeout diagnostics", () => {
           throw new Error("sink");
         });
       }
-      const entered = createDeferred<void>();
-      const finish = createDeferred<void>();
+      const operation = pendingOperation();
       shared.acquire.mockResolvedValue(client());
-      const run = async () => {
-        entered.resolve();
-        await finish.promise;
-      };
       const result =
         mode === "default deadline"
-          ? withCodexAppServerJsonClient({}, run).catch((error: unknown) => error)
-          : start(run);
-      await entered.promise;
+          ? withCodexAppServerJsonClient({}, operation.run).catch((error: unknown) => error)
+          : start(operation.run);
+      await operation.entered;
       const deadline = mode === "default deadline" ? 60_000 : 50;
       await vi.advanceTimersByTimeAsync(deadline - 1);
       expect(records).toEqual([]);
@@ -230,7 +226,7 @@ describe("scoped Codex timeout diagnostics", () => {
       } else {
         expect(records).toEqual([]);
       }
-      finish.resolve();
+      operation.finish();
       await vi.advanceTimersByTimeAsync(0);
       expect(shared.release).toHaveBeenCalledOnce();
     },
@@ -241,13 +237,7 @@ describe("scoped Codex timeout diagnostics", () => {
       { code: -32601, message: "unsupported" },
       "model/list",
     );
-    shared.acquire.mockResolvedValue(
-      client(
-        vi.fn(async () => {
-          throw error;
-        }),
-      ),
-    );
+    shared.acquire.mockResolvedValue(client(vi.fn().mockRejectedValue(error)));
     expect(await start(async (send) => send({ method: "model/list" }))).toBe(error);
     const controller = new AbortController();
     const cancelled = new Error("cancelled");

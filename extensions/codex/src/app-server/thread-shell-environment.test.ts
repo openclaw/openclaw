@@ -47,9 +47,6 @@ describe("Codex managed shell environment", () => {
     GH_TOKEN: "",
     GITHUB_TOKEN: "",
     PREVIEW_SERVICE_TOKEN: "",
-    OPENCLAW_STATE_DIR: "/fixture/diagnosed",
-    OPENCLAW_CONFIG_PATH: "/fixture/custom.json",
-    OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
   };
   it.each<[string, JsonObject | undefined, string?]>([
     ["ambient", undefined],
@@ -91,11 +88,6 @@ describe("Codex managed shell environment", () => {
     expect(
       mergeCodexNativeShellEnvironment(undefined, {
         inherit: null,
-        ignore_default_excludes: null,
-        exclude: null,
-        include_only: null,
-        filters: null,
-        experimental_use_profile: null,
         set: { PATH: "" },
       }),
     ).toEqual({ shell_environment_policy: { set: { PATH: "" } } });
@@ -189,7 +181,7 @@ describe("Codex managed shell environment", () => {
         include_only: expect.arrayContaining(Object.keys(hostEnvironment)),
       },
     });
-    expect(shellEnvironmentPolicy.include_only).toHaveLength(8);
+    expect(shellEnvironmentPolicy.include_only).toHaveLength(5);
     expect(shellEnvironmentPolicy).not.toHaveProperty("use_profile");
   });
 
