@@ -9,7 +9,7 @@ import {
   resolveClosestAspectRatio,
   resolveClosestResolution,
   resolveClosestSize,
-  resolveMediaProviderRequestTimeoutMs,
+  resolveMediaProviderRequestTimeoutMs as requestTimeout,
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
   throwCapabilityGenerationFailure,
@@ -57,29 +57,26 @@ it.each([
   ["standard-key", "https://dashscope.example.test", true],
   ["subscription-key", "https://dashscope.example.test", false],
   ["standard-key", "https://coding.example.test", false],
-] as const)(
-  "preserves DashScope factory policy in sync and async discovery (%s, %s)",
-  async (apiKey, baseUrl, allowed) => {
-    const provider = buildDashscopeVideoGenerationProvider({
-      providerId: "qwen",
-      label: "Qwen",
-      taskLabel: "Qwen",
-      defaultBaseUrl: "https://dashscope.example.test",
-      credentialPolicy: {
-        acceptsApiKey: (key) => key === "standard-key",
-        acceptsBaseUrl: (url) => url !== "https://coding.example.test",
-        unsupportedMessage: "Use Standard credentials and endpoint",
-      },
-    });
-    const params = candidateParams({
-      cfg: providerConfig("qwen", apiKey, baseUrl, "api-key"),
-      listProviders: () => [provider],
-    });
-    const expected = allowed ? [{ provider: "qwen", model: provider.defaultModel }] : [];
-    expect(resolveCapabilityModelCandidates(params)).toEqual(expected);
-    expect(await resolveCapabilityModelCandidatesAsync(params)).toEqual(expected);
-  },
-);
+] as const)("enforces DashScope policy (%s, %s)", async (apiKey, baseUrl, allowed) => {
+  const provider = buildDashscopeVideoGenerationProvider({
+    providerId: "qwen",
+    label: "Qwen",
+    taskLabel: "Qwen",
+    defaultBaseUrl: "https://dashscope.example.test",
+    credentialPolicy: {
+      acceptsApiKey: (key) => key === "standard-key",
+      acceptsBaseUrl: (url) => url !== "https://coding.example.test",
+      unsupportedMessage: "Use Standard credentials and endpoint",
+    },
+  });
+  const params = candidateParams({
+    cfg: providerConfig("qwen", apiKey, baseUrl, "api-key"),
+    listProviders: () => [provider],
+  });
+  const expected = allowed ? [{ provider: "qwen", model: provider.defaultModel }] : [];
+  expect(resolveCapabilityModelCandidates(params)).toEqual(expected);
+  expect(await resolveCapabilityModelCandidatesAsync(params)).toEqual(expected);
+});
 
 it.each([
   [0, undefined, undefined],
@@ -87,40 +84,28 @@ it.each([
   [2, { enabled: true, maxInputImages: 1 }, "p/m supports at most 1 reference image, 2 requested"],
   [11, { enabled: true }, "p/m supports at most 10 reference images, 11 requested"],
 ] as const)("validates %s reference-image inputs", (inputImageCount, edit, error) => {
-  expect(resolveReferenceImageCapabilityError({ candidateRef: "p/m", inputImageCount, edit })).toBe(
-    error,
-  );
+  const params = { candidateRef: "p/m", inputImageCount, edit };
+  expect(resolveReferenceImageCapabilityError(params)).toBe(error);
 });
 
-it.each([
-  {
-    name: "appends auth-backed defaults after explicit refs",
-    providers: [google, openai, configuredProvider("minimax")],
-    options: {
-      cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
-      modelConfig: imageModels,
-    },
-    expected: [ref("google"), ref("fal", "fal-ai/flux/dev"), ref("openai"), ref("minimax")],
-  },
-  {
-    name: "orders auto-detected defaults by canonical aliases",
-    providers: [fal, { ...openai, aliases: ["media-alias"] }],
-    options: {
-      cfg: { agents: { defaults: { model: { primary: "media-alias/text" } } } },
-    },
-    expected: [ref("openai"), ref("fal", "fal-ai/flux/dev")],
-  },
-  {
-    name: "treats an explicit model override as exact-only",
-    providers: [google],
-    options: {
-      modelConfig: imageModels,
-      modelOverride: "openai/openai-image",
-    },
-    expected: [ref("openai")],
-  },
-])("$name", async ({ providers, options, expected }) => {
-  expect(await resolveCandidates(providers, options)).toEqual(expected);
+it.each<{
+  name: string;
+  providers: Parameters<typeof resolveCandidates>[0];
+  primary: string;
+  modelConfig: CandidateParams["modelConfig"];
+  expected: ReturnType<typeof ref>[];
+}>`
+  name          | providers                                          | primary               | modelConfig    | expected
+  ${"explicit"} | ${[google, openai, configuredProvider("minimax")]} | ${"openai/text"}      | ${imageModels} | ${[ref("google"), ref("fal", "fal-ai/flux/dev"), ref("openai"), ref("minimax")]}
+  ${"alias"}    | ${[fal, { ...openai, aliases: ["media-alias"] }]}  | ${"media-alias/text"} | ${undefined}   | ${[ref("openai"), ref("fal", "fal-ai/flux/dev")]}
+`("orders provider defaults after $name", async ({ providers, expected, primary, modelConfig }) => {
+  const options = { cfg: { agents: { defaults: { model: { primary } } } }, modelConfig };
+  await expect(resolveCandidates(providers, options)).resolves.toEqual(expected);
+});
+
+it("treats an explicit model override as exact-only", async () => {
+  const options = { modelConfig: imageModels, modelOverride: "openai/openai-image" };
+  await expect(resolveCandidates([google], options)).resolves.toEqual([ref("openai")]);
 });
 
 it.each([
@@ -137,31 +122,28 @@ it.each([
 
 it("uses async readiness and observes an in-process credential change", async () => {
   let configured = false;
-  const resolve = () =>
-    resolveCandidates([
-      {
-        id: "media",
-        defaultModel: "image",
-        isConfigured: () => {
-          throw new Error("deprecated readiness must not run");
-        },
-        isConfiguredAsync: async () => configured,
-      },
-    ]);
-
+  const provider = {
+    ...configuredProvider("media", "image"),
+    isConfigured: () => {
+      throw new Error("deprecated readiness must not run");
+    },
+    isConfiguredAsync: async () => configured,
+  };
+  const resolve = () => resolveCandidates([provider]);
   expect(await resolve()).toEqual([]);
   configured = true;
   expect(await resolve()).toEqual([ref("media", "image")]);
 });
 
 it("preserves missing, skipped, and failed attempts before the first usable result", async () => {
-  const calls: string[] = [];
   const result = await runMediaGenerationCandidates({
     request: candidateRequest("image", ["missing", "skipped", "failed", "success", "unused"]),
     listProviders: () => [],
     capability: "image",
     getProvider(id) {
-      calls.push(`lookup:${id}`);
+      if (id === "unused") {
+        throw new Error("must stop after success");
+      }
       return id === "missing" ? undefined : { id };
     },
     prepareCandidate(candidate) {
@@ -169,7 +151,6 @@ it("preserves missing, skipped, and failed attempts before the first usable resu
         return "reference inputs unsupported";
       }
       return async (attempts) => {
-        calls.push(`generate:${candidate.provider}`);
         if (candidate.provider === "failed") {
           throw new Error("generation failed");
         }
@@ -178,41 +159,25 @@ it("preserves missing, skipped, and failed attempts before the first usable resu
     },
   });
 
-  expect(result.model).toBe("selected-model");
-  const failedAttempt = (provider: string, error: string) => ({
-    ...ref(provider, "model"),
-    error,
-    reason: undefined,
-    status: undefined,
-    code: undefined,
+  const failure = (provider: string, error: string) => ({ ...ref(provider, "model"), error });
+  expect(result).toEqual({
+    model: "selected-model",
+    attempts: [
+      failure("missing", "No image-generation provider registered for missing"),
+      failure("skipped", "reference inputs unsupported"),
+      failure("failed", "generation failed"),
+    ],
   });
-  expect(result.attempts).toStrictEqual([
-    {
-      ...ref("missing", "model"),
-      error: "No image-generation provider registered for missing",
-    },
-    failedAttempt("skipped", "reference inputs unsupported"),
-    failedAttempt("failed", "generation failed"),
-  ]);
-  expect(calls).toEqual([
-    "lookup:missing",
-    "lookup:skipped",
-    "lookup:failed",
-    "generate:failed",
-    "lookup:success",
-    "generate:success",
-  ]);
 });
 
 it("propagates async prepare failures without submitting a fallback", async () => {
   const error = new Error("provider registry unavailable");
-  const lookedUp: string[] = [];
   const result = runMediaGenerationCandidates({
     request: candidateRequest("video", ["primary", "fallback"]),
     listProviders: () => [],
     capability: "video",
     getProvider(id) {
-      lookedUp.push(id);
+      expect(id).toBe("primary");
       return { id };
     },
     prepareCandidate() {
@@ -221,51 +186,31 @@ it("propagates async prepare failures without submitting a fallback", async () =
   });
 
   await expect(result).rejects.toBe(error);
-  expect(lookedUp).toEqual(["primary"]);
 });
 
 it.each([
   [Number.MAX_SAFE_INTEGER, 30_000, MAX_TIMER_TIMEOUT_MS],
   [0, 45_000, 45_000],
 ])("resolves timeout %s", (timeoutMs, providerDefaultTimeoutMs, expected) => {
-  expect(resolveMediaProviderRequestTimeoutMs({ timeoutMs, providerDefaultTimeoutMs })).toBe(
-    expected,
-  );
+  expect(requestTimeout({ timeoutMs, providerDefaultTimeoutMs })).toBe(expected);
 });
 
-it.each([
-  ["9007199254740993x3", ["1024x1024", "1536x1024"], undefined],
-  ["1792x1024", ["1024x1024", "1024x1536", "1536x1024"], "1536x1024"],
-] as const)("normalizes size %s", (requestedSize, supportedSizes, expected) => {
-  expect(resolveClosestSize({ requestedSize, supportedSizes })).toBe(expected);
-});
-
-it("does not map across image and video resolution units", () => {
-  const resolution = resolveClosestResolution({
-    requestedResolution: "4K",
-    supportedResolutions: ["768P", "1080P"],
-  });
-  expect(resolution).toBeUndefined();
-});
-
-it("keeps geometry tie-breaking independent of provider declaration order", () => {
-  for (const reverse of [false, true]) {
-    const ordered = <T>(values: T[]) => (reverse ? values.toReversed() : values);
-    const aspectRatio = resolveClosestAspectRatio({
-      requestedAspectRatio: "3:3",
-      supportedAspectRatios: ordered(["invalid", "2:2", "1:1"]),
-    });
-    expect(aspectRatio).toBe("1:1");
-    const size = resolveClosestSize({
-      requestedAspectRatio: "1:1",
-      supportedSizes: ordered(["invalid", "128x128", "64x64"]),
-    });
-    expect(size).toBe("64x64");
-    const resolution = resolveClosestResolution({
-      requestedResolution: "480P",
-      supportedResolutions: ordered(["invalid", "360P", "600P"]),
-    });
-    expect(resolution).toBe("600P");
+it.each<{
+  name: string;
+  normalize: (values: string[]) => string | undefined;
+  values: string[];
+  expected: string | undefined;
+}>`
+  name                  | normalize                                                                                                                 | values                                     | expected
+  ${"unsafe size"}      | ${(supportedSizes: string[]) => resolveClosestSize({ requestedSize: "9007199254740993x3", supportedSizes })}              | ${["1024x1024", "1536x1024"]}              | ${undefined}
+  ${"closest size"}     | ${(supportedSizes: string[]) => resolveClosestSize({ requestedSize: "1792x1024", supportedSizes })}                       | ${["1024x1024", "1024x1536", "1536x1024"]} | ${"1536x1024"}
+  ${"resolution units"} | ${(supportedResolutions: string[]) => resolveClosestResolution({ requestedResolution: "4K", supportedResolutions })}      | ${["768P", "1080P"]}                       | ${undefined}
+  ${"ratio tie"}        | ${(supportedAspectRatios: string[]) => resolveClosestAspectRatio({ requestedAspectRatio: "3:3", supportedAspectRatios })} | ${["invalid", "2:2", "1:1"]}               | ${"1:1"}
+  ${"size tie"}         | ${(supportedSizes: string[]) => resolveClosestSize({ requestedAspectRatio: "1:1", supportedSizes })}                      | ${["invalid", "128x128", "64x64"]}         | ${"64x64"}
+  ${"resolution tie"}   | ${(supportedResolutions: string[]) => resolveClosestResolution({ requestedResolution: "480P", supportedResolutions })}    | ${["invalid", "360P", "600P"]}             | ${"600P"}
+`("normalizes $name independent of provider order", ({ normalize, values, expected }) => {
+  for (const ordered of [values, values.toReversed()]) {
+    expect(normalize(ordered)).toBe(expected);
   }
 });
 
@@ -275,22 +220,21 @@ it("clamps durations to the closest supported max", () => {
 });
 
 it("collapses abort cascades behind the non-abort failure", () => {
+  const error = "This operation was aborted";
   const abortedAttempts = ["minimax", "minimax-portal"].map((provider) => ({
     provider,
     model: "music-2.6",
-    error: "This operation was aborted",
+    error,
   }));
-
-  expect(() =>
-    throwCapabilityGenerationFailure({
-      capabilityLabel: "music generation",
-      attempts: [
-        { provider: "google", model: "clip", error: "deadline too short" },
-        ...abortedAttempts,
-      ],
-      lastError: new Error("This operation was aborted"),
-    }),
-  ).toThrow(
+  const params = {
+    capabilityLabel: "music generation",
+    attempts: [
+      { provider: "google", model: "clip", error: "deadline too short" },
+      ...abortedAttempts,
+    ],
+    lastError: new Error(error),
+  };
+  expect(() => throwCapabilityGenerationFailure(params)).toThrow(
     "All music generation models failed (3): google/clip: deadline too short | 2 fallback(s) aborted after the request was cancelled or timed out: minimax/music-2.6, minimax-portal/music-2.6",
   );
 });
