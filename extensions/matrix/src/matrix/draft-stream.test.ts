@@ -3,19 +3,8 @@ import { createMatrixDraftStream } from "./draft-stream.js";
 import type { MatrixClient } from "./sdk.js";
 
 const sendModuleMocks = vi.hoisted(() => {
-  type PreviewOptions = {
-    client?: { sendMessage: (roomId: string, content: Record<string, unknown>) => Promise<string> };
-    cfg?: unknown;
-    accountId?: string;
-    msgtype?: string;
-    includeMentions?: boolean;
-    live?: boolean;
-  };
-  const messageContent = (body: string, opts: PreviewOptions): Record<string, unknown> => ({
-    msgtype: opts.msgtype ?? "m.text",
-    body,
-    ...(opts.live ? { "org.matrix.msc4357.live": {} } : {}),
-  });
+  // send.test.ts owns wire encoding; this suite observes draft lifecycle dispatches.
+  const dispatch = vi.fn<(...args: unknown[]) => Promise<string>>();
   const resolveTextChunkLimitMock = vi.fn<
     (cfg: unknown, channel: unknown, accountId?: unknown) => number
   >(() => 4000);
@@ -36,36 +25,16 @@ const sendModuleMocks = vi.hoisted(() => {
     },
   );
   const sendSingleTextMessageMatrix = vi.fn(
-    async (roomId: string, text: string, opts: PreviewOptions = {}) => {
-      const prepared = prepareMatrixSingleText(text, {
-        cfg: opts.cfg,
-        accountId: opts.accountId,
-      });
-      if (!prepared.trimmedText) {
-        throw new Error("Matrix single-message send requires text");
-      }
-      if (!prepared.fitsInSingleEvent) {
-        throw new Error("Matrix single-message text exceeds limit");
-      }
-      const content = messageContent(prepared.convertedText, opts);
-      const eventId = await opts.client?.sendMessage(roomId, content);
-      return { messageId: eventId ?? "unknown" };
-    },
+    async (...args: Parameters<typeof import("./send.js").sendSingleTextMessageMatrix>) => ({
+      messageId: await dispatch(...args),
+    }),
   );
   const editMessageMatrix = vi.fn(
-    async (roomId: string, originalEventId: string, newText: string, opts: PreviewOptions = {}) => {
-      const convertedText = convertMarkdownTablesMock(newText);
-      const newContent = messageContent(convertedText, opts);
-      const content: Record<string, unknown> = {
-        ...newContent,
-        body: `* ${convertedText}`,
-        "m.new_content": newContent,
-        "m.relates_to": { rel_type: "m.replace", event_id: originalEventId },
-      };
-      return (await opts.client?.sendMessage(roomId, content)) ?? "";
-    },
+    async (...args: Parameters<typeof import("./send.js").editMessageMatrix>) =>
+      await dispatch(...args),
   );
   return {
+    dispatch,
     convertMarkdownTablesMock,
     editMessageMatrix,
     prepareMatrixSingleText,
@@ -81,15 +50,7 @@ vi.mock("./send.js", () => ({
   prepareMatrixSingleText: sendModuleMocks.prepareMatrixSingleText,
   sendSingleTextMessageMatrix: sendModuleMocks.sendSingleTextMessageMatrix,
 }));
-const sendMessageMock = vi.fn();
-
-function sentContentAt(callIndex: number): Record<string, unknown> {
-  const content = sendMessageMock.mock.calls[callIndex]?.[1];
-  if (!content || typeof content !== "object") {
-    throw new Error(`Expected sent content at call ${callIndex}`);
-  }
-  return content as Record<string, unknown>;
-}
+const sendMessageMock = sendModuleMocks.dispatch;
 
 function expectLogContaining(log: ReturnType<typeof vi.fn>, fragment: string): void {
   expect(log.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
@@ -127,8 +88,10 @@ describe("createMatrixDraftStream", () => {
 
     await update(stream, `${firstMarkdown}  `);
 
-    expect(sentContentAt(0).body).toBe(firstMarkdown);
+    expect(sendModuleMocks.sendSingleTextMessageMatrix.mock.calls[0]?.[1]).toBe(firstMarkdown);
     expect(sendModuleMocks.sendSingleTextMessageMatrix.mock.calls[0]?.[2]).toMatchObject({
+      client,
+      cfg: {},
       includeMentions: false,
       live: true,
       msgtype: "m.text",
@@ -154,9 +117,17 @@ describe("createMatrixDraftStream", () => {
 
     // The first send is immediate; the remaining updates coalesce into one edit.
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
-    expect(sentContentAt(0)).toMatchObject({ body: "A", msgtype: "m.notice" });
-    expect(sentContentAt(1)).toMatchObject({ body: "* ABC", msgtype: "m.notice" });
-    expect(sentContentAt(1)["m.new_content"]).toEqual({ msgtype: "m.notice", body: "ABC" });
+    expect(sendModuleMocks.sendSingleTextMessageMatrix).toHaveBeenCalledWith(
+      "!room:test",
+      "A",
+      expect.objectContaining({ msgtype: "m.notice", live: false }),
+    );
+    expect(sendModuleMocks.editMessageMatrix).toHaveBeenCalledWith(
+      "!room:test",
+      "$evt1",
+      "ABC",
+      expect.objectContaining({ msgtype: "m.notice", live: false }),
+    );
   });
 
   it("skips no-op updates", async () => {
@@ -181,7 +152,7 @@ describe("createMatrixDraftStream", () => {
     stream.update("Hello");
     expect(await stream.stop()).toBe("$evt1");
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sentContentAt(0)).toHaveProperty("org.matrix.msc4357.live");
+    expect(sendModuleMocks.sendSingleTextMessageMatrix.mock.calls[0]?.[2]?.live).toBe(true);
     if (failure) {
       await expect(stream.finalizeLive()).resolves.toBe(false);
       expect(stream.mustDeliverFinalNormally()).toBe(true);
@@ -189,7 +160,7 @@ describe("createMatrixDraftStream", () => {
       await stream.finalizeLive();
       await stream.finalizeLive();
       expect(sendMessageMock).toHaveBeenCalledTimes(2);
-      expect(sentContentAt(1)).not.toHaveProperty("org.matrix.msc4357.live");
+      expect(sendModuleMocks.editMessageMatrix.mock.lastCall?.[3]?.live).toBe(false);
     }
   });
 

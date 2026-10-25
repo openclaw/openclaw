@@ -82,6 +82,18 @@ function planTarget(deliveryIdentity = identity()) {
   };
 }
 
+const load = (deliveryIdentity = identity()) =>
+  loadMatrixDeliveryPlan(planTarget(deliveryIdentity));
+
+function receiptParts(messageIds: string[], kinds: string[], threaded = false) {
+  return messageIds.map((platformMessageId, index) => ({
+    platformMessageId,
+    kind: kinds[index] ?? "text",
+    index,
+    ...(threaded ? { replyToId: "$reply", threadId: "$thread" } : {}),
+  }));
+}
+
 function persistEvents(plannedEvents: ReturnType<typeof events>, target = planTarget()) {
   const transactionId = plannedEvents[0]!.transactionId;
   return persistMatrixDeliveryPlan({
@@ -162,7 +174,7 @@ it("persists one exact plan and rejects a different plan for the same queue part
     content: { msgtype: "m.text", body: "durable hello" },
   });
   expect(plan.events[0]?.transactionId).toMatch(/^oc_/);
-  await expect(loadMatrixDeliveryPlan(planTarget(deliveryIdentity))).resolves.toEqual(plan);
+  await expect(load(deliveryIdentity)).resolves.toEqual(plan);
 
   const changedEvents = events(deliveryIdentity, "changed");
   await expect(persistEvents(changedEvents, planTarget(deliveryIdentity))).rejects.toThrow(
@@ -178,9 +190,7 @@ it.each([{ queueId: "different-queue" }, { partIndex: 1 }])(
       plan.queueId,
       new TextEncoder().encode(JSON.stringify({ ...plan, ...changedIdentity })),
     );
-    await expect(loadMatrixDeliveryPlan(planTarget(identity("queue-1", 0, 2)))).rejects.toThrow(
-      "Matrix durable delivery plan",
-    );
+    await expect(load(identity("queue-1", 0, 2))).rejects.toThrow("Matrix durable delivery plan");
   },
 );
 
@@ -188,22 +198,17 @@ it("fails closed when a persisted plan contains invalid UTF-8", async () => {
   const queueId = "queue-invalid-utf8";
   const deliveryIdentity = identity(queueId);
   const plan = await persist({ queueId });
-  const json = JSON.stringify(plan);
-  const markerOffset = json.indexOf("durable hello");
+  const bytes = Buffer.from(JSON.stringify(plan));
+  const markerOffset = bytes.indexOf("durable hello");
   if (markerOffset < 0) {
     throw new Error("expected test plan body marker");
   }
-  const invalidByteOffset = markerOffset + "durable".length;
-  const bytes = Buffer.concat([
-    Buffer.from(json.slice(0, invalidByteOffset)),
-    Buffer.from([0xff]),
-    Buffer.from(json.slice(invalidByteOffset)),
-  ]);
+  bytes[markerOffset + "durable".length] = 0xff;
 
   await replaceStoredPlan(queueId, bytes);
   await expectUnresolved(queueId, "invalid JSON");
   expect(client.sendMessage).not.toHaveBeenCalled();
-  await expect(loadMatrixDeliveryPlan(planTarget(deliveryIdentity))).resolves.toBeNull();
+  await expect(load(deliveryIdentity)).resolves.toBeNull();
 });
 
 it("preserves the unknown-error fallback for non-error send failures", async () => {
@@ -259,13 +264,7 @@ it.each([false, true])(
         platformMessageIds: messageIds,
         replyToId: "$reply",
         threadId: "$thread",
-        parts: messageIds.map((platformMessageId, index) => ({
-          platformMessageId,
-          kind: index === 0 ? "media" : "text",
-          index,
-          replyToId: "$reply",
-          threadId: "$thread",
-        })),
+        parts: receiptParts(messageIds, ["media", "text"], true),
       },
     });
   },
@@ -277,7 +276,7 @@ it("fails closed without provider I/O when any expected part plan is missing", a
 
   await expectUnresolved("queue-incomplete", "incomplete event plan");
   expect(client.sendMessage).not.toHaveBeenCalled();
-  await expect(loadMatrixDeliveryPlan(planTarget(incompleteIdentity))).resolves.toBeNull();
+  await expect(load(incompleteIdentity)).resolves.toBeNull();
 });
 
 it("fails closed when the SDK selects a different Matrix endpoint path", async () => {
@@ -320,11 +319,7 @@ it.each(["scope-1", "old-scope"])(
         receipt: {
           primaryPlatformMessageId: messageIds[0],
           platformMessageIds: messageIds,
-          parts: messageIds.map((platformMessageId, index) => ({
-            platformMessageId,
-            kind: "text",
-            index,
-          })),
+          parts: receiptParts(messageIds, []),
         },
       });
       expect(client.sendMessage.mock.calls.map((call) => call.slice(0, 3))).toEqual(
@@ -343,9 +338,7 @@ it.each(["scope-1", "old-scope"])(
     for (const plan of plans) {
       await expect(loadMatrixDeliveryPlan({ ...plan, identity: plan })).resolves.toBeNull();
     }
-    await expect(
-      loadMatrixDeliveryPlan(planTarget(identity("queue-keep"))),
-    ).resolves.not.toBeNull();
+    await expect(load(identity("queue-keep"))).resolves.not.toBeNull();
   },
 );
 
@@ -368,9 +361,7 @@ it.each([false, true])(
     );
     expect(client.sendMessage).not.toHaveBeenCalled();
     if (populated) {
-      await expect(
-        loadMatrixDeliveryPlan(planTarget(identity("queue-keep"))),
-      ).resolves.not.toBeNull();
+      await expect(load(identity("queue-keep"))).resolves.not.toBeNull();
     }
   },
 );
