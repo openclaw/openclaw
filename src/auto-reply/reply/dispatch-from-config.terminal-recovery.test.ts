@@ -450,12 +450,8 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         });
       }
       let resolverOperation: ReturnType<typeof createReplyOperation> | undefined;
-      let resolverOwnerSettled = false;
       const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
         resolverOperation = options?.replyOperation;
-        void resolverOperation?.ownerSettlement.then(() => {
-          resolverOwnerSettled = true;
-        });
         if (state === "terminal-row") {
           options?.onAgentRunStart?.("successful-run");
         }
@@ -498,7 +494,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       if (!resolverOperation) {
         throw new Error("dispatch did not expose its reply operation");
       }
-      expect(resolverOwnerSettled).toBe(true);
+      await resolverOperation.ownerSettlement;
       expect(resolverOperation.watchdog.snapshot()).toMatchObject({
         current: false,
         phase: "settled",
