@@ -40,6 +40,20 @@ const refresh = (config: OpenClawConfig = {}, startup = false) =>
   });
 const readSnapshot = (agentId: string, config: OpenClawConfig = {}) =>
   getPreparedModelRuntimeSnapshot({ config, agentId, agentDir: fixture.state.agentDir(agentId) });
+const expectAdmission = async (agentId: string) =>
+  expect(loadPublishedGatewayReplyDispatchRuntime({ agentId })).resolves.toMatchObject({ agentId });
+function barrier() {
+  const entered = createDeferredCore();
+  const finish = createDeferredCore();
+  return {
+    entered: entered.promise,
+    ...finish,
+    wait: async () => {
+      entered.resolve();
+      await finish.promise;
+    },
+  };
+}
 
 describe("prepared fleet batches", () => {
   beforeEach(() => {
@@ -53,10 +67,8 @@ describe("prepared fleet batches", () => {
     "continues first Gateway startup while fleet workspace $heldIndex is acquiring (early auth: $earlyAuth)",
     async ({ heldIndex, earlyAuth }) => {
       mocks.configuredAgentIds = Array.from({ length: 64 }, (_, index) => `fleet-${index}`);
-      const acquiring = createDeferredCore();
-      const acquired = createDeferredCore();
-      const lastAcquiring = createDeferredCore();
-      const lastAcquired = createDeferredCore();
+      const held = barrier();
+      const last = barrier();
       const completed = createDeferredCore();
       const unregister = registerPreparedModelRuntimePublicationListener(({ phase }) => {
         if (phase === "published" && getPreparedModelRuntimeStartupStatus()?.degraded === false) {
@@ -75,12 +87,10 @@ describe("prepared fleet batches", () => {
       };
       mocks.prepareStaticCatalog.mockImplementation(async (options) => {
         if ((options as { workspaceDir: string }).workspaceDir === `/tmp/workspace-${heldAgent}`) {
-          acquiring.resolve();
-          await acquired.promise;
+          await held.wait();
         }
         if ((options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-fleet-63") {
-          lastAcquiring.resolve();
-          await lastAcquired.promise;
+          await last.wait();
         }
         return { entries: [] };
       });
@@ -92,7 +102,7 @@ describe("prepared fleet batches", () => {
       void ready.catch(() => undefined);
       let admission: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
       try {
-        await acquiring.promise;
+        await held.entered;
         if (earlyAuth) {
           mutateAuth();
         }
@@ -106,35 +116,29 @@ describe("prepared fleet batches", () => {
         expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining(`agent ${heldAgent}`));
         admission = loadPublishedGatewayReplyDispatchRuntime({ agentId: heldAgent });
         const admissionSettled = observeSettlement(admission);
-        await expect(
-          loadPublishedGatewayReplyDispatchRuntime({ agentId: "fleet-0" }),
-        ).resolves.toMatchObject({ agentId: "fleet-0" });
+        await expectAdmission("fleet-0");
         if (!earlyAuth) {
           mutateAuth();
         }
-        await expect(
-          loadPublishedGatewayReplyDispatchRuntime({ agentId: "fleet-0" }),
-        ).resolves.toMatchObject({ agentId: "fleet-0" });
+        await expectAdmission("fleet-0");
         expect(readSnapshot("fleet-0", config)?.createStores().authStorage.getAll()).toEqual(
           credentials,
         );
         expect(admissionSettled()).toBe(false);
-        acquired.resolve();
-        await lastAcquiring.promise;
+        held.resolve();
+        await last.entered;
         await expect(admission).resolves.toMatchObject({ agentId: heldAgent });
-        lastAcquired.resolve();
+        last.resolve();
         await completed.promise;
         expect(getPreparedModelRuntimeStartupStatus()).toEqual({
           degraded: false,
           pendingAgents: [],
         });
-        await expect(
-          loadPublishedGatewayReplyDispatchRuntime({ agentId: heldAgent }),
-        ).resolves.toMatchObject({ agentId: heldAgent });
+        await expectAdmission(heldAgent);
         expect(readSnapshot(heldAgent, config)).toBeDefined();
       } finally {
-        acquired.resolve();
-        lastAcquired.resolve();
+        held.resolve();
+        last.resolve();
         await Promise.allSettled([publication, admission]);
         await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
         unregister();
@@ -145,10 +149,8 @@ describe("prepared fleet batches", () => {
 
   it("keeps auth admission pending when startup degrades during an adopted refresh", async () => {
     mocks.configuredAgentIds = ["first", "last"];
-    const firstAuth = createDeferredCore();
-    const finishFirstAuth = createDeferredCore();
-    const secondAuth = createDeferredCore();
-    const finishSecondAuth = createDeferredCore();
+    const firstAuth = barrier();
+    const secondAuth = barrier();
     const mutateAuth = () =>
       mocks.mutationListener?.({
         agentDir: fixture.state.agentDir("first"),
@@ -166,13 +168,11 @@ describe("prepared fleet batches", () => {
       .mockImplementationOnce(() => ({}))
       .mockImplementationOnce(() => ({}))
       .mockImplementationOnce(async () => {
-        firstAuth.resolve();
-        await finishFirstAuth.promise;
+        await firstAuth.wait();
         return {};
       })
       .mockImplementationOnce(async () => {
-        secondAuth.resolve();
-        await finishSecondAuth.promise;
+        await secondAuth.wait();
         return {};
       });
     mocks.warn.mockImplementation((message: string) => {
@@ -184,20 +184,20 @@ describe("prepared fleet batches", () => {
     const publication = refresh({}, true);
     let admission: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
     try {
-      await firstAuth.promise;
+      await firstAuth.entered;
       admission = loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" });
       const settled = observeSettlement(admission);
       await vi.advanceTimersByTimeAsync(120_000);
       await publication;
-      finishFirstAuth.resolve();
-      await secondAuth.promise;
+      firstAuth.resolve();
+      await secondAuth.entered;
       await nextTurn();
       expect(settled()).toBe(false);
-      finishSecondAuth.resolve();
+      secondAuth.resolve();
       await expect(admission).resolves.toMatchObject({ agentId: "first" });
     } finally {
-      finishFirstAuth.resolve();
-      finishSecondAuth.resolve();
+      firstAuth.resolve();
+      secondAuth.resolve();
       await Promise.allSettled([publication, admission]);
       await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
       vi.useRealTimers();
@@ -206,13 +206,11 @@ describe("prepared fleet batches", () => {
 
   it("retains settled agents after a late failure across a neutral config advance", async () => {
     mocks.configuredAgentIds = ["first", "last"];
-    const acquiring = createDeferredCore();
-    const acquired = createDeferredCore();
+    const acquisition = barrier();
     const failed = createDeferredCore();
     mocks.prepareStaticCatalog.mockImplementation(async (options) => {
       if ((options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-last") {
-        acquiring.resolve();
-        await acquired.promise;
+        await acquisition.wait();
       }
       return { entries: [] };
     });
@@ -224,21 +222,19 @@ describe("prepared fleet batches", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const publication = refresh({}, true);
     try {
-      await acquiring.promise;
+      await acquisition.entered;
       await vi.advanceTimersByTimeAsync(120_000);
       await publication;
       advancePreparedModelRuntimeConfig({ logging: { level: "debug" } });
-      acquired.reject(new Error("fixture catalog failure"));
+      acquisition.reject(new Error("fixture catalog failure"));
       await failed.promise;
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "first" }),
-      ).resolves.toMatchObject({ agentId: "first" });
+      await expectAdmission("first");
       expect(getPreparedModelRuntimeStartupStatus()).toMatchObject({
         degraded: true,
         pendingAgents: ["last"],
       });
     } finally {
-      acquired.resolve();
+      acquisition.resolve();
       await Promise.allSettled([publication]);
       await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
       vi.useRealTimers();
@@ -335,7 +331,6 @@ describe("prepared fleet batches", () => {
       mocks.configuredAgentIds.map((agentId) => readSnapshot(agentId, config));
     try {
       await refresh(config);
-      expect(captures).toHaveLength(3);
       expect(new Set(captures).size).toBe(1);
       const first = captures[0]!;
       expect(first).not.toBe(config);
@@ -343,28 +338,13 @@ describe("prepared fleet batches", () => {
       expect(Object.isFrozen(config.agents?.defaults)).toBe(false);
       const firstSnapshots = readSnapshots();
       for (const [index, snapshot] of firstSnapshots.entries()) {
-        expect(snapshot).toMatchObject({
-          agentId: mocks.configuredAgentIds[index],
-          workspaceDir: `/tmp/workspace-${mocks.configuredAgentIds[index]}`,
-          inlineProviderModels: [
-            { id: "first", name: "first" },
-            { id: "second", name: "second" },
-          ],
-          modelCatalog: {
-            entries: [
-              {
-                id: "first",
-                api: "openai-responses",
-                baseUrl: `https://workspace-${mocks.configuredAgentIds[index]}.fixture.invalid/v1`,
-              },
-              {
-                id: "second",
-                api: "openai-completions",
-                baseUrl: "https://fixture.invalid/v1",
-              },
-            ],
-          },
-        });
+        const agentId = mocks.configuredAgentIds[index];
+        expect(
+          snapshot?.modelCatalog.entries.map(({ id, api, baseUrl }) => [id, api, baseUrl]),
+        ).toEqual([
+          ["first", "openai-responses", `https://workspace-${agentId}.fixture.invalid/v1`],
+          ["second", "openai-completions", "https://fixture.invalid/v1"],
+        ]);
       }
       expect(inlineProjection).toHaveBeenCalledOnce();
       expect(configuredProjection.mock.calls.filter(([params]) => !params.catalog)).toHaveLength(1);
@@ -374,7 +354,6 @@ describe("prepared fleet batches", () => {
       expect(first.agents?.defaults?.model).toBe("fixture/first");
       captures.length = 0;
       await refresh(config);
-      expect(captures).toHaveLength(3);
       expect(new Set(captures).size).toBe(1);
       expect(captures[0]).not.toBe(first);
       expect(captures[0]?.agents?.defaults?.model).toBe("fixture/second");

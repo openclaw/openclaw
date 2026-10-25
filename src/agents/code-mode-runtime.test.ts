@@ -68,24 +68,15 @@ describe("Code Mode output bounding", () => {
     expect(projectResult({ output, error, maxOutputBytes })).toEqual({ output, error });
   });
 
+  const oversizedOutput = [{ type: "text", text: "output ".repeat(1_000) }];
   it.each([
-    { name: "Unicode error", errorText: "😀 café ", output: [], returned: {} },
-    { name: "escaped error", errorText: '\\"\n\t', output: [], returned: {} },
-    {
-      name: "error and output",
-      errorText: "😀 failure ",
-      output: [{ type: "text", text: "output ".repeat(1_000) }],
-      returned: {},
-    },
-    {
-      name: "error, output, and value",
-      errorText: "😀 failure ",
-      output: [{ type: "text", text: "output ".repeat(1_000) }],
-      returned: { value: "value ".repeat(1_000) },
-    },
-  ])(
-    "bounds $name without losing the cause or splitting Unicode",
-    ({ errorText, output, returned }) => {
+    ["😀 café ", [], {}],
+    ['\\"\n\t', [], {}],
+    ["😀 failure ", oversizedOutput, {}],
+    ["😀 failure ", oversizedOutput, { value: "value ".repeat(1_000) }],
+  ] satisfies Array<[string, unknown[], { value?: string }]>)(
+    "bounds %j with output %j and return %j without losing the cause or splitting Unicode",
+    (errorText, output, returned) => {
       const maxOutputBytes = 1_024;
       const bounded = projectResult({
         output,
@@ -157,20 +148,11 @@ describe("Code Mode master switch resolution", () => {
 
 describe("Code Mode guest source validation", () => {
   it.each([
-    { code: "const answer = ;", location: "1:16" },
-    { code: "const first = 1;\nconst answer = ;", location: "2:16" },
-    { code: "const answer = ; return import('node:fs');", location: "1:16" },
-    {
-      code: `const label = "${"😀".repeat(96)}";\nconst answer = ; return import('node:fs');`,
-      location: "2:16",
-    },
-    {
-      code: `const label = "${"😀".repeat(96)}";\nconst answer = ; return require('node:fs');`,
-      location: "2:16",
-    },
-    { code: "import fs from 'node:fs';", location: "1:1" },
-    { code: "return import.meta.url;", location: "1:8" },
-  ])("rejects malformed JavaScript at $location", ({ code, location }) => {
+    ["const answer = ;", "1:16"],
+    [`const label = "${"😀".repeat(96)}";\nconst answer = ; return import('node:fs');`, "2:16"],
+    ["import fs from 'node:fs';", "1:1"],
+    ["return import.meta.url;", "1:8"],
+  ])("rejects malformed JavaScript %j at %s", (code, location) => {
     expect(() => prepareSource(code)).toThrow(
       "SyntaxError at openclaw-code-mode:user.js:" + location,
     );

@@ -56,22 +56,20 @@ function setup({ deferred = false, ...options }: Partial<Options> & { deferred?:
   subscriptions.push(subscription);
   const message = (value: AssistantMessage, stream = true) => {
     emit({ type: "message_start", message: value });
-    if (stream) {
-      for (const [contentIndex, content] of value.content.entries()) {
-        if (content.type !== "text") {
-          continue;
-        }
-        const partial = { ...value, content: value.content.slice(0, contentIndex + 1) };
-        for (const update of [
-          { type: "text_delta", delta: content.text },
-          { type: "text_end", content: content.text },
-        ]) {
-          emit({
-            type: "message_update",
-            message: partial,
-            assistantMessageEvent: { ...update, contentIndex, partial },
-          });
-        }
+    for (const [contentIndex, content] of stream ? value.content.entries() : []) {
+      if (content.type !== "text") {
+        continue;
+      }
+      const partial = { ...value, content: value.content.slice(0, contentIndex + 1) };
+      for (const update of [
+        { type: "text_delta", delta: content.text },
+        { type: "text_end", content: content.text },
+      ]) {
+        emit({
+          type: "message_update",
+          message: partial,
+          assistantMessageEvent: { ...update, contentIndex, partial },
+        });
       }
     }
     emit({ type: "message_end", message: value });
@@ -84,10 +82,13 @@ function setup({ deferred = false, ...options }: Partial<Options> & { deferred?:
   ) => {
     emitToolRun({ emit, toolName, toolCallId, args: {}, result, isError });
   };
-  const assistantEvents = () =>
+  const events = (stream: string) =>
     onAgentEvent.mock.calls
-      .filter(([event]) => event.stream === "assistant")
+      .filter(([event]) => event.stream === stream)
       .map(([event]) => event.data);
+  const assistantEvents = () => events("assistant");
+  const end = (messages: AssistantMessage[] = []) =>
+    emit({ type: "agent_end", messages, willRetry: false });
   return {
     emit,
     subscription,
@@ -104,19 +105,15 @@ function setup({ deferred = false, ...options }: Partial<Options> & { deferred?:
       emit({ type: "message_start", message: value });
       emit({ type: "message_end", message: value });
     },
-    end: (messages: AssistantMessage[] = []) =>
-      emit({ type: "agent_end", messages, willRetry: false }),
+    end,
     finish: async (messages: AssistantMessage[] = []) => {
-      emit({ type: "agent_end", messages, willRetry: false });
+      end(messages);
       await subscription.waitForPendingEvents();
     },
     drain: () => subscription.waitForPendingEvents(),
     assistantEvents,
     hasAssistantText: (text: string) => assistantEvents().some((data) => data.text === text),
-    lifecycleEnded: () =>
-      onAgentEvent.mock.calls.some(
-        ([event]) => event.stream === "lifecycle" && event.data.phase === "end",
-      ),
+    lifecycleEnded: () => events("lifecycle").some((data) => data.phase === "end"),
   };
 }
 
@@ -428,15 +425,14 @@ it("preserves deferred media and reasoning while superseding obsolete captions",
     "Completed answer.",
     "Second answer block.",
   ]);
-  const assistantEvents = h.assistantEvents();
-  const obsolete = expect.objectContaining({ text: expect.stringContaining("Obsolete") });
-  expect(assistantEvents).not.toEqual(expect.arrayContaining([obsolete]));
-  const mediaEvents = assistantEvents.filter(
-    (data) => Array.isArray(data.mediaUrls) && data.mediaUrls.length > 0,
+  expect(h.assistantEvents()).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ text: expect.stringContaining("Obsolete") }),
+    ]),
   );
-  expect(mediaEvents).toEqual([
-    expect.objectContaining({ text: "", mediaUrls: [attachment.path] }),
-  ]);
+  expect(
+    h.assistantEvents().filter((data) => Array.isArray(data.mediaUrls) && data.mediaUrls.length),
+  ).toEqual([expect.objectContaining({ text: "", mediaUrls: [attachment.path] })]);
   expect(h.subscription.hasToolMediaBlockReply()).toBe(true);
   expect(h.subscription.getPendingToolMediaReply()).toBeNull();
 });
