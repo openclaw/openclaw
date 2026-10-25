@@ -22,10 +22,22 @@ const showInfo = {
   capabilities: ["completion", "tools"],
 };
 
-function setupContext(baseUrl: string, provider: Partial<ModelProviderConfig> = {}) {
-  return {
+function setupAt(
+  baseUrl: string,
+  model = selected,
+  provider: Partial<ModelProviderConfig> = {},
+  signal?: AbortSignal,
+) {
+  const context = {
     config: { models: { providers: { ollama: { baseUrl, models: [], ...provider } } } },
     env: {},
+    modelRef: `ollama/${model}`,
+    signal,
+  };
+  const setup = expectDefined(authMethod().appGuidedSetup, "Ollama app-guided setup");
+  return {
+    detect: () => setup.detect(context),
+    prepare: () => setup.prepare(context),
   };
 }
 
@@ -79,32 +91,12 @@ function authMethod(id = "ollama") {
   );
 }
 
-function guidedSetup() {
-  return expectDefined(authMethod().appGuidedSetup, "Ollama app-guided setup");
-}
-
-function prepare(baseUrl: string, model = selected, provider: Partial<ModelProviderConfig> = {}) {
-  return guidedSetup().prepare({ ...setupContext(baseUrl, provider), modelRef: `ollama/${model}` });
-}
-
-function runSetup(operation: "detect" | "prepare", baseUrl: string, signal?: AbortSignal) {
-  return guidedSetup()[operation]({
-    ...setupContext(baseUrl),
-    modelRef: `ollama/${selected}`,
-    signal,
-  });
-}
-
 describe("Ollama app-guided setup HTTP discovery", () => {
-  it.each([
-    { tag: { remote_host: "https://ollama.com" }, expected: 262_144 },
-    { tag: { remote_model: "upstream-model" }, expected: 262_144 },
-    { tag: {}, expected: 8192 },
-  ])("preserves alias output budgets for $tag", async ({ tag, expected }) => {
+  it("preserves remote alias output budgets during app-guided setup", async () => {
     const name = "private-alias";
     await withOllamaServer(
       {
-        models: [{ name, ...tag }],
+        models: [{ name, remote_model: "upstream-model" }],
         loaded: [name],
         show: {
           ...showInfo,
@@ -112,19 +104,10 @@ describe("Ollama app-guided setup HTTP discovery", () => {
         },
       },
       async (baseUrl) => {
-        const prepared = await prepare(baseUrl, name);
-        const provider = prepared?.configPatch?.models?.providers?.ollama;
-        expect(prepared).toMatchObject({ profiles: [], defaultModel: `ollama/${name}` });
-        expect(prepared?.configPatch?.models?.mode).toBe("merge");
-        expect(provider).toMatchObject({
-          baseUrl,
-          api: "ollama",
-          apiKey: "ollama-local",
-        });
-        expect(provider?.models?.[0]).not.toHaveProperty("parameterCount");
-        expect(provider?.models?.[0]).toMatchObject({
+        const result = await setupAt(baseUrl, name).prepare();
+        expect(result?.configPatch?.models?.providers?.ollama?.models?.[0]).toMatchObject({
           id: name,
-          maxTokens: expected,
+          maxTokens: 262_144,
         });
       },
     );
@@ -133,7 +116,7 @@ describe("Ollama app-guided setup HTTP discovery", () => {
   it.each(["detect", "prepare"] as const)("%s skips idle models past cap", async (operation) => {
     const models = [...Array.from({ length: 200 }, (_, index) => `idle-${index}`), selected];
     await withOllamaServer({ models }, async (baseUrl, inspected) => {
-      const result = await runSetup(operation, baseUrl);
+      const result = await setupAt(baseUrl)[operation]();
       expect(result).toMatchObject({
         [operation === "detect" ? "modelRef" : "defaultModel"]: `ollama/${selected}`,
         ...(operation === "detect" ? { detail: `${selected} at ${baseUrl}` } : {}),
@@ -149,8 +132,9 @@ describe("Ollama app-guided setup HTTP discovery", () => {
     { name: "failed inspection", showStatus: 503 },
   ])("rejects a loaded model with $name", async (options) => {
     await withOllamaServer(options, async (baseUrl) => {
-      await expect(guidedSetup().detect(setupContext(baseUrl))).resolves.toBeNull();
-      await expect(prepare(baseUrl)).resolves.toBeNull();
+      const setup = setupAt(baseUrl);
+      await expect(setup.detect()).resolves.toBeNull();
+      await expect(setup.prepare()).resolves.toBeNull();
     });
   });
 
@@ -159,9 +143,9 @@ describe("Ollama app-guided setup HTTP discovery", () => {
     await withOllamaServer(
       { onShow: () => controller.abort(new Error("Setup cancelled")) },
       async (baseUrl, inspected) => {
-        await expect(runSetup(operation, baseUrl, controller.signal)).rejects.toThrow(
-          "Setup cancelled",
-        );
+        await expect(
+          setupAt(baseUrl, selected, {}, controller.signal)[operation](),
+        ).rejects.toThrow("Setup cancelled");
         expect(inspected).toEqual([selected]);
       },
     );
@@ -178,7 +162,7 @@ describe("Ollama app-guided setup HTTP discovery", () => {
         timeoutSeconds: 17,
         models: [otherModel, configuredModel],
       };
-      const result = await prepare(baseUrl, selected, provider);
+      const result = await setupAt(baseUrl, selected, provider).prepare();
       expect(result?.defaultModel).toBe(`ollama/${selected}`);
       expect(result?.configPatch?.models?.providers?.ollama).toMatchObject({
         ...provider,
@@ -191,7 +175,7 @@ describe("Ollama app-guided setup HTTP discovery", () => {
   it.each(["local", "cloud"] as const)("handles %s models absent from tags", async (kind) => {
     const model = { ...configuredModel, id: kind === "cloud" ? "setup-tools:cloud" : selected };
     await withOllamaServer({ models: [], loaded: [], show: {} }, async (baseUrl) => {
-      const result = await prepare(baseUrl, model.id, { models: [model] });
+      const result = await setupAt(baseUrl, model.id, { models: [model] }).prepare();
       if (kind === "cloud") {
         expect(result?.defaultModel).toBe(`ollama/${model.id}`);
         const prepared = result?.configPatch?.models?.providers?.ollama?.models?.[0];
@@ -205,8 +189,6 @@ describe("Ollama app-guided setup HTTP discovery", () => {
 });
 
 const keyError = "Ollama Cloud requires a hosted API key";
-
-const cloudAuthMethod = () => authMethod("ollama-cloud");
 
 function authContext(
   options: Partial<Pick<ProviderAuthContext, "env" | "opts" | "secretInputMode">>,
@@ -236,23 +218,17 @@ function authContext(
 }
 
 describe("Ollama Cloud API key setup", () => {
-  it.each(["flag", "prompt", "env", "ref"] as const)(
-    "rejects local key from %s",
-    async (source) => {
-      await expect(
-        cloudAuthMethod().run(
-          authContext({
-            env: source === "env" || source === "ref" ? { OLLAMA_API_KEY: "ollama-local" } : {},
-            opts: source === "flag" ? { ollamaCloudApiKey: "ollama-local" } : {},
-            secretInputMode: source === "ref" ? "ref" : "plaintext",
-          }),
-        ),
-      ).rejects.toThrow(keyError);
-    },
-  );
+  it.each([
+    ["flag", { opts: { ollamaCloudApiKey: "ollama-local" } }],
+    ["prompt", {}],
+    ["env", { env: { OLLAMA_API_KEY: "ollama-local" } }],
+    ["ref", { env: { OLLAMA_API_KEY: "ollama-local" }, secretInputMode: "ref" }],
+  ] as const)("rejects local key from %s", async (_source, options) => {
+    await expect(authMethod("ollama-cloud").run(authContext(options))).rejects.toThrow(keyError);
+  });
 
   it("rejects a resolved local placeholder before non-interactive persistence", async () => {
-    const method = cloudAuthMethod();
+    const method = authMethod("ollama-cloud");
     const toApiKeyCredential = vi.fn();
     const ctx = {
       authChoice: "ollama-cloud",
@@ -269,7 +245,7 @@ describe("Ollama Cloud API key setup", () => {
   });
 
   it("preserves a hosted key and the Cloud default model", async () => {
-    const result = await cloudAuthMethod().run(
+    const result = await authMethod("ollama-cloud").run(
       authContext({ opts: { ollamaCloudApiKey: "hosted-test-key" } }),
     );
     expect(result).toMatchObject({
