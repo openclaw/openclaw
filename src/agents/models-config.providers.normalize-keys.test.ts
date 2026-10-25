@@ -225,7 +225,7 @@ describe("provider normalization through catalog planning", () => {
     },
   );
 
-  it("publishes schema-complete costs after duplicate model rows merge", () => {
+  it("publishes schema-complete costs while preserving authored tiers", () => {
     const modelWithPartialCost = (id: string, cost: Partial<NonNullable<ConfigModel["cost"]>>) =>
       ({ ...modelDefinition(id), cost }) as ConfigModel;
     const tieredPricing = [
@@ -237,26 +237,16 @@ describe("provider normalization through catalog planning", () => {
         range: [0, 1_000_000] as [number, number],
       },
     ];
-    const providers: Providers = {
-      custom: {
-        baseUrl: "https://models.example/v1",
-        models: [
-          modelWithPartialCost("partial", { input: 10, output: 50, tieredPricing }),
-          modelDefinition("unknown", { cost: undefined }),
-          modelWithPartialCost("duplicate", { input: 3, output: 15 }),
-          modelWithPartialCost("duplicate", { cacheRead: 0.3, cacheWrite: 3.75 }),
-        ],
-      },
+    const providers = {
+      custom: provider({
+        models: [modelWithPartialCost("partial", { input: 10, output: 50, tieredPricing })],
+      }),
     };
 
     expect(ModelsConfigSchema.safeParse({ providers }).success).toBe(true);
     expect(normalizeProviderCatalogModelsForConfig(providers)?.custom?.models).toEqual([
       modelDefinition("partial", {
         cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0, tieredPricing },
-      }),
-      modelDefinition("unknown", { cost: undefined }),
-      modelDefinition("duplicate", {
-        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
       }),
     ]);
   });

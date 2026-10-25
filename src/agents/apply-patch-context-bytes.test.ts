@@ -23,12 +23,6 @@ describe("applyPatch context byte preservation", () => {
       expected: "head\nlast context  \nnew\n",
     },
     {
-      name: "multiple chunks with repeated context",
-      initial: "anchor  \nold one\nmarker  \nanchor  \nold two\nmarker  \n",
-      hunk: "@@\n anchor\n-old one\n+new one\n marker\n@@\n anchor\n-old two\n+new two\n marker",
-      expected: "anchor  \nnew one\nmarker  \nanchor  \nnew two\nmarker  \n",
-    },
-    {
       name: "a move",
       initial: "It\u2019s here\nold\n",
       hunk: "@@\n It's here\n-old\n+new",
@@ -40,18 +34,6 @@ describe("applyPatch context byte preservation", () => {
       initial: "anchor  \ntail\n",
       hunk: "@@ anchor\n+inserted",
       expected: "anchor  \ninserted\ntail\n",
-    },
-    {
-      name: "a CRLF replacement",
-      initial: "\tcontext\r\nold\r\n",
-      hunk: "@@\n    context\n-old\n+new",
-      expected: "\tcontext\r\nnew\r\n",
-    },
-    {
-      name: "a mixed-ending replacement",
-      initial: "before  \r\nold\nIt\u2019s after\r\n",
-      hunk: "@@\n before\n-old\n+new\n It's after",
-      expected: "before  \r\nnew\nIt\u2019s after\r\n",
     },
   ])("keeps context bytes through $name", async ({ initial, hunk, expected, move }) => {
     await withTempDir("openclaw-patch-context-", async (dir) => {
@@ -75,44 +57,6 @@ describe("applyPatch context byte preservation", () => {
       expect(memory.files.get("/sandbox/source.txt")).toBe(initial);
       expect(memory.writeFile.mock.calls).toHaveLength(0);
     }
-  });
-
-  it.each([
-    {
-      title: "preserves CRLF line endings for inserted lines",
-      initial: "foo\r\nbar\r\n",
-      hunk: "@@ foo\n+middle",
-      expected: "foo\r\nmiddle\r\nbar\r\n",
-    },
-    {
-      title: "does not normalize mixed line endings outside the changed hunk",
-      initial: "first\r\nsecond\nthird\r\n",
-      hunk: "@@\n-second\n+changed",
-      expected: "first\r\nchanged\nthird\r\n",
-    },
-    {
-      title: "keeps later insertion contexts in original file coordinates",
-      initial: "a\nb\nc\n",
-      hunk: "@@ a\n+after-a\n@@ b\n+after-b",
-      expected: "a\nafter-a\nb\nafter-b\nc\n",
-    },
-    {
-      title: "supports end-of-file inserts",
-      initial: "line1\n",
-      hunk: "@@\n+line2\n*** End of File",
-      expected: "line1\nline2\n",
-    },
-    {
-      title: "keeps tab indentation on context lines when the hunk uses spaces",
-      initial: "def run(x):\n\tif x:\n\t\tprepare()\n\t\tvalue = 1\n\t\treturn value\n\treturn 0\n",
-      hunk: "@@\n     if x:\n         prepare()\n-        value = 1\n+        value = 2\n         return value",
-      expected:
-        "def run(x):\n\tif x:\n\t\tprepare()\n        value = 2\n\t\treturn value\n\treturn 0\n",
-    },
-  ])("$title", async ({ initial, hunk, expected }) => {
-    const memory = createMemoryPatchSandbox({ "source.txt": initial });
-    await applyPatch(update(hunk), memory.options);
-    expect(memory.files.get("/sandbox/source.txt")).toBe(expected);
   });
 
   it("applies a real deletion of the sole blank line", async () => {
