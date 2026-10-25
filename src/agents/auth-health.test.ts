@@ -36,8 +36,6 @@ describe("buildAuthHealthSummary", () => {
   const now = 1_700_000_000_000;
   const profileStatuses = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
     Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.status]));
-  const profileReasonCodes = (summary: ReturnType<typeof buildAuthHealthSummary>) =>
-    Object.fromEntries(summary.profiles.map((profile) => [profile.profileId, profile.reasonCode]));
 
   const oauth = (expires: number, provider = "openai", refresh = "refresh") =>
     createOAuthRefreshCredential({ expires, provider, refresh });
@@ -60,8 +58,6 @@ describe("buildAuthHealthSummary", () => {
         accountId: "acct-cli",
       }),
     });
-  const summarizeProfile = (profileId: string, credential: AuthProfileCredential) =>
-    buildAuthHealthSummary({ store: createAuthProfileStoreFixture({ [profileId]: credential }) });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -117,48 +113,62 @@ describe("buildAuthHealthSummary", () => {
     ).toBe("expired");
   });
 
-  it("reports unresolved legacy Codex OAuth sidecars as missing auth", () => {
-    mockFreshCodexCliCredentials();
-    const store = createAuthProfileStoreFixture({
-      "openai-codex:default": {
-        type: "oauth" as const,
+  it.each<[string, AuthProfileCredential, string, string?]>([
+    [
+      "unresolved sidecar",
+      {
+        ...oauth(now + DEFAULT_OAUTH_WARN_MS),
         provider: "openai-codex",
-        expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+        access: "",
+        refresh: "",
         oauthRef: {
-          source: "openclaw-credentials" as const,
-          provider: "openai-codex" as const,
+          source: "openclaw-credentials",
+          provider: "openai-codex",
           id: "0123456789abcdef0123456789abcdef",
         },
-      } as unknown as OAuthCredential,
-    });
-
-    const summary = buildAuthHealthSummary({ store });
-
-    expect(profileStatuses(summary)["openai-codex:default"]).toBe("missing");
-    expect(profileReasonCodes(summary)["openai-codex:default"]).toBe("unresolved_ref");
-    expect(summary.providers.find((entry) => entry.provider === "openai-codex")?.status).toBe(
+      },
       "missing",
-    );
-  });
-
-  it("does not replace missing OpenClaw auth with a native Codex login", () => {
-    mockFreshCodexCliCredentials();
-    const store = createAuthProfileStoreFixture({
-      "openai:default": {
-        type: "oauth" as const,
-        provider: "openai",
-      } as unknown as OAuthCredential,
-    });
-
-    const summary = buildAuthHealthSummary({ store });
-
-    expect(profileStatuses(summary)["openai:default"]).toBe("missing");
-    expect(profileReasonCodes(summary)["openai:default"]).toBe("missing_credential");
-    const provider = summary.providers.find((entry) => entry.provider === "openai");
-    expect(provider?.status).toBe("missing");
-    expect(provider?.expiresAt).toBeUndefined();
-    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
-  });
+      "unresolved_ref",
+    ],
+    [
+      "missing OAuth",
+      { type: "oauth", provider: "openai" } as unknown as OAuthCredential,
+      "missing",
+      "missing_credential",
+    ],
+    [
+      "command-shaped key",
+      createApiKeyCredential("zai", "openclaw onboard --auth-choice zai-coding-global"),
+      "missing",
+      "malformed_api_key",
+    ],
+    [
+      "invalid token expiry",
+      { type: "token", provider: "github-copilot", token: "gh-token", expires: 0 },
+      "missing",
+      "invalid_expires",
+    ],
+    ["out-of-range OAuth expiry", oauth(MAX_DATE_TIMESTAMP_MS + 1), "missing"],
+    ["expired OAuth without refresh", oauth(now - 10_000, "google-antigravity", ""), "expired"],
+  ])(
+    "classifies %s without consulting native Codex credentials",
+    (_name, credential, status, reasonCode) => {
+      mockFreshCodexCliCredentials();
+      const summary = buildAuthHealthSummary({
+        store: createAuthProfileStoreFixture({ [`${credential.provider}:default`]: credential }),
+      });
+      expect(summary.profiles[0]?.status).toBe(status);
+      expect(summary.providers[0]?.status).toBe(status);
+      if (reasonCode) {
+        expect(summary.profiles[0]?.reasonCode).toBe(reasonCode);
+      }
+      if (status === "missing") {
+        expect(summary.profiles[0]?.expiresAt).toBeUndefined();
+        expect(summary.providers[0]?.expiresAt).toBeUndefined();
+      }
+      expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses ordered usable profiles for provider health while keeping stale inventory visible", () => {
     const store = {
@@ -209,24 +219,6 @@ describe("buildAuthHealthSummary", () => {
     expect(provider?.profiles.map((profile) => profile.profileId)).toEqual(["codex-cli:legacy"]);
   });
 
-  it("reports expired for OAuth without a refresh token", () => {
-    const summary = summarizeProfile(
-      "google:no-refresh",
-      oauth(now - 10_000, "google-antigravity", ""),
-    );
-    expect(profileStatuses(summary)["google:no-refresh"]).toBe("expired");
-  });
-
-  it("reports command-shaped API-key profiles as missing malformed auth", () => {
-    const summary = summarizeProfile(
-      "zai:default",
-      createApiKeyCredential("zai", "openclaw onboard --auth-choice zai-coding-global"),
-    );
-    expect(profileStatuses(summary)["zai:default"]).toBe("missing");
-    expect(profileReasonCodes(summary)["zai:default"]).toBe("malformed_api_key");
-    expect(summary.providers.find((entry) => entry.provider === "zai")?.status).toBe("missing");
-  });
-
   it("uses runtime provider credentials for profile health", () => {
     const store = createAuthProfileStoreFixture({
       "anthropic:claude-cli": oauth(now - 10_000, "claude-cli"),
@@ -272,31 +264,6 @@ describe("buildAuthHealthSummary", () => {
       }
     },
   );
-
-  it("marks token profiles with invalid expires as missing with reason code", () => {
-    const summary = summarizeProfile("github-copilot:invalid-expires", {
-      type: "token",
-      provider: "github-copilot",
-      token: "gh-token",
-      expires: 0,
-    });
-    const statuses = profileStatuses(summary);
-    const reasonCodes = profileReasonCodes(summary);
-
-    expect(statuses["github-copilot:invalid-expires"]).toBe("missing");
-    expect(reasonCodes["github-copilot:invalid-expires"]).toBe("invalid_expires");
-  });
-
-  it("does not expose out-of-range oauth expiry values in health rollups", () => {
-    const summary = summarizeProfile("openai:bad-expiry", oauth(MAX_DATE_TIMESTAMP_MS + 1));
-    const profile = summary.profiles.find((entry) => entry.profileId === "openai:bad-expiry");
-    const provider = summary.providers.find((entry) => entry.provider === "openai");
-
-    expect(profile?.status).toBe("missing");
-    expect(profile?.expiresAt).toBeUndefined();
-    expect(provider?.status).toBe("missing");
-    expect(provider?.expiresAt).toBeUndefined();
-  });
 
   it("keeps unavailable profiles in explicit auth order authoritative", () => {
     const store = createAuthProfileStoreFixture({

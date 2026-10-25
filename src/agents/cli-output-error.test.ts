@@ -7,6 +7,7 @@ import {
   createClaudeBackend,
   createPluginParser,
   joinJsonlFrames,
+  claudeTextDelta,
 } from "./cli-output.test-helpers.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
@@ -15,6 +16,20 @@ type ParseCliOutputParams = Parameters<typeof parseCliOutput>[0];
 function parseCliJsonl(raw: string, backend: ParseCliOutputParams["backend"], providerId: string) {
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
+
+function parseGemini(...frames: unknown[]) {
+  return parseCliJsonl(joinJsonlFrames(...frames), createGeminiBackend(), "google-gemini-cli");
+}
+
+const geminiMessage = (content: string) => ({
+  type: "message",
+  role: "assistant",
+  content,
+  delta: true,
+});
+const resultFrame = (fields: Record<string, unknown>) => ({ type: "result", ...fields });
+const effectsWarning = "Tool actions may already have run; verify their effects before retrying.";
+const maxTurnsRetry = "Retry with a higher --max-turns value or a narrower task.";
 
 function parseClaude(...frames: unknown[]) {
   return parseCliJsonl(
@@ -84,148 +99,97 @@ describe("formatCliOutputError", () => {
 });
 
 describe("parseCliJsonl errors", () => {
+  it.each([
+    {
+      name: "detailed result after a generic Gemini error",
+      frames: [
+        { type: "error", severity: "error" },
+        resultFrame({ status: "error", error: { message: "Final Gemini failure" } }),
+      ],
+      expected: { errorText: "Final Gemini failure" },
+    },
+    {
+      name: "Gemini warning without a provider error",
+      frames: [
+        { type: "error", severity: "warning", message: "Loop detected, stopping execution" },
+        geminiMessage("final output"),
+        resultFrame({ status: "success" }),
+      ],
+      expected: { text: "final output" },
+    },
+  ])("keeps $name", ({ frames, expected }) => {
+    expectOutput(parseGemini(...frames), expected);
+  });
+
   it("keeps an explicit Claude execution error that also reports a terminal reason", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        {
-          type: "stream_event",
-          event: { type: "content_block_delta", delta: { type: "text_delta", text: "partial" } },
-        },
-        {
-          type: "result",
-          subtype: "error_during_execution",
-          is_error: true,
-          session_id: "claude-execution-error",
-          stop_reason: "error",
-          terminal_reason: "error_during_execution",
-          result: "",
-          errors: ["API Error: 529 Overloaded"],
-        },
+    expectOutput(
+      parseCliJsonl(
+        joinJsonlFrames(
+          claudeTextDelta("partial"),
+          resultFrame({
+            subtype: "error_during_execution",
+            is_error: true,
+            session_id: "claude-execution-error",
+            stop_reason: "error",
+            terminal_reason: "error_during_execution",
+            result: "",
+            errors: ["API Error: 529 Overloaded"],
+          }),
+        ),
+        createClaudeBackend("claude"),
+        "claude-cli",
       ),
-      createClaudeBackend("claude"),
-      "claude-cli",
-    );
-
-    expectOutput(result, {
-      sessionId: "claude-execution-error",
-      errorText: "API Error: 529 Overloaded",
-    });
-  });
-
-  it("keeps detailed Gemini stream-json result errors over generic error events", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        {
-          type: "error",
-          severity: "error",
-        },
-        {
-          type: "result",
-          status: "error",
-          error: { message: "Final Gemini failure" },
-        },
-      ),
-      createGeminiBackend(),
-      "google-gemini-cli",
-    );
-
-    expect(result?.errorText).toBe("Final Gemini failure");
-  });
-
-  it("does not treat Gemini stream-json warning events as provider errors", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        {
-          type: "error",
-          severity: "warning",
-          message: "Loop detected, stopping execution",
-        },
-        {
-          type: "message",
-          role: "assistant",
-          content: "final output",
-          delta: true,
-        },
-        {
-          type: "result",
-          status: "success",
-        },
-      ),
-      createGeminiBackend(),
-      "google-gemini-cli",
-    );
-
-    expectOutput(result, { text: "final output" });
-  });
-
-  it("extracts nested Claude API errors from failed stream-json output", () => {
-    const { message, jsonl } = createClaudeApiErrorFixture();
-    const result = extractCliErrorMessage(jsonl);
-
-    expect(result).toBe(message);
-  });
-
-  it("classifies Claude is_error stream-json results as provider errors", () => {
-    const { message, jsonl } = createClaudeApiErrorFixture();
-    const result = parseClaude(jsonl);
-
-    expectOutput(result, {
-      sessionId: "session-api-error",
-      errorText: message,
-    });
-  });
-
-  it("preserves Claude max-turn terminal context for actionable run errors", () => {
-    const result = parseClaude({
-      type: "result",
-      subtype: "error_max_turns",
-      session_id: "session-max-turns",
-      num_turns: 2,
-      stop_reason: "tool_use",
-      terminal_reason: "max_turns",
-      errors: ["Reached maximum number of turns (1)"],
-    });
-
-    expectOutput(result, {
-      sessionId: "session-max-turns",
-      errorText: "Reached maximum number of turns (1)",
-      terminalFailure: {
-        reason: "max_turns",
-        limit: 1,
+      {
+        sessionId: "claude-execution-error",
+        errorText: "API Error: 529 Overloaded",
       },
-    });
-    expect(
-      formatCliOutputError(result!, {
-        runId: "run-max-turns",
-        sessionId: "openclaw-session-max-turns",
-      }),
-    ).toBe(
-      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
-        "OpenClaw run: run-max-turns. OpenClaw session: openclaw-session-max-turns. " +
-        "Claude session: session-max-turns. Tool actions may already have run; verify their effects before retrying. " +
-        "Retry with a higher --max-turns value or a narrower task.",
     );
   });
 
-  it("warns that terminal_reason-only max-turn results may have run tools", () => {
-    const result = parseClaude({
-      type: "result",
-      session_id: "session-terminal-reason-only",
-      terminal_reason: "max_turns",
-    });
+  it("extracts and classifies nested Claude API errors", () => {
+    const { message, jsonl } = createClaudeApiErrorFixture();
+    expect(extractCliErrorMessage(jsonl)).toBe(message);
+    expectOutput(parseClaude(jsonl), { sessionId: "session-api-error", errorText: message });
+  });
 
-    expectOutput(result, {
+  it.each([
+    {
+      name: "max-turn limit",
+      sessionId: "session-max-turns",
+      fields: {
+        subtype: "error_max_turns",
+        num_turns: 2,
+        stop_reason: "tool_use",
+        errors: ["Reached maximum number of turns (1)"],
+      },
+      errorText: "Reached maximum number of turns (1)",
+      terminalFailure: { reason: "max_turns", limit: 1 },
+      attribution: { runId: "run-max-turns", sessionId: "openclaw-session-max-turns" },
+      formatted:
+        "Claude CLI stopped after reaching the maximum number of turns (limit: 1). OpenClaw run: run-max-turns. OpenClaw session: openclaw-session-max-turns. Claude session: session-max-turns.",
+    },
+    {
+      name: "terminal-reason-only max-turn stop",
       sessionId: "session-terminal-reason-only",
+      fields: {},
       errorText: "Reached maximum number of turns.",
       terminalFailure: { reason: "max_turns" },
-    });
-    expect(formatCliOutputError(result!)).toBe(
-      "Claude CLI stopped after reaching the maximum number of turns. " +
-        "Claude session: session-terminal-reason-only. " +
-        "Tool actions may already have run; verify their effects before retrying. " +
-        "Retry with a higher --max-turns value or a narrower task.",
-    );
-  });
+      attribution: undefined,
+      formatted:
+        "Claude CLI stopped after reaching the maximum number of turns. Claude session: session-terminal-reason-only.",
+    },
+  ] as const)(
+    "preserves actionable $name context",
+    ({ sessionId, fields, errorText, terminalFailure, attribution, formatted }) => {
+      const result = parseClaude(
+        resultFrame({ session_id: sessionId, terminal_reason: "max_turns", ...fields }),
+      );
+      expectOutput(result, { sessionId, errorText, terminalFailure });
+      expect(formatCliOutputError(result, attribution)).toBe(
+        `${formatted} ${effectsWarning} ${maxTurnsRetry}`,
+      );
+    },
+  );
 
   it("does not apply Claude terminal semantics to an explicit Gemini dialect", () => {
     const result = parseCliJsonl(
@@ -258,17 +222,8 @@ describe("createCliJsonlStreamingParser errors", () => {
 
     parser.push(
       joinJsonlFrames(
-        {
-          type: "message",
-          role: "assistant",
-          content: "partial output",
-          delta: true,
-        },
-        {
-          type: "result",
-          status: "error",
-          error: { message: "Gemini stream failed" },
-        },
+        geminiMessage("partial output"),
+        resultFrame({ status: "error", error: { message: "Gemini stream failed" } }),
       ) + "\n",
     );
     parser.finish();
@@ -357,40 +312,34 @@ describe("createCliJsonlStreamingParser errors", () => {
     });
   });
 
-  it("preserves streamed plugin text when the terminal result text is empty", () => {
+  it.each([
+    {
+      name: "streamed text before an empty result",
+      first: { kind: "text" as const, text: "streamed answer" },
+      last: { kind: "result" as const, text: "  " },
+      expected: { text: "streamed answer" },
+    },
+    {
+      name: "result text before a metadata-only summary",
+      first: { kind: "result" as const, text: "completed answer" },
+      last: {
+        kind: "result" as const,
+        sessionId: "summary-session",
+        usage: { input: 5, output: 3, total: 8 },
+      },
+      expected: {
+        text: "completed answer",
+        sessionId: "summary-session",
+        usage: { input: 5, output: 3, total: 8 },
+      },
+    },
+  ])("preserves plugin $name", ({ first, last, expected }) => {
     const parser = createPluginParser({
-      parseJsonlEvent: (line) =>
-        line === "delta"
-          ? { kind: "text", text: "streamed answer" }
-          : { kind: "result", text: "  " },
+      parseJsonlEvent: (line) => (line === "first" ? first : last),
     });
-
-    parser.push("delta\nresult\n");
+    parser.push("first\nlast\n");
     parser.finish();
-
-    expectOutput(parser.getOutput(), { text: "streamed answer" });
-  });
-
-  it("preserves earlier plugin result text when a later result only adds metadata", () => {
-    const parser = createPluginParser({
-      parseJsonlEvent: (line) =>
-        line === "result"
-          ? { kind: "result", text: "completed answer" }
-          : {
-              kind: "result",
-              sessionId: "summary-session",
-              usage: { input: 5, output: 3, total: 8 },
-            },
-    });
-
-    parser.push("result\nsummary\n");
-    parser.finish();
-
-    expectOutput(parser.getOutput(), {
-      text: "completed answer",
-      sessionId: "summary-session",
-      usage: { input: 5, output: 3, total: 8 },
-    });
+    expectOutput(parser.getOutput(), expected);
   });
 
   it.each([

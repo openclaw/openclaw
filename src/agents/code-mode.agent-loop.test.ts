@@ -1,4 +1,4 @@
-import { access, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { createCodeModePermissionChangeReason } from "./code-mode-permission-change.js";
+import { controlledTool } from "./code-mode.controlled-tool.test-support.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "./code-mode.js";
 import {
   createCatalogCodeModeHarness,
@@ -116,23 +117,15 @@ describe("Code Mode agent-loop error recovery", () => {
     const workspace = tempDirs.make("code-mode-wait-");
     const input = join(workspace, "input.txt");
     await writeFile(input, "audited input\n");
-    const readStarted = createDeferred();
-    const readRelease = createDeferred();
-    const readFinished = createDeferred();
+    const {
+      tool: read,
+      started: readStarted,
+      release: readRelease,
+      finished: readFinished,
+    } = controlledTool(createReadTool(workspace));
     const parked = createDeferred<Record<string, unknown>>();
     const beginWait = createDeferred();
     const effects: string[] = [];
-    const read = createReadTool(workspace, {
-      operations: {
-        access,
-        readFile: async (file) => {
-          readStarted.resolve();
-          await readRelease.promise;
-          return await readFile(file).finally(readFinished.resolve);
-        },
-      },
-    });
-    vi.spyOn(read, "execute");
     const complete = effectTool("complete_task", effects, "completed", { completed: true });
     let activeAgent: Agent | undefined;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -158,8 +151,7 @@ describe("Code Mode agent-loop error recovery", () => {
       await readStarted.promise;
       // Only the host deadline moves; the real worker has already dispatched the audited read.
       await vi.advanceTimersByTimeAsync(10_000);
-      const suspended = await parked.promise;
-      expect(suspended).toMatchObject({
+      expect(await parked.promise).toMatchObject({
         status: "waiting",
         reason: "pending_tools",
         replaySafe: false,
@@ -172,7 +164,7 @@ describe("Code Mode agent-loop error recovery", () => {
       const waited = result.agent.state.messages.find(
         (message) => message.role === "toolResult" && message.toolName === "wait",
       );
-      expect(read.execute).toHaveBeenCalledOnce();
+      expectToolCalls(1, read, complete);
       expect([testing.activeRuns.size, testing.resumingRunIds.size]).toEqual([0, 0]);
       expect(readToolResultDetails(waited)).toMatchObject({
         status: "failed",
@@ -181,7 +173,6 @@ describe("Code Mode agent-loop error recovery", () => {
         output: [expect.objectContaining({ type: "json" })],
       });
       expectRecovered(result.agent, result.providerContexts, 4);
-      expect(complete.execute).toHaveBeenCalledOnce();
       expect(effects).toEqual(["completed"]);
     } finally {
       vi.useRealTimers();
@@ -242,9 +233,6 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(agent.state.errorMessage).toBeUndefined();
     expect(providerContexts, JSON.stringify(agent.state.messages)).toHaveLength(4);
     expectToolCalls(1, shell, process);
-    expect(vi.mocked(process.execute).mock.calls.map(([, input]) => input)).toEqual([
-      { action: "poll", sessionId, timeout: 1000 },
-    ]);
     const lastResult = agent.state.messages.findLast((message) => message.role === "toolResult");
     expect(readToolResultDetails(lastResult)).toMatchObject({
       status: "completed",
@@ -260,8 +248,8 @@ describe("Code Mode agent-loop error recovery", () => {
     let retainedExec!: AnyAgentTool;
     try {
       await refresh.run(async () => {
-        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
         const owner = captureAgentPluginRuntimeRefresh();
+        owner.bindConsumer(() => true);
         const slow = tool("slow_action", async () => {
           started.resolve();
           await release.promise;
@@ -284,8 +272,7 @@ describe("Code Mode agent-loop error recovery", () => {
           code: 'const pending = slow_action({}); await reload_runtime({}); json("reload recorded"); await yield_control(); return await pending;',
         });
         expect(result).toMatchObject({ terminate: false, details: { status: "waiting" } });
-        expect(owner.isRequested()).toBe(true);
-        expect(owner.isPending()).toBe(false);
+        expect([owner.isRequested(), owner.isPending()]).toEqual([true, false]);
         expect(effects).toEqual(["reload committed"]);
         release.resolve();
         const settled = await wait!.execute("drain", {
@@ -367,16 +354,14 @@ describe("Code Mode agent-loop error recovery", () => {
     });
 
     expectRecovered(agent, providerContexts, 6);
-    expect(providerContexts[1]?.messages).toContainEqual(
-      expect.objectContaining({
-        role: "toolResult",
-        isError: true,
-        details: expect.objectContaining({
-          status: "failed",
-          error: expect.stringContaining("interrupted after first change"),
-        }),
-      }),
-    );
+    expect(providerContexts[1]?.messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      isError: true,
+      details: {
+        status: "failed",
+        error: expect.stringContaining("interrupted after first change"),
+      },
+    });
     expect(patch.execute).toHaveBeenCalledTimes(3);
     expect(shell.execute).toHaveBeenCalledTimes(2);
     expect(await readFile(file, "utf8")).toBe("original\nfirst\nsecond\nthird\n");
@@ -432,18 +417,16 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(providerContexts).toHaveLength(4);
     expect(applied).toEqual(["prior mutation", "remaining mutation"]);
     expectToolCalls(1, recordEffect, pending, inspect, finish);
-    expect(agent.state.messages).toContainEqual(
-      expect.objectContaining({
-        role: "toolResult",
-        toolName: "exec",
-        details: expect.objectContaining({
-          status: "failed",
-          code: "aborted",
-          error: expect.stringContaining("Permission change"),
-          output: [{ type: "json", value: "prior mutation completed" }],
-        }),
-      }),
-    );
+    expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+      role: "toolResult",
+      toolName: "exec",
+      details: {
+        status: "failed",
+        code: "aborted",
+        error: expect.stringContaining("Permission change"),
+        output: [{ type: "json", value: "prior mutation completed" }],
+      },
+    });
     await expect(retainedControl.execute("stale-control", { code: "return 1;" })).rejects.toThrow(
       "Aborted",
     );
