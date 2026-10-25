@@ -612,7 +612,9 @@ export class CommandPaletteState {
     }
     if (isCommandPaletteShortcut(event)) {
       event.preventDefault();
-      this.togglePalette();
+      if (!event.repeat) {
+        this.togglePalette();
+      }
     }
   };
 
