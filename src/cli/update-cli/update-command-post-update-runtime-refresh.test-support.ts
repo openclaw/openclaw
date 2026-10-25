@@ -8,6 +8,7 @@ import { finishUpdate } from "./update-command-post-update.js";
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
+  managedServiceState,
 } from "./update-command-post-update.test-support.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import type * as serviceOperations from "./update-command-service.js";
@@ -81,19 +82,16 @@ export function registerCurrentCoreRuntimeRefreshTests(
         params.preManagedServiceStop!.serviceMutationSkipMessage = `System-scope Gateway requires an operator restart. Run: ${restartCommand}`;
       }
       mocks.readService.mockResolvedValue({
-        installed: true,
-        loadState: { status: "loaded" },
-        running: true,
-        runtime: { status: "running", pid: 4321 },
-        env: params.ownedManagedUpdateEnv!,
-        command: {
+        ...managedServiceState(params.ownedManagedUpdateEnv!, {
           programArguments: [process.execPath, "/candidate/dist/entry.js", "gateway"],
           environment: Object.fromEntries(
             Object.entries(params.ownedManagedUpdateEnv!).filter(
               (entry): entry is [string, string] => entry[1] !== undefined,
             ),
           ),
-        },
+        }),
+        running: true,
+        runtime: { status: "running", pid: 4321 },
       });
       mocks.revalidate.mockImplementation(async () => {
         order.push("inspect");
@@ -197,14 +195,12 @@ export function registerServiceStartRefusalFinalizationTests({
       expect(restorePackage).not.toHaveBeenCalled();
       expect(mocks.restartService).toHaveBeenCalledOnce();
       if (phase === "revalidation") {
-        expect(mocks.restartService).toHaveBeenCalledWith(
-          expect.objectContaining({
-            shouldRestart: false,
-            serviceMutationSkipMessage: expect.stringMatching(
-              /SERVICE-DEFINITION.*unmask.*openclaw gateway start/,
-            ),
-          }),
-        );
+        expect(mocks.restartService.mock.calls[0]?.[0]).toMatchObject({
+          shouldRestart: false,
+          serviceMutationSkipMessage: expect.stringMatching(
+            /SERVICE-DEFINITION.*unmask.*openclaw gateway start/,
+          ),
+        });
         expect(mocks.printResult.mock.lastCall?.[0].steps).toContainEqual(
           expect.objectContaining({
             advisory: expect.objectContaining({
