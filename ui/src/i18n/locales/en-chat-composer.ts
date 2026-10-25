@@ -334,6 +334,8 @@ const catalog = {
     outboxRecoveryDeleteConflict:
       "This saved copy changed while you were reviewing it. Nothing was deleted. Reload and review it again.",
     attachments: {
+      redactImage: "Redact image",
+      redactionFailed: "Could not redact this image. Try a smaller PNG, JPEG, or WebP image.",
       allowImage: "Allow image",
       attachedFile: "Attached file",
       audio: "Audio",

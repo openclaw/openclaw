@@ -12,6 +12,7 @@ import { removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { AttachmentRemove, CompactAttachmentFile } from "./chat-attachment-file.tsx";
 import type { AttachmentPreviewEntry } from "./chat-attachments.tsx";
 import { ComposerPastedText } from "./chat-composer-pasted-text.tsx";
+import { ImageRedactionButton } from "./chat-image-redaction-button.tsx";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatSelectionAnnotations } from "./chat-selection-annotations.tsx";
 
@@ -205,12 +206,17 @@ function AttachmentTile(props: {
                 />
               ) : reading() ? undefined : att().mimeType.startsWith("image/") &&
                 getChatAttachmentPreviewUrl(att()) ? (
-                <AttachmentImage
-                  attachment={att()}
-                  alt={att().fileName?.trim() || t("chat.composer.attachmentPreview")}
-                  title={att().fileName?.trim() || t("chat.imageLightbox.untitled")}
-                  controls={props.controls}
-                />
+                <>
+                  <AttachmentImage
+                    attachment={att()}
+                    alt={att().fileName?.trim() || t("chat.composer.attachmentPreview")}
+                    title={att().fileName?.trim() || t("chat.imageLightbox.untitled")}
+                    controls={props.controls}
+                  />
+                  <Show when={/^image\/(png|jpeg|webp)$/.test(att().mimeType)}>
+                    <ImageRedactionButton attachment={att()} controls={props.controls} />
+                  </Show>
+                </>
               ) : (
                 <CompactAttachmentFile attachment={att()} />
               )}
