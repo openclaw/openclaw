@@ -798,7 +798,10 @@ describe("memory.search gateway method", () => {
         agentId: "main",
         purpose: "cli",
       });
-      assert(seeded.manager?.sync, seeded.error ?? "Expected a memory index manager");
+      assert(
+        typeof seeded.manager?.sync === "function",
+        seeded.error ?? "Expected a memory index manager",
+      );
       await seeded.manager.sync({ reason: "cli", force: true });
       const dbPath = seeded.manager.status().dbPath;
       assert(dbPath, "Expected a memory index database path");
