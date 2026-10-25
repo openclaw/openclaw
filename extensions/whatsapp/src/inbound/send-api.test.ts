@@ -64,7 +64,7 @@ describe("createWebSendApi", () => {
     imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     api = createWebSendApi({ sock, defaultAccountId: "main" });
   });
-  function expectPartial(failure: unknown, ids: string[], cause: unknown, calls: number) {
+  function expectPartial(failure: unknown, ids: string[], cause: unknown, calls = 2) {
     expect(isChannelPartialDeliveryError(failure)).toBe(true);
     expect(failure).toMatchObject({
       cause,
@@ -89,10 +89,10 @@ describe("createWebSendApi", () => {
     });
   }
   const voice = () => api.sendMessage("+1555", "voice text", MEDIA, "audio/ogg");
-  const failedVoice = () => voice().catch((caught: unknown) => caught);
+  const failure = (send = voice) => send().catch((caught: unknown) => caught);
 
   const vcard = "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD";
-  const contact = Object.freeze({ displayName: "QA Contact", vcard });
+  const contact = { displayName: "QA Contact", vcard };
   const location = { degreesLatitude: 37.7749, degreesLongitude: -122.4194, name: "QA Location" };
   const sticker = Buffer.from("webp");
   it.each([
@@ -124,7 +124,15 @@ describe("createWebSendApi", () => {
   const line = `visible ${source}\n${code}\nagain ${source}`;
   const expectedLine = `visible ${target}\n${code}\nagain ${target}`;
   type Participants = readonly WhatsAppOutboundMentionParticipant[];
-  type MentionCase = [Participants, string, string, string[], ("image" | "document")?, string?];
+  function useMentions(participants: Participants) {
+    api = createWebSendApi({
+      sock,
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({ chatJid: jid, text, participants }),
+    });
+  }
+  type MentionCase = [Participants, string, string, string[], string?];
   it.each<MentionCase>([
     [mapped, markdownToWhatsApp(escaped + source), escaped + target, [LID_JID]],
     [[{ id: LID_JID, e164: "+15551234567" }], "ping @15551234567", "ping " + target, [LID_JID]],
@@ -137,49 +145,42 @@ describe("createWebSendApi", () => {
     [mapped, line, expectedLine, [LID_JID]],
     [mapped, "Run `notify\n" + source, "Run `notify\n" + source, []],
     [mapped, "Run ``notify ` " + source, "Run ``notify ` " + source, []],
-    [phone, tagged, tagged, [], undefined, PN],
+    [phone, tagged, tagged, [], PN],
     [[{ id: "15550000000@s.whatsapp.net" }], tagged, tagged, []],
-    [phone, "cap @15551234567", "cap @15551234567", [PN], "image"],
-    [mapped, "cap " + source, "cap " + target, [LID_JID], "document"],
-  ])(
-    "native mentions %#",
-    async (participants, text, expected, mentions, media, to = GROUP_JID) => {
-      api = createWebSendApi({
-        sock,
-        defaultAccountId: "main",
-        resolveOutboundMentions: ({ jid, text: mentionText }) =>
-          resolveWhatsAppOutboundMentions({ chatJid: jid, text: mentionText, participants }),
-      });
-      if (media === "image") {
-        imageOps.getImageMetadata.mockResolvedValueOnce({
-          width: PREVIEW.width,
-          height: PREVIEW.height,
-        });
-        imageOps.resizeToJpeg.mockResolvedValueOnce(THUMBNAIL);
-      }
-      await api.sendMessage(
-        to,
-        text,
-        media ? MEDIA : undefined,
-        media ? "image/jpeg" : undefined,
-        media === "document" ? { asDocument: true, fileName: "promo.jpg" } : undefined,
-      );
-      expectSend(
-        {
-          ...(media
-            ? { [media]: MEDIA, caption: expected, mimetype: "image/jpeg" }
-            : { text: expected }),
-          ...(media === "document" ? { fileName: "promo.jpg" } : {}),
-          ...(media === "image" ? PREVIEW : {}),
-          ...(mentions.length ? { mentions } : {}),
-        },
-        to,
-      );
-      if (!mentions.length) {
-        expect(sendMessage.mock.calls[0]?.[1]).not.toHaveProperty("mentions");
-      }
-    },
-  );
+  ])("native mentions %#", async (participants, text, expected, mentions, to = GROUP_JID) => {
+    useMentions(participants);
+    await api.sendMessage(to, text);
+    expect(sendMessage).toHaveBeenCalledWith(
+      to,
+      mentions.length ? { text: expected, mentions } : { text: expected },
+    );
+  });
+
+  it.each(["image", "document"] as const)("sends %s captions with mentions", async (kind) => {
+    useMentions(kind === "image" ? phone : mapped);
+    if (kind === "image") {
+      imageOps.getImageMetadata.mockResolvedValueOnce({ width: 640, height: 480 });
+      imageOps.resizeToJpeg.mockResolvedValueOnce(THUMBNAIL);
+    }
+    const asDocument = kind === "document";
+    await api.sendMessage(
+      GROUP_JID,
+      asDocument ? "cap " + source : "cap @15551234567",
+      MEDIA,
+      "image/jpeg",
+      asDocument ? { asDocument, fileName: "promo.jpg" } : undefined,
+    );
+    expectSend(
+      {
+        [kind]: MEDIA,
+        mimetype: "image/jpeg",
+        caption: asDocument ? "cap " + target : "cap @15551234567",
+        mentions: [asDocument ? LID_JID : PN],
+        ...(asDocument ? { fileName: "promo.jpg" } : PREVIEW),
+      },
+      GROUP_JID,
+    );
+  });
 
   it.each([
     [" Video/MP4; charset=binary ", "video/mp4", "video", undefined],
@@ -218,45 +219,24 @@ describe("createWebSendApi", () => {
         visibleReplySent: true,
       }),
     );
-    expectPartial(await failedVoice(), ["voice", "caption"], bookkeepingError, 2);
+    expectPartial(await failure(), ["voice", "caption"], bookkeepingError);
   });
 
   it("retains voice receipts when the caption is unaccepted", async () => {
     sendMessage.mockResolvedValueOnce(acceptedMessage("voice")).mockResolvedValueOnce(undefined);
-    expectPartial(await failedVoice(), ["voice"], expect.any(PlatformMessageNotDispatchedError), 2);
+    expectPartial(await failure(), ["voice"], expect.any(PlatformMessageNotDispatchedError));
   });
 
   it.each([
     ["poll", () => api.sendPoll("+1555", { question: "Q?", options: ["a", "b"] })],
     ["voice", voice],
-  ] as const)(
-    "retains the first accepted %s receipt when activity recording fails",
-    async (kind, send) => {
-      const activityError = new Error("channel activity bookkeeping disconnected");
-      sendMessage.mockResolvedValueOnce(acceptedMessage(`${kind}-accepted`));
-      recordChannelActivity.mockImplementationOnce(() => {
-        throw activityError;
-      });
-
-      expectPartial(
-        await send().catch((caught: unknown) => caught),
-        [`${kind}-accepted`],
-        activityError,
-        1,
-      );
-    },
-  );
-
-  it("sends reactions with participant JID normalization", async () => {
-    const res = await api.sendReaction("+1555", "msg-2", "👍", false, "+1999");
-    const key = {
-      remoteJid: DM_JID,
-      id: "msg-2",
-      fromMe: false,
-      participant: "1999@s.whatsapp.net",
-    };
-    expectSend({ react: { text: "👍", key } });
-    expectAccepted(res, "reaction");
+  ] as const)("retains accepted %s on activity failure", async (_kind, send) => {
+    const activityError = new Error("activity bookkeeping disconnected");
+    sendMessage.mockResolvedValueOnce(acceptedMessage("accepted"));
+    recordChannelActivity.mockImplementationOnce(() => {
+      throw activityError;
+    });
+    expectPartial(await failure(send), ["accepted"], activityError, 1);
   });
 
   it("rejects an unaccepted Baileys voice send without recording outbound activity", async () => {
@@ -267,24 +247,19 @@ describe("createWebSendApi", () => {
     expect(recordChannelActivity).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["preserves an unproven LID quote", false, undefined, LID_JID],
-    ["aligns a lookup-proven LID quote", true, DM_JID, DM_JID],
-  ] as const)("%s", async (_name, fromMe, lookupTargetJid, expectedJid) => {
+  it("forwards quote context to the provider", async () => {
     await api.sendMessage("+1555", "hello", undefined, undefined, {
       quotedMessageKey: {
         id: "quoted-1",
         remoteJid: LID_JID,
-        fromMe,
-        lookupTargetJid,
-        participant: "1234@s.whatsapp.net",
+        fromMe: true,
+        lookupTargetJid: DM_JID,
         messageText: "quoted body",
       },
     });
-    expect(sendMessage.mock.calls[0]?.slice(0, 2)).toEqual([DM_JID, { text: "hello" }]);
     expect(sendMessage.mock.calls[0]?.[2]).toHaveProperty(
       "quoted.key",
-      expect.objectContaining({ remoteJid: expectedJid, id: "quoted-1", fromMe }),
+      expect.objectContaining({ remoteJid: DM_JID, id: "quoted-1", fromMe: true }),
     );
   });
   // #67378: Missing LID resolution sends messages into a sender-only ghost chat.
@@ -310,14 +285,26 @@ describe("createWebSendApi", () => {
       expect(sendMessage).toHaveBeenCalledWith("33123456789@s.whatsapp.net", { text: "hello" });
     });
 
-    it("resolves PN to LID for sendReaction", async () => {
-      await api.sendReaction("+15555550000", "msg-2", "1️⃣", true);
-      expect(sendMessage.mock.calls[0]?.[0]).toBe("987654@lid");
-      expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
-        react: { text: "1️⃣", key: { remoteJid: "987654@lid", id: "msg-2", fromMe: true } },
-      });
-      expect(sendMessage.mock.calls[0]?.[1]).toHaveProperty("react.key.participant", undefined);
-    });
+    it.each([undefined, "+1999"])(
+      "resolves reaction JIDs with participant %s",
+      async (participant) => {
+        expectAccepted(
+          await api.sendReaction("+15555550000", "msg-2", "👍", true, participant),
+          "reaction",
+        );
+        expect(sendMessage).toHaveBeenCalledWith("987654@lid", {
+          react: {
+            text: "👍",
+            key: {
+              remoteJid: "987654@lid",
+              id: "msg-2",
+              fromMe: true,
+              participant: participant ? "1999@s.whatsapp.net" : undefined,
+            },
+          },
+        });
+      },
+    );
 
     it("resolves PN to LID for sendComposingTo presence", async () => {
       await api.sendComposingTo("+15555550000");

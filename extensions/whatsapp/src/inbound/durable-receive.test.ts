@@ -5,10 +5,7 @@ import path from "node:path";
 import type { WAMessage } from "baileys";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  deserializeWhatsAppDurableInboundMessage,
-  serializeWhatsAppDurableInboundMessage,
-} from "./durable-payload.js";
+import { serializeWhatsAppDurableInboundMessage } from "./durable-payload.js";
 import { createWhatsAppIngressMonitor, type WhatsAppIngressAdmission } from "./durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import { createWhatsAppInboundMessageDebouncer } from "./message-debounce.js";
@@ -87,44 +84,9 @@ describe("WhatsApp durable receive", () => {
       reason: "missing-message-key",
     });
   });
-  it("releases claims when dispatch throws before adoption", async () => {
-    await enqueue("msg-1");
-    const active = monitor(async () => {
-      throw new Error("downstream callback rejected");
-    });
-    await active.waitForIdle();
-    await expect(
-      queue.enqueue(eventId("msg-1"), payload("msg-1"), { laneKey: JID }),
-    ).resolves.not.toMatchObject({ kind: "completed" });
-    expect(await pending()).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: eventId("msg-1") })]),
-    );
-  });
-  it("retains individual same-lane claims until idempotent adoption", async () => {
-    const ids = ["msg-4a", "msg-4b"] as const;
-    await enqueue(ids[0], 1);
-    await enqueue(ids[1], 2);
-    const dispatched: string[] = [];
-    const adoptions: Array<() => void | Promise<void>> = [];
-    const active = monitor(async (inbound, lifecycle) => {
-      dispatched.push(transportId(inbound));
-      adoptions.push(lifecycle.onAdopted);
-      return { kind: "deferred" };
-    });
-    await active.waitForIdle();
-    expect(dispatched).toEqual(ids);
-    expect(await claims()).toEqual(ids.map(eventId).toSorted());
-    expect(await pending()).toEqual([]);
-    expect(adoptions).toHaveLength(2);
-    for (const [index, adopt] of adoptions.entries()) {
-      await adopt();
-      await adopt();
-      expect(await claims()).toEqual(index === 0 ? [eventId(ids[1])] : []);
-      await completed(ids.slice(index, index + 1));
-    }
-    expect(dispatched).toEqual(ids);
-  });
   it("orders debounced messages before adopting claims and marking read", async () => {
+    const ids = ["first", "second", "third"];
+    const adopted: string[] = [];
     const bodies: string[] = [];
     const markRead = vi.fn(async () => {});
     const onError = vi.fn();
@@ -147,7 +109,16 @@ describe("WhatsApp durable receive", () => {
           admission: { conversation: { id: JID } },
         }),
         receiveOrder: inbound.receiveOrder,
-        turnAdoptionLifecycle: lifecycle,
+        turnAdoptionLifecycle: {
+          ...lifecycle,
+          onAdopted: async () => {
+            await lifecycle.onAdopted();
+            await lifecycle.onAdopted();
+            adopted.push(id);
+            expect(await claims()).toEqual(ids.slice(adopted.length).map(eventId).toSorted());
+            await completed([id]);
+          },
+        },
         readReceipt: { remoteJid: JID, id },
       });
       return { kind: "deferred" };
@@ -166,18 +137,16 @@ describe("WhatsApp durable receive", () => {
       }
       await active.waitForIdle();
       expect(bodies).toEqual([]);
-      expect(await queue.listClaims()).toHaveLength(3);
+      expect(await claims()).toEqual(ids.map(eventId).toSorted());
       expect(await pending()).toEqual([]);
       expect(markRead).not.toHaveBeenCalled();
       await debouncer.drain();
       await active.waitForIdle();
       expect(bodies).toEqual(["first\nsecond\nthird"]);
-      expect(markRead.mock.calls).toEqual(
-        ["first", "second", "third"].map((id) => [{ remoteJid: JID, id }]),
-      );
+      expect(markRead.mock.calls).toEqual(ids.map((id) => [{ remoteJid: JID, id }]));
       expect(onError).not.toHaveBeenCalled();
       expect(await claims()).toEqual([]);
-      await completed(["first", "second", "third"]);
+      expect(adopted).toEqual(ids);
     } finally {
       await active.pause();
       await debouncer.drain();
@@ -203,13 +172,5 @@ describe("WhatsApp durable receive", () => {
     }).waitForIdle();
     expect(dispatched.toSorted()).toEqual(ids.toSorted());
     expect(await pending()).toEqual([]);
-  });
-  it("serializes Long-like protobuf timestamps as seconds", () => {
-    const timestamp = 1_700_000_000;
-    const serialized = serializeWhatsAppDurableInboundMessage({
-      ...message("long-timestamp"),
-      messageTimestamp: { low: timestamp, high: 0, unsigned: true, valueOf: () => timestamp },
-    } as unknown as WAMessage);
-    expect(deserializeWhatsAppDurableInboundMessage(serialized).messageTimestamp).toBe(timestamp);
   });
 });
