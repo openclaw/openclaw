@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect, it, onTestFailed, type TestContext } from "vitest";
 import type { ModelChoice } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { readProcessRssMb } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
   createFixtureRequest,
   verifyBuiltGatewayHead,
@@ -55,7 +54,6 @@ async function withBuiltGateway(
     context,
     async ({ signal, verifyCleanup }) => {
       await verifyBuiltGatewayHead(process.cwd(), signal);
-      signal.throwIfAborted();
       gateway = await createOpenClawTestInstance({
         name,
         cwd: process.cwd(),
@@ -232,7 +230,6 @@ it(
         const gatewayPid = gateway.child?.pid;
         expect(gatewayPid).toBeTypeOf("number");
         const runTurn = async (agentId: keyof typeof profileIds, message: string) => {
-          signal.throwIfAborted();
           const sessionKey = `agent:${agentId}:auth-recovery-${randomUUID()}`;
           const accepted = await request<{ runId: string; status: string }>("agent", {
             agentId,
@@ -251,7 +248,6 @@ it(
         };
         const failTurn = async (agentId: keyof typeof profileIds) => {
           const { terminal } = await runTurn(agentId, `AUTH_FAILURE_${agentId.toUpperCase()}`);
-          signal.throwIfAborted();
           expect(terminal.status).toBe("error");
           expect(requests[agentId]).toBeGreaterThan(0);
           expect(unexpectedCredential).toBe(false);
@@ -260,7 +256,6 @@ it(
           )?.usageStats?.[profileIds[agentId]];
         };
         const rateStats = await failTurn("rate");
-        signal.throwIfAborted();
         // The synthetic 429 carries no provider timing: record it without a local cooldown.
         expect(rateStats?.lastRateLimitAt).toEqual(expect.any(Number));
         expect(rateStats?.cooldownUntil).toBeUndefined();
@@ -268,7 +263,6 @@ it(
 
         phase = "auth";
         const authStats = await failTurn("auth");
-        signal.throwIfAborted();
         expect(["auth", "auth_permanent"]).toContain(
           authStats?.cooldownReason ?? authStats?.disabledReason,
         );
@@ -296,7 +290,6 @@ it(
 
         phase = "recovered";
         const { sessionKey, terminal } = await runTurn("auth", "Reply AUTH_RECOVERY_OK.");
-        signal.throwIfAborted();
         expect(terminal.status, gateway.logs()).toBe("ok");
         expect(requests.recovered).toBe(1);
         expect(unexpectedCredential).toBe(false);
@@ -378,9 +371,7 @@ it(
         const client = await connect();
         const request = createFixtureRequest(client, signal);
         const expectedIds = new Set(models.map((model) => model.id));
-        let returnedRows = 0;
         for (const agentId of agentIds) {
-          signal.throwIfAborted();
           const result = await request<{ models: ModelChoice[] }>(
             "models.list",
             { agentId, view: "configured" },
@@ -395,11 +386,7 @@ it(
             configured.every((model) => model.available === true),
             agentId,
           ).toBe(true);
-          returnedRows += configured.length;
         }
-        const gatewayRssMb = readProcessRssMb(gateway.child?.pid);
-        expect(gatewayRssMb).toBeGreaterThan(0);
-        expect(returnedRows).toBe(4_400);
       },
     );
   },

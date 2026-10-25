@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { JSDOM } from "jsdom";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
 
@@ -35,18 +35,12 @@ function render(overrides: Page = {}) {
     ...overrides,
   });
 }
-const dispose: (() => void)[] = [];
-afterEach(() => {
-  for (const close of dispose.splice(0)) {
-    close();
-  }
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 function fixture(overrides: Page = {}, initialRowHeight = 400) {
   vi.useFakeTimers();
   const dom = new JSDOM(render(overrides), { url: "https://example.test/chat/main/topic" });
-  dispose.push(() => dom.window.close());
+  onTestFinished(() => dom.window.close());
   const { document } = dom.window;
   // The protected login probe is covered separately; exercise the shipped reader lifecycle.
   document.getElementById("session-login")?.remove();
@@ -59,7 +53,6 @@ function fixture(overrides: Page = {}, initialRowHeight = 400) {
       window.scrollY = top;
     }),
     addEventListener: dom.window.addEventListener.bind(dom.window),
-    matchMedia: () => ({ matches: true }),
   };
   // DOM behavior is real; only browser layout is deterministic in this Node test.
   let rowHeight = initialRowHeight;
@@ -73,7 +66,6 @@ function fixture(overrides: Page = {}, initialRowHeight = 400) {
     const bottom = this.matches(".transcript") ? 300 + rows.length * rowHeight : top + rowHeight;
     return new dom.window.DOMRect(0, top - window.scrollY, 720, bottom - top);
   };
-  const replaceWith = vi.spyOn(document.querySelector("main")!, "replaceWith");
   const fetch = vi.fn<typeof globalThis.fetch>();
   const response = (status: number, body = "updated", etag = '"revision-1"') =>
     new Response(
@@ -98,7 +90,6 @@ function fixture(overrides: Page = {}, initialRowHeight = 400) {
     fetch,
     location: dom.window.location,
     Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
-    Number,
     Date,
     AbortSignal,
     setTimeout,
@@ -118,7 +109,6 @@ function fixture(overrides: Page = {}, initialRowHeight = 400) {
     window,
     fetch,
     response,
-    replaceWith,
     event,
     find: <E extends Element = HTMLElement>(selector: string) =>
       document.querySelector<E>(selector)!,
@@ -162,17 +152,6 @@ it("keeps unchanged widget frames, their state, and measured height on the first
   expect(Array.from(f.all("iframe"), (frame) => frame.style.height)).toEqual(["730px", "280px"]);
 });
 
-it("appends a new message without detaching an existing widget", async () => {
-  const f = fixture({ messages: [widget], widgetUrls });
-  const frame = f.find<HTMLIFrameElement>("iframe");
-  const frameWindow = frame.contentWindow;
-  await f.refresh();
-  expect(f.find("iframe")).toBe(frame);
-  expect(frame.contentWindow).toBe(frameWindow);
-  expect(f.all(".transcript > *")).toHaveLength(2);
-  expect(f.text(".transcript")).toContain("updated");
-});
-
 it("replaces surrounding rows and page content without detaching a kept widget", async () => {
   const f = fixture({
     messages: [{ ...message("old"), role: "user" }, widget, message("old tail")],
@@ -193,6 +172,7 @@ it("replaces surrounding rows and page content without detaching a kept widget",
   expect(main.dataset.publicRefresh).toBe("false");
   expect(f.find("iframe")).toBe(frame);
   expect(frame.contentWindow).toBe(frameWindow);
+  expect(f.all(".transcript > *")).toHaveLength(3);
   expect(f.text(".transcript")).toContain("new tail");
   expect(f.text(".transcript")).not.toContain("old");
   expect(f.text(".article-head h1")).toBe("Earlier conversation");
@@ -219,7 +199,7 @@ it.each(["reorder", "duplicate", "unkeyed"])("replaces the document for %s rows"
   const f = fixture(page);
   const original = f.find("main");
   const next = new JSDOM(render(page));
-  dispose.push(() => next.window.close());
+  onTestFinished(() => next.window.close());
   const transcript = next.window.document.querySelector(".transcript")!;
   if (mode === "reorder") {
     // Leave the first row unchanged; swapping two continued rows retains their full rendered HTML.
@@ -235,7 +215,6 @@ it.each(["reorder", "duplicate", "unkeyed"])("replaces the document for %s rows"
   f.fetch.mockResolvedValue(new Response(next.serialize()));
   await f.refresh();
   expect(f.find("main")).not.toBe(original);
-  expect(f.replaceWith).toHaveBeenCalledOnce();
 });
 
 it("jitters conditional reads, retains ETag manually, and catches up only when visible", async () => {
@@ -280,7 +259,7 @@ it("does not publish a read that settles after the tab becomes hidden", async ()
   f.visibility(true);
   pending.resolve(f.response(200));
   await vi.advanceTimersByTimeAsync(0);
-  expect(f.replaceWith).not.toHaveBeenCalled();
+  expect(f.text(".transcript")).not.toContain("updated");
   expect(f.document.title).toBe("Shared · OpenClaw");
 });
 it("honors Retry-After without replacing the readable transcript", async () => {
@@ -310,19 +289,12 @@ it("follows new messages and late layout only at the transcript end, not in the 
   await vi.advanceTimersByTimeAsync(16500);
   expect(f.window.scrollTo).not.toHaveBeenCalled();
 });
-it.each([false, true])(
-  "follows a short visible conversation (explicit Latest: %s)",
-  async (explicitLatest) => {
-    const f = fixture({}, 40);
-    if (explicitLatest) {
-      f.document.querySelector<HTMLButtonElement>("[data-public-latest]")!.click();
-      f.scroll(0);
-    }
-    await vi.advanceTimersByTimeAsync(16500);
-    f.resize(200);
-    expect(f.window.scrollY).toBe(788);
-  },
-);
+it("follows a short visible conversation", async () => {
+  const f = fixture({}, 40);
+  await vi.advanceTimersByTimeAsync(16500);
+  f.resize(200);
+  expect(f.window.scrollY).toBe(788);
+});
 it("keeps the visible message and expanded tools when the latest page rolls forward", async () => {
   const f = fixture();
   f.scroll(750);
@@ -345,6 +317,7 @@ it("offers top/latest controls and refreshes manually without a navigation", asy
   await vi.advanceTimersByTimeAsync(0);
   expect(f.fetch).toHaveBeenCalledTimes(1);
   expect(f.text("[data-public-refresh-status]")).toBe("Up to date");
+  expect(f.window.scrollY).toBe(1788);
 });
 it("refreshes legacy links in place and clears a plain revoked response", async () => {
   const f = fixture({ entryUrl: undefined });

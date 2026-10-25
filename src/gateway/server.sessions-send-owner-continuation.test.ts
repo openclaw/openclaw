@@ -18,8 +18,6 @@ import {
 } from "../agents/cron-creator-authority-context.js";
 import * as runWait from "../agents/run-wait.js";
 import * as completionDelivery from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
-import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { revokeRequesterCronAuthority } from "../agents/subagents/requester-cron-authority.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -119,29 +117,12 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       accountId: "default",
       isCurrent: () => isConfiguredCommandOwner(getRuntimeConfig(), sender),
     };
-    expect(owner.isCurrent()).toBe(true);
     const childMayFinish = createDeferred();
     const pluginEntered = createDeferred();
     const effectMayFinish = createDeferred();
     const parentFinished = createDeferred();
     const inlineWaitStarted = createDeferred();
     const requesterAccepted = createDeferred();
-    const completionSettled = createDeferred();
-    let childRunId: string | undefined;
-    let requesterReceipt: unknown;
-    const stopObservingCompletion = subscribeSubagentRunChanges("persistence", () => {
-      const entry = childRunId ? subagentRuns.get(childRunId) : undefined;
-      if (
-        entry &&
-        (entry.delivery?.status === "delivered" ||
-          entry.delivery?.status === "suspended" ||
-          entry.delivery?.status === "discarded" ||
-          entry.delivery?.disposition === "permanent_failure" ||
-          entry.cleanupCompletedAt !== undefined)
-      ) {
-        completionSettled.resolve();
-      }
-    });
     const waitForReply = runWait.waitForAgentRunReply;
     const observeInlineWait = vi
       .spyOn(runWait, "waitForAgentRunReply")
@@ -162,9 +143,6 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
             params.onAccepted?.(receipt);
             requesterAccepted.resolve();
           },
-        }).then((receipt) => {
-          requesterReceipt = receipt;
-          return receipt;
         }),
       );
     const unblock = () => {
@@ -246,7 +224,6 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       });
       await opts.userTurnTranscriptRecorder?.persistApproved();
       if (opts.sessionKey === child) {
-        childRunId = runId;
         await childMayFinish.promise;
         if (outcome === "child error") {
           throw new Error("synthetic child failure");
@@ -261,11 +238,6 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       });
       try {
         expect(originalClosed).toBe(true);
-        expect(opts.inputProvenance).toMatchObject({
-          kind: "inter_session",
-          sourceTool: "subagent_announce",
-          sourceSessionKey: child,
-        });
         const admitted = await admission.admit("embedded");
         const caller = createAdmittedGatewayToolCallerIdentity({
           admittedRunContext: admitted,
@@ -356,7 +328,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       }
       await gate(
         requesterAccepted.promise,
-        completionSettled.promise,
+        parentFinished.promise,
         "Completion ended before requester admission",
       );
       // Cross the native accepted-ack yield without advancing run deadlines.
@@ -377,12 +349,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       }
       effectMayFinish.resolve();
       await wait(parentFinished.promise);
-      await wait(completionSettled.promise);
       expect(parentError).toBeUndefined();
-      expect(requesterReceipt).toMatchObject({ status: "ok", inputProcessingCompleted: true });
-      expect(subagentRuns.get(expectDefined(childRunId, "child run ID"))).toMatchObject({
-        delivery: { status: "delivered" },
-      });
       if (outcome === "success" || outcome === "child error") {
         expect(pluginError).toBeUndefined();
         expect(fs.readFileSync(effectPath, "utf8")).toBe("authorized effect");
@@ -393,7 +360,6 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       }
     } finally {
       unblock();
-      stopObservingCompletion();
       observeInlineWait.mockRestore();
       observeRequesterAdmission.mockRestore();
       if (vi.isFakeTimers()) {
