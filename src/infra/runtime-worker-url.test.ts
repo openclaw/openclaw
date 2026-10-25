@@ -9,6 +9,11 @@ import { describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
+  resolveExternalPackageRuntimeEntrypointUrl as external,
+  resolveRuntimeDeployEntrypointUrl as deploy,
+  resolveRuntimeScriptEntrypointUrl as script,
+} from "./runtime-process-url.js";
+import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
@@ -240,40 +245,15 @@ describe("resolveRuntimeProcessEntrypointUrl", () => {
   });
 });
 
-describe("resolveExternalPackageRuntimeEntrypointUrl", () => {
-  it.each([
-    ["sourceCli", "src/entry.ts"],
-    ["cliLauncher", "openclaw.mjs"],
-    ["preinstall", "scripts/preinstall-package-manager-warning.mjs"],
-    ["postinstall", "scripts/postinstall-bundled-plugins.mjs"],
-  ] as const)("resolves %s in the selected package", async (name, relativePath) => {
-    const { resolveExternalPackageRuntimeEntrypointUrl } = await import("./runtime-process-url.js");
-    const packageRoot = path.resolve("external package with spaces");
-    expect(resolveExternalPackageRuntimeEntrypointUrl(name, packageRoot)).toEqual(
-      pathToFileURL(path.join(packageRoot, relativePath)),
-    );
-  });
-});
-
-describe("resolveRuntimeScriptEntrypointUrl", () => {
-  it("resolves the declared handoff script in its staging directory", async () => {
-    const { resolveRuntimeScriptEntrypointUrl } = await import("./runtime-process-url.js");
-    const directory = path.resolve("handoff directory #1");
-    expect(resolveRuntimeScriptEntrypointUrl("managedUpdateHandoff", directory)).toEqual(
-      pathToFileURL(path.join(directory, "handoff.cjs")),
-    );
-  });
-});
-
-describe("resolveRuntimeDeployEntrypointUrl", () => {
-  it.each([
-    ["worker", "worker.mjs"],
-    ["image-processor.worker", "image-processor.worker.mjs"],
-  ] as const)("resolves %s in the selected bundle", async (name, fileName) => {
-    const { resolveRuntimeDeployEntrypointUrl } = await import("./runtime-process-url.js");
-    const directory = path.resolve("worker bundle #1");
-    expect(resolveRuntimeDeployEntrypointUrl(name, directory)).toEqual(
-      pathToFileURL(path.join(directory, fileName)),
-    );
-  });
+it.each([
+  ["src/entry.ts", external.bind(null, "sourceCli")],
+  ["openclaw.mjs", external.bind(null, "cliLauncher")],
+  ["scripts/preinstall-package-manager-warning.mjs", external.bind(null, "preinstall")],
+  ["scripts/postinstall-bundled-plugins.mjs", external.bind(null, "postinstall")],
+  ["handoff.cjs", script.bind(null, "managedUpdateHandoff")],
+  ["worker.mjs", deploy.bind(null, "worker")],
+  ["image-processor.worker.mjs", deploy.bind(null, "image-processor.worker")],
+] as const)("resolves %s beneath the selected runtime root", (file, resolve) => {
+  const directory = path.resolve("runtime directory #1 with spaces");
+  expect(resolve(directory)).toEqual(pathToFileURL(path.join(directory, file)));
 });
