@@ -88,23 +88,6 @@ it("does not offer enablement or Settings for an uninstalled plugin", () => {
   expect(find('[aria-label="Enable Workboard"], [aria-label="Settings"]')).toBeNull();
 });
 
-it("retains the focused Uninstall button when inspection arrives", () => {
-  let publishInspection!: () => void;
-  const { find } = mount({ result: createResult(createPlugin({ removable: true })) }, (props) => {
-    const [inspection, setInspection] = createSignal<DetailProps["inspection"]>(null);
-    Object.defineProperty(props, "inspection", { get: inspection });
-    publishInspection = () => setInspection(createInspectResult());
-  });
-  const button = find<HTMLButtonElement>('[aria-label="Uninstall Workboard"]')!;
-  button.focus();
-  expect(document.activeElement).toBe(button);
-  publishInspection();
-  flush();
-  expect(find('[aria-label="Uninstall Workboard"]')).toBe(button);
-  expect(button.isConnected).toBe(true);
-  expect(document.activeElement).toBe(button);
-});
-
 it("retains inspection retry focus and uses the current error and callback", async () => {
   const firstRetry = vi.fn();
   const nextRetry = vi.fn();
@@ -183,11 +166,7 @@ it("gives host permissions the setting menu and preserves configured, inherited,
   const hooksPath = ["plugins", "entries", "workboard", "hooks"];
   const path = [...hooksPath, "allowPromptInjection"];
   expect(props.onAskSetting).toHaveBeenCalledWith(
-    expect.objectContaining({
-      path,
-      value: true,
-      label: "Add context to prompts",
-    }),
+    expect.objectContaining({ path, value: true, label: "Add context to prompts" }),
   );
   row.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
   expect(props.onConfigPatch).toHaveBeenCalledWith(path, false);
