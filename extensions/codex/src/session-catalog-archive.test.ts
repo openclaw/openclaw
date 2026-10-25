@@ -121,7 +121,7 @@ it("pins one App Server connection while archive configuration changes live", as
   const acquisition = pinnedConnectionMocks.getClient.mock.calls[0]?.[0];
   expect(acquisition).toMatchObject({
     agentDir: expectedAgentDir,
-    startOptions: expect.objectContaining({ command: "codex-archive-a", homeScope: "user" }),
+    startOptions: { command: "codex-archive-a", homeScope: "user" },
     config: initialRuntimeConfig,
   });
   for (const [request] of pinnedConnectionMocks.request.mock.calls) {
@@ -235,10 +235,9 @@ it("fences ownership mutations through both descendant collections and their pag
   validationReleased.resolve();
   await expect(archiving).resolves.toEqual({ archived: true });
   expect(bindingStore.read(lateIdentity)).toBeUndefined();
-  expect(control.readThread).toHaveBeenCalledWith("idle-descendant-false-first", false);
-  expect(control.readThread).toHaveBeenCalledWith("idle-descendant-false-next", false);
-  expect(control.readThread).toHaveBeenCalledWith("idle-descendant-true-first", false);
-  expect(control.readThread).toHaveBeenCalledWith("idle-descendant-true-next", false);
+  for (const id of ["false-first", "false-next", "true-first", "true-next"]) {
+    expect(control.readThread).toHaveBeenCalledWith(`idle-descendant-${id}`, false);
+  }
   expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
 });
 

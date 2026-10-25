@@ -2,19 +2,11 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCodexSessionCli } from "./session-cli.js";
 
-const gatewayRuntime = vi.hoisted(() => ({
-  callGatewayFromCli: vi.fn(),
+const callGatewayFromCli = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
+  callGatewayFromCli,
 }));
-
-vi.mock("openclaw/plugin-sdk/gateway-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/gateway-runtime")>(
-    "openclaw/plugin-sdk/gateway-runtime",
-  );
-  return {
-    ...actual,
-    callGatewayFromCli: gatewayRuntime.callGatewayFromCli,
-  };
-});
 
 const catalog = {
   hosts: [
@@ -53,14 +45,6 @@ function gatewayCatalog(hosts: unknown[]) {
   return { catalogs: [{ id: "codex", hosts }] };
 }
 
-function createProgram(): Command {
-  const program = new Command();
-  program.exitOverride();
-  program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
-  registerCodexSessionCli(program);
-  return program;
-}
-
 async function runCli(
   args: string[],
   flags: Record<string, string | boolean> = {},
@@ -71,10 +55,13 @@ async function runCli(
     return true;
   });
   try {
+    const program = new Command().exitOverride();
+    program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
+    registerCodexSessionCli(program);
     const options = Object.entries(flags).flatMap(([name, value]) =>
       value === true ? [`--${name}`] : [`--${name}`, String(value)],
     );
-    await createProgram().parseAsync(["codex", ...args, ...options], { from: "user" });
+    await program.parseAsync(["codex", ...args, ...options], { from: "user" });
     return chunks.join("");
   } finally {
     write.mockRestore();
@@ -86,7 +73,7 @@ function expectGateway(
   params: Record<string, unknown>,
   options: Record<string, string | boolean> = { timeout: "75000", json: false },
 ) {
-  expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
+  expect(callGatewayFromCli).toHaveBeenCalledWith(
     `sessions.catalog.${action}`,
     options,
     { catalogId: "codex", ...params },
@@ -96,8 +83,7 @@ function expectGateway(
 
 describe("registerCodexSessionCli", () => {
   beforeEach(() => {
-    gatewayRuntime.callGatewayFromCli.mockReset();
-    gatewayRuntime.callGatewayFromCli.mockResolvedValue(gatewayCatalog(catalog.hosts));
+    callGatewayFromCli.mockReset().mockResolvedValue(gatewayCatalog(catalog.hosts));
   });
 
   describe("sessions", () => {
@@ -145,7 +131,7 @@ describe("registerCodexSessionCli", () => {
     });
 
     it("neutralizes terminal controls in human-readable host and session metadata", async () => {
-      gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(
+      callGatewayFromCli.mockResolvedValueOnce(
         gatewayCatalog([
           {
             hostId: "gateway:local\u001b",
@@ -177,7 +163,7 @@ describe("registerCodexSessionCli", () => {
     });
 
     it("reports empty catalog and unmatched host results", async () => {
-      gatewayRuntime.callGatewayFromCli.mockResolvedValue(gatewayCatalog([]));
+      callGatewayFromCli.mockResolvedValue(gatewayCatalog([]));
 
       const emptyOutput = await runCli(["sessions"]);
       const hostOutput = await runCli(["sessions"], { host: "node:missing" });
@@ -189,7 +175,7 @@ describe("registerCodexSessionCli", () => {
 
   describe("continue", () => {
     it("continues a Gateway-local thread and sanitizes the human-readable session key", async () => {
-      gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({
+      callGatewayFromCli.mockResolvedValueOnce({
         sessionKey: "harness:codex:supervision:branch\u001b[2J",
       });
 
@@ -214,7 +200,7 @@ describe("registerCodexSessionCli", () => {
     });
 
     it("prints existing session results as JSON", async () => {
-      gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({
+      callGatewayFromCli.mockResolvedValueOnce({
         sessionKey: "harness:codex:supervision:existing",
         ignored: true,
       });
@@ -229,7 +215,7 @@ describe("registerCodexSessionCli", () => {
 
   describe("archive", () => {
     it("renders a successful archive in human-readable output", async () => {
-      gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce({ ok: true });
+      callGatewayFromCli.mockResolvedValueOnce({ ok: true });
 
       const output = await runCli(["archive", "thread-2"], { "confirm-no-other-runner": true });
 
@@ -246,7 +232,7 @@ describe("registerCodexSessionCli", () => {
     [["archive", "thread-1"], "--confirm-no-other-runner is required"],
   ] satisfies [string[], string][])("rejects %j before Gateway access", async (args, message) => {
     await expect(runCli(args)).rejects.toThrow(message);
-    expect(gatewayRuntime.callGatewayFromCli).not.toHaveBeenCalled();
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -263,7 +249,7 @@ describe("registerCodexSessionCli", () => {
       message: "Codex session archive returned an invalid result",
     },
   ])("rejects malformed Gateway response: $message", async ({ args, result, message }) => {
-    gatewayRuntime.callGatewayFromCli.mockResolvedValueOnce(result);
+    callGatewayFromCli.mockResolvedValueOnce(result);
     await expect(runCli(args)).rejects.toThrow(message);
   });
 });
