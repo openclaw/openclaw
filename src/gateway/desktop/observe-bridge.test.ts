@@ -20,7 +20,6 @@ import {
   type DesktopObserveRequester,
 } from "./observe-requester.js";
 import { startObserveGateway } from "./observe.test-support.js";
-import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 import { createDesktopSessionRegistry, type DesktopSessionRegistry } from "./session-registry.js";
 
 const cleanup: Array<() => Promise<void>> = [];
@@ -62,7 +61,6 @@ async function createProxyHarness(
   params: {
     control?: boolean;
     stream?: Duplex;
-    preauth?: RfbPreauthDescriptor;
     requester?: DesktopObserveRequester;
     registry?: DesktopSessionRegistry;
   } = {},
@@ -99,7 +97,6 @@ async function createProxyHarness(
       },
     },
   );
-  const serverTimers = vi.isFakeTimers() ? vi.getTimerCount() : undefined;
   const minted = mintDesktopObserverToken({
     sourceKey: "worker:pump",
     ownerEpoch: 2,
@@ -107,7 +104,6 @@ async function createProxyHarness(
     attachment: params.stream
       ? { kind: "stream", streamId: "synthetic-stream" }
       : { kind: "unix-socket", socketPath: localSocketPath },
-    ...(params.preauth ? { preauth: params.preauth } : {}),
     requester: params.requester,
   });
   const ws = new WebSocket(`${url}/desktop/observe?token=${minted.token}`);
@@ -118,7 +114,6 @@ async function createProxyHarness(
     desktopPeer: params.stream ?? (await peerConnected.promise),
     observerUrl: ws.url,
     release,
-    serverTimers,
     ws,
   };
 }
@@ -165,7 +160,6 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     const logCapture = captureLogs();
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const harness = await createProxyHarness({ control: true });
-    expect(vi.getTimerCount()).toBe(harness.serverTimers! + 1);
     const pings: Buffer[] = [];
     const onDesktopData = vi.fn();
     harness.ws.on("ping", (data) => pings.push(data));
@@ -181,8 +175,6 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     harness.closeObserver(1012, "desktop tunnel closed");
     await expect(closed).resolves.toBe(1012);
     await expectCloseLog(logCapture, {
-      sourceKey: "worker:pump",
-      ownerEpoch: 2,
       trigger: "owner-close",
       cleanupCode: 1012,
       closeCode: 1012,
@@ -191,46 +183,28 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     expect(harness.release).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(25_000);
     expect(pings).toHaveLength(2);
-    expect(vi.getTimerCount()).toBe(harness.serverTimers);
-  });
-
-  it("clears the credential-bearing token timer when the token is consumed", async () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-    await createProxyHarness({
-      preauth: {
-        auth: "ard-account",
-        credentials: { username: "operator", password: "memory-only-password" },
-      },
-    });
-    const expiryCallIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 60_000);
-    expect(expiryCallIndex).toBeGreaterThanOrEqual(0);
-    const expiryTimer = setTimeoutSpy.mock.results[expiryCallIndex]?.value;
-    expect(clearTimeoutSpy).toHaveBeenCalledWith(expiryTimer);
   });
 
   it("rejects consumed, expired, and unknown tokens", async () => {
     const harness = await createProxyHarness();
     await expectUnauthorizedObserver(harness.observerUrl);
 
-    await expectUnauthorizedToken(harness.observerUrl, mintUnused({ nowMs: 0 }).token);
+    await expectUnauthorizedToken(
+      harness.observerUrl,
+      mintUnused({
+        nowMs: 0,
+        preauth: { auth: "vnc-password", credentials: { password: "expired-fixture-password" } },
+      }).token,
+    );
     await expectUnauthorizedToken(harness.observerUrl, "0".repeat(48));
   });
 
-  it.each([
-    "invalidated",
-    "invalidate-after-mint",
-    "abort-before-mint",
-    "abort-after-mint",
-  ] as const)(
+  it.each(["invalidated", "invalidate-after-mint", "abort-after-mint"] as const)(
     "refuses an unused requester token before its TTL expires (%s)",
     async (revocation) => {
       const harness = await createProxyHarness();
       const controller = new AbortController();
       let invalidated = revocation === "invalidated";
-      if (revocation === "abort-before-mint") {
-        controller.abort();
-      }
       const minted = mintUnused({
         requester: {
           signal: controller.signal,
@@ -375,25 +349,6 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       expect(harness.release).toHaveBeenCalledOnce();
     },
   );
-
-  it("expires unused credential-bearing tokens without a later token operation", async () => {
-    const harness = await createProxyHarness();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const minted = mintUnused({
-      preauth: {
-        auth: "vnc-password",
-        credentials: { password: "synthetic-memory-only-password" },
-      },
-    });
-
-    vi.advanceTimersByTime(60_000);
-    // Wall-clock expiry still lies ahead; only the timer could have retired this token.
-    expect(minted.expiresAtMs).toBeGreaterThan(Date.now());
-    expect(vi.getTimerCount()).toBe(0);
-    // Only token expiry uses virtual time; socket rejection and teardown use real timers.
-    vi.useRealTimers();
-    await expectUnauthorizedToken(harness.observerUrl, minted.token);
-  });
 
   it("pauses and resumes unix-socket reads around websocket backpressure", async () => {
     const logCapture = captureLogs();

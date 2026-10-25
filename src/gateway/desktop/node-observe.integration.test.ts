@@ -11,12 +11,8 @@ import {
   invokeNodeWorkerDesktopStream,
 } from "../../node-host/desktop-stream-command.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
-import type {
-  NodeWorkerSupervisorNodeProof,
-  NodeWorkerSupervisorTransport,
-} from "../node-registry-private.js";
+import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import type { NodeRegistry } from "../node-registry.js";
-import { environmentsHandlers } from "../server-methods/environments.js";
 import { createWorkerNodeDesktopCarrier } from "../worker-environments/node-desktop-carrier.js";
 import { createNodeWorkerBundleTestNode } from "../worker-environments/node-worker-bundle.test-support.js";
 import * as workerSupport from "../worker-environments/service.test-support.js";
@@ -90,11 +86,11 @@ async function openViewOnlyObserver(gatewayUrl: string, wsPath: string): Promise
   return ws;
 }
 
-async function trackInvocation<T>(results: boolean[], invoke: () => Promise<T>) {
+async function trackInvocation(results: boolean[], invoke: () => Promise<void>) {
   try {
-    const result = await invoke();
+    await invoke();
     results.push(true);
-    return result;
+    return { ok: true, payload: null };
   } catch (error) {
     results.push(false);
     return {
@@ -102,31 +98,6 @@ async function trackInvocation<T>(results: boolean[], invoke: () => Promise<T>) 
       error: { message: error instanceof Error ? error.message : String(error) },
     };
   }
-}
-
-function workerNodeProof(nodeId: string): NodeWorkerSupervisorNodeProof {
-  return createNodeWorkerBundleTestNode({
-    nodeId,
-    connId: "worker-conn-1",
-    pairingIdentity: "worker-identity-1",
-    pairingGeneration: "worker-generation-1",
-    workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
-  });
-}
-
-async function observeEnvironmentDesktop(
-  workerEnvironmentService: ReturnType<typeof workerSupport.createService>,
-  environmentId: string,
-) {
-  const respond = vi.fn();
-  await environmentsHandlers["desktop.observe"]?.({
-    params: { source: { kind: "environment", environmentId }, control: false },
-    respond,
-    context: { workerEnvironmentService },
-  } as never);
-  const [ok, result, error] = respond.mock.calls.at(0) ?? [];
-  expect([ok, error]).toEqual([true, undefined]);
-  return result as { transport: "rfb"; wsPath: string; control: boolean };
 }
 
 describe.each(["node", "worker"] as const)("%s desktop observe integration", (kind) => {
@@ -168,18 +139,16 @@ describe.each(["node", "worker"] as const)("%s desktop observe integration", (ki
             params?: unknown;
             signal?: AbortSignal;
             onProgress?: (chunk: string) => void;
-          }) => {
-            return trackInvocation(completedInvocations, async () => {
-              await invokeNodeDesktopStream({
+          }) =>
+            trackInvocation(completedInvocations, () =>
+              invokeNodeDesktopStream({
                 paramsJSON: JSON.stringify(request.params),
                 gatewayUrl,
                 config: { enabled: true, port: rfb.port },
                 signal: request.signal ?? new AbortController().signal,
                 emitStatus: async (status) => request.onProgress?.(status),
-              });
-              return { ok: true };
-            });
-          },
+              }),
+            ),
         } as unknown as NodeRegistry;
 
         const service = createNodeDesktopService({
@@ -207,7 +176,10 @@ describe.each(["node", "worker"] as const)("%s desktop observe integration", (ki
           throw new Error("expected durable worker node id");
         }
 
-        const proof = workerNodeProof(record.nodeDeviceId);
+        const proof = createNodeWorkerBundleTestNode({
+          nodeId: record.nodeDeviceId,
+          workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
+        });
         nodeRegistry = {
           getForPairingGeneration: (nodeId: string, generation: string) =>
             nodeId === proof.nodeId && generation === proof.pairingGeneration ? proof : undefined,
@@ -218,14 +190,13 @@ describe.each(["node", "worker"] as const)("%s desktop observe integration", (ki
           if (!request.isDispatchAuthorized()) {
             return { ok: false, error: { code: "STALE", message: "desktop owner is stale" } };
           }
-          return trackInvocation(completedInvocations, async () => {
-            await invokeNodeWorkerDesktopStream({
+          return trackInvocation(completedInvocations, () =>
+            invokeNodeWorkerDesktopStream({
               paramsJSON: JSON.stringify(request.params),
               gatewayUrl,
               signal: request.signal ?? new AbortController().signal,
-            });
-            return { ok: true, payload: null };
-          });
+            }),
+          );
         });
         const transport: NodeWorkerSupervisorTransport = {
           getCurrentNode: async (nodeId) => (proof.nodeId === nodeId ? proof : undefined),
@@ -247,7 +218,8 @@ describe.each(["node", "worker"] as const)("%s desktop observe integration", (ki
           now: Date.now,
         });
 
-        observe = () => observeEnvironmentDesktop(workerService, record.environmentId);
+        observe = () =>
+          workerService.observeDesktop({ environmentId: record.environmentId, control: false });
         stop = () => workerService.destroy(record.environmentId);
         verifyStopped = () => {
           expect(workerSupport.testState.store.get(record.environmentId)?.state).toBe("destroyed");

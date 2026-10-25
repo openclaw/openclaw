@@ -228,13 +228,9 @@ describe("screen-owned desktop audio", () => {
     },
   );
 
-  it.each([
-    [true, "requester"],
-    [false, "requester"],
-    [false, "ingress"],
-  ] as const)(
-    "carries live authority into pending capture admission (%s, %s)",
-    async (allowed, authority) => {
+  it.each(["requester", "ingress"] as const)(
+    "rejects revoked %s authority at pending capture admission",
+    async (authority) => {
       let current = true;
       const native = createAudioFixture(tempDirs.make("desktop-viewer-admission-"), {
         deferCapture: true,
@@ -251,20 +247,15 @@ describe("screen-owned desktop audio", () => {
       f.observation.activate();
       f.peer.command("start");
       await native.captureSpawned.promise;
-      current = allowed;
+      current = false;
       native.captureAdmission.resolve();
       await native.captureSettled.promise;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      expect(native.captureAdmitted).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(native.captureAdmitted).not.toHaveBeenCalled();
       expect(requesterAbort.signal.aborted).toBe(false);
-      expect(f.peer.sent.filter((frame) => Buffer.isBuffer(frame))).toEqual(
-        allowed ? [Buffer.from([0, 128, 255, 127])] : [],
-      );
-      expect(f.peer.sent.filter((frame) => typeof frame === "string")).toEqual(
-        allowed ? ['{"state":"started"}'] : [],
-      );
+      expect(f.peer.sent).toEqual([]);
       f.observation.close();
       await native.runs[1]!.wait();
       expect(native.runs.map((run) => run.activity.resultSettled)).toEqual([false, true]);

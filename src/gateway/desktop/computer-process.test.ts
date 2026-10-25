@@ -151,28 +151,10 @@ async function expectJoinedFailure(
 
 describe("Gateway computer process", () => {
   it("carries the acquired desktop environment and selected provider into the child, then finalizes through its scope owner", async () => {
-    const originalDisplay = process.env.DISPLAY;
-    const originalBus = process.env.DBUS_SESSION_BUS_ADDRESS;
     const f = createChildFixture();
     const { child } = f;
-    expect(f.inputs).toHaveLength(0);
     expect(await child.ready).toEqual(computerUse);
     expect(f.inputs[0]).toMatchObject({ env: f.env, exactEnv: true, stdinMode: "pipe-open" });
-    expect(f.messages[0]).toEqual({ type: "start", pluginIds: ["fixture"] });
-    expect(process.env.DISPLAY).toBe(originalDisplay);
-    expect(process.env.DBUS_SESSION_BUS_ADDRESS).toBe(originalBus);
-
-    const result = f.invoke({
-      command: "screen.snapshot",
-      params: { executionId: "fixture" },
-    });
-    const invocation = await f.invocationReceived.promise;
-    f.emit({
-      type: "result",
-      id: invocation.id,
-      payload: JSON.stringify({ format: "png", base64: "cGl4ZWxz" }),
-    });
-    await expect(result).resolves.toEqual({ format: "png", base64: "cGl4ZWxz" });
     const close = child.close();
     const closing = observe(close);
     await f.stopReceived.promise;

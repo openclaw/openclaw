@@ -205,37 +205,17 @@ describe("retained RFB connection", () => {
       await closed.promise;
     },
   );
-  it("ends writes and preserves terminal response bytes while a consumer remains paused", async () => {
-    const response = Buffer.alloc(32 * 1024, 7);
-    const peerClosed = createDeferred();
-    const port = await listenScriptedRfb((socket) => {
-      socket.once("close", () => peerClosed.resolve());
-      serveHandshake(socket, (selection) => {
-        expect(selection).toEqual(Buffer.from([2]));
-        socket.end(response);
-      });
-    });
-    const stream = await connect(port);
-    const prefix = await pauseAfterPrefix(stream);
-    expect(prefix).toEqual(Buffer.concat([VERSION, OFFER]));
-    stream.write(CLIENT_HELLO);
-    // The peer has finished and closed while the caller has consumed no response.
-    await peerClosed.promise;
-    expect(stream).toMatchObject({ destroyed: false, writableEnded: true });
-    const settled = finished(stream);
-    void settled.catch(() => undefined);
-    expect(await collect(stream)).toEqual(response);
-    await expect(settled).resolves.toBeUndefined();
-  });
-
   it.each(["peer-fin", "owner-abort"])("settles queued client writes on %s", async (ending) => {
     const ready = createDeferred<net.Socket>();
+    const peerClosed = createDeferred();
     const received: Buffer[] = [];
     let receivedBytes = 0;
     const response = Buffer.alloc(32 * 1024, 9);
     const port = await listenScriptedRfb((peer) => {
       peer.on("error", handlePeerTeardownError);
-      serveHandshake(peer, () => {
+      peer.once("close", () => peerClosed.resolve());
+      serveHandshake(peer, (selection) => {
+        expect(selection).toEqual(Buffer.from([2]));
         peer.pause();
         peer.on("data", (chunk) => {
           const bytes = Buffer.from(chunk);
@@ -249,7 +229,7 @@ describe("retained RFB connection", () => {
     const stream = await connect(port, controller.signal);
     const settled = finished(stream);
     void settled.catch(() => undefined);
-    await pauseAfterPrefix(stream);
+    expect(await pauseAfterPrefix(stream)).toEqual(Buffer.concat([VERSION, OFFER]));
     stream.write(CLIENT_HELLO);
     const peer = await ready.promise;
     const first = Buffer.alloc(8 * 1024 * 1024, 7);
@@ -270,11 +250,12 @@ describe("retained RFB connection", () => {
     peer.end(response);
     await vi.waitFor(() => expect(stream.writableEnded).toBe(true));
     peer.resume();
-    const output: Buffer[] = [];
-    stream.on("data", (chunk: Buffer) => output.push(chunk));
-    stream.resume();
+    // Even after the peer closes, its terminal response survives until the paused reader drains.
+    await peerClosed.promise;
+    expect(stream).toMatchObject({ destroyed: false, writableEnded: true });
+    const output = collect(stream);
     await expect(settled).resolves.toBeUndefined();
-    expect(Buffer.concat(output)).toEqual(response);
+    expect(await output).toEqual(response);
     expect(callbacks).toEqual([null, null]);
     await vi.waitFor(() => expect(receivedBytes).toBe(first.length + last.length));
     expect(Buffer.concat(received)).toEqual(Buffer.concat([first, last]));
