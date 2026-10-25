@@ -65,13 +65,18 @@ export function jsonOrderedArray(
   db: DatabaseSync | PostgresSqlConnection,
   value: Expression<string>,
   orderBy: readonly Expression<unknown>[],
+  // Use "not-null" only when every ORDER BY key is NOT NULL in the canonical schema;
+  // null placement is then irrelevant, and plain ASC matches the PG-native NOT NULL index ordering.
+  nullOrder: "first" | "not-null" = "first",
 ): AliasableExpression<string> {
   const postgres = isPostgresSqlConnection(db);
   let aggregate = expressionBuilder().fn.agg<string>(postgres ? "json_agg" : "json_group_array", [
     value,
   ]);
   for (const key of orderBy) {
-    aggregate = aggregate.orderBy(key, (order) => order.asc().nullsFirst());
+    aggregate = aggregate.orderBy(key, (order) =>
+      nullOrder === "first" ? order.asc().nullsFirst() : order.asc(),
+    );
   }
   return postgres
     ? /* kysely-allow-raw: JSON aggregates cross the driver as text, including empty arrays. */ sql<string>`coalesce(${aggregate}::text, '[]')`

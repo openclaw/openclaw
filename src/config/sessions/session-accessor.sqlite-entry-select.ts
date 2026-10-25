@@ -169,7 +169,7 @@ export function readSelectedSessionEntryRows(
                   database.db,
                   builder.ref("identity_id"),
                   [builder.ref("identity_id")],
-                  "native",
+                  "not-null",
                 ).as("ids"),
               )
               .whereRef("session_members.session_key", "=", "session_nodes.session_key")
