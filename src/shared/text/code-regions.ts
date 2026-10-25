@@ -341,7 +341,7 @@ function completesInlineLinkTitle(previousText: string, nextText: string, retain
   return /\]\([\s\S]*?\s["'(][\s\S]*$/u.test(previousSource);
 }
 
-export function stripBlockquotePrefixes(text: string) {
+function stripBlockquotePrefixes(text: string) {
   return text.replace(/(^|\r\n|\n|\r)[ \t]*>(?:[ \t]{0,4}>)*[ \t]{0,3}/gu, "$1");
 }
 

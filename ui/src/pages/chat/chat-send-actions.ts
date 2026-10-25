@@ -1,4 +1,3 @@
-import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import {
@@ -12,22 +11,20 @@ import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import {
   isExpiredIncognitoSession,
   isInitialChatHistoryUnavailable,
   setChatError,
 } from "./chat-history-state.ts";
-import {
-  flushStoredChatOutbox,
-  resumeStoredChatOutboxes as resumeStoredChatOutboxesDrain,
-  scheduleStoredChatOutboxDrain,
-} from "./chat-outbox-drain.ts";
+import type { QueuedChatSendOptions } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { flushChatQueueForEvent } from "./chat-outbox-resume.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { readQueuedMessageById, updateQueuedMessage } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { chatOutboxDrainDependencies, deliverChatQueueItem } from "./chat-send-delivery.ts";
-import { canSendVolatileQueueItem, reconnectSafeQueuedSendState } from "./chat-send-queue-state.ts";
+import { deliverChatQueueItem } from "./chat-send-delivery.ts";
+import { canSendVolatileQueueItem, reconnectSafeQueuedSendState } from "./chat-send-eligibility.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import {
   isQueuedMessageBeingEdited,
@@ -35,6 +32,8 @@ import {
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
+
+export { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-outbox-resume.ts";
 
 registerChatGoalsEnglish();
 
@@ -93,12 +92,6 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string): Promis
   }
   await retryQueuedChatMessage(host, id);
 }
-
-export const resumeStoredChatOutboxes = (host: ChatHost, event?: GatewayEventFrame) =>
-  resumeStoredChatOutboxesDrain(host, chatOutboxDrainDependencies, event);
-
-export const flushChatQueueForEvent = (host: ChatHost) =>
-  flushStoredChatOutbox(host, chatOutboxDrainDependencies);
 
 /**
  * Moves a queued row to the target row's position in its own movable segment. A locked row
@@ -274,18 +267,27 @@ export async function retryQueuedChatMessage(
   }
   const outbox = retried.scope;
   const explicitAdmission = retry.queueMode || retriesFailedDelivery || retriesAttempted;
+  const options: QueuedChatSendOptions | undefined = explicitAdmission
+    ? {
+        routingSessionKey: host.sessionKey,
+        canDispatch,
+        ...(retriesFailedDelivery ? { allowActiveRunSend: true } : {}),
+      }
+    : undefined;
+  const connectionIsCurrent = captureChatConnectionOwner(host);
+  const [{ scheduleStoredChatOutboxDrain }, { chatOutboxDrainDependencies }] = await Promise.all([
+    import("./chat-outbox-drain.ts"),
+    import("./chat-send-delivery.runtime.ts"),
+  ]);
+  if (!connectionIsCurrent() || (canDispatch && !canDispatch())) {
+    return;
+  }
   const drain = scheduleStoredChatOutboxDrain(
     host,
     outbox,
     chatOutboxDrainDependencies,
     explicitAdmission ? retry.id : undefined,
-    explicitAdmission
-      ? {
-          routingSessionKey: host.sessionKey,
-          canDispatch,
-          ...(retriesFailedDelivery ? { allowActiveRunSend: true } : {}),
-        }
-      : undefined,
+    options,
   );
   if (host.chatSending && host.chatSendingScopeKey === storedChatOutboxScopeKey(outbox)) {
     void drain;
@@ -293,6 +295,6 @@ export async function retryQueuedChatMessage(
   }
   await drain;
   if (!host.chatRunId) {
-    void flushStoredChatOutbox(host, chatOutboxDrainDependencies);
+    void flushChatQueueForEvent(host);
   }
 }

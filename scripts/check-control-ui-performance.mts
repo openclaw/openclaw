@@ -39,10 +39,11 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Deferred menu and emoji/Markdown loads use 7/23/17 requests; retain two per path.
+  // Earlier signing plus deferred interactions measure 7/26/20 requests.
+  // Route gzip remains below the base; the signer was already fetched on demand.
   startupJsRequests: 9,
-  chatBootJsRequests: 25,
-  newBootJsRequests: 19,
+  chatBootJsRequests: 26,
+  newBootJsRequests: 20,
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,

@@ -26,7 +26,6 @@ import { claimAgentSessionWriter } from "../embedded-agent-runner/run/session-bo
 import { runWithModelFallback } from "../model-fallback-runner.js";
 import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 import {
-  CliHistoryOwnerChangedError,
   prepareCliHistoryBoundary,
   prepareCliHistoryCompactionBoundary,
 } from "./history-boundary.js";
@@ -433,7 +432,7 @@ describe("CLI transcript account boundary", () => {
           fallbacksOverride: ["fixture-next/fixture-model"],
           run,
         });
-        await expect(refusal).rejects.toBeInstanceOf(CliHistoryOwnerChangedError);
+        await expect(refusal).rejects.toMatchObject({ name: "CliHistoryOwnerChangedError" });
         await expect(refusal).rejects.toThrow("CLI history owner changed before preparation");
         expect(run).toHaveBeenCalledOnce();
         expect(direct.sessionEntry).toEqual(before);

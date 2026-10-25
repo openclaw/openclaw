@@ -166,9 +166,12 @@ export function readSelectedSessionEntryRows(
           ? outer
               .selectFrom("session_members")
               .select((builder) =>
-                jsonOrderedArray(database.db, builder.ref("identity_id"), [
+                jsonOrderedArray(
+                  database.db,
                   builder.ref("identity_id"),
-                ]).as("ids"),
+                  [builder.ref("identity_id")],
+                  "native",
+                ).as("ids"),
               )
               .whereRef("session_members.session_key", "=", "session_nodes.session_key")
               .$asScalar()

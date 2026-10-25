@@ -23,27 +23,43 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { inflateRawSync, constants as zlibConstants } from "node:zlib";
 import { chromium, type Response } from "playwright";
+import {
+  gatewayCredentialScope,
+  gatewayOriginScope,
+} from "../packages/gateway-client/src/gateway-origin-scope.ts";
 import type { TranscriptEvent } from "../src/config/sessions/session-accessor.sqlite-contract.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
+import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../src/shared/control-ui-storage.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "../ui/src/test-helpers/playwright-chromium.ts";
+import { createControlUiWireLink } from "./lib/control-ui-wire-link.ts";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 
 const { values } = parseArgs({
   options: {
     "bundle-dir": { type: "string" },
+    "compare-bundle-dir": { type: "string" },
     "compare-source-dir": { type: "string" },
     output: { type: "string" },
     pairs: { type: "string", default: "1" },
     profile: { type: "string", default: "local" },
+    auth: { type: "string", default: "none" },
     port: { type: "string" },
     worker: { type: "boolean", default: false },
     screenshots: { type: "boolean", default: false },
   },
 });
-if (!values["bundle-dir"] || !values.output || !["local", "remote"].includes(values.profile)) {
+if (
+  !values["bundle-dir"] ||
+  !values.output ||
+  !["local", "remote"].includes(values.profile) ||
+  !["none", "token"].includes(values.auth)
+) {
   throw new Error(
-    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote] [--pairs N] [--compare-source-dir <checkout>]",
+    "Required: --bundle-dir <built UI> --output <directory> [--profile local|remote] [--auth none|token] [--pairs N] [--compare-source-dir <checkout>] [--compare-bundle-dir <base UI>]",
   );
+}
+if (values["compare-bundle-dir"] && !values["compare-source-dir"]) {
+  throw new Error("--compare-bundle-dir requires --compare-source-dir (use . for the same source)");
 }
 const output = path.resolve(values.output);
 const pairs = Number(values.pairs);
@@ -65,6 +81,7 @@ if (outputInsideRepository) {
 }
 const bundle = path.resolve(values["bundle-dir"]);
 const remote = values.profile === "remote";
+const SYNTHETIC_GATEWAY_TOKEN = "synthetic-wire-benchmark-gateway-token";
 const sessionKeys = ["agent:main:wire-fixture-a", "agent:main:wire-fixture-b"];
 type WireFrame = {
   direction: "sent" | "received";
@@ -77,6 +94,8 @@ type WireFrame = {
   wireBytes: number;
   decodedBytes?: number;
   name?: string;
+  requestId?: string;
+  type?: string;
   digest?: string;
 };
 
@@ -93,7 +112,7 @@ function frameReader(
   let upgraded = false;
   let message: WireFrame | undefined;
   let parts: Buffer[] = [];
-  return (chunk: Buffer, deliveredAtMs: number) => {
+  return (chunk: Buffer, deliveredAtMs: number, receivedAtMs = performance.now()) => {
     pending = Buffer.concat([pending, chunk]);
     if (headers) {
       const end = pending.indexOf("\r\n\r\n");
@@ -143,7 +162,7 @@ function frameReader(
         message = {
           direction,
           connection,
-          atMs: performance.now(),
+          atMs: receivedAtMs,
           deliveredAtMs,
           opcode,
           compressed: Boolean(first & 64),
@@ -185,6 +204,8 @@ function frameReader(
               value.event ??
               (value.id ? methods.get(value.id) : undefined) ??
               value.type;
+            message.requestId = value.id;
+            message.type = value.type;
             message.decodedBytes = payload.length;
             message.digest = createHash("sha256").update(payload).digest("hex");
           }
@@ -200,62 +221,33 @@ function frameReader(
 async function startProxy(upstreamPort: number, listenPort: number) {
   const frames: WireFrame[] = [];
   const sockets = new Set<Socket>();
-  const timers = new Set<ReturnType<typeof setTimeout>>();
-  const next = { sent: 0, received: 0 };
+  const links = { sent: createControlUiWireLink(), received: createControlUiWireLink() };
   let connection = 0;
   const methods = new Map<string, string>();
-  const server = createServer((client) => {
-    const upstream = connect(upstreamPort, "127.0.0.1");
+  const server = createServer({ allowHalfOpen: true }, (client) => {
+    const upstream = connect({ port: upstreamPort, host: "127.0.0.1", allowHalfOpen: true });
     sockets.add(client);
     sockets.add(upstream);
+    client.on("close", () => sockets.delete(client));
+    upstream.on("close", () => sockets.delete(upstream));
     const id = ++connection;
     for (const [source, target, direction] of [
       [client, upstream, "sent"],
       [upstream, client, "received"],
     ] as const) {
       const inspect = frameReader(direction, id, frames, methods);
-      let queuedWrites = 0;
-      let ended = false;
-      source.on("data", (chunk: Buffer) => {
-        const now = performance.now();
-        // One shared serial link per direction: concurrent assets share 10 Mbps.
-        // 50 ms propagation each way models 100 ms RTT for both HTTP and WS.
-        const delivery = remote ? Math.max(now + 50, next[direction]) + chunk.length / 1250 : now;
-        next[direction] = delivery;
-        inspect(chunk, delivery);
-        if (!remote) {
-          target.write(chunk);
-          return;
-        }
-        queuedWrites++;
-        const timer = setTimeout(
-          () => {
-            timers.delete(timer);
-            if (!target.destroyed) {
-              target.write(chunk);
-            }
-            queuedWrites--;
-            if (ended && !queuedWrites && !target.destroyed) {
-              target.end();
-            }
-          },
-          Math.max(0, delivery - now),
-        );
-        timers.add(timer);
-      });
-      source.on("end", () => {
-        ended = true;
-        if (!queuedWrites && !target.destroyed) {
-          target.end();
-        }
-      });
-      source.on("error", () => target.destroy());
-      source.on("close", () => {
-        sockets.delete(source);
-        if (!ended || !queuedWrites) {
-          target.destroy();
-        }
-      });
+      if (remote) {
+        links[direction].connect(source, target, inspect);
+      } else {
+        source.on("data", (chunk: Buffer) => inspect(chunk, performance.now()));
+        source.pipe(target);
+        source.on("error", () => target.destroy());
+        source.on("close", () => {
+          if (!source.readableEnded) {
+            target.destroy();
+          }
+        });
+      }
     }
   });
   await new Promise<void>((resolve, reject) => {
@@ -270,9 +262,8 @@ async function startProxy(upstreamPort: number, listenPort: number) {
     frames,
     url: `http://127.0.0.1:${address.port}`,
     async close() {
-      for (const timer of timers) {
-        clearTimeout(timer);
-      }
+      links.sent.close();
+      links.received.close();
       for (const socket of sockets) {
         socket.destroy();
       }
@@ -401,7 +392,10 @@ async function runWorker() {
       mode: "local",
       bind: "loopback",
       trustedProxies: ["127.0.0.1"],
-      auth: { mode: "none" },
+      auth:
+        values.auth === "token"
+          ? { mode: "token", token: SYNTHETIC_GATEWAY_TOKEN }
+          : { mode: "none" },
       tailscale: { mode: "off" },
       controlUi: { enabled: true, allowedOrigins: [`http://127.0.0.1:${proxyPort}`] },
     },
@@ -546,6 +540,13 @@ async function runWorker() {
     console.log("Gateway ready");
     const proxy = await startProxy(gatewayPort, proxyPort);
     try {
+      const gatewayUrl = new URL(proxy.url);
+      gatewayUrl.protocol = "ws:";
+      const tokenStorageKey = `${CONTROL_UI_TOKEN_SESSION_KEY_PREFIX}${gatewayOriginScope(gatewayUrl.href)}`;
+      const bootRecordStorageKey =
+        values.auth === "token"
+          ? `openclaw.control.bootRecord.v1:${gatewayCredentialScope(gatewayUrl.href)}`
+          : undefined;
       // A deterministic, task-only browser key proves the real pairing/signature path.
       const seed = createHash("sha256").update("openclaw-wire-benchmark-synthetic-device").digest();
       const privateKey = createPrivateKey({
@@ -605,9 +606,19 @@ async function runWorker() {
                 }
               : {}),
           });
-          await context.addInitScript((deviceIdentity) => {
-            localStorage.setItem("openclaw-device-identity-v1", JSON.stringify(deviceIdentity));
-          }, identity);
+          await context.addInitScript(
+            ({ deviceIdentity, tokenKey, token }) => {
+              localStorage.setItem("openclaw-device-identity-v1", JSON.stringify(deviceIdentity));
+              if (token && sessionStorage.getItem(tokenKey) === null) {
+                sessionStorage.setItem(tokenKey, token);
+              }
+            },
+            {
+              deviceIdentity: identity,
+              tokenKey: tokenStorageKey,
+              token: values.auth === "token" ? SYNTHETIC_GATEWAY_TOKEN : undefined,
+            },
+          );
           const page = await context.newPage();
           await page.addInitScript({
             content: `const __name = (fn) => fn; (${installReadiness.toString()})();`,
@@ -621,6 +632,7 @@ async function runWorker() {
             startedAtMs: number;
             browserStartedAtMs: number;
             responseAtMs?: number;
+            browserResponseAtMs?: number;
             finishedAtMs?: number;
             browserFinishedAtMs?: number;
             bytes: number;
@@ -642,16 +654,38 @@ async function runWorker() {
           const decoded: Decoded[] = [];
           const methods = new Map<string, string>();
           const errors: string[] = [];
-          const negotiations: Array<{ atMs: number; extensions: string }> = [];
-          cdp.on("Network.webSocketHandshakeResponseReceived", (event) =>
+          const upgradeRequests = new Map<
+            string,
+            { startedAtMs: number; browserStartedAtMs: number }
+          >();
+          const negotiations: Array<{
+            requestId: string;
+            startedAtMs?: number;
+            browserStartedAtMs?: number;
+            atMs: number;
+            browserResponseAtMs: number;
+            status: number;
+            extensions: string;
+          }> = [];
+          cdp.on("Network.webSocketWillSendHandshakeRequest", (event) => {
+            upgradeRequests.set(event.requestId, {
+              startedAtMs: performance.now(),
+              browserStartedAtMs: event.timestamp * 1000,
+            });
+          });
+          cdp.on("Network.webSocketHandshakeResponseReceived", (event) => {
             negotiations.push({
+              requestId: event.requestId,
+              ...upgradeRequests.get(event.requestId),
               atMs: performance.now(),
+              browserResponseAtMs: event.timestamp * 1000,
+              status: event.response.status,
               extensions:
                 Object.entries(event.response.headers).find(
                   ([name]) => name.toLowerCase() === "sec-websocket-extensions",
                 )?.[1] ?? "none",
-            }),
-          );
+            });
+          });
           page.on("pageerror", (error) => errors.push(error.message));
           cdp.on("Network.requestWillBeSent", (event) =>
             requests.set(event.requestId, {
@@ -668,6 +702,7 @@ async function runWorker() {
             if (request) {
               Object.assign(request, {
                 responseAtMs: performance.now(),
+                browserResponseAtMs: event.timestamp * 1000,
                 status: event.response.status,
                 cached:
                   request.cached ||
@@ -765,6 +800,7 @@ async function runWorker() {
             const performanceSession = await context.newCDPSession(page);
             await performanceSession.send("Performance.enable", { timeDomain: "threadTicks" });
             try {
+              const gatewayCpuBefore = process.cpuUsage();
               const startedAtMs = performance.now();
               const decodedStart = decoded.length;
               const result = await action();
@@ -784,6 +820,8 @@ async function runWorker() {
                 { timeout: 60_000 },
               );
               const driverReadyAtMs = performance.now();
+              const gatewayCpu = process.cpuUsage(gatewayCpuBefore);
+              const gatewayRssBytes = process.memoryUsage.rss();
               const readiness = await page.evaluate(() => {
                 const state = Reflect.get(window, "__wireReadiness").state;
                 return { ...state };
@@ -856,14 +894,23 @@ async function runWorker() {
                       record.browserFinishedAtMs <= readyBrowserTimestampMs,
                     url: new URL(record.url).pathname,
                     startedAtMs: record.startedAtMs - startedAtMs,
+                    browserStartedAtMs: record.browserStartedAtMs - actionBrowserStartMs,
                     responseAtMs:
                       record.responseAtMs === undefined
                         ? undefined
                         : record.responseAtMs - startedAtMs,
+                    browserResponseAtMs:
+                      record.browserResponseAtMs === undefined
+                        ? undefined
+                        : record.browserResponseAtMs - actionBrowserStartMs,
                     finishedAtMs:
                       record.finishedAtMs === undefined
                         ? undefined
                         : record.finishedAtMs - startedAtMs,
+                    browserFinishedAtMs:
+                      record.browserFinishedAtMs === undefined
+                        ? undefined
+                        : record.browserFinishedAtMs - actionBrowserStartMs,
                   }),
                 );
               samples.push({
@@ -875,6 +922,22 @@ async function runWorker() {
                 incompleteHttpRequests: http.filter((request) => request.finishedAtMs === undefined)
                   .length,
                 http,
+                websocketUpgrades: negotiations
+                  .filter((upgrade) => upgrade.atMs >= startedAtMs)
+                  .map((upgrade) =>
+                    Object.assign({}, upgrade, {
+                      startedAtMs:
+                        upgrade.startedAtMs === undefined
+                          ? undefined
+                          : upgrade.startedAtMs - startedAtMs,
+                      atMs: upgrade.atMs - startedAtMs,
+                      browserStartedAtMs:
+                        upgrade.browserStartedAtMs === undefined
+                          ? undefined
+                          : upgrade.browserStartedAtMs - actionBrowserStartMs,
+                      browserResponseAtMs: upgrade.browserResponseAtMs - actionBrowserStartMs,
+                    }),
+                  ),
                 websocket: frames,
                 summary: {
                   ...Object.fromEntries(
@@ -916,6 +979,8 @@ async function runWorker() {
                   wsAllMessages: frames.filter((frame) => frame.opcode === 1 || frame.opcode === 2)
                     .length,
                 },
+                gatewayCpuMs: { user: gatewayCpu.user / 1000, system: gatewayCpu.system / 1000 },
+                gatewayRssBytes,
                 cpuMs: Object.fromEntries(
                   cpuAfter
                     .filter((m) =>
@@ -947,6 +1012,73 @@ async function runWorker() {
             await capture("cold-chat", () =>
               page.goto(entryUrl, { waitUntil: "domcontentloaded" }),
             );
+            // Persistence is deferred beyond paint; token auth also needs its real boot receipt.
+            const snapshotDeadline = Date.now() + 10_000;
+            for (;;) {
+              const persisted = await page.evaluate(
+                async ({ sessionKey, bootRecordKey }) => {
+                  if (bootRecordKey && localStorage.getItem(bootRecordKey) === null) {
+                    return false;
+                  }
+                  const databases = await indexedDB.databases();
+                  if (!databases.some((entry) => entry.name === "openclaw-chat-snapshots")) {
+                    return false;
+                  }
+                  const database = await new Promise<IDBDatabase>((resolve, reject) => {
+                    const request = indexedDB.open("openclaw-chat-snapshots");
+                    request.addEventListener("success", () => resolve(request.result), {
+                      once: true,
+                    });
+                    request.addEventListener(
+                      "error",
+                      () => reject(request.error ?? new Error("Snapshot database failed to open")),
+                      { once: true },
+                    );
+                  });
+                  try {
+                    const request = database
+                      .transaction("snapshots", "readonly")
+                      .objectStore("snapshots")
+                      .getAll(undefined, 8);
+                    const records = await new Promise<
+                      Array<{ sessionKey: string; snapshot?: Record<string, unknown> }>
+                    >((resolve, reject) => {
+                      request.addEventListener("success", () => resolve(request.result), {
+                        once: true,
+                      });
+                      request.addEventListener(
+                        "error",
+                        () => reject(request.error ?? new Error("Snapshot read failed")),
+                        { once: true },
+                      );
+                    });
+                    return records.some(
+                      ({ sessionKey: storedKey, snapshot }) =>
+                        storedKey.endsWith(`\u0000${sessionKey}`) &&
+                        typeof snapshot?.sessionId === "string" &&
+                        typeof snapshot.deltaCursor === "string" &&
+                        snapshot.historyState !== undefined,
+                    );
+                  } finally {
+                    database.close();
+                  }
+                },
+                { sessionKey: sessionKeys[0]!, bootRecordKey: bootRecordStorageKey },
+              );
+              if (persisted) {
+                break;
+              }
+              if (Date.now() >= snapshotDeadline) {
+                throw new Error(
+                  values.auth === "token"
+                    ? "The selected transcript did not persist its warm-reload cursor and auth boot record"
+                    : "The selected transcript did not persist its warm-reload cursor",
+                );
+              }
+              await new Promise((resolve) => {
+                setTimeout(resolve, 250);
+              });
+            }
             const extensions = negotiations[0]?.extensions ?? "none";
             if (remote !== extensions.includes("permessage-deflate")) {
               throw new Error(`Unexpected WebSocket compression negotiation: ${extensions}`);
@@ -992,7 +1124,7 @@ async function runWorker() {
                   revision,
                   dirty,
                   bundle,
-                  fixture: { sessions: 2, messagesEach: 120 },
+                  fixture: { sessions: 2, messagesEach: 120, auth: values.auth },
                   measurement:
                     "Real Gateway. Synthetic offline-owned state. TCP proxy measures RFC6455 headers/payloads before delivery. HTTP encodedDataLength includes headers. Remote: shared 10 Mbps link per direction, 50 ms one-way application-stream latency, no simulated packet loss/congestion or TCP handshake latency. Readiness is first animation frame with visible enabled selectors; screenshots outside timed interval.",
                   samples,
@@ -1047,6 +1179,9 @@ if (values.worker) {
   const otherSource = values["compare-source-dir"]
     ? path.resolve(values["compare-source-dir"])
     : undefined;
+  const otherBundle = values["compare-bundle-dir"]
+    ? path.resolve(values["compare-bundle-dir"])
+    : bundle;
   if (otherSource) {
     for (const source of new Set([ownSource, otherSource])) {
       const branch = execFileSync("git", ["-C", source, "rev-parse", "--abbrev-ref", "HEAD"], {
@@ -1062,10 +1197,12 @@ if (values.worker) {
   const reports: unknown[] = [];
   if (otherSource && otherSource !== ownSource) {
     // A task-owned baseline checkout runs identical instrumentation against its source.
-    await copyFile(
-      fileURLToPath(import.meta.url),
-      path.join(otherSource, "scripts/bench-control-ui-wire.ts"),
-    );
+    for (const relative of [
+      "scripts/bench-control-ui-wire.ts",
+      "scripts/lib/control-ui-wire-link.ts",
+    ]) {
+      await copyFile(path.join(ownSource, relative), path.join(otherSource, relative));
+    }
   }
   async function collect(
     source: string,
@@ -1102,6 +1239,8 @@ if (values.worker) {
         String(workerPairs),
         "--profile",
         values.profile,
+        "--auth",
+        values.auth,
         "--output",
         workerOutput,
       ];
@@ -1187,7 +1326,7 @@ if (values.worker) {
         [ownSource, "candidate"],
       ] as const;
       for (const [source, label] of pair % 2 ? order.toReversed() : order) {
-        await collect(source, label, bundle, 1, pair);
+        await collect(source, label, label === "base" ? otherBundle : bundle, 1, pair);
       }
     }
   } else {

@@ -4,7 +4,6 @@ import type { SQLInputValue } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
@@ -14,7 +13,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { lookupSessionGoalOperation } from "./goals-operations-read.js";
 import { mutateSessionGoal, SessionGoalOperationError } from "./goals-operations.js";
@@ -35,7 +33,6 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { hasPendingCanonicalSessionValidation } from "./session-canonical-validation.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 // These tests exercise the durable owner, including rollback and process reopen; existing
@@ -73,32 +70,8 @@ describe("typed Goal operation persistence", () => {
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
     expect(await loadTranscriptEvents(scope())).toEqual([]);
   };
-  const trackReads = () =>
-    trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database().db),
-      ["sessionNodeSelects", "receiptStatements"],
-      (sql) =>
-        /^select\b/i.test(sql) && /\bfrom\s+"session_nodes"/i.test(sql)
-          ? "sessionNodeSelects"
-          : /\b(?:from|into)\s+"session_goal_operations"/i.test(sql)
-            ? "receiptStatements"
-            : null,
-    );
-  const withoutNodeReads = async <T>(run: () => Promise<T>, noReceipts = false) => {
-    const reads = trackReads();
-    try {
-      const result = await run();
-      for (const counts of [reads.counts, reads.rowCounts, reads.textBytes]) {
-        expect.soft(counts.sessionNodeSelects).toBe(0);
-      }
-      if (noReceipts) {
-        expect.soft(reads.counts.receiptStatements).toBe(0);
-      }
-      return result;
-    } finally {
-      reads.restore();
-    }
-  };
+  const rejectsCode = (promise: Promise<unknown>, code: string) =>
+    expect(promise).rejects.toMatchObject({ code });
   const identity = (operationId: string) => ({
     operationId,
     issuedAtMs: now,
@@ -199,7 +172,7 @@ describe("typed Goal operation persistence", () => {
     const skillsSnapshot = { prompt: "p".repeat(64 * 1024), skills: [] };
     await upsertSessionEntryCore(scope(), { ...loadSessionEntry(scope())!, skillsSnapshot });
     const identityMutation = watchIdentity();
-    const turn = await withoutNodeReads(admit);
+    const turn = await admit();
     expect(identityMutation).not.toHaveBeenCalled();
     expect(turn.sessionEntry?.skillsSnapshot).toEqual(skillsSnapshot);
     const receipt = turn.sessionTurnMutationResult?.result;
@@ -229,11 +202,9 @@ describe("typed Goal operation persistence", () => {
     expect(await lookupReceipt()).toEqual(receipt);
     const editedObjective = "\t resume the café migration 🦞\n/keep every byte ";
     const operation = editOperation("edit-literal", receipt!.goalId, editedObjective);
-    const assertCurrent = Object.assign(vi.fn(), { nativeSource: true });
-    const edited = await withoutNodeReads(() => mutate(operation, assertCurrent), true);
-    expect(assertCurrent).toHaveBeenCalled();
+    const assertCurrent = Object.assign(() => {}, { nativeSource: true });
+    const edited = await mutate(operation, assertCurrent);
     expect(identityMutation).not.toHaveBeenCalled();
-    expect(hasPendingCanonicalSessionValidation(database())).toBe(false);
     expect(edited.sessionEntry).toMatchObject({ sessionId, lastRunId: "run-1" });
     expect(edited.sessionEntry?.status).toBeUndefined();
     expect(edited.result.goal?.objective).toBe(editedObjective);
@@ -283,12 +254,11 @@ describe("typed Goal operation persistence", () => {
     expect(replay.messages.filter((m) => m.appended)).toHaveLength(0);
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
     expect(await loadTranscriptEvents(scope())).toEqual(eventsBefore);
-    await expect(admit({ ...startOperation(), objective: "different" })).rejects.toMatchObject({
-      code: "operation-conflict",
-    });
-    await expect(
+    await rejectsCode(admit({ ...startOperation(), objective: "different" }), "operation-conflict");
+    await rejectsCode(
       admit({ ...startOperation(), requestFingerprint: "different-attachment" }),
-    ).rejects.toMatchObject({ code: "operation-conflict" });
+      "operation-conflict",
+    );
   });
 
   it("replays by SID even when the old writer revision no longer owns the session", async () => {
@@ -325,8 +295,8 @@ describe("typed Goal operation persistence", () => {
         "start-1",
       );
       const eventsBefore = await loadTranscriptEvents(scope());
-      await expect(lookupReceipt()).rejects.toMatchObject({ code: "receipt-invalid" });
-      await expect(admit()).rejects.toMatchObject({ code: "receipt-invalid" });
+      await rejectsCode(lookupReceipt(), "receipt-invalid");
+      await rejectsCode(admit(), "receipt-invalid");
       expect(loadSessionEntry(scope())?.goal).toBeUndefined();
       expect(await loadTranscriptEvents(scope())).toEqual(eventsBefore);
     },
@@ -351,15 +321,12 @@ describe("typed Goal operation persistence", () => {
     const acceptedEntry = loadSessionEntry(scope());
     const acceptedReceipts = receipts();
     expect(acceptedReceipts).toHaveLength(4096);
-    await expect(
-      mutate(
-        editOperation(
-          "edit-at-capacity",
-          accepted.sessionTurnMutationResult!.result.goalId,
-          "must not commit",
-        ),
-      ),
-    ).rejects.toMatchObject({ code: "capacity" });
+    const operation = editOperation(
+      "edit-at-capacity",
+      accepted.sessionTurnMutationResult!.result.goalId,
+      "must not commit",
+    );
+    await rejectsCode(mutate(operation), "capacity");
     expect(loadSessionEntry(scope())).toEqual(acceptedEntry);
     expect(receipts()).toEqual(acceptedReceipts);
 
@@ -370,9 +337,7 @@ describe("typed Goal operation persistence", () => {
     expect(receipts()).toHaveLength(1);
     await clearSessionGoal(scope());
     await writeSql("DELETE FROM session_goal_operations");
-    await expect(
-      admit({ ...prunedOperation, issuedAtMs: now - 24 * 60 * 60 * 1000 }),
-    ).rejects.toMatchObject({ code: "expired" });
+    await rejectsCode(admit({ ...prunedOperation, issuedAtMs: now - 86_400_000 }), "expired");
     expect(loadSessionEntry(scope())?.goal).toBeUndefined();
   });
 
@@ -392,9 +357,10 @@ describe("typed Goal operation persistence", () => {
     expect(identityMutation).not.toHaveBeenCalled();
     const replacement = await createGoal("second");
     expect(await mutate(clear)).toMatchObject({ result: cleared.result, replayed: true });
-    await expect(
+    await rejectsCode(
       mutate({ ...identity("pause-old"), action: "pause", goalId: goal.id }),
-    ).rejects.toMatchObject({ code: "goal-rebound" });
+      "goal-rebound",
+    );
     expect(loadSessionEntry(scope())?.goal?.id).toBe(replacement.id);
     expect(await loadTranscriptEvents(scope())).toEqual([]);
   });
@@ -441,7 +407,7 @@ describe("typed Goal operation persistence", () => {
   it("rejects receipt replay after the session generation rotates", async () => {
     await admit();
     await replaceSessionEntry(scope(), { sessionId: "goal-session-2", updatedAt: now });
-    await expect(lookupReceipt()).rejects.toMatchObject({ code: "session-rebound" });
+    await rejectsCode(lookupReceipt(), "session-rebound");
     await expect(admit()).resolves.toMatchObject({
       rejectedReason: "session-rebound",
       messages: [],

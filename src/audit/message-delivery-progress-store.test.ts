@@ -17,6 +17,7 @@ import {
   pruneExpiredOutboundMessageProgressInDatabase,
   recordOutboundMessageProgressInDatabase,
 } from "./message-delivery-progress-store.js";
+import { assertMessageProgressOverflowRetention } from "./message-progress-retention.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT = 1_024;
@@ -208,5 +209,9 @@ describe("outbound message progress companion", () => {
     expect(database.prune(now)).toBe(1);
     expect(database.prune(now)).toBe(0);
     expect(database.count("audit_events")).toEqual({ count: 1 });
+  });
+
+  it("prunes overflow with one delete and retains the newest rows across sequence gaps", () => {
+    assertMessageProgressOverflowRetention(createStore().open());
   });
 });

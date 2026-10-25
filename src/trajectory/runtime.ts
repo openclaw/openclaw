@@ -1,8 +1,8 @@
 // Trajectory runtime records bounded session events into SQLite-backed storage.
 import { hash } from "node:crypto";
 import { isProxy } from "node:util/types";
-import { projectDiagnosticValue, type DiagnosticProjectionPolicy } from "@openclaw/ai/diagnostics";
-import { createDiagnosticArray, createDiagnosticRecord } from "@openclaw/ai/internal/shared";
+import type { DiagnosticProjectionPolicy } from "@openclaw/ai/diagnostics";
+import { projectPreparedDiagnosticValue } from "@openclaw/ai/internal/shared";
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
@@ -168,11 +168,7 @@ function truncateOversizedTrajectoryEvent(
 }
 
 function truncatedTrajectoryValue(reason: string, details: Record<string, unknown> = {}): unknown {
-  const record = createDiagnosticRecord();
-  record.truncated = true;
-  record.reason = reason;
-  Object.assign(record, details);
-  return record;
+  return Object.assign({ truncated: true, reason }, details);
 }
 
 function limitTrajectoryPayloadValue(
@@ -202,7 +198,7 @@ function limitTrajectoryPayloadValue(
   }
   seen.add(value);
   if (Array.isArray(value)) {
-    const limited = createDiagnosticArray();
+    const limited: unknown[] = [];
     const count = Math.min(value.length, TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS);
     for (let index = 0; index < count; index += 1) {
       limited.push(limitTrajectoryPayloadValue(value[index], depth + 1, seen));
@@ -220,7 +216,7 @@ function limitTrajectoryPayloadValue(
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  const limited = createDiagnosticRecord();
+  const limited: Record<string, unknown> = {};
   for (const key of keys.slice(0, TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS)) {
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen);
   }
@@ -247,7 +243,7 @@ function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string
       boundedData.finalPromptTextOriginalLength = finalPromptText.length;
     }
   }
-  return projectDiagnosticValue(
+  return projectPreparedDiagnosticValue(
     limitTrajectoryPayloadValue(boundedData),
     TRAJECTORY_PAYLOAD_PROJECTION,
   ) as Record<string, unknown>;
@@ -292,11 +288,11 @@ function projectTrajectoryToolParameters(parameters: unknown): unknown {
   // Publication owns immutable JSON; mutable or opaque inputs still need current bounds.
   const bounded = published ? undefined : limitTrajectoryPayloadValue(parameters);
   if (!published && !isTrajectoryJsonData(bounded)) {
-    return projectDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
+    return projectPreparedDiagnosticValue(bounded, TRAJECTORY_PAYLOAD_PROJECTION);
   }
   const content = published?.json ?? JSON.stringify(bounded);
   const project = () =>
-    projectDiagnosticValue(
+    projectPreparedDiagnosticValue(
       published ? limitTrajectoryPayloadValue(parameters) : bounded,
       TRAJECTORY_PAYLOAD_PROJECTION,
     );

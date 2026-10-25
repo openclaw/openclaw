@@ -128,7 +128,9 @@ suite.define(() => {
         async ({ page }) => {
           let currentSocket: WebSocket | undefined;
           let latestDiscovery: { socket: WebSocket; id: string; complete: boolean } | undefined;
-          let latestHistory: { socket: WebSocket; id: string; complete: boolean } | undefined;
+          let latestHistory:
+            | { socket: WebSocket; id: string; complete: boolean; initialHistory: boolean }
+            | undefined;
           page.on("websocket", (socket) => {
             currentSocket = socket;
             socket.on("framesent", ({ payload }) => {
@@ -136,13 +138,21 @@ suite.define(() => {
               if (frame.type !== "req" || typeof frame.id !== "string") {
                 return;
               }
-              if (frame.method === "chat.startup" || frame.method === "chat.history") {
-                latestHistory = { socket, id: frame.id, complete: false };
+              const params = requireRecord(frame.params);
+              const initialHistory =
+                frame.method === "sessions.messages.subscribe" &&
+                params.key === key &&
+                params.initialHistory !== undefined;
+              if (
+                initialHistory ||
+                ((frame.method === "chat.startup" || frame.method === "chat.history") &&
+                  params.sessionKey === key)
+              ) {
+                latestHistory = { socket, id: frame.id, complete: false, initialHistory };
               }
               if (frame.method !== "sessions.catalog.list") {
                 return;
               }
-              const params = requireRecord(frame.params);
               if (params.agentId === "main" && params.metadataOnly === true && !params.catalogId) {
                 latestDiscovery = { socket, id: frame.id, complete: false };
               }
@@ -163,7 +173,16 @@ suite.define(() => {
                 frame.id === latestHistory.id &&
                 latestHistory.socket === socket
               ) {
-                const historyResult = frame.ok === true ? requireRecord(frame.payload) : undefined;
+                const result = frame.ok === true ? requireRecord(frame.payload) : undefined;
+                const initialHistory =
+                  result && latestHistory.initialHistory
+                    ? requireRecord(result.initialHistory)
+                    : undefined;
+                const historyResult = latestHistory.initialHistory
+                  ? initialHistory?.ok === true
+                    ? requireRecord(initialHistory.payload)
+                    : undefined
+                  : result;
                 latestHistory.complete =
                   historyResult !== undefined &&
                   historyResult.kind !== "reset" &&

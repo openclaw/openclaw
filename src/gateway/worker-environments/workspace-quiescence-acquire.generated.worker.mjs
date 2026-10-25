@@ -125,6 +125,32 @@ process.argv.splice(1, 1);
       database.close();
     }
   }
+  function acquireWindowsWorkspaceLease(nonce, watchdogTimeoutMs) {
+    withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (!/^[a-f0-9]{32}$/.test(parsed?.nonce || "")) {
+          throw new Error("invalid Windows shared-host workspace quiescence lease");
+        }
+        const candidate = parseWindowsLease(raw, parsed.nonce);
+        if (candidate.expiresAtMs > Date.now()) {
+          throw new Error("workspace quiescence lease is already active");
+        }
+      }
+      const lease = {
+        version: 1,
+        nonce,
+        sharedHost: true,
+        processes: [],
+        watchdog: null,
+        expiresAtMs: Date.now() + watchdogTimeoutMs,
+      };
+      return JSON.stringify(lease);
+    });
+    process.stderr.write(
+      "workspace quiescence: Windows shared host declared; using manifest fences without process freezing\n",
+    );
+  }
   function createProcessProbe() {
     // Share 30s across probes: tolerate multi-second stalls on slow hosts while leaving
     // the node transport's 60s command deadline room to deliver the failure and cleanup.
@@ -473,30 +499,7 @@ process.argv.splice(1, 1);
   }
   function acquireWorkspaceLease() {
     if (process.platform === "win32" && sharedHost) {
-      withWindowsWorkspaceLease(windowsLeaseDatabasePath, workspaceKey, (raw) => {
-        if (raw !== null) {
-          const parsed = JSON.parse(raw);
-          if (!/^[a-f0-9]{32}$/.test(parsed?.nonce || "")) {
-            throw new Error("invalid Windows shared-host workspace quiescence lease");
-          }
-          const candidate = parseWindowsLease(raw, parsed.nonce);
-          if (candidate.expiresAtMs > Date.now()) {
-            throw new Error("workspace quiescence lease is already active");
-          }
-        }
-        const lease = {
-          version: 1,
-          nonce,
-          sharedHost: true,
-          processes: [],
-          watchdog: null,
-          expiresAtMs: Date.now() + watchdogTimeoutMs,
-        };
-        return JSON.stringify(lease);
-      });
-      process.stderr.write(
-        "workspace quiescence: Windows shared host declared; using manifest fences without process freezing\n",
-      );
+      acquireWindowsWorkspaceLease(nonce, watchdogTimeoutMs);
       return;
     }
     if (typeof process.getuid !== "function")

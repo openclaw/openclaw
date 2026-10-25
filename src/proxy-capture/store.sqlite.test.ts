@@ -669,6 +669,16 @@ describe("DebugProxyCaptureStore", () => {
       upsertSession(store, { id: sessionId, startedAt: Date.now() });
       recordEvent(store, { sessionId, ...sharedPayload });
     }
+    const db = requireNativeSqliteDatabase(store.db);
+    const prepare = db.prepare.bind(db);
+    const deletionCounts: MockInstance[] = [];
+    vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (/^select count\(\*\).* from "capture_(?:events|sessions)"/i.test(sql)) {
+        deletionCounts.push(vi.spyOn(statement, "get"));
+      }
+      return statement;
+    });
 
     const result = store.deleteSessions([" session-a ", "session-a", "", " "]);
 
@@ -678,6 +688,7 @@ describe("DebugProxyCaptureStore", () => {
 
     expect(store.deleteSessions(["session-b"])).toEqual({ sessions: 1, events: 1, blobs: 1 });
     expect(store.readBlob(sharedPayload.dataBlobId ?? "")).toBeNull();
+    expect(deletionCounts.reduce((total, query) => total + query.mock.calls.length, 0)).toBe(0);
     store.persistPayload(Buffer.from("unreferenced capture"));
     if (kind === "path") {
       fs.writeFileSync(path.join(blobDir, "extra-artifact.txt"), "capture artifact");

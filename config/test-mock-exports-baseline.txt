@@ -933,8 +933,6 @@
 ["extensions/slack/src/doctor.test.ts","./probe.js","efebef2778dbd57053b52de112a1aa77ae8fa5034bf5cb66ac5f6a3990b577da",1]
 ["extensions/slack/src/enterprise-user-route.test.ts","./client.js","35860343e9b493d159c5a01ea409b941029089adb91f0e87a8bf57299d652a50",1]
 ["extensions/slack/src/monitor.test-helpers.ts","./resolve-channels.js","3118d71073e81f4431c4b72400e2f7a11a5c4f135837d6ed7dd3e2c56b712658",1]
-["extensions/slack/src/monitor.test-helpers.ts","./resolve-users.js","25c5edfe2b84221e03e9aaef82c1fc4d056d785e001479904e710eea501ccae4",1]
-["extensions/slack/src/monitor.test-helpers.ts","./send.js","4aa8787e42040934a04d19eff840ce3397b1805fa4a060e1d7d200c2f4b0c6de",1]
 ["extensions/slack/src/monitor/events/channels.test.ts","openclaw/plugin-sdk/channel-config-writes","0feaefabfaa3712abc7ffdfa74ec91c9b0f41fad96bc27d2fbf56e22b45e6299",1]
 ["extensions/slack/src/monitor/events/channels.test.ts","openclaw/plugin-sdk/config-mutation","18ff8d6e6cb39b5e721d8f805cb963d82373c753bb4c82e7f0e7b483485dec13",1]
 ["extensions/slack/src/monitor/events/channels.test.ts","openclaw/plugin-sdk/system-event-runtime","59e2e9c873bef9f96e9062ec27848ea426a3bf3768a2a28fe4ec9fcc5d5891b0",1]

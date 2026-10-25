@@ -115,7 +115,9 @@ export function serializeGatewayFrame(value: unknown): string | SerializedGatewa
   const payload = frame?.type === "res" ? asOptionalRecord(frame.payload) : undefined;
   // Subscription admission nests the same list response one level below payload.
   const list = payload && asOptionalRecord(Object.getOwnPropertyDescriptor(payload, "list")?.value);
-  const arrayOwner = [payload, list].find(
+  const initialHistory = payload && asOptionalRecord(payload.initialHistory);
+  const history = initialHistory && asOptionalRecord(initialHistory.payload);
+  const arrayOwner = [payload, list, history].find(
     (record) =>
       record &&
       typeof record.toJSON !== "function" &&
@@ -140,7 +142,13 @@ export function serializeGatewayFrame(value: unknown): string | SerializedGatewa
       const field = record[key];
       const rawArray = record === arrayOwner ? arrayBytes(field) : undefined;
       const nestedPayload =
-        field === payload ? payload : field === arrayOwner ? arrayOwner : undefined;
+        field === payload
+          ? payload
+          : field === initialHistory
+            ? initialHistory
+            : field === arrayOwner
+              ? arrayOwner
+              : undefined;
       const encoded = rawArray || nestedPayload ? `${JSON.stringify(key)}:` : fieldJson(key, field);
       if (!encoded) {
         continue;

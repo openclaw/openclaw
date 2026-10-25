@@ -1,13 +1,14 @@
+import assert from "node:assert/strict";
 // Real HTTP model/tool, committed child settlement, and WebSocket reply effects.
 // Do not import test-helpers.js: that graph replaces the agent execution boundary.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import assert from "node:assert/strict";
 import { randomUUID, X509Certificate } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { UsersSelfResult } from "../../packages/gateway-protocol/src/schema/users.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
@@ -33,7 +34,6 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import {
@@ -296,7 +296,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
           return;
         }
         assert(request.method === "POST" && request.url === "/v1/responses");
-        const body = await readProviderBody(request);
+        const body = await readRequestText(request);
         const parsed = asOptionalRecord(JSON.parse(body) as unknown);
         if (parsed?.model === "forbidden-effect") {
           forbiddenRequests.push(body);

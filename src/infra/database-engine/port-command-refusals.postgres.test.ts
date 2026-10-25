@@ -53,7 +53,7 @@ it.skipIf(!connection)(
     seedPortSqlite(
       sourcePath,
       `${metadata.sqlite};
-      INSERT INTO workboard_schema_migrations VALUES ('schema-3', 1);
+      INSERT INTO workboard_schema_migrations VALUES ('schema-${metadata.version}', 1);
       INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', 'private-payload', 1, 1)`,
     );
     const original = await hash(sourcePath);
