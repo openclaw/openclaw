@@ -140,7 +140,7 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
         publishedIdentity: originalDatabase.facts.serialized,
         progress: {
           memoryComplete: false,
-          cachePrunePending: true,
+          cachePrunePending: false,
           completedSessionFiles: new Set(),
           changedSessionFiles: new Set(),
           changedSessionTargets: new Map(),

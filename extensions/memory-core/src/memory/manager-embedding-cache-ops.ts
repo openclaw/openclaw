@@ -258,6 +258,10 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       if (accepted.length === 0) {
         return;
       }
+      const reindex = this.reindexProgress;
+      if (reindex) {
+        reindex.cachePrunePending = true;
+      }
       await this.withGeneratedEmbeddingCacheWrite(generation, {
         kind: "upsert",
         header: {
