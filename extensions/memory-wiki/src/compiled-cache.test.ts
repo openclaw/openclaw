@@ -120,7 +120,7 @@ describe("Memory Wiki compiled publication ownership", () => {
           }),
           lookup: vi.fn(async (key: string) => (entry?.key === key ? entry : undefined)),
           registerIfAbsent: vi.fn(),
-          entries: vi.fn(),
+          entries: vi.fn(async () => (entry ? [entry] : [])),
           delete: vi.fn(),
           deleteExpiredKey: vi.fn(),
           deleteExpired: vi.fn(),
