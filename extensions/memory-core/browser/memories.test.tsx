@@ -36,33 +36,23 @@ function createElement(request: Request, advertised = true, agentId: string | nu
   });
   const { container, update } = mountSettingsView(memoriesView, context);
   disposers.push(() => lifetime.abort());
-  return Object.assign(container, {
-    retire: () => lifetime.abort(),
-    update,
-    formatError,
-  });
+  return Object.assign(container, { retire: () => lifetime.abort(), update, formatError });
 }
 
-function typeQuery(element: HTMLElement, query: string) {
+const input = (element: HTMLElement) =>
+  element.querySelector<HTMLInputElement>("#memory-search-input")!;
+const submitButton = (element: HTMLElement) =>
+  element.querySelector<HTMLButtonElement>('button[type="submit"]');
+function search(element: HTMLElement, query = "Ada", submit = true) {
   flush();
-  const input = element.querySelector<HTMLInputElement>("#memory-search-input");
-  if (!input) {
-    throw new Error("missing memory search input");
+  input(element).value = query;
+  input(element).dispatchEvent(new InputEvent("input", { bubbles: true }));
+  flush();
+  if (submit) {
+    element
+      .querySelector("form")
+      ?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
   }
-  input.value = query;
-  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  flush();
-}
-
-function submit(element: HTMLElement) {
-  element
-    .querySelector("form")
-    ?.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
-}
-
-function search(element: HTMLElement, query = "Ada") {
-  typeQuery(element, query);
-  submit(element);
 }
 function searchElement(request: Request, query = "Ada") {
   const element = createElement(request);
@@ -85,11 +75,10 @@ function searchResponse(
 ): MemorySearchResponse {
   return { agentId: "main", provider: "local", searchMode: "hybrid", results, ...overrides };
 }
-
 function fileReads(request: { mock: { calls: Array<[string, ...unknown[]]> } }) {
   return request.mock.calls.filter(([method]) => method === "agents.workspace.get");
 }
-
+const matchedContent = "first\nmatched two\nmatched three";
 const memoryFileResponse = (content: string) => ({ file: { encoding: "utf8", content } });
 function requestFiles(read: Request, results = [result]) {
   return vi.fn<Request>((method, params) =>
@@ -113,18 +102,18 @@ describe("Memory Core indexed-search presentation", () => {
   it("loads changed locales without replacing the search input or its draft", async () => {
     const request = vi.fn<Request>().mockResolvedValue(searchResponse([]));
     const element = createElement(request);
-    const input = element.querySelector<HTMLInputElement>("#memory-search-input")!;
-    typeQuery(element, "Ada");
+    const originalInput = input(element);
+    search(element, "Ada", false);
     element.update({ locale: "fr" });
     await waitForSolid(() =>
-      expect(input.placeholder).toBe("Rechercher dans les souvenirs de cet agent"),
+      expect(originalInput.placeholder).toBe("Rechercher dans les souvenirs de cet agent"),
     );
-    expect(element.querySelector("#memory-search-input")).toBe(input);
-    expect(input.value).toBe("Ada");
+    expect(input(element)).toBe(originalInput);
+    expect(originalInput.value).toBe("Ada");
     expect(request).not.toHaveBeenCalled();
     element.update({ locale: "en" });
-    expect(input.placeholder).toBe("Search this agent's memories");
-    expect(input.value).toBe("Ada");
+    expect(originalInput.placeholder).toBe("Search this agent's memories");
+    expect(originalInput.value).toBe("Ada");
   });
 
   it.each(["search", "detail"])("ignores retired %s errors before formatting", async (stage) => {
@@ -161,39 +150,39 @@ describe("Memory Core indexed-search presentation", () => {
   it("keeps search disabled when no agent is available", () => {
     const request = vi.fn<Request>().mockResolvedValue({});
     const element = createElement(request, true, null);
-    typeQuery(element, "Ada");
-    expect(element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
-    submit(element);
+    search(element, "Ada", false);
+    expect(submitButton(element)?.disabled).toBe(true);
+    search(element);
     expect(request).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])("retries failed searches only when connected=%s", async (connected) => {
+  it("blocks offline retries and retries the search after reconnecting", async () => {
     const retried = deferred<MemorySearchResponse>();
     const request = vi
       .fn<Request>()
       .mockRejectedValueOnce(new Error("index unavailable"))
       .mockReturnValueOnce(retried.promise);
     const element = searchElement(request, "missing");
-    const input = element.querySelector("input");
-    const submitButton = element.querySelector<HTMLButtonElement>('button[type="submit"]');
+    const originalInput = input(element);
+    const originalSubmit = submitButton(element);
     await waitText(element, "index unavailable");
-    if (!connected) {
-      element.update({ connected: false, connectionEpoch: 2 });
-    }
-    expect(retry(element)?.disabled).toBe(!connected);
+    element.update({ connected: false, connectionEpoch: 2 });
+    expect(retry(element)?.disabled).toBe(true);
     retry(element)?.click();
-    if (connected) {
-      await waitText(element, "Searching");
-      expect(element.textContent).not.toContain("index unavailable");
-      expect(element.querySelector("input")).toBe(input);
-      expect(element.querySelector('button[type="submit"]')).toBe(submitButton);
-      expect(submitButton?.disabled).toBe(true);
-      retried.resolve(searchResponse([], { provider: "none", searchMode: "fts-only" }));
-      await waitText(element, "No memories matched");
-      expect(element.textContent).toContain("keyword search");
-      expect(submitButton?.disabled).toBe(false);
-    }
-    expect(request).toHaveBeenCalledTimes(connected ? 2 : 1);
+    expect(request).toHaveBeenCalledTimes(1);
+    element.update({ connected: true, connectionEpoch: 3 });
+    expect(retry(element)?.disabled).toBe(false);
+    retry(element)?.click();
+    await waitText(element, "Searching");
+    expect(element.textContent).not.toContain("index unavailable");
+    expect(input(element)).toBe(originalInput);
+    expect(submitButton(element)).toBe(originalSubmit);
+    expect(originalSubmit?.disabled).toBe(true);
+    retried.resolve(searchResponse([], { provider: "none", searchMode: "fts-only" }));
+    await waitText(element, "No memories matched");
+    expect(element.textContent).toContain("keyword search");
+    expect(originalSubmit?.disabled).toBe(false);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("shares pending and loaded files across matches while keeping each row's highlight", async () => {
@@ -220,7 +209,7 @@ describe("Memory Core indexed-search presentation", () => {
     expect(element.querySelectorAll(".memory-memories__detail")).toHaveLength(1);
     expect(fileReads(request)).toHaveLength(1);
 
-    pending.resolve(memoryFileResponse("first\nmatched two\nmatched three\nfourth"));
+    pending.resolve(memoryFileResponse(`${matchedContent}\nfourth`));
     await waitMatch(element, "first");
     rows[0]?.click();
     flush();
@@ -262,14 +251,6 @@ describe("Memory Core indexed-search presentation", () => {
     expect(fileReads(request)).toHaveLength(0);
   });
 
-  it("keeps workspace read failures on the expanded row", async () => {
-    const request = requestFiles(() => Promise.reject(new Error("workspace file not found")));
-    const element = searchElement(request);
-    await openResult(element);
-    await waitText(element, "Could not load this memory file: workspace file not found");
-    expectText(element, [result.snippet], ["Memory search failed"]);
-  });
-
   it.each(["resolves", "rejects"] as const)("ignores stale %s reads", async (outcome) => {
     const previous = deferred<unknown>();
     const current = deferred<unknown>();
@@ -302,15 +283,15 @@ describe("Memory Core indexed-search presentation", () => {
       .fn<Request>()
       .mockResolvedValueOnce(searchResponse([result]))
       .mockRejectedValueOnce(new Error("gateway closed"))
-      .mockResolvedValueOnce(memoryFileResponse("first\nmatched two\nmatched three"));
+      .mockResolvedValueOnce(memoryFileResponse(matchedContent));
     const element = searchElement(request);
     await openResult(element);
-    await waitText(element, "gateway closed");
-
+    await waitText(element, "Could not load this memory file: gateway closed");
+    expectText(element, [result.snippet], ["Memory search failed"]);
     element.update({ connected: false, connectionEpoch: 2 });
-    expect(element.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+    expect(submitButton(element)?.disabled).toBe(true);
     element.update({ connected: true, connectionEpoch: 3 });
-    expect(element.querySelector<HTMLInputElement>("#memory-search-input")?.value).toBe("Ada");
+    expect(input(element).value).toBe("Ada");
     expect(element.textContent).toContain(result.snippet);
     expect(request.mock.calls.filter(([method]) => method === "memory.search")).toHaveLength(1);
 
