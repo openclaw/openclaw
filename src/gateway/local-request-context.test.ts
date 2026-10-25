@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -39,6 +39,12 @@ type PublishedOwnerSnapshot = Awaited<
 
 const asPublishedOwner = (value: PublishedModelCatalogOwnerCandidate): PublishedOwnerSnapshot =>
   value as unknown as PublishedOwnerSnapshot;
+const spyOnLoadOwner = () =>
+  vi.spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot");
+const spyOnReadOwner = () =>
+  vi.spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot");
+
+afterEach(() => vi.restoreAllMocks());
 
 function modelFixture(agentId: string, prefix: string) {
   const agentDir = `/tmp/${prefix}-agent`;
@@ -152,9 +158,7 @@ describe("local gateway request context", () => {
 
   it("defaults local model catalog snapshot reads to read-only", async () => {
     const { cfg, candidate } = modelFixture("worker", "local-model-catalog");
-    const loadOwner = vi
-      .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockResolvedValue(asPublishedOwner(candidate));
+    const loadOwner = spyOnLoadOwner().mockResolvedValue(asPublishedOwner(candidate));
 
     await withConfig(cfg, async () => {
       expect(
@@ -163,7 +167,6 @@ describe("local gateway request context", () => {
     });
 
     expect(loadOwner).toHaveBeenCalledWith({ agentId: "worker", config: cfg, readOnly: true });
-    loadOwner.mockRestore();
   });
 
   it("refreshes local models.list auth after login and logout", async () => {
@@ -175,37 +178,27 @@ describe("local gateway request context", () => {
       api: "openai-completions" as const,
     };
     const candidate = { ...base, modelCatalog: { entries: [model], routeVariants: [model] } };
-    const refreshAuth = vi
-      .fn()
-      .mockResolvedValueOnce({
-        authModes: { "local-auth-provider": "api_key" },
-        authStore: {
-          version: 1,
-          profiles: {
-            "local-auth-provider:default": {
-              type: "api_key",
-              provider: "local-auth-provider",
-              key: "local-auth-key-not-real",
-            },
+    let published: PublishedOwnerSnapshot | undefined;
+    spyOnReadOwner().mockImplementation(() => published);
+    let next = asPublishedOwner({
+      ...candidate,
+      authModes: { "local-auth-provider": "api_key" },
+      authStore: {
+        version: 1,
+        profiles: {
+          "local-auth-provider:default": {
+            type: "api_key",
+            provider: "local-auth-provider",
+            key: "local-auth-key-not-real",
           },
         },
-      })
-      .mockResolvedValueOnce({ authModes: {}, authStore: { version: 1, profiles: {} } });
-    let published: PublishedOwnerSnapshot | undefined;
-    const readOwner = vi
-      .spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockImplementation(() => published);
-    const loadOwner = vi
-      .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockImplementation(async () => {
-        const auth = await refreshAuth({ providerIds: ["local-auth-provider"] });
-        published = asPublishedOwner({
-          ...candidate,
-          authModes: auth.authModes,
-          authStore: auth.authStore,
-        });
-        return published;
-      });
+      },
+    });
+    const loadOwner = spyOnLoadOwner().mockImplementation(async () => {
+      published = next;
+      next = asPublishedOwner(candidate);
+      return published;
+    });
 
     const list = () =>
       withConfig(cfg, () =>
@@ -220,25 +213,21 @@ describe("local gateway request context", () => {
     });
     expect(loggedOut).toMatchObject({ ok: true, payload: { models: [] } });
     for (const call of [1, 2]) {
-      expect(refreshAuth).toHaveBeenNthCalledWith(call, { providerIds: ["local-auth-provider"] });
       expect(loadOwner).toHaveBeenNthCalledWith(
         call,
         expect.objectContaining({ readOnly: false, refreshFullCatalog: true }),
       );
     }
-    loadOwner.mockRestore();
-    readOwner.mockRestore();
   });
 
   it("uses the prepared local owner without starting a catalog load", async () => {
     const { cfg, candidate } = modelFixture("main", "local-model-timeout");
-    const loadOwner = vi
-      .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockImplementation(() => new Promise(() => {}));
+    const loadOwner = spyOnLoadOwner().mockImplementation(() => new Promise(() => {}));
     const recheckNativeLogin = vi.fn();
-    const readOwner = vi
-      .spyOn(preparedModelCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
-      .mockReturnValue({ ...asPublishedOwner(candidate), recheckNativeLogin });
+    const readOwner = spyOnReadOwner().mockReturnValue({
+      ...asPublishedOwner(candidate),
+      recheckNativeLogin,
+    });
 
     const result = await withConfig(cfg, () =>
       dispatchGatewayMethodInProcessRaw("models.list", { view: "default" }),
@@ -248,8 +237,6 @@ describe("local gateway request context", () => {
     expect(loadOwner).not.toHaveBeenCalled();
     expect(readOwner).toHaveBeenCalledTimes(2);
     expect(recheckNativeLogin).toHaveBeenCalledOnce();
-    loadOwner.mockRestore();
-    readOwner.mockRestore();
   });
 
   it("commits agent deletion through the canonical cron store", async () => {

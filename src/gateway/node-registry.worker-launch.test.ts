@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../infra/node-commands.js";
+import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND as LAUNCH } from "../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import {
   testNodeWorkerLaunchIdentity,
@@ -40,6 +40,12 @@ describe("private worker launch wire", () => {
       ok: true,
       payloadJSON: JSON.stringify(payload),
     });
+  const launchParams = (input: ReturnType<typeof testWorkerLaunchInput>) => ({
+    command: LAUNCH,
+    params: input,
+    timeoutMs: 0,
+    idempotencyKey: input.launchId,
+  });
   const startLaunch = (
     input: Parameters<ReturnType<typeof createNodeWorkerLaunchAdapter>["launch"]>[0]["input"],
     timeoutMs: number,
@@ -78,14 +84,7 @@ describe("private worker launch wire", () => {
     const nodeClient = makeClient(connId, nodeId, [], {
       socket: gatewayTestTextTransport(socket),
       clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      version: "test",
-      platform: "test",
-      commands: [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
-    });
-    Object.assign(nodeClient.connect.device!, {
-      publicKey: "fixture",
-      signature: "fixture",
-      nonce: "fixture",
+      commands: [LAUNCH],
     });
     nodeRegistry.register(nodeClient, {
       pairingIdentity: "fixture-pairing",
@@ -128,10 +127,7 @@ describe("private worker launch wire", () => {
         buildNodeInvokeRequest({
           id: "00000000-0000-0000-0000-000000000000",
           nodeId,
-          command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
-          params: input,
-          timeoutMs: 0,
-          idempotencyKey: input.launchId,
+          ...launchParams(input),
         }),
       );
     const targetBytes = WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES + delta;
@@ -153,10 +149,7 @@ describe("private worker launch wire", () => {
     try {
       const result = await nodeWorkerSupervisorTransport.invoke({
         node,
-        command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
-        params: input,
-        timeoutMs: 0,
-        idempotencyKey: input.launchId,
+        ...launchParams(input),
         isDispatchAuthorized: () => true,
         onDispatchReady: dispatched,
       });
@@ -185,10 +178,6 @@ describe("private worker launch wire", () => {
         expect(sent).not.toHaveBeenCalled();
         expect(dispatched).not.toHaveBeenCalled();
       }
-      console.info(
-        "worker-node-frame",
-        JSON.stringify({ bytes: targetBytes, dispatched: result.ok }),
-      );
     } finally {
       sent.mockRestore();
     }
@@ -213,8 +202,7 @@ describe("private worker launch wire", () => {
     try {
       const [data] = await received;
       const request = JSON.parse(Buffer.from(data).toString("utf8"));
-      expect(request.event).toBe("node.invoke.request");
-      expect(request.payload.command).toBe(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
+      expect(request).toMatchObject({ event: "node.invoke.request", payload: { command: LAUNCH } });
       expect(dispatched).toHaveBeenCalledOnce();
 
       await vi.advanceTimersByTimeAsync(11_000);

@@ -194,27 +194,15 @@ export async function prepareManagedSessionStore(stateDir: string): Promise<stri
   closeOpenClawAgentDatabasesForTest();
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const storePath = path.join(stateDir, "sessions.sqlite");
-  const { replaceSessionEntrySync } = await import("../config/sessions/session-accessor.js");
-  replaceSessionEntrySync(
-    {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    },
-    { sessionId: "sess-1", updatedAt: Date.now() },
-  );
+  const scope = { agentId: "main", env, sessionKey: "agent:main:main", storePath };
+  await replaceTestSessionEntry(scope, { sessionId: "sess-1", updatedAt: Date.now() });
   closeOpenClawAgentDatabasesForTest();
   const { loadExactSessionEntryReadOnlyResult } =
     await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
-  expect(
-    loadExactSessionEntryReadOnlyResult({
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    }),
-  ).toMatchObject({ found: true, value: { sessionKey: "agent:main:main" } });
+  expect(loadExactSessionEntryReadOnlyResult(scope)).toMatchObject({
+    found: true,
+    value: { sessionKey: "agent:main:main" },
+  });
   return storePath;
 }
 
