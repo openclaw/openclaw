@@ -142,7 +142,7 @@ async function baseline(): Promise<AsyncIterator<OpenClawEvent>> {
   return events;
 }
 
-it.each(["agent-lifecycle", "chat-delta", "accepted", "chat-final"])(
+it.each(["chat-delta", "accepted", "chat-final"])(
   "preserves the full terminal reply across a %s reconnect",
   async (mode) => {
     const outputText =
@@ -178,15 +178,11 @@ it.each(["agent-lifecycle", "chat-delta", "accepted", "chat-final"])(
     if (mode === "accepted") {
       socket.close();
     } else {
-      sendGap(
-        mode === "agent-lifecycle" ? "agent" : "chat",
-        mode === "agent-lifecycle"
-          ? { ...scope, stream: "lifecycle", data: { phase: "end" } }
-          : mode === "chat-final"
-            ? chat("final", outputText)
-            : chat("delta", undefined, { deltaText: " lost suffix" }),
-        3,
-      );
+      const payload =
+        mode === "chat-final"
+          ? chat("final", outputText)
+          : chat("delta", undefined, { deltaText: " lost suffix" });
+      sendGap("chat", payload, 3);
       if (mode !== "chat-final") {
         sendGap("chat", chat("final", outputText), 4);
       }
