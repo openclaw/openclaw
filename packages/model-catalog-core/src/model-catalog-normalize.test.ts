@@ -1,13 +1,21 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   normalizeModelCatalog,
   normalizeModelCatalogProviderRows,
 } from "./model-catalog-normalize.js";
 import type { ModelCatalogProvider } from "./model-catalog-types.js";
+import {
+  parseRemoteModelCatalogBundle as parseV1,
+  parseRemoteModelCatalogBundleV2 as parseV2,
+  parseRemoteModelCatalogBundleV3 as parseV3,
+  validateAndSanitizeRemoteModelCatalogBundle as sanitizeV1,
+  validateAndSanitizeRemoteModelCatalogBundleV2 as sanitizeV2,
+  validateAndSanitizeRemoteModelCatalogBundleV3 as sanitizeV3,
+} from "./remote-catalog-bundle.js";
 
 const normalize = (value: unknown, ownedProviders = [" OpenAI "]) =>
   normalizeModelCatalog(structuredClone(value), { ownedProviders: new Set(ownedProviders) });
-const models = (...rows: unknown[]) =>
+const normalizeModels = (...rows: unknown[]) =>
   normalize({ providers: { OpenAI: { models: rows } } })?.providers?.openai?.models;
 const normalizeRows = (providerCatalog: ModelCatalogProvider) =>
   normalizeModelCatalogProviderRows({ provider: " OpenAI ", providerCatalog, source: "manifest" });
@@ -16,56 +24,46 @@ const windows = [
   { id: "1m", label: "1M", contextWindow: 1_000_000 },
 ];
 
-it("normalizes owned providers, aliases, suppression scopes and defaults", () => {
-  const provider = { api: "openai-responses", baseUrl: "https://api.test", headers: { x: "y" } };
-  expect(
-    normalize({
-      providers: {
-        OpenAI: {
-          ...provider,
-          defaultModel: " m ",
-          defaultUtilityModel: " u ",
-          models: [{ id: "m" }, { id: "" }],
-        },
-        other: { models: [{ id: "x" }] },
+const wire = { api: "openai-responses", baseUrl: "https://api.test", headers: { x: "y" } };
+const scope = { baseUrlHosts: ["api.test"], providerConfigApiIn: ["qwen", "modelstudio"] };
+const suppression = { provider: "alias", model: "m", reason: "retired", when: scope };
+it.each<[string, unknown, unknown]>([
+  [
+    "providers",
+    {
+      OpenAI: {
+        ...wire,
+        defaultModel: " m ",
+        defaultUtilityModel: " u ",
+        models: [{ id: "m" }, { id: "" }],
       },
-      aliases: {
-        Alias: { provider: "OpenAI", api: "azure-openai-responses" },
-        other: { provider: "other" },
-      },
-      suppressions: [
-        {
-          provider: "Alias",
-          model: "m",
-          reason: "retired",
-          when: {
-            baseUrlHosts: ["API.TEST"],
-            providerConfigApiIn: ["Qwen", "ModelStudio"],
-          },
-        },
-      ],
-      discovery: { OpenAI: "static", other: "static", bad: "unknown" },
-      runtimeAugment: true,
-    }),
-  ).toEqual({
-    providers: {
-      openai: { ...provider, defaultModel: "m", defaultUtilityModel: "u", models: [{ id: "m" }] },
+      other: { models: [{ id: "x" }] },
     },
-    aliases: { alias: { provider: "openai", api: "azure-openai-responses" } },
-    suppressions: [
+    { openai: { ...wire, defaultModel: "m", defaultUtilityModel: "u", models: [{ id: "m" }] } },
+  ],
+  [
+    "aliases",
+    { Alias: { provider: "OpenAI", api: "azure-openai-responses" }, other: { provider: "other" } },
+    { alias: { provider: "openai", api: "azure-openai-responses" } },
+  ],
+  [
+    "suppressions",
+    [
       {
-        provider: "alias",
-        model: "m",
-        reason: "retired",
+        ...suppression,
+        provider: "Alias",
         when: {
-          baseUrlHosts: ["api.test"],
-          providerConfigApiIn: ["qwen", "modelstudio"],
+          baseUrlHosts: ["API.TEST"],
+          providerConfigApiIn: ["Qwen", "ModelStudio"],
         },
       },
     ],
-    discovery: { openai: "static" },
-    runtimeAugment: true,
-  });
+    [suppression],
+  ],
+  ["discovery", { OpenAI: "static", other: "static", bad: "unknown" }, { openai: "static" }],
+  ["runtimeAugment", true, true],
+])("normalizes catalog %s within provider ownership", (field, raw, expected) => {
+  expect(normalize({ [field]: raw })).toEqual({ [field]: expected });
 });
 
 it("keeps only explicit owned models.dev mappings without creating provider rows", () => {
@@ -89,7 +87,8 @@ it("keeps only explicit owned models.dev mappings without creating provider rows
 
 it("sorts rows, drops invalid ids and upstream ids, merges transport and fills defaults", () => {
   const transport = { api: "openai-responses", baseUrl: "https://api.test" } as const;
-  const mediaInput = { image: { tokenMode: "detail", maxBytes: 1 } } as const;
+  const image = { maxBytes: 4096, maxPixels: 1024, maxSidePx: 64, preferredSidePx: 32 };
+  const mediaInput = { image: { ...image, tokenMode: "detail" } } as const;
   const defaults = {
     ...transport,
     provider: "openai",
@@ -131,18 +130,12 @@ it("sorts rows, drops invalid ids and upstream ids, merges transport and fills d
   ]);
 });
 
-it.each<[string, unknown]>([
+it.each<[string, unknown, unknown?]>([
   ["supportsTools", true],
   ["sendSessionIdHeader", false],
   ["cacheControlFormat", "anthropic"],
   ["maxTokensField", "max_completion_tokens"],
   ["thinkingFormat", "openrouter"],
-])("preserves compatibility %s", (field, value) => {
-  const compat = { [field]: value };
-  expect(models({ id: "m", compat })).toEqual([{ id: "m", compat }]);
-});
-
-it.each<[string, unknown, unknown]>([
   ["codeMode", " preferred ", "preferred"],
   ["toolSchemaProfile", " strict ", "strict"],
   ["toolCallArgumentsEncoding", " json ", "json"],
@@ -156,37 +149,18 @@ it.each<[string, unknown, unknown]>([
     { only: [" openai "], order: [" anthropic ", "", 1] },
     { only: ["openai"], order: ["anthropic"] },
   ],
-])("normalizes compatibility %s", (field, raw, expected) => {
-  expect(models({ id: "m", compat: { [field]: raw } })).toEqual([
+])("normalizes compatibility %s", (field, raw, expected = raw) => {
+  expect(normalizeModels({ id: "m", compat: { [field]: raw } })).toEqual([
     { id: "m", compat: { [field]: expected } },
   ]);
 });
 
 it("normalizes model selections, lists, prices and safe headers", () => {
-  const metadata = {
-    name: "GPT-5.4",
-    reasoning: true,
-    contextWindow: 256000,
-    contextTokens: 200000,
-    status: "preview",
-    statusReason: "rolling out",
-    replacedBy: "gpt-5.5",
-    mediaInput: {
-      image: {
-        maxBytes: 4096,
-        maxPixels: 1024,
-        maxSidePx: 64,
-        preferredSidePx: 32,
-        tokenMode: "tile",
-      },
-    },
-  };
   const tier = { input: 0, output: 2, cacheRead: 0, cacheWrite: 1, range: [128] };
   const bounded = { ...tier, input: 1, range: [0, 256000] };
   const cost = { input: 0, output: 2, cacheRead: 0.125, cacheWrite: 1 };
   expect(
-    models({
-      ...metadata,
+    normalizeModels({
       id: " m ",
       input: ["text", "image", "video", "document", "audio"],
       contextWindows: [
@@ -211,7 +185,6 @@ it("normalizes model selections, lists, prices and safe headers", () => {
     }),
   ).toEqual([
     {
-      ...metadata,
       id: "m",
       input: ["text", "image", "video", "document"],
       contextWindows: windows,
@@ -242,7 +215,7 @@ it("normalizes routing and drops malformed compatibility fields", () => {
     preferred_max_latency: 1,
   };
   expect(
-    models(
+    normalizeModels(
       {
         id: "m",
         compat: {
@@ -276,13 +249,8 @@ it.each([null, { suppressions: [{ provider: "openai" }] }, { modelsDev: { openai
 );
 
 it("drops the selection tuple with an undeclared default", () => {
-  const contextWindows = Array.from({ length: 20 }, (_, i) => ({
-    id: `window-${i}`,
-    label: `Window ${i}`,
-    contextWindow: 20 - i,
-  }));
   const [row] = normalizeRows({
-    models: [{ id: "m", contextWindows, contextWindowDefault: "missing" }],
+    models: [{ id: "m", contextWindows: windows, contextWindowDefault: "missing" }],
   });
   expect([row?.contextWindows, row?.contextWindowDefault]).toEqual([undefined, undefined]);
 });
@@ -292,14 +260,12 @@ it("retains ownership without static models and rejects invalid credential scope
   expect(normalize({ providers: { fixture: provider } }, ["fixture"])?.providers?.fixture).toEqual(
     provider,
   );
-  expect(() =>
-    normalize({ providers: { fixture: { authScope: "global", models: [{ id: "m" }] } } }, [
-      "fixture",
-    ]),
-  ).toThrow("credential ownership");
+  expect(() => normalize({ providers: { fixture: { authScope: "global" } } }, ["fixture"])).toThrow(
+    "credential ownership",
+  );
 });
 
-it("inherits provider family unless overridden and drops malformed families", () => {
+it("normalizes declared families and drops malformed families", () => {
   const providers = normalize(
     {
       providers: {
@@ -312,10 +278,221 @@ it("inherits provider family unless overridden and drops malformed families", ()
     },
     ["openai", "router"],
   )?.providers;
-  expect(providers?.openai?.family).toBe("openai");
-  expect(providers?.router).toEqual({ models: [{ id: "x" }] });
-  const families = (catalog: ModelCatalogProvider | undefined) =>
-    Object.fromEntries(normalizeRows(catalog ?? { models: [] }).map((row) => [row.id, row.family]));
-  expect(families(providers?.openai)).toEqual({ m: "openai", oss: "meta", bad: "openai" });
-  expect(families(providers?.router)).toEqual({ x: undefined });
+  expect(providers).toEqual({
+    openai: {
+      family: "openai",
+      models: [{ id: "m" }, { id: "oss", family: "meta" }, { id: "bad" }],
+    },
+    router: { models: [{ id: "x" }] },
+  });
+});
+
+const transport = { baseUrl: "https://evil.test", headers: { Authorization: "bad" } };
+const cleanProvider = { models: [{ id: "claude-test" }] };
+const validBundle = {
+  schemaVersion: 1,
+  generatedAt: 1_753_500_000_000,
+  sourceCommit: "abc123",
+  providers: { anthropic: cleanProvider },
+};
+const knownPrice = { status: "known", currency: "USD", unit: "million_tokens" };
+const modelV2 = (id: string, provider = "first", pricing: unknown = { status: "unknown" }) => ({
+  id,
+  provider,
+  pricing,
+});
+const firstModel = modelV2("vendor/model");
+const validBundleV2 = {
+  schemaVersion: 2,
+  generatedAt: validBundle.generatedAt,
+  sourceCommit: "abc123",
+  providers: { first: {}, second: {} },
+  models: [firstModel, modelV2("second-only", "second")],
+};
+const versions = [
+  [1, parseV1, sanitizeV1, validBundle],
+  [2, parseV2, sanitizeV2, validBundleV2],
+] as const;
+const v1Provider = (patch: Record<string, unknown>) => ({
+  providers: { anthropic: { ...cleanProvider, ...patch } },
+});
+const v1Models = (...models: unknown[]) => v1Provider({ models });
+const rowsFor = (version: number, models: unknown[]) =>
+  version === 1 ? { providers: { first: { models } } } : { models };
+
+type Rejection = [Record<string, unknown>, string?];
+const invalidV1: Rejection[] = [
+  [{ schemaVersion: 2 }],
+  [{ generatedAt: 0 }],
+  [
+    { generatedAt: Date.now() + 2 * 24 * 60 * 60_000 },
+    "generatedAt is implausibly far in the future",
+  ],
+  [v1Models()],
+  [v1Models({ id: " duplicate " }, { id: "duplicate" }), "duplicate model id: duplicate"],
+  [{ pricing: { "openai/bad": { input: -1, output: 2 } } }],
+  [{ pricing: { "openai/bad": { input: 1, output: 2, baseUrl: "https://bad.test" } } }],
+  [
+    v1Models({ id: "bad", contextWindows: windows, contextWindowDefault: "missing" }),
+    "contextWindowDefault must reference a declared contextWindows option",
+  ],
+  [v1Provider({ recommendedModels: ["claude-test"] }), "recommendedModels"],
+];
+const invalidV2: Rejection[] = [
+  [{ models: [firstModel, { ...firstModel, id: " vendor/model " }] }, "duplicate provider/model"],
+  [{ models: [{ ...firstModel, provider: "missing" }] }, "undeclared model provider"],
+  [{ models: [{ ...firstModel, baseUrl: "https://bad.test" }] }, "baseUrl"],
+  [{ models: [{ ...firstModel, contextWindowDefault: "missing" }] }, "contextWindowDefault"],
+  [{ models: [{ ...firstModel, pricing: { status: "unknown", input: 0 } }] }, "input"],
+  [{ models: [{ ...firstModel, pricing: knownPrice }] }, "known pricing must contain rates"],
+  [{ models: [{ ...firstModel, pricing: { ...knownPrice, input: -1 } }] }, "input"],
+  [{ pricing: {} }],
+];
+for (const recommendedModels of [["vendor/model", " vendor/model "], [" "], ["second-only"]]) {
+  invalidV2.push([
+    {
+      providers: { first: { recommendedModels }, second: {} },
+    },
+  ]);
+}
+for (const pricing of [
+  { "vendor/model": { input: 1, output: 2 } },
+  { model: { input: 1, output: 2, source: "x" } },
+]) {
+  for (const field of ["upstreamPricing", "providerPricing"]) {
+    invalidV2.push([{ [field]: pricing }]);
+  }
+}
+it.each([versions[0], versions[1]])(
+  "rejects malformed v%i catalogs",
+  (version, parse, _sanitize, bundle) => {
+    const cases = version === 1 ? invalidV1 : invalidV2;
+    for (const [patch, error] of cases) {
+      expect(() => parse({ ...bundle, ...patch }), JSON.stringify(patch)).toThrow(error);
+    }
+  },
+);
+
+it.each([versions[0], versions[1]])(
+  "ingests v%i rows independently and warns once per affected row",
+  (version, _parse, sanitize, base) => {
+    const warn = vi.fn();
+    const rows = [
+      { id: "kept", input: ["text", "audio", "image", "future", "video", "document"] },
+      { id: "future-only", input: ["audio"] },
+      { id: "bad-input", input: ["text", 42] },
+      { id: "bad-api", api: "future-api" },
+      { id: "bad-limit", contextWindow: -1 },
+      { id: "bad-context", contextWindowDefault: "missing" },
+      { id: " " },
+      {},
+      { id: "kept" },
+      { id: "last", input: ["text"] },
+    ];
+    const patch =
+      version === 1
+        ? {
+            providers: {
+              first: { models: rows },
+              second: { models: [{ id: "kept" }] },
+              empty: { models: [] },
+            },
+          }
+        : {
+            providers: { first: { recommendedModels: ["bad-api", "kept"] }, second: {} },
+            models: [
+              ...rows.map((row) =>
+                Object.assign({}, row, { provider: "first", pricing: { status: "unknown" } }),
+              ),
+              modelV2("kept", "second"),
+            ],
+          };
+    const bundle = sanitize({ ...base, ...patch }, warn);
+    const models =
+      bundle.schemaVersion === 1 ? (bundle.providers.first?.models ?? []) : bundle.models;
+    expect(models.slice(0, 2).map(({ id, input }) => ({ id, input }))).toEqual([
+      { id: "kept", input: ["text", "image", "video", "document"] },
+      { id: "last", input: ["text"] },
+    ]);
+    expect(
+      bundle.schemaVersion === 1 ? bundle.providers.second?.models : models.slice(2),
+    ).toMatchObject([{ id: "kept" }]);
+    if (bundle.schemaVersion === 2) {
+      expect(bundle.providers.first?.recommendedModels).toEqual(["kept"]);
+    } else {
+      expect(bundle.providers).not.toHaveProperty("empty");
+    }
+    expect(warn).toHaveBeenCalledTimes(9);
+    warn.mockClear();
+    expect(sanitize(bundle, warn)).toEqual(bundle);
+    expect(warn).not.toHaveBeenCalled();
+  },
+);
+
+it.each([versions[0], versions[1]])(
+  "rejects invalid v%i envelopes and catalogs with no usable rows",
+  (version, _parse, sanitize, bundle) => {
+    for (const patch of [
+      { sourceCommit: undefined },
+      { generatedAt: "today" },
+      { providers: null },
+    ]) {
+      expect(() => sanitize({ ...bundle, ...patch })).toThrow();
+    }
+    for (const models of [[], [{ id: "" }]]) {
+      expect(() => sanitize({ ...bundle, ...rowsFor(version, models) }, vi.fn())).toThrow(
+        "no valid models",
+      );
+    }
+  },
+);
+
+it("strips v2 transport metadata while preserving transport-like provider identities", () => {
+  const models = [
+    {
+      ...firstModel,
+      provider: "headers",
+      contextWindows: windows,
+      contextWindowDefault: "1m",
+      compat: { supportsTools: true, nested: transport },
+    },
+    { ...validBundleV2.models[1], provider: "baseUrl" },
+  ];
+  const bundle = sanitizeV2({
+    ...validBundleV2,
+    providers: { headers: {}, baseUrl: {} },
+    models,
+  });
+  expect(Object.keys(bundle.providers)).toEqual(["headers", "baseUrl"]);
+  expect(bundle.models.map((model) => model.provider)).toEqual(["headers", "baseUrl"]);
+  expect(bundle.models[0]).toEqual({
+    ...models[0],
+    compat: { supportsTools: true, nested: {} },
+  });
+  expect(() => parseV2(bundle)).not.toThrow();
+});
+
+it("negotiates task metadata only on v3 and rejects malformed declarations per row", () => {
+  const inference = { chat: false, decision: { protocol: "fixture", input: ["text"] } };
+  const native = { ...firstModel, inference, compat: { nested: transport } };
+  const candidate = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: { first: { recommendedModels: [native.id] } },
+    models: [native],
+  };
+  expect(() => parseV2(candidate)).toThrow();
+  expect(() => parseV2({ ...candidate, schemaVersion: 2 })).toThrow();
+  expect(parseV3(candidate).models[0]?.inference).toEqual(inference);
+  const warn = vi.fn();
+  const invalid = {
+    ...native,
+    id: "invalid",
+    inference: { ...inference, decision: { ...inference.decision, protocol: "invalid protocol" } },
+  };
+  const admitted = sanitizeV3({ ...candidate, models: [native, invalid] }, warn);
+  expect(admitted.models).toHaveLength(1);
+  expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
+  expect(admitted.providers.first?.recommendedModels).toEqual([]);
+  expect(warn).toHaveBeenCalledOnce();
 });
