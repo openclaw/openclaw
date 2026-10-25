@@ -66,9 +66,14 @@ it.each(["read-only reader opens", "last writable reader closes"])(
         readOnly.prepare("SELECT * FROM retained").all();
       }
       expect(readUpdateDatabaseGenerations([pathname])[pathname]).not.toBe(generations[pathname]);
-      using database = new DatabaseSync(pathname);
-      migrate(database, pathname);
-      expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 7 }]);
+      const database = new DatabaseSync(pathname);
+      try {
+        migrate(database, pathname);
+        expect(database.prepare("SELECT value FROM retained").all()).toEqual([{ value: 7 }]);
+      } finally {
+        // Migration installs a close observer after acquisition; using would retain the old disposer.
+        database.close();
+      }
     });
     expect(warnings).toEqual([]);
     expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
