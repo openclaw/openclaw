@@ -124,7 +124,10 @@ do not match their declared types. Type errors still stop compilation.
 AOT-only options apply to either input mode:
 
 - `--trim` removes unused compiler/runtime features. `--trim-locales <locale,...>`
-  requires `--trim` and retains the selected locales.
+  requires `--trim` or `--trim-allow` and retains the selected locales.
+- `--trim-allow run[,jit]` enables trimming while retaining Bun's subprocess runner
+  and, optionally, its JIT. Both AOT modes pass these retention options through
+  the compiler's build API. The JIT support companion does not inherit AOT options.
 - `--no-compile-function-source` omits function source text. Source serialization
   consumers need their own qualification with this option.
 - `--disallow-code-generation-from-strings` denies ordinary string evaluation;
