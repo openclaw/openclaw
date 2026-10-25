@@ -11,6 +11,9 @@ const accounts = createAccountListHelpers<XAccountConfig>("x", {
   implicitDefaultAccount: { channelKeys: ["userId", "clientId", "refreshToken"] },
 });
 export const listXAccountIds = accounts.listAccountIds;
+export const listXRuntimeAccountIds = (cfg: OpenClawConfig) => [
+  ...new Set(listXAccountIds(cfg).map(normalizeAccountId)),
+];
 export const resolveDefaultXAccountId = accounts.resolveDefaultAccountId;
 export function resolveXAccount(cfg: OpenClawConfig, requested?: string | null) {
   const accountId = normalizeAccountId(requested ?? resolveDefaultXAccountId(cfg));

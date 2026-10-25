@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi, OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { listXAccountIds, resolveXAccount } from "./accounts.js";
+import { listXRuntimeAccountIds, resolveXAccount } from "./accounts.js";
 import { openXAllowlist } from "./allowlist.js";
 import { getXApi } from "./client.js";
 import { createXGitHubReader, XGitHubError } from "./github.js";
@@ -20,7 +20,7 @@ export function createXGitHubService(
       const readConfig = createRuntimeConfigReader(context.config);
       const cfg = readConfig();
       const allowlist = openXAllowlist(api.runtime);
-      activeAccounts = listXAccountIds(cfg);
+      activeAccounts = listXRuntimeAccountIds(cfg);
       for (const accountId of activeAccounts) {
         allowlist.invalidate(accountId);
         const account = resolveXAccount(cfg, accountId);
