@@ -19,6 +19,7 @@ import {
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { LEGACY_PARTICIPANTS_SCHEMA } from "./openclaw-agent-schema-history.js";
 import { restoreEmptyV21StorageForHistoricalFixture } from "./openclaw-agent-schema-v21.test-support.js";
+import { expectRow, expectRows, readRow } from "./openclaw-state-db-fixtures.test-support.js";
 
 const sessionKey = "agent:main:participant-migration";
 
@@ -50,8 +51,8 @@ function migrate(
   );
 }
 function expectHealthy(database: ReturnType<typeof openNodeSqliteDatabase>) {
-  expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  expect(database.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+  expectRows(database, "PRAGMA foreign_key_check", []);
+  expectRow(database, "PRAGMA integrity_check", { integrity_check: "ok" });
 }
 
 function legacyHuman(source: string | null) {
@@ -156,27 +157,23 @@ describe("participant identity migration", () => {
             database.prepare("SELECT name, sql FROM sqlite_schema ORDER BY name").all(),
           ).toEqual(before);
           expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(17);
-          expect(
-            database
-              .prepare(
-                "SELECT actor_id, contribution_count, first_prompted_at, last_prompted_at FROM session_participants",
-              )
-              .all(),
-          ).toEqual([
-            {
-              actor_id: "profile",
-              contribution_count: 2,
-              first_prompted_at: 30,
-              last_prompted_at: 50,
-            },
-          ]);
-          expect(
-            database
-              .prepare(
-                "SELECT name FROM sqlite_schema WHERE name = 'session_participants_identity_migration'",
-              )
-              .all(),
-          ).toEqual([]);
+          expectRows(
+            database,
+            "SELECT actor_id, contribution_count, first_prompted_at, last_prompted_at FROM session_participants",
+            [
+              {
+                actor_id: "profile",
+                contribution_count: 2,
+                first_prompted_at: 30,
+                last_prompted_at: 50,
+              },
+            ],
+          );
+          expectRows(
+            database,
+            "SELECT name FROM sqlite_schema WHERE name = 'session_participants_identity_migration'",
+            [],
+          );
           expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
           expectHealthy(database);
         } finally {
@@ -249,28 +246,22 @@ describe("participant identity migration", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const entry = { sessionId: "migration-session", updatedAt: 123 };
         const { db, path: databasePath } = await historicalStore(state, entry);
-        db.exec(`
-          CREATE TABLE session_participants (
-            session_key TEXT NOT NULL,
-            actor_type TEXT NOT NULL,
-            actor_id TEXT NOT NULL,
-            ${shape !== "original" ? "actor_source TEXT," : ""}
-            ${shape === "count" || shape === "null-count" ? "contribution_count INTEGER," : ""}
-            first_prompted_at INTEGER NOT NULL,
-            last_prompted_at INTEGER NOT NULL,
-            PRIMARY KEY (session_key, actor_type, actor_id),
-            FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
-          ) STRICT;
-        `);
+        let schema = LEGACY_PARTICIPANTS_SCHEMA;
+        if (shape === "original") {
+          schema = schema.replace("  actor_source TEXT,\n", "");
+        }
+        if (shape === "original" || shape === "source") {
+          schema = schema.replace("  contribution_count INTEGER,\n", "");
+        }
+        db.exec(schema);
         db.prepare(`INSERT INTO session_participants VALUES (
           ?, 'human', 'historical-profile',
           ${shape !== "original" ? "'profile'," : ""}
           ${shape === "count" ? "2," : shape === "null-count" ? "NULL," : ""}
           30, 50
         )`).run(sessionKey);
-        const originalEntry = db
-          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-          .get(sessionKey);
+        const entryQuery = "SELECT entry_json FROM session_nodes WHERE session_key = ?";
+        const originalEntry = readRow(db, entryQuery, sessionKey);
         closeOpenClawAgentDatabasesForTest();
         using database = openNodeSqliteDatabase(databasePath);
         await migrate(database, databasePath, state.env);
@@ -293,11 +284,7 @@ describe("participant identity migration", () => {
         expect(
           database.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version,
         ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-        expect(
-          database
-            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey),
-        ).toEqual(originalEntry);
+        expectRow(database, entryQuery, originalEntry, sessionKey);
         expectHealthy(database);
         ensureOpenClawAgentDatabaseSchema(database, {
           agentId: "main",

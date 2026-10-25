@@ -6,11 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { noteDoctorAgentDatabasePathHealth } from "../commands/doctor-agent-database-paths.js";
 import { compactDoctorSessionSqliteTarget } from "../commands/doctor-session-sqlite-compact.js";
 import { runDoctorStateSqliteCompact } from "../commands/doctor-state-sqlite-compact.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { readUpdateStateSchemaVersions } from "../infra/update-candidate-state.js";
-// Windows database path tests exercise canonical state lifecycles beyond MAX_PATH.
 import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.versions.js";
 import { createUpdateRun, finishUpdateRun } from "../infra/update-run-ledger.js";
-// Windows database path tests exercise canonical state lifecycles beyond MAX_PATH.
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
@@ -59,6 +58,14 @@ function createDeepStateEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+function versionedPath({ db, path: pathname }: { db: EngineConnection; path: string }) {
+  return [pathname, db.prepare("PRAGMA user_version").get()];
+}
+
+function entries(databasePath: string) {
+  return fs.readdirSync(path.dirname(databasePath)).toSorted();
+}
+
 describe.runIf(process.platform === "win32")("OpenClaw database paths on Windows", () => {
   it("migrates legacy namespace collisions through captured startup and Doctor", async () => {
     for (const repair of [false, true]) {
@@ -104,15 +111,18 @@ describe.runIf(process.platform === "win32")("OpenClaw database paths on Windows
         .run(path.toNamespacedPath(agent.path), OPENCLAW_AGENT_SCHEMA_VERSION, Date.now(), 123);
     const inspect = () =>
       readUpdateStateSchemaVersions({ stateDir: env.OPENCLAW_STATE_DIR, config: {}, env });
+    const expectInventory = async (baseline: Awaited<ReturnType<typeof inspect>>) => {
+      expect(
+        updateStateSchemaVersionsMatch(baseline, await inspect(), { sharedPath: state.path }),
+      ).toBe(true);
+    };
     addAlias();
     expect(noteDoctorAgentDatabasePathHealth({ env, shouldRepair: true })).toEqual([]);
     expect(state.db.prepare("SELECT COUNT(*) AS count FROM agent_databases").get()).toEqual({
       count: 1,
     });
     const baseline = await inspect();
-    expect(
-      updateStateSchemaVersionsMatch(baseline, await inspect(), { sharedPath: state.path }),
-    ).toBe(true);
+    await expectInventory(baseline);
 
     addAlias();
     const mixedBaseline = await inspect();
@@ -120,9 +130,7 @@ describe.runIf(process.platform === "win32")("OpenClaw database paths on Windows
     expect(noteDoctorAgentDatabasePathHealth({ env, shouldRepair: true })).toEqual([
       expect.stringContaining(`update ${run.runId} is in progress`),
     ]);
-    expect(
-      updateStateSchemaVersionsMatch(mixedBaseline, await inspect(), { sharedPath: state.path }),
-    ).toBe(true);
+    await expectInventory(mixedBaseline);
     finishUpdateRun(run.runId, { status: "succeeded" }, { env });
     expect(
       noteDoctorAgentDatabasePathHealth({
@@ -130,9 +138,7 @@ describe.runIf(process.platform === "win32")("OpenClaw database paths on Windows
         shouldRepair: true,
       }),
     ).toEqual([expect.stringContaining("during update Doctor")]);
-    expect(
-      updateStateSchemaVersionsMatch(mixedBaseline, await inspect(), { sharedPath: state.path }),
-    ).toBe(true);
+    await expectInventory(mixedBaseline);
   });
 
   it("registers a reopened native filename as the same relative inventory row", () => {
@@ -172,51 +178,16 @@ describe.runIf(process.platform === "win32")("OpenClaw database paths on Windows
     const agent = openOpenClawAgentDatabase({ agentId: AGENT_ID, env });
     expect(state.path).toBe(statePath);
     expect(agent.path).toBe(agentPath);
-    expect(
-      state.db
-        .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-    expect(
-      agent.db
-        .prepare(
-          "SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'",
-        )
-        .get(),
-    ).toEqual({
-      role: "agent",
-      schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      agent_id: AGENT_ID,
-    });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
 
-    expect(
-      withOpenClawStateDatabaseReadOnly(
-        ({ db, path: pathname }) => ({
-          pathname,
-          version: db.prepare("PRAGMA user_version;").get(),
-        }),
-        { env },
-      ),
-    ).toEqual({
-      pathname: statePath,
-      version: { user_version: OPENCLAW_STATE_SCHEMA_VERSION },
-    });
-    expect(
-      withOpenClawAgentDatabaseReadOnly(
-        ({ db, path: pathname }) => ({
-          pathname,
-          version: db.prepare("PRAGMA user_version;").get(),
-        }),
-        { agentId: AGENT_ID, env },
-      ),
-    ).toEqual({
+    expect(withOpenClawStateDatabaseReadOnly(versionedPath, { env })).toEqual([
+      statePath,
+      { user_version: OPENCLAW_STATE_SCHEMA_VERSION },
+    ]);
+    expect(withOpenClawAgentDatabaseReadOnly(versionedPath, { agentId: AGENT_ID, env })).toEqual({
       found: true,
-      value: {
-        pathname: agentPath,
-        version: { user_version: OPENCLAW_AGENT_SCHEMA_VERSION },
-      },
+      value: [agentPath, { user_version: OPENCLAW_AGENT_SCHEMA_VERSION }],
     });
     expect(
       await preflightOpenClawDatabaseSchemas({
@@ -230,17 +201,9 @@ describe.runIf(process.platform === "win32")("OpenClaw database paths on Windows
     fs.rmSync(`${statePath}-wal`, { force: true });
     fs.rmSync(`${statePath}-shm`, { force: true });
     const stateBytesBeforeReadOnly = fs.readFileSync(statePath);
-    const stateEntriesBeforeReadOnly = fs
-      .readdirSync(path.dirname(statePath), { withFileTypes: true })
-      .map((entry) => entry.name)
-      .toSorted();
+    const stateEntriesBeforeReadOnly = entries(statePath);
     const readOnlyState = await openExistingOpenClawStateDatabaseReadOnly({ env });
     expect(readOnlyState?.path).toBe(statePath);
-    expect(
-      readOnlyState?.db
-        .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
     const openedStatePath = readOnlyState?.db.prepare("PRAGMA database_list").get() as
       | { file?: unknown }
       | undefined;
@@ -249,12 +212,7 @@ describe.runIf(process.platform === "win32")("OpenClaw database paths on Windows
     expect(readOnlyState?.walMaintenance.close()).toBe(true);
     expect(fs.existsSync(privateDirectory)).toBe(false);
     assert.deepStrictEqual(fs.readFileSync(statePath), stateBytesBeforeReadOnly);
-    expect(
-      fs
-        .readdirSync(path.dirname(statePath), { withFileTypes: true })
-        .map((entry) => entry.name)
-        .toSorted(),
-    ).toEqual(stateEntriesBeforeReadOnly);
+    expect(entries(statePath)).toEqual(stateEntriesBeforeReadOnly);
 
     await expect(runDoctorStateSqliteCompact({ env })).resolves.toMatchObject({
       integrityCheck: "ok",

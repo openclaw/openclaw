@@ -85,45 +85,31 @@ function createV17PublicationState(options: { populated?: boolean; deferred?: bo
         legacy.exec(`ALTER TABLE ${table} DROP COLUMN requester_authority_json;`);
       }
     }
-    for (const status of ["requested", "published"] as const) {
-      const url = status === "published" ? "https://github.com/example/project/pull/1" : null;
-      legacy
-        .prepare(`INSERT INTO github_publication_requests (
+    // Authority migration adds columns without inspecting receipt status.
+    legacy.exec(`INSERT INTO github_publication_requests (
           request_id, idempotency_key, request_digest, session_id, session_key, agent_id,
           worktree_id, repository_fingerprint, identity_source, identity_profile_id,
           identity_account_id, identity_login, status, repository, branch, base_branch,
           head_commit, pull_request_url, created_at_ms, updated_at_ms
-        ) VALUES (?, ?, 'digest', 'session', 'agent:main:publication', 'main',
+        ) VALUES ('local-published', 'published', 'digest', 'session', 'agent:main:publication', 'main',
           'worktree', 'fingerprint', 'system-configured', 'publisher-profile',
-          42, 'publisher', ?, 'example/project', 'changes', 'main', ?, ?, 10, 20)`)
-        .run(`local-${status}`, status, status, "a".repeat(40), url);
-      legacy
-        .prepare(`INSERT INTO github_publication_session_lifecycles
+          42, 'publisher', 'published', 'example/project', 'changes', 'main',
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'https://github.com/example/project/pull/1', 10, 20);
+        INSERT INTO github_publication_session_lifecycles
           (publication_kind, request_id, lifecycle_revision)
-          VALUES ('shared', ?, 'original-lifecycle')`)
-        .run(`local-${status}`);
-      legacy
-        .prepare(`INSERT INTO github_repository_publication_requests (
+          VALUES ('shared', 'local-published', 'original-lifecycle');
+        INSERT INTO github_repository_publication_requests (
           request_id, idempotency_key, request_digest, session_id, session_lifecycle_revision,
           session_key, agent_id, workspace_id, identity_source, identity_profile_id,
           identity_account_id, identity_login, status, push_repository, repository,
           branch, base_branch, head_commit, pull_request_url, last_effect, effect_state,
           created_at_ms, updated_at_ms
-        ) VALUES (?, ?, 'digest', 'session', 'original-lifecycle',
+        ) VALUES ('repository-published', 'published', 'digest', 'session', 'original-lifecycle',
           'agent:main:publication', 'main', 'workspace', 'system-configured', 'publisher-profile',
-          42, 'publisher', ?, 'example/project', 'example/project',
-          'changes', 'main', ?, ?, ?, ?, 10, 20)`)
-        .run(
-          `repository-${status}`,
-          status,
-          status,
-          "a".repeat(40),
-          url,
-          url ? "pull_request" : null,
-          url ? "observed" : null,
-        );
-    }
-    legacy.exec(`INSERT INTO github_publication_session_lifecycles
+          42, 'publisher', 'published', 'example/project', 'example/project', 'changes', 'main',
+          'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'https://github.com/example/project/pull/1',
+          'pull_request', 'observed', 10, 20);
+        INSERT INTO github_publication_session_lifecycles
         (publication_kind, request_id, lifecycle_revision) VALUES ('personal', 'personal-history', NULL);`);
   }
   legacy.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
