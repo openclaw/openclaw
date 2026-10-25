@@ -26,10 +26,6 @@ function assistant(overrides: Partial<Assistant> = {}) {
   return buildEmbeddedRunnerAssistant({ model: "gpt-5.4", ...overrides });
 }
 
-function thinking(thinkingSignature?: string): Assistant["content"] {
-  return [{ type: "thinking", thinking: "internal reasoning", thinkingSignature }];
-}
-
 function retryState(attempt: Attempt = {}) {
   return {
     provider: "openai",
@@ -54,44 +50,26 @@ function warning(
   });
 }
 
-function retryError(overrides: Partial<Assistant> = {}, attempt: Attempt = {}) {
-  const message = assistant({
-    stopReason: "error",
-    errorMessage: REJECTION,
-    usage: createMockUsage(640, 1329),
-    ...overrides,
-  });
-  return shouldRetrySilentErrorAssistantTurn({
-    assistant: message,
-    attempt: makeEmbeddedRunnerAttempt({ lastAssistant: message, ...attempt }),
-  });
-}
-
 describe("incomplete-turn retry classification", () => {
   it.each([
-    { provider: "ollama", modelId: "minimax-m2.7:cloud", output: 6, expected: EMPTY_RETRY },
-    { provider: "ollama", modelId: "glm-5.1:cloud", output: 0, expected: null },
-    {
-      provider: "openai",
-      modelId: "gpt-5.5",
-      modelApi: "openai-chatgpt-responses",
-      output: 111,
-      expected: EMPTY_RETRY,
-    },
-  ])("handles empty $provider output with $output tokens", ({ expected, output, ...route }) => {
+    ["ollama", "minimax-m2.7:cloud", 6, EMPTY_RETRY, undefined],
+    ["ollama", "glm-5.1:cloud", 0, null, undefined],
+    ["openai", "gpt-5.5", 111, EMPTY_RETRY, "openai-chatgpt-responses"],
+  ] as const)("handles empty %s/%s output", (provider, modelId, output, expected, modelApi) => {
     expect(
       resolveNonVisibleTurnRetryInstructions({
         ...retryState({ lastAssistant: assistant({ usage: createMockUsage(100, output) }) }),
-        ...route,
+        provider,
+        modelId,
+        modelApi,
       })[1],
     ).toBe(expected);
   });
 
-  const errorCases: Array<[string, boolean, Partial<Assistant>?, Attempt?]> = [
-    ["non-exact rejection message", false, { errorMessage: `${REJECTION} after dispatch` }],
+  const errorCases: Array<[string, Partial<Assistant>, Attempt?]> = [
+    ["non-exact rejection message", { errorMessage: `${REJECTION} after dispatch` }],
     [
       "provider refusal",
-      false,
       {
         errorCode: "malformed_tool_call_arguments",
         diagnostics: [
@@ -103,14 +81,22 @@ describe("incomplete-turn retry classification", () => {
         ],
       },
     ],
-    ["asynchronous work", false, {}, { toolMetas: [{ toolName: "probe", asyncStarted: true }] }],
+    ["asynchronous work", {}, { toolMetas: [{ toolName: "probe", asyncStarted: true }] }],
   ];
-  it.each(errorCases)(
-    "classifies silent error retry with %s",
-    (_name, expected, message, attempt) => {
-      expect(retryError(message, attempt)).toBe(expected);
-    },
-  );
+  it.each(errorCases)("rejects silent error retry with %s", (_name, overrides, attempt) => {
+    const message = assistant({
+      stopReason: "error",
+      errorMessage: REJECTION,
+      usage: createMockUsage(640, 1329),
+      ...overrides,
+    });
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        assistant: message,
+        attempt: makeEmbeddedRunnerAttempt({ lastAssistant: message, ...attempt }),
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("incomplete-turn delivery ownership", () => {
@@ -195,25 +181,25 @@ describe("incomplete-turn payload resolution", () => {
     ).toEqual([true, false, false]);
   });
 
-  const payloadCases: Array<[string, Attempt, number, string]> = [
+  it.each([
     [
       "unsigned thinking only (#89787)",
-      { lastAssistant: assistant({ content: thinking() }) },
+      { content: [{ type: "thinking", thinking: "internal reasoning" }] },
       1,
       "No answer was returned. Ask again if you still need one.",
     ],
     [
       "empty token-limited answer",
-      {
-        assistantTexts: [],
-        lastAssistant: assistant({ stopReason: "length", content: [{ type: "text", text: "" }] }),
-      },
+      { stopReason: "length", content: [{ type: "text", text: "" }] },
       0,
       "⚠️ The model reached its output token limit before generating an answer. Please try again.",
     ],
-  ];
-  it.each(payloadCases)("resolves warning for %s", (_name, attempt, payloadCount, expected) => {
-    const result = warning(attempt, { payloadCount });
-    expect(result).toContain(expected);
-  });
+  ] satisfies Array<[string, Partial<Assistant>, number, string]>)(
+    "resolves warning for %s",
+    (_name, message, payloadCount, expected) => {
+      expect(
+        warning({ assistantTexts: [], lastAssistant: assistant(message) }, { payloadCount }),
+      ).toContain(expected);
+    },
+  );
 });

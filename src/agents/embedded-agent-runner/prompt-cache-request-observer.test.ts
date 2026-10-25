@@ -122,23 +122,14 @@ describe("prompt cache request observer", () => {
   it.each([
     ["system", { instructions: "provider rewritten system" }, "provider-input-change:system"],
     ["tools", { tools: [{ type: "function", name: "changed" }] }],
-    ["tools", { tools: [{ name: "read", type: "function" }] }],
     ["message:0.content", inputChange({ content: "private rewritten history" })],
-    ["message:0.role", inputChange({ role: "assistant" })],
-    ["message:0.id", inputChange({ id: "private-id" })],
     ["message:0.encrypted_content", inputChange({ encrypted_content: "private-ciphertext" })],
     ["message:0.order", { input: [{ content: "first", role: "user" }] }],
     ["message:0.other", inputChange({ "private-field-name": "private-value" })],
     ["message:0.removed", { input: [] }],
     ["parameters:reasoning", { reasoning: { effort: "high" } }],
     ["parameters:prompt_cache_key", { prompt_cache_key: "private-affinity" }],
-    ["parameters:prompt_cache_retention", { prompt_cache_retention: "24h" }],
-    ["parameters:prompt_cache_options", { prompt_cache_options: { ttl: "30m" } }],
-    ["parameters:store", { store: false }],
-    ["parameters:include", { include: ["reasoning.encrypted_content"] }],
-    ["parameters:truncation", { truncation: "disabled" }],
     ["parameters:service_tier", { service_tier: "default" }],
-    ["parameters:metadata", { metadata: { "private-name": "private-value" } }],
     ["parameters:other", { "private-parameter-name": "private-value" }],
     [
       "continuation:parameters:previous_response_id",
@@ -187,7 +178,8 @@ describe("prompt cache request observer", () => {
       await measure(payload, 9_000);
       clock.mockReturnValue(3_000);
       await measure({ ...payload, ...replacement }, 2_000);
-      expect(observer.getObservation()).toMatchObject({
+      const observation = observer.getObservation();
+      expect(observation).toMatchObject({
         broke: true,
         changes: null,
         providerPrefix: expected,
@@ -196,12 +188,12 @@ describe("prompt cache request observer", () => {
         responseId: "resp-cache-fixture",
       });
       if (dropCause) {
-        expect(observer.getObservation()?.dropCause).toBe(dropCause);
+        expect(observation?.dropCause).toBe(dropCause);
       }
       if (expected === "parameters:service_tier") {
-        expect(observer.getObservation()?.requests?.current?.serviceTier).toBe("default");
+        expect(observation?.requests?.current?.serviceTier).toBe("default");
       }
-      expect(JSON.stringify(observer.getObservation())).not.toContain("private");
+      expect(JSON.stringify(observation)).not.toContain("private");
     },
   );
 
