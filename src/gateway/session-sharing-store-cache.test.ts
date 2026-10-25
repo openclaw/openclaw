@@ -353,21 +353,29 @@ describe("session mutation authorization store caches", () => {
     },
   );
 
-  it("fails a patchMany request when a nested target is incognito", async () => {
-    await withState(async () => {
-      const sessionKey = "agent:main:dashboard:incognito-patch-many";
-      await seedSession(sessionKey, { sessionId: "session-incognito", incognito: true });
+  it.each([false, true])("bounds incognito patchMany discovery (over limit: %s)", (overLimit) =>
+    withState(async () => {
+      const key = "agent:main:dashboard:incognito-patch-many";
+      await seedSession(key, { sessionId: "session-incognito", incognito: true });
+      const targets = overLimit
+        ? Array.from({ length: 101 }, (_, index) => ({ key: `agent:main:over-limit-${index}` }))
+        : [];
       const result = await captureMutationAuthorization({
         method: "sessions.patchMany",
         requestParams: {
-          targets: [{ key: sessionKey, agentId: "main" }],
+          targets: [...targets, { key, agentId: "main" }],
           patch: { archived: true },
         },
         context: { getRuntimeConfig: () => ({}) } as never,
       });
-      expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
-    });
-  });
+      if (overLimit) {
+        expect(result.error).toBeNull();
+        expect(result.authorization).toBeDefined();
+      } else {
+        expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
+      }
+    }),
+  );
 
   it("authorizes every patchMany target before dispatch", async () => {
     await withState(async () => {
@@ -435,26 +443,6 @@ describe("session mutation authorization store caches", () => {
       expect(() => authorization.assertTargetCurrent(target)).toThrow(
         "session changed before sessions.patchMany; retry the request",
       );
-    });
-  });
-
-  it("bounds malformed patchMany target discovery before schema validation", async () => {
-    await withState(async () => {
-      const hiddenKey = "agent:main:dashboard:incognito-over-limit";
-      await seedSession(hiddenKey, { sessionId: "session-hidden", incognito: true });
-      const targets = Array.from({ length: 101 }, (_, index) => ({
-        key: `agent:main:over-limit-${index}`,
-      }));
-      targets.push({ key: hiddenKey });
-
-      const result = await captureMutationAuthorization({
-        method: "sessions.patchMany",
-        requestParams: { targets, patch: { archived: true } },
-        context: { getRuntimeConfig: () => ({}) } as never,
-      });
-
-      expect(result.error).toBeNull();
-      expect(result.authorization).toBeDefined();
     });
   });
 
