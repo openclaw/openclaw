@@ -195,6 +195,7 @@ it("keeps archived incognito rows private and retires captures when their sessio
       original.entry,
     );
     expect(rows.selectEntries()).toEqual([]);
+    expect(() => rows.sweepMaterializedRows(Date.now() + 10 * 60_000)).not.toThrow();
     sessionChanges.emit({ all: true, scope: "catalog" });
     await rows.ensureMaterialized();
     expect(rows.selectEntries()).toEqual([]);

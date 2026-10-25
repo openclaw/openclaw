@@ -294,7 +294,7 @@ export function createSessionRowProjectionResidency(params: {
       readPins.clear();
     },
     describe(row: records.Row | undefined) {
-      if (!row || !eligible(row)) {
+      if (!row || row.preparedPrivate || !eligible(row)) {
         return row;
       }
       if (records.ready(row)) {
