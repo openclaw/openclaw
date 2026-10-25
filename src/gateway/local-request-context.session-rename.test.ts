@@ -1,10 +1,9 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { createAgentToolsSandboxContext } from "../agents/test-helpers/agent-tools-sandbox-context.js";
+import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import {
   appendTranscriptMessage,
@@ -57,6 +56,7 @@ describe("guest session rename through the agent catalog", () => {
       );
       const history = await sessionToolsTranscript(sessionKey, original.sessionId);
       const beforeRename = sessionToolsEntry(sessionKey)!;
+      expect(beforeRename.createdActor).toEqual(original.createdActor);
       const controller = new AbortController();
       const operatorAuthority = createAdmittedRunOperatorAuthority({
         profileId,
@@ -71,7 +71,7 @@ describe("guest session rename through the agent catalog", () => {
           sessionKey,
           sessionId: original.sessionId,
         },
-        async ({ operation }) => {
+        async ({ operation, admittedRunContext }) => {
           const options = {
             config: { ...cfg, tools: { ...cfg.tools, allow: ["sessions"] } },
             sessionKey,
@@ -79,10 +79,23 @@ describe("guest session rename through the agent catalog", () => {
             senderIsOwner: false,
             messageProvider: "webchat",
           };
-          const tool = expectDefined(
-            createOpenClawCodingTools(options).find((candidate) => candidate.name === "sessions"),
-            "sessions tool unavailable",
-          );
+          const tools = createOpenClawCodingTools(options);
+          const tool = tools.find((candidate) => candidate.name === "sessions");
+          expect(tool, "guest catalog includes the permitted session operation").toBeDefined();
+          if (!tool) {
+            throw new Error("sessions tool unavailable");
+          }
+          // The full definition stays stable; broader actions are refused when they run (below).
+          expect(tool.parameters).toHaveProperty("properties.label");
+          const loopback = (
+            await resolveGatewayScopedTools({
+              ...options,
+              cfg: options.config,
+              surface: "loopback",
+              admittedRunContext,
+            })
+          ).tools.find((candidate) => candidate.name === "sessions");
+          expect(loopback?.parameters).toHaveProperty("properties.label");
           const result = await tool.execute("rename", { action: "patch", label: "Research plan" });
           expect(result.details).toMatchObject({
             status: "updated",
@@ -148,7 +161,7 @@ describe("guest session rename through the agent catalog", () => {
     });
   });
 
-  it("keeps sandbox rename scoped across catalogs and explicit operator policies", async () => {
+  it("respects required-sandbox default and explicit tool policy", async () => {
     await withSessionToolsFixture(async (cfg) => {
       const profileId = roleClient("view", "sandbox-rename-guest").authenticatedUserProfile!
         .profileId;
@@ -161,35 +174,20 @@ describe("guest session rename through the agent catalog", () => {
         createdVia: "operator",
         createdActor: { type: "human", source: "profile", id: profileId },
       });
-      const options = {
+      const defaultsWithoutAdmission = resolveConversationCapabilityProfile({
         config: cfg,
         sessionKey,
         sessionId,
         senderIsOwner: false,
-        messageProvider: "webchat",
-      };
-      const sandboxConfig = resolveSandboxConfigForAgent(cfg, "main");
-      const defaultsWithoutAdmission = resolveConversationCapabilityProfile({
-        ...options,
-        sandboxToolPolicy: sandboxConfig.tools,
+        sandboxToolPolicy: resolveSandboxConfigForAgent(cfg, "main").tools,
       });
-      // Generic allow/addition/glob precedence and default-policy provenance are covered
-      // by sandbox/tool-policy.test.ts and tools/sessions-create-tool.test.ts.
-      const scenarios: [
-        string,
-        ToolAllowDenyPolicyConfig | undefined,
-        "rename" | "full" | "denied" | "absent",
-      ][] = [
-        ["operator.sessions.write", undefined, "rename"],
-        ["operator.write", { allow: ["sessions"] }, "full"],
-        ["operator.read", { allow: ["sessions"] }, "denied"],
-        ["operator.sessions.write", { deny: ["sessions"] }, "absent"],
-      ];
-      for (const [scope, policy, mode] of scenarios) {
-        cfg.gateway!.roles!.definitions.view!.scopes = [scope];
+      for (const scope of ["operator.sessions.write", "operator.write", "operator.read"] as const) {
+        const scopes = [scope];
+        cfg.gateway!.roles!.definitions.view!.scopes = scopes;
+        const canRename = scopes[0] !== "operator.read";
         const operatorAuthority = createAdmittedRunOperatorAuthority({
           profileId,
-          scopes: [scope],
+          scopes,
           signal: new AbortController().signal,
           readCurrentRoleFacts: () => ({ assignedRole: "view" }),
           assertCurrent: () => {},
@@ -201,112 +199,165 @@ describe("guest session rename through the agent catalog", () => {
             sessionId,
           },
           async ({ admittedRunContext }) => {
-            const config = { ...cfg, tools: { ...cfg.tools, sandbox: { tools: policy } } };
-            const scopedOptions = { ...options, config };
-            const resolveLoopback = (admitted = true) =>
-              resolveGatewayScopedTools({
-                ...scopedOptions,
-                cfg: config,
-                surface: "loopback",
-                admittedRunContext: admitted ? admittedRunContext : undefined,
-              });
-            const loopback = (await resolveLoopback()).tools;
-            if (mode === "absent") {
-              expect(loopback.some((tool) => tool.name === "sessions")).toBe(false);
-              return;
-            }
-            const sandbox = resolveSandboxConfigForAgent(config, "main");
-            const nativeOptions = {
-              ...scopedOptions,
-              toolConstructionPlan: {
-                includeBaseCodingTools: false,
-                includeShellTools: false,
-                includeChannelTools: false,
-                includeOpenClawTools: true,
-                includePluginTools: false,
-              },
-              sandbox: {
-                ...createAgentToolsSandboxContext({
-                  workspaceDir: cfg.agents!.entries!.main!.workspace!,
-                  workspaceAccess: "none",
+            const policies: Array<
+              [string, ToolAllowDenyPolicyConfig | undefined, boolean, boolean]
+            > = [
+              ["explicit addition", { alsoAllow: ["sessions"] }, true, false],
+              ["explicit allow", { allow: ["sessions"] }, true, false],
+              ["allow all", { allow: [] }, true, false],
+              ["restrictive allow", { allow: ["read"] }, false, false],
+              ["explicit deny", { alsoAllow: ["sessions"], deny: ["sessions"] }, false, false],
+              ["wildcard deny", { deny: ["sessions*"] }, false, false],
+              ["unrelated addition", { alsoAllow: ["read"] }, canRename, true],
+              ["default", undefined, canRename, true],
+            ];
+            for (const [name, policy, available, renameOnly] of policies) {
+              const config = {
+                ...cfg,
+                tools: { ...cfg.tools, sandbox: { tools: policy } },
+              };
+              const options = {
+                config,
+                sessionKey,
+                sessionId,
+                senderIsOwner: false,
+                messageProvider: "webchat",
+              };
+              const sandboxConfig = resolveSandboxConfigForAgent(config, "main");
+              const workspaceDir = cfg.agents!.entries!.main!.workspace!;
+              const nativeOptions = {
+                ...options,
+                // This catalog proof does not invoke filesystem or shell tools.
+                toolConstructionPlan: {
+                  includeBaseCodingTools: false,
+                  includeShellTools: false,
+                  includeChannelTools: false,
+                  includeOpenClawTools: true,
+                  includePluginTools: false,
+                },
+                sandbox: {
+                  enabled: true,
+                  required: true as const,
+                  backendId: sandboxConfig.backend,
                   sessionKey,
+                  workspaceDir,
+                  agentWorkspaceDir: workspaceDir,
+                  workspaceAccess: "none" as const,
+                  runtimeId: "rename-test",
+                  runtimeLabel: "rename-test",
                   containerName: "rename-test",
-                  tools: sandbox.tools,
-                  dockerOverrides: sandbox.docker,
-                }),
-                required: true as const,
-                backendId: sandbox.backend,
-              },
-            };
-            const catalogs =
-              mode === "rename"
-                ? [
-                    createOpenClawCodingTools(nativeOptions),
+                  containerWorkdir: "/workspace",
+                  docker: sandboxConfig.docker,
+                  tools: sandboxConfig.tools,
+                  browserAllowHostControl: false,
+                },
+              };
+              const preparedProfile = resolveConversationCapabilityProfile({
+                ...options,
+                sandboxToolPolicy: sandboxConfig.tools,
+              });
+              const catalogs = [
+                ["native", createOpenClawCodingTools(nativeOptions)],
+                [
+                  "prepared native",
+                  createOpenClawCodingTools({
+                    ...nativeOptions,
+                    conversationCapabilityProfile: preparedProfile,
+                  }),
+                ],
+                [
+                  "loopback",
+                  (
+                    await resolveGatewayScopedTools({
+                      ...options,
+                      cfg: config,
+                      surface: "loopback",
+                      admittedRunContext,
+                    })
+                  ).tools,
+                ],
+              ] as const;
+              for (const [surface, tools] of catalogs) {
+                const tool = tools.find((candidate) => candidate.name === "sessions");
+                expect(Boolean(tool), `${scopes[0]} ${name}: ${surface} discovery`).toBe(available);
+                if (!tool) {
+                  continue;
+                }
+                if (!canRename) {
+                  // The definition stays stable across turns; the read-only caller is refused when it runs.
+                  await expect(
+                    tool.execute("denied", { action: "patch", label: "Read only" }),
+                  ).rejects.toThrow("Only assign_owner is available to non-owner callers");
+                  continue;
+                }
+                expect(tool.parameters).toHaveProperty("properties.label");
+                if (renameOnly) {
+                  expect(tool.parameters).not.toHaveProperty("properties.archived");
+                  expect(tool.parameters).not.toHaveProperty("properties.ownerType");
+                  for (const args of [
+                    { action: "assign_owner", ownerType: "human", ownerId: profileId },
+                    { action: "patch", archived: true },
+                    { action: "patch", label: "Broader", model: "model-b" },
+                    { action: "stop" },
+                    { action: "patch", targets: [{ sessionKey }], label: "Batch" },
+                  ]) {
+                    await expect(tool.execute("denied", args)).rejects.toThrow(
+                      "only permits renaming",
+                    );
+                  }
+                } else if (scopes[0] === "operator.write") {
+                  expect(tool.parameters).toHaveProperty("properties.archived");
+                }
+                const label = `${scopes[0]} ${name} ${surface}`;
+                const args: Record<string, unknown> = { action: "patch", label };
+                if (name === "default" && surface === "native") {
+                  // Policy hooks can return arguments with prototype defaults.
+                  delete args.label;
+                  Object.setPrototypeOf(args, {
+                    label,
+                    icon: "book",
+                    targets: [{ sessionKey: TARGET, expectedSessionId: "session-tools-target-id" }],
+                  });
+                }
+                const result = await tool.execute("rename", args);
+                expect(result.details).toMatchObject({ status: "updated", updated: ["label"] });
+                expect(sessionToolsEntry(sessionKey)).toMatchObject({ label });
+                expect(sessionToolsEntry(sessionKey)?.icon).toBeUndefined();
+                expect(sessionToolsEntry(TARGET)?.label).toBeUndefined();
+              }
+              if (name === "default") {
+                const absent = (tools: ReturnType<typeof createOpenClawCodingTools>) =>
+                  expect(tools.some((tool) => tool.name === "sessions")).toBe(false);
+                absent(
+                  (
+                    await resolveGatewayScopedTools({
+                      ...options,
+                      cfg: config,
+                      surface: "loopback",
+                    })
+                  ).tools,
+                );
+                absent(createOpenClawCodingTools({ ...nativeOptions, senderIsOwner: true }));
+                absent(
+                  createOpenClawCodingTools({
+                    ...nativeOptions,
+                    conversationCapabilityProfile: defaultsWithoutAdmission,
+                  }),
+                );
+                const unmarked: SandboxToolPolicy = {
+                  allow: sandboxConfig.tools.allow,
+                  deny: sandboxConfig.tools.deny,
+                };
+                const narrowed: SandboxToolPolicy = { ...sandboxConfig.tools, allow: ["read"] };
+                for (const tools of [unmarked, narrowed]) {
+                  absent(
                     createOpenClawCodingTools({
                       ...nativeOptions,
-                      conversationCapabilityProfile: resolveConversationCapabilityProfile({
-                        ...scopedOptions,
-                        sandboxToolPolicy: sandbox.tools,
-                      }),
+                      sandbox: { ...nativeOptions.sandbox, tools },
                     }),
-                    loopback,
-                  ]
-                : [loopback];
-            for (const [index, tools] of catalogs.entries()) {
-              const tool = expectDefined(
-                tools.find((candidate) => candidate.name === "sessions"),
-                "sessions",
-              );
-              if (mode === "denied") {
-                await expect(
-                  tool.execute("denied", { action: "patch", label: "Read only" }),
-                ).rejects.toThrow("Only assign_owner is available to non-owner callers");
-                continue;
-              }
-              if (mode === "rename") {
-                for (const args of [
-                  { action: "assign_owner", ownerType: "human", ownerId: profileId },
-                  { action: "patch", archived: true },
-                  { action: "patch", label: "Broader", model: "model-b" },
-                  { action: "stop" },
-                  { action: "patch", targets: [{ sessionKey }], label: "Batch" },
-                ]) {
-                  await expect(tool.execute("denied", args)).rejects.toThrow(
-                    "only permits renaming",
                   );
                 }
-              } else {
-                expect(tool.parameters).toHaveProperty("properties.archived");
               }
-              const label = `${scope} ${index}`;
-              const args: Record<string, unknown> = { action: "patch", label };
-              if (mode === "rename" && index === 0) {
-                delete args.label;
-                Object.setPrototypeOf(args, {
-                  label,
-                  icon: "book",
-                  targets: [{ sessionKey: TARGET, expectedSessionId: "session-tools-target-id" }],
-                });
-              }
-              expect((await tool.execute("rename", args)).details).toMatchObject({
-                status: "updated",
-                updated: ["label"],
-              });
-              expect(sessionToolsEntry(sessionKey)).toMatchObject({ label });
-              expect(sessionToolsEntry(sessionKey)?.icon).toBeUndefined();
-              expect(sessionToolsEntry(TARGET)?.label).toBeUndefined();
-            }
-            if (mode === "rename") {
-              const absent = (tools: ReturnType<typeof createOpenClawCodingTools>) =>
-                expect(tools.some((tool) => tool.name === "sessions")).toBe(false);
-              absent((await resolveLoopback(false)).tools);
-              absent(createOpenClawCodingTools({ ...nativeOptions, senderIsOwner: true }));
-              absent(
-                createOpenClawCodingTools({
-                  ...nativeOptions,
-                  conversationCapabilityProfile: defaultsWithoutAdmission,
-                }),
-              );
             }
           },
         );

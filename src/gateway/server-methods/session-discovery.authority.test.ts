@@ -284,7 +284,9 @@ it("uses captured display selections and observes a committed change on the next
     const pending = discoverSelections();
     await gate.during(
       awaitGateBeforeSettlement(gate.entered, pending, "selection discovery did not start"),
-      () => select("second"),
+      async () => {
+        await select("second");
+      },
       pending,
     );
     await discoverSelections();

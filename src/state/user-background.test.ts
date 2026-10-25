@@ -179,7 +179,7 @@ describe("private profile backgrounds", () => {
       });
       const theme = { ...replacement.preference!, source: { kind: "theme" } };
       expect(setBackground(first, theme, replacement.preference).ok).toBe(true);
-      expect(await read()).toStrictEqual({ ...replacement, preference: theme });
+      expect(snapshot(await read())).toStrictEqual({ ...replacement, preference: theme });
       expect(setBackground(first, replacement.preference, theme).ok).toBe(true);
       const removed = snapshot(await remove(expected(replacement)));
       expect(removed.preference).toStrictEqual({

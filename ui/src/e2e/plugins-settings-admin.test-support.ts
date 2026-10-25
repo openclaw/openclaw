@@ -4,7 +4,6 @@ import type {
   PluginsInspectResult,
 } from "../lib/plugins/index.ts";
 import { createPluginDeclaredSurface } from "../test-helpers/plugins-e2e-fixtures.test-support.ts";
-import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 
 export const workboard = {
   id: "workboard",
@@ -145,8 +144,12 @@ export const config = {
 
 export const configMocks = {
   "config.get": {
-    ...configSnapshot(config, "plugins-settings-e2e"),
     appliedConfigHash: "plugins-settings-e2e",
+    config,
+    hash: "plugins-settings-e2e",
+    issues: [],
+    raw: JSON.stringify(config),
+    valid: true,
   },
   "config.schema": {
     generatedAt: "2026-09-01T00:00:00.000Z",

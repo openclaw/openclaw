@@ -5,6 +5,7 @@ import {
   clearEmbeddingProviders,
   registerEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -27,27 +28,27 @@ const multimodalSearch = (overrides: Search = {}): Search => ({
 });
 const asConfig = (cfg: OpenClawConfig): OpenClawConfig => ({
   ...cfg,
-  // Keep pure config cases independent of plugin loading.
+  // Provider registries are supplied explicitly below; plugin loading belongs
+  // to its integration tests and would turn these pure config cases into cold scans.
   plugins: cfg.plugins ?? { enabled: false },
 });
 
-const registerProvider = (id: string, defaultModel: string, transport: "remote" | "local") =>
-  registerEmbeddingProvider({
-    id,
-    defaultModel,
-    transport,
-    create: async () => ({ provider: null }),
-  });
-
 function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
+  // Register provider contracts locally so config tests do not depend on the
+  // plugin loader or live embedding backends.
   for (const [id, defaultModel] of [
     ["openai", "text-embedding-3-small"],
     ["ollama", "nomic-embed-text"],
   ] as const) {
-    registerProvider(id, defaultModel, "remote");
+    registerEmbeddingProvider({
+      id,
+      defaultModel,
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
   }
   if (options?.includeGemini !== false) {
-    registerEmbeddingProvider({
+    const adapter: MemoryEmbeddingProviderAdapter = {
       id: "gemini",
       defaultModel: "gemini-embedding-001",
       transport: "remote",
@@ -57,14 +58,17 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
           .replace(/^models\//, "")
           .replace(/^(gemini|google)\//, "") === "gemini-embedding-2-preview",
       create: async () => ({ provider: null }),
-    });
+    };
+    registerEmbeddingProvider(adapter);
   }
 }
 
 describe("memory search config", () => {
   beforeEach(({ onTestFinished }) => {
     const previous = captureActivePluginRegistrySnapshot();
-    onTestFinished(() => rollbackStagedPluginRegistry(previous));
+    onTestFinished(() => {
+      rollbackStagedPluginRegistry(previous);
+    });
     stageActivePluginRegistry(createEmptyPluginRegistry(), null, "default");
     registerBaseMemoryEmbeddingProviders();
   });
@@ -88,7 +92,9 @@ describe("memory search config", () => {
   });
 
   it("throws the typed unavailable error only for the degraded agent owner", () => {
-    const cfg = asConfig({ agents: { entries: { cold: {}, healthy: {} } } });
+    const cfg = asConfig({
+      agents: { entries: { cold: {}, healthy: {} } },
+    });
     setActiveDegradedSecretOwners([
       {
         ownerKind: "capability",
@@ -110,27 +116,33 @@ describe("memory search config", () => {
     ).toBeNull();
   });
 
-  it.each<[string, OpenClawConfig, boolean]>([
-    [
-      "unset with main scope and a binding override",
-      {
+  it.each([
+    {
+      name: "unset with main scope and a binding override",
+      cfg: {
         session: { dmScope: "main" },
         bindings: [
-          { agentId: "main", match: { channel: "telegram" }, session: { dmScope: "per-peer" } },
+          {
+            agentId: "main",
+            match: { channel: "telegram" },
+            session: { dmScope: "per-peer" },
+          },
         ],
       },
-      false,
-    ],
-    [
-      "explicit true with per-peer scope",
-      {
+      expected: false,
+    },
+    {
+      name: "explicit true with per-peer scope",
+      cfg: {
         session: { dmScope: "per-peer" },
         memory: { search: { rememberAcrossConversations: true } },
       },
-      true,
-    ],
-  ])("resolves remember-across-conversations for %s", (_name, cfg, expected) => {
-    expect(resolveRememberAcrossConversations(asConfig(cfg), "main")).toBe(expected);
+      expected: true,
+    },
+  ])("resolves remember-across-conversations for $name", ({ cfg, expected }) => {
+    expect(resolveRememberAcrossConversations(asConfig(cfg as OpenClawConfig), "main")).toBe(
+      expected,
+    );
   });
 
   it("keeps cross-conversation recall off by default for isolated DMs", () => {
@@ -166,6 +178,24 @@ describe("memory search config", () => {
       { inputType: "passage", queryInputType: "query", documentInputType: "document" },
     ],
     [
+      "literal query instruction inheritance",
+      { queryInstruction: "search_query: " },
+      undefined,
+      { queryInstruction: "search_query: " },
+    ],
+    [
+      "literal query instruction override",
+      { queryInstruction: "search_query: " },
+      { queryInstruction: "Instruct: Retrieve notes\nQuery: " },
+      { queryInstruction: "Instruct: Retrieve notes\nQuery: " },
+    ],
+    [
+      "empty query instruction suppresses inheritance",
+      { queryInstruction: "search_query: " },
+      { queryInstruction: "" },
+      { queryInstruction: undefined },
+    ],
+    [
       "session source exclusion",
       { provider: "openai", sources: ["memory", "sessions"] },
       { rememberAcrossConversations: false },
@@ -175,17 +205,13 @@ describe("memory search config", () => {
     expect(resolve(defaults, overrides, "personal")).toMatchObject(expected);
   });
 
-  it.each([
-    [undefined, "search_query: "],
-    ["Instruct: Retrieve notes\nQuery: ", "Instruct: Retrieve notes\nQuery: "],
-    ["", undefined],
-  ])("preserves literal query instruction override %j", (queryInstruction, expected) => {
-    const resolved = resolve({ queryInstruction: "search_query: " }, { queryInstruction });
-    expect(resolved?.queryInstruction).toBe(expected);
-  });
-
   it("resolves providers from the generic embedding provider registry", () => {
-    registerProvider("generic-local", "local-gguf-default", "local");
+    registerEmbeddingProvider({
+      id: "generic-local",
+      defaultModel: "local-gguf-default",
+      transport: "local",
+      create: async () => ({ provider: null }),
+    });
 
     expect(resolve({ provider: "generic-local" })).toMatchObject({
       provider: "generic-local",
@@ -247,17 +273,38 @@ describe("memory search config", () => {
   });
 
   it("merges extra memory paths from defaults and overrides", () => {
-    // Pattern identity/normalization is owned by memory-host-sdk's config-utils tests.
-    expect(resolve({ extraPaths: ["shared"] }, { extraPaths: ["agent"] })?.extraPaths).toEqual([
-      "shared",
-      "agent",
+    const resolved = resolve(
+      {
+        extraPaths: [
+          "/shared/notes",
+          " docs ",
+          { path: "../team-notes", pattern: "runbooks/**/*.md" },
+        ],
+      },
+      {
+        extraPaths: [
+          "/shared/notes",
+          { path: "../team-notes", pattern: "runbooks/**/*.md" },
+          { path: "../team-notes", pattern: "decisions/**/*.md" },
+        ],
+      },
+    );
+    expect(resolved?.extraPaths).toEqual([
+      "/shared/notes",
+      "docs",
+      { path: "../team-notes", pattern: "runbooks/**/*.md" },
+      { path: "../team-notes", pattern: "decisions/**/*.md" },
     ]);
   });
 
   it("normalizes multimodal settings", () => {
     const resolved = resolve(
       multimodalSearch({
-        multimodal: { enabled: true, modalities: ["all"], maxFileBytes: 8192 },
+        multimodal: {
+          enabled: true,
+          modalities: ["all"],
+          maxFileBytes: 8192,
+        },
       }),
     );
     expect(resolved?.multimodal).toEqual({

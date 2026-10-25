@@ -6,11 +6,13 @@ import {
   readRuntimeConfig,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginCompatibilityNotice } from "../plugins/status-compatibility.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import type { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import type { StatusJsonScanResult } from "./status.scan-result.ts";
-import { createStatusScanResultFixture as createScan } from "./status.test-support.ts";
+import { createStatusScanResultFixture } from "./status.test-support.ts";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const backup = {
@@ -22,6 +24,13 @@ const backup = {
     kind: "git",
   },
 } as const;
+const compatibilityWarning = {
+  pluginId: "legacy",
+  code: "hook-only",
+  compatCode: "hook-only-plugin-shape",
+  severity: "info" as const,
+  message: "warn",
+} satisfies PluginCompatibilityNotice;
 const runtimeSnapshot = {
   securityAudit: { summary: { critical: 1 } },
   usage: { providers: [] },
@@ -30,14 +39,10 @@ const runtimeSnapshot = {
   gatewayService: { label: "LaunchAgent" },
   nodeService: { label: "node" },
 };
-const unavailableDatabases = {
-  source: "unavailable",
-  stores: [],
-  reason: "Physical store inspection unavailable in fixture.",
-};
 
 const mocks = vi.hoisted(() => ({
   scanStatusJsonFast: vi.fn(),
+  writeRuntimeJson: vi.fn((_runtime: RuntimeEnv, _output: Record<string, unknown>) => {}),
   readBackupRunFreshness: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveStatusRuntimeSnapshot: vi.fn(),
@@ -46,6 +51,10 @@ const mocks = vi.hoisted(() => ({
 
 // mock-isolation: Fixed scan facts keep output composition independent of live Gateway collection.
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scanStatusJsonFast }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  writeRuntimeJson: mocks.writeRuntimeJson,
+}));
 vi.mock("../infra/update-run-status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-status.js")>()),
   readUpdateRunStatus: async () => ({}),
@@ -53,7 +62,11 @@ vi.mock("../infra/update-run-status.js", async (importOriginal) => ({
 
 // mock-isolation: Keep store discovery out of these runtime composition tests.
 vi.mock("./status-database-engines.js", () => ({
-  resolveStatusDatabaseEngines: async () => unavailableDatabases,
+  resolveStatusDatabaseEngines: async () => ({
+    source: "unavailable",
+    stores: [],
+    reason: "Physical store inspection unavailable in fixture.",
+  }),
 }));
 
 // mock-isolation: Keep config I/O out of this fixture while exercising the real snapshot owner.
@@ -74,14 +87,51 @@ vi.mock("./status-runtime-shared.ts", () => ({
   resolveStatusUsageSummary: mocks.resolveStatusUsageSummary,
 }));
 
+function createScan() {
+  return createStatusScanResultFixture({
+    env: { OPENCLAW_STATE_DIR: "/tmp/status-json-runtime-state" },
+    cfg: { update: { channel: "stable" }, gateway: {} },
+    sourceConfig: { gateway: {} },
+    summary: { ok: true } as never,
+    osSummary: { platform: "linux" } as never,
+    memory: null,
+    gatewayMode: "local" as const,
+    gatewayConnection: {
+      url: "ws://127.0.0.1:18789",
+      urlSource: "config",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    },
+    gatewaySelf: { host: "gateway" },
+    gatewayProbeAuthWarning: undefined,
+    agentStatus: { agents: [{ id: "main" }], defaultId: "main" } as never,
+    pluginCompatibility: [{ ...compatibilityWarning }],
+  });
+}
+
 async function runJson(
   scan: StatusJsonScanResult,
   opts: Parameters<typeof runStatusJsonCommand>[0]["opts"],
-): Promise<Record<string, unknown>> {
+) {
   mocks.scanStatusJsonFast.mockResolvedValueOnce(scan);
-  const runtime = createTestRuntime();
-  await runStatusJsonCommand({ opts, runtime });
-  return JSON.parse(String(expectDefined(runtime.log.mock.lastCall, "status JSON output")[0]));
+  await runStatusJsonCommand({ opts, runtime: createTestRuntime() });
+  return expectDefined(mocks.writeRuntimeJson.mock.lastCall, "status JSON output")[1];
+}
+
+function runtimeInput(
+  timeoutMs: number,
+  overrides: Partial<Parameters<typeof resolveStatusRuntimeSnapshot>[0]>,
+) {
+  return {
+    config: { update: { channel: "stable" }, gateway: {} },
+    sourceConfig: { gateway: {} },
+    timeoutMs,
+    gatewayProbeDeadlineMs: timeoutMs,
+    gatewayReachable: true,
+    usage: undefined,
+    includeSecurityAudit: false,
+    suppressHealthErrors: true,
+    ...overrides,
+  };
 }
 
 describe("runStatusJsonCommand", () => {
@@ -98,9 +148,52 @@ describe("runStatusJsonCommand", () => {
     vi.restoreAllMocks();
   });
 
-  it("publishes optional runtime sections and retained backup facts", async () => {
-    // Gateway/schema/default output belongs to status-json.test.ts; this owns the runtime handoff.
+  it("preserves the complete status JSON schema with optional sections", async () => {
     const scan = createScan();
+    const update = {
+      root: "/tmp/openclaw",
+      installKind: "git",
+      packageManager: "npm",
+      registry: { latestVersion: "1.2.3" },
+      git: {
+        root: "/tmp/openclaw",
+        sha: null,
+        tag: null,
+        branch: null,
+        upstream: null,
+        dirty: null,
+        fetchOk: false,
+        ahead: 0,
+        behind: 0,
+        countsCached: true,
+        stale: {
+          reason: "fetch-failed" as const,
+          failedAtMs: 1000,
+          detail: "network error",
+          runId: "run-1",
+        },
+      },
+    } satisfies typeof scan.update;
+    scan.update = structuredClone(update);
+    scan.tailscaleMode = "serve";
+    scan.gatewayMode = "remote";
+    scan.gatewayConnection = {
+      url: "wss://gateway.example.com",
+      urlSource: "config",
+      message: "Gateway target: wss://gateway.example.com",
+    };
+    scan.gatewayProbeAuthWarning = "warn";
+    scan.configDiagnostics = {
+      path: "/tmp/openclaw.json",
+      issues: [{ path: "gateway.port", message: "invalid" }],
+    };
+    scan.secretDiagnostics = ["diag"];
+    mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
+      ...structuredClone(runtimeSnapshot),
+      gatewayService: { label: "LaunchAgent", installed: true, loadedText: "loaded" },
+      nodeService: { label: "node", installed: true, loadedText: "loaded" },
+    });
+
     const result = await runJson(scan, {
       ...createStatusGatewayProbeBudget(1234),
       deep: true,
@@ -108,19 +201,69 @@ describe("runStatusJsonCommand", () => {
       agent: "beta",
       all: true,
     });
+
     expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 1234,
-        gatewayProbeDeadlineMs: 1234,
-        agentId: "beta",
-        usage: true,
-        deep: true,
-        includeSecurityAudit: true,
-      }),
+      runtimeInput(1234, { agentId: "beta", usage: true, deep: true, includeSecurityAudit: true }),
     );
-    expect(result).toMatchObject(runtimeSnapshot);
     expect(mocks.readBackupRunFreshness).toHaveBeenCalledWith(scan.env);
-    expect(result.backups).toEqual(backup);
+    expect(result).toEqual({
+      ...runtimeSnapshot,
+      ok: true,
+      recoveryCopies: expect.objectContaining({
+        scope: "local",
+        total: expect.objectContaining({ count: 0, logicalBytes: 0 }),
+      }),
+      os: { platform: "linux" },
+      update,
+      updateChannel: "stable",
+      updateChannelSource: "config",
+      memory: null,
+      memoryPlugin: { enabled: true, slot: "memory" },
+      databaseEngines: {
+        source: "unavailable",
+        stores: [],
+        reason: "Physical store inspection unavailable in fixture.",
+        experimental: false,
+        families: [
+          ["state", "Shared state", false],
+          ["agent", "Agent data", false],
+          ["workboard", "Workboard", false],
+          ["logbook", "Logbook", false],
+          ["team-reports", "Team Reports", false],
+          ["quarantine", "Database quarantine", true],
+          ["managed-update", "Managed update handoffs", true],
+          ["package-activation", "Package activation journal", true],
+        ].map(([id, label, fixedLocal]) => ({
+          id,
+          label,
+          fixedLocal,
+          default: "sqlite",
+          override: null,
+          effective: "sqlite",
+        })),
+      },
+      gateway: {
+        mode: "remote",
+        url: "wss://gateway.example.com",
+        urlSource: "config",
+        misconfigured: false,
+        reachable: true,
+        connectLatencyMs: 42,
+        self: { host: "gateway" },
+        error: null,
+        authWarning: "warn",
+      },
+      gatewayService: { label: "LaunchAgent", installed: true, loadedText: "loaded" },
+      nodeService: { label: "node", installed: true, loadedText: "loaded" },
+      agents: { agents: [{ id: "main" }], defaultId: "main" },
+      configDiagnostics: {
+        path: "/tmp/openclaw.json",
+        issues: [{ path: "gateway.port", message: "invalid" }],
+      },
+      secretDiagnostics: ["diag"],
+      pluginCompatibility: { count: 1, warnings: [compatibilityWarning] },
+      backups: backup,
+    });
   });
 
   it("records requested local inspections as not collected for online JSON", async () => {

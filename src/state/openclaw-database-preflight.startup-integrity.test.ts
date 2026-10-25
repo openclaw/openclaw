@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSelectedSessionEntryRows } from "../config/sessions/session-accessor.sqlite-entry-select.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -16,6 +18,7 @@ import {
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { VERSION } from "../version.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
@@ -36,6 +39,7 @@ import {
   closeOpenClawAgentDatabaseByPath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
 import { sqliteDatabaseSealSchemaFor } from "./openclaw-database-seal-schema.js";
 import {
@@ -77,6 +81,47 @@ it("cold-loads a compatible storage seal without validation SQL or snapshots", a
   expect(fs.readFileSync(agentPath)).toEqual(before);
   expect(readSqliteDatabaseCleanClose(agentPath)).toBe(true);
 });
+
+it.each(["legacy", "malformed", "unknown-policy"])(
+  "runs full agent admission for a %s seal",
+  async (kind) => {
+    const fixture = databaseFixture(tempDirs.make("openclaw-invalid-seal-"));
+    const { path: agentPath } = fixture.agent();
+    closeDatabases();
+    const file = fs.statSync(agentPath, { bigint: true });
+    const seal = readSqliteCleanCloseSeal(agentPath, file)!;
+    if (kind === "malformed") {
+      fs.writeFileSync(`${agentPath}.seal`, "{torn");
+    } else {
+      const identity =
+        kind === "legacy"
+          ? createHash("sha256")
+              .update(JSON.stringify([2, VERSION, "agent"]))
+              .update(OPENCLAW_AGENT_SCHEMA_SQL)
+              .digest("hex")
+          : "unknown-policy";
+      expect(
+        writeSqliteCleanCloseSeal(agentPath, identity, file, {
+          ...seal,
+          identity:
+            kind === "legacy"
+              ? undefined
+              : { ...sqliteDatabaseSealSchemaFor("agent")!.identity, policy: -1 },
+        }),
+      ).toBe(true);
+    }
+    retireSqliteDatabaseAdmissionForPath(agentPath);
+    expect(readSqliteDatabaseCleanClose(agentPath)).toBe(false);
+    fixture.state();
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      fixture.agent();
+      expect(observer.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    } finally {
+      observer.restore();
+    }
+  },
+);
 
 it("admits every previously sealed same-version agent before transcript readers run", async () => {
   const fixture = databaseFixture(tempDirs.make("startup-additive-seal-"));

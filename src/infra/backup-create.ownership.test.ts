@@ -72,13 +72,17 @@ describe("backup SQLite ownership", () => {
         registerOpenClawAgentDatabase({ agentId: "main", path: aliasPath, env: state.env });
       }
       closeOpenClawStateDatabase();
+      const snapshots = vi.fn();
       const runtime = createTestRuntime();
       const archive = await backupCreateCommand(runtime, {
         output: state.path("backup.tar.gz"),
         verify: true,
-        ...(alias === "namespace" ? {} : { includeWorkspace }),
+        ...(alias === "namespace" ? {} : { includeWorkspace, onSqliteSnapshots: snapshots }),
       });
       expect(archive.verified).toBe(true);
+      if (alias !== "namespace") {
+        expectSnapshotOwners(snapshots, resolveOpenClawStateSqlitePath(state.env), agentPath);
+      }
       const restoredRoot = state.path("restored");
       await expect(restoreBackup(state, archive, runtime)).resolves.toMatchObject({ ok: true });
       if (alias === "namespace") {
@@ -148,9 +152,14 @@ describe("backup SQLite ownership", () => {
       const linkedPath = state.statePath("plugins", "linked.sqlite");
       const backingPath = state.statePath("plugins", "database.bin");
       await fs.mkdir(path.dirname(backingPath));
-      withDatabase(backingPath, (database) =>
-        database.exec("CREATE TABLE records (value INTEGER); INSERT INTO records VALUES (7)"),
-      );
+      withDatabase(backingPath, (database) => {
+        database.function("plugin_double", { deterministic: true }, (value) => Number(value) * 2);
+        database.exec(`
+            CREATE TABLE records (value INTEGER NOT NULL);
+            INSERT INTO records VALUES (7);
+            CREATE INDEX records_double ON records(plugin_double(value));
+          `);
+      });
       await fs.symlink("database.bin", linkedPath);
       const sourceBytes = await fs.readFile(backingPath);
       const output = state.path("rejected.tar.gz");
@@ -181,7 +190,7 @@ describe("backup SQLite ownership", () => {
       const globalPath = resolveOpenClawStateSqlitePath(state.env);
       const capture = sqliteSnapshot.createVerifiedSqliteSnapshot;
       let registered = false;
-      using _ = vi
+      const snapshot = vi
         .spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot")
         .mockImplementation(async (options) => {
           if (!registered && options.sourcePath === globalPath) {
@@ -191,28 +200,36 @@ describe("backup SQLite ownership", () => {
           }
           return await capture(options);
         });
-      const runtime = createTestRuntime();
-      const snapshots = vi.fn();
-      const archive = await createVerifiedBackup(state, { onSqliteSnapshots: snapshots }, runtime);
-      expectSnapshotOwners(snapshots, globalPath, agentPath);
-      expect(registered).toBe(true);
-      expect(archive.verified).toBe(true);
-      expect(archive.warnings ?? []).toEqual([]);
-      const restored = await restoreBackup(state, archive, runtime);
-      const restoredPath = (source: string) =>
-        path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source));
-      expectDatabaseRows(restoredPath(globalPath), "SELECT agent_id, path FROM agent_databases", [
-        { agent_id: "main", path: agentPath },
-      ]);
-      expectDatabaseRows(
-        restoredPath(agentPath),
-        "SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'",
-        [{ role: "agent", agent_id: "main" }],
-      );
-      expectDatabaseRows(restoredPath(agentPath), "SELECT value FROM durable_records", [
-        { value: "registered-before-root-capture" },
-      ]);
-      await expectAbsent(`${restoredPath(agentPath)}.seal`);
+      try {
+        const runtime = createTestRuntime();
+        const snapshots = vi.fn();
+        const archive = await createVerifiedBackup(
+          state,
+          { onSqliteSnapshots: snapshots },
+          runtime,
+        );
+        expectSnapshotOwners(snapshots, globalPath, agentPath);
+        expect(registered).toBe(true);
+        expect(archive.verified).toBe(true);
+        expect(archive.warnings ?? []).toEqual([]);
+        const restored = await restoreBackup(state, archive, runtime);
+        const restoredPath = (source: string) =>
+          path.join(restored.targetPath, buildBackupArchivePath(archive.archiveRoot, source));
+        expectDatabaseRows(restoredPath(globalPath), "SELECT agent_id, path FROM agent_databases", [
+          { agent_id: "main", path: agentPath },
+        ]);
+        expectDatabaseRows(
+          restoredPath(agentPath),
+          "SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'",
+          [{ role: "agent", agent_id: "main" }],
+        );
+        expectDatabaseRows(restoredPath(agentPath), "SELECT value FROM durable_records", [
+          { value: "registered-before-root-capture" },
+        ]);
+        await expectAbsent(`${restoredPath(agentPath)}.seal`);
+      } finally {
+        snapshot.mockRestore();
+      }
     }),
   );
   it.each([

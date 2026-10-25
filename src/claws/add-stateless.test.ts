@@ -2,7 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
 import * as mcpMutation from "../agents/mcp-config-mutation.js";

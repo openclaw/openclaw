@@ -1,10 +1,15 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import {
   extractContentFromMessage,
   extractTextFromMessage,
   formatTuiFooter,
+  formatTuiErrorMessage,
+  isolateRtlRenderedLine,
   isTerminalSafeAutocompleteValue,
+  isCommandMarkedMessage,
+  resolveFinalAssistantText,
   sanitizeTerminalControlsAndBinary,
   sanitizeRenderableLine,
   sanitizeRenderableText,
@@ -39,6 +44,15 @@ const includes = (actual: string, expected: readonly string[]) => {
   }
 };
 
+it("hides complete HTML error pages after an HTTP reason phrase", () => {
+  const rendered = resolveFinalAssistantText({
+    errorMessage: "HTTP 502 Bad Gateway\n\n<!doctype html><html><body>down</body></html>",
+  });
+  expect(rendered).toBe(
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  );
+});
+
 describe("formatTuiFooter", () => {
   it.each(["auto", "ultrafast"] as const)(
     "shows %s and session modes in one compact summary",
@@ -68,21 +82,38 @@ describe("formatTuiFooter", () => {
   });
 
   it("sanitizes terminal controls and collapses footer fields to one line", () => {
-    expect(
-      footer(
-        {
-          model:
-            "provider/model-start\u001b[3Jmiddle\u001b]52;c;footer-clipboard\u0007\u009b2K\u009d0;footer-c1-title\u009cmodel-end\tUnicode",
-        },
-        {
-          agentLabel: "agent-start\u001b[38;5;201magent-end\nمرحبا",
-          sessionLabel: "session-start\u001b]0;footer-title\u0007session-end\r\nשלום",
-          deliver: true,
-        },
-      ),
-    ).toBe(
-      "\u2067agent agent-startagent-end مرحبا | session session-startsession-end שלום | provider/model-startmiddlemodel-end Unicode | deliver:on | tokens ?\u2069",
+    const attacks = [
+      "\u001b[38;5;201m",
+      "\u001b[3J",
+      "\u001b]0;footer-title\u0007",
+      "\u001b]52;c;footer-clipboard\u0007",
+      "\u009b2K",
+      "\u009d0;footer-c1-title\u009c",
+    ];
+    const rendered = footer(
+      {
+        model: `provider/model-start${attacks[1]}middle${attacks[3]}${attacks[4]}${attacks[5]}model-end\tUnicode`,
+      },
+      {
+        agentLabel: `agent-start${attacks[0]}agent-end\nمرحبا`,
+        sessionLabel: `session-start${attacks[2]}session-end\r\nשלום`,
+        deliver: true,
+      },
     );
+
+    includes(rendered, [
+      "agent-startagent-end",
+      "مرحبا",
+      "session-startsession-end",
+      "שלום",
+      "model-startmiddlemodel-end Unicode",
+      "\u2067",
+      "\u2069",
+    ]);
+    expect(rendered).not.toMatch(/[\r\n\t]/u);
+    for (const attack of attacks) {
+      expect(rendered).not.toContain(attack);
+    }
   });
 
   it.each([
@@ -107,35 +138,35 @@ describe("formatTuiFooter", () => {
 
 describe("extractTextFromMessage", () => {
   it.each([
-    [[attachment("document", "/document", "Attached file")], {}, "Attached file"],
+    [[attachment("document", "/document", "Attached file")], "Attached file"],
     [
       [
         { type: "image", source: { type: "url", url: "/image.png" } },
         attachment("document", "/report.pdf", "report.pdf"),
       ],
-      {},
       "Attached image\nAttached file: report.pdf",
     ],
-    ["", { __openclaw: { media: [{ path: "/media/inbound/media-only.png" }] } }, "Attached image"],
+  ] as const)("renders attachment-only user content %j", (content, expected) => {
+    expect(userText(content)).toBe(expected);
+  });
+
+  it.each([
+    [[{ path: "/media/inbound/media-only.png" }], "Attached image"],
     [
-      "",
-      {
-        __openclaw: {
-          media: [
-            { path: "/media/inbound/generated-image.png", contentType: "image/png" },
-            { path: "/media/inbound/generated-report.pdf", contentType: "application/pdf" },
-          ],
-        },
-      },
+      [
+        { path: "/media/inbound/generated-image.png", contentType: "image/png" },
+        { path: "/media/inbound/generated-report.pdf", contentType: "application/pdf" },
+      ],
       "Attached image\nAttached file",
     ],
-    [
-      [attachment("document", "/report.pdf", "\u001b[31mreport.pdf\u001b[0m\u0000")],
-      {},
-      "Attached file: report.pdf",
-    ],
-  ] as const)("renders safe user attachments %j", (content, fields, expected) => {
-    expect(userText(content, fields)).toBe(expected);
+  ] as const)("renders canonical media %j for an empty user turn", (media, expected) => {
+    expect(userText("", { __openclaw: { media } })).toBe(expected);
+  });
+
+  it("sanitizes the display name of an attachment-only user turn", () => {
+    expect(
+      userText([attachment("document", "/report.pdf", "\u001b[31mreport.pdf\u001b[0m\u0000")]),
+    ).toBe("Attached file: report.pdf");
   });
 
   it.each([
@@ -184,11 +215,19 @@ describe("extractTextFromMessage", () => {
     includes(assistantText([], { stopReason: "error", errorMessage }), expected);
   });
 
+  it("joins multiple text blocks with single newlines", () => {
+    expect(assistantText([textBlock("first\ncontinued"), textBlock("second")])).toBe(
+      "first\ncontinued\nsecond",
+    );
+  });
+
   it.each([
     [undefined, "ponder", "hello", "hello"],
+    [false, "ponder", "hello", "hello"],
     [true, "ponder", "hello", "[thinking]\nponder\n\nhello"],
     [true, "ponder", "", "[thinking]\nponder"],
     [true, "", "hello", "hello"],
+    [true, "", "", ""],
     [false, "ponder", "", ""],
   ] as const)(
     "renders thinking=%s, thought=%j, content=%j",
@@ -209,10 +248,9 @@ describe("extractTextFromMessage", () => {
   );
 
   it.each([
-    [[textBlock("first\ncontinued"), textBlock("second")], "first\ncontinued\nsecond"],
     ["Hello\x1b[31m red\x1b[0m\x00world\nNext line", "Hello redworld\nNext line"],
     [[{ type: "text", text: "������������������������" }], "[binary data omitted]"],
-  ] as const)("renders and sanitizes assistant content %j", (content, expected) => {
+  ] as const)("sanitizes assistant content %j", (content, expected) => {
     expect(assistantText(content)).toBe(expected);
   });
 
@@ -264,6 +302,23 @@ it("renders error text when stopReason is error and content is not an array", ()
   expect(text).toContain("HTTP 429");
 });
 
+it("detects command-marked messages", () => {
+  expect(isCommandMarkedMessage({ command: true })).toBe(true);
+  expect(isCommandMarkedMessage({ command: false })).toBe(false);
+  expect(isCommandMarkedMessage({})).toBe(false);
+});
+
+it("redacts and sanitizes terminal escapes in nested error causes", () => {
+  const secret = "sk-abcdefghijklmnopqrstuv";
+  const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
+
+  const formatted = formatTuiErrorMessage(new Error("gateway down", { cause }));
+
+  includes(formatted, ["gateway down", "Authorization: Bearer"]);
+  expect(formatted).not.toContain(secret);
+  expect(formatted).not.toContain("\u001b");
+});
+
 const cjk =
   "MotherTeresa特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";
 const code =
@@ -298,15 +353,34 @@ describe("Markdown display safety", () => {
 
     expect(sanitized).toBe("# مرحبا\n> שלום");
   });
+
+  it("keeps rendered padding outside RTL isolates", () => {
+    const rendered = "  \x1b[1mمرحبا\x1b[0m   ";
+    const isolated = isolateRtlRenderedLine(rendered);
+
+    expect(isolated).toBe(`  \u2067\x1b[1mمرحبا\x1b[0m\u2069   `);
+    expect(visibleWidth(isolated)).toBe(visibleWidth(rendered));
+  });
 });
 
-it.each([
-  ["/tmp/مرحبا-東京.txt", true],
-  ["👩🏽‍💻/cafe\u0301.txt", true],
-  ["bad\x1b[31m", false],
-  ["bad\u202evalue", false],
-] as const)("checks autocomplete safety for %j", (value, safe) => {
-  expect(isTerminalSafeAutocompleteValue(value)).toBe(safe);
+it("accepts ordinary Unicode and rejects terminal or bidi controls", () => {
+  expect(isTerminalSafeAutocompleteValue("/tmp/مرحبا-東京.txt")).toBe(true);
+  expect(isTerminalSafeAutocompleteValue("👩🏽‍💻/cafe\u0301.txt")).toBe(true);
+  for (const value of [
+    "bad\x1b[31m",
+    "bad\tvalue",
+    "bad\rvalue",
+    "bad\nvalue",
+    "bad\u007fvalue",
+    "bad\u0085value",
+    "bad\u009bvalue",
+    "bad\u200evalue",
+    "bad\u202evalue",
+    "bad\u2066value",
+    "bad\u2069value",
+  ]) {
+    expect(isTerminalSafeAutocompleteValue(value)).toBe(false);
+  }
 });
 
 it.each([

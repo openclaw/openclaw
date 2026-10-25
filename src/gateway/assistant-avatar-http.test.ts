@@ -35,31 +35,65 @@ function projectSelected(avatar: string, cfg = avatarFixture().cfg) {
 }
 
 it("inlines the selected local file", async () => {
-  const { cfg, workspace } = avatarFixture();
+  const { projectInline, workspace } = avatarFixture("", { avatar: "avatar.png" });
   fs.writeFileSync(path.join(workspace, "avatar.png"), APNG_BYTES);
 
-  expect(await projectSelected("avatar.png", cfg)).toMatchObject({
+  expect(await projectInline()).toMatchObject({
     avatar: encodeDataUrl(APNG_BYTES),
     resolution: { kind: "local", source: "avatar.png" },
   });
 });
 
+it("preserves a selected emoji over a lower-priority IDENTITY.md file", async () => {
+  const { projectInline, workspace } = avatarFixture("", { emoji: "🦞" });
+  fs.writeFileSync(path.join(workspace, "identity.png"), APNG_BYTES);
+  fs.writeFileSync(path.join(workspace, "IDENTITY.md"), "- Avatar: identity.png\n");
+
+  expect(await projectInline()).toEqual({ avatar: "🦞", resolution: null });
+});
+
 it.each([
-  ["🦞", "🦞", null, null],
-  ["https://example.com/avatar.png", "🦞", "remote", null],
-  [encodeDataUrl(APNG_BYTES), "🦞", "data", null],
-  ["data:text/plain,avatar", "🦞", "none", "unsupported_data_url"],
-  ["slack://avatar.png", "🦞", "none", "unsupported_uri"],
-  ["/avatar/main/extra", "🦞", "none", "outside_workspace"],
-  ["missing.png", "🦞", "none", "missing"],
-  ["missing.png", undefined, "none", "missing"],
-] as const)("projects selected avatar %s (fallback %s)", async (avatar, emoji, kind, reason) => {
-  const cfg = avatarFixture().cfg;
-  expect(
-    await resolveGatewayAssistantAvatar({ cfg, identity: { agentId: "main", avatar, emoji } }),
-  ).toEqual({
-    avatar: kind === "none" ? (emoji ?? "A") : avatar,
-    resolution: kind ? { kind, source: avatar, ...(reason ? { reason } : { url: avatar }) } : null,
+  ["remote URL", "https://example.com/avatar.png"],
+  ["data URI", encodeDataUrl(APNG_BYTES)],
+])("preserves a selected %s", async (_name, avatar) => {
+  expect(await avatarFixture("", { avatar }).projectInline()).toMatchObject({
+    avatar,
+    resolution: { source: avatar },
+  });
+});
+
+it.each([
+  ["data:text/plain,avatar", "unsupported_data_url"],
+  ["slack://avatar.png", "unsupported_uri"],
+  ["/avatar/main/extra", "outside_workspace"],
+  ["//evil.example/avatar/main", "outside_workspace"],
+  ["//[", "outside_workspace"],
+  ["/avatar\\main", "outside_workspace"],
+])("rejects selected avatar %s", async (avatar, reason) => {
+  expect(await projectSelected(avatar)).toEqual({
+    avatar: "🦞",
+    resolution: { kind: "none", reason, source: avatar },
+  });
+});
+
+it.each([undefined, "🦞"])(
+  "uses the fallback for missing local avatars (emoji=%s)",
+  async (emoji) => {
+    expect(await avatarFixture("", { avatar: "missing.png", emoji }).projectInline()).toEqual({
+      avatar: emoji ?? "A",
+      resolution: { kind: "none", reason: "missing", source: "missing.png" },
+    });
+  },
+);
+
+it("reports pinned-read rejection instead of claiming the avatar is local", async () => {
+  const { projectInline, workspace } = avatarFixture("", { avatar: "avatar.png" });
+  fs.writeFileSync(path.join(workspace, "original.png"), APNG_BYTES);
+  fs.linkSync(path.join(workspace, "original.png"), path.join(workspace, "avatar.png"));
+
+  expect(await projectInline()).toEqual({
+    avatar: "A",
+    resolution: { kind: "none", reason: "unreadable", source: "avatar.png" },
   });
 });
 
@@ -76,31 +110,40 @@ it.each(["/avatar/main", "/openclaw/avatar/main"])(
   },
 );
 
-function avatarFixture(basePath = "") {
+function avatarFixture(basePath = "", initialIdentity: { avatar?: string; emoji?: string } = {}) {
   const workspace = tempRoots.make("openclaw-avatar-");
   const entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {
-    main: { workspace, identity: {} },
+    main: { workspace, identity: initialIdentity },
   };
   const config: OpenClawConfig = {
     ...(basePath ? { gateway: { controlUi: { basePath } } } : {}),
     agents: { entries },
   };
   const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
-  const resolve = async (agentId = "main", httpBasePath?: string) =>
-    resolveGatewayAssistantAvatar({
-      cfg: config,
-      identity: await resolveAssistantIdentity({ cfg: config, agentId }),
-      httpBasePath,
-    });
   return {
     workspace,
     cfg: config,
+    async projectInline(this: void) {
+      return resolveGatewayAssistantAvatar({
+        cfg: config,
+        identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
+      });
+    },
     setAvatar(this: void, avatar: string | undefined, agentId = "main") {
-      (entries[agentId] ??= { workspace }).identity = { avatar };
+      const identity = entries[agentId]?.identity;
+      if (identity) {
+        identity.avatar = avatar;
+      } else {
+        entries[agentId] = { workspace, identity: { avatar } };
+      }
       setRuntimeConfigSnapshot(config);
     },
     async project(this: void, agentId = "main") {
-      const { avatar } = await resolve(agentId, basePath);
+      const { avatar } = await resolveGatewayAssistantAvatar({
+        cfg: config,
+        identity: await resolveAssistantIdentity({ cfg: config, agentId }),
+        httpBasePath: basePath,
+      });
       return avatar;
     },
     async request(this: void, url: string, method = "GET", etag?: string, authorized = true) {
@@ -168,26 +211,28 @@ it("coalesces concurrent thumbnail requests for the same admitted source", async
   expect(images[5]).toBe(images[0]);
 });
 
-it.each(["thumbnail", "notification"] as const)("retries failed %s preparation", async (kind) => {
+it("retries failed thumbnail preparation without retaining the rejected result", async () => {
   const source = {
-    dataUrl:
-      kind === "thumbnail"
-        ? 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>'
-        : encodeDataUrl(png(1, Buffer.from([255, 150, 0, 255]))),
-    revision: `retry-${kind}`,
+    dataUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>',
+    revision: "retry-svg",
   };
   const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("decode failed"));
-  const read = kind === "thumbnail" ? readThumbnail : readIcon;
-  if (kind === "thumbnail") {
-    await expect(read(source)).rejects.toThrow("decode failed");
-  } else {
-    expect(await read(source)).toBeUndefined();
-  }
-  const recovered = await read(source);
-  if (kind === "notification") {
-    expect(recovered).toMatch(/^data:image\/png;base64,/);
-  }
-  expect(await read(source)).toBe(recovered);
+  await expect(readThumbnail(source)).rejects.toThrow("decode failed");
+  const recovered = await readThumbnail(source);
+  expect(await readThumbnail(source)).toBe(recovered);
+  expect(fetch).toHaveBeenCalledTimes(2);
+});
+
+it("retries a failed notification image on the next delivery", async () => {
+  const source = {
+    dataUrl: encodeDataUrl(png(1, Buffer.from([255, 150, 0, 255]))),
+    revision: "retry-notification-icon",
+  };
+  const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("decode failed"));
+  expect(await readIcon(source)).toBeUndefined();
+  const icon = await readIcon(source);
+  expect(icon).toMatch(/^data:image\/png;base64,/);
+  expect(await readIcon(source)).toBe(icon);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
@@ -204,7 +249,7 @@ it("keeps a detailed saved picker avatar within the notification image budget", 
   expect(size?.height).toBeLessThanOrEqual(32);
 });
 
-// Two 2×2 red/blue frames encoded with img2webp.
+// Two 2×2 red/blue frames encoded with img2webp; VP8X animation flag and timing are retained.
 const ANIMATED_WEBP = Buffer.from(
   "UklGRoQAAABXRUJQVlA4WAoAAAACAAAAAQAAAQAAQU5JTQYAAAD/////AABBTk1GKAAAAAAAAAAAAAEAAAEAAGQAAAJWUDhMDwAAAC8BQAAABxD9j/4HIqL/AQBBTk1GKAAAAAAAAAAAAAEAAAEAAGQAAABWUDhMDwAAAC8BQAAABxDR//4HIqL/AQA=",
   "base64",
@@ -222,6 +267,7 @@ it.each([
   ["local", "image/apng", "avatar.png", APNG_BYTES],
   ["escaped-base64", "image/apng", undefined, APNG_BYTES],
   ["local", "image/webp", "avatar.webp", ANIMATED_WEBP],
+  ["data", "image/webp", undefined, ANIMATED_WEBP],
   ["data", "image/bmp", undefined, BMP_BYTES],
   ["percent-data", "image/avif", undefined, AVIF_BYTES],
   [
