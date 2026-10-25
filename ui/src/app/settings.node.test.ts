@@ -24,6 +24,7 @@ import {
   persistSessionToken,
   resolvePageGatewaySettings,
   saveSettings,
+  type UiSettings,
 } from "./settings.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
@@ -35,6 +36,32 @@ function writeStored(value: Record<string, unknown>, gatewayUrl = expectedGatewa
   localStorage.setItem(`openclaw.control.settings.v1:${gatewayUrl}`, JSON.stringify(value));
 }
 
+function startup(gatewayUrl: string, hash = "", pathname = "/", token = "") {
+  return resolveApplicationStartupSettings(makeUiSettings(gatewayUrl, { token }), {
+    pathname,
+    search: "",
+    hash,
+  });
+}
+
+function roundTrip<K extends keyof UiSettings>(key: K, value: UiSettings[K]) {
+  saveSettings({ ...loadSettings(), [key]: value });
+  expect(loadSettings()[key]).toEqual(value);
+}
+
+function mountTheme(initial = loadSettings()) {
+  const { gateway } = createGatewayStoreTestStore({ settings: initial });
+  const theme = createApplicationTheme(initial, gateway);
+  return {
+    gateway,
+    theme,
+    dispose() {
+      theme.dispose();
+      gateway.stop();
+    },
+  };
+}
+
 describe("resolveApplicationStartupSettings", () => {
   beforeEach(() => {
     vi.stubGlobal("window", {});
@@ -44,84 +71,53 @@ describe("resolveApplicationStartupSettings", () => {
     vi.unstubAllGlobals();
   });
 
-  it("clears a cached shared token when the native dashboard selects browser identity", () => {
+  it("clears shared tokens for native browser identity", () => {
     const gatewayUrl = "wss://gateway.example";
     window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token: null };
-    const startup = resolveApplicationStartupSettings(
-      makeUiSettings(gatewayUrl, { token: "shared-owner-token" }),
-      { pathname: "/chat", search: "", hash: "" },
-    );
-    expect(startup).toMatchObject({ settings: { gatewayUrl, token: "" }, password: null });
+    expect(startup(gatewayUrl, "", "/chat", "shared-owner-token")).toMatchObject({
+      settings: { gatewayUrl, token: "" },
+      password: null,
+    });
   });
 
   it("strips fragment bootstrap tokens without persisting them", () => {
-    const startup = resolveApplicationStartupSettings(makeUiSettings("wss://gateway.example"), {
-      pathname: "/",
-      search: "",
-      hash: "#gatewayUrl=wss%3A%2F%2Fgateway.example&bootstrapToken=boot-123&bootstrapProfile=owner",
+    const result = startup(
+      "wss://gateway.example",
+      "#gatewayUrl=wss%3A%2F%2Fgateway.example&bootstrapToken=boot-123&bootstrapProfile=owner",
+    );
+    expect(result).toMatchObject({
+      pendingGatewayUrl: null,
+      pendingGatewayToken: null,
+      pendingBootstrapToken: "boot-123",
+      pendingBootstrapProfile: "owner",
+      settings: { token: "" },
     });
-    expect(startup.pendingGatewayUrl).toBeNull();
-    expect(startup.pendingGatewayToken).toBeNull();
-    expect(startup.pendingBootstrapToken).toBe("boot-123");
-    expect(startup.pendingBootstrapProfile).toBe("owner");
-    expect(startup.settings.token).toBe("");
-    expect(startup.location).toEqual({ pathname: "/", search: "", hash: "" });
+    expect(result.location).toEqual({ pathname: "/", search: "", hash: "" });
   });
 
   it("carries fragment bootstrap tokens with changed gateway URLs", () => {
-    const startup = resolveApplicationStartupSettings(makeUiSettings("wss://gateway-a.example"), {
-      pathname: "/dash",
-      search: "",
-      hash: "#gatewayUrl=wss%3A%2F%2Fgateway-b.example&bootstrapToken=boot-456",
+    const result = startup(
+      "wss://gateway-a.example",
+      "#gatewayUrl=wss%3A%2F%2Fgateway-b.example&bootstrapToken=boot-456",
+      "/dash",
+    );
+    expect(result).toMatchObject({
+      pendingGatewayUrl: "wss://gateway-b.example",
+      pendingGatewayToken: null,
+      pendingBootstrapToken: "boot-456",
+      pendingBootstrapProfile: null,
     });
-    expect(startup.pendingGatewayUrl).toBe("wss://gateway-b.example");
-    expect(startup.pendingGatewayToken).toBeNull();
-    expect(startup.pendingBootstrapToken).toBe("boot-456");
-    expect(startup.pendingBootstrapProfile).toBeNull();
-    expect(startup.location).toEqual({ pathname: "/dash", search: "", hash: "" });
+    expect(result.location).toEqual({ pathname: "/dash", search: "", hash: "" });
   });
 
-  it("re-scopes the selected token when native auth changes only the Gateway and password", () => {
+  it("re-scopes tokens when native Gateway and password change", () => {
     window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
       gatewayUrl: "wss://gateway-b.example",
       password: "next-password",
     };
-    const initial = makeUiSettings("wss://gateway-a.example", { token: "old-token" });
-    const startup = resolveApplicationStartupSettings(initial, {
-      pathname: "/",
-      search: "",
-      hash: "",
-    });
-    expect(startup.settings.token).toBe("");
-    expect(startup.password).toBe("next-password");
-  });
-
-  it("carries a bounded native client identity into gateway startup", () => {
-    Object.assign(window, {
-      __OPENCLAW_NATIVE_CONTROL_AUTH__: {
-        gatewayUrl: "wss://gateway.example",
-        client: {
-          id: "openclaw-ios",
-          mode: "ui",
-          platform: "iOS 27.0.0",
-          deviceFamily: "iPhone",
-          instanceId: "ios-installation",
-          scopes: ["operator.read", "operator.write"],
-        },
-      },
-    });
-    const startup = resolveApplicationStartupSettings(makeUiSettings("wss://gateway.example"), {
-      pathname: "/chat",
-      search: "",
-      hash: "",
-    });
-    expect(startup.nativeClient).toEqual({
-      clientName: "openclaw-ios",
-      mode: "ui",
-      platform: "iOS 27.0.0",
-      deviceFamily: "iPhone",
-      instanceId: "ios-installation",
-      scopes: ["operator.read", "operator.write"],
+    expect(startup("wss://gateway-a.example", "", "/", "old-token")).toMatchObject({
+      settings: { token: "" },
+      password: "next-password",
     });
   });
 });
@@ -143,7 +139,7 @@ describe("gateway settings and layout persistence", () => {
     }));
   });
 
-  it("keeps development credentials scoped to the upstream when the Vite target changes", () => {
+  it("scopes development credentials to the Vite upstream", () => {
     setTestLocation({ protocol: "http:", host: "localhost:5173", pathname: "/" });
     vi.stubGlobal("OPENCLAW_UI_DEV_SERVER", true);
     const first = "ws://localhost:18789";
@@ -193,7 +189,7 @@ describe("gateway settings and layout persistence", () => {
     }
   });
 
-  it("binds standalone documents to the page Gateway without persisting a selection", () => {
+  it("binds standalone pages without persisting a selection", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
@@ -227,7 +223,7 @@ describe("gateway settings and layout persistence", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("isolates remembered sessions and selected agents across inferred base paths", () => {
+  it("isolates sessions and agents across inferred base paths", () => {
     function visit(base: string) {
       setTestLocation({ protocol: "http:", host: "multi.example:8443", pathname: `/${base}/chat` });
     }
@@ -269,11 +265,10 @@ describe("gateway settings and layout persistence", () => {
       columnWeights: [0.4, 0.6],
       activePaneId: "p2",
     };
-    saveSettings({ ...loadSettings(), chatSplitLayout });
-    expect(loadSettings().chatSplitLayout).toEqual(chatSplitLayout);
+    roundTrip("chatSplitLayout", chatSplitLayout);
   });
 
-  it("round-trips per-session dashboard tabs and docks while dropping legacy face", () => {
+  it("round-trips dashboard tabs and docks, dropping legacy face", () => {
     const boardSessionViews = {
       main: { activeTabId: "research", reopenDockByTab: { research: "left" } },
       legacy: { activeTabId: "notes" },
@@ -285,8 +280,7 @@ describe("gateway settings and layout persistence", () => {
       },
     });
     expect(loadSettings().boardSessionViews).toEqual(boardSessionViews);
-    saveSettings(loadSettings());
-    expect(loadSettings().boardSessionViews).toEqual(boardSessionViews);
+    roundTrip("boardSessionViews", boardSessionViews);
   });
 
   it("normalizes and round-trips per-session sidebar layouts", () => {
@@ -304,17 +298,14 @@ describe("gateway settings and layout persistence", () => {
   it.each([
     [" Research ", "research"],
     [null, null],
-  ])(
-    "normalizes remembered team scope %j without conflating all agents and unset",
-    (value, expected) => {
-      writeStored({ sidebarPreTeamScope: value });
-      const settings = loadSettings();
-      expect(settings.sidebarPreTeamScope).toBe(expected);
-      saveSettings(settings);
-      expect(loadSettings().sidebarPreTeamScope).toBe(expected);
-      expect(Object.hasOwn(readStored(), "sidebarPreTeamScope")).toBe(expected !== undefined);
-    },
-  );
+  ])("normalizes team scope %j without losing explicit null", (value, expected) => {
+    writeStored({ sidebarPreTeamScope: value });
+    const settings = loadSettings();
+    expect(settings.sidebarPreTeamScope).toBe(expected);
+    saveSettings(settings);
+    expect(loadSettings().sidebarPreTeamScope).toBe(expected);
+    expect(Object.hasOwn(readStored(), "sidebarPreTeamScope")).toBe(expected !== undefined);
+  });
 
   it("persists rail shortcuts across save and load, normalizing bad values", () => {
     const gwUrl = expectedGatewayUrl("");
@@ -344,7 +335,7 @@ describe("gateway settings and layout persistence", () => {
   });
 
   it.each(["direct save", "unrelated locale patch"])(
-    "keeps legacy sidebar order and pins out of rail shortcuts through %s",
+    "preserves legacy sidebar data outside rail shortcuts: %s",
     (action) => {
       const gatewayUrl = expectedGatewayUrl("");
       const sessionsByGateway = {
@@ -385,13 +376,12 @@ describe("gateway settings and layout persistence", () => {
   );
 
   it("persists roster mode and defaults invalid stored modes to chip", () => {
-    saveSettings({ ...loadSettings(), sidebarAgentsMode: "roster" });
-    expect(loadSettings().sidebarAgentsMode).toBe("roster");
+    roundTrip("sidebarAgentsMode", "roster");
     writeStored({ sidebarAgentsMode: "invalid" });
     expect(loadSettings().sidebarAgentsMode).toBe("chip");
   });
 
-  it("preserves an older browser-panel preference through external opt-in, reload, and opt-out", () => {
+  it("preserves browser-panel settings across external-link toggles", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
     const gatewayUrl = "wss://gateway.example";
     // Pre-change browser settings have no external-link field.
@@ -410,9 +400,7 @@ describe("gateway settings and layout persistence", () => {
 
   it("publishes profile readiness only when requested", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
-    const initial = loadSettings();
-    const { gateway } = createGatewayStoreTestStore({ settings: initial });
-    const theme = createApplicationTheme(initial, gateway);
+    const { theme, dispose } = mountTheme();
     theme.refresh();
     const listener = vi.fn();
     theme.subscribe(listener);
@@ -422,12 +410,11 @@ describe("gateway settings and layout persistence", () => {
       theme.refresh({ notify: true });
       expect(listener).toHaveBeenCalledOnce();
     } finally {
-      theme.dispose();
-      gateway.stop();
+      dispose();
     }
   });
 
-  it("keeps live preferences scoped through cross-tab edits, gateway switches, and credential rotation", async () => {
+  it("scopes live preferences across tabs, Gateways and token rotation", async () => {
     setTestLocation({ protocol: "https:", host: "gateway-a.example", pathname: "/" });
     const events = new EventTarget();
     vi.stubGlobal("addEventListener", events.addEventListener.bind(events));
@@ -445,65 +432,47 @@ describe("gateway settings and layout persistence", () => {
     };
     saveSettings(first);
     saveSettings(second);
-    const { gateway } = createGatewayStoreTestStore({ settings: first });
-    const theme = createApplicationTheme(first, gateway);
+    const { gateway, theme, dispose } = mountTheme(first);
+    const dispatchStorage = (key: string) =>
+      events.dispatchEvent(Object.assign(new Event("storage"), { key }));
     try {
       resetServerUiPrefsSync();
       const key = `openclaw.control.settings.v1:${first.gatewayUrl}`;
-      const next = {
-        ...JSON.parse(localStorage.getItem(key) ?? "{}"),
-        realtimeTalkInputDeviceId: "cross-tab-mic",
-      };
-      localStorage.setItem(key, JSON.stringify(next));
+      writeStored(
+        { ...readStored(first.gatewayUrl), realtimeTalkInputDeviceId: "cross-tab-mic" },
+        first.gatewayUrl,
+      );
       const credentialReads = vi.spyOn(sessionStorage, "getItem");
-      events.dispatchEvent(Object.assign(new Event("storage"), { key }));
+      dispatchStorage(key);
       expect(theme.settings.realtimeTalkInputDeviceId).toBe("cross-tab-mic");
       expect(credentialReads).not.toHaveBeenCalled();
       expect(theme.settings).not.toHaveProperty("token");
 
       const background = selectBackgroundSource({ kind: "none" });
       saveBackgroundPreference(first.gatewayUrl, background);
-      events.dispatchEvent(
-        Object.assign(new Event("storage"), {
-          key: backgroundPreferenceStorageKey(first.gatewayUrl),
-        }),
-      );
+      dispatchStorage(backgroundPreferenceStorageKey(first.gatewayUrl));
       expect(theme.settings.background).toEqual(background);
       saveBackgroundPreference(second.gatewayUrl, selectBackgroundSource({ kind: "theme" }));
-      events.dispatchEvent(
-        Object.assign(new Event("storage"), {
-          key: backgroundPreferenceStorageKey(second.gatewayUrl),
-        }),
-      );
+      dispatchStorage(backgroundPreferenceStorageKey(second.gatewayUrl));
       expect(theme.settings.background).toEqual(background);
       expect(credentialReads).not.toHaveBeenCalled();
 
       const selectionKey = `openclaw.control.currentGateway.v1:${first.gatewayUrl}`;
       localStorage.setItem(selectionKey, second.gatewayUrl);
-      events.dispatchEvent(Object.assign(new Event("storage"), { key: selectionKey }));
+      dispatchStorage(selectionKey);
       expect.soft(loadSettings().gatewayUrl).toBe(first.gatewayUrl);
       expect
         .soft(resolveServerUiPrefState({}, "chatSendShortcut", first.gatewayUrl).value)
         .toBe("modifier-enter");
-      expect
-        .soft(
-          applyServerUiPrefs(
-            { ui: { prefs: { chatSendShortcut: "enter" } } },
-            {
-              scope: first.gatewayUrl,
-              onApplied: vi.fn(),
-            },
-          ),
-        )
-        .toBe(true);
+      const serverPrefs = { ui: { prefs: { chatSendShortcut: "enter" } } };
+      const hooks = { scope: first.gatewayUrl, onApplied: vi.fn() };
+      expect.soft(applyServerUiPrefs(serverPrefs, hooks)).toBe(true);
       expect.soft(theme.settings.chatSendShortcut).toBe("enter");
       patchSettings({ chatSendShortcut: "modifier-enter" });
       expect(theme.settings.chatSendShortcut).toBe("modifier-enter");
       patchSettings({ chatSendShortcut: "enter" });
       expect(theme.settings.gatewayUrl).toBe(first.gatewayUrl);
-      expect(JSON.parse(localStorage.getItem(key) ?? "{}").realtimeTalkInputDeviceId).toBe(
-        "cross-tab-mic",
-      );
+      expect(readStored(first.gatewayUrl).realtimeTalkInputDeviceId).toBe("cross-tab-mic");
       gateway.connect({ gatewayUrl: second.gatewayUrl });
       expect(theme.settings.realtimeTalkInputDeviceId).toBe("mic-b");
       gateway.connect({ gatewayUrl: first.gatewayUrl });
@@ -517,21 +486,18 @@ describe("gateway settings and layout persistence", () => {
         `openclaw.control.token.v1:${first.gatewayUrl}`,
       ]);
       expect(theme.settings.composerHoldToRecord).toBe(false);
-      expect(JSON.parse(localStorage.getItem(key) ?? "{}")).not.toHaveProperty("token");
+      expect(readStored(first.gatewayUrl)).not.toHaveProperty("token");
       expect(loadSettings().token).toBe("synthetic-rotated-credential");
     } finally {
       resetServerUiPrefsSync();
-      theme.dispose();
-      gateway.stop();
+      dispose();
       await vi.dynamicImportSettled();
     }
   });
 
-  it("retains live private-storage edits and releases the mounted preference owner", () => {
+  it("retains private-storage edits until owner disposal", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
-    const initial = loadSettings();
-    const { gateway } = createGatewayStoreTestStore({ settings: initial });
-    const theme = createApplicationTheme(initial, gateway);
+    const { theme, dispose } = mountTheme();
     try {
       vi.spyOn(localStorage, "setItem").mockImplementation(() => {
         throw new Error("Storage unavailable");
@@ -545,8 +511,7 @@ describe("gateway settings and layout persistence", () => {
       patchSettings({ realtimeTalkInputDeviceId: "after-dispose" });
       expect(theme.settings.realtimeTalkInputDeviceId).toBe("private-mic");
     } finally {
-      theme.dispose();
-      gateway.stop();
+      dispose();
     }
   });
 
@@ -564,13 +529,10 @@ describe("gateway settings and layout persistence", () => {
       { name: "  ", avatar: "https://example.com/avatar.png" },
       { name: null, avatar: null },
     ],
-  ])(
-    "normalizes local user identity independently from Gateway settings: %j",
-    (stored, expected) => {
-      localStorage.setItem("openclaw.control.user.v1", JSON.stringify(stored));
-      expect(loadLocalUserIdentity()).toEqual(expected);
-    },
-  );
+  ])("normalizes Gateway-independent user identity: %j", (stored, expected) => {
+    localStorage.setItem("openclaw.control.user.v1", JSON.stringify(stored));
+    expect(loadLocalUserIdentity()).toEqual(expected);
+  });
 
   it("falls back to claw when persisted custom theme palettes are invalid", () => {
     writeStored({
@@ -587,17 +549,15 @@ describe("gateway settings and layout persistence", () => {
 
   it("round-trips explicit camera intent and rejects invalid stored values", () => {
     for (const talkCameraAutoEnable of [true, false]) {
-      saveSettings({ ...loadSettings(), talkCameraAutoEnable });
+      roundTrip("talkCameraAutoEnable", talkCameraAutoEnable);
       expect(readStored().talkCameraAutoEnable).toBe(talkCameraAutoEnable);
-      expect(loadSettings().talkCameraAutoEnable).toBe(talkCameraAutoEnable);
     }
     writeStored({ talkCameraAutoEnable: "true" });
     expect(loadSettings().talkCameraAutoEnable).toBeUndefined();
   });
 
   it("persists pinned agents and normalizes duplicate or malformed entries", () => {
-    saveSettings({ ...loadSettings(), pinnedAgentIds: ["main", "research"] });
-    expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
+    roundTrip("pinnedAgentIds", ["main", "research"]);
     writeStored({ pinnedAgentIds: ["main", "main", 7, "  ", " research "] });
     expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
   });
@@ -607,15 +567,11 @@ describe("gateway settings and layout persistence", () => {
     const secondGateway = "wss://second.example";
     patchSettings(
       { gatewayUrl: firstGateway, sidebarRecentlyCreatedAgentId: "bot-first" },
-      {
-        selectGateway: false,
-      },
+      { selectGateway: false },
     );
     patchSettings(
       { gatewayUrl: secondGateway, sidebarRecentlyCreatedAgentId: "bot-second" },
-      {
-        selectGateway: false,
-      },
+      { selectGateway: false },
     );
     expect(loadSettings(firstGateway).sidebarRecentlyCreatedAgentId).toBe("bot-first");
     expect(loadSettings(secondGateway).sidebarRecentlyCreatedAgentId).toBe("bot-second");

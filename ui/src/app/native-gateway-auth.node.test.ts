@@ -535,7 +535,13 @@ describe("native authenticated Control UI", () => {
       const socket = connect(gatewayUrl, "");
       const frame = await socket.connect.promise;
       expectNativeGrant(frame.params, { deviceToken: "ios-existing-grant" });
-      expect(frame.params.client).toMatchObject({ id: "openclaw-ios", mode: "ui", deviceFamily });
+      expect(frame.params.client).toMatchObject({
+        id: "openclaw-ios",
+        mode: "ui",
+        platform: "iOS",
+        deviceFamily,
+        instanceId: nativeClient.instanceId,
+      });
       expect(bridge.postMessage).not.toHaveBeenCalled();
     },
   );

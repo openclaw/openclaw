@@ -25,6 +25,28 @@ import type { ApplicationContext } from "./context.ts";
 import { createApplicationAgent } from "./create-agent.ts";
 import { loadSettings, patchSettings } from "./settings.ts";
 
+const mainAgent = { id: "main", name: "Molty" };
+const mainLocation = { pathname: "/chat/main", search: "", hash: "" };
+const newAgentSelector = '[data-value="command:new-agent"]';
+const nameSelector = ".agent-create-dialog input[name='name']";
+const submitSelector = ".agent-create-dialog button[type='submit']";
+const methods = (request: Awaited<ReturnType<typeof fixture>>["request"]) =>
+  request.mock.calls.map(([method]) => method);
+
+function expectSelected(context: ApplicationContext, id: string | undefined) {
+  expect(context.agentSelection.state.selectedId).toBe(id);
+  expect(context.gateway.snapshot.sessionKey).toBe(`agent:${id}:home`);
+}
+
+async function openAgentMenu(context: ApplicationContext) {
+  const { sidebar } = await mountSidebarContext(context);
+  sidebar.connected = true;
+  await sidebar.updateComplete;
+  sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
+  await sidebar.updateComplete;
+  return sidebar;
+}
+
 async function fixture(
   options: {
     verification?: Promise<{ ok: boolean; error?: string }>;
@@ -40,7 +62,7 @@ async function fixture(
     defaultId: "main",
     mainKey: "home",
     scope: "per-sender",
-    agents: [{ id: "main", name: "Molty" }],
+    agents: [{ ...mainAgent }],
   };
   const creationStarted = createDeferred();
   const request = vi.fn(async (method: string, params?: unknown) => {
@@ -105,7 +127,7 @@ async function fixture(
     createSessionsHarness("main", ["agent:main:home"]).sessions,
     roster,
   );
-  let location = { pathname: "/chat/main", search: "", hash: "" };
+  let location = { ...mainLocation };
   const history: RouterHistory = {
     location: () => location,
     push: (next) => {
@@ -125,28 +147,20 @@ async function fixture(
     ),
   });
   let navigation: Promise<void> | undefined;
-  const navigate = vi.fn<ApplicationContext["navigate"]>((routeId, params) => {
-    navigation = router.navigate(
-      routeId,
-      context,
-      { history: "push" },
-      {
-        ...locationForRoute(routeId, ""),
-        ...params,
-      },
-    );
-  });
-  const replace = vi.fn<ApplicationContext["replace"]>((routeId, params) => {
-    navigation = router.navigate(
-      routeId,
-      context,
-      { history: "replace" },
-      {
-        ...locationForRoute(routeId, ""),
-        ...params,
-      },
-    );
-  });
+  const navigationSpy = (historyMode: "push" | "replace") =>
+    vi.fn<ApplicationContext["navigate"]>((routeId, params) => {
+      navigation = router.navigate(
+        routeId,
+        context,
+        { history: historyMode },
+        {
+          ...locationForRoute(routeId, ""),
+          ...params,
+        },
+      );
+    });
+  const navigate = navigationSpy("push");
+  const replace = navigationSpy("replace");
   Object.assign(context, {
     agents,
     agentSelection,
@@ -191,7 +205,7 @@ describe("application agent creation", () => {
       });
       await createApplicationAgent(context);
       expect(navigate).not.toHaveBeenCalled();
-      expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list"]);
+      expect(methods(request)).toEqual(["agents.list"]);
       expect(context.chatSubmissions.creation).toBeUndefined();
       await vi.waitFor(() => expect(toast.toast?.message).toContain("Pair this browser"));
     },
@@ -213,14 +227,13 @@ describe("application agent creation", () => {
         sessionKey: expect.stringMatching(/^agent:bot-.*:home$/),
         admitted: false,
       });
-      expect(context.chatSubmissions.readCreate()?.displayName).toBe("New agent");
-      expect(context.chatSubmissions.readCreate()?.message).toBeNull();
+      expect(context.chatSubmissions.readCreate()).toMatchObject({
+        displayName: "New agent",
+        message: null,
+      });
       expect(context.gateway.snapshot.sessionKey).toBe("agent:main:home");
       await creationStarted;
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "agents.list",
-        "agents.create",
-      ]);
+      expect(methods(request)).toEqual(["agents.list", "agents.create"]);
       Object.assign(context.placementStartup, {
         get: () => null,
         subscribe: () => () => undefined,
@@ -257,8 +270,7 @@ describe("application agent creation", () => {
 
     const agent = roster.agents[1];
     expect(agent).toEqual({ id: expect.stringMatching(/^bot-/), name: "Scout" });
-    expect(context.agentSelection.state.selectedId).toBe(agent?.id);
-    expect(context.gateway.snapshot.sessionKey).toBe(`agent:${agent?.id}:home`);
+    expectSelected(context, agent?.id);
     expect(request).toHaveBeenCalledWith("agents.create", {
       agentId: agent?.id,
       name: "Scout",
@@ -274,45 +286,32 @@ describe("application agent creation", () => {
       verification: verification.promise,
       creation: creation.promise,
     });
-    const { sidebar } = await mountSidebarContext(context);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    await vi.waitFor(() => {
-      expect(sidebar.querySelector('[data-value="command:new-agent"]')?.textContent).toContain(
-        "Create new agent",
-      );
-    });
-    const create = sidebar.querySelector<HTMLButtonElement>('[data-value="command:new-agent"]');
+    const sidebar = await openAgentMenu(context);
+    const query = <T extends Element = HTMLElement>(selector: string) =>
+      sidebar.querySelector<T>(selector);
+    await vi.waitFor(() =>
+      expect(query(newAgentSelector)?.textContent).toContain("Create new agent"),
+    );
+    const create = query<HTMLButtonElement>(newAgentSelector);
     expect(sidebar.querySelector(".sidebar-agent-menu [data-value]")).toBe(create);
     expect(sidebar.querySelector(".sidebar-agent-menu [role=separator]")).toBeNull();
     create?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-    await vi.waitFor(() => {
-      expect(sidebar.querySelector(".agent-create-dialog input[name='name']")).not.toBeNull();
-    });
-    const name = sidebar.querySelector<HTMLInputElement>(
-      ".agent-create-dialog input[name='name']",
-    )!;
+    await vi.waitFor(() => expect(query(nameSelector)).not.toBeNull());
+    const name = query<HTMLInputElement>(nameSelector)!;
     name.value = "New agent";
     name.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
     expect(name.value).toBe("New agent");
-    expect(
-      sidebar.querySelector<HTMLButtonElement>(".agent-create-dialog button[type='submit']")
-        ?.disabled,
-    ).toBe(false);
-    sidebar.querySelector<HTMLButtonElement>(".agent-create-dialog button[type='submit']")!.click();
+    expect(query<HTMLButtonElement>(submitSelector)?.disabled).toBe(false);
+    query<HTMLButtonElement>(submitSelector)!.click();
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
     await vi.waitFor(() => {
       expect(context.agents.state.pendingAgent).toBeDefined();
-      expect(sidebar.querySelector('[data-value="command:new-agent"]')?.textContent).toContain(
-        "Creating new agent",
-      );
+      expect(query(newAgentSelector)?.textContent).toContain("Creating new agent");
     });
     expect(roster.agents).toHaveLength(1);
     expect(navigate).toHaveBeenCalledOnce();
@@ -320,12 +319,10 @@ describe("application agent creation", () => {
     verification.resolve({ ok: true });
     await vi.waitFor(() => {
       expect(context.agents.state.pendingAgent).toBeDefined();
-      const pendingRow = sidebar.querySelector<HTMLButtonElement>(
-        '[data-value="command:new-agent"]',
-      );
+      const pendingRow = query(newAgentSelector);
       expect(pendingRow?.textContent).toContain("Creating new agent");
       expect(pendingRow?.getAttribute("aria-disabled")).toBe("true");
-      const firstAgent = sidebar.querySelector('[data-value^="agent:"]');
+      const firstAgent = query('[data-value^="agent:"]');
       expect(firstAgent?.textContent).toContain("New agent");
       expect(firstAgent?.getAttribute("aria-disabled")).toBe("true");
       expect(firstAgent?.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe(
@@ -338,9 +335,8 @@ describe("application agent creation", () => {
     await settledNavigation();
     const bot = roster.agents[1];
     expect(bot).toEqual({ id: expect.stringMatching(/^bot-/), name: "New agent" });
-    expect(context.agentSelection.state.selectedId).toBe(bot?.id);
+    expectSelected(context, bot?.id);
     expect(context.agents.state.agentsList?.agents).toContainEqual(bot);
-    expect(context.gateway.snapshot.sessionKey).toBe(`agent:${bot?.id}:home`);
     expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", {
       pathname: `/chat/${bot?.id}`,
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
@@ -351,7 +347,7 @@ describe("application agent creation", () => {
       onboarding: true,
     });
     // The creation owner starts the assistant turn; the UI never impersonates a user.
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list", "agents.create"]);
+    expect(methods(request)).toEqual(["agents.list", "agents.create"]);
     expect(toast.toast).toBeNull();
   });
 
@@ -374,11 +370,7 @@ describe("application agent creation", () => {
       createSessionsHarness("main", ["agent:main:home"]).sessions,
       structuredClone(roster),
     );
-    const { sidebar } = await mountSidebarContext(resumed);
-    sidebar.connected = true;
-    await sidebar.updateComplete;
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!.click();
-    await sidebar.updateComplete;
+    const sidebar = await openAgentMenu(resumed);
     expect(sidebar.querySelector('[data-value^="agent:"]')?.getAttribute("data-value")).toBe(
       `agent:${createdId}`,
     );
@@ -409,20 +401,15 @@ describe("application agent creation", () => {
     await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(1_000);
     await toast.updateComplete;
-    expect(roster.agents).toEqual([{ id: "main", name: "Molty" }]);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "agents.list",
-      "agents.create",
-      "config.get",
-    ]);
+    expect(roster.agents).toEqual([mainAgent]);
+    expect(methods(request)).toEqual(["agents.list", "agents.create", "config.get"]);
     expect(navigate).toHaveBeenCalledOnce();
-    expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/main", search: "", hash: "" });
+    expect(replace).toHaveBeenCalledWith("chat", mainLocation);
     expect(context.chatSubmissions.creation).toBeUndefined();
-    expect(context.agentSelection.state.selectedId).toBe("main");
+    expectSelected(context, "main");
     expect(loadSettings(context.gateway.connection.gatewayUrl).sidebarRecentlyCreatedAgentId).toBe(
       "previous",
     );
-    expect(context.gateway.snapshot.sessionKey).toBe("agent:main:home");
     expect(toast.active).toBe(true);
     expect(toast.querySelector(".app-toast__message")?.textContent).toContain(
       "Provider credentials expired",
@@ -455,17 +442,13 @@ describe("application agent creation", () => {
     await settledNavigation();
 
     expect(context.router.getState().location.pathname).toBe("/chat/main");
-    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", {
-      pathname: "/chat/main",
-      search: "",
-      hash: "",
-    });
+    expect(replace).toHaveBeenCalledExactlyOnceWith("chat", mainLocation);
     // A disconnected client cannot undo an already dispatched server creation.
     expect(roster.agents).toHaveLength(2);
     // Reconnecting retains the last confirmed roster while refresh is unavailable.
-    expect(context.agents.state.agentsList?.agents).toEqual([{ id: "main", name: "Molty" }]);
+    expect(context.agents.state.agentsList?.agents).toEqual([mainAgent]);
     expect(context.chatSubmissions.creation).toBeUndefined();
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list", "agents.create"]);
+    expect(methods(request)).toEqual(["agents.list", "agents.create"]);
   });
 
   it.each(["route", "selection"] as const)(
@@ -513,8 +496,7 @@ describe("application agent creation", () => {
     const agent = roster.agents[1];
     expect(agent?.name).toBe("New agent");
     expect(context.agents.state.agentsList?.agents).toContainEqual(agent);
-    expect(context.agentSelection.state.selectedId).toBe(agent?.id);
-    expect(context.gateway.snapshot.sessionKey).toBe(`agent:${agent?.id}:home`);
+    expectSelected(context, agent?.id);
     await toast.updateComplete;
     await vi.dynamicImportSettled();
     expect(toast.active).toBe(true);
