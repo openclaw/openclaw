@@ -9,8 +9,9 @@ type ProgressRosterSource = {
 
 const sources = new WeakMap<SessionCapability, Map<string, ProgressRosterSource>>();
 const projectRoster = createSharedSourceProjection({
-  read: ({ sessions, query }: ProgressRosterSource) => sessions.listSnapshot(query),
-  subscribe: ({ sessions, query }, notify) => {
+  // Widgets read the owner's current rows; a shared observer must not retain retired rosters.
+  read: () => undefined,
+  subscribe: ({ sessions, query }: ProgressRosterSource, notify) => {
     const release = sessions.subscribeList(query, notify);
     const snapshot = sessions.listSnapshot(query);
     if (

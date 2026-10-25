@@ -108,11 +108,15 @@ class SessionPrefetcher {
     this.stopVisibility?.();
     this.stopVisibility = undefined;
     this.cancelScheduledWork();
+    this.lastAttemptAt.clear();
   }
 
   update(snapshot: SessionPrefetchSnapshot): void {
     const previous = this.snapshot;
     this.snapshot = snapshot;
+    if (previous?.client !== snapshot.client) {
+      this.lastAttemptAt.clear();
+    }
     if (
       !previous ||
       previous.client !== snapshot.client ||
@@ -316,6 +320,14 @@ class SessionPrefetcher {
   }
 
   private selectCandidate(snapshot: SessionPrefetchSnapshot): SessionPrefetchCandidate | null {
+    const now = Date.now();
+    // Only attempts within the cooldown affect admission; old session keys
+    // must not accumulate across a long-lived page's navigation history.
+    for (const [key, attemptedAt] of this.lastAttemptAt) {
+      if (now - attemptedAt >= SESSION_PREFETCH_COOLDOWN_MS) {
+        this.lastAttemptAt.delete(key);
+      }
+    }
     const row = snapshot.rows?.find((candidate) => candidate.key === snapshot.intentSessionKey);
     // The presented pane owns transient run adoption and replay. Prefetch only
     // warms durable history after navigation intent.
@@ -339,7 +351,7 @@ class SessionPrefetcher {
     if (savedAt !== null && savedAt >= activityAt) {
       return null;
     }
-    const elapsed = Date.now() - (this.lastAttemptAt.get(snapshotKey) ?? 0);
+    const elapsed = now - (this.lastAttemptAt.get(snapshotKey) ?? 0);
     if (elapsed < SESSION_PREFETCH_COOLDOWN_MS) {
       this.schedule(SESSION_PREFETCH_COOLDOWN_MS - elapsed);
       return null;
