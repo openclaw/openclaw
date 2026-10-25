@@ -10,9 +10,16 @@ import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build
 import { readUpdateCompatibilityInventory } from "../scripts/lib/update-compat-chunks.mts";
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
+import {
+  runtimeProcessScriptEntrypoints,
+  runtimeProcessToolingEntrypoints,
+} from "../src/infra/runtime-process-manifest.ts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
 import aiBuildConfig from "../tsdown.ai.config.ts";
-import { compileDynamicConsumerEdges } from "./knip-dynamic-consumers.mjs";
+import {
+  collectRuntimeProcessManifestEntries,
+  compileDynamicConsumerEdges,
+} from "./knip-dynamic-consumers.mjs";
 import { compileViteConfigConsumers } from "./knip-vite-consumers.mjs";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -712,6 +719,11 @@ const rootEntries = [
     ...Object.values(runtimeProcessBuildEntries),
     ...createManagedHandoffBuildConfigs().flatMap(({ entry }) => Object.values(entry)),
   ].map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
+  // The runtime manifest also declares generated script sources/outputs and source-only tooling.
+  ...collectRuntimeProcessManifestEntries(
+    runtimeProcessScriptEntrypoints,
+    runtimeProcessToolingEntrypoints,
+  ).map((source) => `${source}!`),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
@@ -959,7 +971,7 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
 
 function compileDynamicMjsConsumers(source: string, filePath: string): string {
   if (path.resolve(filePath) === path.resolve("config/knip-dynamic-consumers.mjs")) {
-    return compileDynamicConsumerEdges(source, filePath);
+    return compileDynamicConsumerEdges(source, filePath, runtimeProcessScriptEntrypoints);
   }
   // A custom TS compiler disables Knip's declaration-to-source mapping.
   if (path.resolve(filePath) === path.resolve("config/knip-vite-consumers.mjs")) {

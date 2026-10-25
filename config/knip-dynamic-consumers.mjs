@@ -26,6 +26,17 @@ function importedNames(source, specifier) {
   );
 }
 
+export function collectRuntimeProcessManifestEntries(scriptEntrypoints, toolingEntrypoints) {
+  const entries = new Set(Object.values(toolingEntrypoints));
+  for (const entry of Object.values(scriptEntrypoints)) {
+    if ("buildSource" in entry) {
+      entries.add(entry.buildSource);
+    }
+    entries.add(entry.sourceModule);
+  }
+  return [...entries];
+}
+
 function dynamicImportMemberNames(source, specifier) {
   return [
     ...new Set(
@@ -126,6 +137,42 @@ function emittedNamedImportEdges(source) {
   return edges;
 }
 
+function emittedFileNamedImportEdges(source) {
+  const outputPaths = new Map(
+    [
+      ...source.matchAll(
+        /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*path\.join\(\s*[A-Za-z_$][\w$]*\s*,\s*["']([^"'\r\n]+)["']\s*\)\s*;/gu,
+      ),
+    ].map(([, binding, outputPath]) => [binding, outputPath]),
+  );
+  const edges = new Map();
+  for (const match of source.matchAll(
+    /\b(?:fs\.)?writeFileSync\(\s*([A-Za-z_$][\w$]*)\s*,([\s\S]*?)\n\s*\);/gu,
+  )) {
+    const outputPath = outputPaths.get(match[1]);
+    if (!outputPath) {
+      continue;
+    }
+    for (const imported of match[2].matchAll(
+      /\bimport\s*\{([^}]+)\}\s*from\s*["']([^"'\r\n]+)["']/gu,
+    )) {
+      const targetFile = path.resolve(path.dirname(outputPath), imported[2]);
+      const names = edges.get(targetFile) ?? new Set();
+      for (const binding of imported[1].split(",")) {
+        const name = binding
+          .trim()
+          .replace(/^type\s+/u, "")
+          .split(/\s+as\s+/u)[0];
+        if (name) {
+          names.add(name);
+        }
+      }
+      edges.set(targetFile, names);
+    }
+  }
+  return edges;
+}
+
 function namedImport(names, targetFile, consumerFile, index) {
   const bindings = names.map(
     (name, bindingIndex) => `${name} as __dynamic${index}_${bindingIndex}`,
@@ -140,9 +187,10 @@ function namedImport(names, targetFile, consumerFile, index) {
  *
  * @param {string} source
  * @param {string} filePath
+ * @param {Record<string, {sourceModule: string, sourceBinding?: string}>} [scriptEntrypoints]
  * @returns {string}
  */
-export function compileDynamicConsumerEdges(source, filePath) {
+export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints = {}) {
   const imports = [];
 
   const tsdownPath = "tsdown.config.ts";
@@ -248,6 +296,58 @@ export function compileDynamicConsumerEdges(source, filePath) {
   );
   for (const [targetFile, names] of emittedNamedImportEdges(rowChurnInstrumenter)) {
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
+  }
+
+  const runtimeAssetGeneratorPath = "scripts/generate-runtime-script-assets.mjs";
+  const materializerSpecifier = "./src/infra/runtime-process-script-file.ts";
+  const materializerNames = importedNames(
+    fs.readFileSync(runtimeAssetGeneratorPath, "utf8"),
+    materializerSpecifier,
+  );
+  if (materializerNames.length > 0) {
+    imports.push(
+      namedImport(materializerNames, path.resolve(materializerSpecifier), filePath, imports.length),
+    );
+  }
+
+  const prepareHooksPath = "scripts/prepare-git-hooks.mjs";
+  const bootstrapSpecifier = "../runtime-process-bootstrap.generated.mjs";
+  const bootstrapNames = importedNames(
+    fs.readFileSync(prepareHooksPath, "utf8"),
+    bootstrapSpecifier,
+  );
+  if (bootstrapNames.length > 0) {
+    imports.push(
+      namedImport(
+        bootstrapNames,
+        path.resolve(path.dirname(prepareHooksPath), bootstrapSpecifier),
+        filePath,
+        imports.length,
+      ),
+    );
+  }
+
+  const workerArtifactsPath = "test/scripts/vitest-worker-artifacts.test.ts";
+  const emittedWorkerEdges = emittedFileNamedImportEdges(
+    fs.readFileSync(workerArtifactsPath, "utf8"),
+  );
+  const sqliteFacadePath = path.resolve("node-sqlite.mjs");
+  const sqliteFacadeNames = [...(emittedWorkerEdges.get(sqliteFacadePath) ?? [])];
+  if (sqliteFacadeNames.length > 0) {
+    imports.push(namedImport(sqliteFacadeNames, sqliteFacadePath, filePath, imports.length));
+  }
+
+  for (const entry of Object.values(scriptEntrypoints)) {
+    if (entry.sourceBinding) {
+      imports.push(
+        namedImport(
+          [entry.sourceBinding],
+          path.resolve(entry.sourceModule),
+          filePath,
+          imports.length,
+        ),
+      );
+    }
   }
 
   return `${source}\n${imports.join("\n")}`;
