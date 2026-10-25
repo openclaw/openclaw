@@ -383,7 +383,7 @@ export async function runDoctorSessionSqlite(
             owner.retainedImportVerified ||= owner.verifiedSources !== undefined;
             owner.report.issues.push({
               code: "plugin_migration_source_retained",
-              message: `Plugin migration obligations changed before archival. Original session migration inputs remain pending for plugin(s): ${owner.deferredPluginIds.join(", ")}. Run openclaw doctor --fix after the plugin is available.`,
+              message: `${new ConflictError(conflict, { expected, phase: "session archive publication" }).message} Original session migration inputs remain pending for plugin(s): ${owner.deferredPluginIds.join(", ")}.`,
             });
           }
         }
