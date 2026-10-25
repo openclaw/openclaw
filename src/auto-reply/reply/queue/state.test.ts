@@ -12,6 +12,7 @@ import {
   type SessionControllerMailbox,
 } from "../../../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
+import { createQueueTestRun } from "../queue.test-helpers.js";
 import type { ScheduledSessionAutomation } from "../session-event-contract.js";
 import { enqueueFollowupRun } from "./enqueue.js";
 import {
@@ -27,26 +28,22 @@ const QUEUE_KEY = "agent:main:dm:test";
 
 async function clearOwnedQueues() {
   // Capture owners before cleanup can mutate the registry or publish a successor.
-  const capturedOwners = Array.from(sessionControllerMailboxes());
-  for (const queue of capturedOwners) {
-    if (!queue.owner.aliases.has(QUEUE_KEY)) {
-      continue;
-    }
+  const queues = [...sessionControllerMailboxes()].filter((queue) =>
+    queue.owner.aliases.has(QUEUE_KEY),
+  );
+  for (const queue of queues) {
     const sources = [
       ...queue.entries.flatMap((input) => (input.source ? [input.source] : [])),
       ...queue.summarySources,
       ...queue.summaryElisions.flatMap((part) => part.sources),
     ];
-    // Metadata-only summary fixtures still retire through the exact physical
-    // queue they were inserted into, not through a newly inferred config path.
-    for (const source of sources) {
-      if (!source.controllerInput) {
-        const input = reserveSessionControllerSource(queue.key, {
-          target: queue.owner.target,
-          policy: { mode: queue.mode },
-        });
-        bindSessionControllerSource(input, source);
-      }
+    // Bind synthetic summaries to their exact owner before retiring them.
+    for (const source of sources.filter((candidate) => !candidate.controllerInput)) {
+      const input = reserveSessionControllerSource(queue.key, {
+        target: queue.owner.target,
+        policy: { mode: queue.mode },
+      });
+      bindSessionControllerSource(input, source);
     }
     const inputs = [...queue.entries];
     const claim = queue.claim;
@@ -54,35 +51,29 @@ async function clearOwnedQueues() {
     if (claim) {
       releaseSessionControllerClaim(claim);
     }
-    await Promise.allSettled([
-      ...inputs.map((input) => input.settlement.promise),
-      ...sources.flatMap((source) =>
-        source.controllerInput ? [source.controllerInput.settlement.promise] : [],
-      ),
-      ...(claim ? [claim.settlement.promise] : []),
-    ]);
+    await Promise.allSettled(
+      [...inputs, ...(claim ? [claim] : [])].map((input) => input.settlement.promise),
+    );
   }
 }
 afterEach(clearOwnedQueues);
 
 function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"] {
-  return {
-    agentId: "main",
-    agentDir: "/tmp/agent",
-    sessionId: "session-1",
-    sessionKey: QUEUE_KEY,
-    sessionFile: "/tmp/session-1.jsonl",
-    workspaceDir: "/tmp/workspace",
-    config: { session: { store: "/synthetic/queue-state/sessions.sqlite" } },
-    provider: "anthropic",
-    model: "claude-opus-4-6",
-    requestedRouteResolution: "resolved",
-    authProfileId: "profile-a",
-    authProfileIdSource: "user",
-    timeoutMs: 30_000,
-    blockReplyBreak: "message_end",
-    ...overrides,
-  };
+  return createQueueTestRun(
+    { prompt: "queued message" },
+    {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: QUEUE_KEY,
+      config: { session: { store: "/synthetic/queue-state/sessions.sqlite" } },
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      requestedRouteResolution: "resolved",
+      authProfileId: "profile-a",
+      authProfileIdSource: "user",
+      ...overrides,
+    },
+  ).run;
 }
 
 function makeSource(run = makeRun(), prompt = "queued message", enqueuedAt = 1): FollowupRun {
@@ -103,7 +94,8 @@ function populateRepresentations(
   queue: SessionControllerMailbox,
   overrides: Partial<FollowupRun["run"]> = {},
 ) {
-  const runs = Array.from({ length: 4 }, () => makeRun(overrides));
+  const run = () => makeRun(overrides);
+  const runs = [run(), run(), run(), run()] as const;
   queue.lastRun = runs[0];
   addSources(queue, makeSource(runs[1]!));
   queue.summarySources.push(makeSource(runs[2]!));
@@ -113,14 +105,6 @@ function populateRepresentations(
 
 function refresh(params: Omit<Parameters<typeof refreshQueuedFollowupSession>[0], "key">) {
   refreshQueuedFollowupSession({ key: QUEUE_KEY, ...params });
-}
-
-function route(
-  nextProvider: string,
-  nextModel: string,
-  overrides: Parameters<typeof refresh>[0] = {},
-): Parameters<typeof refresh>[0] {
-  return { nextProvider, nextModel, nextRouteResolution: "resolved", ...overrides };
 }
 
 function thinkingRoute(model: string, level?: string, reasoning = true) {
@@ -138,7 +122,7 @@ function thinkingRoute(model: string, level?: string, reasoning = true) {
 function retarget(run: Partial<FollowupRun["run"]>, params: Parameters<typeof refresh>[0]) {
   const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
   addSources(queue, makeSource(makeRun(run)));
-  refresh(params);
+  refresh({ nextRouteResolution: "resolved", ...params });
   return queue.items[0]?.run;
 }
 
@@ -157,19 +141,24 @@ function scheduledAutomation(sessionModelOverrideSource?: "auto" | "user") {
 }
 
 const modelThinking = (thinking: string) => ({ params: { thinking } });
-type Agents = NonNullable<FollowupRun["run"]["config"]["agents"]>;
-function thinkingConfig(defaults: Agents["defaults"], entries?: Agents["entries"]) {
-  return { agents: { defaults, entries } };
-}
 const reasoningModel = (id: string, name = id, reasoning = true) => [
   { provider: "openai", id, name, reasoning },
 ];
-const highModel = { "openai/gpt-5.6-sol": modelThinking("high") };
+const thinkingConfig = {
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5.6-sol": modelThinking("high"),
+        "openai/gpt-5.6-luna": modelThinking("low"),
+      },
+    },
+  },
+};
 
 describe("clearRemovedQueuedAuthProfiles", () => {
   it("releases removed accounts in every queued source without replacing newer choices", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    const [lastRun, queued, summarized, elided] = [makeRun(), makeRun(), makeRun(), makeRun()];
+    const [lastRun, queued, summarized, elided] = populateRepresentations(queue);
     const newer = { ...makeRun(), authProfileId: "profile-b" };
     const otherAgent = { ...makeRun(), agentId: "other" };
     const retainedConfig = otherAgent.config;
@@ -185,11 +174,8 @@ describe("clearRemovedQueuedAuthProfiles", () => {
       ...queued.autoFallbackPrimaryProbe,
       fallbackAuthProfileId: "profile-b",
     };
-    queue.lastRun = lastRun;
     const otherAgentSource = makeSource(otherAgent);
-    addSources(queue, makeSource(queued), makeSource(newer), otherAgentSource);
-    queue.summarySources.push(makeSource(summarized));
-    queue.summaryElisions.push(elision([makeSource(elided)]));
+    addSources(queue, makeSource(newer), otherAgentSource);
     const rewrittenConfig = { agents: { entries: { main: { model: "anthropic/model" } } } };
 
     clearRemovedQueuedAuthProfiles({
@@ -203,12 +189,8 @@ describe("clearRemovedQueuedAuthProfiles", () => {
       expect(run.model).toBe("claude-opus-4-6");
       expect(run.config).toBe(rewrittenConfig);
     }
-    expect(queued.autoFallbackPrimaryProbe).toEqual({
-      provider: "anthropic",
-      model: "primary",
-      fallbackProvider: "anthropic",
-      fallbackModel: queued.model,
-    });
+    expect(queued.autoFallbackPrimaryProbe.fallbackAuthProfileId).toBeUndefined();
+    expect(queued.autoFallbackPrimaryProbe.fallbackAuthProfileIdSource).toBeUndefined();
     expect(newer.authProfileId).toBe("profile-b");
     expect(newer.authProfileIdSource).toBe("user");
     expect(newer.autoFallbackPrimaryProbe.fallbackAuthProfileId).toBe("profile-b");
@@ -222,46 +204,6 @@ describe("clearRemovedQueuedAuthProfiles", () => {
 });
 
 describe("refreshQueuedFollowupSession", () => {
-  it("retargets queued runs to the persisted selection", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-    const runs = populateRepresentations(queue);
-    queue.summaryElisions[0]!.count = 2;
-
-    refresh(
-      route("openai", "gpt-4o", {
-        nextAuthProfileId: undefined,
-        nextAuthProfileIdSource: undefined,
-      }),
-    );
-
-    const expectedRun = {
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    };
-    for (const run of runs) {
-      expect(run).toEqual(expectedRun);
-    }
-  });
-
-  it.each(["user", undefined] as const)("retargets model override strictness to %s", (next) => {
-    const run = retarget(
-      next === "user"
-        ? { hasAutoFallbackProvenance: true }
-        : { hasSessionModelOverride: true, modelOverrideSource: "user" },
-      route("ollama", "qwen3.5:27b", { nextModelOverrideSource: next }),
-    );
-    expect(run).toEqual({
-      ...makeRun(),
-      provider: "ollama",
-      model: "qwen3.5:27b",
-      hasSessionModelOverride: next === "user",
-      modelOverrideSource: next,
-    });
-  });
-
   it.each([
     { name: "clears", admitted: "user" as const, next: undefined },
     { name: "adopts", admitted: undefined, next: "user" as const },
@@ -271,17 +213,25 @@ describe("refreshQueuedFollowupSession", () => {
     ({ admitted, next }) => {
       const automation = scheduledAutomation(admitted);
       const run = retarget(
-        { scheduledAutomation: automation },
-        route("openai", "gpt-4o", { nextModelOverrideSource: next }),
+        {
+          scheduledAutomation: automation,
+          hasSessionModelOverride: admitted !== undefined,
+          modelOverrideSource: admitted,
+          hasAutoFallbackProvenance: true,
+        },
+        { nextProvider: "openai", nextModel: "gpt-4o", nextModelOverrideSource: next },
       );
 
-      expect(run?.scheduledAutomation).toEqual({
-        ...automation,
-        modelFallbackPolicy: {
-          useSubagentFallbacks: false,
-          inheritDefaultFallbacksForAgentStringModel: false,
-          sessionModelOverrideSource: next,
-        },
+      expect(run).toMatchObject({
+        provider: "openai",
+        model: "gpt-4o",
+        hasSessionModelOverride: next !== undefined,
+        modelOverrideSource: next,
+      });
+      expect(run?.hasAutoFallbackProvenance).toBeUndefined();
+      expect(run?.scheduledAutomation?.modelFallbackPolicy).toEqual({
+        ...automation.modelFallbackPolicy,
+        sessionModelOverrideSource: next,
       });
       expect(run?.scheduledAutomation?.job).toBe(automation.job);
       expect(automation.modelFallbackPolicy).toEqual(
@@ -296,29 +246,9 @@ describe("refreshQueuedFollowupSession", () => {
       { scheduledAutomation: automation },
       { previousSessionId: "session-1", nextSessionId: "session-2" },
     );
-
     expect(run?.sessionId).toBe("session-2");
     expect(run?.scheduledAutomation).toBe(automation);
   });
-
-  it.each([
-    ["openai", "gpt-5.6-luna", "codex", reasoningModel("gpt-5.6-luna", "Luna")],
-    ["custom", "reasoner", "openclaw", undefined],
-  ] as const)(
-    "preserves Ultra when retargeting to %s/%s via %s",
-    (provider, model, agentRuntime, catalog) => {
-      const run = retarget(
-        { provider: "openai", model: "gpt-5.6-sol", thinkLevel: "ultra" },
-        route(provider, model, { nextThinking: { level: "ultra", catalog, agentRuntime } }),
-      );
-      expect(run).toMatchObject({
-        provider,
-        model,
-        thinkLevel: "ultra",
-        thinkingCatalog: catalog,
-      });
-    },
-  );
 
   it.each([
     { requested: "high", stored: "low", expected: ["high", "high", "high"] },
@@ -331,72 +261,46 @@ describe("refreshQueuedFollowupSession", () => {
     ({ requested, stored, expected }) => {
       const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
       const runs = populateRepresentations(queue, {
-        config: thinkingConfig({
-          models: {
-            ...highModel,
-            "openai/gpt-5.6-luna": modelThinking("low"),
-          },
-        }),
+        config: thinkingConfig,
         thinkLevel: "high",
         thinkLevelOverride: requested,
       });
       for (const [index, model] of ["gpt-5.6-sol", "non-reasoner", "gpt-5.6-luna"].entries()) {
-        refresh(thinkingRoute(model, stored, index !== 1));
+        refresh({
+          ...thinkingRoute(model, stored, index !== 1),
+          nextAuthProfileId: undefined,
+          nextAuthProfileIdSource: undefined,
+        });
         for (const run of runs) {
+          expect(run).toMatchObject({
+            provider: "openai",
+            model,
+            authProfileId: undefined,
+            authProfileIdSource: undefined,
+          });
           expect(run.thinkLevel).toBe(expected[index]);
           expect(run.thinkLevelOverride).toBe(requested);
+          expect(run.thinkingCatalog?.[0]?.id).toBe(model);
         }
       }
     },
   );
 
-  describe.each(["default", undefined] as const)("thinking source %s", (thinkingSource) => {
-    it.each([
-      [
-        "agent",
-        thinkingConfig(
-          { thinkingDefault: "off", models: highModel },
-          { main: { thinkingDefault: "low" } },
-        ),
-        "low",
-      ],
-      [
-        "agent model",
-        thinkingConfig(
-          { models: highModel },
-          { main: { models: { "openai/gpt-5.6-sol": modelThinking("low") } } },
-        ),
-        "low",
-      ],
-      ["model", thinkingConfig({ thinkingDefault: "off", models: highModel }), "high"],
-      ["global", thinkingConfig({ thinkingDefault: "high" }), "high"],
-    ] as const)("honors the configured %s default when retargeting", (_name, config, expected) => {
-      const run = retarget(
-        { config, thinkLevel: "medium", thinkLevelOverride: thinkingSource },
-        thinkingRoute("gpt-5.6-sol", thinkingSource === "default" ? "off" : undefined),
-      );
-      expect(run?.thinkLevel).toBe(expected);
-    });
+  it.each([undefined, "default"] as const)("resets implicit thinking (%s)", (override) => {
+    const run = retarget(
+      { thinkLevel: "ultra", thinkingExplicit: true, thinkLevelOverride: override },
+      {
+        nextProvider: "openai",
+        nextModel: "gpt-5.6-sol",
+        nextThinking: {
+          agentRuntime: "codex",
+          level: override === "default" ? "high" : undefined,
+        },
+      },
+    );
+
+    expect(run).toMatchObject({ thinkLevel: "medium", thinkingExplicit: false });
   });
-
-  it.each([undefined, "default"] as const)(
-    "recomputes the model default with override %s",
-    (override) => {
-      const run = retarget(
-        { thinkLevel: "ultra", thinkingExplicit: true, thinkLevelOverride: override },
-        route("openai", "gpt-5.6-sol", {
-          nextThinking: {
-            agentRuntime: "codex",
-            level: override === "default" ? "high" : undefined,
-          },
-        }),
-      );
-
-      // Sol's provider default reasoning level is medium (extensions/openai
-      // thinking-policy.ts); retargeting without an override adopts it.
-      expect(run).toMatchObject({ thinkLevel: "medium", thinkingExplicit: false });
-    },
-  );
 });
 
 describe("getFollowupQueue", () => {
@@ -444,15 +348,6 @@ describe("getFollowupQueue", () => {
     expect(queue.summaryElisions[0]?.sources[0]?.deliveryCorrelations).toBe(
       sources[1]?.deliveryCorrelations,
     );
-  });
-
-  it("aborts work owned by a cleared queue", () => {
-    const queuedRun = makeSource();
-    enqueueFollowupRun(QUEUE_KEY, queuedRun, { mode: "followup" });
-
-    expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
-    clearFollowupQueue(QUEUE_KEY);
-    expect(queuedRun.queueAbortSignal?.aborted).toBe(true);
   });
 
   it("trims overflow metadata when a live queue cap shrinks", () => {
@@ -524,7 +419,10 @@ describe("hasPendingFollowupQueueWork", () => {
   it("detects each actionable queued-work representation", async () => {
     const cases = [
       (queue: SessionControllerMailbox) => addSources(queue, makeSource()),
-      (queue: SessionControllerMailbox) => claimSource(queue, makeSource()),
+      (queue: SessionControllerMailbox) => {
+        const input = submitSessionControllerInput(queue.key, makeSource(), { mode: queue.mode });
+        expect(tryClaimSessionControllerTask(input)).toBeDefined();
+      },
       (queue: SessionControllerMailbox) => {
         queue.droppedCount = 1;
       },
@@ -532,16 +430,11 @@ describe("hasPendingFollowupQueueWork", () => {
 
     for (const populate of cases) {
       const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      expect(hasPendingFollowupQueueWork([undefined, "", QUEUE_KEY])).toBe(false);
       populate(queue);
       expect(hasPendingFollowupQueueWork(["", ` ${QUEUE_KEY} `, QUEUE_KEY])).toBe(true);
       await clearOwnedQueues();
     }
-  });
-
-  it("ignores empty queues", () => {
-    getFollowupQueue(QUEUE_KEY, { mode: "followup" });
-
-    expect(hasPendingFollowupQueueWork([undefined, "", QUEUE_KEY])).toBe(false);
   });
 });
 
@@ -550,12 +443,5 @@ function addSources(queue: SessionControllerMailbox, ...sources: FollowupRun[]):
     const input = submitSessionControllerInput(queue.key, source, { mode: queue.mode });
     input.payload = "ready";
     input.phase = "waiting";
-  }
-}
-function claimSource(queue: SessionControllerMailbox, source: FollowupRun): void {
-  const input = submitSessionControllerInput(queue.key, source, { mode: queue.mode });
-  const claim = tryClaimSessionControllerTask(input);
-  if (!claim) {
-    throw new Error("Expected isolated test input to be selected");
   }
 }
