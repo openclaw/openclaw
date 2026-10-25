@@ -645,7 +645,7 @@ fs.mkdirSync(leaseDirectory, { recursive: true });
 const nonce = crypto.randomBytes(16).toString("hex");
 let watchdogTimeoutMs = Number(process.argv[2] || 12 * 60 * 1000);
 if (!Number.isSafeInteger(watchdogTimeoutMs) || watchdogTimeoutMs < 1) throw new Error("invalid watchdog timeout");
-if ((process.argv[3] || "dedicated") !== "shared-host") throw new Error("Windows worker workspace quiescence requires a shared host");
+if ((process.argv[3] || "dedicated") !== "shared-host") throw new Error("workspace quiescence requires POSIX");
 ${REMOTE_QUIESCENCE_LEASE_JS}
 ${REMOTE_WINDOWS_ACQUIRE_WORKSPACE_LEASE_JS}
 acquireWindowsWorkspaceLease(nonce, watchdogTimeoutMs);
