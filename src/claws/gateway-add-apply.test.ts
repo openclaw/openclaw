@@ -266,38 +266,45 @@ describe("Gateway Claw Add application", () => {
     ]);
   });
 
-  it("pins a direct install to the current plan and grants clean plugin consent", async () => {
-    const { planIntegrity: _planIntegrity, ...input } = applyInput();
-    await applyClawAddForGateway(input);
-    expect(mocks.consent).toHaveBeenCalledWith(
-      projected.pluginReviews,
-      undefined,
-      expect.any(Function),
-      { allowCleanDirectInstall: true },
-    );
-    expect(mocks.apply).toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "applies the current sealed plan with ordered policy leases (direct: %s)",
+    async (direct) => {
+      const result = await applyClawAddForGateway(
+        applyInput(direct ? { planIntegrity: undefined } : {}),
+      );
 
-  it("uses the canonical worker installer only after a sealed plan and persisted source match", async () => {
-    const result = await applyReviewed();
-
-    expect(result).toEqual({
-      agentId: "workflow-operator",
-      status: "complete",
-      readiness: { ready: true, requirements: [] },
-    });
-    expect(mocks.project).toHaveBeenNthCalledWith(3, plan, persistedSource, trust, config);
-    expect(mocks.apply).toHaveBeenCalledWith(
-      plan,
-      expect.objectContaining({
-        stateMode: "worker",
-        config,
-        consentPlanIntegrity: plan.planIntegrity,
-        assertCurrent: expect.any(Function),
-      }),
-    );
-    expect(mocks.owned).toHaveBeenCalled();
-  });
+      expect(result).toEqual({
+        agentId: "workflow-operator",
+        status: "complete",
+        readiness: { ready: true, requirements: [] },
+      });
+      expect(mocks.project).toHaveBeenNthCalledWith(3, plan, persistedSource, trust, config);
+      expect(mocks.apply).toHaveBeenCalledWith(
+        plan,
+        expect.objectContaining({
+          stateMode: "worker",
+          config,
+          consentPlanIntegrity: plan.planIntegrity,
+          assertCurrent: expect.any(Function),
+        }),
+      );
+      expect(mocks.owned).toHaveBeenCalled();
+      expect(mocks.consent).toHaveBeenCalledWith(
+        projected.pluginReviews,
+        undefined,
+        expect.any(Function),
+        { allowCleanDirectInstall: direct },
+      );
+      expect(mocks.lease.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.pluginLease.mock.invocationCallOrder[0]!,
+      );
+      expect(mocks.pluginLease.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.policyReader.mock.invocationCallOrder[0]!,
+      );
+      const options = mocks.apply.mock.calls[0]?.[1] as { getCurrentConfig: () => OpenClawConfig };
+      expect(options.getCurrentConfig()).toBe(config);
+    },
+  );
 
   it("rejects changed configured access before persisting the Claw", async () => {
     const changedConfig: OpenClawConfig = { ...config, tools: { deny: ["web_fetch"] } };
@@ -384,20 +391,6 @@ describe("Gateway Claw Add application", () => {
     expect(() => assertReviewedConfig(committedConfig, "after-agent-commit")).toThrow(
       ClawAddMutationError,
     );
-  });
-
-  it("pins current policy only after the agent and plugin leases", async () => {
-    const input = applyInput();
-    await applyClawAddForGateway(input);
-
-    expect(mocks.lease.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.pluginLease.mock.invocationCallOrder[0]!,
-    );
-    expect(mocks.pluginLease.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.policyReader.mock.invocationCallOrder[0]!,
-    );
-    const options = mocks.apply.mock.calls[0]?.[1] as { getCurrentConfig: () => OpenClawConfig };
-    expect(options.getCurrentConfig()).toBe(config);
   });
 
   it("refuses Add when Labs turns off while waiting for the mutation lease", async () => {

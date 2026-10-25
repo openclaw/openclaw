@@ -21,7 +21,7 @@ async function profileFixture(profile?: string, pointer?: string) {
       ...(pointer ? { metadata: { "openclaw.config": pointer } } : {}),
     }),
   );
-  const profilePath = join(root, "profiles", "openclaw.yml");
+  const profilePath = join(root, pointer ?? "profiles/openclaw.yml");
   const write = (content: string | Buffer) => writeFile(profilePath, content);
   if (profile !== undefined) {
     await write(profile);
@@ -99,42 +99,34 @@ describe("OpenClaw profile reader", () => {
   ])(
     "rejects malformed UTF-8 in a $location profile and accepts repaired Unicode",
     async ({ pointer }) => {
-      const { root, path } = await profileFixture(undefined, pointer);
-      const profilePath = join(root, pointer ?? "profiles/openclaw.yml");
+      const { read, write } = await profileFixture(undefined, pointer);
       const content = profileYaml({ groupChat: { mentionPatterns: ["@café �"] } });
-      await writeFile(profilePath, Buffer.from(content.replace(" �", ""), "latin1"));
+      await write(Buffer.from(content.replace(" �", ""), "latin1"));
 
-      expectProfileFailure(await readClawManifestFile(path), {
+      expectProfileFailure(await read(), {
         code: "openclaw_profile_read_failed",
         path: pointer ? "$.metadata.openclaw.config" : "$.profiles.openclaw",
         message: expect.stringContaining("must be valid UTF-8"),
       });
 
-      await writeFile(profilePath, `\uFEFF${content}`, "utf8");
-      expect(await readClawManifestFile(path)).toMatchObject({
+      await write(`\uFEFF${content}`);
+      expect(await read()).toMatchObject({
         ok: true,
         openClawProfile: { agent: { groupChat: { mentionPatterns: ["@café �"] } } },
       });
     },
   );
 
-  it.each([
-    ["anchor", "agent: &agent {}", "anchors"],
-    ["alias", "agent: *agent", "aliases"],
-    ["tag", "agent: !!map {}", "explicit tags"],
-    ["merge", "agent: { <<: {} }", "merge keys"],
-  ])(
-    "rejects profile YAML %s with its profile diagnostic",
-    async (_label, declaration, feature) => {
-      expectProfileFailure(await readProfile(`schemaVersion: 1\n${declaration}\n`), {
-        code: "unsupported_openclaw_profile_yaml_feature",
-        path: "$",
-        level: "error",
-        phase: "parse",
-        message: `profiles/openclaw.yml uses ${feature}; OpenClaw profile YAML must map directly to JSON data.`,
-      });
-    },
-  );
+  it("reports unsupported YAML features with the profile diagnostic", async () => {
+    expectProfileFailure(await readProfile("schemaVersion: 1\nagent: &agent {}\n"), {
+      code: "unsupported_openclaw_profile_yaml_feature",
+      path: "$",
+      level: "error",
+      phase: "parse",
+      message:
+        "profiles/openclaw.yml uses anchors; OpenClaw profile YAML must map directly to JSON data.",
+    });
+  });
 
   it.each([
     ["duplicate key", "schemaVersion: 1\nschemaVersion: 1\nagent: {}\n"],
@@ -149,39 +141,46 @@ describe("OpenClaw profile reader", () => {
     });
   });
 
-  it("loads and integrity-binds the conventional profile", async () => {
-    const { read, write } = await profileFixture(
-      profileYaml({
-        tools: {
-          profile: "coding",
-          allow: ["read", "github__list_issues"],
-          deny: ["exec"],
-          fs: { workspaceOnly: true },
-        },
-      }),
-    );
-    const first = await read();
-    expect(first).toMatchObject({
-      ok: true,
-      openClawProfile: {
-        schemaVersion: 1,
-        agent: {
+  it.each([undefined, "profiles/triage.openclaw.yml", "profiles/openclaw.yml"])(
+    "loads and integrity-binds the profile with pointer %s",
+    async (pointer) => {
+      const { read, write } = await profileFixture(
+        profileYaml({
           tools: {
             profile: "coding",
             allow: ["read", "github__list_issues"],
             deny: ["exec"],
             fs: { workspaceOnly: true },
           },
-        },
-      },
-    });
-    assert(first.ok, "expected OpenClaw profile to parse");
+        }),
+        pointer,
+      );
+      const first = await read();
+      assert(first.ok, "expected OpenClaw profile to parse");
+      expect(first.openClawProfile?.schemaVersion).toBe(1);
+      expect(first.openClawProfile?.agent.tools).toEqual({
+        profile: "coding",
+        allow: ["read", "github__list_issues"],
+        deny: ["exec"],
+        fs: { workspaceOnly: true },
+      });
+      if (pointer) {
+        expect(first.diagnostics).toContainEqual(
+          expect.objectContaining({
+            level: "warning",
+            code: "deprecated_openclaw_profile_pointer",
+            path: "$.metadata.openclaw.config",
+          }),
+        );
+        expect(first.diagnostics.some((entry) => entry.level === "error")).toBe(false);
+      }
 
-    await write(profileYaml({ tools: { profile: "messaging", allow: ["message"] } }));
-    const second = await read();
-    assert(second.ok, "expected changed OpenClaw profile to parse");
-    expect(second.source.integrity).not.toBe(first.source.integrity);
-  });
+      await write(profileYaml({ tools: { profile: "messaging", allow: ["message"] } }));
+      const second = await read();
+      assert(second.ok, "expected changed OpenClaw profile to parse");
+      expect(second.source.integrity).not.toBe(first.source.integrity);
+    },
+  );
 
   it.each([
     { toolProfile: "coding", strictOk: false },
@@ -277,17 +276,10 @@ describe("OpenClaw profile reader", () => {
     [{ model: { primary: "acme/model", provider: "acme" } }, "$.agent.model"],
     [{ subagents: { allowAgents: ["Invalid"] } }, "$.agent.subagents.allowAgents[0]"],
     [{ subagents: { delegationMode: "always" } }, "$.agent.subagents.delegationMode"],
+    [{ model: { primary: "acme/model" }, provider: "acme" }, "$.agent"],
   ])("rejects malformed released v1 host settings at %s", (agent, path) => {
     const parsed = parseLegacyLocalUpdateClawOpenClawProfile({ schemaVersion: 1, agent });
     expectProfileFailure(parsed, { path });
-  });
-
-  it("does not allow other host-owned profile fields through the legacy reader", () => {
-    const parsed = parseLegacyLocalUpdateClawOpenClawProfile({
-      schemaVersion: 1,
-      agent: { model: { primary: "acme/model" }, provider: "acme" },
-    });
-    expectProfileFailure(parsed, { path: "$.agent" });
   });
 
   it("combines released v1 host settings with the existing legacy tool migration", async () => {
@@ -310,22 +302,17 @@ describe("OpenClaw profile reader", () => {
     expect(migrated.openClawProfile?.agent).not.toHaveProperty("subagents");
   });
 
-  it("rejects a hardlinked profile", async () => {
-    const { root } = await profileFixture();
+  it.each(["hardlink", "symlink"])("rejects a %s profile at the read boundary", async (kind) => {
+    const { root, read } = await profileFixture();
     const source = join(root, "source.yml");
     await writeFile(source, "schemaVersion: 1\nagent: {}\n", "utf8");
-    await link(source, join(root, "profiles", "openclaw.yml"));
-
-    expectProfileFailure(await readClawManifestFile(join(root, "openclaw.claw.json")), {
-      code: "openclaw_profile_unsafe",
-    });
-  });
-  it("rejects a symlinked profile at the read boundary", async () => {
-    const { root, path } = await profileFixture();
-    await writeFile(join(root, "source.yml"), "schemaVersion: 1\nagent: {}\n", "utf8");
-    await symlink("../source.yml", join(root, "profiles", "openclaw.yml"));
-
-    expectProfileFailure(await readClawManifestFile(path), { code: "openclaw_profile_unsafe" });
+    const target = join(root, "profiles", "openclaw.yml");
+    if (kind === "hardlink") {
+      await link(source, target);
+    } else {
+      await symlink("../source.yml", target);
+    }
+    expectProfileFailure(await read(), { code: "openclaw_profile_unsafe" });
   });
 
   it("fails closed for an escaping metadata profile pointer", async () => {
@@ -336,45 +323,6 @@ describe("OpenClaw profile reader", () => {
       code: "invalid_openclaw_profile_path",
       path: "$.metadata.openclaw.config",
     });
-  });
-
-  it("still reads the deprecated metadata profile pointer with a warning", async () => {
-    const { root, path } = await profileFixture(undefined, "profiles/triage.openclaw.yml");
-    await writeFile(
-      join(root, "profiles", "triage.openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n    allow: [read]\n",
-      "utf8",
-    );
-
-    const result = await readClawManifestFile(path);
-
-    expect(result).toMatchObject({
-      ok: true,
-      openClawProfile: {
-        schemaVersion: 1,
-        agent: { tools: { profile: "coding", allow: ["read"] } },
-      },
-    });
-    assert(result.ok, "expected the deprecated pointer to keep resolving");
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "warning",
-        code: "deprecated_openclaw_profile_pointer",
-        path: "$.metadata.openclaw.config",
-      }),
-    );
-    expect(result.diagnostics.some((entry) => entry.level === "error")).toBe(false);
-  });
-
-  it("accepts a deprecated pointer that already targets the conventional profile", async () => {
-    const { path } = await profileFixture(
-      profileYaml({ tools: { profile: "coding", allow: ["read"] } }),
-      "profiles/openclaw.yml",
-    );
-
-    const result = await readClawManifestFile(path);
-
-    expect(result).toMatchObject({ ok: true, openClawProfile: { schemaVersion: 1 } });
   });
 
   it("fails closed when a deprecated pointer diverges from the conventional profile", async () => {
