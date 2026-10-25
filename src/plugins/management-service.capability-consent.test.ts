@@ -110,7 +110,7 @@ const stagedArtifact = (stagedArtifactDir: string, pluginId = "diffs") => ({
 });
 
 function discoverMetadata(
-  params: Parameters<typeof loadInstalledPluginIndexWithDiscovery>[0],
+  params: NonNullable<Parameters<typeof loadInstalledPluginIndexWithDiscovery>[0]>,
   liveRecords = false,
 ) {
   const { index, manifestRegistry } = loadInstalledPluginIndexWithDiscovery(params);

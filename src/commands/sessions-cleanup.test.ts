@@ -255,6 +255,12 @@ describe("sessionsCleanupCommand", () => {
             afterCount: 0,
             missing: 1,
             pruned: 0,
+            unreferencedArtifacts: {
+              scannedFiles: 0,
+              removedFiles: 0,
+              freedBytes: 0,
+              olderThanMs: 0,
+            },
           }),
           appliedCount: 0,
         },

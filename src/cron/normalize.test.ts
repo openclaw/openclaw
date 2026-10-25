@@ -168,7 +168,7 @@ it.each<[UnknownRecord, UnknownRecord | undefined]>([
     { version: 1, source: "authenticated-requester", channelRequester },
     undefined,
   ]),
-])("preserves only authored requester facts without invoking getters: %j", (input, expected) => {
+])("preserves only authored requester facts without invoking getters: %#", (input, expected) => {
   const normalized = createAgent({ toolsAllowProvenance: input });
   if (expected) {
     expect(normalized.toolsAllowProvenance).toEqual(expected);

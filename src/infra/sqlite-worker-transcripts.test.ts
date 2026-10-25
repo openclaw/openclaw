@@ -479,7 +479,7 @@ it("returns complete stored reads and typed errors after existing-only status an
       expect(entry).toMatchObject({ selector, utteranceCount: utterances.length });
     }
     const page = await getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 2 });
-    expect(page.utterances.map((row) => row.sequence)).toEqual([0, 1]);
+    expect(page.utterances?.map((row) => row.sequence)).toEqual([0, 1]);
     expect(page.nextCursor).not.toBeNull();
     const listed = await listTranscriptLibrary(store, {}, () => "Manual");
     expect(listed.sessions).toMatchObject([{ selector, providerName: "Manual" }]);

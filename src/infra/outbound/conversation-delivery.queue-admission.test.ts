@@ -82,7 +82,9 @@ describe("conversation completion through the real delivery queue", () => {
   async function openScope(config: OpenClawConfig, stateDir: string, destination = conversation) {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const scope = await prepareConversationRegistryScope({ agentId: "main", config });
-    onTestFinished(() => closeOpenClawAgentDatabaseByPathAsync(scope.storePath));
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+    });
     await registerConversationAddresses(scope, [
       { ...destination, deliveryTarget: destination.target },
     ]);

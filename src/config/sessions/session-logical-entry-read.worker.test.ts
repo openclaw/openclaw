@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import {
   emptySqliteCounts,
   observeParentSqlite,
+  sqliteMethods,
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -18,6 +19,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
@@ -51,29 +53,51 @@ function storedScope(storePath: string, scope: Partial<SessionAccessScope> = {})
   return { agentId: "ops", env: state.env, storePath, sessionKey: "global", ...scope };
 }
 
-function holdFirstPreparation(agentId: string) {
+function holdExecution(
+  stage: "before-open" | "reply",
+  shouldHold: (execution: OpenClawAgentDatabaseExecution) => boolean = () => true,
+  once = stage === "reply",
+) {
   const gate = {
     entered: createDeferredCore(),
     release: createDeferredCore(),
+    armed: stage !== "reply",
     restore: () => intercept.mockRestore(),
   };
-  let armed = true;
+  const hold = async (execution: OpenClawAgentDatabaseExecution) => {
+    if (gate.armed && shouldHold(execution)) {
+      gate.armed = !once;
+      gate.entered.resolve();
+      await gate.release.promise;
+    }
+  };
   const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
   const intercept = vi
     .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
     .mockImplementation((...args) => {
       const execution = capture(...args);
-      return {
-        ...execution,
-        async prepare(source: Parameters<typeof execution.prepare>[0]) {
-          if (armed && execution.agentId === agentId) {
-            armed = false;
-            gate.entered.resolve();
-            await gate.release.promise;
-          }
+      const overrides: Partial<OpenClawAgentDatabaseExecution> = {};
+      if (stage === "before-open") {
+        overrides.prepare = async (source) => {
+          await hold(execution);
           await execution.prepare(source);
-        },
-      };
+        };
+      } else if (stage === "reply") {
+        overrides.runExisting = (source, operation, options) =>
+          execution.runExisting(
+            source,
+            async (worker) => {
+              const execute: typeof worker.execute = async (command, requestOptions) => {
+                const result = await worker.execute(command, requestOptions);
+                await hold(execution);
+                return result;
+              };
+              return operation({ execute });
+            },
+            options,
+          );
+      }
+      return { ...execution, ...overrides };
     });
   return gate;
 }
@@ -95,31 +119,28 @@ async function readFirstSession(
   }
 }
 
-it.each(["read", "admission"] as const)(
-  "shares cold database admission across %s requests",
-  async (kind) => {
-    const agentId = `session-admission-${kind}`;
-    const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
-      agentId,
-      sessionKey: `agent:${agentId}:hook`,
-    });
-    const gate = holdFirstPreparation(agentId);
-    const first = readFirstSession(kind, scope);
-    let second: typeof first | undefined;
-    try {
-      await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
-      second = readFirstSession(kind, { ...scope, sessionKey: `agent:${agentId}:main` });
-      void second.catch(() => {});
-      gate.release.resolve();
-      await expect(first).resolves.toBeUndefined();
-      await expect(second).resolves.toBeUndefined();
-    } finally {
-      gate.release.resolve();
-      await Promise.allSettled([first, second]);
-      gate.restore();
-    }
-  },
-);
+it("shares cold database admission across logical session reads", async () => {
+  const agentId = "session-admission";
+  const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
+    agentId,
+    sessionKey: `agent:${agentId}:hook`,
+  });
+  const gate = holdExecution("before-open", (execution) => execution.agentId === agentId, true);
+  const first = readSessionEntryInWorker(scope);
+  let second: ReturnType<typeof readSessionEntryInWorker> | undefined;
+  try {
+    await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
+    second = readSessionEntryInWorker({ ...scope, sessionKey: `agent:${agentId}:main` });
+    void second.catch(() => {});
+    gate.release.resolve();
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+  } finally {
+    gate.release.resolve();
+    await Promise.allSettled([first, second]);
+    gate.restore();
+  }
+});
 
 it("preserves legacy entry metadata and SQLite creation without materializing the JSON locator", async () => {
   for (const reader of ["native", "worker"] as const) {
@@ -152,6 +173,23 @@ it("preserves legacy entry metadata and SQLite creation without materializing th
     expect(fs.existsSync(scope.storePath)).toBe(false);
   }
 });
+
+it.each(["read", "admission"] as const)(
+  "joins concurrent first %s requests through the queued database owner",
+  async (kind) => {
+    const agentId = `first-${kind}`;
+    const scope = { agentId, env: state.env, sessionKey: `agent:${agentId}:missing` };
+    const databasePath = resolveOpenClawAgentSqlitePath(scope);
+    expect(fs.existsSync(databasePath)).toBe(false);
+    const results = await Promise.allSettled(
+      Array.from({ length: 15 }, () => readFirstSession(kind, scope)),
+    );
+    expect(results).toEqual(
+      Array.from({ length: 15 }, () => ({ status: "fulfilled", value: undefined })),
+    );
+    expect(fs.existsSync(databasePath)).toBe(true);
+  },
+);
 
 it("preserves logical and physical owners without parent SQLite calls", async () => {
   const canonical = state.sessionsDir("ops") + "/sessions.json";
@@ -198,6 +236,16 @@ it("preserves logical and physical owners without parent SQLite calls", async ()
   await closeOpenClawAgentDatabasesAsync();
   const observer = observeParentSqlite();
   try {
+    const calibration = openNodeSqliteDatabase(":memory:");
+    calibration.exec("CREATE TABLE calibration (value INTEGER)");
+    calibration.prepare("INSERT INTO calibration VALUES (?)").run(7);
+    const query = calibration.prepare("SELECT value FROM calibration");
+    expect(query.get()).toEqual({ value: 7 });
+    expect(query.all()).toEqual([{ value: 7 }]);
+    expect([...query.iterate()]).toEqual([{ value: 7 }]);
+    calibration.close();
+    sqliteMethods.forEach((method) => expect(observer.counts[method], method).toBeGreaterThan(0));
+    observer.reset();
     for (const [sessionId, scope] of cases) {
       expect(await readSessionEntryInWorker({ ...scope, env: state.env })).toMatchObject({
         sessionId,
@@ -239,10 +287,14 @@ it.each(["before-consume", "after-consume"])(
         }
         return "consumed";
       },
+    ).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
     );
     try {
-      await expect(reading).resolves.toBe("consumed");
+      const result = await reading;
       expect(consumed).toBe(1);
+      expect(result).toEqual({ value: "consumed", error: undefined });
     } finally {
       await registryChange;
     }
@@ -321,8 +373,10 @@ it.for([
       if (!callerCurrent) {
         throw new Error("Captured caller was revoked");
       }
-    });
-    void reading.catch(() => {});
+    }).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
+    );
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -340,11 +394,17 @@ it.for([
         callerCurrent = false;
       }
       if (registration === "changed") {
-        registerOpenClawAgentDatabase({ agentId: "ops", path: databasePath, env: state.env });
+        registerOpenClawAgentDatabase({
+          agentId: "ops",
+          path: databasePath,
+          env: state.env,
+        });
       }
       releaseWriter.resolve();
       await priorWriter;
-      await expect(reading).rejects.toBeInstanceOf(Error);
+      const result = await reading;
+      expect(result.value).toBeUndefined();
+      expect(result.error).toBeInstanceOf(Error);
     } finally {
       releaseWriter.resolve();
       intercept.mockRestore();
