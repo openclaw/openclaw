@@ -243,6 +243,21 @@ export async function handleNextcloudTalkInbound(params: {
     access.ingress.reasonCode === "route_blocked"
       ? "route blocked"
       : access.senderAccess.reasonCode;
+  const ignoreOwnOutboundFileShare = async () => {
+    if (!message.attachment) {
+      return false;
+    }
+    const { isNextcloudTalkOutboundFileEcho } = await import("./outbound-media.js");
+    const echo = await isNextcloudTalkOutboundFileEcho({
+      account,
+      message,
+      signal: ingressAbortSignal,
+    });
+    if (echo) {
+      runtime.log?.("nextcloud-talk: ignored own outbound file share");
+    }
+    return echo;
+  };
 
   if (isGroup) {
     if (access.routeAccess.reason === "room_not_allowlisted") {
@@ -263,6 +278,11 @@ export async function handleNextcloudTalkInbound(params: {
     }
   } else if (access.senderAccess.decision !== "allow") {
     if (access.senderAccess.decision === "pairing") {
+      // An unpaired API user's own file share is an echo, not a pairing request.
+      if (await ignoreOwnOutboundFileShare()) {
+        return;
+      }
+      ingressAbortSignal?.throwIfAborted();
       await pairing.issueChallenge({
         senderId,
         senderIdLine: `Your Nextcloud user id: ${senderId}`,
@@ -323,12 +343,8 @@ export async function handleNextcloudTalkInbound(params: {
     return;
   }
 
-  if (message.attachment) {
-    const { isNextcloudTalkOutboundFileEcho } = await import("./outbound-media.js");
-    if (await isNextcloudTalkOutboundFileEcho({ account, message, signal: ingressAbortSignal })) {
-      runtime.log?.("nextcloud-talk: ignored own outbound file share");
-      return;
-    }
+  if (await ignoreOwnOutboundFileShare()) {
+    return;
   }
 
   let stagedMedia: { path: string; contentType?: string } | undefined;
