@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type CDPSession, type Page } from "playwright";
@@ -54,6 +55,7 @@ const { values } = parseArgs({
     "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
     "resource-counts": { type: "boolean", default: false },
+    "process-wakeups": { type: "boolean", default: false },
     headed: { type: "boolean", default: false },
   },
 });
@@ -111,6 +113,121 @@ function distribution(numbers: number[]) {
   };
 }
 
+type ProcessWakeupSample = {
+  sampleStartMach: string;
+  sampleEndMach: string;
+  timebase: { numer: number; denom: number };
+  processes: Array<{
+    pid: number;
+    ppid?: number;
+    uid?: number;
+    startAbstime?: string;
+    exitAbstime?: string;
+    interruptWakeups?: string;
+    packageIdleWakeups?: string;
+    error?: string;
+    errno?: number;
+  }>;
+};
+type ProcessWakeupSnapshot = {
+  // CDP supplies cumulative whole-process CPU seconds; rusage CPU units are not assumed.
+  cdpProcesses: Array<{ id: number; type: string; cumulativeCpuSeconds: number }>;
+  rusage: ProcessWakeupSample;
+};
+type ProcessWakeups = {
+  complete: boolean;
+  nativeBrowserPid?: number;
+  reason?: string;
+  before?: ProcessWakeupSnapshot;
+  after?: ProcessWakeupSnapshot;
+  delta?: { interruptWakeups: string; packageIdleWakeups: string };
+};
+
+async function readProcessWakeups(
+  session: CDPSession,
+  reader: string,
+  expectedBrowserPid?: number,
+): Promise<ProcessWakeupSnapshot> {
+  const { processInfo }: { processInfo: Array<{ id: number; type: string; cpuTime: number }> } =
+    await session.send("SystemInfo.getProcessInfo");
+  const browserPids = processInfo.filter((process) => process.type === "browser");
+  const ids = processInfo.map((process) => process.id);
+  if (
+    browserPids.length !== 1 ||
+    (expectedBrowserPid !== undefined && browserPids[0]!.id !== expectedBrowserPid) ||
+    ids.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+    new Set(ids).size !== ids.length
+  ) {
+    throw new Error("The active owned browser did not supply one valid process set");
+  }
+  // No process discovery: only this owned browser's explicit OS PIDs reach libproc.
+  const rusage: ProcessWakeupSample = JSON.parse(
+    execFileSync(reader, ids.map(String), { encoding: "utf8", timeout: 10_000 }),
+  );
+  return {
+    cdpProcesses: processInfo.map(({ id, type, cpuTime }) => ({
+      id,
+      type,
+      cumulativeCpuSeconds: cpuTime,
+    })),
+    rusage,
+  };
+}
+
+function finishProcessWakeups(observation: ProcessWakeups): void {
+  const { before, after } = observation;
+  if (!before || !after) {
+    throw new Error("Both process snapshots are required");
+  }
+  const processSet = (snapshot: ProcessWakeupSnapshot) =>
+    snapshot.cdpProcesses
+      .map(({ id, type }) => `${id}:${type}`)
+      .toSorted()
+      .join(",");
+  if (processSet(before) !== processSet(after)) {
+    throw new Error("Owned Chromium processes changed between snapshots");
+  }
+  let interruptWakeups = 0n;
+  let packageIdleWakeups = 0n;
+  for (const snapshot of [before, after]) {
+    const rows = snapshot.rusage.processes;
+    if (
+      rows.length !== snapshot.cdpProcesses.length ||
+      new Set(rows.map(({ pid }) => pid)).size !== rows.length ||
+      rows.some((row) => row.error || !snapshot.cdpProcesses.some(({ id }) => id === row.pid))
+    ) {
+      throw new Error("Incomplete Darwin rusage process set");
+    }
+  }
+  for (const initial of before.rusage.processes) {
+    const final = after.rusage.processes.find(({ pid }) => pid === initial.pid)!;
+    if (
+      !initial.startAbstime ||
+      initial.startAbstime === "0" ||
+      initial.startAbstime !== final.startAbstime ||
+      initial.uid !== final.uid ||
+      initial.ppid !== final.ppid ||
+      initial.exitAbstime !== "0" ||
+      final.exitAbstime !== "0"
+    ) {
+      throw new Error(`Process ${initial.pid} changed identity or exited`);
+    }
+    const interrupts = BigInt(final.interruptWakeups!) - BigInt(initial.interruptWakeups!);
+    const packageIdle = BigInt(final.packageIdleWakeups!) - BigInt(initial.packageIdleWakeups!);
+    if (interrupts < 0n || packageIdle < 0n) {
+      throw new Error(`Process ${initial.pid} counters moved backwards`);
+    }
+    interruptWakeups += interrupts;
+    packageIdleWakeups += packageIdle;
+  }
+  observation.delta = {
+    interruptWakeups: String(interruptWakeups),
+    packageIdleWakeups: String(packageIdleWakeups),
+  };
+  observation.complete = true;
+  delete observation.reason;
+}
+
 type Result = {
   step: string;
   viewport: string;
@@ -130,6 +247,7 @@ type Result = {
   rowIdentity?: { initial: number; created: number; retained: number; final: number };
   resourcesBefore?: ControlUiResourceCounts;
   resourcesAfter?: ControlUiResourceCounts;
+  processWakeups?: ProcessWakeups;
   skipReason?: string;
   trace?: ReturnType<typeof summarizeInteractionTrace>;
   longTaskDetails?: ReturnType<typeof summarizeLongTaskCpuProfiles>;
@@ -153,6 +271,32 @@ const servers: Array<{
   indexSha256: string;
   server: Awaited<ReturnType<typeof startBuiltControlUiE2eServer>>;
 }> = [];
+let processWakeupReader: string | undefined;
+let processWakeupSetupError: string | undefined;
+let processWakeupBuild: { command: string; argv: string[]; sourceSha256: string } | undefined;
+if (values["process-wakeups"]) {
+  if (process.platform !== "darwin") {
+    processWakeupSetupError = "Darwin proc_pid_rusage is unavailable on this platform";
+  } else {
+    try {
+      const source = fileURLToPath(new URL("./perf/darwin-process-wakeups.c", import.meta.url));
+      const executable = path.join(artifactDir, "darwin-process-wakeups");
+      const argv = ["clang", "-O2", "-Wall", "-Wextra", "-std=c11", source, "-o", executable];
+      processWakeupBuild = {
+        command: "/usr/bin/xcrun",
+        argv,
+        sourceSha256: createHash("sha256")
+          .update(await readFile(source))
+          .digest("hex"),
+      };
+      // Build once before launching Chromium, never during an observation.
+      execFileSync(processWakeupBuild.command, argv, { timeout: 30_000, stdio: "pipe" });
+      processWakeupReader = executable;
+    } catch (error) {
+      processWakeupSetupError = String(error);
+    }
+  }
+}
 const browser = await chromium.launch({
   executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
   headless: !values.headed,
@@ -219,7 +363,7 @@ async function launchNativeVisibilityContext() {
     if (!context) {
       throw new Error("Native Chromium did not expose its default context");
     }
-    return { context, close };
+    return { context, close, processId: child.pid };
   } catch (error) {
     await close();
     throw error;
@@ -286,6 +430,21 @@ try {
         screenshots: values["first-pair-screenshots"] ? "first pair per cell" : "all",
         resourceCounts: values["resource-counts"]
           ? "Instrumented top-frame native registrations, including fixture resources; measure timings separately without this flag."
+          : false,
+        processWakeups: values["process-wakeups"]
+          ? {
+              collector: "Darwin proc_pid_rusage RUSAGE_INFO_V0",
+              scope: "CDP-reported process set of the active owned Chromium browser",
+              supported: Boolean(processWakeupReader),
+              setupError: processWakeupSetupError,
+              build: processWakeupBuild,
+              limitations: [
+                "Interrupt-level wakeups and package-idle subset, not every OS wakeup",
+                "Two sequential endpoint snapshots include control-message and read skew",
+                "Transient processes entirely between endpoints are not observed",
+                "CDP CPU values are cumulative seconds; Chromium may substitute zero on read failure",
+              ],
+            }
           : false,
         preferences: { lobsterPetVisits: false },
         headed: values.headed,
@@ -385,8 +544,18 @@ try {
             status: "failed",
             hostLoadAverage: os.loadavg(),
             artifactPrefix,
+            ...(values["process-wakeups"]
+              ? {
+                  processWakeups: {
+                    complete: false,
+                    nativeBrowserPid: nativeVisibility?.processId,
+                    reason: processWakeupSetupError ?? "Sampling not reached",
+                  },
+                }
+              : {}),
           };
           let cdp: CDPSession | undefined;
+          let processSession: CDPSession | undefined;
           let tracing = false;
           let profiling = false;
           let minimizedWindow: number | undefined;
@@ -537,6 +706,29 @@ try {
                   return { state, observer };
                 }, scenario.rowSelector)
               : undefined;
+            if (values["process-wakeups"]) {
+              const observation = result.processWakeups!;
+              observation.reason = processWakeupSetupError ?? "Process observation did not finish";
+              if (processWakeupReader) {
+                try {
+                  if (nativeVisibility && nativeVisibility.processId === undefined) {
+                    throw new Error("Native owned Chromium launch did not retain its PID");
+                  }
+                  const ownedBrowser = context.browser();
+                  if (!ownedBrowser) {
+                    throw new Error("Active context has no owned Chromium browser");
+                  }
+                  processSession = await ownedBrowser.newBrowserCDPSession();
+                  observation.before = await readProcessWakeups(
+                    processSession,
+                    processWakeupReader,
+                    nativeVisibility?.processId,
+                  );
+                } catch (error) {
+                  observation.reason = String(error);
+                }
+              }
+            }
             const before = await metrics(cdp);
             await page.evaluate(() => performance.mark("interaction:start"));
             const start = performance.now();
@@ -547,6 +739,18 @@ try {
             result.wallMs = performance.now() - start;
             await page.evaluate(() => performance.mark("interaction:end"));
             const after = await metrics(cdp);
+            if (processSession && processWakeupReader && result.processWakeups?.before) {
+              try {
+                result.processWakeups.after = await readProcessWakeups(
+                  processSession,
+                  processWakeupReader,
+                  nativeVisibility?.processId,
+                );
+                finishProcessWakeups(result.processWakeups);
+              } catch (error) {
+                result.processWakeups.reason = String(error);
+              }
+            }
             result.domAfter = await countDom();
             if (rowProbe && scenario.rowSelector) {
               result.rowIdentity = await rowProbe.evaluate(({ state, observer }, selector) => {
@@ -699,6 +903,17 @@ try {
                 );
               }
             } finally {
+              if (processSession) {
+                try {
+                  await processSession.detach();
+                } catch (error) {
+                  if (result.processWakeups) {
+                    result.processWakeups.complete = false;
+                    delete result.processWakeups.delta;
+                    result.processWakeups.reason = `Process session cleanup failed: ${String(error)}`;
+                  }
+                }
+              }
               await capture(async () => cdp?.detach());
               await capture(() => (nativeVisibility ? nativeVisibility.close() : context.close()));
             }
@@ -838,6 +1053,9 @@ await writeFile(
       executed: results.length,
       failed: results.filter((row) => row.status === "failed").length,
       skipped: results.filter((row) => row.status === "skipped").length,
+      processWakeupsIncomplete: values["process-wakeups"]
+        ? results.filter((row) => row.processWakeups?.complete !== true).length
+        : undefined,
       summary,
     },
     null,
