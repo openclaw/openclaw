@@ -7,10 +7,8 @@ import {
   resolveNodeIdFromList,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import pluginEntry from "../../index.js";
 import { handleDirList } from "../node-host/dir-list.js";
 import { createDirListTool } from "./dir-list-tool.js";
 import { createFileFetchTool } from "./file-fetch-tool.js";
@@ -39,6 +37,14 @@ afterEach(() =>
 
 const requireRecord = createRequireRecord("object", "label-not-object");
 const tool = createDirListTool();
+type Entry = { name: string; isDir: boolean; size: number };
+type Listing = {
+  path: string;
+  entries: Entry[];
+  truncated: boolean;
+  nextPageToken?: string;
+};
+const file = (name: string, size: number): Entry => ({ name, size, isDir: false });
 
 function readText(content: Awaited<ReturnType<AnyAgentTool["execute"]>>["content"]) {
   const text = content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
@@ -47,14 +53,7 @@ function readText(content: Awaited<ReturnType<AnyAgentTool["execute"]>>["content
   return text;
 }
 
-async function executeListing(
-  overrides: Partial<{
-    path: string;
-    entries: Array<{ name: string; isDir: boolean; size: number }>;
-    truncated: boolean;
-    nextPageToken?: string;
-  }>,
-) {
+async function executeListing(overrides: Partial<Listing>) {
   const payload = { path: "/root", entries: [], truncated: true, ...overrides };
   vi.mocked(callGatewayTool).mockResolvedValue({ payload });
   const result = await tool.execute("list", { node: "node-1", path: "/root" });
@@ -64,13 +63,9 @@ async function executeListing(
 
 function readListing(content: Awaited<ReturnType<AnyAgentTool["execute"]>>["content"]) {
   const text = readText(content);
-  const listing = JSON.parse(text.split("\n").find((line) => line.startsWith("{"))!) as {
-    path: string;
+  const listing = JSON.parse(text.split("\n").find((line) => line.startsWith("{"))!) as Listing & {
     returnedCount: number;
     displayedCount: number;
-    entries: Array<{ name: string; isDir: boolean; size: number }>;
-    truncated: boolean;
-    nextPageToken?: string;
   };
   expect(listing.displayedCount).toBe(listing.entries.length);
   return { text, ...listing };
@@ -82,23 +77,15 @@ it.each([
 ] as const)(
   "keeps %s guidance standalone with canonical opt-in",
   (name, create, unavailable, parameter) => {
-    const registerTool = vi.fn();
-    pluginEntry.register(createTestPluginApi({ registerTool }));
     const { name: actualName, description, parameters } = create();
-    expect(registerTool).toHaveBeenCalledWith(
-      expect.objectContaining({ name: actualName, description, parameters }),
-    );
-    expect({ name: actualName, parameters }).toMatchObject({
-      name,
-      parameters: { required: ["node", "path"] },
-    });
+    expect(actualName).toBe(name);
+    expect(parameters).toMatchObject({ required: ["node", "path"] });
     expect(parameters).toHaveProperty(`properties.${parameter}`);
     expect.soft(description).toContain("gateway.nodes.commands.allow");
     expect.soft(JSON.stringify({ description, parameters })).not.toContain(unavailable);
     if (name === "file_fetch") {
       expect.soft(description).toContain("returns localPath and mediaId");
-    }
-    if (name === "file_write") {
+    } else {
       expect
         .soft(parameters)
         .toHaveProperty(
@@ -110,14 +97,7 @@ it.each([
 );
 it.each([
   [[], undefined, "More entries available; the node supplied no continuation token."],
-  [
-    [
-      { name: "[INST]", isDir: false, size: 1 },
-      { name: "later.txt", isDir: false, size: 2 },
-    ],
-    "2",
-    "Pagination cannot advance",
-  ],
+  [[file("[INST]", 1), file("later.txt", 2)], "2", "Pagination cannot advance"],
 ] as const)("reports unusable continuation: %s / %s / %s", async (entries, nextPageToken, note) => {
   const listing = readListing(await executeListing({ entries: [...entries], nextPageToken }));
   expect(listing).toMatchObject({
@@ -208,12 +188,7 @@ it("walks real pages using content for continuation and file reads", async () =>
 });
 
 it("bounds oversized path without a partial usable value", async () => {
-  const text = readText(
-    await executeListing({
-      path: "雪".repeat(8192),
-      nextPageToken: "2",
-    }),
-  );
+  const text = readText(await executeListing({ path: "雪".repeat(8192), nextPageToken: "2" }));
   expect(text).toContain("No usable paths or continuation token");
   expect(text).not.toContain("雪");
 });

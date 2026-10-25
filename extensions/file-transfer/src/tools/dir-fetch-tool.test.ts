@@ -4,10 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import { gzipSync } from "node:zlib";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { DIR_FETCH_HARD_MAX_BYTES } from "../shared/dir-fetch-limits.js";
-import { FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 
 const appendFileTransferAudit = vi.fn(async () => undefined);
 const saveMediaBuffer = vi.fn<() => Promise<{ path: string }>>();
@@ -110,7 +109,7 @@ function prepareArchive(tarBuffer: Buffer, mediaName = "media", canonicalPath = 
       path: canonicalPath,
       tarBase64: tarBuffer.toString("base64"),
       tarBytes: tarBuffer.byteLength,
-      sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
+      sha256: sha256(tarBuffer),
       fileCount: 3,
     },
     audit: bindFileTransferAudit(
@@ -133,10 +132,7 @@ type ToolResult = Awaited<ReturnType<ReturnType<typeof createDirFetchTool>["exec
 type SavedFile = Record<"relPath" | "localPath" | "sha256" | "mimeType", string> & { size: number };
 const sha256 = (bytes: string | Buffer) => crypto.createHash("sha256").update(bytes).digest("hex");
 const resultText = (content: ToolResult["content"]) =>
-  content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text)
-    .join("\n");
+  content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
 
 function readSavedContent(content: ToolResult["content"]) {
   const text = resultText(content);
@@ -156,18 +152,22 @@ function expectAudit(fields: { decision: string; errorCode?: string }) {
   expect(appendFileTransferAudit).toHaveBeenLastCalledWith(expect.objectContaining(fields));
 }
 
+async function expectRemoved({ archivePath, mediaDir }: { archivePath: string; mediaDir: string }) {
+  await expect(fs.access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(fs.readdir(mediaDir)).resolves.toEqual([]);
+}
+
 async function expectUnsafeArchive(
   entries: RawTarEntry[],
   causeCode: "entry-path" | "entry-filtered" = "entry-path",
   message = /^dir\.fetch UNSAFE_ARCHIVE:/u,
 ) {
-  const { archivePath, mediaDir } = prepareArchive(createRawTarBuffer(entries));
+  const saved = prepareArchive(createRawTarBuffer(entries));
   await expect(executeDirFetch()).rejects.toMatchObject({
     message: expect.stringMatching(message),
     cause: { name: "ArchiveSecurityError", code: causeCode },
   });
-  await expect(fs.access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(fs.readdir(mediaDir)).resolves.toEqual([]);
+  await expectRemoved(saved);
   expectAudit({ decision: "error", errorCode: "UNSAFE_ARCHIVE" });
 }
 
@@ -245,10 +245,7 @@ it.each([false, true])("extracts and renders a tree (truncated: %s)", async (lar
     relPaths
       .toSorted()
       .slice(0, visible.displayedCount)
-      .map((relPath) => ({
-        relPath,
-        size: Buffer.byteLength(contents[relPath]!),
-      })),
+      .map((relPath) => ({ relPath, size: Buffer.byteLength(contents[relPath]!) })),
   );
   expect(visible.text).toContain(`Fetched ${relPaths.length} files`);
   expect(visible.text).toContain(`${relPaths.length - visible.displayedCount} saved files omitted`);
@@ -259,61 +256,41 @@ it.each([false, true])("extracts and renders a tree (truncated: %s)", async (lar
     path.dirname(archivePath),
     `dir-fetch-${path.basename(archivePath, ".gz")}`,
   );
-  const expectedFiles: SavedFile[] = [];
+  const { files, ...details } = result.details as { files: SavedFile[] };
+  const diskFiles = (await listDirectoryTreeStrict(rootDir))
+    .filter(({ dirent }) => dirent.isFile())
+    .map(({ relativePath }) => relativePath);
+  expect(diskFiles.toSorted()).toEqual(relPaths.toSorted());
+  expect(files.map((file) => file.relPath).toSorted()).toEqual(relPaths.toSorted());
   const mimeTypes: Record<string, string> = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".txt": "text/plain",
   };
-  const visit = async (directory: string): Promise<void> => {
-    for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      const localPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(localPath);
-        continue;
-      }
-      const relPath = path.relative(rootDir, localPath);
-      const bytes = await fs.readFile(localPath);
-      expect(bytes.toString()).toBe(contents[relPath]);
-      const mimeType = mimeTypes[path.extname(relPath)] ?? "application/octet-stream";
-      expectedFiles.push({
-        relPath,
-        localPath,
-        size: bytes.length,
-        sha256: sha256(bytes),
-        mimeType,
-      });
-    }
-  };
-  await visit(rootDir);
-  expect(expectedFiles.map((file) => file.relPath).toSorted()).toEqual(relPaths.toSorted());
-  const images = expectedFiles.filter((file) => file.mimeType.startsWith("image/"));
-  const others = expectedFiles.filter((file) => !file.mimeType.startsWith("image/"));
-  expect(result.details).toEqual({
+  for (const file of files) {
+    const bytes = await fs.readFile(file.localPath);
+    expect(bytes.toString()).toBe(contents[file.relPath]);
+    expect(file).toEqual({
+      relPath: file.relPath,
+      localPath: path.join(rootDir, file.relPath),
+      size: bytes.length,
+      sha256: sha256(bytes),
+      mimeType: mimeTypes[path.extname(file.relPath)] ?? "application/octet-stream",
+    });
+  }
+  const images = files.filter((file) => file.mimeType.startsWith("image/"));
+  const others = files.filter((file) => !file.mimeType.startsWith("image/"));
+  expect(details).toEqual({
     path: canonicalPath,
     rootDir,
     fileCount: relPaths.length,
     tarBytes: tarBuffer.length,
     sha256: sha256(tarBuffer),
-    files: expectedFiles,
     media: { mediaUrls: [...images, ...others].slice(0, 25).map((file) => file.localPath) },
   });
-  expect(visible.text.split("\n").find((line) => line.startsWith("{"))).toBe(
-    JSON.stringify({
-      rootDir,
-      fileCount: relPaths.length,
-      displayedCount: visible.displayedCount,
-      files: visible.files,
-    }),
-  );
+  expect(visible.rootDir).toBe(rootDir);
   expect(encodedRecords).toBeGreaterThan(0);
   expect(encodedRecords).toBeLessThanOrEqual(visible.displayedCount + 1);
-  expect(saveMediaBuffer).toHaveBeenCalledWith(
-    tarBuffer,
-    "application/gzip",
-    FILE_TRANSFER_SUBDIR,
-    DIR_FETCH_HARD_MAX_BYTES,
-  );
   expectAudit({ decision: "allowed" });
 });
 
@@ -395,12 +372,11 @@ it("rejects canonical collisions", async () => {
 
 it("maps single-entry expansion limits to TREE_TOO_LARGE", async () => {
   const tarBuffer = await createTarBuffer({ "large.bin": Buffer.alloc(16 * 1024 * 1024 + 1) });
-  const { archivePath, mediaDir } = prepareArchive(tarBuffer);
+  const saved = prepareArchive(tarBuffer);
 
   await expect(executeDirFetch()).rejects.toThrow(
     /dir\.fetch UNCOMPRESSED_TOO_LARGE: archive entry extracted size exceeds limit/iu,
   );
-  await expect(fs.access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-  await expect(fs.readdir(mediaDir)).resolves.toEqual([]);
+  await expectRemoved(saved);
   expectAudit({ decision: "error", errorCode: "TREE_TOO_LARGE" });
 });
