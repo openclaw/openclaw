@@ -68,7 +68,7 @@ afterEach(() => {
 });
 
 it.runIf(process.platform !== "win32").each(["oversized", "invalid-utf8"] as const)(
-  "preserves native bootstrap handling for %s remote files",
+  "withholds %s remote files as unreadable without Gateway fallback",
   async (kind) => {
     const bytes =
       kind === "oversized"
@@ -89,15 +89,11 @@ it.runIf(process.platform !== "win32").each(["oversized", "invalid-utf8"] as con
     await withAccess(local, bridge, async () => {
       const [file] = await loadBootstrap(local, [DEFAULT_AGENTS_FILENAME]);
       expect(file?.missing).toBe(false);
-      if (kind === "oversized") {
-        expect(file?.content).toContain("[UNREADABLE:");
-        expect(await loadExtra(local, ["AGENTS.md"])).toMatchObject({
-          files: [],
-          diagnostics: [expect.anything()],
-        });
-      } else {
-        expect(file?.content).toBe(bytes.toString("utf8"));
-      }
+      expect(file?.content).toContain("[UNREADABLE:");
+      expect(await loadExtra(local, ["AGENTS.md"])).toMatchObject({
+        files: [],
+        diagnostics: [expect.anything()],
+      });
       expect(file?.content).not.toContain("stale local document");
     });
   },
