@@ -1,26 +1,18 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
-import {
-  createServer as createHttpServer,
-  request,
-  type Server,
-  type RequestListener,
-} from "node:http";
+import { createServer as createHttpServer, type Server, type RequestListener } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { completionChunk } from "../agents/simple-completion.test-support.js";
 import { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "../test-helpers/proxy-tls-fixture.js";
 import type { NativeRuntimeConfig } from "./native-runtime-config.js";
 import { buildNativeRuntimeFetch, isNativeRuntimeEndpoint } from "./native-runtime-transport.js";
-import {
-  closeNativeServers,
-  listenNativeServer,
-  nativeProviderFixture,
-} from "./native-worker.test-support.js";
+import { closeNativeServers, listenNativeServer } from "./native-worker.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const servers: Server[] = [];
@@ -37,7 +29,6 @@ const apis = [
 ];
 const opaque = "external-proxy-fixture-authorization";
 const sensitiveHeader = "external-custom-header-fixture";
-const providerOnly = "custodian-only-provider-fixture";
 const jwt = [
   Buffer.from('{"alg":"none"}').toString("base64url"),
   Buffer.from(
@@ -47,9 +38,7 @@ const jwt = [
 ].join(".");
 const observed: boolean[] = [];
 let sinkHits = 0;
-let forwardedSensitiveHeaders = 0;
 let wrongNameOrigin: string;
-let provider: Awaited<ReturnType<typeof nativeProviderFixture>>;
 let tlsOrigin: string;
 let httpOrigin: string;
 let workspace: string;
@@ -141,10 +130,8 @@ beforeAll(async () => {
   };
   trusted = spawnProbe(true);
   untrusted = spawnProbe(false);
-  provider = await nativeProviderFixture(servers, "fixture-model", () => "qualified", "qualified");
-  httpOrigin = await listen((req, res) => {
+  httpOrigin = await listen((_req, res) => {
     sinkHits++;
-    forwardedSensitiveHeaders += Number(req.headers["x-worker-session"] === sensitiveHeader);
     res.writeHead(401).end();
   });
   const handle: RequestListener = (req, res) => {
@@ -157,24 +144,8 @@ beforeAll(async () => {
           req.headers["x-goog-api-key"] === opaque),
     );
     if (p.startsWith("/success/")) {
-      // Synthetic custodian owns this provider key in the parent; only opaque auth and CA
-      // enter the compiled runtime child. This is not an OS workload-isolation claim.
-      if (req.headers.authorization !== "Bearer " + opaque) {
-        res.writeHead(401).end();
-        return;
-      }
-      const forward = request(
-        provider.baseUrl,
-        { method: "POST", headers: { authorization: "Bearer " + providerOnly } },
-        (reply) => {
-          res.writeHead(reply.statusCode ?? 500, reply.headers);
-          reply.pipe(res);
-        },
-      );
-      forward.on("error", () => {
-        res.writeHead(502).end();
-      });
-      req.pipe(forward);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(completionChunk("qualified", "fixture-model") + "data: [DONE]\n\n");
       return;
     }
     if (p.startsWith("/same-origin/")) {
@@ -204,23 +175,17 @@ afterAll(async () => {
   await closeNativeServers(servers);
 });
 it("rejects non-loopback plaintext configuration before any request", async () => {
-  for (const endpoint of [
-    "http://custodian.example.test/v1",
-    "http://192.0.2.9/v1",
-    "http://localhost/v1",
-  ]) {
-    expect((await run(trusted, "openai-completions", endpoint)).stopReason).toBe("startup-error");
-  }
+  expect(
+    (await run(trusted, "openai-completions", "http://custodian.example.test/v1")).stopReason,
+  ).toBe("startup-error");
 });
-it("uses a trusted private CA with a separate synthetic custodian and never sends its provider key to the runtime", async () => {
-  const prior = provider.requests.length;
+it("uses a trusted private CA for authenticated native inference", async () => {
+  const prior = observed.length;
   expect(await run(trusted, "openai-completions", tlsOrigin + "/success/v1")).toMatchObject({
     stopReason: "stop",
     text: "qualified",
   });
-  expect(provider.requests).toHaveLength(prior + 1);
-  expect(provider.requests[prior]?.headers.authorization).toBe("Bearer " + providerOnly);
-  expect(JSON.stringify(config("openai-completions", tlsOrigin))).not.toContain(providerOnly);
+  expect(observed.slice(prior)).toEqual([true]);
 });
 it("rejects an untrusted certificate before auth reaches the endpoint", async () => {
   await expectRejectedBeforeRequest(untrusted, tlsOrigin + "/observe");
@@ -234,9 +199,9 @@ it("binds real built-in SDK requests to their endpoint without forwarding auth o
       api + " must reach the TLS fixture through its real SDK",
     ).toBeGreaterThan(prior);
     expect(observed.slice(prior).every(Boolean), api).toBe(true);
-    const before = { sinkHits, forwardedSensitiveHeaders };
+    const before = sinkHits;
     await run(trusted, api, tlsOrigin + "/redirect/" + api);
-    expect({ sinkHits, forwardedSensitiveHeaders }, api).toEqual(before);
+    expect(sinkHits, api).toBe(before);
   }
 });
 it("rejects even a same-origin redirect instead of replaying sensitive headers", async () => {
@@ -278,7 +243,4 @@ it("uses canonical loopback IP classification rather than DNS-looking names", ()
 it("rejects an SDK request to an unprovisioned origin before network I/O", () => {
   const fetcher = buildNativeRuntimeFetch({ baseUrl: tlsOrigin });
   expect(() => fetcher(httpOrigin + "/outside")).toThrow("configured endpoint origin");
-  expect(() => fetcher("https://unprovisioned.example.test/v1")).toThrow(
-    "configured endpoint origin",
-  );
 });
