@@ -12,7 +12,6 @@ import {
   repairProviderWrappedModelOverride,
 } from "./model-overrides.js";
 import {
-  resolveDirectStoredModelOverride,
   resolveStoredModelOverride,
   resolveStoredModelOverrideAsync,
   resolveStoredModelOverrideCore,
@@ -224,15 +223,6 @@ describe("stored model overrides", () => {
     return { provider, model, source: "parent", routeResolution: "raw" };
   }
 
-  function resolveParentOverride(parent: Partial<SessionEntry>) {
-    const rootKey = "agent:main:discord:channel:root";
-    return resolveStoredModelOverrideAsync({
-      defaultProvider: "openai",
-      sessionKey: `${rootKey}:thread:child`,
-      sessionStore: { [rootKey]: makeEntry(parent) },
-    });
-  }
-
   it.each([
     ["sync", resolveStoredModelOverrideCore],
     ["async", resolveStoredModelOverrideAsync],
@@ -255,6 +245,7 @@ describe("stored model overrides", () => {
       const result = await resolve({
         defaultProvider: "openai",
         sessionEntry,
+        sessionKey: "agent:main:dashboard:child",
         parentSessionKey: parentKey,
         loadSessionEntry,
       });
@@ -279,33 +270,23 @@ describe("stored model overrides", () => {
   });
 
   it("inherits configured automatic choices", async () => {
-    expect(await resolveParentOverride(automatic)).toEqual(
-      parentChoice("google-vertex", "gemini-fallback"),
-    );
+    expect(
+      await resolveStoredModelOverrideAsync({
+        defaultProvider: "openai",
+        sessionKey: `${parentKey}:thread:child`,
+        sessionStore: { [parentKey]: makeEntry(automatic) },
+      }),
+    ).toEqual(parentChoice("google-vertex", "gemini-fallback"));
   });
 
-  it.each([
-    ["direct", resolveDirectStoredModelOverride, { sessionEntry: staleDefault }],
-    [
-      "parent",
-      resolveStoredModelOverride,
-      {
+  it("honors a parent's explicit Default marker", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
         sessionKey: `${parentKey}:thread:child`,
         sessionStore: { [parentKey]: staleDefault },
-      },
-    ],
-    [
-      "child",
-      resolveStoredModelOverride,
-      {
-        sessionEntry: { ...staleDefault, providerOverride: "google-vertex" },
-        sessionKey: "agent:main:dashboard:child",
-        parentSessionKey: parentKey,
-        sessionStore: { [parentKey]: makeEntry(userPin) },
-      },
-    ],
-  ] as const)("honors an explicit Default marker on the %s", (_name, resolve, params) => {
-    expect(resolve({ defaultProvider: "openai", ...params })).toBeNull();
+      }),
+    ).toBeNull();
   });
 
   it("reloads parent model choices after in-process writes", async () => {
