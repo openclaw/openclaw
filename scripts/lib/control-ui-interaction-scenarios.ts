@@ -799,15 +799,22 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     expected: "The 1,000-session sidebar closes and reopens.",
     prepare: prepareSidebarInventory,
     run: async (page) => {
-      if (await page.locator(".shell--mobile-nav").count()) {
+      const mobile = (await page.locator(".shell--mobile-nav").count()) > 0;
+      if (mobile) {
         await page.keyboard.press("Escape");
         await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
+        await page.locator(".shell-nav").evaluate(async (drawer) => {
+          await Promise.all(drawer.getAnimations().map((animation) => animation.finished));
+        });
       } else {
         await page.locator(".sidebar-session-toolbar__collapse").first().click();
       }
       await navigation(page, "sessions");
       await page.locator(`.sidebar-recent-session[data-session-key="${sessionKeys[0]}"]`).waitFor();
       await frames(page);
+      if (mobile && !(await page.locator(".shell-nav :focus").first().isVisible())) {
+        throw new Error("Opening the mobile drawer must focus a control inside it");
+      }
     },
   },
   {
