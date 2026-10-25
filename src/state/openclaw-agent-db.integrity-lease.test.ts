@@ -303,6 +303,8 @@ it.runIf(process.platform === "linux")(
     const created = once(creator, "exit");
     creator.send("close");
     expect(await created).toEqual([0, null]);
+    // A live Gateway that has written since its last close has no reusable seal.
+    fs.rmSync(`${pathname}.seal`);
     const child = await openChild(pathname, env);
     const gate = schema.agentDatabaseIntegrityBeforeMutationSteps;
     let diagnostics: SqliteIntegrityDiagnostics | undefined;
@@ -324,7 +326,9 @@ it.runIf(process.platform === "linux")(
     expect(await exited).toEqual([0, null]);
     // The borrower never checked the file, so closing last leaves verification to the next opener.
     closeOpenClawAgentDatabaseByPath(database.path);
-    expect(readSqliteDatabaseCleanClose(database.path)).toBe(false);
+    expect(readSqliteCleanCloseSeal(pathname, fs.statSync(pathname, { bigint: true }))).toBe(
+      undefined,
+    );
   },
 );
 
@@ -336,6 +340,11 @@ it.each([
   async ({ swapped, outcome }) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-lease-race-") };
     const pathname = resolveOpenClawAgentSqlitePath({ agentId: "integrity-lease", env });
+    const creator = await openChild(pathname, env);
+    const created = once(creator, "exit");
+    creator.send("close");
+    expect(await created).toEqual([0, null]);
+    fs.rmSync(`${pathname}.seal`);
     const child = await openChild(pathname, env);
     openOpenClawStateDatabase({ env })
       .db.prepare("UPDATE agent_database_leases SET provenance = ? WHERE owner_pid = ?")
@@ -359,13 +368,19 @@ it.each([
       return result;
     });
 
-    openOpenClawAgentDatabase({ agentId: "integrity-lease", env });
+    const database = openOpenClawAgentDatabase({ agentId: "integrity-lease", env });
 
     expect(opened).toBe(true);
     expect(diagnostics?.integrityGateOutcome).toBe(outcome);
+    database.db.exec("INSERT INTO auth_profile_state VALUES ('race-writer', '{}', 1)");
     const exited = once(child, "exit");
     child.send("close");
     expect(await exited).toEqual([0, null]);
+    closeOpenClawAgentDatabaseByPath(pathname);
+    // Only a process that actually checked the file can certify it on its last close.
+    expect(
+      readSqliteCleanCloseSeal(pathname, fs.statSync(pathname, { bigint: true })) !== undefined,
+    ).toBe(swapped);
   },
 );
 
