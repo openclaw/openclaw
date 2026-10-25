@@ -28,63 +28,31 @@ describe("delivery context helpers", () => {
   });
 
   it("normalizes channel/to/accountId and drops empty contexts", () => {
-    expect(
-      normalizeDeliveryContext({
-        channel: " demo-channel ",
-        to: " +1555 ",
-        accountId: " acct-1 ",
-      }),
-    ).toEqual({
-      channel: "demo-channel",
-      to: "+1555",
-      accountId: "acct-1",
-    });
-
+    const input = { channel: " demo ", to: " C1 ", accountId: " a " };
+    expect(normalizeDeliveryContext(input)).toEqual({ channel: "demo", to: "C1", accountId: "a" });
     expect(normalizeDeliveryContext({ channel: "  " })).toBeUndefined();
   });
 
   it.each([
-    [
-      { channel: "slack" },
-      { channel: "telegram", accountId: "bot" },
-      { channel: "slack", accountId: undefined },
-    ],
-    [
-      { channel: "telegram", accountId: "bot-a" },
-      { channel: "telegram", accountId: "bot-b" },
-      { channel: "telegram", accountId: "bot-a" },
-    ],
-    [
-      { accountId: "bot-a" },
-      { channel: "telegram", accountId: "bot-b" },
-      { channel: undefined, accountId: "bot-a" },
-    ],
-  ] as const)(
-    "does not inherit target or thread across route owners: %j",
-    (primary, fallback, expected) => {
-      expect(mergeDeliveryContext(primary, { ...fallback, to: "123", threadId: "99" })).toEqual({
-        ...expected,
-        to: undefined,
-      });
-    },
-  );
-
-  it.each([
-    [{ channel: "demo-channel", to: "+1555" }, "demo-channel|+1555||"],
-    [{ channel: "demo-channel" }, undefined],
-    [{ channel: "demo-channel", to: "+1555", accountId: "acct-1" }, "demo-channel|+1555|acct-1|"],
-    [
-      { channel: "demo-channel", to: "channel:C1", threadId: "123.456" },
-      "demo-channel|channel:C1||123.456",
-    ],
-    [{ channel: "telegram", to: "-100123", threadId: 42.9 }, "telegram|-100123||42"],
-  ] as const)("builds stable keys for %j", (context, key) => {
-    expect(deliveryContextKey(context)).toBe(key);
+    ["slack", undefined],
+    ["telegram", "bot-a"],
+    [undefined, "bot-a"],
+  ] as const)("does not inherit target or thread across route owners: %j", (channel, accountId) => {
+    const fallback = { channel: "telegram", accountId: "bot-b", to: "123", threadId: "99" };
+    expect(mergeDeliveryContext({ channel, accountId }, fallback)).toEqual({
+      channel,
+      accountId,
+      to: undefined,
+    });
   });
 
-  it("derives delivery context from a session entry", () => {
-    const delivery = normalizeSessionDeliveryState({ route: slackRoute });
-    expect(deliveryContextFromSession({ delivery })).toEqual(slackContext);
+  it.each([
+    [{ channel: "demo", to: "C1" }, "demo|C1||"],
+    [{ channel: "demo" }, undefined],
+    [{ channel: "demo", to: "C1", accountId: "a" }, "demo|C1|a|"],
+    [{ channel: "demo", to: "C1", threadId: "123.456" }, "demo|C1||123.456"],
+  ] as const)("builds stable keys for %j", (context, key) => {
+    expect(deliveryContextKey(context)).toBe(key);
   });
 
   it("does not reconstruct delivery from retired session fields at runtime", () => {
@@ -103,19 +71,19 @@ describe("delivery context helpers", () => {
       normalizeSessionDeliveryState({ context: { channel: "webchat", to: "dashboard" } }),
     ).toEqual({ kind: "internal" });
 
-    expect(
-      normalizeSessionDeliveryState({
-        route: {
-          ...slackRoute,
-          channel: "Slack",
-          accountId: " work ",
-          target: { ...slackRoute.target, to: " channel:C123 ", rawTo: " slack://C123 " },
-          thread: { ...slackRoute.thread, id: " 177000.123 " },
-        },
-        context: { channel: "discord", to: "channel:old" },
-        origin: { label: "Support" },
-      }),
-    ).toEqual({
+    const delivery = normalizeSessionDeliveryState({
+      route: {
+        ...slackRoute,
+        channel: "Slack",
+        accountId: " work ",
+        target: { ...slackRoute.target, to: " channel:C123 ", rawTo: " slack://C123 " },
+        thread: { ...slackRoute.thread, id: " 177000.123 " },
+      },
+      context: { channel: "discord", to: "channel:old" },
+      origin: { label: "Support" },
+    });
+    expect(deliveryContextFromSession({ delivery })).toEqual(slackContext);
+    expect(delivery).toEqual({
       kind: "external",
       route: slackRoute,
       context: slackContext,

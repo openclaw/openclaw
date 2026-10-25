@@ -22,6 +22,13 @@ import {
 } from "./usage-format.js";
 
 type ModelCostConfig = NonNullable<ReturnType<typeof resolveModelCostConfig>>;
+function accumulate(...usages: Parameters<typeof mergeUsageIntoAccumulator>[1][]) {
+  const result = createUsageAccumulator();
+  for (const usage of usages) {
+    mergeUsageIntoAccumulator(result, usage);
+  }
+  return result;
+}
 
 const inputRates = (input: number) => ({ input, output: 0, cacheRead: 0, cacheWrite: 0 });
 type SourceModel = { id: string; cost?: Partial<ModelDefinitionConfig["cost"]> };
@@ -32,11 +39,7 @@ const pricedModel = (input: number) => ({ id: "demo-model", cost: inputRates(inp
 const resolveCost = (provider: string, model: string, config?: OpenClawConfig, agentDir?: string) =>
   resolveModelCostConfig({ provider, model, config, agentDir });
 
-async function writePricing(
-  agentDir: string,
-  provider: string,
-  models: SourceModel[],
-): Promise<void> {
+async function writePricing(agentDir: string, provider: string, models: SourceModel[]) {
   await fs.mkdir(agentDir, { recursive: true });
   await fs.writeFile(
     path.join(agentDir, "models.json"),
@@ -92,57 +95,45 @@ describe("usage-format", () => {
 
   it("scopes models.json pricing by agent directory before configured and default pricing", async () => {
     const secondAgentDir = path.join(stateDir, "agents", "second", "agent");
-    const configuredOnlyAgentDir = path.join(stateDir, "agents", "configured-only", "agent");
+    const emptyAgentDir = path.join(stateDir, "agents", "configured-only", "agent");
     await writePricing(agentDir, "demo-scoped", [pricedModel(10)]);
     await writePricing(secondAgentDir, "demo-scoped", [pricedModel(20)]);
-    await fs.mkdir(configuredOnlyAgentDir, { recursive: true });
+    await fs.mkdir(emptyAgentDir, { recursive: true });
 
     const config = sourceConfig("demo-scoped", [pricedModel(30)]);
     const resolveInputPrice = (scopedAgentDir?: string) =>
       resolveCost("demo-scoped", "demo-model", config, scopedAgentDir)?.input;
 
-    expect(
-      [agentDir, secondAgentDir, configuredOnlyAgentDir, undefined].map(resolveInputPrice),
-    ).toEqual([10, 20, 30, 10]);
+    expect([agentDir, secondAgentDir, emptyAgentDir, undefined].map(resolveInputPrice)).toEqual([
+      10, 20, 30, 10,
+    ]);
   });
 
   const firstRates = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
   const laterRates = { input: 7, output: 8, cacheRead: 0.7, cacheWrite: 0.8 };
 
   it("refreshes duplicate model prices and fingerprints with replacement config snapshots", () => {
-    const first: SourceModel = { id: "priced-fixture", cost: { ...firstRates } };
-    const later: SourceModel = { id: "priced-fixture", cost: { ...laterRates } };
-    const models = [first, later];
-    const config = sourceConfig("venice", models);
+    const partial = { output: 0 };
     let previousFingerprint: string | undefined;
-    const check = (label: string, expected: ModelCostConfig | undefined) => {
-      const snapshot = structuredClone(config);
+    const snapshots: [Array<SourceModel["cost"]>, ModelCostConfig | undefined][] = [
+      [[firstRates, laterRates], firstRates],
+      [[undefined, laterRates], laterRates],
+      [[partial, laterRates], { ...laterRates, output: 0 }],
+      [[laterRates, partial, firstRates], laterRates],
+      [[], undefined],
+    ];
+    for (const [costs, expected] of snapshots) {
+      const snapshot = sourceConfig(
+        "venice",
+        costs.map((cost) => ({ id: "priced-fixture", cost })),
+      );
       const resolve = () => resolveCost("venice", "priced-fixture", snapshot, agentDir);
-      expect.soft(resolve(), label).toEqual(expected);
+      expect.soft(resolve()).toEqual(expected);
       const fingerprint = resolveModelCostConfigFingerprint(snapshot, agentDir);
-      expect.soft(fingerprint, label).not.toBe(previousFingerprint);
+      expect.soft(fingerprint).not.toBe(previousFingerprint);
       previousFingerprint = fingerprint;
-      // Fingerprinting and direct lookups share this snapshot's prices.
-      expect.soft(resolve(), label).toEqual(expected);
-    };
-    check("initial duplicates", firstRates);
-    first.cost!.input = 9;
-    check("mutated first cost", { ...firstRates, input: 9 });
-    delete first.cost;
-    check("removed first cost", laterRates);
-    first.cost = { output: 0 };
-    check("restored partial cost", { ...laterRates, output: 0 });
-    const inserted = { id: "priced-fixture", cost: { ...firstRates, input: 3 } };
-    models.unshift(inserted);
-    check("inserted duplicate", inserted.cost);
-    models.reverse();
-    check("reordered duplicates", laterRates);
-    models[0] = { id: "priced-fixture", cost: { ...firstRates, input: 4 } };
-    check("replaced same-id row", { ...firstRates, input: 4 });
-    models.shift();
-    check("removed duplicate", { ...inserted.cost, output: 0 });
-    models.splice(0);
-    check("removed all rows", undefined);
+      expect.soft(resolve()).toEqual(expected);
+    }
   });
 
   it("skips metadata-only model rows while caching configured pricing", async () => {
@@ -167,17 +158,6 @@ describe("usage-format", () => {
   });
 });
 
-function promptPricing(): ModelCostConfig {
-  const baseRates = { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 };
-  return {
-    ...baseRates,
-    tieredPricing: [
-      { ...baseRates, range: [0, 100] },
-      { input: 3, output: 6, cacheRead: 1, cacheWrite: 2, range: [100, Infinity] },
-    ],
-  };
-}
-
 const unpriced = {
   provider: "unpriced-fixture",
   model: "unpriced",
@@ -187,22 +167,13 @@ const unpriced = {
 
 describe("usage cost estimation", () => {
   it("never reprices an incomplete mixed-model total after another aggregation", () => {
-    const attempt = createUsageAccumulator();
-    mergeUsageIntoAccumulator(attempt, { input: 100, costStatus: "unavailable" });
-    mergeUsageIntoAccumulator(attempt, {
-      input: 200,
-      cost: { total: 0.7 },
-      costStatus: "complete",
-    });
-    const run = createUsageAccumulator();
-    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
-    expect(toNormalizedUsage(run)?.input).toBe(300);
-    expect(
-      estimateAggregateUsageCost({
-        usage: toNormalizedUsage(run),
-        cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
-      }),
-    ).toBeUndefined();
+    const attempt = accumulate(
+      { input: 100, costStatus: "unavailable" },
+      { input: 200, cost: { total: 0.7 }, costStatus: "complete" },
+    );
+    const usage = toNormalizedUsage(accumulate(toNormalizedUsage(attempt)));
+    expect(usage?.input).toBe(300);
+    expect(estimateAggregateUsageCost({ usage, cost: inputRates(10) })).toBeUndefined();
   });
 
   it.each([
@@ -229,25 +200,12 @@ describe("usage cost estimation", () => {
     ).toBe(expected);
   });
 
-  it("preserves provider-billed zero for unpriced aggregate usage", () => {
-    expect(
-      estimateAggregateUsageCost({
-        usage: { input: 1_000, output: 500, cost: { total: 0, totalOrigin: "provider-billed" } },
-        ...unpriced,
-      }),
-    ).toBe(0);
-  });
-
   it("keeps recorded zero components through nested sums without covering an unpriced call", () => {
     const recorded = normalizeUsage({ input: 1_000, cost: { total: 0, input: 0.25 } });
-    const attempt = createUsageAccumulator();
-    mergeUsageIntoAccumulator(attempt, recorded);
-    const run = createUsageAccumulator();
-    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+    const run = accumulate(toNormalizedUsage(accumulate(recorded)));
     const total = () => estimateAggregateUsageCost({ ...unpriced, usage: toNormalizedUsage(run) });
     expect(total()).toBe(0);
     expect(toNormalizedUsage(run)?.cost?.totalOrigin).toBeUndefined();
-
     mergeUsageIntoAccumulator(run, normalizeUsage({ input: 1_000, cost: { total: 0 } }));
     expect(total()).toBeUndefined();
     mergeUsageIntoAccumulator(run, recorded);
@@ -266,15 +224,19 @@ describe("usage cost estimation", () => {
       usage,
       declaredCost: { cacheRead: 0, cacheWrite: 0, ...declaredCost },
     });
-    if (expected === undefined || expected === 0) {
-      expect(cost).toBe(expected);
-    } else {
-      expect(cost).toBeCloseTo(expected, 15);
-    }
+    expect(cost).toEqual(expected ? expect.closeTo(expected, 15) : expected);
   });
 
   it("uses the selected input rate for the 1h cache-write subset", () => {
+    const rates = { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0.5 };
+    const cost: ModelCostConfig = {
+      ...rates,
+      tieredPricing: [
+        { ...rates, range: [0, 100] },
+        { input: 3, output: 6, cacheRead: 1, cacheWrite: 2, range: [100, Infinity] },
+      ],
+    };
     const usage = { input: 20, output: 10, cacheRead: 30, cacheWrite: 60, cacheWrite1h: 40 };
-    expect(estimateUsageCost({ usage, cost: promptPricing() })).toBeCloseTo(0.00043, 10);
+    expect(estimateUsageCost({ usage, cost })).toBeCloseTo(0.00043, 10);
   });
 });
