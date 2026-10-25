@@ -1,10 +1,12 @@
 /** Real Gateway + bundled iMessage, synthetic JSON-RPC bridge, frozen SQL observer. */
+import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import { stopChild } from "./lib/gateway-bench-child.ts";
@@ -22,6 +24,7 @@ import {
   waitForInitialProbe,
   writeGatewayBenchConfig,
 } from "./lib/gateway-bench-runtime.ts";
+import { createGatewayWsClient } from "./lib/gateway-ws-client.ts";
 const { values } = parseArgs({
   options: {
     out: { type: "string" },
@@ -30,6 +33,11 @@ const { values } = parseArgs({
     "sparse-events": { type: "string", default: "3" },
     "cpu-profile": { type: "boolean", default: false },
     resources: { type: "boolean", default: false },
+    "session-polling": { type: "boolean", default: false },
+    sessions: { type: "string", default: "2600" },
+    placements: { type: "string", default: "177" },
+    bound: { type: "string", default: "46" },
+    "settle-seconds": { type: "string" },
   },
 });
 if (!values.out || !values.observer) {
@@ -38,7 +46,13 @@ if (!values.out || !values.observer) {
 const output = path.resolve(values.out);
 const idleSeconds = Number(values["idle-seconds"]);
 const sparseEvents = Number(values["sparse-events"]);
-if (!(idleSeconds > 0) || !Number.isSafeInteger(sparseEvents) || sparseEvents < 0) {
+const settleSeconds = Number(values["settle-seconds"] ?? (values["session-polling"] ? 90 : 2));
+if (
+  !(idleSeconds > 0) ||
+  !(settleSeconds >= 0) ||
+  !Number.isSafeInteger(sparseEvents) ||
+  sparseEvents < 0
+) {
   throw new Error("Invalid workload size");
 }
 mkdirSync(output, { recursive: true });
@@ -55,6 +69,7 @@ const evidence = {
   ok: false,
 };
 let phase = "boot";
+let client: ReturnType<typeof createGatewayWsClient> | undefined;
 let phaseStart = Date.now();
 function setPhase(next: string) {
   evidence.phases.push({ phase, start: phaseStart, end: Date.now() });
@@ -107,10 +122,16 @@ try {
   const mockPort = await getFreePort();
   const cfg: OpenClawConfig = structuredClone(BASE_GATEWAY_BENCH_CONFIG);
   applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+  const agentList = [{ id: "main", workspace: path.join(fixture, "workspace") }];
+  if (values["session-polling"]) {
+    for (const id of ["second", "third"]) {
+      agentList.push({ id, workspace: path.join(fixture, id) });
+    }
+  }
   cfg.agents = {
     ...cfg.agents,
     defaults: { ...cfg.agents?.defaults, skipBootstrap: true },
-    entries: { main: { workspace: path.join(fixture, "workspace") } },
+    entries: Object.fromEntries(agentList.map(({ id, workspace }) => [id, { workspace }])),
   };
   const bridge = path.join(fixture, "synthetic-imsg");
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
@@ -138,8 +159,30 @@ try {
     },
   };
   const configPath = writeGatewayBenchConfig(fixture, cfg, {
-    agentList: [{ id: "main", workspace: path.join(fixture, "workspace") }],
+    agentList,
   });
+  if (values["session-polling"]) {
+    const seed = launch(
+      [
+        "--import",
+        "./scripts/tsx.mjs",
+        "scripts/perf/session-polling-fixture.ts",
+        "--sessions",
+        values.sessions,
+        "--placements",
+        values.placements,
+        "--bound",
+        values.bound,
+      ],
+      createGatewayBenchEnv(fixture, configPath, { caseEnv: {} }),
+      "seed",
+    );
+    const seedCode = await new Promise<number | null>((resolve, reject) => {
+      seed.once("error", reject);
+      seed.once("exit", resolve);
+    });
+    assert.equal(seedCode, 0, "Synthetic fixture generation failed");
+  }
   launch(
     ["scripts/e2e/mock-openai-server.mjs"],
     { PATH: process.env.PATH, HOME: fixture, MOCK_PORT: String(mockPort) },
@@ -186,7 +229,32 @@ try {
     throw new Error("Gateway unavailable");
   }
   await until(() => watches > 0, "iMessage watch");
-  await delay(2_000);
+  if (values["session-polling"]) {
+    client = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
+    await client.waitOpen();
+    assert.equal(
+      (
+        await client.request("connect", {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "gateway-client",
+            version: "1.0.0",
+            platform: process.platform,
+            mode: "backend",
+          },
+          role: "operator",
+          scopes: ["operator.read", "operator.write"],
+          caps: [],
+        })
+      ).ok,
+      true,
+      "Synthetic client admission failed",
+    );
+    assert.equal((await client.request("sessions.subscribe", {})).ok, true);
+    setPhase("settle");
+  }
+  await delay(settleSeconds * 1_000);
   const before = values.resources
     ? await readGatewayCpuUsage(gateway, { includeWorkers: true })
     : undefined;
@@ -222,9 +290,11 @@ try {
     evidence.resources.push(await readGatewayResources(gateway));
   }
   setPhase("shutdown");
+  client?.close();
   await stopChild(gateway, { teardownGraceMs: 30_000, killGraceMs: 2_000 });
   evidence.ok = true;
 } finally {
+  client?.close();
   for (const child of children.toReversed()) {
     await stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2_000 });
   }

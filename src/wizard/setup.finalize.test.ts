@@ -752,16 +752,13 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("waits for gateway install warnings before installing the service", async () => {
-    let acknowledgeWarning: (() => void) | undefined;
-    const warningAcknowledged = new Promise<void>((resolve) => {
-      acknowledgeWarning = resolve;
-    });
+    const warningAcknowledged = createDeferred();
     const prompter = buildWizardPrompter({
       select: vi.fn(async () => "later") as never,
       confirm: vi.fn(async () => false),
       note: vi.fn(async (message: string) => {
         if (message === "Gateway install warning") {
-          await warningAcknowledged;
+          await warningAcknowledged.promise;
         }
       }),
     });
@@ -784,7 +781,7 @@ describe("finalizeSetupWizard", () => {
     });
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
 
-    acknowledgeWarning?.();
+    warningAcknowledged.resolve();
     await finalizePromise;
 
     expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);

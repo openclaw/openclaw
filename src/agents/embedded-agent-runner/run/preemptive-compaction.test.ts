@@ -37,6 +37,16 @@ function makeAssistantHistory(text: string): AgentMessage {
   } as AgentMessage;
 }
 
+function shortHistoryInput() {
+  return {
+    messages: [makeAssistantHistory("short history")],
+    systemPrompt: "sys",
+    prompt: "hello",
+    contextTokenBudget: 10_000,
+    reserveTokens: 1_000,
+  };
+}
+
 function makeProviderAssistant(params: {
   promptTokens: number;
   totalTokens: number;
@@ -215,13 +225,7 @@ describe("preemptive-compaction", () => {
   });
 
   it("formats all-route pre-prompt diagnostics for a fits decision", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("short history")],
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: 10_000,
-      reserveTokens: 1_000,
-    });
+    const result = shouldPreemptivelyCompactBeforePrompt(shortHistoryInput());
     const line = formatPrePromptPrecheckLog({
       result,
       sessionKey: "discord:channel:thread",
@@ -251,13 +255,7 @@ describe("preemptive-compaction", () => {
   });
 
   it("builds a durable estimated context budget status snapshot", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("short history")],
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: 10_000,
-      reserveTokens: 1_000,
-    });
+    const result = shouldPreemptivelyCompactBeforePrompt(shortHistoryInput());
 
     const status = buildPrePromptContextBudgetStatus({
       result,

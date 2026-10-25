@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { Context, Model, StreamOptions } from "../types.js";
 
@@ -208,14 +209,6 @@ function createStream(
     steeringInput: (messages) =>
       messages.map((message) => ({ role: "user", content: message.content as string })),
   });
-}
-
-async function collect(stream: AsyncIterable<unknown>) {
-  const events: unknown[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-  return events;
 }
 
 function expectPostDispatchError(error: unknown, cause: RegExp) {

@@ -2,8 +2,9 @@ import type { MarkdownRenderOptions } from "../../../components/markdown-render-
 import {
   partitionMarkdownHtml,
   toSanitizedMarkdownHtml,
-  toStreamingMarkdownParts,
+  toStreamingMarkdownDomParts,
 } from "../../../components/markdown.ts";
+import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 export type DuplicateSuffix = {
@@ -45,13 +46,18 @@ export function prepareMessageMarkdown(
   const options: MarkdownRenderOptions = recovered
     ? { ...markdownRenderOptions, mode: "document" }
     : markdownRenderOptions;
-  const parts: [string, string] = opts.isStreaming
-    ? toStreamingMarkdownParts(source, options, isAssistant ? messageKey : undefined)
+  const parts: [MarkdownContent, MarkdownContent] = opts.isStreaming
+    ? toStreamingMarkdownDomParts(source, options, isAssistant ? messageKey : undefined)
     : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
   if (duplicateSuffix) {
-    const terminalPart = parts[1].trim() ? 1 : 0;
+    const terminalPart = markdownContentHtml(parts[1]).trim() ? 1 : 0;
     const template = document.createElement("template");
-    template.innerHTML = parts[terminalPart];
+    const content = parts[terminalPart];
+    if (typeof content === "string") {
+      template.innerHTML = content;
+    } else {
+      template.content.append(content.fragment.cloneNode(true));
+    }
     const terminalBlock = template.content.lastElementChild;
     const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
 
@@ -60,7 +66,10 @@ export function prepareMessageMarkdown(
     badge.setAttribute("aria-label", duplicateSuffix.label);
     badge.textContent = `×${duplicateSuffix.count}`;
     (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
-    parts[terminalPart] = template.innerHTML;
+    parts[terminalPart] =
+      typeof content === "string"
+        ? template.innerHTML
+        : { html: template.innerHTML, fragment: template.content };
   }
   return { messageKey, source, parts, recoverFullMessage };
 }

@@ -174,6 +174,14 @@ function fireworksCooldownFallback() {
   };
 }
 
+function createMainSessionOperation() {
+  return createReplyOperation({
+    sessionKey: "main",
+    sessionId: "session",
+    resetTriggered: false,
+  });
+}
+
 function makeSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
     sessionId: "session",
@@ -636,11 +644,7 @@ describe("runReplyAgent active steering", () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const sourceContext = discordSourceContext("first-source-message");
     const { followupRun } = createMinimalRun({ sessionCtx: sourceContext });
-    const first = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const first = createMainSessionOperation();
     first.setPhase("running");
     const createController = async (
       operation: ReplyOperation,
@@ -800,11 +804,7 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
       bindActiveAuthority: false,
     });
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     await active.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
     await active.bindToolAuthorityRouteAsync(activeRoute);
     active.setPhase("running");
@@ -874,11 +874,7 @@ describe("runReplyAgent active steering", () => {
 
   it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
     state.backendQueueMessageMock.mockReturnValueOnce(true);
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     const taskTyping = createMockTypingController({ isActive: vi.fn(() => true) });
     bindReplyOperationTyping(active, taskTyping);
@@ -910,11 +906,7 @@ describe("runReplyAgent active steering", () => {
 
   it("injects a steer without claiming a new agent reply", async () => {
     const runState: ReplyOperationRunState = {};
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
@@ -966,11 +958,7 @@ describe("runReplyAgent active steering", () => {
 
   it("replays a declined steer without dispatching its hook twice", async () => {
     using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
@@ -1009,11 +997,7 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("falls back visibly when the active CLI backend cannot accept injection", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     active.attachBackend({ kind: "cli", cancel: vi.fn() });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
@@ -1034,11 +1018,7 @@ describe("runReplyAgent active steering", () => {
 
   it("durably records an adopted steer once with the active run id for transcript projection", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     const recorder = createUserTurnTranscriptRecorder({
       input: {
@@ -1117,11 +1097,7 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("falls back once when the pre-resolved steer owner disappears before queue admission", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     active.attachBackend({
       kind: "embedded",
@@ -1218,11 +1194,7 @@ describe("runReplyAgent active steering", () => {
   });
 
   it("waits for transcript commit and keeps a rejected adoption finalizer irrevocably adopted", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     const finalizerError = new Error("dedupe finalizer failed");
     const events: string[] = [];
@@ -1284,11 +1256,7 @@ describe("runReplyAgent active steering", () => {
     });
     const onAdopted = vi.fn();
     const onBlockReply = vi.fn();
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     const { run } = createMinimalRun({
       opts: { onBlockReply, turnAdoptionLifecycle: { onAdopted } },
@@ -1319,11 +1287,7 @@ describe("runReplyAgent active steering", () => {
 
   it("adopts and consumes non-handoff unconfirmed steering without replay", async () => {
     const runState: ReplyOperationRunState = {};
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     state.backendQueueMessageMock.mockReturnValueOnce({
       queued: true,
@@ -1422,11 +1386,7 @@ describe("runReplyAgent active steering", () => {
         meta: { agentMeta: { usage: { input: 1, output: 1 } } },
       };
     });
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     active.setPhase("running");
     const { followupRun, run } = createRecordedSessionRun("steering rejected before admission", {
       opts: { turnAdoptionLifecycle: { onAdopted } },
@@ -1581,11 +1541,7 @@ describe("runReplyAgent admission and cleanup", () => {
   });
 
   it("keeps queued typing alive and the drain dormant until the active owner clears", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const active = createMainSessionOperation();
     const { run, typing } = createMinimalRun({
       opts: {},
       isActive: true,
@@ -1693,14 +1649,7 @@ describe("runReplyAgent admission and cleanup", () => {
     ["rejected answer", { text: "answer block" }],
   ])("settles optional provider failure after %s block delivery", async (label, payload) => {
     const runState: ReplyOperationRunState = {};
-    const replyOperation =
-      label === "aborted answer"
-        ? createReplyOperation({
-            sessionKey: "main",
-            sessionId: "session",
-            resetTriggered: false,
-          })
-        : undefined;
+    const replyOperation = label === "aborted answer" ? createMainSessionOperation() : undefined;
     const deliveryStarted = createDeferred();
     let blockFlush: Promise<void> | undefined;
     const onBlockReply = vi.fn(async () => {
@@ -1804,11 +1753,7 @@ describe("runReplyAgent admission and cleanup", () => {
   });
 
   it("keeps user aborts silent after a delivered partial", async () => {
-    const replyOperation = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const replyOperation = createMainSessionOperation();
     const onPartialReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "partial answer" });
@@ -2698,11 +2643,7 @@ describe("runReplyAgent pending final delivery capture", () => {
       restartRecoveryDeliveryRunId: "msg",
       restartRecoveryDeliverySourceRunId: "control-ui-run",
     });
-    const replyOperation = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
+    const replyOperation = createMainSessionOperation();
     await using actor = createReplyRecoveryActorFixture({
       agentId: "main",
       sessionKey: "main",

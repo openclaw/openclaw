@@ -33,14 +33,13 @@ export function createChatMessageHarness() {
 
   const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 
-  const renderStreamingMarkdown = markdown.toStreamingMarkdownParts;
+  const renderStreamingMarkdown = markdown.toStreamingMarkdownDomParts;
 
-  const markdownRenderMock = vi.fn((value: string) => value);
+  const markdownRenderMock = vi.fn<typeof markdown.toSanitizedMarkdownHtml>((value) => value);
 
-  const streamingMarkdownRenderMock = vi.fn((value: string): [string, string] => [
-    "",
-    `<div class="streaming-markdown">${value}</div>`,
-  ]);
+  const streamingMarkdownRenderMock = vi.fn<typeof markdown.toStreamingMarkdownDomParts>(
+    (value) => ["", `<div class="streaming-markdown">${value}</div>`],
+  );
 
   const messageMounts = new Map<
     HTMLElement,
@@ -50,7 +49,9 @@ export function createChatMessageHarness() {
   beforeEach(() => {
     view = document.createElement("div");
     vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
-    vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
+    vi.spyOn(markdown, "toStreamingMarkdownDomParts").mockImplementation(
+      streamingMarkdownRenderMock,
+    );
     vi.spyOn(chatAvatar, "ChatAvatar").mockImplementation(TestAvatar);
   });
 

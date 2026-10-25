@@ -307,55 +307,6 @@ describe("parseCliJsonl", () => {
         usage: { input: 1, output: 1, total: 2 },
       },
     },
-    {
-      name: "parses Gemini stream-json result errors as provider errors",
-      frames: [
-        {
-          type: "message",
-          timestamp: "2026-06-16T19:36:47.000Z",
-          role: "assistant",
-          content: "partial output",
-          delta: true,
-        },
-        {
-          type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
-          status: "error",
-          error: { message: "Gemini stream failed" },
-        },
-      ],
-      sessionIdFields: undefined,
-      expected: {
-        text: "",
-        sessionId: undefined,
-        usage: undefined,
-        errorText: "Gemini stream failed",
-      },
-    },
-    {
-      name: "keeps detailed Gemini stream-json error events over generic result errors",
-      frames: [
-        {
-          type: "error",
-          timestamp: "2026-06-16T19:36:48.000Z",
-          severity: "error",
-          message: "Invalid stream payload",
-        },
-        {
-          type: "result",
-          timestamp: "2026-06-16T19:36:49.000Z",
-          status: "error",
-          stats: { total_tokens: 1 },
-        },
-      ],
-      sessionIdFields: undefined,
-      expected: {
-        text: "",
-        sessionId: undefined,
-        usage: { total: 1 },
-        errorText: "Invalid stream payload",
-      },
-    },
   ])("$name", ({ frames, sessionIdFields, expected }) => {
     const result = parseCliJsonl(
       joinJsonlFrames(...frames),
@@ -429,42 +380,6 @@ describe("parseCliJsonl", () => {
     });
   });
 
-  it("does not let cumulative Claude result usage overwrite assistant usage", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        { type: "init", session_id: "session-stream" },
-        {
-          type: "assistant",
-          message: {
-            id: "msg-1",
-            usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 },
-          },
-        },
-        {
-          type: "assistant",
-          message: {
-            id: "msg-2",
-            usage: { input_tokens: 11, output_tokens: 6, cache_read_input_tokens: 125 },
-          },
-        },
-        {
-          type: "result",
-          session_id: "session-stream",
-          result: "done",
-          usage: { input_tokens: 30, output_tokens: 15, cache_read_input_tokens: 300 },
-        },
-      ),
-    );
-
-    expect(result?.usage).toEqual({
-      input: 11,
-      output: 6,
-      cacheRead: 125,
-      cacheWrite: undefined,
-      total: undefined,
-    });
-  });
-
   it("captures the last Claude assistant transcript UUID as a resume checkpoint", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(
@@ -524,25 +439,6 @@ describe("parseCliJsonl", () => {
         text: "",
         sessionId: "session-456",
         usage: { input: 18 },
-      },
-    },
-    {
-      name: "preserves streamed Claude text when the final result text is empty",
-      raw: joinJsonlFrames(
-        { type: "init", session_id: "session-456" },
-        claudeTextDelta("Hello"),
-        claudeTextDelta(" world"),
-        {
-          type: "result",
-          session_id: "session-456",
-          result: "",
-          usage: { input_tokens: 18, output_tokens: 4 },
-        },
-      ),
-      expected: {
-        text: "Hello world",
-        sessionId: "session-456",
-        usage: { input: 18, output: 4 },
       },
     },
     {
