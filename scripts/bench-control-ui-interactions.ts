@@ -565,6 +565,7 @@ try {
             if (nativeVisibility && scenario.fixture?.boardFrameResources) {
               // Native default contexts allow service workers, which hide fixture fetches from page.route.
               cdp = await context.newCDPSession(page);
+              await cdp.send("Network.enable");
               await cdp.send("Network.setBypassServiceWorker", { bypass: true });
             }
             const fixture = createInteractionFixture(
@@ -595,6 +596,7 @@ try {
             await scenario.prepare(page, gateway);
             if (cdp) {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
+              await cdp.send("Network.disable");
             }
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
             await settle(page);
