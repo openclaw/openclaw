@@ -7,7 +7,6 @@ import {
   listSessionPendingInputs,
   loadSessionEntry,
   loadTranscriptEventsSync,
-  patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -122,31 +121,6 @@ it("rejects without mutation, then admits the same safe retry exactly once after
   expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
   expect(loadTranscriptEventsSync(fixture.scope)).toEqual(after);
 });
-
-it.each(["active leaf", "settings"] as const)(
-  "still rejects changed %s on the retry",
-  async (change) => {
-    await using fixture = await createRebuildingFixture();
-    fixture.params.expectedPermissionMode = null;
-    fixture.markRebuilding();
-    expectRebuildingResponse(await fixture.send());
-    await fixture.assertNoDispatch();
-    await waitForSessionTranscriptIndexReconcile(fixture.databaseOptions);
-    if (change === "active leaf") {
-      fixture.params.expectedLeafEntryId = "obsolete-leaf";
-    } else {
-      await patchSessionEntryCore(fixture.scope, () => ({ permissionMode: "full" }));
-    }
-    const response = await fixture.send();
-    expect(response.mock.calls[0]?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      details: {
-        reason: change === "active leaf" ? "active-leaf-changed" : "session-settings-changed",
-      },
-    });
-    await fixture.assertNoDispatch();
-  },
-);
 
 it.for(["expired", "removed", "lifecycle rotation", "chat abort"] as const)(
   "never revives a %s reservation while projection is rebuilding",

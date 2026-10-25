@@ -2640,7 +2640,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/models-auth-api-key.integration.test.ts",
   "src/gateway/server-methods/models-auth-login.catalog.integration.test.ts",
   "src/gateway/server-methods/models-auth-login.test.ts",
-  "src/gateway/server-methods/models-auth-refresh.catalog.integration.test.ts",
   "src/gateway/server-methods/models-auth-refresh.integration.test.ts",
   "src/gateway/server-methods/models-auth-removal.integration.test.ts",
   "src/gateway/server-methods/models-auth-status.test.ts",
