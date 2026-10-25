@@ -296,6 +296,7 @@ src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
 src/agents/model-auth-policy.ts
+src/agents/model-catalog-entry.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
@@ -309,6 +310,7 @@ src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection-warnings.ts
+src/agents/model-serving-context.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
 src/agents/owner-display.ts
