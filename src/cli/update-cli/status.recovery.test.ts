@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createMissingConfigRecoveryManifest } from "../../commands/update-recovery-manifest.test-support.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
 // Prepare the lazy production graph during collection, not inside the first test timeout.
 import "../../infra/update-recovery-backup-status.js";
@@ -104,15 +104,21 @@ async function inspect() {
 async function capture(runId = firstId) {
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   const manifest = {
-    ...createMissingConfigRecoveryManifest({
-      runId,
-      installRoot: path.join(root, "older-install"),
-      stateDir,
-      configPath,
-      createdAt: "2026-09-10T00:00:00.000Z",
-    }),
-    roots: [stateDir],
+    schemaVersion: 2,
+    kind: "update-recovery",
+    generation: { kind: "baseline" },
     databases: [{ path: databasePath, role: "global" }],
+    runId,
+    installRoot: path.join(root, "older-install"),
+    stateDir,
+    configPath,
+    configPaths: [configPath],
+    creator: { host: "fixture", pid: 1, startIdentity: "1" },
+    drivers: [],
+    createdAt: "2026-09-10T00:00:00.000Z",
+    roots: [stateDir],
+    excludedRoots: [],
+    protectedPaths: [configPath],
     entries: [
       { kind: "directory", sourcePath: stateDir, mode: 0o700 },
       { kind: "missing", sourcePath: configPath, sqlite: false, directory: false },
@@ -201,13 +207,23 @@ it.each([
   const directory = path.join(path.dirname(c.directory), secondId);
   await fs.mkdir(directory);
   const partialPath = path.join(directory, "manifest.json.partial");
-  const raw =
+  await fs.writeFile(
+    partialPath,
     publication === "partial"
       ? '{"schemaVersion":2'
-      : JSON.stringify({ ...c.manifest, runId: path.basename(directory) });
-  await fs.writeFile(partialPath, raw);
+      : JSON.stringify({ ...c.manifest, runId: path.basename(directory) }),
+  );
   if (publication === "linked-manifest") {
     await fs.link(partialPath, path.join(directory, "manifest.json"));
+  }
+  const retained = new Map<string, Buffer>();
+  for (const name of (await listDirectoryTreeStrict(directory)).map(
+    (walkEntry) => walkEntry.relativePath,
+  )) {
+    const pathname = path.join(directory, name);
+    if ((await fs.lstat(pathname)).isFile()) {
+      retained.set(name, await fs.readFile(pathname));
+    }
   }
   await updateStatus({ json });
   if (json) {
@@ -237,14 +253,10 @@ it.each([
     expect(output).not.toContain("Update recovery sets unavailable");
   }
   expect(await text(c.manifestPath)).toBe(c.raw);
-  expect(await text(partialPath)).toBe(raw);
-  expect(await fs.readdir(directory)).toEqual(
-    publication === "partial"
-      ? ["manifest.json.partial"]
-      : ["manifest.json", "manifest.json.partial"],
-  );
+  for (const [name, bytes] of retained) {
+    expect(await fs.readFile(path.join(directory, name))).toEqual(bytes);
+  }
   if (publication === "linked-manifest") {
-    expect(await text(path.join(directory, "manifest.json"))).toBe(raw);
     const partial = await fs.lstat(partialPath, { bigint: true });
     expect(await fs.lstat(path.join(directory, "manifest.json"), { bigint: true })).toMatchObject({
       dev: partial.dev,
