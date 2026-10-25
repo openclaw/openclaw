@@ -330,16 +330,32 @@ it("reports a first blocked checkpoint when the retained WAL exceeds its ceiling
     { databaseLabel: "fixture-db", databasePath, onCheckpointError },
     1024,
   );
-  expect(owner.checkpoint("TRUNCATE")).toBe(true);
-  reader.exec("BEGIN");
-  reader.prepare("SELECT data FROM payload").all();
-  database.exec("INSERT INTO payload VALUES (zeroblob(4194304))");
-  const walBytes = fs.statSync(`${databasePath}-wal`).size;
-  const databaseBytes = fs.statSync(databasePath).size;
-  expect(walBytes).toBeGreaterThan(Math.max(2 * databaseBytes, 1024));
-  expect(owner.checkpoint("TRUNCATE")).toBe(false);
-  expect(owner.health).toMatchObject({ state: "blocked", consecutiveBlocked: 1, warning: true });
-  expect(onCheckpointError).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ message: "fixture-db WAL checkpoint TRUNCATE remained busy" }),
-  );
+  try {
+    expect(owner.checkpoint("TRUNCATE")).toBe(true);
+    reader.exec("BEGIN");
+    reader.prepare("SELECT data FROM payload").all();
+    database.exec("INSERT INTO payload VALUES (zeroblob(4194304))");
+    const walBytes = fs.statSync(`${databasePath}-wal`).size;
+    const databaseBytes = fs.statSync(databasePath).size;
+    expect(walBytes).toBeGreaterThan(Math.max(2 * databaseBytes, 1024));
+
+    // Oversized retained WAL is a real operator signal on the very first blocked pass.
+    expect(owner.checkpoint("TRUNCATE")).toBe(false);
+    expect(owner.health).toMatchObject({
+      state: "blocked",
+      consecutiveBlocked: 1,
+      warning: true,
+    });
+    expect(onCheckpointError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: "fixture-db WAL checkpoint TRUNCATE remained busy",
+      }),
+    );
+  } finally {
+    if (reader.isTransaction) {
+      reader.exec("ROLLBACK");
+    }
+    reader.close();
+    database.close();
+  }
 });

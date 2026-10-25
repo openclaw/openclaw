@@ -3,10 +3,11 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -72,7 +73,8 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         childSessionKey,
         lifecycleRevision: "original",
       });
-      // Real ownership prevents the registry sweeper from mistaking setup for lost work.
+      // Running fixture turns need real ownership so cold lifecycle setup cannot
+      // let the registry sweeper mistake them for lost executions.
       registerAgentRunContext(runId, {
         sessionKey: childSessionKey,
         sessionId: `${runId}-session`,
@@ -121,7 +123,8 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           Array.from(params.identities).includes(endedKey)
         ) {
           holdEndedMutation = false;
-          // Pause at mutation entry; completed ancestors use ungated late discovery.
+          // Preserve the reset/admission-before-Stop race at the actual mutation
+          // entry. Completed ancestors remain ungated late-discovery coverage.
           endedMutationEntered.resolve();
           await resumeEndedMutation.promise;
         }
@@ -135,7 +138,8 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         )
       ) {
         expect(released).toBe(true);
-        // Hold after the real drain so sibling reset cannot consume its deadline.
+        // Keep the captured kill scope pending after the real drain. A cold
+        // sibling reset must not consume the active admission's deadline.
         entered.resolve();
         await resume.promise;
       }
@@ -145,11 +149,12 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     const interrupted = vi.fn();
     let newAdmission: Awaited<ReturnType<typeof sessionLifecycle.beginSessionEffect>> | undefined;
     try {
-      await awaitGateBeforeSettlement(
+      await Promise.race([
         entered.promise,
-        abort.pending,
-        "abort missed admission drain",
-      );
+        abort.pending.then(() => {
+          throw new Error("abort missed admission drain");
+        }),
+      ]);
       expect(abort.parent.input.abortSignal.aborted).toBe(true);
       expect(sessionLifecycle.isSessionControllerWorkActive(storePath, [activeKey])).toBe(false);
       if (!completed) {
@@ -191,6 +196,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
         childSessionKey: grandchildKey,
         requesterSessionKey: endedKey,
         requesterTurnRunId: "new-turn",
+        task: "grandchild",
         queued: true,
       });
       fixture.queueRun({
@@ -238,26 +244,41 @@ it.each(["child", "ancestor"])(
   async (faultOwner) => {
     const childAgent = faultOwner === "ancestor" ? "worker" : "broken";
     const badKey = `agent:${childAgent}:subagent:bad`;
+    const healthyKey = "agent:main:subagent:healthy";
     const ancestorKey = "agent:broken:subagent:ancestor";
     if (faultOwner === "ancestor") {
       await fixture.seedRun({
         runId: "ancestor",
         childSessionKey: ancestorKey,
         childAgentId: "broken",
+        task: "ancestor",
         queued: true,
         lifecycleRevision: "original-ancestor",
       });
     }
-    const storePath = await fixture.seedRun({
-      runId: "bad",
-      childSessionKey: badKey,
-      childAgentId: childAgent,
-      requesterSessionKey: faultOwner === "ancestor" ? ancestorKey : parentKey,
-      requesterDisplayKey: parentKey,
-      requesterAgentId: faultOwner === "ancestor" ? "broken" : "main",
-      queued: true,
+    const storePath = await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: childAgent,
+      sessionKey: badKey,
+      defaultSessionId: "bad-session",
       lifecycleRevision: "original-child",
     });
+    for (const [runId, childSessionKey] of [
+      ["bad", badKey],
+      ["healthy", healthyKey],
+    ] as const) {
+      const childAgentId = runId === "bad" ? childAgent : "main";
+      await fixture.seedRun({
+        runId,
+        childSessionKey,
+        childAgentId,
+        requesterSessionKey: faultOwner === "ancestor" && runId === "bad" ? ancestorKey : parentKey,
+        requesterDisplayKey: parentKey,
+        requesterAgentId: faultOwner === "ancestor" && runId === "bad" ? "broken" : "main",
+        queued: true,
+        lifecycleRevision: "original-child",
+      });
+    }
     const database = listOpenClawAgentDatabasesForTest().find(
       (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
     )!;
@@ -278,14 +299,21 @@ it.each(["child", "ancestor"])(
       }
     });
     const badDispatch = vi.fn(async () => {});
+    const healthyDispatch = vi.fn(async () => {});
     const survivorDispatch = vi.fn(async () => {});
-    const capacity = "read-failure-capacity";
-    // Keep reservations queued while Stop prepares its session snapshot.
+    const capacityOwner = "read-failure-capacity";
     for (const [runId, start] of [
       ["bad", badDispatch],
+      ["healthy", healthyDispatch],
       ["survivor", survivorDispatch],
     ] as const) {
-      fixture.queueRun({ groupId: "read-failure", runId, activeRunIds: [capacity], start });
+      fixture.queueRun({
+        groupId: "read-failure",
+        runId,
+        // Keep these reservations queued while Stop prepares its session snapshot.
+        activeRunIds: [capacityOwner],
+        start,
+      });
     }
     try {
       const { parent, pending } = abortParent();
@@ -309,15 +337,17 @@ it.each(["child", "ancestor"])(
       expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toMatchObject({
         reason: "killed",
       });
-      expect(releaseSwarmRun(capacity)).toBe(true);
+      expect(subagentRuns.get("healthy")?.endedReason).toBe("subagent-killed");
+      expect(releaseSwarmRun(capacityOwner)).toBe(true);
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
+      expect(healthyDispatch).not.toHaveBeenCalled();
       expect(
         badDispatch,
         "retained durable intent must withdraw its exact never-started reservation",
       ).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
-      releaseSwarmRun(capacity);
+      releaseSwarmRun(capacityOwner);
       releaseSwarmRun("bad");
       releaseSwarmRun("survivor");
     }

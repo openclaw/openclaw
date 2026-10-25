@@ -32,11 +32,20 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as sentinel from "./server-restart-sentinel.js";
+import { activateGatewayScheduledServices } from "./server-runtime-services.js";
 
 const { resume } = vi.hoisted(() => ({ resume: vi.fn() }));
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({ resumeSubagentRun: resume }));
+
+vi.mock("../sessions/session-upstream-monitor.js", () => ({
+  startSessionUpstreamMonitor: () => ({ stop() {} }),
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -56,7 +65,13 @@ describe("registered correlated completion recovery custody", () => {
   ] as const)("settles $outcome with $change ownership change", async ({ change, outcome }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       resetGatewayWorkAdmission();
-      setRuntimeConfigSnapshot({});
+      const cfg = {
+        agents: { defaults: { heartbeat: { every: "0m" } } },
+        skills: { workshop: { autonomous: { mode: "off" as const } } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler(clock.clock);
       const context = captureOpenClawStateWorkerContext();
       const now = Date.now();
       let child = createSubagentRunRecord({
@@ -120,12 +135,17 @@ describe("registered correlated completion recovery custody", () => {
         });
       if (change === "hydration pending") {
         const store = await import("../state/openclaw-state-db-readonly.js");
-        using _ = vi
+        const unavailable = vi
           .spyOn(store, "executeExistingOpenClawStateRead")
-          .mockImplementationOnce(async () => {
+          .mockImplementationOnce(async (_options, command) => {
+            expect(command).toEqual({ type: "subagents.restore" });
             throw new Error("registry hydration read unavailable");
           });
-        await expect(restore(true)).rejects.toThrow("registry hydration read unavailable");
+        try {
+          await expect(restore(true)).rejects.toThrow("registry hydration read unavailable");
+        } finally {
+          unavailable.mockRestore();
+        }
       }
       if (change !== "hydration pending") {
         await restore();
@@ -139,15 +159,18 @@ describe("registered correlated completion recovery custody", () => {
       const replacementBefore = replacement && readChild(replacement);
       let cleanupRelease: Promise<void> | undefined;
       if (change === "cleanup released at receipt") {
-        vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+        const failedCompletion = vi
+          .fn()
+          .mockRejectedValue(new Error("terminal effects unavailable"));
         const fallbackResume = vi.fn(() => {
           expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
         });
+        vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
         const completionRuntime = createSubagentRegistryCompletionRuntime({
           runs: subagentRuns,
           resumed: new Set([getSubagentRunRuntimeKey(child)]),
           retryTimers: new Set(),
-          completeSubagentRun: vi.fn().mockRejectedValue(new Error("terminal effects unavailable")),
+          completeSubagentRun: failedCompletion,
           scheduleSweep: vi.fn(),
           resumeRun: fallbackResume,
         });
@@ -169,7 +192,11 @@ describe("registered correlated completion recovery custody", () => {
                 },
                 "queued-completion-retry",
               )
-              .then(() => expect(fallbackResume).toHaveBeenCalledOnce());
+              .then(() => {
+                expect(failedCompletion).toHaveBeenCalledTimes(2);
+                expect(fallbackResume).toHaveBeenCalledOnce();
+                expect(subagentRuns.get(child.runId)?.cleanupHandled).toBe(false);
+              });
           }
           return receipt;
         });
@@ -204,13 +231,18 @@ describe("registered correlated completion recovery custody", () => {
             }
             changed = true;
             if (change === "successor") {
-              await mutateSubagentRuns([child.runId], (rows) => {
-                const next = {
-                  ...expectDefined(rows.get(child.runId), "committed delivery owner"),
-                  generation: 2,
-                };
-                return { value: undefined, postimages: new Map([[child.runId, next]]) };
-              });
+              await mutateSubagentRuns([child.runId], (rows) => ({
+                value: undefined,
+                postimages: new Map([
+                  [
+                    child.runId,
+                    {
+                      ...expectDefined(rows.get(child.runId), "committed delivery owner"),
+                      generation: 2,
+                    },
+                  ],
+                ]),
+              }));
               successor = subagentRuns.get(child.runId);
               return;
             }
@@ -225,22 +257,29 @@ describe("registered correlated completion recovery custody", () => {
         );
       }
       const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-      const recover = () =>
-        sentinel.recoverPendingRestartContinuationDeliveries({
+      const startServices = () =>
+        activateGatewayScheduledServices({
+          scheduler,
+          minimalTestGateway: false,
+          cfgAtStart: cfg,
           deps: {},
-          queueContext: context,
-          maxEnqueuedAt: queued.enqueuedAt,
-          log,
+          sessionDeliveryRecoveryMaxEnqueuedAt: queued.enqueuedAt,
+          log: { ...log, child: () => log },
         });
+      let services = startServices();
       const replaySettlement = async () => {
-        await recover();
+        await services.stopScheduledServices();
+        services = startServices();
+        await clock.advanceBy(1_250);
+        await services.stopDeliveryRecovery();
         expect(settled).toHaveBeenCalledTimes(2);
         expect(queueStatus()).toBe("completed");
         expect(resume).toHaveBeenCalledExactlyOnceWith(child.runId);
         expect(deliver).not.toHaveBeenCalled();
       };
       try {
-        await recover();
+        await clock.advanceBy(1_250);
+        await services.stopDeliveryRecovery();
         await cleanupRelease;
         expect(settled).toHaveBeenCalledOnce();
         expect(deliver).not.toHaveBeenCalled();
@@ -302,6 +341,9 @@ describe("registered correlated completion recovery custody", () => {
           }
         }
       } finally {
+        await services.stopDeliveryRecovery();
+        await services.stopScheduledServices();
+        await scheduler.stop();
         subagentRuns.delete(child.runId);
         vi.unstubAllEnvs();
         if (replacement) {

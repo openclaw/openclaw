@@ -179,8 +179,8 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
           expect((await readLocalWorkspaceProjection(worktree.id))!.pending_ref).toBe(pending);
         };
         const createGate = () => ({
-          entered: createDeferred<void>(),
-          release: createDeferred<void>(),
+          entered: createDeferred(),
+          release: createDeferred(),
         });
         let gate: ReturnType<typeof createGate> | undefined;
         let moveCount = 0;
