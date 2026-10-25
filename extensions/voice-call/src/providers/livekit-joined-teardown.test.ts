@@ -103,6 +103,7 @@ vi.mock("@livekit/rtc-node", async () => {
       ParticipantDisconnected: "participantDisconnected",
       Disconnected: "disconnected",
       TrackSubscribed: "trackSubscribed",
+      TrackUnsubscribed: "trackUnsubscribed",
     },
   };
 });
@@ -112,6 +113,7 @@ async function fixture(
     synchronousErrorClose?: boolean;
     provisionalCloseFailure?: boolean;
     shutdownDuringAdmission?: "before-bridge" | "after-bridge";
+    holdAttachedAdmission?: boolean;
   } = {},
 ) {
   rtc.disconnect.mockClear();
@@ -207,6 +209,18 @@ async function fixture(
     new StreamDisconnectGrace(() => {}),
   );
   provider.bind(manager, handler);
+  const attachEntered = createDeferred<void>();
+  const releaseAttach = createDeferred<void>();
+  if (options.holdAttachedAdmission) {
+    // Hold the already-attached binding before the carrier publishes its connection.
+    const attach = handler.attachRoomTransport.bind(handler);
+    vi.spyOn(handler, "attachRoomTransport").mockImplementation(async (...args) => {
+      const binding = await attach(...args);
+      attachEntered.resolve();
+      await releaseAttach.promise;
+      return binding;
+    });
+  }
   if (options.shutdownDuringAdmission === "before-bridge") {
     const lookup = manager.getCallForStream.bind(manager);
     let lookupCount = 0;
@@ -229,10 +243,18 @@ async function fixture(
     }
     return result;
   });
-  const placement = await manager.initiateCall("+15550000002", undefined, { mode: "conversation" });
-  expect(placement.success).toBe(
-    !options.shutdownDuringAdmission && !options.provisionalCloseFailure,
-  );
+  const placementWork = manager.initiateCall("+15550000002", undefined, { mode: "conversation" });
+  if (options.holdAttachedAdmission) {
+    await attachEntered.promise;
+  }
+  const placement = options.holdAttachedAdmission
+    ? { callId: manager.getActiveCalls()[0]!.callId, success: false, error: undefined }
+    : await placementWork;
+  if (!options.holdAttachedAdmission) {
+    expect(placement.success).toBe(
+      !options.shutdownDuringAdmission && !options.provisionalCloseFailure,
+    );
+  }
   const callId = placement.callId;
   const room = manager.getCall(callId)?.providerCallId ?? rtc.roomName;
   const webhook = async (event: string, eventRoom = room) => {
@@ -273,6 +295,8 @@ async function fixture(
     callbacks: () => callbacks,
     shutdown,
     placement,
+    placementWork,
+    releaseAttach,
   };
 }
 
@@ -573,3 +597,82 @@ it.each(["ttl", "capacity"] as const)(
     }
   },
 );
+
+function failTerminalWrites(mode: "once" | "always") {
+  const original = callStore.persistCallRecord;
+  let failures = 0;
+  return vi.spyOn(callStore, "persistCallRecord").mockImplementation(async (...args) => {
+    if (args[1].endedAt && (mode === "always" || failures++ === 0)) {
+      throw new Error("Synthetic terminal persistence failure");
+    }
+    await original(...args);
+  });
+}
+
+it.each(["during-stop", "before-stop"] as const)(
+  "retries failed terminal persistence at shutdown after successful carrier disposal (%s)",
+  async (when) => {
+    const h = await fixture();
+    h.finishClose.resolve();
+    const write = failTerminalWrites("once");
+    try {
+      if (when === "before-stop") {
+        await expect(h.manager.endCall(h.callId)).resolves.toMatchObject({ success: false });
+        expect(h.manager.getCall(h.callId)).toBeDefined();
+      }
+      await h.provider.stop();
+      // Carrier disposal succeeded earlier; shutdown must not report success while
+      // the manager still owns an unterminated record.
+      expect(h.manager.getCall(h.callId)).toBeUndefined();
+      expect((await callStore.findCallInStore(h.storePath, h.callId))?.state).toBe("completed");
+      expect(h.rooms.deleteRoom).toHaveBeenCalledOnce();
+    } finally {
+      write.mockRestore();
+      await h.handler.close();
+    }
+  },
+);
+
+it("rejects shutdown when terminal persistence keeps failing after carrier disposal", async () => {
+  const h = await fixture();
+  h.finishClose.resolve();
+  const write = failTerminalWrites("always");
+  try {
+    await expect(h.provider.stop()).rejects.toThrow("failed during shutdown");
+    expect(h.manager.getCall(h.callId)).toBeDefined();
+  } finally {
+    write.mockRestore();
+    await h.handler.close();
+  }
+});
+
+it("keeps the manager owner when a cancelled admission's late final write fails", async () => {
+  const h = await fixture({ holdAttachedAdmission: true });
+  h.finishClose.resolve();
+  const original = callStore.persistCallRecord;
+  let failedFinal = false;
+  const write = vi.spyOn(callStore, "persistCallRecord").mockImplementation(async (...args) => {
+    if (!failedFinal && args[1].transcript.some((entry) => entry.text === "Late assistant final")) {
+      failedFinal = true;
+      throw new Error("Synthetic final persistence failure");
+    }
+    await original(...args);
+  });
+  try {
+    const hangup = h.manager.endCall(h.callId, { reason: "completed" });
+    await nextEventLoopTurn();
+    h.releaseAttach.resolve();
+    expect(await hangup).toMatchObject({ success: false, error: "LiveKit RTC disconnect failed" });
+    expect((await h.placementWork).success).toBe(false);
+    expect(failedFinal).toBe(true);
+    // The generic dial-failure catch must not terminalize over the lost final.
+    expect(h.manager.getCall(h.callId)).toBeDefined();
+    expect((await callStore.findCallInStore(h.storePath, h.callId))?.endedAt).toBeUndefined();
+    await expect(h.provider.stop()).rejects.toThrow("cleanup failed during shutdown");
+  } finally {
+    h.releaseAttach.resolve();
+    write.mockRestore();
+    await h.placementWork;
+    await h.handler.close();
+  }
+});

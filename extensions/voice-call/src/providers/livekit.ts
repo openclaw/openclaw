@@ -27,7 +27,7 @@ import type {
 } from "../types.js";
 import { createWebhookReplayCache, reserveWebhookReplay } from "../webhook-replay.js";
 import type { RealtimeCallHandler } from "../webhook/realtime-handler.js";
-import type { VoiceCallProvider } from "./base.js";
+import { ProviderSetupDurabilityError, type VoiceCallProvider } from "./base.js";
 import {
   connectLiveKitAudio,
   LiveKitAudioCleanupError,
@@ -430,7 +430,10 @@ export class LiveKitProvider implements VoiceCallProvider {
       try {
         await this.dispose(call);
       } catch {
-        throw new Error("LiveKit call setup failed; room cleanup pending retry");
+        const message = "LiveKit call setup failed; room cleanup pending retry";
+        throw this.disconnectFailures.has(room)
+          ? new ProviderSetupDurabilityError(message)
+          : new Error(message);
       }
       throw new Error(
         "LiveKit call setup failed; check trunk, connectivity, and realtime configuration",
@@ -624,13 +627,36 @@ export class LiveKitProvider implements VoiceCallProvider {
       clearTimeout(this.cleanupRetryTimer);
     }
     this.stopPromise = (async () => {
+      // Disposed calls move to terminalRooms; include those whose manager record
+      // is still active so a failed terminal write is retried, not forgotten.
+      const targets = [
+        ...this.calls.values(),
+        ...[...this.terminalRooms.values()].filter(
+          (call) => this.manager?.getCallByProviderCallId(call.room) && !this.calls.has(call.room),
+        ),
+      ];
       const cleanup = await Promise.allSettled(
-        [...this.calls.values()].map(async (call) => {
+        targets.map(async (call) => {
           const record = this.manager?.getCallByProviderCallId(call.room);
           if (record) {
-            const ended = await this.manager!.endCall(record.callId, { reason: "completed" });
+            let ended = await this.manager!.endCall(record.callId, { reason: "completed" });
             if (!ended.success) {
-              await this.dispose(call);
+              // Carrier cleanup is independent of manager finalization: drain it,
+              // retry terminal persistence once, then surface the original failure.
+              const disposal = await this.dispose(call).then(
+                () => undefined,
+                (error: unknown) => error,
+              );
+              if (disposal) {
+                throw disposal;
+              }
+              const original = ended.error;
+              ended = await this.manager!.endCall(record.callId, { reason: "completed" });
+              if (!ended.success) {
+                throw new Error("LiveKit call finalization failed during shutdown", {
+                  cause: original,
+                });
+              }
             }
           } else {
             await this.dispose(call);

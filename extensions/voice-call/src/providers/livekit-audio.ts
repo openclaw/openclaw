@@ -51,7 +51,12 @@ export async function connectLiveKitAudio(
   let connectPromise: Promise<void> | undefined;
   const readers = new Set<ReadableStreamDefaultReader<InstanceType<typeof rtc.AudioFrame>>>();
   const tasks = new Set<Promise<void>>();
-  const trackIds = new Set<string>();
+  // Active reader per subscribed track SID. A resubscription reuses the SID with a
+  // new track object, so ownership is retired on unsubscribe/completion, not kept for life.
+  const trackReaders = new Map<
+    string,
+    ReadableStreamDefaultReader<InstanceType<typeof rtc.AudioFrame>>
+  >();
   const current = () => !closed && params.isCurrent();
   const close = (): Promise<void> => {
     if (closePromise) {
@@ -205,16 +210,17 @@ export async function connectLiveKitAudio(
       (params.participantSid && participant.sid !== params.participantSid) ||
       track.kind !== rtc.TrackKind.KIND_AUDIO ||
       !track.sid ||
-      trackIds.has(track.sid)
+      trackReaders.has(track.sid)
     ) {
       return;
     }
-    trackIds.add(track.sid);
+    const sid = track.sid;
     const reader = new rtc.AudioStream(track, {
       sampleRate: 8000,
       numChannels: 1,
       frameSizeMs: 20,
     }).getReader();
+    trackReaders.set(sid, reader);
     readers.add(reader);
     const task = (async () => {
       try {
@@ -236,11 +242,22 @@ export async function connectLiveKitAudio(
         disconnected("error");
       } finally {
         readers.delete(reader);
+        // Exact-owner check: a retired reader must not unregister its replacement.
+        if (trackReaders.get(sid) === reader) {
+          trackReaders.delete(sid);
+        }
         reader.releaseLock();
       }
     })();
     tasks.add(task);
     void task.finally(() => tasks.delete(task));
+  });
+  room.on(rtc.RoomEvent.TrackUnsubscribed, (track) => {
+    const reader = track.sid ? trackReaders.get(track.sid) : undefined;
+    if (track.sid && reader) {
+      trackReaders.delete(track.sid);
+      void reader.cancel().catch(() => {});
+    }
   });
   try {
     // The SDK import may outlive manager admission. A room JWT is still valid

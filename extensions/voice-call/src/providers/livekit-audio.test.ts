@@ -16,6 +16,7 @@ const mock = vi.hoisted(() => ({
   connect: vi.fn(async () => {}),
   disconnect: vi.fn(async () => {}),
   subscribed: vi.fn(),
+  streams: 0,
   room: undefined as EventEmitter | undefined,
   input: undefined as
     | ReadableStreamDefaultController<{ data: Int16Array; sampleRate: number }>
@@ -65,6 +66,7 @@ vi.mock("@livekit/rtc-node", async () => {
     },
     AudioStream: class {
       getReader() {
+        mock.streams++;
         return new ReadableStream<{ data: Int16Array; sampleRate: number }>({
           start(controller) {
             mock.input = controller;
@@ -84,6 +86,7 @@ vi.mock("@livekit/rtc-node", async () => {
       ParticipantDisconnected: "participantDisconnected",
       Disconnected: "disconnected",
       TrackSubscribed: "trackSubscribed",
+      TrackUnsubscribed: "trackUnsubscribed",
     },
   };
 });
@@ -129,6 +132,7 @@ function harness() {
 afterEach(() => {
   vi.clearAllMocks();
   mock.input = undefined;
+  mock.streams = 0;
   mock.room = undefined;
 });
 
@@ -316,3 +320,57 @@ it.each(["disconnected", "participantDisconnected"])(
     await connection.close();
   },
 );
+
+it.each(["reader-completion", "unsubscribe"] as const)(
+  "delivers caller audio from a same-SID track resubscribed after %s",
+  async (retirement) => {
+    const h = harness();
+    const connection = await connectLiveKitAudio(h.params);
+    const peer = { identity: "sip-test", sid: "PA_test" };
+    const subscribe = () =>
+      mock.room!.emit("trackSubscribed", { kind: 1, sid: "TR_same" }, {}, peer);
+    const deliver = async (value: number) => {
+      mock.input!.enqueue({ data: new Int16Array([value]), sampleRate: 8000 });
+      await vi.waitFor(() => expect(h.sendAudio).toHaveBeenCalledTimes(value));
+    };
+    subscribe();
+    // A duplicate event while the first reader is live must not start a second reader.
+    subscribe();
+    expect(mock.streams).toBe(1);
+    await deliver(1);
+    if (retirement === "reader-completion") {
+      mock.input!.close();
+      await vi.waitFor(() => expect(mock.streams).toBe(1));
+      await Promise.resolve();
+    } else {
+      mock.room!.emit("trackUnsubscribed", { kind: 1, sid: "TR_same" }, {}, peer);
+    }
+    subscribe();
+    expect(mock.streams).toBe(2);
+    await deliver(2);
+    await connection.close();
+    expect(h.sendAudio).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("does not let a retired reader's completion unregister its replacement", async () => {
+  const h = harness();
+  const connection = await connectLiveKitAudio(h.params);
+  const peer = { identity: "sip-test", sid: "PA_test" };
+  mock.room!.emit("trackSubscribed", { kind: 1, sid: "TR_same" }, {}, peer);
+  const first = mock.input!;
+  mock.room!.emit("trackUnsubscribed", { kind: 1, sid: "TR_same" }, {}, peer);
+  mock.room!.emit("trackSubscribed", { kind: 1, sid: "TR_same" }, {}, peer);
+  expect(mock.streams).toBe(2);
+  // Let the first reader's cancellation settle, then duplicate the live replacement.
+  await Promise.resolve();
+  await Promise.resolve();
+  try {
+    first.close();
+  } catch {
+    // Already cancelled by unsubscribe; completion has nothing further to signal.
+  }
+  mock.room!.emit("trackSubscribed", { kind: 1, sid: "TR_same" }, {}, peer);
+  expect(mock.streams).toBe(2);
+  await connection.close();
+});

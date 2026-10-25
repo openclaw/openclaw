@@ -83,6 +83,12 @@ export interface VoiceCallProvider {
   getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult>;
 }
 
+/**
+ * A provider failed call setup but still owes a durable final-transcript drain.
+ * The manager must keep the active record instead of finalizing it as failed.
+ */
+export class ProviderSetupDurabilityError extends Error {}
+
 export function assertVoiceCallProviderSetting(value: unknown, message: string): asserts value {
   if (!value) {
     throw new Error(message);
