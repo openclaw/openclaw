@@ -2,17 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
-import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { MemoryFileWatcher } from "./file-watcher.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
-import { MemoryIndexManager } from "./manager.js";
+import { openObservedManager } from "./manager-observation.test-support.js";
+import type { MemoryIndexManager } from "./manager.js";
 
 // Keep owner fault injection in this process; real worker transport has separate coverage.
 vi.mock("./local-file-watcher.js", async (original) => {
@@ -55,6 +54,8 @@ type CloseFields = {
   awaitManagerIdle: () => Promise<void>;
 };
 const observerFailure = new Error("observer retirement failed");
+const calls = (...spies: { mock: { calls: unknown[] } }[]) =>
+  spies.map((spy) => spy.mock.calls.length);
 
 describe("MemoryIndexManager observation close lifecycle", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -85,28 +86,17 @@ describe("MemoryIndexManager observation close lifecycle", () => {
 
   async function open(beforeWorkerClose: (fields: CloseFields) => void | Promise<void>) {
     const agentId = `observation-close-${managers.length}`;
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      agents: { defaults: { workspace: state.workspaceDir }, entries: { [agentId]: {} } },
-      memory: {
-        search: {
-          provider: "openai",
-          model: "close-test",
-          fallback: "none",
-          sources: ["memory", "sessions"],
-          rememberAcrossConversations: true,
-          store: { vector: { enabled: false } },
-        },
+    const { manager } = await openObservedManager(
+      state.workspaceDir,
+      {
+        provider: "openai",
+        model: "close-test",
+        fallback: "none",
+        sources: ["memory", "sessions"],
+        rememberAcrossConversations: true,
       },
-    };
-    const manager = await MemoryIndexManager.get({
-      runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg,
       agentId,
-    });
-    if (!manager) {
-      throw new Error("Expected a persistent Memory manager");
-    }
+    );
     managers.push(manager);
     const fields = manager as unknown as CloseFields;
     await fields.awaitManagerIdle();
@@ -146,11 +136,8 @@ describe("MemoryIndexManager observation close lifecycle", () => {
       try {
         // A pre-fix rejection wakes the wait instead of hanging on unreachable cleanup.
         await Promise.race([workerEntered.promise, outcomes]);
-        expect(unsubscribe).toHaveBeenCalledOnce();
         expect(fields.sessionUnsubscribe).toBeNull();
-        expect(embedding.close).toHaveBeenCalledOnce();
-        expect(worker).toHaveBeenCalledOnce();
-        expect(release).not.toHaveBeenCalled();
+        expect(calls(unsubscribe, embedding.close, worker, release)).toEqual([1, 1, 1, 0]);
         expect(fields.publishedDatabase.db.isOpen).toBe(true);
         workerGate.resolve();
         const results = await outcomes;
@@ -159,19 +146,20 @@ describe("MemoryIndexManager observation close lifecycle", () => {
         const expectedError = failProvider
           ? expect.objectContaining({ errors: [watcherError, providerFailure] })
           : watcherError;
-        expect(results).toEqual([
-          { status: "rejected", reason: expectedError },
-          { status: "rejected", reason: expectedError },
-        ]);
+        expect(results).toEqual(
+          Array.from({ length: 2 }, () => ({ status: "rejected", reason: expectedError })),
+        );
         expect(release).toHaveBeenCalledOnce();
 
         // Retrying the provider cannot erase the observer failure.
         await expect(manager.close()).rejects.toBe(watcherError);
         await expect(manager.close()).rejects.toBe(watcherError);
-        expect(embedding.close).toHaveBeenCalledTimes(failProvider ? 2 : 1);
-        expect(entry.close).toHaveBeenCalledOnce();
-        expect(worker).toHaveBeenCalledOnce();
-        expect(release).toHaveBeenCalledOnce();
+        expect(calls(embedding.close, entry.close, worker, release)).toEqual([
+          failProvider ? 2 : 1,
+          1,
+          1,
+          1,
+        ]);
       } finally {
         workerGate.resolve();
         await outcomes;
@@ -204,9 +192,7 @@ describe("MemoryIndexManager observation close lifecycle", () => {
       const closing = manager.close();
       outcomes = Promise.allSettled([closing]);
       expect(fields.closed).toBe(false);
-      expect(release).not.toHaveBeenCalled();
-      expect(entry.close).not.toHaveBeenCalled();
-      expect(embedding.close).not.toHaveBeenCalled();
+      expect(calls(release, entry.close, embedding.close)).toEqual([0, 0, 0]);
       embeddingGate.resolve();
       await syncing;
       const results = await outcomes;
@@ -221,9 +207,7 @@ describe("MemoryIndexManager observation close lifecycle", () => {
       expect(release).not.toHaveBeenCalled();
       expect(fields.publishedDatabase.db.isOpen).toBe(true);
       await expect(manager.close()).rejects.toBe(watcherError);
-      expect(release).toHaveBeenCalledOnce();
-      expect(embedding.close).toHaveBeenCalledOnce();
-      expect(entry.close).toHaveBeenCalledOnce();
+      expect(calls(release, embedding.close, entry.close)).toEqual([1, 1, 1]);
     } finally {
       embeddingGate.resolve();
       await Promise.allSettled([syncing]);
