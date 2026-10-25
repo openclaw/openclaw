@@ -589,10 +589,11 @@ struct MacNodeRuntimeTests {
         #expect(!payload.base64.isEmpty)
     }
 
-    @Test func `handle invoke screen record rejects recordings above the inline media ceiling`() async throws {
+    @Test(arguments: [19_660_800, 19_660_801])
+    func `handle invoke screen record rejects recordings exceeding the frame budget`(recordingBytes: Int) async throws {
         let services = await MainActor.run {
             let services = MainActorServicesProbe()
-            services.recordingBytes = 19_660_801
+            services.recordingBytes = recordingBytes
             return services
         }
         let runtime = await MacNodeRuntime(
@@ -606,7 +607,8 @@ struct MacNodeRuntimeTests {
             params: OpenClawScreenRecordParams(durationMs: 60000))
 
         #expect(response.ok == false)
-        #expect(response.payloadJSON == nil)
+        let hasPayload = response.payloadJSON != nil
+        #expect(!hasPayload)
         #expect(response.error?.code == .unavailable)
         #expect(response.error?.message == "UNAVAILABLE: screen.record payload too large; reduce durationMs or fps")
         let path = try #require(await MainActor.run { services.recordingPaths.first })
@@ -684,9 +686,8 @@ struct MacNodeRuntimeTests {
         #expect(payload.width == 800)
         #expect(payload.height == 450)
         #expect(payload.capturedAtMs > 0)
-        let snapshotCalledAtMs = await MainActor.run { services.snapshotCalledAtMs }
-        #expect(snapshotCalledAtMs != nil)
-        #expect(payload.capturedAtMs <= snapshotCalledAtMs!)
+        let snapshotCalledAtMs = try #require(await MainActor.run { services.snapshotCalledAtMs })
+        #expect(payload.capturedAtMs <= snapshotCalledAtMs)
     }
 
     @Test func `handle invoke screen snapshot rejects malformed params before capture`() async {
