@@ -59,14 +59,14 @@ export { chatOutboxDrainDependencies } from "./chat-send-delivery.ts";
 
 export async function sendPreparedChatQueueItem(
   host: ChatHost,
-  item: ChatQueueItem,
+  preparedItem: ChatQueueItem,
   expectedLeafEntryId: string | null | undefined,
   options: QueuedChatSendOptions | undefined,
   queuedSessionKey: string,
   allowNativeRecovery: boolean,
   retryOwnerIsCurrent: () => boolean,
 ): Promise<QueuedChatSendResult> {
-  let queued = item;
+  let queued = preparedItem;
   const id = queued.id;
   const storageMode = options?.storageMode ?? "durable";
   const approvedReset = queued.localCommandName === "reset" && Boolean(options?.target);

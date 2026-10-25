@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 272660,
-  "reason": "Defer optional chat operations and renderers; startup bytes measured after integrating current main, retaining seven JS requests and one CSS request.",
+  "startupJsGzipBytes": 272543,
+  "reason": "Measured dormant Chat runtime deferral with synchronous FIFO admission; startup baseline equals final production bundle",
   "updatedAt": "2026-10-25"
 }
