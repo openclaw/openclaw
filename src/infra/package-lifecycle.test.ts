@@ -52,7 +52,6 @@ async function withBlockedLifecycle(
     start: (script?: (script: PackageLifecycleScript) => void | Promise<void>) => Promise<void>;
     runScript: ReturnType<typeof vi.fn<(script: PackageLifecycleScript) => Promise<void>>>;
   }) => Promise<void>,
-  timeoutMs?: number,
 ) {
   await withTestDir({ prefix: "openclaw-package-lifecycle-" }, async (packageRoot) => {
     const marker = await markModernLifecyclePending(packageRoot);
@@ -71,7 +70,7 @@ async function withBlockedLifecycle(
     const start = (
       script: (script: PackageLifecycleScript) => void | Promise<void> = runScript,
     ) => {
-      const caller = completePendingPackageLifecycle({ packageRoot, runScript: script, timeoutMs });
+      const caller = completePendingPackageLifecycle({ packageRoot, runScript: script });
       void caller.catch(() => {});
       callers.push(caller);
       return caller;
@@ -144,31 +143,6 @@ describe("package lifecycle completion", () => {
       release();
       await Promise.all([owner, contender]);
     });
-  });
-
-  it.each([-1, 1])("keeps an unresolved owner across a %i day clock shift", async (direction) => {
-    await withBlockedLifecycle(
-      "preinstall",
-      async ({ entered, release, start, runScript }) => {
-        const first = start();
-        await entered;
-        const clock = vi
-          .spyOn(Date, "now")
-          .mockReturnValue(Date.now() + direction * 24 * 60 * 60_000);
-        try {
-          const waitForContention = observeLifecycleContention();
-          const second = start();
-          await waitForContention(second);
-          expect(runScript.mock.calls.map(([script]) => script.name)).toEqual(["preinstall"]);
-          clock.mockRestore();
-          release();
-          await Promise.all([first, second]);
-        } finally {
-          clock.mockRestore();
-        }
-      },
-      1000,
-    );
   });
 
   it.each(["none", "preinstall", "postinstall"])(

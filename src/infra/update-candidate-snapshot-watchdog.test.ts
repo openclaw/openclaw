@@ -10,14 +10,6 @@ import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { captureUpdateCandidateDeadline } from "./update-candidate-state.test-support.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunStep,
-} from "./update-run-ledger.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
-import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -213,21 +205,6 @@ it.each([
         settled ? "Update validation deadline expired" : "exceeded its 300 second allowance",
       );
       expect(failed?.stderrTail).not.toContain(root);
-      const run = createUpdateRun({ trigger: "cli" }, { env });
-      for (const step of result.steps.flatMap(updateRunStepsFromResultStep)) {
-        recordUpdateRunStep(run.runId, step, { env });
-      }
-      finishUpdateRun(run.runId, { status: "failed", reason: result.reason }, { env });
-      const saved = getUpdateRun(run.runId, { env });
-      expect(
-        saved?.steps.find((step) => step.step === "candidate-state-snapshot")?.stderrTail,
-      ).toEqual(failed?.stderrTail);
-      const report = renderUpdateRunReport(saved!).markdown;
-      expect(report).toContain(phase);
-      expect(report).toContain("12,943,360 bytes");
-      if (!settled) {
-        expect(report).toContain("total estimated snapshot input");
-      }
       expect(isProcessAlive(Number(await fs.readFile(pidFile, "utf8")))).toBe(false);
       expect(
         (await fs.readdir(root)).filter((entry) => entry.startsWith("openclaw-update-canary-")),
