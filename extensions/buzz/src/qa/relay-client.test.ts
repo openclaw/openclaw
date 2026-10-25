@@ -1,5 +1,6 @@
 import { getPublicKey, type Event, type Filter, type Relay } from "nostr-tools";
 import { beforeEach, expect, it, vi } from "vitest";
+import { createBuzzRelayInfoFetchMock } from "../buzz-bus.test-helpers.js";
 import { parseBuzzQaCredentialPayload } from "./credentials.js";
 
 type SubscriptionHandlers = Parameters<Relay["prepareSubscription"]>[1];
@@ -65,12 +66,7 @@ const credentials = parseBuzzQaCredentialPayload({
 beforeEach(() => {
   vi.clearAllMocks();
   relayMocks.replayedMessage = undefined;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () =>
-      Response.json({ self: RELAY_PUBLIC_KEY, software: "https://github.com/block/buzz" }),
-    ),
-  );
+  vi.stubGlobal("fetch", createBuzzRelayInfoFetchMock(RELAY_PUBLIC_KEY));
 });
 
 it("authenticates, verifies membership, and publishes a native mentioned thread event", async () => {
