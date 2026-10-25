@@ -60,7 +60,6 @@ function storedJob(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
     ...cronTestJob({ id: "job-1", name: "Knowledge ingest", wakeMode: "now" }),
     agentId: "main",
     delivery: { mode: "none" },
-    state: {},
     owner: { agentId: "main", sessionKey: PARENT_KEY, accountId: "default" },
     sourceConversation: {
       sessionKey: PARENT_KEY,
@@ -69,7 +68,7 @@ function storedJob(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
     },
     createdActor: { type: "human", source: "profile", id: OWNER_PROFILE },
     ...overrides,
-  } as CronStoredJob;
+  };
 }
 
 function provider(): MemoryProviderHandle & { health: ReturnType<typeof vi.fn> } {
@@ -150,22 +149,6 @@ function setParent(chatType: "direct" | "group") {
   return parent;
 }
 
-it("gives both runtimes owner-private memory for an owner's direct-chat child and reaches the provider", async () => {
-  setParent("direct");
-  const run = await runOccurrence(storedJob());
-  expect(run.audiences).toEqual([
-    { kind: "owner-private", agentId: "main" },
-    { kind: "owner-private", agentId: "main" },
-  ]);
-  const raw = provider();
-  await expect(bindToRun(raw, run.audiences[0]!).health()).resolves.toMatchObject({
-    status: "ready",
-  });
-  expect(raw.health).toHaveBeenCalledOnce();
-  run.settle();
-  expect(fakeSessionOwner.activeLeases).toBe(0);
-});
-
 it("gives a group conversation's child that conversation's memory, never owner-private", async () => {
   setParent("group");
   const run = await runOccurrence(storedJob());
@@ -195,8 +178,17 @@ it("refuses provider I/O on both runtimes once the parent resets mid-run", async
 it("drops owner-private memory on the next run after the requester loses owner status", async () => {
   setParent("direct");
   const first = await runOccurrence(storedJob());
-  expect(first.audiences[0]).toEqual({ kind: "owner-private", agentId: "main" });
+  const raw = provider();
+  expect(first.audiences).toEqual([
+    { kind: "owner-private", agentId: "main" },
+    { kind: "owner-private", agentId: "main" },
+  ]);
+  await expect(bindToRun(raw, first.audiences[0]!).health()).resolves.toMatchObject({
+    status: "ready",
+  });
+  expect(raw.health).toHaveBeenCalledOnce();
   first.settle();
+  expect(fakeSessionOwner.activeLeases).toBe(0);
   profiles.revoked.add(OWNER_PROFILE);
   const next = await runOccurrence(storedJob());
   for (const audience of next.audiences) {

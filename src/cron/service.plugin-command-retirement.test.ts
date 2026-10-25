@@ -12,7 +12,8 @@ import {
 import { pluginCommandSchedule } from "./plugin-command-schedule.test-support.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "./plugin-command-schedule.types.js";
 import type { PluginCommandSchedule } from "./plugin-command-schedule.types.js";
-import { projectCronRunHistoryPage } from "./run-history.js";
+import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import {
   createCronServiceWithStateForTest,
   setupCronServiceSuite,
@@ -21,7 +22,7 @@ import {
 import { waitForCronRunQueue } from "./service/run-queue.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
-import { readCronRunHistoryCandidates, readCronRunHistoryRecords } from "./store/read-only.js";
+import { cronStoreKey } from "./store/key.js";
 import type { CronStoredJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "openclaw-command-retire-" });
@@ -30,8 +31,8 @@ const everyMs = 60_000;
 
 // Real service/queue/timer; only the occurrence runner is stubbed.
 async function runSchedule(
-  overrides: Partial<PluginCommandSchedule>,
-  ticks: number,
+  overrides: Partial<PluginCommandSchedule> = {},
+  ticks = 8,
   deps: Pick<CronServiceDeps, "resolveSessionEventTarget"> = {},
   occurrence: Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>> = {
     status: "ok",
@@ -39,25 +40,28 @@ async function runSchedule(
   },
 ) {
   const store = await makeStorePath();
-  const job = {
-    id: "watch",
-    name: "watch",
-    agentId: "main",
-    enabled: true,
-    createdAtMs: nowMs,
-    updatedAtMs: nowMs,
-    schedule: { kind: "every", everyMs, anchorMs: nowMs },
-    sessionTarget: "session:agent:main:parent",
-    wakeMode: "next-heartbeat",
-    payload: {
-      kind: "agentTurn",
-      message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,
-      toolsAllow: ["sessions_spawn", "agents_wait"],
-    },
-    delivery: { mode: "none" },
-    pluginCommand: pluginCommandSchedule(nowMs, overrides),
-    state: { nextRunAtMs: nowMs + everyMs, pluginCommandRuns: 0 },
-  } satisfies CronStoredJob;
+  const job: CronStoredJob = {
+    ...cronTestJob({
+      id: "watch",
+      agentId: "main",
+      createdAtMs: nowMs,
+      updatedAtMs: nowMs,
+      schedule: { kind: "every", everyMs, anchorMs: nowMs },
+      sessionTarget: "session:agent:main:parent",
+      payload: {
+        kind: "agentTurn",
+        message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,
+        toolsAllow: ["sessions_spawn", "agents_wait"],
+      },
+      delivery: { mode: "none" },
+      state: { nextRunAtMs: nowMs + everyMs, pluginCommandRuns: 0 },
+    }),
+    pluginCommand: pluginCommandSchedule(nowMs, {
+      maxRuns: 100,
+      deadlineAtMs: nowMs + 60 * everyMs,
+      ...overrides,
+    }),
+  };
   await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [job] });
   const clock = createGatewaySchedulerClock(nowMs);
   const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
@@ -87,18 +91,12 @@ async function runSchedule(
     const stored = (await cron.list({ includeDisabled: true })).find(
       (entry) => entry.id === job.id,
     );
-    const { records } = await readCronRunHistoryCandidates(store.storePath);
-    const history = projectCronRunHistoryPage(
-      await readCronRunHistoryRecords(
-        store.storePath,
-        records.map(({ id }) => id),
-      ),
-      { storeKey: store.storePath },
-    ).entries.map(({ status, error }) => ({ status, error }));
+    const history = readCronRunHistoryPageForTests({
+      storeKey: cronStoreKey(store.storePath),
+    }).entries.map(({ status, error }) => ({ status, error }));
     return { stored, history, runIsolatedAgentJob, runSessionEvent };
   } finally {
     cron.stop();
-    await store.cleanup();
   }
 }
 
@@ -122,10 +120,7 @@ describe("private command schedules under the live scheduler", () => {
       "cron: plugin command schedule ended with its Gateway process",
     ],
   ] as const)("retires at %s without further wake-ups", async (_name, overrides, runs, error) => {
-    const result = await runSchedule(
-      { maxRuns: 100, deadlineAtMs: nowMs + 60 * everyMs, ...overrides },
-      8,
-    );
+    const result = await runSchedule(overrides);
     expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(runs);
     expect(result.runSessionEvent).not.toHaveBeenCalled();
     expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: runs } });
@@ -150,7 +145,7 @@ describe("private command schedules under the live scheduler", () => {
         { jobId: "watch", assertCurrent: () => {}, prepare },
       ),
     ).toBe("queued");
-    const result = await runSchedule({ maxRuns: 1, deadlineAtMs: nowMs + 60 * everyMs }, 2, {
+    const result = await runSchedule({ maxRuns: 1 }, 2, {
       resolveSessionEventTarget: () => ({ agentId: "main", sessionKey: "agent:main:parent" }),
     });
     expect(prepare).not.toHaveBeenCalled();
@@ -168,12 +163,7 @@ describe("private command schedules under the live scheduler", () => {
       errorClassification: { kind: "permanent" as const },
       executionStarted: false,
     };
-    const result = await runSchedule(
-      { maxRuns: 100, deadlineAtMs: nowMs + 60 * everyMs },
-      8,
-      {},
-      refused,
-    );
+    const result = await runSchedule({}, 8, {}, refused);
     expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
     expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: 1 } });
     expect(result.stored?.state.nextRunAtMs).toBeUndefined();
@@ -183,7 +173,7 @@ describe("private command schedules under the live scheduler", () => {
 
   it("keeps waking after a refusal that is not permanent", async () => {
     const result = await runSchedule(
-      { maxRuns: 100, deadlineAtMs: nowMs + 60 * everyMs },
+      {},
       3,
       {},
       { status: "error", error: "Scheduled plugin command source changed or expired." },

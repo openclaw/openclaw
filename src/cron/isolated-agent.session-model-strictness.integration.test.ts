@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
+import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -24,52 +26,12 @@ const providerUrls = {
   jobfallback: "http://127.0.0.1:11437/v1",
 } as const;
 
-function completedResponse(model: string): Response {
-  const item = {
-    id: "msg_synthetic",
-    type: "message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text: "answered", annotations: [] }],
-  };
-  const response = { id: "resp_synthetic", model, status: "in_progress", output: [] };
-  const events = [
-    { type: "response.created", response },
-    { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        ...response,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ];
-  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
-function stubProvider(baseUrl: string, model: string) {
+function stubProvider(baseUrl: string, id: string) {
   return {
     api: "openai-responses" as const,
     baseUrl,
     agentRuntime: { id: "openclaw" },
-    models: [catalogModel(model)],
-  };
-}
-
-function catalogModel(id: string) {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 1024,
+    models: [modelDefinition(id, { reasoning: false, contextWindow: 128_000, maxTokens: 1024 })],
   };
 }
 
@@ -82,10 +44,10 @@ afterEach(async () => {
 });
 
 describe("stored cron session model selections through the real embedded runner", () => {
-  async function runWithFailingPinnedModel(params: {
-    storedSelection: Pick<SessionEntry, "modelOverrideSource">;
-    payload?: { model?: string; fallbacks?: string[] };
-  }) {
+  async function runWithFailingPinnedModel(
+    modelOverrideSource: SessionEntry["modelOverrideSource"],
+    payload?: { model?: string; fallbacks?: string[] },
+  ) {
     return await withOpenClawTestState({ label: "cron-session-model" }, async (state) => {
       installPrivateUpdateHandoffStore(state.root);
       const requests: string[] = [];
@@ -111,7 +73,14 @@ describe("stored cron session model selections through the real embedded runner"
             { status: 401 },
           );
         }
-        return completedResponse(body.model ?? "unknown");
+        return providerResponse({
+          api: "openai-responses",
+          model: body.model ?? "unknown",
+          id: "resp_synthetic",
+          messageId: "msg_synthetic",
+          text: "answered",
+          calls: [],
+        }).response;
       };
       vi.spyOn(globalThis, "fetch").mockImplementation(providerFetch);
       vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(providerFetch);
@@ -147,17 +116,13 @@ describe("stored cron session model selections through the real embedded runner"
       setRuntimeConfigSnapshot(cfg);
       const stored: CronStoredJob = cronTestJob({
         id: "session-model",
-        name: "Session model",
         agentId: "main",
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        wakeMode: "now",
         delivery: { mode: "none" },
         payload: {
           kind: "agentTurn",
           message: "Reply.",
           lightContext: true,
-          ...params.payload,
+          ...payload,
         },
       });
       await replaceSessionEntry(
@@ -167,7 +132,7 @@ describe("stored cron session model selections through the real embedded runner"
           updatedAt: Date.now(),
           providerOverride: "pinned",
           modelOverride: "model-x",
-          ...params.storedSelection,
+          modelOverrideSource,
         },
       );
       const storePath = state.statePath("cron", "jobs.json");
@@ -187,28 +152,20 @@ describe("stored cron session model selections through the real embedded runner"
     });
   }
 
-  it.each([
-    {
-      name: "user pin",
-      storedSelection: { modelOverrideSource: "user" as const },
-      payload: undefined,
-      expected: [],
-    },
-    { name: "legacy pin", storedSelection: {}, payload: undefined, expected: [] },
-    {
-      name: "explicit fallbacks",
-      storedSelection: { modelOverrideSource: "user" as const },
-      payload: { fallbacks: ["jobfallback/model-c"] },
-      expected: ["jobfallback/model-c"],
-    },
-    {
-      name: "its own model",
-      storedSelection: { modelOverrideSource: "user" as const },
-      payload: { model: "pinned/model-x" },
-      expected: ["fallback/model-b"],
-    },
-  ])("honors fallback policy for $name", async ({ storedSelection, payload, expected }) => {
-    const { result, requests } = await runWithFailingPinnedModel({ storedSelection, payload });
+  it.each<
+    [
+      string,
+      SessionEntry["modelOverrideSource"],
+      { model?: string; fallbacks?: string[] } | undefined,
+      string[],
+    ]
+  >([
+    ["user pin", "user", undefined, []],
+    ["legacy pin", undefined, undefined, []],
+    ["explicit fallbacks", "user", { fallbacks: ["jobfallback/model-c"] }, ["jobfallback/model-c"]],
+    ["its own model", "user", { model: "pinned/model-x" }, ["fallback/model-b"]],
+  ])("honors fallback policy for %s", async (_name, source, payload, expected) => {
+    const { result, requests } = await runWithFailingPinnedModel(source, payload);
     expect(requests).toEqual(["pinned/model-x", ...expected]);
     expect(result.status, result.error).toBe(expected.length ? "ok" : "error");
     if (!expected.length) {

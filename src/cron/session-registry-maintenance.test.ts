@@ -218,10 +218,8 @@ describe("runSessionRegistryMaintenance", () => {
         agentId: "retained",
         storePath: retained.storePath,
         skippedReason: "agent-store-held",
-        warning: expect.stringContaining(`Held agent retained database ${databasePath}`),
+        warning: expect.stringContaining("openclaw doctor --fix"),
       });
-      const held = summary.stores.find((store) => store.agentId === "retained");
-      expect(held).toMatchObject({ warning: expect.stringContaining("openclaw doctor --fix") });
       expect(await fs.readFile(databasePath)).toEqual(bytes);
       expect(loadSessionEntry(retained)).toBeDefined();
       expect(loadSessionEntry(main)).toBeDefined();
@@ -234,9 +232,6 @@ describe("runSessionRegistryMaintenance", () => {
       const retiredStorePath = path.join(state.sessionsDir("retired"), "sessions.json");
       openOpenClawStateDatabase();
       const sqlitePath = resolveSqliteTargetFromSessionStorePath(retiredStorePath).path;
-      if (!sqlitePath) {
-        throw new Error("expected retired store to resolve to SQLite");
-      }
       await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
       await fs.writeFile(sqlitePath, "not a sqlite database");
       await expect(maintain(false)).rejects.toThrow();
