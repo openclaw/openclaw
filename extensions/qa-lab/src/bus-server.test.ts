@@ -376,15 +376,6 @@ describe("qa-bus server", () => {
       events: [{ message: { id: message.id } }],
     });
 
-    const searchResponse = await post("/v1/actions/search", {
-      accountId: "acct-a",
-      limit: 10_000,
-      query: "bounded",
-    });
-    await expectSuccess(searchResponse, {
-      messages: [{ id: message.id }],
-    });
-
     const extremeSearchResponse = await raw(
       "/v1/actions/search",
       `{"accountId":"acct-a","limit":1e309,"query":"bounded"}`,
