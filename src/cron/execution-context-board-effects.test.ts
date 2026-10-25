@@ -9,6 +9,7 @@ import {
 import { boardStore } from "../gateway/board-store.js";
 import { createBoardHarness } from "../gateway/server-methods/board.test-support.js";
 import type { RespondFn } from "../gateway/server-methods/types.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import type { CronStoredJob } from "./types.js";
 
 vi.mock("../agents/openclaw-plugin-tools.js", async (importOriginal) => ({
@@ -38,19 +39,15 @@ const { resolveGatewayScopedTools } = await import("../gateway/tool-resolution.j
 
 const PARENT: BoardSessionTarget = { sessionKey: "agent:main:dashboard:parent", agentId: "main" };
 const RUN_KEY = "agent:main:cron:job-1:run:s1";
+const TOOLS = ["dashboard", "show_widget"];
 const LINKED_JOB = {
-  id: "job-1",
+  ...makeCronJob({}),
   agentId: "main",
-  name: "Board report",
-  enabled: true,
   createdAtMs: 0,
   updatedAtMs: 0,
-  schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "isolated",
   wakeMode: "now",
-  payload: { kind: "agentTurn", message: "report", toolsAllow: ["dashboard", "show_widget"] },
+  payload: { kind: "agentTurn", message: "report", toolsAllow: TOOLS },
   delivery: { mode: "none" },
-  state: {},
   owner: { agentId: "main", sessionKey: PARENT.sessionKey, accountId: "default" },
   sourceConversation: { sessionKey: PARENT.sessionKey, sessionId: "parent-session" },
 } as unknown as CronStoredJob;
@@ -123,7 +120,7 @@ async function admitChildRun() {
       agentId: "main",
       runId: "run-1",
       runSessionKey: RUN_KEY,
-      toolsAllow: ["dashboard", "show_widget"],
+      toolsAllow: TOOLS,
       operatorAuthorityRestored: false,
     }),
   });
@@ -132,7 +129,7 @@ async function admitChildRun() {
     agentSessionKey: "agent:main:cron:job-1",
     runSessionKey: RUN_KEY,
     gatewayCallerScheduled: true,
-    runtimeToolAllowlist: ["dashboard", "show_widget"],
+    runtimeToolAllowlist: TOOLS,
     scheduledToolTargets: readScheduledToolTargets(admitted),
   });
   const tool = (name: string) => tools.find((candidate) => candidate.name === name)!;
@@ -149,6 +146,21 @@ async function admitChildRun() {
 
 const createTab = { action: "tab_create", tabId: "report", title: "Report" };
 const pinReport = { title: "Status", widget_code: "<p>ready</p>", pin: true };
+const boardTarget = (sessionKey: string) => ({ sessionKey, agentId: "main" });
+const widgetTitles = async () =>
+  (await boardStore.getSnapshot(PARENT)).widgets.map((entry) => entry.title);
+const scopedTools = (
+  admittedRunContext: Awaited<ReturnType<typeof admitChildRun>>["admitted"],
+  toolsAllow?: string[],
+) =>
+  resolveGatewayScopedTools({
+    cfg: {},
+    sessionKey: RUN_KEY,
+    senderIsOwner: false,
+    surface: "loopback",
+    admittedRunContext,
+    toolsAllow,
+  });
 
 it("authors the parent's board while the parent conversation is current", async () => {
   const store = useBoard();
@@ -158,7 +170,7 @@ it("authors the parent's board while the parent conversation is current", async 
   const board = await store.getSnapshot(PARENT);
   expect(board.tabs.map((tab) => tab.tabId)).toContain("report");
   expect(board.widgets.map((widget) => widget.title)).toEqual(["Status"]);
-  const runBoard = await store.getSnapshot({ sessionKey: RUN_KEY, agentId: "main" });
+  const runBoard = await store.getSnapshot(boardTarget(RUN_KEY));
   expect(runBoard.tabs.map((tab) => tab.tabId)).not.toContain("report");
   expect(runBoard.widgets).toEqual([]);
   run.settle();
@@ -174,7 +186,7 @@ it("keeps the run session's board for a run admitted without a context", async (
   }).find((tool) => tool.name === "dashboard")!;
   await dashboard.execute("tab", createTab);
   const tabsOf = async (sessionKey: string) =>
-    (await store.getSnapshot({ sessionKey, agentId: "main" })).tabs.map((tab) => tab.tabId);
+    (await store.getSnapshot(boardTarget(sessionKey))).tabs.map((tab) => tab.tabId);
   expect(await tabsOf(RUN_KEY)).toContain("report");
   expect(await tabsOf(PARENT.sessionKey)).not.toContain("report");
 });
@@ -208,35 +220,22 @@ it.each(["parent reset", "reset at commit", "settled occurrence"] as const)(
 );
 
 it("offers a CLI child pinned authoring on its parent's board through the loopback", async () => {
-  const store = useBoard();
+  useBoard();
   const run = await admitChildRun();
   // The CLI MCP loopback resolves the run's tools from its grant: the admitted run and its tool cap.
-  const scoped = await resolveGatewayScopedTools({
-    cfg: {},
-    sessionKey: RUN_KEY,
-    senderIsOwner: false,
-    surface: "loopback",
-    admittedRunContext: run.admitted,
-    toolsAllow: ["dashboard", "show_widget"],
-  });
+  const scoped = await scopedTools(run.admitted, TOOLS);
   const widget = scoped.tools.find((tool) => tool.name === "show_widget");
   expect(widget?.parameters).toMatchObject({ properties: { pin: { const: true } } });
   await widget!.execute("pin", pinReport);
-  expect((await store.getSnapshot(PARENT)).widgets.map((entry) => entry.title)).toEqual(["Status"]);
+  expect(await widgetTitles()).toEqual(["Status"]);
   // After a real parent reset the same CLI tool refuses, leaving the parent board unchanged.
   await resetParent();
   await expect(
     widget!.execute("pin-after-reset", { ...pinReport, title: "Late" }),
   ).rejects.toThrow();
-  expect((await store.getSnapshot(PARENT)).widgets.map((entry) => entry.title)).toEqual(["Status"]);
+  expect(await widgetTitles()).toEqual(["Status"]);
   // Without the grant's cap the scheduled run keeps the inline-client requirement.
-  const uncapped = await resolveGatewayScopedTools({
-    cfg: {},
-    sessionKey: RUN_KEY,
-    senderIsOwner: false,
-    surface: "loopback",
-    admittedRunContext: run.admitted,
-  });
+  const uncapped = await scopedTools(run.admitted);
   expect(uncapped.tools.find((tool) => tool.name === "show_widget")?.parameters).not.toMatchObject({
     properties: { pin: { const: true } },
   });
