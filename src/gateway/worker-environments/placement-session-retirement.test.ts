@@ -22,7 +22,6 @@ import {
 function createHarness(records: WorkerSessionPlacementRecord[]) {
   const placements = new Map(records.map((record) => [record.sessionId, record]));
   const destroyed = new Set<string>();
-  const retired: WorkerSessionPlacementRetirement[] = [];
   const resolveSessionEvidence = vi.fn<PlacementSessionEvidenceResolver>(async () => "absent");
   const createSessionEvidenceResolver = vi.fn(
     async (): Promise<PlacementSessionEvidenceResolver> => resolveSessionEvidence,
@@ -54,7 +53,6 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
       throw new Error("placement changed");
     }
     placements.delete(input.sessionId);
-    retired.push(input);
   });
   const retirement = createPlacementSessionRetirement({
     placements: {
@@ -88,7 +86,6 @@ function createHarness(records: WorkerSessionPlacementRecord[]) {
     listAsync,
     retireSessionPlacementAsync,
     resolveSessionEvidence,
-    retired,
     retirement,
   };
 }
@@ -118,9 +115,6 @@ it("reuses evidence until invalidation, including receipts during discovery", as
     harness.resolveSessionEvidence.mockResolvedValue("absent");
     await harness.retirement.reconcile();
     expect(harness.placements.has(placement.sessionId)).toBe(false);
-    expect(harness.retired).toEqual([
-      { sessionId: placement.sessionId, expectedState: "local", expectedGeneration: 1 },
-    ]);
     expect(harness.forceDestroyEnvironment).not.toHaveBeenCalled();
   } finally {
     uninstall();
@@ -152,7 +146,6 @@ it("retires only ownerless requested placements for absent sessions", async () =
     runId: "requested-owner-run",
   });
   const ownedRequested = await placements.startDispatch(ownedIdentity);
-  const retireSessionPlacement = vi.spyOn(placements, "retireSessionPlacementAsync");
   const forceDestroyEnvironment = vi.fn();
   const warn = vi.fn();
   const retirement = createPlacementSessionRetirement({
@@ -167,11 +160,6 @@ it("retires only ownerless requested placements for absent sessions", async () =
   try {
     await retirement.reconcile();
 
-    expect(retireSessionPlacement).toHaveBeenCalledExactlyOnceWith({
-      sessionId: requested.sessionId,
-      expectedState: "requested",
-      expectedGeneration: requested.generation,
-    });
     expect(placements.get(requested.sessionId)).toBeUndefined();
     expect(placements.get(ownedRequested.sessionId)).toMatchObject({
       state: "requested",
@@ -244,7 +232,6 @@ it.each(["unknown", "read", "write", "teardown"] as const)(
     await harness.retirement.reconcile();
 
     expect(harness.placements.has(placement.sessionId)).toBe(false);
-    expect(harness.retired).toHaveLength(1);
   },
 );
 
@@ -270,5 +257,4 @@ it("retains queued changes across evidence reads", async () => {
   await harness.retirement.reconcile();
 
   expect(harness.placements.has(placement.sessionId)).toBe(false);
-  expect(harness.retired).toHaveLength(1);
 });

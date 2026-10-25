@@ -102,17 +102,20 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("recovers pending work and replays a terminal result across reopen", async () => {
-  expect(await store.begin(input)).toEqual({ kind: "claimed" });
-  expect(await store.begin(input)).toEqual({ kind: "recover" });
+it("requires a reservation, recovers pending work, and preserves the first terminal result across reopen", async () => {
+  await expect(store.complete({ ...input, outcome: SUCCESS_OUTCOME })).rejects.toThrow(
+    "must begin before terminal completion",
+  );
+  expect(await store.begin(input)).toEqual(CLAIMED);
+  expect(await store.begin(input)).toEqual(RECOVER);
 
   expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
-  expect(await store.begin(input)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
+  expect(await store.complete({ ...input, outcome: ERROR_OUTCOME })).toEqual(SUCCESS_OUTCOME);
+  expect(await store.begin(input)).toEqual(REPLAY);
 
   await closeStateDatabaseForTest();
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  store = createWorkerTranscriptCommitStore({ database });
-  expect(await store.begin(input)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
+  store = openStore();
+  expect(await store.begin(input)).toEqual(REPLAY);
 });
 
 it("rejects a tuple replayed with a different payload or environment", async () => {
@@ -136,15 +139,6 @@ it("advances one ordered sequence only after terminal completion", async () => {
   expect(await store.complete({ ...second, outcome: ERROR_OUTCOME })).toEqual(ERROR_OUTCOME);
   expect(await store.begin(second)).toEqual({ kind: "replay", outcome: ERROR_OUTCOME });
   expect(await store.begin(third)).toEqual(CLAIMED);
-});
-
-it("keeps the first cached terminal outcome", async () => {
-  await expect(store.complete({ ...input, outcome: SUCCESS_OUTCOME })).rejects.toThrow(
-    "must begin before terminal completion",
-  );
-  await store.begin(input);
-  expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
-  expect(await store.complete({ ...input, outcome: ERROR_OUTCOME })).toEqual(SUCCESS_OUTCOME);
 });
 
 it("releases only the exact pending reservation without rewinding or releasing its owner", async () => {
@@ -177,7 +171,7 @@ it("preserves submission order and captures inputs before yielding", async () =>
 });
 
 it("starts an independent sequence for a later owner epoch", async () => {
-  expect(await store.begin(input)).toEqual({ kind: "claimed" });
+  expect(await store.begin(input)).toEqual(CLAIMED);
   await store.complete({ ...input, outcome: SUCCESS_OUTCOME });
   const replacement = {
     ...input,
@@ -185,7 +179,7 @@ it("starts an independent sequence for a later owner epoch", async () => {
     runEpoch: input.runEpoch + 1,
   };
 
-  expect(await store.begin(replacement)).toEqual({ kind: "claimed" });
+  expect(await store.begin(replacement)).toEqual(CLAIMED);
   expect(await store.complete({ ...replacement, outcome: SUCCESS_OUTCOME })).toEqual(
     SUCCESS_OUTCOME,
   );
