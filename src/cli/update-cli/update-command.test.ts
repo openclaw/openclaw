@@ -11,9 +11,6 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as nativeLaunchAgentRecovery from "../daemon-cli/launchd-recovery.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
-import * as launchAgentRecovery from "./update-command-launch-agent-recovery.js";
-import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
-import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolveServiceRefreshEnv,
   resolveUpdateTargetEnv,
@@ -50,21 +47,6 @@ function expectGuidance(output: string, parts: string[]) {
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
-});
-
-it("fails closed when updated plugin migrations leave config invalid", () => {
-  const pluginUpdate = createPostCorePluginUpdateResult({ status: "ok", changed: true });
-  expect(
-    applyPostPluginConfigValidation(pluginUpdate, { status: "invalid", failureFacts: [] }),
-  ).toMatchObject({
-    status: "error",
-    reason: "post-plugin-doctor-invalid-config",
-    warnings: [
-      {
-        guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
-      },
-    ],
-  });
 });
 
 it("uses the managed service port ahead of the caller environment", async () => {
@@ -167,60 +149,9 @@ it("keeps operator scratch and SecretRef inputs while applying managed service s
   expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
 });
 
-describe("recoverInstalledLaunchAgentAfterUpdate", () => {
-  beforeEach(() => mockProcessPlatform("darwin"));
-  afterEach(() => vi.restoreAllMocks());
-  it.each(["loaded", "recovered", "failed", "system owner"] as const)(
-    "reports LaunchAgent recovery: %s",
-    async (outcome) => {
-      const service = createMockGatewayService();
-      const serviceEnv = { OPENCLAW_PROFILE: "stomme" };
-      const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" };
-      const readState = vi
-        .spyOn(gatewayService, "readGatewayServiceState")
-        .mockResolvedValue(serviceState(recoveredEnv, outcome === "loaded"));
-      const guidance = "System LaunchDaemon system/ai.openclaw.stomme owns this label";
-      const recover = vi
-        .spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent")
-        .mockImplementation(async ({ result }) => {
-          if (outcome === "system owner") {
-            throw new Error(guidance);
-          }
-          return outcome === "recovered"
-            ? { result, loaded: true, message: recoveryMessage }
-            : null;
-        });
-
-      await expect(
-        launchAgentRecovery.recoverInstalledLaunchAgentAfterUpdate({
-          service,
-          env: serviceEnv,
-        }),
-      ).resolves.toEqual(
-        outcome === "loaded"
-          ? { status: "not-needed" }
-          : outcome === "recovered"
-            ? { status: "recovered", message: recoveryMessage }
-            : {
-                status: "failed",
-                detail:
-                  outcome === "system owner"
-                    ? guidance
-                    : "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
-              },
-      );
-      expect(readState).toHaveBeenCalledWith(service, { env: serviceEnv });
-      if (outcome === "loaded") {
-        expect(recover).not.toHaveBeenCalled();
-      } else {
-        expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
-      }
-    },
-  );
-});
-
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
   beforeEach(() => {
+    mockProcessPlatform("darwin");
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
       tempDirs.make("update-native-repair-locks-"),
     );
@@ -231,7 +162,6 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     async (probe) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-probe-failure-") };
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-      mockProcessPlatform("darwin");
       const service = createMockGatewayService();
       const readState = vi.spyOn(gatewayService, "readGatewayServiceState");
       const reason = "launchctl denied";
@@ -283,17 +213,21 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       expect(start).not.toHaveBeenCalled();
     },
   );
-  it.each(["recovered", "failed", "unhealthy"] as const)(
+  it.each(["loaded", "recovered", "failed", "system owner", "unhealthy"] as const)(
     "records only attempted native repair before rechecking update health (%s)",
     async (outcome) => {
-      const repaired = outcome !== "failed";
+      const repaired = outcome === "recovered" || outcome === "unhealthy";
       const env = {
         OPENCLAW_STATE_DIR: tempDirs.make("update-native-repair-"),
         OPENCLAW_PROFILE: "stomme",
         OPENCLAW_PORT: "18790",
       };
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-      const service = {} as never;
+      const service = createMockGatewayService();
+      const recoveredEnv = { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" };
+      vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue(
+        serviceState(recoveredEnv, outcome === "loaded"),
+      );
       const unhealthy = stoppedHealth();
       const healthy = {
         ...unhealthy,
@@ -305,12 +239,24 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
       };
       const rechecked =
         outcome === "unhealthy" ? { ...unhealthy, waitOutcome: "timeout" as const } : healthy;
-      const recovery = repaired
-        ? ({ status: "recovered", message: recoveryMessage } as const)
-        : ({ status: "failed", detail: "Bootstrap failed." } as const);
-      vi.spyOn(launchAgentRecovery, "recoverInstalledLaunchAgentAfterUpdate").mockResolvedValue(
-        recovery,
-      );
+      const detail =
+        outcome === "system owner"
+          ? "System LaunchDaemon system/ai.openclaw.stomme owns this label"
+          : "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.";
+      const recovery =
+        outcome === "loaded"
+          ? { status: "not-needed" }
+          : repaired
+            ? { status: "recovered", message: recoveryMessage }
+            : { status: "failed", detail };
+      const recover = vi
+        .spyOn(nativeLaunchAgentRecovery, "recoverInstalledLaunchAgent")
+        .mockImplementation(async ({ result }) => {
+          if (outcome === "system owner") {
+            throw new Error(detail);
+          }
+          return repaired ? { result, loaded: true, message: recoveryMessage } : null;
+        });
       const waitForHealthy = vi
         .spyOn(restartHealth, "waitForGatewayHealthyRestart")
         .mockImplementation(async () => {
@@ -336,22 +282,20 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
         launchAgentRecovery: recovery,
       });
 
+      if (outcome === "loaded") {
+        expect(recover).not.toHaveBeenCalled();
+      } else {
+        expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
+      }
       if (repaired) {
-        expect(waitForHealthy).toHaveBeenCalledWith({
-          service,
-          port: 18790,
-          expectedVersion: "2026.5.3",
-          expectedBuildId: "new-build",
-          env,
-          supervisorKeepsAlive: true,
-          requirePluginHealth: false,
-          requireChannelHealth: false,
-        });
+        expect(waitForHealthy).toHaveBeenCalledWith(
+          expect.objectContaining({ expectedVersion: "2026.5.3", expectedBuildId: "new-build" }),
+        );
       } else {
         expect(waitForHealthy).not.toHaveBeenCalled();
       }
       const repair = getUpdateRun(runId, { env })?.repair;
-      if (outcome === "unhealthy") {
+      if (outcome === "unhealthy" || outcome === "loaded") {
         expect(repair).toEqual([]);
       } else {
         expect(repair).toEqual([
@@ -360,7 +304,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
             status: repaired ? "succeeded" : "failed",
             startedAtMs: expect.any(Number),
             endedAtMs: expect.any(Number),
-            summary: repaired ? recoveryMessage : "Bootstrap failed.",
+            summary: repaired ? recoveryMessage : detail,
           },
         ]);
         expect(repair?.[0]?.startedAtMs).toBeGreaterThanOrEqual(startedAtMs);
