@@ -106,32 +106,6 @@ describe("conversation tools", () => {
     expect(result).toEqual({ conversations: [conversation] });
   });
 
-  it("routes sends through the Gateway with a stable operation id", async () => {
-    const callGateway = mockGateway();
-    const firstResult = await execute("send", message, "tool-call-1");
-    const secondResult = await execute("send", message, "tool-call-1");
-    const first = callGateway.mock.calls[0]![0];
-    const second = callGateway.mock.calls[1]![0];
-
-    expect(first).toMatchObject({
-      method: "conversations.send",
-      params: {
-        agentId: "main",
-        sourceSessionKey: operatorOptions.agentSessionKey,
-        ...message,
-        operationId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u),
-      },
-      config: {},
-    });
-    expect(second.params).toEqual(first.params);
-    expect(firstResult).toEqual(secondResult);
-    expect(firstResult).toMatchObject({
-      status: "sent",
-      messageId: "reef-outbound-1",
-      queueId: "queue-1",
-    });
-  });
-
   it("reports Gateway suppression without claiming delivery", async () => {
     const suppressed = {
       status: "suppressed",
@@ -150,9 +124,20 @@ describe("conversation tools", () => {
     await expect(execute("send", message)).resolves.toMatchObject({
       status: "sent",
       messageId: "reef-outbound-1",
+      queueId: "queue-1",
     });
     const first = callGateway.mock.calls[0]![0];
     const second = callGateway.mock.calls[1]![0];
+    expect(second).toMatchObject({
+      method: "conversations.send",
+      params: {
+        agentId: "main",
+        sourceSessionKey: operatorOptions.agentSessionKey,
+        ...message,
+        operationId: expect.stringMatching(/^convop_[a-f0-9]{32}$/u),
+      },
+      config: {},
+    });
     expect(second.params).toEqual(first.params);
   });
 

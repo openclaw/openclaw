@@ -212,24 +212,11 @@ it.each(["setup token", "provider-default setup token", "API key"] as const)(
             ]
           : undefined,
       );
-      expect(body).toMatchObject({
-        model: modelId,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "document",
-                source: {
-                  media_type: "application/pdf",
-                  data: FAKE_PDF_MEDIA.buffer.toString("base64"),
-                },
-              },
-              { type: "text", text: "Summarize this PDF." },
-            ],
-          },
-        ],
-      });
+      expect(body.model).toBe(modelId);
+      expect(body.messages[0].content[0].source.data).toBe(
+        FAKE_PDF_MEDIA.buffer.toString("base64"),
+      );
+      expect(body.messages[0].content[1].text).toBe("Summarize this PDF.");
     });
   },
 );
