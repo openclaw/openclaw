@@ -169,24 +169,59 @@ click B "https://example.invalid/mermaid-link"`;
   expect(remote).not.toContain("example.invalid");
 });
 
-it("renders authored alternatives as inert image metadata", async () => {
+it("keeps untrusted alternatives inert and retires metadata when the source changes", async () => {
   await import("./markdown-mermaid.tsx");
   const element = document.createElement("openclaw-mermaid");
   document.body.append(element);
-  element.source =
-    "flowchart LR\\naccTitle: Audit 🧪\\naccDescr: Inspect <img src=x onerror=alert(1)> before allowing the request.\\nA --> B";
+  const authored =
+    "flowchart LR\naccTitle: Audit 🧪\naccDescr: Inspect <img src=x onerror=alert(1)> before allowing the request.\nA --> B";
+  const cases = [
+    { source: authored, title: "Audit 🧪", description: "Inspect", partial: true },
+    {
+      source: "flowchart LR\nA[No authored alternative] --> B",
+      title: "Mermaid diagram",
+      description: "",
+    },
+    {
+      source: "flowchart LR\naccTitle: Approval order\nA --> B",
+      title: "Approval order",
+      description: "",
+    },
+    {
+      source: "flowchart LR\naccDescr: Approval precedes execution.\nA --> B",
+      title: "Mermaid diagram",
+      description: "Approval precedes execution.",
+    },
+    { source: authored, title: "Audit 🧪", description: "Inspect", partial: true },
+  ];
   try {
-    await expect
-      .poll(() => element.querySelector<HTMLImageElement>(".preview img")?.alt)
-      .toBe("Audit 🧪");
-    const image = element.querySelector<HTMLImageElement>(".preview img")!;
-    await image.decode();
-    const description = document.getElementById(image.getAttribute("aria-describedby")!);
-    expect(description?.textContent).toContain("Inspect");
-    expect(description?.children).toHaveLength(0);
-    expect(getComputedStyle(description!).display).toBe("none");
-    expect(element.querySelector(".preview svg, .preview script, .description img")).toBeNull();
-    expect(image.src).toMatch(/^blob:/u);
+    for (const fixture of cases) {
+      const oldUrl = element.querySelector(".preview img")?.getAttribute("src");
+      element.source = fixture.source;
+      await expect
+        .poll(() => element.querySelector(".preview img")?.getAttribute("src"))
+        .not.toBe(oldUrl);
+      await expect
+        .poll(() => element.querySelector<HTMLImageElement>(".preview img")?.alt)
+        .toBe(fixture.title);
+      const image = element.querySelector<HTMLImageElement>(".preview img")!;
+      await image.decode();
+      const description = document.getElementById(image.getAttribute("aria-describedby")!);
+      if (fixture.description) {
+        expect(description?.textContent).toContain(fixture.description);
+        if (!fixture.partial) {
+          expect(description?.textContent).toBe(fixture.description);
+        }
+        expect(description?.children).toHaveLength(0);
+        expect(getComputedStyle(description!).display).toBe("none");
+      } else {
+        expect(description).toBeNull();
+        expect(image.hasAttribute("aria-describedby")).toBe(false);
+        expect(element.querySelector(".description")).toBeNull();
+      }
+      expect(element.querySelector(".preview svg, .preview script, .description img")).toBeNull();
+      expect(image.src).toMatch(/^blob:/u);
+    }
   } finally {
     element.remove();
   }

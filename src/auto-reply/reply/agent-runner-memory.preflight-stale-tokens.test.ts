@@ -10,11 +10,7 @@ import {
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
-import {
-  createFreshSessionEntry,
-  createMemoryFlushPlan,
-} from "./agent-runner-memory.test-support.js";
+import { runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw } from "./agent-runner-memory.js";
 import {
   createTestFollowupRun,
   withTestModelContextTokens,
@@ -41,6 +37,23 @@ vi.mock("./queue.js", async (importOriginal) => ({
   refreshQueuedFollowupSession: vi.fn(),
 }));
 
+type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
+  modelContextTokens?: number;
+};
+
+async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParams) {
+  const { modelContextTokens, ...runParams } = params;
+  return await runSessionCompactionIfNeededRaw({
+    ...runParams,
+    cfg: withTestModelContextTokens({
+      cfg: runParams.cfg,
+      followupRun: runParams.followupRun,
+      defaultModel: runParams.defaultModel,
+      contextTokens: modelContextTokens,
+    }),
+  });
+}
+
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-preflight-stale-");
 
 describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
@@ -49,7 +62,14 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
   beforeEach(() => {
     rootDir = sessionDirs.make();
     registerMemoryCapability("memory-core", {
-      flushPlanResolver: createMemoryFlushPlan,
+      flushPlanResolver: () => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }),
     });
     compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
       ok: true,
@@ -64,71 +84,113 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
     clearMemoryPluginState();
   });
 
-  async function runWithEntry(
-    sessionEntry: SessionEntry,
-    sessionFile: string,
-    sessionKey = "agent:main:main",
-    runOverrides: Parameters<typeof createTestFollowupRun>[0] = {},
-  ) {
-    const followupRun = createTestFollowupRun({
-      sessionId: "session",
-      sessionFile,
-      sessionKey,
-      ...runOverrides,
-    });
-    const defaultModel = "anthropic/claude-opus-4-6";
+  async function runWithEntry(sessionEntry: SessionEntry, sessionFile: string) {
     return await runSessionCompactionIfNeeded({
-      cfg: withTestModelContextTokens({
-        cfg: {
-          agents: {
-            ...(sessionKey === "main" ? { entries: { ops: {} } } : {}),
-            defaults: { compaction: { memoryFlush: {} } },
-          },
-        },
-        followupRun,
-        defaultModel,
-        contextTokens: 100_000,
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:main",
       }),
-      followupRun,
-      defaultModel,
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 100_000,
       sessionEntry,
-      sessionStore: { [sessionKey]: sessionEntry },
-      sessionKey,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
       storePath: path.join(rootDir, "sessions.json"),
 
       abortSignal: new AbortController().signal,
     });
   }
 
-  async function oversizedEntry(sessionKey: string) {
+  it("compacts fresh token totals above the model budget", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
       sessionFile,
       `${JSON.stringify({ message: { role: "user", content: "x".repeat(2_000) } })}\n`,
       "utf8",
     );
-    const entry = createFreshSessionEntry({ sessionFile, totalTokens: 200_000 });
-    await writeTestSessionStore(path.join(rootDir, "sessions.json"), sessionKey, entry);
-    return { entry, sessionFile };
-  }
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+    await writeTestSessionStore(
+      path.join(rootDir, "sessions.json"),
+      "agent:main:main",
+      sessionEntry,
+    );
+    await runWithEntry(sessionEntry, sessionFile);
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+  });
 
   it.each([
-    ["anthropic", "claude-opus-4-6", true],
-    ["openai", "gpt-5.6-luna", false],
-  ] as const)(
-    "resolves an unscoped session key with the sole configured agent (%s)",
-    async (provider, model, expectsCompaction) => {
-      const { entry: sessionEntry, sessionFile } = await oversizedEntry("main");
-      const result = await runWithEntry(sessionEntry, sessionFile, "main", {
-        agentId: undefined,
-        provider,
-        model,
+    {
+      name: "the sole configured agent for an embedded provider",
+      expectedAgentId: "ops",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      expectsCompaction: true,
+    },
+    {
+      name: "the sole configured agent before provider runtime selection",
+      expectedAgentId: "ops",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      expectsCompaction: false,
+    },
+  ])(
+    "resolves an unscoped session key with $name",
+    async ({ expectedAgentId, provider, model, expectsCompaction }) => {
+      const sessionFile = path.join(rootDir, "session.jsonl");
+      const storePath = path.join(rootDir, "sessions.json");
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({ message: { role: "user", content: "x".repeat(2_000) } })}\n`,
+        "utf8",
+      );
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        sessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 200_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      };
+      await writeTestSessionStore(storePath, "main", sessionEntry);
+
+      const result = await runSessionCompactionIfNeeded({
+        cfg: {
+          agents: {
+            entries: { ops: {} },
+            defaults: { compaction: { memoryFlush: {} } },
+          },
+        },
+        followupRun: createTestFollowupRun({
+          agentId: undefined,
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "main",
+          provider,
+          model,
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        modelContextTokens: 100_000,
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath,
+
+        abortSignal: new AbortController().signal,
       });
 
       expect(result).toBe(sessionEntry);
       if (expectsCompaction) {
         expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
-          sessionTarget: { agentId: "ops" },
+          sessionTarget: { agentId: expectedAgentId },
         });
       } else {
         expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();

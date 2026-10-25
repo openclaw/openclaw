@@ -1,10 +1,13 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
-import { withTestTimeout } from "../../test/helpers/promise.js";
 import { registerDocsCli } from "./docs-cli.js";
 
-const runtime = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }));
+const runtime = vi.hoisted(() => ({
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
+}));
 const fetchMock = vi.fn<typeof fetch>();
 
 vi.mock("../runtime.js", async (importOriginal) => ({
@@ -59,7 +62,9 @@ beforeEach(() => {
   fetchMock.mockReset();
   vi.mocked(isRich).mockReturnValue(false);
   vi.stubGlobal("fetch", fetchMock);
-  vi.clearAllMocks();
+  runtime.log.mockClear();
+  runtime.error.mockClear();
+  runtime.exit.mockClear();
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -102,7 +107,11 @@ it("emits one JSON object for the docs homepage", async () => {
 
 it.each([
   ["null root", "null", "malformed: expected results array"],
-  ["non-array results", '{"results":"unavailable"}', "malformed: expected results array"],
+  [
+    "non-array results",
+    JSON.stringify({ results: "unavailable" }),
+    "malformed: expected results array",
+  ],
   [
     "invalid UTF-8",
     Buffer.from('{"results":[{"title":"\xff","link":"/"}]}', "latin1"),
@@ -119,7 +128,22 @@ it.each([
   },
 );
 
-it.each([false, true])("renders search results with rich=%s", async (rich) => {
+it.each([
+  {
+    rich: false,
+    output: [
+      "# Docs search: plugin \\[allowlist\\]\n\n- [Plugin \\[allowlist\\]](https://docs.openclaw.ai/plugins/allowlist) - How to \\(configure\\).",
+    ],
+  },
+  {
+    rich: true,
+    output: [
+      "Docs search: plugin [allowlist]",
+      "- Plugin [allowlist] (docs.openclaw.ai/plugins/allowlisthttps://docs.openclaw.ai/plugins/allowlist)",
+      "  How to (configure).",
+    ],
+  },
+])("renders search results with rich=$rich", async ({ rich, output }) => {
   vi.mocked(isRich).mockReturnValue(rich);
   respond([
     {
@@ -130,11 +154,9 @@ it.each([false, true])("renders search results with rich=%s", async (rich) => {
   ]);
   await search(["plugin", "[allowlist]"]);
 
-  const output = runtime.log.mock.calls.flat().join("\n");
-  expect(output).toContain(rich ? "plugin [allowlist]" : "plugin \\[allowlist\\]");
-  expect(output).toContain(rich ? "Plugin [allowlist]" : "[Plugin \\[allowlist\\]](");
-  expect(output).toContain("https://docs.openclaw.ai/plugins/allowlist");
-  expect(output).toContain(rich ? "How to (configure)." : "How to \\(configure\\).");
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(runtime.exit).not.toHaveBeenCalled();
+  expect(runtime.log.mock.calls).toEqual(output.map((line) => [line]));
 });
 
 it("rejects oversized docs search responses", async () => {
@@ -177,15 +199,27 @@ it("settles a known HTTP error before a retained clone reaches EOF", async () =>
     );
     return response;
   });
-  const pending = search(["held-error"], { json: true });
+  const pending = search(["held-error"], { json: true }).then(
+    () => ({ ok: true as const }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
-    await expect(
-      withTestTimeout(pending, 500, "HTTP error blocked on response EOF"),
-    ).rejects.toThrow("Docs search failed: HTTP 503");
+    const result = await Promise.race([
+      pending,
+      new Promise<null>((resolve) => {
+        deadline = setTimeout(() => resolve(null), 500);
+      }),
+    ]);
+    expect(result).toMatchObject({ ok: false, error: { message: "Docs search failed: HTTP 503" } });
     expect(requestSignal?.aborted).toBe(true);
   } finally {
+    if (deadline) {
+      clearTimeout(deadline);
+    }
     streamController?.error(new DOMException("fixture cleanup", "AbortError"));
     await capture.body?.cancel().catch(() => undefined);
-    await pending.catch(() => undefined);
+    await pending;
+    vi.unstubAllGlobals();
   }
 });

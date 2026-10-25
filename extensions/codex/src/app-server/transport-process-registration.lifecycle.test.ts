@@ -114,7 +114,10 @@ it("starts process inspection after a slow durable registration read", async (ct
   reading.resolve([{ key: "live-owner", value: existing }]);
   await started;
 
+  expect(state.spawn).toHaveBeenCalledOnce();
+  expect(state.register).toHaveBeenCalledOnce();
   expect(state.rows.size).toBe(2);
+  expect(state.rows.get("live-owner")).toEqual(existing);
   expect(terminateCodexAppServerOrphan).not.toHaveBeenCalled();
   expect(state.delete).not.toHaveBeenCalled();
   exit(spawned);
@@ -172,6 +175,7 @@ it.for(["insertion", "failed deletion"])("joins pending %s before closing", asyn
   gate.resolve();
   await startup;
   await closing;
+  expect(state.delete).toHaveBeenCalledOnce();
   expect(state.rows.size).toBe(mode === "insertion" ? 0 : 1);
 });
 
@@ -199,6 +203,7 @@ it.for(["revoked", "commit failure"])(
     admission.resolve();
     await rejected;
     expect(spawned.exitCode).toBe(0);
+    expect(state.delete).toHaveBeenCalledOnce();
     expect(state.rows.size).toBe(0);
   },
 );
@@ -208,7 +213,7 @@ it("joins the best-effort boot sweep when the service stops", async () => {
   state.entries.mockReturnValue(reading.promise);
   const service = createCodexAppServerProcessReaperService();
   const ctx = registrationServiceContext("/fixture");
-  service.start(ctx);
+  expect(service.start(ctx)).toBeUndefined();
   const stopped = vi.fn();
   const stopping = Promise.resolve(service.stop?.(ctx)).then(stopped);
   await setImmediate();

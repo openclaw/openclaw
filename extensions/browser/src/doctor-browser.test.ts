@@ -110,12 +110,28 @@ it("warns while legacy Browser Relay Authentication remains enabled", async () =
   );
 });
 
+it("warns when Chrome MCP is configured but Chrome is missing", async () => {
+  const { text } = await diagnose({ defaultProfile: "user" }, { platform: "darwin" });
+  expect(text).toContain("Google Chrome was not found");
+  expect(text).toContain("brave://inspect/#remote-debugging");
+  expect(text).not.toContain("System browser profile cookie import");
+});
+
 it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
   ["custom default Chrome MCP", withProfile(mcpProfile, "work", { defaultProfile: "work" }), "mcp"],
   ["explicit Chrome MCP endpoint", withProfile(remoteMcp), false],
-  ["MCP auto-connect override", withProfile({ ...remoteMcp, mcpArgs: ["--autoConnect"] }), "mcp"],
   [
-    "managed user override",
+    "Chrome MCP endpoint arguments",
+    withProfile({ ...mcpProfile, mcpArgs: ["--browserUrl", remoteMcp.cdpUrl] }),
+    false,
+  ],
+  [
+    "explicit Chrome MCP auto-connect override",
+    withProfile({ ...remoteMcp, mcpArgs: ["--autoConnect"] }),
+    "mcp",
+  ],
+  [
+    "explicit managed override of user",
     withProfile({ driver: "openclaw", cdpPort: 18801 }, "user", { defaultProfile: "user" }),
     "managed",
   ],
@@ -126,10 +142,16 @@ it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
   ],
   ["remote CDP", withProfile({ cdpUrl: "https://browser.example" }), false],
   ["profile attach-only", withProfile({ cdpPort: 18801, attachOnly: true }), false],
+  ["inherited attach-only", withProfile({ cdpPort: 18801 }, "work", { attachOnly: true }), false],
   [
-    "attach-only override",
+    "explicit managed override of inherited attach-only",
     withProfile({ cdpPort: 18801, attachOnly: false }, "work", { attachOnly: true }),
     "managed",
+  ],
+  [
+    "Lightpanda",
+    withProfile({ engine: "lightpanda", cdpUrl: "ws://127.0.0.1:9222", attachOnly: true }),
+    false,
   ],
   ["unconfigured built-ins", {}, false],
 ])("checks only launch prerequisites for %s", async (_name, browser, mode) => {
@@ -141,31 +163,37 @@ it.each<[string, BrowserConfig, "managed" | "mcp" | false]>([
     { headless: false, ...browser },
     { env: {}, getUid: () => 0, resolveManagedExecutable, resolveChromeExecutable },
   );
+  expect(resolveManagedExecutable).toHaveBeenCalledTimes(managed ? 1 : 0);
+  expect(resolveChromeExecutable).toHaveBeenCalledTimes(chromeMcp ? 1 : 0);
   expect(text.includes("No Chromium-based browser executable was found")).toBe(managed);
   expect(text.includes("No DISPLAY or WAYLAND_DISPLAY is set")).toBe(managed);
   expect(text.includes("The Gateway is running as root")).toBe(managed);
   expect(text.includes("Google Chrome was not found")).toBe(chromeMcp);
-  if (chromeMcp) {
-    expect(text).toContain("brave://inspect/#remote-debugging");
-  }
 });
 
-it.each([
-  ["profile", {}, { headless: false }, "browser.profiles.work.headless=false"],
-  [
-    "environment",
-    { OPENCLAW_BROWSER_HEADLESS: "0" },
-    { headless: true },
-    "OPENCLAW_BROWSER_HEADLESS=0",
-  ],
-] as const)("names the effective %s display requirement", async (_source, env, profile, hint) => {
-  const { text } = await diagnose(
-    withProfile({ cdpPort: 18801, ...profile }, "work", { headless: true }),
-    { env },
-  );
-  expect(text.includes("DISPLAY") || text.includes("Linux display server")).toBe(true);
-  expect(text).toContain(hint);
-});
+it.each<[string, boolean | undefined, boolean | undefined, NodeJS.ProcessEnv, boolean]>([
+  ["profile headless override", false, true, {}, false],
+  ["profile headed override", true, false, {}, true],
+  ["Linux headless default", undefined, undefined, {}, false],
+  ["environment headless override", false, false, { OPENCLAW_BROWSER_HEADLESS: "1" }, false],
+  ["environment headed override", true, true, { OPENCLAW_BROWSER_HEADLESS: "0" }, true],
+])(
+  "matches managed launch display requirements for %s",
+  async (name, global, profile, env, warning) => {
+    const { text } = await diagnose(
+      withProfile({ cdpPort: 18801, headless: profile }, "work", { headless: global }),
+      { env },
+    );
+    expect(text.includes("DISPLAY") || text.includes("Linux display server")).toBe(warning);
+    if (warning) {
+      expect(text).toContain(
+        name === "profile headed override"
+          ? "browser.profiles.work.headless=false"
+          : "OPENCLAW_BROWSER_HEADLESS=0",
+      );
+    }
+  },
+);
 
 it("checks effective executables once per path and names only profiles missing a browser", async () => {
   const resolveManagedExecutable = vi.fn((resolved: { executablePath?: string }) =>
@@ -240,27 +268,35 @@ async function protectedProfiles(platform: NodeJS.Platform, installed: boolean) 
       await fsp.writeFile(path.join(profileDir, filename), "{}", { mode: 0o600 });
     }
   }
-  const roots = install.chromeProductRoots(value.deps).map((root) => root.userDataDir);
-  const reads = [
-    vi.spyOn(fs, "readFileSync"),
-    vi.spyOn(fsp, "readFile"),
-    vi.spyOn(fsp, "lstat"),
-    vi.spyOn(fsp, "readdir"),
-  ];
+  const accesses: string[] = [];
+  const denyProfileRead = (target: unknown) => {
+    const filename = path.basename(String(target));
+    if (["Local State", "Preferences", "Secure Preferences", "Cookies"].includes(filename)) {
+      accesses.push(String(target));
+      throw Object.assign(new Error("synthetic browser profile access denied"), { code: "EACCES" });
+    }
+  };
+  const readSync = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
+    denyProfileRead(args[0]);
+    return readSync(...args);
+  });
+  const read = fsp.readFile;
+  vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
+    denyProfileRead(args[0]);
+    return await read(...args);
+  });
+  const roots = new Set(install.chromeProductRoots(value.deps).map((root) => root.userDataDir));
+  const rootReads = [vi.spyOn(fsp, "lstat"), vi.spyOn(fsp, "readdir")];
   Object.entries(value.deps.env).forEach(([key, entry]) => vi.stubEnv(key, entry));
   vi.stubEnv("OPENCLAW_STATE_DIR", value.stateDir);
   const configHome = path.join(value.homeDir, ".config");
   ["CHROME_CONFIG_HOME", "XDG_CONFIG_HOME"].forEach((key) => vi.stubEnv(key, configHome));
-  const accesses = () =>
-    reads
+  const rootAccesses = () =>
+    rootReads
       .flatMap((spy) => spy.mock.calls.map(([target]) => String(target)))
-      .filter(
-        (target) =>
-          ["Local State", "Preferences", "Secure Preferences", "Cookies"].includes(
-            path.basename(target),
-          ) || roots.some((root) => target === root || target.startsWith(`${root}${path.sep}`)),
-      );
-  return { ...value, accesses };
+      .filter((target) => roots.has(target));
+  return { ...value, accesses: () => [...accesses, ...rootAccesses()] };
 }
 
 it.each([
@@ -271,18 +307,22 @@ it.each([
 ] as const)("does not inspect profiles on %s (installed copy: %s)", async (platform, installed) => {
   const value = await protectedProfiles(platform, installed);
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-  const findings = await collectBrowserReadinessFindings({
-    browser: { allowSystemProfileImport: true, extensionRelay: { allowLegacyAuth: false } },
-  });
-  expect(value.accesses()).toEqual([]);
-  if (installed) {
-    expect(findings).toContainEqual(
-      expect.objectContaining({ category: "recommended", severity: "info" }),
-    );
+  for (const allowSystemProfileImport of [false, undefined, true]) {
+    const findings = await collectBrowserReadinessFindings({
+      browser: { allowSystemProfileImport, extensionRelay: { allowLegacyAuth: false } },
+    });
+    expect(value.accesses()).toEqual([]);
     const notes = findings.map((finding) => `${finding.message}\n${finding.fixHint}`).join("\n");
-    expect(notes).toContain("native bootstrap was not inspected");
-    expect(notes).toContain("openclaw browser extension status --json");
-    expect(notes).not.toContain("not fully registered");
+    expect(notes).not.toContain("cookie databases found:");
+    expect(notes).not.toContain("System browser profile cookie import");
+    if (installed) {
+      expect(findings).toContainEqual(
+        expect.objectContaining({ category: "recommended", severity: "info" }),
+      );
+      expect(notes).toContain("native bootstrap was not inspected");
+      expect(notes).toContain("openclaw browser extension status --json");
+      expect(notes).not.toContain("not fully registered");
+    }
   }
   await install.discoverChromeExtensionIds({ approvedDirs: [], deps: value.deps });
   expect(value.accesses()).toContain(install.chromeProductRoots(value.deps)[0]!.userDataDir);
