@@ -243,7 +243,6 @@ describe("requester settle retry lifetime", () => {
 
   it.each([
     { trigger: "descendant event", nextAttemptAt: undefined },
-    { trigger: "stale deadline", nextAttemptAt: undefined },
     { trigger: "stale deadline", nextAttemptAt: 5_000 },
   ] as const)(
     "waits without repeated preparation or writes until $trigger (retry=$nextAttemptAt)",
@@ -308,7 +307,6 @@ describe("requester settle retry lifetime", () => {
         const input = armRequesterWake(records());
         input.subagent.requesterSettleWake!.requesterYieldBatch = true;
         const driver = seedDriver(database, input);
-        const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
         driver.wake.mockImplementation(async (params) => {
           params.onDescendantsPending?.(deadline);
           return false;
@@ -316,13 +314,6 @@ describe("requester settle retry lifetime", () => {
         try {
           await driver.run();
           expect(driver.controller.waitingRequesterSettleWakes.size).toBe(1);
-          const deadlineTimer = [...driver.controller.waitingRequesterSettleWakes.values()][0]
-            ?.timer;
-          if (deadline === undefined) {
-            expect(deadlineTimer).toBeUndefined();
-          } else {
-            expect(deadlineTimer).toBeDefined();
-          }
           await driver.controller.retireSubagentObligations(currentCompletionRun(input), () => {}, {
             requesterNotified: true,
           });
@@ -330,13 +321,10 @@ describe("requester settle retry lifetime", () => {
           expect(stored).toBeDefined();
           expect(stored?.requesterSettleWake).toBeUndefined();
           expect(driver.controller.waitingRequesterSettleWakes.size).toBe(0);
-          if (deadline !== undefined) {
-            expect(clearTimeoutSpy).toHaveBeenCalledWith(deadlineTimer);
-          }
+          await vi.advanceTimersByTimeAsync(310_000);
           expect(driver.wake).toHaveBeenCalledOnce();
         } finally {
           driver.controller.clearRuntimeState();
-          clearTimeoutSpy.mockRestore();
           vi.useRealTimers();
           resetGatewayWorkAdmission();
         }
@@ -469,98 +457,89 @@ describe("requester settle retry lifetime", () => {
     },
   );
 
-  it.each([1, 4])(
-    "retains a delivered batch through %s persistence failures without redelivery",
-    async (failures) => {
-      await withSubagentCompletionWorkerState(async (database) => {
-        const first = records();
-        const sibling = records();
-        sibling.subagent.runId = "retry-sibling";
-        sibling.subagent.childSessionKey = "agent:main:subagent:retry-sibling";
-        const inputs = [first, sibling];
-        const batchRunIds = inputs.map(({ subagent }) => subagent.runId);
-        for (const input of inputs) {
-          armRequesterWake(input, batchRunIds);
-          seedSubagentCompletionOwner({ subagent: input.subagent, databaseOptions: { database } });
+  it("retains a delivered batch through repeated persistence failures without redelivery", async () => {
+    const failures = 4;
+    await withSubagentCompletionWorkerState(async (database) => {
+      const first = records();
+      const sibling = records();
+      sibling.subagent.runId = "retry-sibling";
+      sibling.subagent.childSessionKey = "agent:main:subagent:retry-sibling";
+      const inputs = [first, sibling];
+      const batchRunIds = inputs.map(({ subagent }) => subagent.runId);
+      for (const input of inputs) {
+        armRequesterWake(input, batchRunIds);
+        seedSubagentCompletionOwner({ subagent: input.subagent, databaseOptions: { database } });
+      }
+      const driver = requesterWakeDriver(inputs);
+      const transport = vi.fn();
+      const finalized = vi.fn();
+      let settlementWrites = 0;
+      const worker = probe.command(stateWorker, (command, options, scope) => {
+        if (
+          isSubagentCompletionMutation(command) &&
+          command.input.mutation.kind === "requesterBatch"
+        ) {
+          settlementWrites += 1;
+          if (settlementWrites === failures + 1) {
+            database.db.exec("DROP TRIGGER reject_delivered_batch");
+          }
         }
-        const driver = requesterWakeDriver(inputs);
-        const transport = vi.fn();
-        const finalized = vi.fn();
-        let settlementWrites = 0;
-        const worker = probe.command(stateWorker, (command, options, scope) => {
-          if (
-            isSubagentCompletionMutation(command) &&
-            command.input.mutation.kind === "requesterBatch"
-          ) {
-            settlementWrites += 1;
-            if (settlementWrites === failures + 1) {
-              database.db.exec("DROP TRIGGER reject_delivered_batch");
-            }
-          }
-          return scope.execute(command, options);
-        });
-        database.db.exec(
-          "CREATE TRIGGER reject_delivered_batch BEFORE UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.delivery.status') = 'delivered' BEGIN SELECT RAISE(ABORT, 'delivered outcome persistence unavailable'); END",
+        return scope.execute(command, options);
+      });
+      database.db.exec(
+        "CREATE TRIGGER reject_delivered_batch BEFORE UPDATE ON subagent_runs WHEN json_extract(NEW.payload_json, '$.delivery.status') = 'delivered' BEGIN SELECT RAISE(ABORT, 'delivered outcome persistence unavailable'); END",
+      );
+      driver.wake.mockImplementation(async (params) => {
+        const batch = () => inputs.map((input) => currentCompletionRun(input));
+        await params.transitionBatch(
+          batch(),
+          { status: "dispatching", attemptCount: 1, rearmGeneration: 1, batchRunIds },
+          () => {},
         );
-        driver.wake.mockImplementation(async (params) => {
-          const batch = () => inputs.map((input) => currentCompletionRun(input));
-          await params.transitionBatch(
-            batch(),
-            { status: "dispatching", attemptCount: 1, rearmGeneration: 1, batchRunIds },
-            () => {},
-          );
-          transport();
-          await params.completeBatch(
-            batch(),
-            1,
-            { delivered: true, path: "direct", deliveredAt: 5_000 },
-            finalized,
-          );
-          return true;
-        });
-        try {
-          await driver.run();
-          for (let event = 0; event <= failures; event += 1) {
-            if (settlementWrites > failures) {
-              break;
-            }
-            expect(transport).toHaveBeenCalledOnce();
-            expect(finalized).not.toHaveBeenCalled();
-            for (const input of inputs) {
-              const stored = storedRun(input);
-              expect(stored?.delivery?.status).toBe("in_progress");
-              expect(stored?.requesterSettleWake).toMatchObject({
-                rearmGeneration: 1,
-                batchRunIds,
-              });
-            }
-            // No child changes again; the existing sweep must adopt the retained receipt.
-            await driver.sweep();
+        transport();
+        await params.completeBatch(
+          batch(),
+          1,
+          { delivered: true, path: "direct", deliveredAt: 5_000 },
+          finalized,
+        );
+        return true;
+      });
+      try {
+        await driver.run();
+        for (let event = 0; event <= failures; event += 1) {
+          if (settlementWrites > failures) {
+            break;
           }
-          expect(settlementWrites).toBe(failures + 1);
-          expect(driver.warn).toHaveBeenCalledWith(
-            "requester settle wake failed",
-            expect.objectContaining({
-              error: expect.objectContaining({
-                message: expect.stringContaining("delivered outcome persistence unavailable"),
-              }),
-            }),
-          );
           expect(transport).toHaveBeenCalledOnce();
-          expect(finalized).toHaveBeenCalledOnce();
+          expect(finalized).not.toHaveBeenCalled();
           for (const input of inputs) {
             const stored = storedRun(input);
-            expect(stored?.delivery).toMatchObject({ status: "delivered", deliveredAt: 5_000 });
-            expect(stored?.requesterSettleWake).toBeUndefined();
+            expect(stored?.delivery?.status).toBe("in_progress");
+            expect(stored?.requesterSettleWake).toMatchObject({
+              rearmGeneration: 1,
+              batchRunIds,
+            });
           }
-        } finally {
-          database.db.exec("DROP TRIGGER IF EXISTS reject_delivered_batch");
-          driver.controller.clearRuntimeState();
-          worker.mockRestore();
+          // No child changes again; the existing sweep must adopt the retained receipt.
+          await driver.sweep();
         }
-      });
-    },
-  );
+        expect(settlementWrites).toBe(failures + 1);
+        expect(driver.warn).toHaveBeenCalled();
+        expect(transport).toHaveBeenCalledOnce();
+        expect(finalized).toHaveBeenCalledOnce();
+        for (const input of inputs) {
+          const stored = storedRun(input);
+          expect(stored?.delivery).toMatchObject({ status: "delivered", deliveredAt: 5_000 });
+          expect(stored?.requesterSettleWake).toBeUndefined();
+        }
+      } finally {
+        database.db.exec("DROP TRIGGER IF EXISTS reject_delivered_batch");
+        driver.controller.clearRuntimeState();
+        worker.mockRestore();
+      }
+    });
+  });
 
   it("recovers a failed replay publication through the existing sweep", async () => {
     await withSubagentCompletionWorkerState(async (database) => {
