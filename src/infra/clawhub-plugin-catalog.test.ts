@@ -13,6 +13,7 @@ import {
 } from "./clawhub-plugin-catalog.js";
 import { captureClawHubJson as mockResponse } from "./clawhub.test-support.js";
 
+const registry = { baseUrl: "https://example.com" };
 const listingMetadata = {
   displayName: "Memory Plus",
   family: "code-plugin",
@@ -44,18 +45,13 @@ async function catalog(
   response: unknown = { items: [remotePlugin] },
 ) {
   const fetchImpl = mockResponse(response);
-  const result = await fetchClawHubPluginCatalog({
-    baseUrl: "https://example.com",
-    ...options,
-  });
+  const result = await fetchClawHubPluginCatalog({ ...registry, ...options });
   return { result, url: fetchImpl.url(), fetchImpl: fetchImpl.fetch };
 }
 
 function readCategories(categories: unknown[]) {
   mockResponse({ categories });
-  return fetchClawHubPluginCategories({
-    baseUrl: "https://example.com",
-  });
+  return fetchClawHubPluginCategories(registry);
 }
 
 function readDetail(value: Record<string, unknown>, version?: string) {
@@ -103,7 +99,7 @@ it.each([false, true])(
         .mockRejectedValueOnce(new TypeError("fetch failed"));
       vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
       const result = fetchClawHubPluginCatalog({
-        baseUrl: "https://example.com",
+        ...registry,
         query: "memory",
         searchSource: "openclaw-control-ui",
       });
@@ -165,19 +161,18 @@ it("reads the bounded plugin overview in one request", async () => {
     items: [{ ...remotePlugin, ...ranking }],
   });
 
-  const result = await fetchClawHubPluginOverview({
-    baseUrl: "https://example.com",
-  });
+  const result = await fetchClawHubPluginOverview(registry);
 
   expect(fetchImpl.url().pathname).toBe("/api/v1/plugins/overview");
   expect(result.categories).toEqual([remoteCategory]);
-  expect(result.items).toEqual([
-    expect.objectContaining({
+  expect(result.items).toMatchObject([
+    {
       packageName: "memory-plus",
       iconUrl: `https://example.com${remotePlugin.icon}`,
       ...ranking,
-    }),
+    },
   ]);
+  expect(result.items).toHaveLength(1);
   expect(fetchImpl.fetch).toHaveBeenCalledOnce();
 });
 
@@ -281,24 +276,19 @@ it("batch-reads current and legacy categories for exact package versions", async
     { ...packages[0], categories },
     { ...packages[1], categories: null },
   ];
-  let request: Request | undefined;
-  const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    request = new Request(input, init);
-    return jsonResponse({ packages: response });
-  });
-  vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
+  const request = mockResponse({ packages: response });
 
   const result = await fetchClawHubPluginVersionCategories({
-    baseUrl: "https://example.com",
+    ...registry,
     token: "private-token",
     skipAuth: true,
     packages,
   });
 
-  expect(request?.method).toBe("POST");
-  expect(request?.headers.has("authorization")).toBe(false);
-  expect(new URL(request?.url ?? "").pathname).toBe("/api/v1/packages/categories:batch");
-  await expect(request?.json()).resolves.toEqual({ packages });
+  expect(request.init()?.method).toBe("POST");
+  expect(new Headers(request.init()?.headers).has("authorization")).toBe(false);
+  expect(request.url().pathname).toBe("/api/v1/packages/categories:batch");
+  expect(request.body()).toEqual({ packages });
   expect(result).toEqual(response);
 });
 
@@ -397,7 +387,7 @@ it.each([
   });
 
   const detail = await fetchClawHubPluginDetail({
-    baseUrl: "https://example.com",
+    ...registry,
     packageName: "memory-plus",
     version: "1.2.2",
   });
@@ -512,26 +502,23 @@ it.each([undefined, {}])("keeps unreleased detail with optional security: %s", a
     security,
   });
   const detail = await fetchClawHubPluginDetail({
-    baseUrl: "https://example.com",
+    ...registry,
     packageName: "memory-plus",
     skipAuth: true,
   });
-  expect(detail).toEqual(
-    expect.objectContaining({
-      packageName: "memory-plus",
-      versions: [],
-      configFields: [],
-      selectedRelease: null,
-      downloadability: {
-        status: "unavailable",
-        reason: "The listing has no selected release.",
-      },
-      metadata: { manifest: "missing", readme: "missing", security: "missing" },
-      compatibility: { minGatewayVersion: ">=2.0.0" },
-    }),
-  );
-  expect(detail.readme).toBeUndefined();
-  expect(detail.security).toBeUndefined();
+  expect(detail).toMatchObject({
+    packageName: "memory-plus",
+    versions: [],
+    configFields: [],
+    selectedRelease: null,
+    downloadability: {
+      status: "unavailable",
+      reason: "The listing has no selected release.",
+    },
+    metadata: { manifest: "missing", readme: "missing", security: "missing" },
+    compatibility: { minGatewayVersion: ">=2.0.0" },
+  });
+  expect([detail.readme, detail.security]).toEqual([undefined, undefined]);
   expect(fetchImpl.fetch).toHaveBeenCalledOnce();
 });
 it.each([

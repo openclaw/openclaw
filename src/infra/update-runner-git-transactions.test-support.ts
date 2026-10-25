@@ -30,6 +30,9 @@ async function activateTransaction({ update }: GitCandidateFixture) {
   return { retained, result };
 }
 
+const completeRollback = (transaction: PackageUpdateTransaction) =>
+  transaction.complete({ activationVerified: false }, assertCurrent);
+
 async function expectGeneration(root: string, sha: string) {
   await expectHead(root, sha);
   await expectRuntime(root, sha);
@@ -202,9 +205,7 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
       if (outcome === "source-changed") {
         await fs.writeFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
         await expect(retained.rollback(assertCurrent)).rejects.toThrow("changed after activation");
-        await expect(
-          retained.complete({ activationVerified: false }, assertCurrent),
-        ).rejects.toThrow("changed after activation");
+        await expect(completeRollback(retained)).rejects.toThrow("changed after activation");
         await expectHead(root, targetSha);
         await expectFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
         await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
@@ -212,7 +213,7 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
       }
       const restored = await retained.rollback(assertCurrent);
       expect(restored.exitCode).toBe(0);
-      await retained.complete({ activationVerified: false }, assertCurrent);
+      await completeRollback(retained);
       await expectGeneration(root, beforeSha);
       await expectNoRuntimeStagingPaths();
     },
@@ -356,7 +357,7 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
     if (kind === "staged-unrelated") {
       expect(await git(root, "status", "--short")).toContain("MM openclaw.mjs");
     }
-    await expect(retained.complete({ activationVerified: false }, assertCurrent)).rejects.toThrow();
+    await expect(completeRollback(retained)).rejects.toThrow();
     await expectHead(
       root,
       phase === "source restore" || kind === "staged-unrelated" ? beforeSha : targetSha,
@@ -389,7 +390,7 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
     await expectGit(root, beforeSha, "rev-parse", "refs/heads/main");
     await expectGit(root, "refs/heads/main", "symbolic-ref", "HEAD");
     await expectRuntime(root, beforeSha);
-    await retained.complete({ activationVerified: false }, assertCurrent);
+    await completeRollback(retained);
   });
 
   it.each(["operator-branch", "HEAD"])(
@@ -416,7 +417,7 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
       );
       expect(kept.advisory?.message).toMatch(/git branch -d (?:main|'main')/);
       await expectRuntime(root, beforeSha);
-      await retained.complete({ activationVerified: false }, assertCurrent);
+      await completeRollback(retained);
       await expectNoRuntimeStagingPaths();
     },
   );
@@ -490,9 +491,7 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
     await expectGit(root, advanced, "rev-parse", "refs/heads/main");
     await expectRuntime(root, beforeSha);
     await expectFile(operatorFile, "preserve this operator note\n");
-    await expect(
-      retained.complete({ activationVerified: false }, assertCurrent),
-    ).resolves.toBeUndefined();
+    await expect(completeRollback(retained)).resolves.toBeUndefined();
     await expectNoRuntimeStagingPaths();
   });
 
@@ -546,9 +545,7 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
         expect(diagnostic).toContain("keep the newest intended commit");
       }
       await expectRuntimeRetained(root, targetSha, retained);
-      await expect(
-        retained.complete({ activationVerified: false }, assertCurrent),
-      ).rejects.toThrow();
+      await expect(completeRollback(retained)).rejects.toThrow();
       if (failure === "raw-writer-before") {
         await git(root, "checkout", "--detach", "--no-overwrite-ignore");
         await git(root, "branch", "-f", "main", concurrentSha);

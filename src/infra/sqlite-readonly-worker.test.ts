@@ -47,6 +47,14 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const openDatabase = (location: string, readOnly = false) =>
+  new (requireNodeSqlite().DatabaseSync)(location, { readOnly });
+const familyBytes = (location: string) =>
+  ["", "-wal", "-shm"].map((suffix) =>
+    fs.existsSync(location + suffix) ? fs.readFileSync(location + suffix) : null,
+  );
+const witnessSql = (value: string) =>
+  `CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('${value}');`;
 beforeEach(() => {
   vi.mocked(execFile).mockReset();
   vi.mocked(spawn).mockClear();
@@ -56,7 +64,7 @@ beforeEach(() => {
 
 function createDatabase(paddingBytes: number | null, sql = ""): string {
   const source = path.join(tempDirs.make("openclaw-snapshot-budget-"), "source.sqlite");
-  using database = new (requireNodeSqlite().DatabaseSync)(source);
+  using database = openDatabase(source);
   if (sql) {
     database.exec(sql);
   }
@@ -88,7 +96,7 @@ async function readSnapshotVersion(source: string) {
 }
 
 function readQueries(location: string, ...queries: string[]) {
-  using snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
+  using snapshot = openDatabase(location, true);
   return queries.map((sql) => snapshot.prepare(sql).get());
 }
 
@@ -96,11 +104,8 @@ describe("scoped SQLite read-only children", () => {
   it.each(["frame-free read", "disposal refusal"] as const)(
     "forks through the retained IPC session with %s",
     async (scenario) => {
-      const source = createDatabase(
-        null,
-        "CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('checkpointed');",
-      );
-      using writer = new (requireNodeSqlite().DatabaseSync)(source);
+      const source = createDatabase(null, witnessSql("checkpointed"));
+      using writer = openDatabase(source);
       writer.exec(
         "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO witness VALUES ('seed WAL'); DELETE FROM witness WHERE value='seed WAL'; PRAGMA wal_checkpoint(TRUNCATE)",
       );
@@ -109,10 +114,6 @@ describe("scoped SQLite read-only children", () => {
       } else {
         writer.close();
       }
-      const familyBytes = (location: string) =>
-        ["", "-wal", "-shm"].map((suffix) =>
-          fs.existsSync(location + suffix) ? fs.readFileSync(location + suffix) : null,
-        );
       const sourceBytes = familyBytes(source);
       const preparation = startSqliteReadOnlyLocationAsync(source, {
         preserveSourceArtifacts: true,
@@ -131,9 +132,7 @@ describe("scoped SQLite read-only children", () => {
         if (scenario === "frame-free read") {
           expect(family.wal).toBeNull();
           expect(fs.existsSync(`${prepared.location}-wal`)).toBe(false);
-          using reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, {
-            readOnly: true,
-          });
+          using reader = openDatabase(prepared.location, true);
           expect(reader.prepare("SELECT value FROM witness").all()).toEqual([
             { value: "checkpointed" },
           ]);
@@ -162,7 +161,7 @@ describe("scoped SQLite read-only children", () => {
           expect(fs.existsSync(`${fork.location}-wal`)).toBe(false);
         }
         {
-          using writable = new (requireNodeSqlite().DatabaseSync)(fork.location);
+          using writable = openDatabase(fork.location);
           expect(writable.prepare("SELECT value FROM witness ORDER BY rowid").all()).toEqual(
             scenario === "frame-free read"
               ? [{ value: "checkpointed" }]
@@ -243,7 +242,7 @@ describe("scoped SQLite read-only children", () => {
 
   it("reuses fresh raw snapshots while joining backup-capable children before returning", async () => {
     const source = createDatabase(1024 * 1024);
-    using writer = new (requireNodeSqlite().DatabaseSync)(source);
+    using writer = openDatabase(source);
     writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
     await withSqliteReadOnlyWorkerScope(async () => {
       for (const [index, mode] of (["sync", "async", "sync"] as const).entries()) {
@@ -382,7 +381,7 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
 
   it("budgets the WAL family while copying committed data from an open writer", async () => {
     const source = createDatabase(null);
-    using writer = new (requireNodeSqlite().DatabaseSync)(source);
+    using writer = openDatabase(source);
     writer.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE padding (data BLOB)",
     );
@@ -397,7 +396,7 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
       expect(fs.existsSync(`${snapshot}-shm`)).toBe(false);
     }
     {
-      using copied = new (requireNodeSqlite().DatabaseSync)(snapshot, { readOnly: true });
+      using copied = openDatabase(snapshot, true);
       expect(copied.prepare("SELECT length(data) AS bytes FROM padding").all()).toEqual([
         { bytes: 32 * 1024 * 1024 },
       ]);
@@ -438,10 +437,7 @@ it.each(
     : ["unavailable"],
 )("cold-starts an absolute SQLite snapshot when the invoking cwd is %s", async (condition) => {
   const root = tempDirs.make("openclaw-sqlite-unavailable-cwd-");
-  const source = createDatabase(
-    null,
-    "CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('preserved');",
-  );
+  const source = createDatabase(null, witnessSql("preserved"));
   const stagingRoot = path.join(root, "staging");
   fs.mkdirSync(stagingRoot);
   const before = fs.readFileSync(source);
