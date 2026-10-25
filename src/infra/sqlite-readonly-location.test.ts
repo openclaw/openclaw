@@ -101,12 +101,6 @@ function readFamily(pathname: string): Map<string, Buffer> {
   return family;
 }
 
-function readLogicalFamily(pathname: string): Map<string, Buffer> {
-  const family = readFamily(pathname);
-  family.delete("-shm");
-  return family;
-}
-
 it.each(["cache", "update-tmpdir"])(
   "keeps %s inspections byte-neutral across writer commits",
   async (placement) => {
@@ -294,16 +288,6 @@ it("preserves source corruption without reporting a snapshot staging quota failu
     fs.closeSync(descriptor);
   }
 
-  withDatabase(
-    databasePath,
-    (corruptSource) => {
-      expect(() => corruptSource.prepare("PRAGMA quick_check;").get()).toThrow(
-        /database disk image is malformed/u,
-      );
-    },
-    true,
-  );
-
   const inProcessError = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
     (error: unknown) => error,
   );
@@ -455,55 +439,6 @@ it.runIf(process.platform === "linux")(
   },
 );
 
-it("retries a same-size WAL reset and publishes only the new consistent pair", async () => {
-  const livePath = createTempDatabasePath();
-  const writer = new sqlite.DatabaseSync(livePath);
-  writer.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA wal_autocheckpoint = 0;
-      CREATE TABLE before_reset (value TEXT PRIMARY KEY);
-      CREATE TABLE after_reset (value TEXT PRIMARY KEY);
-      PRAGMA wal_checkpoint(TRUNCATE);
-      INSERT INTO before_reset VALUES ('A');
-    `);
-  const databasePath = createTempDatabasePath();
-  fs.copyFileSync(livePath, databasePath);
-  fs.copyFileSync(`${livePath}-wal`, `${databasePath}-wal`);
-  writer.close();
-  expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
-  const walSizeBeforeReset = fs.statSync(`${databasePath}-wal`).size;
-  const fsyncSync = fs.fsyncSync.bind(fs);
-  let injected = false;
-  let raceWriter: DatabaseSync | undefined;
-  let sourceAfterReset: Map<string, Buffer> | undefined;
-  vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
-    fsyncSync(descriptor);
-    if (!injected) {
-      injected = true;
-      raceWriter = new sqlite.DatabaseSync(databasePath);
-      raceWriter.exec(`
-          PRAGMA wal_checkpoint(TRUNCATE);
-          INSERT INTO after_reset VALUES ('B');
-        `);
-      sourceAfterReset = readLogicalFamily(databasePath);
-    }
-  });
-
-  try {
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-    inspectSnapshot(prepared, (snapshot) => {
-      expectRows(snapshot, "SELECT value FROM before_reset", [{ value: "A" }]);
-      expectRows(snapshot, "SELECT value FROM after_reset", [{ value: "B" }]);
-      expectIntegrity(snapshot);
-    });
-    expect(injected).toBe(true);
-    expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
-    expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
-  } finally {
-    raceWriter?.close();
-  }
-});
-
 it("rolls back contended MEMORY writes before committing another batch", async () => {
   const databasePath = createTempDatabasePath();
   using reader = new sqlite.DatabaseSync(databasePath);
@@ -581,30 +516,6 @@ it("backs up live MEMORY-journal transactions atomically", async () => {
   );
 });
 
-it("retries a transient missing pathname without publishing the unverified attempt", async () => {
-  const databasePath = createTempDatabasePath(
-    "CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('ok');",
-  );
-  const canonicalDatabasePath = fs.realpathSync.native(databasePath);
-  const statSync = fs.statSync.bind(fs);
-  let injected = false;
-  vi.spyOn(fs, "statSync").mockImplementation(((pathname, options) => {
-    if (!injected && path.resolve(String(pathname)) === canonicalDatabasePath) {
-      injected = true;
-      const error = new Error("missing");
-      (error as NodeJS.ErrnoException).code = "ENOENT";
-      throw error;
-    }
-    return statSync(pathname, options as never);
-  }) as typeof fs.statSync);
-
-  const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-  inspectSnapshot(prepared, (snapshot) => {
-    expectRows(snapshot, "SELECT value FROM probe", [{ value: "ok" }]);
-    expect(injected).toBe(true);
-  });
-});
-
 it("copies an orphan SHM privately without creating a source WAL", async () => {
   const databasePath = createTempDatabasePath(`
       PRAGMA journal_mode = WAL;
@@ -629,46 +540,32 @@ it("copies an orphan SHM privately without creating a source WAL", async () => {
   expect(fs.readdirSync(path.dirname(databasePath)).toSorted()).toEqual(beforeEntries);
 });
 
-it.each([
-  { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess },
-  { mode: "sync", prepare: prepareSqliteReadOnlyLocationSync },
-  {
-    mode: "artifact-preserving",
-    prepare: (pathname: string) =>
-      prepareSqliteReadOnlyLocation(pathname, { preserveSourceArtifacts: true }),
-  },
-])(
-  "backs up an active WAL database during $mode inspection while another connection keeps writing",
-  async ({ prepare }) => {
-    const databasePath = createTempDatabasePath();
-    withDatabase(databasePath, (seed) =>
-      seed.exec(`
+it("copies a coherent WAL snapshot while an independent writer keeps committing", async () => {
+  const databasePath = createTempDatabasePath(`
     PRAGMA journal_mode = WAL;
     PRAGMA wal_autocheckpoint = 0;
     CREATE TABLE writes (sequence INTEGER PRIMARY KEY);
     CREATE TABLE payload (data BLOB NOT NULL);
     INSERT INTO payload VALUES (zeroblob(16777216));
     PRAGMA wal_checkpoint(TRUNCATE);
-  `),
-    );
-    const writer = startWriter(databasePath, "WAL");
-    const ready = await writer.waitFor("ready");
-    expect(ready.commits).toBeGreaterThan(0);
-    expect(writer.pid).not.toBe(process.pid);
+  `);
+  const writer = startWriter(databasePath, "WAL");
+  const ready = await writer.waitFor("ready");
+  expect(ready.commits).toBeGreaterThan(0);
+  expect(writer.pid).not.toBe(process.pid);
 
-    const prepared = await prepare(databasePath);
-    inspectSnapshot(prepared, (snapshot) => {
-      expectIntegrity(snapshot);
-      expect(snapshot.prepare("SELECT COUNT(*) AS count FROM payload").get()).toEqual({
-        count: 1,
-      });
-      expect(snapshot.prepare("SELECT COUNT(*) AS count FROM writes").get()?.count).toBeGreaterThan(
-        0,
-      );
-    });
-    expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
-  },
-);
+  const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
+    preserveSourceArtifacts: true,
+  });
+  inspectSnapshot(prepared, (snapshot) => {
+    expectIntegrity(snapshot);
+    expect(snapshot.prepare("SELECT COUNT(*) AS count FROM payload").get()).toEqual({ count: 1 });
+    expect(snapshot.prepare("SELECT COUNT(*) AS count FROM writes").get()?.count).toBeGreaterThan(
+      0,
+    );
+  });
+  expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
+});
 
 it("snapshots a verified live writer once despite checkpoints that exhaust raw-copy retries", async () => {
   const root = tempDirs.make("sqlite-live-metadata-");

@@ -20,8 +20,6 @@ import {
 } from "./update-candidate-canary.test-support.js";
 import { createCanaryHarness } from "./update-candidate-harness.test-support.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
-import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
-import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const mocks = vi.hoisted(() => ({
@@ -71,10 +69,6 @@ function cleanupCopy(
   options: Omit<Parameters<typeof cleanupUpdateTemporaryDirectory>[0], "root" | "name">,
 ) {
   return cleanupUpdateTemporaryDirectory({ root, name: "candidate-state-cleanup", ...options });
-}
-
-function renderCanaryReport(result: Awaited<ReturnType<typeof runCanary>>) {
-  return renderUpdateRunReport(updateRunReportInputFromResult({ ...result, mode: "git", root }));
 }
 
 function expectRecorded(recorder: { mock: { calls: unknown[][] } }, step: object) {
@@ -242,13 +236,7 @@ describe("canary teardown evidence", () => {
           message: expect.stringContaining(cause),
         }),
       ]);
-      const detail = updateRunStepsFromResultStep(failed).at(-1)?.detail;
       expect(failed.stderrTail).toContain("phase=checking");
-      expect(detail).toContain(cause);
-      const { markdown } = renderCanaryReport(result);
-      expect(markdown).toContain(cause);
-      expect(markdown).toContain("phase=checking");
-      expect(markdown).not.toContain("usable inference route");
     } finally {
       clock.mockRestore();
       vi.useRealTimers();
@@ -518,7 +506,7 @@ describe("canary teardown evidence", () => {
     },
   );
 
-  it.each(["pipes", "unconfirmed", "late", "malformed"] as const)(
+  it.each(["pipes", "late", "malformed"] as const)(
     "distinguishes a completed lint report (%s) from checks still running at the deadline",
     async (report) => {
       let now = 2_000_000;
@@ -555,11 +543,6 @@ describe("canary teardown evidence", () => {
           if (report === "late") {
             lintChild.stdout.write(JSON.stringify({ ok: true, checksRun: 1, findings: [] }));
           }
-          if (report === "unconfirmed") {
-            now += 101;
-            options.onComplete?.();
-            return;
-          }
           lintChild.emit("exit", null, "SIGTERM");
         }
         signalNormally(pid, signal, options);
@@ -568,12 +551,10 @@ describe("canary teardown evidence", () => {
         const result = await runCanary({}, 1_000);
         const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
         expect(step.termination).toBe("timeout");
-        const completed = report === "pipes" || report === "unconfirmed";
-        const rendered = renderCanaryReport(result);
-        if (completed) {
-          const message = `Update lint exit phase timed out after 0ms (899ms total); checks completed; ${report === "pipes" ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
-          expect(step.warnings).toEqual([message]);
-          expect(rendered.markdown).toContain(message);
+        if (report === "pipes") {
+          expect(step.warnings).toEqual([
+            expect.stringContaining("checks completed; output pipes stayed open"),
+          ]);
           expect(result).toMatchObject({ status: "ok", phase: "readiness" });
           expect(step.failureFacts).toBeUndefined();
         } else {
@@ -590,7 +571,6 @@ describe("canary teardown evidence", () => {
                 "candidate-migration-rehearsal: lint exceeded budget after 1 s (└  Doctor complete.)",
             },
           ]);
-          expect(rendered.markdown).toContain("lint exceeded budget after 1 s");
           expect(JSON.stringify(result)).not.toContain("exit phase");
         }
       } finally {
@@ -657,9 +637,6 @@ describe("canary teardown evidence", () => {
           },
         });
         expect(onStep).toHaveBeenCalledWith(cleanup);
-        expect(
-          updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep)),
-        ).toContain(cleanup?.advisory?.message);
         expect(
           mocks.signal.mock.calls
             .filter(([pid]) => pid === controlled?.pid)

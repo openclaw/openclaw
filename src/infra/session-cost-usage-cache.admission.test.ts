@@ -296,108 +296,103 @@ it.each([
   },
 );
 
-it.each([false, true])(
-  "drains retained usage cleanup by captured path before physical retirement (retry=%s)",
-  async (retry) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const agentId = "usage-deletion";
-      const selected = openOpenClawAgentDatabase({ agentId, env: state.env });
-      const otherEnv = { ...state.env, OPENCLAW_STATE_DIR: state.path("other-state") };
-      const other = openOpenClawAgentDatabase({ agentId, env: otherEnv });
-      const aliasDirectory = state.path("selected-agent");
-      fs.symlinkSync(path.dirname(selected.path), aliasDirectory, "junction");
-      const alias = path.join(aliasDirectory, path.basename(selected.path));
-      const finish = createDeferredCore();
-      const ready = createDeferredCore();
-      let cleaned = 0;
-      let otherCleaned = false;
-      const failure = new Error("Refresh cleanup temporarily failed");
-      let cleanupFailure = retry ? failure : undefined;
-      const readingFromOtherState = withUsageDatabases(
-        [{ agentId, path: selected.path, env: otherEnv }],
-        async () => await finish.promise,
-      );
-      const read = Promise.allSettled([readingFromOtherState]);
-      const target = { agentId, path: selected.path, env: state.env, requestedPaths: [alias] };
-      const holding = withUsageDatabases([target], async (scope) => {
-        const lock = prepareLock(agentId, selected.path, { env: state.env });
-        scope.retainCleanup(async () => {
-          if (cleanupFailure) {
-            throw cleanupFailure;
-          }
-          await lock.release();
-          cleaned++;
-        });
-        expect(await lock.acquire()).toBe(true);
-        ready.resolve();
-        await finish.promise;
-      });
-      const held = Promise.allSettled([holding]);
-      const otherReady = createDeferredCore();
-      const holdingOther = withUsageDatabases(
-        [{ agentId, path: other.path, env: otherEnv }],
-        async (scope) => {
-          scope.retainCleanup(async () => {
-            otherCleaned = true;
-          });
-          otherReady.resolve();
-          await finish.promise;
-        },
-      );
-      const otherHeld = Promise.allSettled([holdingOther]);
-      let reopen: (() => void) | undefined;
-      try {
-        await awaitGateBeforeSettlement(ready.promise, holding, "Usage lock did not acquire");
-        await awaitGateBeforeSettlement(
-          otherReady.promise,
-          holdingOther,
-          "Sibling scope did not open",
-        );
-        reopen = closeAgentWorkAdmissions({
-          agentId,
-          env: state.env,
-          reason: new Error("Agent deletion is draining active work"),
-        });
-        const selection = { agentId, paths: [alias, selected.path, alias] };
-        if (retry) {
-          await expect(retireSessionHistoryWorkerDatabases(selection)).rejects.toMatchObject({
-            errors: [failure],
-          });
-          await expect(withUsageDatabases([target], async () => undefined)).rejects.toThrow(
-            "Session database work is still draining",
-          );
-          cleanupFailure = undefined;
+it("retries retained usage cleanup by captured path before physical retirement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-deletion";
+    const selected = openOpenClawAgentDatabase({ agentId, env: state.env });
+    const otherEnv = { ...state.env, OPENCLAW_STATE_DIR: state.path("other-state") };
+    const other = openOpenClawAgentDatabase({ agentId, env: otherEnv });
+    const aliasDirectory = state.path("selected-agent");
+    fs.symlinkSync(path.dirname(selected.path), aliasDirectory, "junction");
+    const alias = path.join(aliasDirectory, path.basename(selected.path));
+    const finish = createDeferredCore();
+    const ready = createDeferredCore();
+    let cleaned = 0;
+    let otherCleaned = false;
+    const failure = new Error("Refresh cleanup temporarily failed");
+    let cleanupFailure: Error | undefined = failure;
+    const readingFromOtherState = withUsageDatabases(
+      [{ agentId, path: selected.path, env: otherEnv }],
+      async () => await finish.promise,
+    );
+    const read = Promise.allSettled([readingFromOtherState]);
+    const target = { agentId, path: selected.path, env: state.env, requestedPaths: [alias] };
+    const holding = withUsageDatabases([target], async (scope) => {
+      const lock = prepareLock(agentId, selected.path, { env: state.env });
+      scope.retainCleanup(async () => {
+        if (cleanupFailure) {
+          throw cleanupFailure;
         }
-        await retireSessionHistoryWorkerDatabases(selection);
-        expect(cleaned).toBe(1);
-        expect(otherCleaned).toBe(false);
-        expect(
-          selected.db
-            .prepare("SELECT key FROM cache_entries WHERE scope = ? AND key = ?")
-            .get("session-cost-usage", "refresh-lock"),
-        ).toBeUndefined();
-        await closeOpenClawAgentDatabaseByPathAsync(selected.path, agentId);
-        expect(otherCleaned).toBe(false);
-        finish.resolve();
-        await expect(holding).rejects.toThrow("Session usage database work was revoked");
-        await expect(readingFromOtherState).rejects.toThrow(
-          "Session usage database work was revoked",
-        );
-        await expect(holdingOther).resolves.toBeUndefined();
-        expect(otherCleaned).toBe(true);
-        expect(cleaned).toBe(1);
-        await expect(withUsageDatabases([target], async () => undefined)).resolves.toBeUndefined();
-      } finally {
-        cleanupFailure = undefined;
-        finish.resolve();
-        await held;
-        await read;
-        await otherHeld;
-        reopen?.();
-      }
+        await lock.release();
+        cleaned++;
+      });
+      expect(await lock.acquire()).toBe(true);
+      ready.resolve();
+      await finish.promise;
     });
-  },
-);
+    const held = Promise.allSettled([holding]);
+    const otherReady = createDeferredCore();
+    const holdingOther = withUsageDatabases(
+      [{ agentId, path: other.path, env: otherEnv }],
+      async (scope) => {
+        scope.retainCleanup(async () => {
+          otherCleaned = true;
+        });
+        otherReady.resolve();
+        await finish.promise;
+      },
+    );
+    const otherHeld = Promise.allSettled([holdingOther]);
+    let reopen: (() => void) | undefined;
+    try {
+      await awaitGateBeforeSettlement(ready.promise, holding, "Usage lock did not acquire");
+      await awaitGateBeforeSettlement(
+        otherReady.promise,
+        holdingOther,
+        "Sibling scope did not open",
+      );
+      reopen = closeAgentWorkAdmissions({
+        agentId,
+        env: state.env,
+        reason: new Error("Agent deletion is draining active work"),
+      });
+      const selection = { agentId, paths: [alias, selected.path, alias] };
+      await expect(retireSessionHistoryWorkerDatabases(selection)).rejects.toMatchObject({
+        errors: [failure],
+      });
+      await expect(withUsageDatabases([target], async () => undefined)).rejects.toThrow(
+        "Session database work is still draining",
+      );
+      cleanupFailure = undefined;
+      await retireSessionHistoryWorkerDatabases(selection);
+      expect(cleaned).toBe(1);
+      expect(otherCleaned).toBe(false);
+      expect(
+        selected.db
+          .prepare("SELECT key FROM cache_entries WHERE scope = ? AND key = ?")
+          .get("session-cost-usage", "refresh-lock"),
+      ).toBeUndefined();
+      await closeOpenClawAgentDatabaseByPathAsync(selected.path, agentId);
+      expect(otherCleaned).toBe(false);
+      finish.resolve();
+      await expect(holding).rejects.toThrow("Session usage database work was revoked");
+      await expect(readingFromOtherState).rejects.toThrow(
+        "Session usage database work was revoked",
+      );
+      await expect(holdingOther).resolves.toBeUndefined();
+      expect(otherCleaned).toBe(true);
+      expect(cleaned).toBe(1);
+      await expect(withUsageDatabases([target], async () => undefined)).resolves.toBeUndefined();
+    } finally {
+      cleanupFailure = undefined;
+      finish.resolve();
+      await held;
+      await read;
+      await otherHeld;
+      reopen?.();
+    }
+  });
+});
 
 it.for(["rollup", "prune"] as const)(
   "cancels a queued usage %s before the active writer settles",

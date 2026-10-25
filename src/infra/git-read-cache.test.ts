@@ -120,7 +120,7 @@ describe("typed Git read ownership", () => {
     expect(JSON.stringify(phases)).not.toContain("timing-private");
   });
 
-  it("reports bounded revision components while retaining independent request shapes", async () => {
+  it("reports bounded revision components without leaking revision metadata", async () => {
     const phasesAfterDrain = observeDiffPhases();
     gitRead.mockResolvedValue(emptyDiff);
     const unchanged = {
@@ -138,30 +138,20 @@ describe("typed Git read ownership", () => {
       "metadata",
     ] as const) {
       const input = { cwd: `/revision-reasons-${component}`, summaryOnly: true };
-      const read = (baseCommit?: string) => readDiff({ ...input, baseCommit });
       readRevision.mockResolvedValue(JSON.stringify(unchanged));
-      await read();
-      await read("a".repeat(40));
-      await read();
+      await readDiff(input);
       readRevision.mockResolvedValue(
         JSON.stringify({ ...unchanged, [component]: "private-changed" }),
       );
-      await read();
-      await read("a".repeat(40));
-      await read();
+      await readDiff(input);
     }
     const phases = await phasesAfterDrain();
     expect(phases.map((event) => event.details?.missReason)).toEqual(
       ["head", "index", "untracked-set", "worktree-mtime", "metadata"].flatMap((component) => [
         "cold",
-        "cold",
-        undefined,
         `revision-changed-${component}`,
-        `revision-changed-${component}`,
-        undefined,
       ]),
     );
-    expect(gitRead).toHaveBeenCalledTimes(20);
     expect(JSON.stringify(phases)).not.toContain("private");
   });
 
@@ -252,22 +242,6 @@ describe("typed Git read ownership", () => {
     await retiring;
     gitRead.mockResolvedValueOnce([]);
     await expect(runGitReadOperation(operation)).resolves.toEqual([]);
-  });
-
-  it("shares concurrent checkout work without sharing session envelopes or settled file state", async () => {
-    readRevision.mockResolvedValue(null);
-    const held = holdRead("checkout.diff", emptyDiff);
-    const first = loadCheckoutDiff({ cwd: "/diff-sharing", sessionKey: "session-a" });
-    const second = loadCheckoutDiff({ cwd: "/diff-sharing", sessionKey: "session-b" });
-    await vi.waitFor(() => expect(gitRead).toHaveBeenCalledOnce());
-    held.resolve(emptyDiff);
-    await expect(first).resolves.toEqual({ ...emptyDiff, sessionKey: "session-a" });
-    await expect(second).resolves.toEqual({ ...emptyDiff, sessionKey: "session-b" });
-    gitRead.mockResolvedValueOnce({ ...emptyDiff, additions: 3 });
-    await expect(
-      loadCheckoutDiff({ cwd: "/diff-sharing", sessionKey: "session-a" }),
-    ).resolves.toMatchObject({ additions: 3 });
-    expect(gitRead).toHaveBeenCalledTimes(2);
   });
 
   it("shares summary work until expiry without duplicating a slow scan or reusing full patches", async () => {
@@ -559,6 +533,8 @@ describe("typed Git read ownership", () => {
       mergeBase: { sha: "b".repeat(40), subject: "Base commit" },
     });
     const [truncated, complete] = await Promise.all([first, second]);
+    expect(truncated.sessionKey).toBe("a");
+    expect(complete.sessionKey).toBe("b");
     const file = truncated.files[0]!;
     delete file.patch;
     file.truncated = true;

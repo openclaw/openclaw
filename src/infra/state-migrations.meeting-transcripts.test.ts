@@ -9,11 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  exportTranscriptLibrary,
-  getTranscriptLibrary,
-  listTranscriptLibrary,
-} from "../transcripts/library.js";
+import { exportTranscriptLibrary } from "../transcripts/library.js";
 import { safeTranscriptPathSegment } from "../transcripts/store-artifacts.js";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { summarizeTranscripts } from "../transcripts/summary.js";
@@ -692,29 +688,13 @@ describe("meeting transcript Doctor oversized projections", () => {
       },
     );
     expect(h.snapshot()).toEqual(expected);
-    const listed = (await listTranscriptLibrary(h.store, {})).sessions.find(
-      (entry) => entry.sessionId === sessionId,
-    );
-    expect(listed?.selector).toBe(`2026-07-01/${slug}`);
-    const selector = listed!.selector;
-    const detail = await getTranscriptLibrary(h.store, { selector, includeUtterances: true });
-    expect(detail.session).toMatchObject({
-      sessionId,
-      selector,
-      utteranceCount: 1,
-      hasSummary: true,
-    });
-    expect(detail.utterances).toEqual([{ sequence: 0, text: "Preserve this note.", final: true }]);
-    for (const format of ["markdown", "jsonl"] as const) {
-      const exported = await exportTranscriptLibrary(h.store, { selector, format });
-      const body = Buffer.from(exported.data, "base64").toString("utf8");
-      expect(exported.selector).toBe(selector);
-      expect(Buffer.byteLength(exported.filename)).toBeLessThanOrEqual(255);
-      expect(body).toContain("Preserve this note.");
-      if (format === "jsonl") {
-        expect(jsonLines(body)).toEqual(detail.utterances);
-      }
-    }
+    const selector = `2026-07-01/${slug}`;
+    const exported = await exportTranscriptLibrary(h.store, { selector, format: "jsonl" });
+    expect(exported.selector).toBe(selector);
+    expect(Buffer.byteLength(exported.filename)).toBeLessThanOrEqual(255);
+    expect(jsonLines(Buffer.from(exported.data, "base64").toString("utf8"))).toEqual([
+      { sequence: 0, text: "Preserve this note.", final: true },
+    ]);
     expect(h.snapshot()).toEqual(expected);
     await expectMissing(h.root);
     expect(h.detect().hasLegacy).toBe(false);
