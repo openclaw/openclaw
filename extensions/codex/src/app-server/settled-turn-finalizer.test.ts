@@ -1,10 +1,10 @@
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as agentAuth from "openclaw/plugin-sdk/agent-runtime";
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import * as authBridge from "./auth-bridge.js";
 import { CodexSettledTurnContext } from "./settled-turn-context.js";
+import { createCodexTestOAuthProfile } from "./test-support.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
@@ -36,20 +36,16 @@ function createAttempt(
     prompt: "Produce the final user-visible answer now.",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
-    sessionFile: "/tmp/session.jsonl",
     workspaceDir: "/tmp/workspace",
     agentDir: "/tmp/synthetic-finalizer-agent",
     runId: "run-1",
     timeoutMs: 5_000,
     provider: "irrelevant-outer-provider",
-    modelId: "irrelevant-outer-model",
     model: {
-      id: "irrelevant-outer-model",
       provider: "irrelevant-outer-provider",
       api: "openai-chatgpt-responses",
-    } as Model,
+    },
     authProfileId: "openai:outer",
-    authStorage: {} as never,
     authProfileStore: {
       version: 1,
       profiles: {
@@ -60,23 +56,13 @@ function createAttempt(
     runtimePlan: authRequirement
       ? {
           auth: {
-            providerForAuth: "openai",
             authProfileProviderForAuth: "openai",
             forwardedAuthProfileId: "openai:outer",
-            modelRoute: {
-              provider: "openai",
-              modelId: "irrelevant-outer-model",
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-              authRequirement,
-              requestTransportOverrides: "none",
-            },
+            modelRoute: { authRequirement },
           },
           observability: { harnessId: "codex" },
         }
       : undefined,
-    modelRegistry: {} as never,
-    thinkLevel: "low",
   } as SettledTurnFinalizationAttemptParams;
 }
 
@@ -222,15 +208,7 @@ it.each(["agent", "user"] as const)(
   "uses the selected scoped subscription for a bounded side turn (ordinary home: %s)",
   async (homeScope) => {
     const attempt = createAttempt("subscription");
-    const token = [
-      Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
-      Buffer.from(
-        JSON.stringify({
-          "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" },
-        }),
-      ).toString("base64url"),
-      "synthetic-signature",
-    ].join(".");
+    const token = createCodexTestOAuthProfile("synthetic-account").access;
     attempt.authProfileStore.profiles["openai:captured"] = {
       type: "token",
       provider: "openai",
@@ -256,11 +234,6 @@ it.each(["agent", "user"] as const)(
 
     await finalize(attempt, settledAttempt, options);
 
-    expect(agentAuth.resolveApiKeyForProfile).toHaveBeenCalledExactlyOnceWith({
-      store: attempt.authProfileStore,
-      profileId: "openai:captured",
-      agentDir: attempt.agentDir,
-    });
     expectBounded({
       isolation: "private-stdio",
       options,

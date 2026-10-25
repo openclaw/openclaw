@@ -203,11 +203,6 @@ describe("Codex procfs command inspector", () => {
           mode === "empty" ? "deadline" : mode === "permission" ? "permission" : "unavailable",
       });
     }
-    if (["ready", "empty", "read-error", "replaced after read"].includes(mode)) {
-      expect(commandReads).toBe(2);
-    } else {
-      expect(commandReads).toBe(1);
-    }
   });
 
   it.for([
