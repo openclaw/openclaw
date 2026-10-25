@@ -34,13 +34,13 @@ async function render(
 }
 
 function renderOk(result: ReturnType<typeof renderAuthorized>): string {
-  assert(result.ok, result.ok ? undefined : result.reason);
+  assert(result.ok, "Expected an authorized shell command");
   return result.command;
 }
 
 async function prepareReviewedCommand(command: string, env: NodeJS.ProcessEnv, cwd?: string) {
   const plan = await planShell({ command, env, cwd });
-  assert(plan.ok, plan.ok ? undefined : plan.reason);
+  assert(plan.ok, "Expected a shell authorization plan");
   const prepared = await prepareBinding({
     command: {
       kind: "segments",
@@ -51,7 +51,7 @@ async function prepareReviewedCommand(command: string, env: NodeJS.ProcessEnv, c
     env,
     cwd,
   });
-  assert(prepared.ok, prepared.ok ? undefined : prepared.message);
+  assert(prepared.ok, "Expected a prepared shell binding");
   return { plan, binding: prepared.binding };
 }
 

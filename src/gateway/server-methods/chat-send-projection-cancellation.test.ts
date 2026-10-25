@@ -31,7 +31,7 @@ vi.mock("node:worker_threads", async () =>
 
 const observer = useReconcileWorkerObserver();
 
-it.each(["reply-observation", "commentary-media"] as const)(
+it.for(["reply-observation", "commentary-media"] as const)(
   "cancels %s projection waiting without cancelling the shared rebuild or losing the answer",
   (scenario, test) =>
     withReplyTranscript(

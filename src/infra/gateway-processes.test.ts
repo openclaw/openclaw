@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.types.js";
+import { getWindowsPowerShellExePath, getWindowsSystem32ExePath } from "./windows-install-roots.js";
 
 const spawn = vi.hoisted(() => vi.fn());
 const readFile = vi.hoisted(() => vi.fn());
@@ -128,6 +129,30 @@ describe("gateway-processes", () => {
     expect(find(18789)).toEqual([200]);
   });
 
+  it("falls back from powershell to trusted netstat for windows listener pids", () => {
+    mockProcessPlatform("win32");
+    spawn
+      .mockReturnValueOnce({ error: new Error("powershell missing"), status: null, stdout: "" })
+      .mockReturnValueOnce(
+        output(
+          [
+            "Proto  Local Address          Foreign Address        State           PID",
+            "TCP    127.0.0.1:18789       127.0.0.1:0            ABHOEREN       998",
+            "TCP    127.0.0.1:18789       127.0.0.1:54321        HERGESTELLT    999",
+            "TCP    0.0.0.0:18789         0.0.0.0:0              ABHOEREN       200",
+            "TCP    [::]:18789            [::]:0                 ABHOEREN       200",
+          ].join("\r\n"),
+        ),
+      )
+      .mockReturnValueOnce(output("openclaw-gateway"));
+
+    expect(find(18789)).toEqual([200]);
+    expect(spawn.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
+    expect(spawn.mock.calls[1]?.[0]).toBe(getWindowsSystem32ExePath("netstat.exe"));
+    expect(spawn.mock.calls[1]?.[1]).toEqual(["-ano"]);
+    expect(spawn.mock.calls[2]?.[0]).toBe(getWindowsPowerShellExePath());
+  });
+
   it("recognizes a relative Windows gateway only at its recorded listener PID and port", () => {
     mockRelativeWindowsGateway([500, 600, 500]);
     readOwner.mockReturnValue(gatewayOwner());
@@ -138,6 +163,9 @@ describe("gateway-processes", () => {
     signal(500, "SIGTERM", { env, port: 18789 });
     expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
     expect(readOwner).toHaveBeenCalledWith({ env, port: 18789, current: true });
+    expect(find(18890, { env })).toEqual([]);
+    mockRelativeWindowsGateway([600]);
+    expect(find(18789, { env })).toEqual([]);
   });
 
   it.each([

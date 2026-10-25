@@ -15,7 +15,9 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: vi.fn(),
 }));
 
-function createShellSupervisor(spawn = vi.fn<ProcessSupervisor["spawn"]>()) {
+function createShellSupervisor(
+  spawn: ProcessSupervisor["spawn"] = vi.fn<ProcessSupervisor["spawn"]>(),
+) {
   const cleanupScope = vi.fn(async (_scopeKey: string) => {});
   const cancelScope = vi.fn<ProcessSupervisor["cancelScope"]>();
   const supervisor = {

@@ -235,11 +235,14 @@ describe("LogbookStore", () => {
     expect(rows("SELECT id, batch_id FROM frames")).toEqual([{ id: 11, batch_id: 7 }]);
     expect(
       rows(
-        "SELECT name, strict FROM pragma_table_list WHERE name IN ('batches', 'frames') ORDER BY name",
+        "SELECT name, strict FROM pragma_table_list WHERE name IN ('batches', 'frames', 'cards', 'observations', 'standups') ORDER BY name",
       ),
     ).toEqual([
       { name: "batches", strict: 1 },
+      { name: "cards", strict: 1 },
       { name: "frames", strict: 1 },
+      { name: "observations", strict: 1 },
+      { name: "standups", strict: 1 },
     ]);
   });
 

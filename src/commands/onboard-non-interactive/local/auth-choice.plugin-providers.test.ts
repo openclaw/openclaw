@@ -88,7 +88,10 @@ function applyChoice(params: Pick<ChoiceParams, "authChoice"> & Partial<ChoicePa
 type MockCalls = { mock: { calls: Array<Array<unknown>> } };
 
 function mockArg(mock: MockCalls, callIndex = 0, argIndex = 0): Record<string, unknown> {
-  return expectDefined(mock.mock.calls[callIndex]?.[argIndex]) as Record<string, unknown>;
+  return expectDefined(
+    mock.mock.calls[callIndex]?.[argIndex],
+    `Expected mock argument ${callIndex}:${argIndex}`,
+  ) as Record<string, unknown>;
 }
 
 function expectRuntimeErrorIncludes(text: string) {

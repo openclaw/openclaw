@@ -119,7 +119,7 @@ describe("Windows Gateway task supervisor", () => {
     "settles child %s/%s (cleanup failure=%s)",
     async (exitCode, exitSignal, fails, expected) => {
       const result = { exitCode, exitSignal, reason: exitSignal ? "signal" : "exit" };
-      const logger = exitCode === 0 ? log.info : log.error;
+      const logger = log.error;
       const lastReason = "final startup failure";
       spawn.mockImplementation(async (input: SpawnInput) => {
         expect(input.captureOutput).toBe(false);

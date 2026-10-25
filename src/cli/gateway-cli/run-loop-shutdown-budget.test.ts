@@ -41,8 +41,19 @@ const resolveDrain = (
   });
 
 beforeEach(() => {
-  vi.resetAllMocks();
+  info.mockClear();
+  warn.mockClear();
   vi.stubGlobal("process", { ...process, platform: "linux", getuid: () => 1000, env: {} });
+  readFile.mockReset().mockResolvedValue("0::/system.slice/openclaw-gateway.service\n");
+  execUser.mockReset().mockResolvedValue({ code: 1, stdout: "", stderr: "No user bus" });
+  execSystem.mockReset().mockResolvedValue({
+    code: 0,
+    stdout:
+      "LoadState=loaded\nTimeoutStopUSec=1min 30s\nInvocationID=own\n" +
+      "User=openclaw\nType=simple\nNotifyAccess=none\nKillMode=control-group",
+    stderr: "",
+  });
+  execLaunchctl.mockReset();
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -77,13 +88,39 @@ describe("Gateway stop deadline independent of restart ownership", () => {
     expect(drain.drainTimeoutMs).toBe(Math.min(20_000, timeoutMs - 10_000));
     expect(drain.forceExitMs).toBe(timeoutMs);
   });
+  it("clamps an external system unit running as a service user", async () => {
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    process.env.INVOCATION_ID = "own";
+    const budget = await resolveBudget();
+    budget.log("startup");
+    expect(info).toHaveBeenCalledWith(
+      "shutdown budget at startup: drain=75000ms shutdown=85000ms reserve=10000ms exitMargin=5000ms; source=systemd system openclaw-gateway.service TimeoutStopUSec=90000ms",
+    );
+    expect(budget).toMatchObject({ timeoutMs: 85_000, nativeStopBudget: true });
+    expect(execSystem).toHaveBeenCalled();
+    expect(execUser).not.toHaveBeenCalled();
+  });
+
+  it("warns before using a conservative fallback when inspection fails", async () => {
+    process.env.INVOCATION_ID = "own";
+    execSystem.mockResolvedValue({ code: 1, stdout: "", stderr: "permission denied" });
+    const budget = await resolveBudget();
+    expect(budget.timeoutMs).toBe(85_000);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        "system manager openclaw-gateway.service: systemctl show exited 1: permission denied",
+      ),
+    );
+    expect(execUser).not.toHaveBeenCalled();
+  });
+
   it("keeps the normal budget outside a service", async () => {
-    readFile.mockResolvedValue("0::/user.slice/terminal.scope\n");
+    readFile.mockResolvedValue(
+      "0::/user.slice/user-1000.slice/user@1000.service/app.slice/terminal.scope\n",
+    );
     const budget = await resolveBudget(null);
     expect(budget).toMatchObject({ timeoutMs: 325_000, nativeStopBudget: false });
     expectCallCount(0, warn, execSystem, execUser);
-    budget.log("startup");
-    expect(info).toHaveBeenCalledWith(expect.stringContaining("Gateway stop policy"));
   });
 });
 
@@ -93,9 +130,9 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
     previous: { timeoutMs: 325_000, nativeStopBudget: false },
     acceptedAtMs: Number.MAX_SAFE_INTEGER,
   };
-  const printed = (seconds?: number, state = "SIGTERMed") => ({
+  const printed = (seconds?: number, state = "SIGTERMed", extra = "") => ({
     code: 0,
-    stdout: `system/ai.openclaw.gateway = {\n\tstate = ${state}\n${seconds === undefined ? "" : `\texit timeout = ${seconds}\n`}\tpid = 4242\n}\n`,
+    stdout: `system/ai.openclaw.gateway = {\n\tstate = ${state}\n\n${extra}${seconds === undefined ? "" : `\texit timeout = ${seconds}\n`}\tpid = 4242\n\tresource coalition = {\n\t\tstate = active\n\t}\n}\n`,
     stderr: "",
     termination: "exit",
   });
@@ -115,15 +152,15 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
   });
 
   it.each([
-    [5, 0, 3_750, 1_875],
-    [19, 0, 14_250, 9_250],
-    [20, 0, 15_000, 10_000],
-    [47, 0, 42_000, 10_000],
-    [20, 6_000, 9_000, 4_500],
+    [5, 0, 3_750, 1_875, 1_875, 1_250],
+    [19, 0, 14_250, 9_250, 5_000, 4_750],
+    [20, 0, 15_000, 10_000, 5_000, 5_000],
+    [47, 0, 42_000, 10_000, 32_000, 5_000],
+    [20, 6_000, 9_000, 4_500, 4_500, 5_000],
   ] as const)(
-    "allocates %is after %ims inspection",
-    async (seconds, elapsed, timeoutMs, reserveMs) => {
-      execLaunchctl.mockResolvedValue(printed(seconds));
+    "allocates a %i second deadline after %i ms of inspection",
+    async (seconds, elapsed, timeoutMs, reserveMs, drainMs, exitMarginMs) => {
+      execLaunchctl.mockResolvedValue(printed(seconds, "SIGTERMed", "\tminimum runtime = 10\n"));
       const nowMs = performance.now();
       vi.spyOn(performance, "now").mockReturnValue(nowMs);
       const budget = await resolveBudget("external", {
@@ -131,14 +168,25 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
         acceptedAtMs: nowMs - elapsed,
       });
       expect(budget).toMatchObject({ timeoutMs, reserveMs, nativeStopBudget: true });
+      expect(budget.timeoutMs - budget.reserveMs).toBe(drainMs);
+      if (!elapsed) {
+        budget.log("shutdown");
+        expect(info).toHaveBeenCalledWith(
+          `shutdown budget at shutdown: drain=${drainMs}ms shutdown=${timeoutMs}ms reserve=${reserveMs}ms exitMargin=${exitMarginMs}ms; source=launchd system/ai.openclaw.gateway exit timeout=${seconds * 1_000}ms`,
+        );
+      }
     },
   );
 
-  it.each([undefined, 0, 47])(
-    "caps restart drain only at a finite deadline (%s seconds)",
-    async (seconds) => {
+  it.each([
+    { supervisor: "external", seconds: undefined },
+    { supervisor: "external", seconds: 0 },
+    { supervisor: "external", seconds: 47 },
+  ])(
+    "caps restart drain only at a finite deadline ($supervisor/$seconds)",
+    async ({ supervisor, seconds }) => {
       execLaunchctl.mockResolvedValue(seconds === undefined ? unavailable : printed(seconds));
-      const budget = await resolveBudget("external", stoppingNow);
+      const budget = await resolveBudget(supervisor, stoppingNow);
       expect(budget.nativeStopBudget).toBe(seconds === 47);
       const drain = resolveDrain({ budget, requestedRestartDrainTimeoutMs: 600_000 });
       if (seconds === 47) {
@@ -156,27 +204,51 @@ describe("Gateway stop deadline follows the launchd stop that is actually runnin
     },
   );
 
+  const inspectWarning = expect.stringContaining("Unable to inspect the launchd job");
+  const retainWarning =
+    "Retaining the startup shutdown budget of 15000ms because the current supervisor stop timeout could not be confirmed.";
+  const missingWarning = expect.stringContaining("its exit timeout is missing or invalid");
   it.each([
     ["confirmed running", printed(20, "running"), 325_000, []],
-    ["failed inspection", unavailable, 15_000, ["Unable to inspect", "Retaining"]],
-    ["defaulted deadline", printed(), 15_000, ["missing or invalid"]],
-  ] as const)("retains the startup budget after %s", async (_name, result, timeoutMs, warnings) => {
-    delete process.env.OPENCLAW_SUPERVISOR_MODE;
-    execLaunchctl.mockResolvedValue(result);
-    const budget = await resolveBudget("launchd", {
-      previous: { timeoutMs: 15_000, nativeStopBudget: true },
-      acceptedAtMs: Number.MAX_SAFE_INTEGER,
-    });
-    expect(budget).toMatchObject({ timeoutMs, nativeStopBudget: true });
-    expect(warn.mock.calls.map(([message]) => message)).toEqual(
-      warnings.map((text) => expect.stringContaining(text)),
-    );
-  });
+    ["failed inspection", unavailable, 15_000, [inspectWarning, retainWarning]],
+    ["defaulted deadline", printed(), 15_000, [missingWarning]],
+  ] as const)(
+    "retains the launchd startup budget only after %s",
+    async (_name, result, timeoutMs, warnings) => {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+      execLaunchctl.mockResolvedValue(result);
+      const budget = await resolveBudget("launchd", {
+        previous: { timeoutMs: 15_000, nativeStopBudget: true },
+        acceptedAtMs: Number.MAX_SAFE_INTEGER,
+      });
+      expect(budget).toMatchObject({ timeoutMs, nativeStopBudget: true });
+      expect(warn.mock.calls).toEqual(warnings.map((message) => [message]));
+    },
+  );
 
-  it("keeps the full policy budget for a running external job", async () => {
-    execLaunchctl.mockResolvedValue(printed(5, "running"));
-    const budget = await resolveBudget("external", stoppingNow);
-    expect(budget).toMatchObject({ timeoutMs: 325_000, nativeStopBudget: false });
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each(["startup", "unmanaged stop", "running job"])(
+    "keeps the full budget for %s",
+    async (phase) => {
+      if (phase === "unmanaged stop") {
+        process.env = {};
+      }
+      if (phase === "running job") {
+        execLaunchctl.mockResolvedValue(printed(5, "running"));
+      }
+      const budget = await resolveBudget(
+        phase === "unmanaged stop" ? null : "external",
+        phase === "startup" ? undefined : stoppingNow,
+      );
+      if (phase !== "running job") {
+        expectCallCount(0, execLaunchctl);
+      }
+      expectCallCount(0, warn);
+      expect(budget).toMatchObject({ timeoutMs: 325_000, nativeStopBudget: false });
+      const logPhase = phase === "running job" ? "shutdown" : "startup";
+      budget.log(logPhase);
+      expect(info).toHaveBeenCalledWith(
+        `shutdown budget at ${logPhase}: drain=315000ms shutdown=325000ms reserve=10000ms exitMargin=5000ms; source=Gateway stop policy=330000ms`,
+      );
+    },
+  );
 });

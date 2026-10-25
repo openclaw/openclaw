@@ -184,6 +184,8 @@ it("shows selected capabilities without a catalog", () => {
   };
   inspection.overview = {
     capabilities: {
+      providers: [],
+      channels: [],
       contracts: { speechProviders: ["local-speech", "local-speech-alias"] },
       ui: ["page"],
     },
