@@ -77,6 +77,8 @@ function createPluginChat(
     },
   } as unknown as ApplicationContext;
   const provider = document.body.appendChild(createApplicationContextProvider(context));
+  const query = <T extends Element = HTMLElement>(selector: string) =>
+    provider.querySelector<T>(selector);
   let current: ChatProps;
   let update: ((next: ChatProps) => void) | undefined;
   function render(overrides: Partial<ChatProps>) {
@@ -118,6 +120,8 @@ function createPluginChat(
     provider,
     render,
     reportError,
+    query,
+    text: (selector: string) => query(selector)?.textContent,
     count: (selector: string) => provider.querySelectorAll(selector).length,
     selectReplacement: () => {
       selected = true;
@@ -128,6 +132,12 @@ function createPluginChat(
   };
 }
 
+function composerReplacement(
+  mount: ControlUiReplacement<"composer">["mount"],
+): ControlUiReplacement<"composer"> {
+  return { id: "custom-draft", label: "Custom draft", surface: "composer", mount };
+}
+
 it.each([
   { mode: "nondelegating", action: "submit" },
   { mode: "delegated", action: "skip" },
@@ -135,12 +145,9 @@ it.each([
 ] as const)(
   "keeps one usable async question when switching to a $mode plugin composer",
   async ({ mode, action }) => {
-    const { provider, render, reportError, selectReplacement, count } = createPluginChat(
-      {
-        id: "custom-draft",
-        label: "Custom draft",
-        surface: "composer",
-        mount(container, view) {
+    const { provider, render, reportError, selectReplacement, count, query, text } =
+      createPluginChat(
+        composerReplacement((container, view) => {
           if (mode === "failing") {
             throw new Error("Synthetic composer mount failure");
           }
@@ -152,10 +159,9 @@ it.each([
           input.value = "Keep the plugin draft.";
           container.append(input);
           return undefined;
-        },
-      },
-      false,
-    );
+        }),
+        false,
+      );
     const submit = vi.fn(async () => true);
     render({
       paneId: "plugin-question",
@@ -181,15 +187,13 @@ it.each([
       );
     });
     expect(reportError).toHaveBeenCalledTimes(mode === "failing" ? 1 : 0);
-    const answer = provider.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
+    const answer = query<HTMLInputElement>(".chat-question-panel__other")!;
     answer.value = "New contributors";
     answer.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
-    provider
-      .querySelector<HTMLButtonElement>(
-        `.chat-question-panel__${action === "submit" ? "advance" : "skip"}`,
-      )!
-      .click();
+    query<HTMLButtonElement>(
+      `.chat-question-panel__${action === "submit" ? "advance" : "skip"}`,
+    )!.click();
     await vi.waitFor(() => {
       if (action === "submit") {
         expect(submit).toHaveBeenCalledExactlyOnceWith(
@@ -200,29 +204,26 @@ it.each([
       } else {
         expect(submit).not.toHaveBeenCalled();
       }
-      expect(provider.querySelector("openclaw-chat-question-panel")).toBeNull();
-      expect(provider.querySelector(".chat-question-summary")?.textContent).toContain(
+      expect(query("openclaw-chat-question-panel")).toBeNull();
+      expect(text(".chat-question-summary")).toContain(
         action === "submit" ? "New contributors" : "Dismissed",
       );
     });
     if (mode === "nondelegating") {
-      expect(
-        provider.querySelector<HTMLTextAreaElement>('textarea[aria-label="Custom draft"]')?.value,
-      ).toBe("Keep the plugin draft.");
+      expect(query<HTMLTextAreaElement>('textarea[aria-label="Custom draft"]')?.value).toBe(
+        "Keep the plugin draft.",
+      );
     }
   },
 );
 
 it("keeps one actionable local queue row with a nondelegating plugin composer", async () => {
-  const { provider, render } = createPluginChat({
-    id: "custom-queue",
-    label: "Custom queue",
-    surface: "composer",
-    mount(container) {
+  const { provider, render, query } = createPluginChat(
+    composerReplacement((container) => {
       container.textContent = "Custom draft";
       return undefined;
-    },
-  });
+    }),
+  );
   const onQueueRemove = vi.fn();
   render({
     paneId: "plugin-queue-nondelegating",
@@ -240,7 +241,7 @@ it("keeps one actionable local queue row with a nondelegating plugin composer", 
   });
   flush();
   await waitForSolid(() => expect(provider.querySelectorAll(".chat-queue__item")).toHaveLength(1));
-  const row = provider.querySelector<HTMLElement>(".chat-queue__item");
+  const row = query(".chat-queue__item");
   expect(row?.getAttribute("data-chat-queue-item")).toBe("local-row");
   row?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
   expect(onQueueRemove).toHaveBeenCalledExactlyOnceWith("local-row");
@@ -249,14 +250,9 @@ it("keeps one actionable local queue row with a nondelegating plugin composer", 
 it.each(["native", "delegated"] as const)(
   "keeps mobile conversation presentation live through the %s composer",
   async (mode) => {
-    const { provider, render } = createPluginChat(
+    const { render, query, text } = createPluginChat(
       mode === "delegated"
-        ? {
-            id: "mobile-presentation",
-            label: "Mobile presentation",
-            surface: "composer",
-            mount: (container, view) => ({ dispose: view.mountDefault(container) }),
-          }
+        ? composerReplacement((container, view) => ({ dispose: view.mountDefault(container) }))
         : undefined,
     );
     const onRefresh = vi.fn();
@@ -270,25 +266,23 @@ it.each(["native", "delegated"] as const)(
     });
     render(initial);
     await waitForSolid(() => {
-      expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
-      expect(provider.querySelector(".chat-error--mobile")?.textContent).toContain(
-        "Couldn’t finish this reply",
-      );
+      expect(query(".chat-conversation-loading")).not.toBeNull();
+      expect(text(".chat-error--mobile")).toContain("Couldn’t finish this reply");
     });
-    const textarea = provider.querySelector<HTMLTextAreaElement>("textarea")!;
+    const textarea = query<HTMLTextAreaElement>("textarea")!;
     textarea.setSelectionRange(2, 5);
-    provider.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
+    query<HTMLButtonElement>(".chat-error__refresh")!.click();
     expect(onRefresh).toHaveBeenCalledOnce();
 
     render({ ...initial, mobileComposer: false });
     await waitForSolid(() => {
-      expect(provider.querySelector(".chat-conversation-loading")).toBeNull();
-      expect(provider.querySelector(".chat-error--mobile")).toBeNull();
-      expect(provider.querySelector(".chat-error")?.textContent).toContain(
+      expect(query(".chat-conversation-loading")).toBeNull();
+      expect(query(".chat-error--mobile")).toBeNull();
+      expect(text(".chat-error")).toContain(
         "Couldn't finish this reply. Check the conversation before trying again.",
       );
     });
-    expect(provider.querySelector("textarea")).toBe(textarea);
+    expect(query("textarea")).toBe(textarea);
     expect(textarea.value).toBe("Retain this draft");
     expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([2, 5]);
   },

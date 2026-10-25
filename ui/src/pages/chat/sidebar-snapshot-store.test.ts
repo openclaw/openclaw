@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { projectSidebarSession } from "../../components/app-sidebar-session-navigation.test-support.ts";
 import { parseSidebarSnapshot, snapshotSessions } from "../../components/sidebar-snapshot-model.ts";
@@ -59,6 +59,17 @@ async function seededStore() {
   return store;
 }
 
+async function putSidebar(value: unknown, savedAt: number, projectionVersion = 1) {
+  const database = await openSessionSnapshotDatabase();
+  assert(database, "expected snapshot database");
+  const transaction = database.transaction(SIDEBAR, "readwrite");
+  transaction
+    .objectStore(SIDEBAR)
+    .put({ sessionKey: key(scope), savedAt, projectionVersion, model: value });
+  await transactionComplete(transaction);
+  database.close();
+}
+
 beforeEach(() => {
   vi.stubGlobal("indexedDB", new IDBFactory());
   vi.stubGlobal("localStorage", createStorageMock());
@@ -95,9 +106,7 @@ it("retires pre-rail-identity sidebars and unbounded transcripts", async () => {
 
   expect(await read(createStore())).toBeNull();
   const upgraded = await openSessionSnapshotDatabase();
-  if (!upgraded) {
-    throw new Error("expected snapshot database");
-  }
+  assert(upgraded, "expected snapshot database");
   const readTransaction = upgraded.transaction(CHAT, "readonly");
   expect(await requestResult(readTransaction.objectStore(CHAT).get(sessionKey))).toBeUndefined();
   await transactionComplete(readTransaction);
@@ -157,19 +166,7 @@ it("retires a legacy hierarchy without evicting valid sidebars or transcripts", 
   );
   const legacy = { ...sidebarSnapshot, sessions: [{ ...parent!, children: [child!] }] };
   expect(parseSidebarSnapshot(legacy)).toBeNull();
-  const database = await openSessionSnapshotDatabase();
-  if (!database) {
-    throw new Error("expected snapshot database");
-  }
-  const transaction = database.transaction(SIDEBAR, "readwrite");
-  transaction.objectStore(SIDEBAR).put({
-    sessionKey: key(scope),
-    savedAt: 2000,
-    projectionVersion: 1,
-    model: legacy,
-  });
-  await transactionComplete(transaction);
-  database.close();
+  await putSidebar(legacy, 2000);
 
   expect(await store.readSidebar(key(scope), parseSidebarSnapshot)).toBeNull();
   for (const current of profiles) {
@@ -253,15 +250,7 @@ it.each(["profile", "account", "session", "cache-eviction", "all"] as const)(
 it("resets a mismatched stored projection and rejects unadmitted display data", async () => {
   const store = createStore();
   await write(store);
-  const database = await openSessionSnapshotDatabase();
-  if (!database) {
-    throw new Error("expected snapshot database");
-  }
-  const transaction = database.transaction(SIDEBAR, "readwrite");
-  const objectStore = transaction.objectStore(SIDEBAR);
-  objectStore.put({ sessionKey: key(scope), projectionVersion: 99, savedAt: 1, model });
-  await transactionComplete(transaction);
-  database.close();
+  await putSidebar(model, 1, 99);
   expect(await read(store)).toBeNull();
   const unadmitted = { ...model, token: "synthetic-disallowed-field" };
   await write(store, unadmitted);

@@ -74,6 +74,11 @@ function setup() {
   vi.advanceTimersToNextFrame();
   const published = vi.fn();
   disposals.push(chatRunPresentation(state).subscribe(published));
+  const commit = () => {
+    controller.captureRenderChanges();
+    controller.commitRender();
+    vi.advanceTimersToNextFrame();
+  };
   return {
     state,
     runtime,
@@ -81,25 +86,27 @@ function setup() {
     dispose,
     published,
     scrollport,
+    commit,
+    stream: (text: string | null) => {
+      chatRunPresentation(state).batch(() => {
+        state.chatStream = text;
+      }, "animation-frame");
+    },
     commitGrowth: () => {
       height += 889;
       controller.publishPendingRunState();
-      controller.captureRenderChanges();
-      controller.commitRender();
-      vi.advanceTimersToNextFrame();
+      commit();
     },
   };
 }
 
 describe("transcript arrival scroll ownership", () => {
   it("publishes stream arrival and removal to the pane without publishing continuing text", () => {
-    const { state } = setup();
+    const { state, stream } = setup();
     const paneUpdate = vi.fn();
     disposals.push(chatRunPresentation(state).subscribeNonText(paneUpdate));
     const publish = (text: string | null) => {
-      chatRunPresentation(state).batch(() => {
-        state.chatStream = text;
-      }, "animation-frame");
+      stream(text);
       vi.advanceTimersToNextFrame();
     };
 
@@ -182,11 +189,9 @@ describe("transcript arrival scroll ownership", () => {
   });
 
   it("only schedules same-height streaming arrivals for a locked reader without a pane commit", async () => {
-    const { state, scrollport } = setup();
+    const { state, scrollport, stream } = setup();
     const follow = vi.spyOn(state, "chatScrollToEnd");
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "Text in the existing tail row";
-    }, "animation-frame");
+    stream("Text in the existing tail row");
     vi.advanceTimersToNextFrame();
     await Promise.resolve();
     vi.advanceTimersToNextFrame();
@@ -196,9 +201,7 @@ describe("transcript arrival scroll ownership", () => {
     scrollport.scrollTop = 800;
     handleChatScrollTakeover(state);
     state.chatNewMessagesBelow = false;
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "More text in the existing tail row";
-    }, "animation-frame");
+    stream("More text in the existing tail row");
     vi.advanceTimersToNextFrame();
     await Promise.resolve();
     vi.advanceTimersToNextFrame();
@@ -208,20 +211,16 @@ describe("transcript arrival scroll ownership", () => {
   });
 
   it("coalesces streamed replies without delaying the draft or new transcript rows", () => {
-    const { state, controller, published } = setup();
+    const { state, controller, published, stream } = setup();
     for (let index = 0; index < 36; index++) {
-      chatRunPresentation(state).batch(() => {
-        state.chatStream = `Reply ${index}`;
-      }, "animation-frame");
+      stream(`Reply ${index}`);
     }
     expect(published).not.toHaveBeenCalled();
     vi.advanceTimersToNextFrame();
     expect(published).toHaveBeenCalledOnce();
     expect(state.chatStream).toBe("Reply 35");
 
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "A queued reply";
-    }, "animation-frame");
+    stream("A queued reply");
     state.handleChatDraftChange("Keep this draft");
     expect(controller.composerDraft.read().draft).toBe("Keep this draft");
     expect(published).toHaveBeenCalledOnce();
@@ -236,10 +235,8 @@ describe("transcript arrival scroll ownership", () => {
   });
 
   it("absorbs a pending stream publication into a commit and cancels on teardown", async () => {
-    const { controller, dispose, published, state } = setup();
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "Waiting for a frame";
-    }, "animation-frame");
+    const { controller, dispose, published, state, stream } = setup();
+    stream("Waiting for a frame");
     controller.publishPendingRunState();
     controller.captureRenderChanges();
     vi.advanceTimersToNextFrame();
@@ -249,9 +246,7 @@ describe("transcript arrival scroll ownership", () => {
     state.renderLifecycle.afterCommit(effect);
     await Promise.resolve();
     expect(effect).toHaveBeenCalledOnce();
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "Retired before publication";
-    }, "animation-frame");
+    stream("Retired before publication");
     dispose();
     const publicationsAtDisposal = published.mock.calls.length;
     vi.advanceTimersToNextFrame();
@@ -272,14 +267,9 @@ describe("transcript arrival scroll ownership", () => {
   });
 
   it("leaves continuing text to measured row growth without reading the viewport", () => {
-    const { controller, state, scrollport } = setup();
+    const { state, scrollport, commit } = setup();
     const follow = vi.spyOn(state, "chatScrollToEnd");
     const readHeight = vi.spyOn(scrollport, "scrollHeight", "get");
-    const commit = () => {
-      controller.captureRenderChanges();
-      controller.commitRender();
-      vi.advanceTimersToNextFrame();
-    };
     state.chatStream = "First text";
     commit();
     expect(follow).toHaveBeenCalledOnce();
