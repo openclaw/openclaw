@@ -34,6 +34,49 @@ async function roundedWidth(locator: Locator): Promise<number> {
 }
 
 suite.define(() => {
+  it("restores and persists the default sidebar width with double-click or Enter", async () => {
+    await suite.withPage(
+      { locale: "en-US", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const sidebar = page.locator(".shell-nav");
+        const resizer = page.getByRole("separator", { name: "Resize sidebar", exact: true });
+        const defaultWidth = 310; // Expanded sidebar plus the persistent navigation rail.
+        await expect.poll(() => roundedWidth(sidebar)).toBe(defaultWidth);
+
+        const bounds = await resizer.boundingBox();
+        if (!bounds) {
+          throw new Error("expected visible desktop sidebar resizer");
+        }
+        const x = bounds.x + bounds.width / 2;
+        const y = bounds.y + bounds.height / 2;
+        await page.mouse.move(x, y);
+        await page.mouse.down();
+        await page.mouse.move(x + 100, y, { steps: 5 });
+        await page.mouse.up();
+        await expect.poll(() => roundedWidth(sidebar)).toBe(defaultWidth + 100);
+
+        await page.setViewportSize({ width: 1300, height: 900 });
+        await resizer.dblclick();
+        await expect.poll(() => roundedWidth(sidebar)).toBe(defaultWidth);
+        await expect.poll(() => resizer.getAttribute("aria-valuetext")).toBe("310 pixels");
+        await expect.poll(() => page.locator(".shell--nav-resizing").count()).toBe(0);
+        await page.reload();
+        await expect.poll(() => roundedWidth(sidebar)).toBe(defaultWidth);
+        await waitForControlUiRoute(page, { pathnamePrefix: "/chat", routeId: "chat" });
+
+        await resizer.focus();
+        await page.keyboard.press("Home");
+        await expect.poll(() => roundedWidth(sidebar)).toBe(292);
+        await page.keyboard.press("Enter");
+        await expect.poll(() => roundedWidth(sidebar)).toBe(defaultWidth);
+        await page.reload();
+        await expect.poll(() => roundedWidth(sidebar)).toBe(defaultWidth);
+      },
+    );
+  });
+
   it.each(
     [1440, 390].flatMap((width) => [
       { width, entry: "route:systems", label: "Systems", route: "chat" },

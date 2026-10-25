@@ -22,6 +22,11 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+On desktop, drag the sidebar divider to change its width. Double-click the divider,
+or focus it and press **Enter**, to restore the default width. The chosen width
+is saved across reloads. Arrow keys adjust the width; **Home** and **End** select
+the minimum and maximum widths.
+
 Optional surfaces follow the permissions granted to the current connection.
 Session-only roles do not load the plugin UI catalog, Side Chat history, observer
 visibility, or remote session-link titles. Side Chat is hidden, and session links
