@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { GatewayCronExitWatcherHandoff, GatewayCronState } from "./server-cron-contract.js";
+import type { GatewayCronExitWatcherHandoff } from "./server-cron-contract.js";
 import type {
   GatewayHotReloadPublication,
   GatewayReloadHandlerParams,
@@ -40,22 +40,13 @@ afterEach(async () => {
   vi.doMock("./server-cron.js", () => ({ buildGatewayCronService }));
 });
 
-function createCronState() {
-  const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
-  const state = createTestCronState({
-    cron: cron as unknown as GatewayCronState["cron"],
-    cronEnabled: true,
-  });
-  return { state, cron };
-}
-
 async function createFixture() {
   const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
   setRuntimeConfigSnapshot({});
   const { createGatewayReloadHandlers } = await import("./server-reload-hot.js");
   const { buildGatewayReloadPlan } = await import("./config-reload-plan.js");
-  const { state: previous, cron: previousCron } = createCronState();
-  const { state: next, cron: nextCron } = createCronState();
+  const previous = createTestCronState({ cronEnabled: true });
+  const next = createTestCronState({ cronEnabled: true });
   buildGatewayCronService.mockReturnValue(next);
   let state = createDefaultGatewayReloadState({
     hooksConfig: null,
@@ -97,9 +88,9 @@ async function createFixture() {
     [Symbol.dispose]: () => handlers.stopRestartRetries(),
     handlers,
     previous,
-    previousCron,
     next,
-    nextCron,
+    previousCron: previous.cron,
+    nextCron: next.cron,
     nextConfig,
     plan,
     setState,
@@ -107,7 +98,7 @@ async function createFixture() {
     reloadPlugins: vi.mocked(params.reloadPlugins),
     replace: () => createGatewayReloadHandlers(params),
     expectUnpublished: () => {
-      for (const mock of [setState, previousCron.stop, nextCron.start, requestRecoveryRestart]) {
+      for (const mock of [setState, previous.cron.stop, next.cron.start, requestRecoveryRestart]) {
         expect(mock).not.toHaveBeenCalled();
       }
     },

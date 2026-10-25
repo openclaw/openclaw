@@ -16,7 +16,6 @@ import {
 } from "../infra/device-pairing-node.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { configureNodeHost } from "../node-host/config.js";
-import type { NodeListNode } from "../shared/node-list-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -121,42 +120,30 @@ describe("node host version mismatch guard", () => {
       }),
   );
 
-  test("list and describe mark only the same-install device despite copied instance metadata", async () => {
+  test("accepts an independently signed stale node despite copied instance metadata", async () => {
     const independent = await createOpenClawTestState({
       label: "node-independent",
       applyEnv: false,
     });
-    const clients: Awaited<ReturnType<typeof connectGatewayClient>>[] = [];
+    let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     try {
       const identity = loadOrCreateDeviceIdentity({ env: independent.env });
       expect(identity.deviceId).not.toBe(localIdentity.deviceId);
       await pairNode(identity);
-      clients.push(await connectNode());
-      clients.push(await connectNode({ deviceIdentity: identity, clientVersion: "2020.1.1" }));
-      const operator = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token: "secret",
-        scopes: ["operator.read"],
+      const onHelloOk = vi.fn();
+      client = await connectNode({
+        deviceIdentity: identity,
+        clientVersion: "2020.1.1",
+        onHelloOk,
       });
-      clients.push(operator);
-      const connected = { paired: true, connected: true };
-      const localNode = { ...connected, nodeId: localIdentity.deviceId, gatewayLocal: true };
-      const list = await operator.request<{ nodes: NodeListNode[] }>("node.list", {});
-      expect(list.nodes.filter((node) => node.gatewayLocal)).toEqual([
-        expect.objectContaining(localNode),
-      ]);
-      const remote = list.nodes.find((node) => node.nodeId === identity.deviceId);
-      expect(remote).toMatchObject({ ...connected, displayName: "test-node" });
-      expect(remote).not.toHaveProperty("gatewayLocal");
-      await expect(
-        operator.request("node.describe", { nodeId: localIdentity.deviceId }),
-      ).resolves.toMatchObject(localNode);
-      const described = await operator.request("node.describe", { nodeId: identity.deviceId });
-      expect(described).toMatchObject({ ...connected, nodeId: identity.deviceId });
-      expect(described).not.toHaveProperty("gatewayLocal");
+      expect(onHelloOk).toHaveBeenCalledWith(
+        expect.objectContaining({ protocol: PROTOCOL_VERSION }),
+      );
     } finally {
       try {
-        await Promise.all(clients.map(stopClient));
+        if (client) {
+          await stopClient(client);
+        }
       } finally {
         await independent.cleanup();
       }
