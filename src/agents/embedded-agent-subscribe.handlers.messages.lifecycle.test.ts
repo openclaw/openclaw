@@ -7,7 +7,6 @@ import {
   createMessageUpdateContext,
   createMessageToolEnvelope,
   endMessage,
-  firstMockArg,
   updateMessage,
 } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
 import {
@@ -35,16 +34,36 @@ const endText = (
   text: string,
   extra: Record<string, unknown> = {},
 ) => endMessage(ctx, { message: { ...textMessage(text), ...extra } });
+const updatePartial = (
+  ctx: Parameters<typeof updateMessage>[0],
+  partial: unknown,
+  event: Record<string, unknown>,
+) =>
+  updateMessage(ctx, {
+    message: partial,
+    assistantMessageEvent: { contentIndex: 0, ...event, partial },
+  });
+const streamText = (ctx: Parameters<typeof updateMessage>[0], text: string) =>
+  updatePartial(ctx, textMessage(text), { type: "text_delta", delta: text });
+async function commentaryEvents(
+  ctx: Parameters<typeof updateMessage>[0],
+  updates: readonly { type: string; partial: unknown; content?: string; delta?: string }[],
+  delayMs = 0,
+) {
+  for (const { partial, ...event } of updates) {
+    await updatePartial(ctx, partial, event);
+    if (delayMs) {
+      vi.setSystemTime(Date.now() + delayMs);
+    }
+  }
+}
 
 describe("handleMessageEnd", () => {
   it("preserves malformed final text across streamed and final delivery", async () => {
     const ctx = createMessageEndContext({ onAgentEvent, onBlockReply });
     const text = "answer ending [";
     const message = textMessage(text);
-    await updateMessage(ctx, {
-      message,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text, partial: message },
-    });
+    await streamText(ctx, text);
     await ctx.flushBlockReplyBuffer();
     expect(onBlockReply).toHaveBeenCalledOnce();
     const streamed = onBlockReply.mock.calls[0]?.[0].text;
@@ -62,10 +81,8 @@ describe("handleMessageEnd", () => {
   });
 
   it("keeps NO_REPLY silent after an internal sessions_send (#119383)", async () => {
-    const finalizeAssistantTexts = vi.fn();
     const ctx = createMessageEndContext({
       onBlockReply,
-      finalizeAssistantTexts,
       state: {
         messagingToolSentTexts: ["<internal escalation note>"],
         messagingToolSentTextsNormalized: ["<internal escalation note>"],
@@ -73,7 +90,7 @@ describe("handleMessageEnd", () => {
       },
     });
     await endText(ctx, "NO_REPLY");
-    expect(finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
+    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
     expect(JSON.stringify(onBlockReply.mock.calls)).not.toContain("<internal escalation note>");
   });
 
@@ -144,14 +161,9 @@ describe("handleMessageEnd", () => {
     const ctx = createMessageEndContext({ onBlockReply, state: { blockReplyBreak: "text_end" } });
     const message = textMessage("Hello world.");
     for (const type of ["text_delta", "text_end"] as const) {
-      await updateMessage(ctx, {
-        message,
-        assistantMessageEvent: {
-          type,
-          contentIndex: 0,
-          partial: message,
-          ...(type === "text_delta" ? { delta: "Hello world." } : { content: "Hello world." }),
-        },
+      await updatePartial(ctx, message, {
+        type,
+        ...(type === "text_delta" ? { delta: "Hello world." } : { content: "Hello world." }),
       });
     }
     expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual(["Hello world."]);
@@ -167,14 +179,11 @@ describe("handleMessageEnd", () => {
     });
     const text = "Caption [[oops\nMEDIA:/tmp/final.png";
     const message = { ...textMessage(text), usage: { input: 10, output: 5, total: 15 } };
-    await updateMessage(ctx, {
-      message,
-      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: text, partial: message },
-    });
+    await updatePartial(ctx, message, { type: "text_delta", delta: text });
     await ctx.flushBlockReplyBuffer();
-    expect(onBlockReply).toHaveBeenCalledOnce();
-    expect(onBlockReply.mock.calls[0]?.[0].text).toBe("Caption ");
-    expect(onBlockReply.mock.calls.flatMap(([reply]) => reply.mediaUrls ?? [])).toEqual([]);
+    expect(onBlockReply.mock.calls.map(([reply]) => [reply.text, reply.mediaUrls ?? []])).toEqual([
+      ["Caption ", []],
+    ]);
     onBlockReply.mockClear();
     await endMessage(ctx, { message });
     expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
@@ -189,14 +198,10 @@ describe("handleMessageEnd", () => {
     await endMessage(ctx, {
       message: {
         role: "assistant",
-        content: [
-          { type: "text", text, textSignature: JSON.stringify({ v: 1, id: "item_unphased" }) },
-        ],
-        usage: { input: 10, output: 5, total: 15 },
+        content: [createOpenAiResponsesTextBlock({ text, id: "item_unphased" })],
       },
     });
-    expect(onBlockReply).toHaveBeenCalledOnce();
-    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({ text });
+    expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual([text]);
     expect(events()[0]).toMatchObject(assistantEvent({ text, delta: text }));
     expect(ctx.state.assistantTexts).toEqual([text]);
   });
@@ -222,14 +227,7 @@ describe("handleMessageEnd", () => {
     });
     ctx.emitAssistantStreamData({ text: previousText, delta: previousText });
     onAgentEvent.mockClear();
-    await endMessage(ctx, {
-      message: createOpenAiResponsesPartial({
-        text: "",
-        id: "item-final",
-        signaturePhase: "final_answer",
-        partialPhase: "final_answer",
-      }),
-    });
+    await endMessage(ctx, { message: finalPartial("") });
     expect(events()).toMatchObject([assistantEvent({ text: "", delta: "", replace: true })]);
     expect(ctx.emitBlockReply).not.toHaveBeenCalled();
     expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
@@ -281,6 +279,13 @@ const commentaryPartial = (text: string, id = "item-commentary") =>
     signaturePhase: "commentary",
     partialPhase: "commentary",
   });
+const finalPartial = (text: string) =>
+  createOpenAiResponsesPartial({
+    text,
+    id: "item-final",
+    signaturePhase: "final_answer",
+    partialPhase: "final_answer",
+  });
 const preamble = (progressText: string, phase: string, itemId = "item-commentary") => ({
   stream: "item",
   data: { kind: "preamble", title: "Preamble", progressText, phase, itemId },
@@ -306,34 +311,26 @@ describe("handleMessageUpdate text signatures", () => {
 
   it("uses incremental unphased Responses deltas with Unicode space and held paragraph breaks", async () => {
     const chunks = ["\u2003Hello ", "world", "\n\n", "Next"];
-    const replies = [
-      ["Hello", "Hello"],
-      ["Hello world", " world"],
-      ["Hello world\n\nNext", "\n\nNext"],
-    ];
-    const stripBlockTags = vi.fn((text: string) => text);
-    const context = createMessageUpdateContext({ onAgentEvent, stripBlockTags });
+    const context = createMessageUpdateContext({ onAgentEvent });
 
     let text = "";
     for (const delta of chunks) {
       text += delta;
-      await updateMessage(context, {
-        message: { role: "assistant", content: [] },
-        assistantMessageEvent: {
-          type: "text_delta",
-          contentIndex: 0,
-          delta,
-          partial: {
-            ...createOpenAiResponsesPartial({ text, id: "unused" }),
-            content: [{ type: "text", text }],
-          },
+      await updateText(context, "text_delta", text, {
+        delta,
+        partial: {
+          ...createOpenAiResponsesPartial({ text, id: "unused" }),
+          content: [{ type: "text", text }],
         },
       });
     }
 
-    expect(stripBlockTags.mock.calls.map(([value]) => value)).toEqual(chunks);
     expect(events()).toMatchObject(
-      replies.map(([value, delta]) => assistantEvent({ text: value, delta })),
+      [
+        ["Hello", "Hello"],
+        ["Hello world", " world"],
+        ["Hello world\n\nNext", "\n\nNext"],
+      ].map(([value, delta]) => assistantEvent({ text: value, delta })),
     );
   });
 
@@ -342,7 +339,7 @@ describe("handleMessageUpdate text signatures", () => {
 
     await updateText(context, "text_delta", "Here it is.\nMEDIA:/tmp/final.png\n");
 
-    expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject(
+    expect(events()[0]).toMatchObject(
       assistantEvent({ text: "Here it is.", delta: "Here it is." }),
     );
   });
@@ -395,21 +392,19 @@ describe("handleMessageUpdate text signatures", () => {
       // Real projection distinguishes completion metadata from a second text message.
       context.emitAssistantStreamData = createReplyDelivery(context).emitAssistantStreamData;
       const startPartial = commentaryPartial("Work");
-      const finalPartial = commentaryPartial("Working...");
+      const completedPartial = commentaryPartial("Working...");
 
-      for (const event of [
-        { type: "text_start", partial: startPartial },
-        { type: "text_delta", delta: "Work", partial: startPartial },
-        { type: "text_delta", delta: "ing...", partial: finalPartial },
-        { type: "text_end", content: "Working...", partial: finalPartial },
-      ] as const) {
-        await updateMessage(context, {
-          message: event.partial,
-          assistantMessageEvent: { ...event, contentIndex: 0 },
-        });
-        vi.setSystemTime(Date.now() + delayMs);
-      }
-      await endMessage(context, { message: finalPartial });
+      await commentaryEvents(
+        context,
+        [
+          { type: "text_start", partial: startPartial },
+          { type: "text_delta", delta: "Work", partial: startPartial },
+          { type: "text_delta", delta: "ing...", partial: completedPartial },
+          { type: "text_end", content: "Working...", partial: completedPartial },
+        ],
+        delayMs,
+      );
+      await endMessage(context, { message: completedPartial });
 
       expect(events()).toEqual([
         ...updates.map((text) => preamble(text, "update")),
@@ -427,16 +422,11 @@ describe("handleMessageUpdate text signatures", () => {
     const firstPartial = commentaryPartial("Working", "item-1");
     const extendedPartial = commentaryPartial("Working now", "item-2");
 
-    for (const event of [
+    await commentaryEvents(context, [
       { type: "text_start", partial: firstPartial },
       { type: "text_end", content: "Working", partial: firstPartial },
       { type: "text_end", content: "Working now", partial: extendedPartial },
-    ] as const) {
-      await updateMessage(context, {
-        message: event.partial,
-        assistantMessageEvent: { ...event, contentIndex: 0 },
-      });
-    }
+    ]);
     await endMessage(context, { message: extendedPartial });
 
     expect(events()).toEqual(
@@ -452,11 +442,7 @@ describe("commentary and flush isolation", () => {
   it("suppresses commentary partials when phase exists only in textSignature metadata", async () => {
     const onPartialReply = vi.fn();
     const flushBlockReplyBuffer = vi.fn();
-    const commentaryBlock = createOpenAiResponsesTextBlock({
-      text: "Need send.",
-      id: "msg_sig",
-      phase: "commentary",
-    });
+    const commentaryBlock = block("Need send.", "msg_sig", "commentary");
     const ctx = createMessageUpdateContext({
       onAgentEvent,
       onPartialReply,
@@ -536,13 +522,7 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
 const block = (text: string, id: string, phase: "commentary" | "final_answer" = "final_answer") =>
   createOpenAiResponsesTextBlock({ text, id, phase });
 const finalEvent = (type: "text_delta" | "text_end", text: string) =>
-  createTextUpdateEvent({
-    type,
-    text,
-    id: "item-final",
-    signaturePhase: "final_answer",
-    partialPhase: "final_answer",
-  });
+  createTextUpdateEvent({ type, text, partial: finalPartial(text) });
 const hiddenTool = [
   "Visible\n<tool_call>{",
   '"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>',

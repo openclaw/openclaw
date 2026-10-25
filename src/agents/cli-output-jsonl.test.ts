@@ -35,6 +35,22 @@ const assistantRecord = (
   ...fields,
 });
 const textBlock = (text: string) => ({ type: "text", text });
+const initFrame = (session_id: string) => ({ type: "init", session_id });
+const geminiMessage = (content: string, delta?: boolean) => ({
+  type: "message",
+  role: "assistant",
+  content,
+  ...(delta ? { delta } : {}),
+});
+const geminiResult = (stats: Record<string, number>) => ({
+  type: "result",
+  status: "success",
+  stats,
+});
+const geminiTool = (name: string, output: string, parameters = {}) => [
+  { type: "tool_use", tool_name: name, tool_id: "tool-1", parameters },
+  { type: "tool_result", tool_id: "tool-1", status: "success", output },
+];
 
 function parseCliJsonl(
   raw: string,
@@ -49,13 +65,18 @@ function parseCliJsonl(
 }
 
 describe("parseCliJsonl", () => {
-  it("parses Claude stream-json result events for an explicit backend dialect", () => {
+  it("parses Claude result and cache usage for an explicit backend dialect", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(
         { type: "init", session_id: "session-dialect" },
         resultFrame("dialect says hello", {
           session_id: "session-dialect",
-          usage: { input_tokens: 5, output_tokens: 2 },
+          usage: {
+            input_tokens: 12,
+            output_tokens: 3,
+            cache_read_input_tokens: 4,
+            cache_creation_input_tokens: 7,
+          },
         }),
       ),
       createClaudeBackend("local-cli"),
@@ -64,7 +85,7 @@ describe("parseCliJsonl", () => {
     expect(result).toEqual({
       text: "dialect says hello",
       sessionId: "session-dialect",
-      usage: { input: 5, output: 2 },
+      usage: { input: 12, output: 3, cacheRead: 4, cacheWrite: 7, total: undefined },
     });
   });
 
@@ -168,77 +189,30 @@ describe("parseCliJsonl", () => {
     {
       name: "parses Gemini stream-json message and result events",
       frames: [
-        {
-          type: "init",
-          session_id: "gemini-session-123",
-          model: "gemini-3.1-pro-preview",
-        },
-        {
-          type: "message",
-          role: "assistant",
-          content: "Gemini says ",
-          delta: true,
-        },
-        {
-          type: "message",
-          role: "assistant",
-          content: "hello",
-          delta: true,
-        },
-        {
-          type: "result",
-          status: "success",
-          stats: { total_tokens: 21, input_tokens: 13, output_tokens: 5, cached: 8, input: 5 },
-        },
+        geminiMessage("Gemini says ", true),
+        geminiMessage("hello", true),
+        geminiResult({ total_tokens: 21, input_tokens: 13, output_tokens: 5, cached: 8, input: 5 }),
       ],
-      sessionIdFields: ["session_id"],
-      expected: {
-        text: "Gemini says hello",
-        sessionId: "gemini-session-123",
-        usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
-      },
+      text: "Gemini says hello",
+      usage: { input: 5, output: 5, cacheRead: 8, total: 21 },
     },
     {
       name: "keeps Gemini tool-only stream-json output structured instead of raw JSONL",
       frames: [
-        {
-          type: "init",
-          session_id: "gemini-session-123",
-          model: "gemini-3.1-pro-preview",
-        },
-        {
-          type: "tool_use",
-          tool_name: "mcp_openclaw_create_goal",
-          tool_id: "tool-1",
-          parameters: { objective: "Update files" },
-        },
-        {
-          type: "tool_result",
-          tool_id: "tool-1",
-          status: "success",
-          output: "created",
-        },
-        {
-          type: "result",
-          status: "success",
-          stats: { total_tokens: 2, input_tokens: 1, output_tokens: 1 },
-        },
+        ...geminiTool("mcp_openclaw_create_goal", "created", { objective: "Update files" }),
+        geminiResult({ total_tokens: 2, input_tokens: 1, output_tokens: 1 }),
       ],
-      sessionIdFields: ["session_id"],
-      expected: {
-        text: "",
-        sessionId: "gemini-session-123",
-        usage: { input: 1, output: 1, total: 2 },
-      },
+      text: "",
+      usage: { input: 1, output: 1, total: 2 },
     },
-  ])("$name", ({ frames, sessionIdFields, expected }) => {
+  ])("$name", ({ frames, text, usage }) => {
     const result = parseCliJsonl(
-      joinJsonlFrames(...frames),
-      { ...createGeminiBackend(), sessionIdFields },
+      joinJsonlFrames(initFrame("gemini-session-123"), ...frames),
+      { ...createGeminiBackend(), sessionIdFields: ["session_id"] },
       "google-gemini-cli",
     );
 
-    expect(result).toEqual(expected);
+    expect(result).toEqual({ text, sessionId: "gemini-session-123", usage });
   });
 
   it.each([
@@ -246,19 +220,13 @@ describe("parseCliJsonl", () => {
     { name: "text after a tool call", tool: true, final: true, expected: "Done." },
     { name: "a tool-only ending", tool: true, final: false, expected: "" },
   ])("records only the final Gemini message ($name)", ({ tool, final, expected }) => {
-    const message = (content: string) => ({ type: "message", role: "assistant", content });
     const result = parseCliJsonl(
       joinJsonlFrames(
-        { type: "init", session_id: "gemini-final" },
-        message("Checking tools."),
-        ...(tool
-          ? [
-              { type: "tool_use", tool_name: "read_file", tool_id: "tool-1", parameters: {} },
-              { type: "tool_result", tool_id: "tool-1", status: "success", output: "ok" },
-            ]
-          : []),
-        ...(final ? [message("Done.")] : []),
-        { type: "result", status: "success", stats: { total_tokens: 2 } },
+        initFrame("gemini-final"),
+        geminiMessage("Checking tools."),
+        ...(tool ? geminiTool("read_file", "ok") : []),
+        ...(final ? [geminiMessage("Done.")] : []),
+        geminiResult({ total_tokens: 2 }),
       ),
       createGeminiBackend(),
       "google-gemini-cli",
@@ -266,35 +234,6 @@ describe("parseCliJsonl", () => {
 
     // rawFinalText is omitted when the final message equals the reply text.
     expect(result?.rawFinalText ?? result?.text.trim()).toBe(expected);
-  });
-
-  it("preserves Claude cache creation tokens instead of flattening them to zero", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        { type: "init", session_id: "session-cache-123" },
-        resultFrame("Claude says hello", {
-          session_id: "session-cache-123",
-          usage: {
-            input_tokens: 12,
-            output_tokens: 3,
-            cache_read_input_tokens: 4,
-            cache_creation_input_tokens: 7,
-          },
-        }),
-      ),
-    );
-
-    expect(result).toEqual({
-      text: "Claude says hello",
-      sessionId: "session-cache-123",
-      usage: {
-        input: 12,
-        output: 3,
-        cacheRead: 4,
-        cacheWrite: 7,
-        total: undefined,
-      },
-    });
   });
 
   it("captures the last Claude assistant transcript UUID as a resume checkpoint", () => {
@@ -387,10 +326,7 @@ describe("parseCliJsonl", () => {
   });
 
   it("captures the last Claude session_id when an ephemeral id precedes the canonical one", () => {
-    // claude-cli emits ephemeral session_ids from SessionStart hooks before the
-    // canonical resumed session_id surfaces in the init event and the terminal
-    // result event. First-wins capture would bind to the ephemeral id whose
-    // transcript JSONL never lands on disk; last-wins captures the canonical id.
+    // SessionStart hooks can emit ephemeral IDs whose transcripts never land on disk.
     const result = parseCliJsonl(
       joinJsonlFrames(
         { type: "system", subtype: "init", session_id: "session-ephemeral" },
