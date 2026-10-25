@@ -30,6 +30,7 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
 
 const sharedSecretRequestAuth = { trustDeclaredOperatorScopes: false };
 const trustedRequestAuth = { trustDeclaredOperatorScopes: true };
+const operatorScopes = (...names: string[]) => names.map((name) => `operator.${name}`);
 const requestContext = (
   sessionKey: string,
   overrides: Partial<Parameters<typeof resolveGatewayRequestContext>[0]> = {},
@@ -130,25 +131,18 @@ describe("resolveTrustedHttpOperatorScopes", () => {
   });
 
   it.each<[string, GatewayOperatorRoleDefinition["scopes"], string[], string[]]>([
-    ["read", ["operator.read"], ["operator.read"], ["operator.read"]],
+    ["read", operatorScopes("read"), operatorScopes("read"), operatorScopes("read")],
     [
       "admin",
-      ["operator.admin"],
-      [
-        "operator.admin",
-        "operator.read",
-        "operator.write",
-        "operator.talk",
-        "operator.approvals",
-        "operator.talk.secrets",
-      ],
+      operatorScopes("admin"),
+      operatorScopes("admin", "read", "write", "talk", "approvals", "talk.secrets"),
       [...CLI_DEFAULT_OPERATOR_SCOPES],
     ],
     [
       "write",
-      ["operator.write"],
-      ["operator.read", "operator.write", "operator.talk"],
-      ["operator.read", "operator.write"],
+      operatorScopes("write"),
+      operatorScopes("read", "write", "talk"),
+      operatorScopes("read", "write"),
     ],
     ["empty", [], [], []],
   ])(

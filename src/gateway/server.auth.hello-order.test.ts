@@ -37,14 +37,49 @@ type ObservedFrame = {
 
 beforeEach(() => configureBrowserAuth());
 
-async function openBrowser(port: number, instanceId: string, caps: string[] = []) {
-  const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");
-  const socket = await openWs(port, {
+const browserAuth = {
+  skipDefaultAuth: true,
+  prePairDevice: true,
+  scopes: ["operator.read"],
+  browserOrigin: origin,
+};
+const openProxySocket = (port: number, user?: string) =>
+  openWs(port, {
     origin,
     "x-forwarded-for": "203.0.113.50",
     "x-forwarded-proto": "https",
-    "x-forwarded-user": `${instanceId}@example.com`,
+    ...(user ? { "x-forwarded-user": user } : {}),
   });
+
+function holdResponse(
+  matches: (data: string) => boolean,
+  beforeRelease?: (ws: WebSocket) => void,
+  fail = true,
+) {
+  const pending = createDeferred<() => void>();
+  const originalSend = Reflect.get(WebSocket.prototype, "send");
+  const spy = vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (
+    this: WebSocket,
+    ...args: Parameters<WebSocket["send"]>
+  ) {
+    if (typeof args[0] !== "string" || !matches(args[0])) {
+      return Reflect.apply(originalSend, this, args);
+    }
+    const callback = args.findLast((arg) => typeof arg === "function");
+    if (typeof callback !== "function") {
+      throw new Error("hello delivery requires a callback");
+    }
+    pending.resolve(() => {
+      beforeRelease?.(this);
+      callback(fail ? new Error("synthetic delivery failure") : undefined);
+    });
+  });
+  return { pending: pending.promise, spy, [Symbol.dispose]: () => spy.mockRestore() };
+}
+
+async function openBrowser(port: number, instanceId: string, caps: string[] = []) {
+  const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");
+  const socket = await openProxySocket(port, `${instanceId}@example.com`);
   const frames: ObservedFrame[] = [];
   socket.on("message", (data) => frames.push(JSON.parse(rawDataToString(data))));
   return {
@@ -52,13 +87,10 @@ async function openBrowser(port: number, instanceId: string, caps: string[] = []
     frames,
     connect: () =>
       connectReq(socket, {
-        skipDefaultAuth: true,
-        prePairDevice: true,
+        ...browserAuth,
         deviceIdentityPath: identityPath,
         client: { ...CONTROL_UI_CLIENT, instanceId },
-        scopes: ["operator.read"],
         caps,
-        browserOrigin: origin,
       }),
   };
 }
@@ -150,12 +182,7 @@ test.each(["accepted", "denied"] as const)(
   async (authentication) => {
     await withGatewayServer(async ({ port }) => {
       const accepted = authentication === "accepted";
-      const socket = await openWs(port, {
-        origin,
-        "x-forwarded-for": "203.0.113.50",
-        "x-forwarded-proto": "https",
-        ...(accepted ? { "x-forwarded-user": "pipeline@example.com" } : {}),
-      });
+      const socket = await openProxySocket(port, accepted ? "pipeline@example.com" : undefined);
       const frames: ObservedFrame[] = [];
       socket.on("message", (data) => frames.push(JSON.parse(rawDataToString(data))));
       const requests = [
@@ -188,16 +215,13 @@ test.each(["accepted", "denied"] as const)(
 
       const [result, responses] = await Promise.all([
         connectReq(socket, {
-          skipDefaultAuth: true,
-          prePairDevice: true,
+          ...browserAuth,
           deviceIdentityPath: path.join(
             tempDirs.make("hello-pipeline-"),
             "client",
             "credentials.sqlite",
           ),
           client: CONTROL_UI_CLIENT,
-          scopes: ["operator.read"],
-          browserOrigin: origin,
         }),
         Promise.all(replies),
       ]);
@@ -231,31 +255,23 @@ test.each(["write-error", "closed-before-callback"] as const)(
       const reader = await openBrowser(port, "established-reader");
       const joining = await openBrowser(port, failedInstanceId);
       const publisher = await openBrowser(port, "presence-publisher");
-      const pendingHello = createDeferred<() => void>();
       let failNextHello = true;
       expect((await reader.connect()).ok).toBe(true);
-      const originalSend = Reflect.get(WebSocket.prototype, "send");
-      using sendSpy = vi.spyOn(WebSocket.prototype, "send");
-      sendSpy.mockImplementation(function (
-        this: WebSocket,
-        ...args: Parameters<WebSocket["send"]>
-      ) {
-        if (failNextHello && typeof args[0] === "string" && args[0].includes('"hello-ok"')) {
-          failNextHello = false;
-          const callback = args.findLast((arg) => typeof arg === "function");
-          if (typeof callback !== "function") {
-            throw new Error("hello delivery requires a callback");
+      using held = holdResponse(
+        (data) => {
+          if (!failNextHello || !data.includes('"hello-ok"')) {
+            return false;
           }
-          pendingHello.resolve(() => {
-            if (failure === "closed-before-callback") {
-              this.close(1000, "test close before hello");
-            }
-            callback(failure === "write-error" ? new Error("test hello write failure") : undefined);
-          });
-          return;
-        }
-        Reflect.apply(originalSend, this, args);
-      });
+          failNextHello = false;
+          return true;
+        },
+        (socket) => {
+          if (failure === "closed-before-callback") {
+            socket.close(1000, "test close before hello");
+          }
+        },
+        failure === "write-error",
+      );
       const closed = once(joining.socket, "close");
       const disconnected = waitForPresence(
         reader.socket,
@@ -265,7 +281,7 @@ test.each(["write-error", "closed-before-callback"] as const)(
         expect(joining.connect()).rejects.toThrow(/closed/),
         closed,
         disconnected,
-        pendingHello.promise.then((failHello) =>
+        held.pending.then((failHello) =>
           Promise.all([
             waitForPresence(reader.socket, (entry) => entry.instanceId === "presence-publisher"),
             expect(publisher.connect()).resolves.toMatchObject({ ok: true }),
