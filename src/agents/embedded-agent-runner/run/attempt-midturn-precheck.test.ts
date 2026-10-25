@@ -30,147 +30,74 @@ const { installEmbeddedAttemptStreamGuards } =
 
 registerAgentSessionLoopTestLifecycle();
 
-function admissionCase(
-  name: string,
-  overrides: Partial<{
+type AdmissionOptions = Partial<{
+  growSystem: boolean;
+  tweakSystem: boolean;
+  tweakTools: boolean;
+  opaque: boolean;
+  completionTokens: number;
+  assistantChars: number;
+  asyncFragments: boolean;
+  syntheticAssistant: boolean;
+  ownsCompaction: boolean;
+  oversizedAssembly: boolean;
+  compatibleBudget: boolean;
+  responseSchema: boolean;
+}>;
+
+describe("provider request admission", () => {
+  const visible = { completionTokens: 5_000, assistantChars: 20_000 };
+  const largerVisible = { completionTokens: 6_000, assistantChars: 24_000 };
+  type AdmissionCase = {
     usage: number;
     chars: number;
     cap: number;
     fits: boolean;
-    growSystem: boolean;
-    tweakSystem: boolean;
-    tweakTools: boolean;
-    opaque: boolean;
-    completionTokens: number;
-    assistantChars: number;
-    asyncFragments: boolean;
-    syntheticAssistant: boolean;
-    ownsCompaction: boolean;
-    oversizedAssembly: boolean;
-    compatibleBudget: boolean;
-    responseSchema: boolean;
-  }> = {},
-) {
-  return { name, usage: 15_000, chars: 12_000, cap: 16_000, fits: true, ...overrides };
-}
-
-describe("provider request admission", () => {
-  it.each([
-    admissionCase("measured compatible reasoning output budget", {
-      usage: 1_500,
-      chars: 15_500,
-      compatibleBudget: true,
-    }),
-    admissionCase("unchanged response schema is not charged twice on a tool continuation", {
-      usage: 24_000,
-      chars: 100,
-      compatibleBudget: true,
-      responseSchema: true,
-    }),
-    admissionCase("owning engine cannot submit oversized assembled history on its first request", {
-      fits: false,
-      ownsCompaction: true,
-      oversizedAssembly: true,
-    }),
-    admissionCase("owning engine admits fitting requests despite an exaggerated engine estimate", {
-      ownsCompaction: true,
-    }),
-    admissionCase("owning engine blocks an oversized measured continuation without opt-in", {
-      usage: 23_000,
-      fits: false,
-      ownsCompaction: true,
-    }),
-    admissionCase("measured unchanged prefix"),
-    admissionCase("counts measured visible completion once", {
-      chars: 2_000,
-      completionTokens: 6_000,
-      assistantChars: 24_000,
-    }),
-    admissionCase("counts visible completion once after a small system change", {
-      chars: 2_000,
-      completionTokens: 5_000,
-      assistantChars: 20_000,
-      tweakSystem: true,
-    }),
-    admissionCase("counts visible completion once after tool definitions change", {
-      chars: 2_000,
-      completionTokens: 5_000,
-      assistantChars: 20_000,
-      tweakTools: true,
-    }),
-    admissionCase("counts split visible completion once after a small system change", {
-      chars: 2_000,
-      completionTokens: 5_000,
-      assistantChars: 20_000,
-      asyncFragments: true,
-      tweakSystem: true,
-    }),
-    admissionCase(
-      "counts async completion fragments once when the provider identity arrives late",
-      {
-        chars: 2_000,
-        completionTokens: 6_000,
-        assistantChars: 24_000,
-        asyncFragments: true,
-      },
-    ),
-    admissionCase("counts an unrelated synthetic assistant appended after the measured prefix", {
-      chars: 2_000,
-      fits: false,
-      syntheticAssistant: true,
-    }),
-    admissionCase("retains opaque reasoning occupancy", {
-      fits: false,
-      opaque: true,
-      completionTokens: 16_000,
-    }),
-    admissionCase("retains opaque reasoning after a small system change", {
-      chars: 2_000,
-      fits: false,
-      opaque: true,
-      completionTokens: 16_000,
-      tweakSystem: true,
-    }),
-    admissionCase("measured oversized tail after projection", {
-      usage: 14_000,
-      chars: 100_000,
-    }),
-    admissionCase("unavailable usage after projection", {
-      usage: 0,
-      chars: 100_000,
-      cap: 2_000,
-    }),
-    admissionCase("genuinely oversized measured tail", { usage: 23_000, fits: false }),
-    admissionCase("unavailable usage with oversized prompt", {
-      usage: 0,
-      fits: false,
-      growSystem: true,
-    }),
-    admissionCase("changed system invalidates measured prefix", {
-      usage: 1_000,
-      fits: false,
-      growSystem: true,
-    }),
-  ])(
-    "$name",
+    options: AdmissionOptions;
+  };
+  it.each`
+    name                                   | usage     | chars      | cap       | fits     | options
+    ${"compatible reasoning budget"}       | ${1_500}  | ${15_500}  | ${16_000} | ${true}  | ${{ compatibleBudget: true }}
+    ${"unchanged schema"}                  | ${24_000} | ${100}     | ${16_000} | ${true}  | ${{ compatibleBudget: true, responseSchema: true }}
+    ${"oversized engine assembly"}         | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, oversizedAssembly: true }}
+    ${"exaggerated engine estimate"}       | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{ ownsCompaction: true }}
+    ${"oversized engine continuation"}     | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true }}
+    ${"unchanged measured prefix"}         | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{}}
+    ${"visible completion"}                | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${largerVisible}
+    ${"system tweak"}                      | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakSystem: true }}
+    ${"tool definitions tweak"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakTools: true }}
+    ${"split completion + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, asyncFragments: true, tweakSystem: true }}
+    ${"late response identity"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...largerVisible, asyncFragments: true }}
+    ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true }}
+    ${"opaque reasoning"}                  | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000 }}
+    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true }}
+    ${"projected measured tail"}           | ${14_000} | ${100_000} | ${16_000} | ${true}  | ${{}}
+    ${"projected unavailable usage"}       | ${0}      | ${100_000} | ${2_000}  | ${true}  | ${{}}
+    ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{}}
+    ${"oversized prompt without usage"}    | ${0}      | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
+    ${"changed system invalidates prefix"} | ${1_000}  | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
+  `(
+    "admits only fitting provider requests: $name",
     async ({
       usage,
       chars,
       cap,
       fits,
-      growSystem,
-      tweakSystem,
-      tweakTools,
-      opaque,
-      completionTokens,
-      assistantChars,
-      asyncFragments,
-      syntheticAssistant,
-      ownsCompaction,
-      oversizedAssembly,
-      compatibleBudget,
-      responseSchema,
-    }) => {
+      options: {
+        growSystem,
+        tweakSystem,
+        tweakTools,
+        opaque,
+        completionTokens,
+        assistantChars,
+        asyncFragments,
+        syntheticAssistant,
+        ownsCompaction,
+        oversizedAssembly,
+        compatibleBudget,
+        responseSchema,
+      },
+    }: AdmissionCase) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
       const model = {
         ...testModel,

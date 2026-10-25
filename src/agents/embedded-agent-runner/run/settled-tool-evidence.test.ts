@@ -94,12 +94,7 @@ function emptyStop(overrides: Partial<EmbeddedRunAttemptResult> = {}) {
 describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("marks incomplete-turn retries as replay-invalid abandoned runs", () => {
     const attempt = makeAttempt({
-      lastAssistant: {
-        stopReason: "toolUse",
-        provider: "openai",
-        model: "gpt-5.4",
-        content: [],
-      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      lastAssistant: textAssistant(undefined, { stopReason: "toolUse", model: "gpt-5.4" }),
     });
     const incompleteTurnText = "⚠️ Agent couldn't generate a response. Please try again.";
 
@@ -220,17 +215,13 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       const attempt = makeSettledIdleWriteAttempt({
         terminal: { kind: "failed", source: "prompt", error: new Error("provider failure") },
       });
-      const instruction = continuation(
-        hasContext
-          ? {
-              ...attempt,
-              settledTurnFinalizationContext: {
-                source: "openclaw-transcript",
-                messages: attempt.messagesSnapshot,
-              },
-            }
-          : attempt,
-      );
+      if (hasContext) {
+        attempt.settledTurnFinalizationContext = {
+          source: "openclaw-transcript",
+          messages: attempt.messagesSnapshot,
+        };
+      }
+      const instruction = continuation(attempt);
 
       expect(instruction?.instruction === CONTINUATION).toBe(hasContext);
     },
@@ -403,66 +394,40 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(attempt.lastToolError).toBe(lastToolError);
   });
 
-  it.each([
-    {
-      label: "an async tool is still running",
-      attemptOverrides: { toolMetas: [{ toolName: "exec", isError: true, asyncStarted: true }] },
-    },
-    {
-      label: "an accepted child session owns the response",
-      attemptOverrides: {
+  it.each<[string, Partial<EmbeddedRunAttemptResult>]>([
+    ["async tool", { toolMetas: [{ toolName: "exec", isError: true, asyncStarted: true }] }],
+    [
+      "accepted child",
+      {
         acceptedSessionSpawns: [
           { runId: "run-child", childSessionKey: "agent:main:subagent:child" },
         ],
       },
-    },
-    {
-      label: "a client tool remains pending",
-      attemptOverrides: { clientToolCalls: [{ name: "pending", params: {} }] },
-    },
-    {
-      label: "the turn yielded",
-      attemptOverrides: { yieldDetected: true },
-    },
-    {
-      label: "an approval prompt was already delivered",
-      attemptOverrides: { didSendDeterministicApprovalPrompt: true },
-    },
-  ])("does not finalize a failed terminal tool when $label (#118274)", ({ attemptOverrides }) => {
-    const instruction = continuation({
-      ...failedToolInput(),
-      ...attemptOverrides,
-    });
-
-    expect(instruction).toBeNull();
+    ],
+    ["pending client tool", { clientToolCalls: [{ name: "pending", params: {} }] }],
+    ["yielded turn", { yieldDetected: true }],
+    ["delivered approval", { didSendDeterministicApprovalPrompt: true }],
+  ])("does not finalize a failed terminal tool with %s (#118274)", (_label, overrides) => {
+    expect(continuation({ ...failedToolInput(), ...overrides })).toBeNull();
   });
 
   it.each([
-    { label: "background trigger", allowEmptyStopContinuation: false },
-    {
-      label: "active tool",
-      allowEmptyStopContinuation: true,
-      completedCount: 0,
-      activeCount: 1,
-    },
-    {
-      label: "partially completed tool batch",
-      allowEmptyStopContinuation: true,
-      startedCount: 2,
-      completedCount: 1,
-    },
-    { label: "async tool", allowEmptyStopContinuation: true, asyncStarted: true },
-    { label: "failed tool", allowEmptyStopContinuation: true, isError: true },
-  ])(
-    "does not continue an empty stop after $label activity",
-    ({
+    ["background trigger", false, 1, 1, 0, undefined, undefined],
+    ["active tool", true, 1, 0, 1, undefined, undefined],
+    ["partially completed batch", true, 2, 1, 0, undefined, undefined],
+    ["async tool", true, 1, 1, 0, true, undefined],
+    ["failed tool", true, 1, 1, 0, undefined, true],
+  ] as const)(
+    "does not continue an empty stop after %s activity",
+    (
+      _label,
       allowEmptyStopContinuation,
-      startedCount = 1,
-      completedCount = 1,
-      activeCount = 0,
+      startedCount,
+      completedCount,
+      activeCount,
       asyncStarted,
       isError,
-    }) => {
+    ) => {
       const instruction = continuation(
         emptyStop({
           toolMetas: [{ toolName: "write", asyncStarted, isError }],
