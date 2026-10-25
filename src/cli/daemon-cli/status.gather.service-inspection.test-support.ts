@@ -8,6 +8,7 @@ import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { registerGatewayCli } from "../gateway-cli/register.js";
+import { expectNoCalls } from "./lifecycle-assertions.test-support.js";
 import type { gatherDaemonStatus } from "./status.gather.js";
 import {
   callGatewayStatusProbe,
@@ -22,12 +23,13 @@ export function createStatusCommand() {
     throw new Error("status-exit");
   });
   onTestFinished(() => {
-    for (const spy of [writeJson, exit]) {
-      spy.mockRestore();
-    }
+    writeJson.mockRestore();
+    exit.mockRestore();
   });
   return { program, writeJson, exit };
 }
+
+type RejectOnce = { mockRejectedValueOnce(error: unknown): unknown };
 
 export function registerServiceInspectionStatusTests(params: {
   serviceFixture: { useSystemdCommand: boolean };
@@ -37,60 +39,41 @@ export function registerServiceInspectionStatusTests(params: {
   };
   setCliConfig: (config: Record<string, unknown>) => void;
   isGatewayExternallySupervised: { mockReturnValue(value: boolean): unknown };
-  findSystemdGatewayInstallation: { mockRejectedValueOnce(error: unknown): unknown };
+  findSystemdGatewayInstallation: RejectOnce;
   loadInstalledPluginIndexInstallRecords: {
     mockResolvedValueOnce(records: Record<string, unknown>): unknown;
   };
-  serviceIsLoaded: {
-    mockRejectedValueOnce(error: unknown): unknown;
-  };
+  serviceIsLoaded: RejectOnce;
   serviceReadCommand: { mockResolvedValueOnce(command: null): unknown };
-  serviceReadRuntime: {
-    mockRejectedValueOnce(error: unknown): unknown;
-  };
+  serviceReadRuntime: RejectOnce;
   inspectGatewayRestart: () => unknown;
   gatherStatus: (
     overrides?: Partial<Parameters<typeof gatherDaemonStatus>[0]>,
   ) => ReturnType<typeof gatherDaemonStatus>;
 }): void {
-  const {
-    serviceFixture,
-    isGatewayExternallySupervised,
-    findSystemdGatewayInstallation,
-    loadInstalledPluginIndexInstallRecords,
-    serviceIsLoaded,
-    serviceReadCommand,
-    serviceReadRuntime,
-    inspectGatewayRestart,
-    gatherStatus,
-  } = params;
-
   it("uses fallback network details when interface discovery throws during status inspection", async () => {
     params.setDaemonConfig({
-      gateway: {
-        bind: "tailnet",
-        tls: { enabled: true },
-        auth: { token: "daemon-token" },
-      },
+      gateway: { bind: "tailnet", tls: { enabled: true }, auth: { token: "daemon-token" } },
     });
     params.resolveGatewayBindHost.mockImplementationOnce(async () => {
       throw new Error("uv_interface_addresses failed");
     });
 
-    const status = await gatherStatus();
+    const status = await params.gatherStatus();
 
-    expect(status.gateway?.bindMode).toBe("tailnet");
-    expect(status.gateway?.bindHost).toBe("127.0.0.1");
-    expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
-    expect(status.gateway?.probeNote).toBe(
-      "Status is using fallback network details because interface discovery failed: uv_interface_addresses failed.",
-    );
+    expect(status.gateway).toMatchObject({
+      bindMode: "tailnet",
+      bindHost: "127.0.0.1",
+      probeUrl: "wss://127.0.0.1:19001",
+      probeNote:
+        "Status is using fallback network details because interface discovery failed: uv_interface_addresses failed.",
+    });
   });
 
   it("keeps registered gateway status available after systemd discovery fails", async () => {
-    serviceFixture.useSystemdCommand = true;
-    isGatewayExternallySupervised.mockReturnValue(false);
-    findSystemdGatewayInstallation.mockRejectedValueOnce(
+    params.serviceFixture.useSystemdCommand = true;
+    params.isGatewayExternallySupervised.mockReturnValue(false);
+    params.findSystemdGatewayInstallation.mockRejectedValueOnce(
       Object.assign(
         new Error("EACCES: permission denied, open '/etc/example-gateway/private.env'"),
         {
@@ -99,7 +82,7 @@ export function registerServiceInspectionStatusTests(params: {
       ),
     );
     params.setCliConfig({ gateway: { bind: "loopback", auth: { token: "caller-token" } } });
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+    params.loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
       whatsapp: {
         source: "npm",
         resolvedName: "@openclaw/whatsapp",
@@ -127,9 +110,7 @@ export function registerServiceInspectionStatusTests(params: {
     });
     expect(JSON.stringify(writeJson.mock.calls)).not.toContain("systemdInstallation");
     expect(JSON.stringify(writeJson.mock.calls)).not.toContain("private.env");
-    expect(serviceIsLoaded).not.toHaveBeenCalled();
-    expect(serviceReadRuntime).not.toHaveBeenCalled();
-    expect(inspectGatewayRestart).not.toHaveBeenCalled();
+    expectNoCalls(params.serviceIsLoaded, params.serviceReadRuntime, params.inspectGatewayRestart);
     expect(callGatewayStatusProbe).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:18789",
@@ -143,12 +124,12 @@ export function registerServiceInspectionStatusTests(params: {
     "keeps %s refusals fatal at the gateway status entrypoint",
     async (kind) => {
       if (kind === "systemd ownership") {
-        serviceFixture.useSystemdCommand = true;
-        findSystemdGatewayInstallation.mockRejectedValueOnce(
+        params.serviceFixture.useSystemdCommand = true;
+        params.findSystemdGatewayInstallation.mockRejectedValueOnce(
           new ServiceOwnershipRefusalError("systemd-manager-changed"),
         );
       } else {
-        serviceReadRuntime.mockRejectedValueOnce(new CommandProcessCleanupError());
+        params.serviceReadRuntime.mockRejectedValueOnce(new CommandProcessCleanupError());
       }
       const { program, writeJson, exit } = createStatusCommand();
       await expect(
@@ -160,8 +141,7 @@ export function registerServiceInspectionStatusTests(params: {
           ? "manager identity changed"
           : "Command cleanup could not confirm that owned work stopped",
       );
-      expect(callGatewayStatusProbe).not.toHaveBeenCalled();
-      expect(loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+      expectNoCalls(callGatewayStatusProbe, params.loadInstalledPluginIndexInstallRecords);
     },
   );
 
@@ -174,12 +154,12 @@ export function registerServiceInspectionStatusTests(params: {
     async ({ platform, reason, recorded }) =>
       withMockedPlatform(platform, async () => {
         const inspectionError = new ServiceInspectionError(reason);
-        serviceIsLoaded.mockRejectedValueOnce(inspectionError);
-        serviceReadRuntime.mockRejectedValueOnce(inspectionError);
+        params.serviceIsLoaded.mockRejectedValueOnce(inspectionError);
+        params.serviceReadRuntime.mockRejectedValueOnce(inspectionError);
         if (!recorded) {
-          serviceReadCommand.mockResolvedValueOnce(null);
+          params.serviceReadCommand.mockResolvedValueOnce(null);
         }
-        const status = await gatherStatus({ probe: false, deep: true });
+        const status = await params.gatherStatus({ probe: false, deep: true });
         expect(status.service.inspectionReason).toBe(reason);
         expect(status.service.loaded).toBeNull();
         const printed = capturePrintedDaemonStatus(status, { json: false, deep: true });
