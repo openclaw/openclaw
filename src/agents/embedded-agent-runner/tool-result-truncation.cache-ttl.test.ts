@@ -124,9 +124,8 @@ describe("cache-TTL tool-result projection", () => {
       projectToolResultMessages({ messages: session.messages, projectionState: session.state });
     }
     expect(digest).toHaveBeenCalledTimes(2);
-    expect(sessions[0].state.sourceHashByKey.get("tool:shared-id:42")).not.toBe(
-      sessions[1].state.sourceHashByKey.get("tool:shared-id:42"),
-    );
+    const hashes = sessions.flatMap(({ state }) => [...state.sourceHashByKey.values()]);
+    expect(new Set(hashes).size).toBe(2);
     for (let turn = 0; turn < 3; turn++) {
       for (const session of sessions) {
         reconcile(session.messages, session.state);
