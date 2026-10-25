@@ -6,9 +6,10 @@
  * Repeat with --allocations in a fresh directory for sampled allocation rates;
  * only the untraced run supplies latency/GC gates. --smoke uses 100 sessions,
  * 80 runs and 4 MiB transcripts for a short setup check, never stress evidence.
- * Defaults: 10,000 finished sessions (8,000 children), 40 plugins, 64 sockets,
- * eight concurrent mock turns and sidebar/list/search churn. Admission lasts the
- * full window; in-flight work drains afterward and its duration is reported.
+ * Defaults: 10,000 finished sessions (8,000 children), 40 plugins, 64 sockets.
+ * Protocol v2: eight concurrent mock turns, 16 staggered sidebar/list/search
+ * pollers every five seconds, and 40 idle subscribers. Admission lasts the full
+ * window; in-flight work drains afterward and its duration is reported.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -78,6 +79,10 @@ if (port >= 65_535) {
 const durationMs = integer(values["duration-ms"], "--duration-ms", values.smoke ? 1 : 600_000);
 const mockPort = port + 1;
 const sessionCount = values.smoke ? 100 : 10000;
+const clientCount = 64;
+const turnSenders = 8;
+const listPollers = 16;
+const listIntervalMs = 5000;
 const marker = "CODE_MODE_JSON_LOAD_OK";
 const variants = [
   { name: "small", code: 'json({ok:true}); return {text:"small",items:[1,2,3]};' },
@@ -114,6 +119,15 @@ const report: Record<string, unknown> = {
   mode: values.allocations ? "sampled-allocation" : "untraced",
   requestedDurationMs: durationMs,
   smoke: values.smoke,
+  workload: {
+    protocol: "code-mode-json-v2",
+    subscribedClients: clientCount,
+    turnSenders,
+    listPollers,
+    listIntervalMs,
+    staggered: true,
+    idleSubscribers: clientCount - turnSenders - listPollers,
+  },
   sourceHashesAtLaunch: Object.fromEntries(
     [
       "../../src/agents/code-mode-json.ts",
@@ -288,7 +302,7 @@ try {
       { agentRuntime: { id: "openclaw" }, params: { transport: "sse" } },
     ]),
   );
-  config.agents!.defaults!.maxConcurrent = 8;
+  config.agents!.defaults!.maxConcurrent = turnSenders;
   config.tools = { codeMode: { enabled: true, executor: "node", maxOutputBytes: 65536 } };
   config.plugins = { ...config.plugins, allow: ["openai"] };
   const plugins = writePluginFixtures(root, { count: 40 });
@@ -377,7 +391,7 @@ try {
   gateway.stderr!.pipe(gatewayLog, { end: false });
   await once(gateway, "spawn");
   await healthy(`http://127.0.0.1:${port}/readyz`, gateway, gatewayListening);
-  for (let index = 0; index < 64; index++) {
+  for (let index = 0; index < clientCount; index++) {
     const client = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
     clients.push(client);
     await client.waitOpen();
@@ -426,7 +440,7 @@ try {
     throw new Error(`Gateway did not expose the ${sessionCount}-session fixture`);
   }
   report.initialSessionCount = sessions.totalCount;
-  if (clients.filter((client) => client.ws.readyState === client.ws.OPEN).length !== 64) {
+  if (clients.filter((client) => client.ws.readyState === client.ws.OPEN).length !== clientCount) {
     throw new Error("Not all 64 subscribed WebSockets remained open before load");
   }
   startedTurns = 0;
@@ -455,12 +469,18 @@ try {
   let nextTurn = 0;
   const jobs = clients
     .map(async (client, index) => {
+      if (index >= turnSenders + listPollers) {
+        return;
+      }
+      if (index >= turnSenders) {
+        await delay(((index - turnSenders) * listIntervalMs) / listPollers);
+      }
       let iteration = 0;
       while (performance.now() < deadline) {
         if (stopped) {
           break;
         }
-        if (index < 8) {
+        if (index < turnSenders) {
           await turn(client, nextTurn++);
           await delay(2000);
         } else {
@@ -476,7 +496,7 @@ try {
                 : { source: "sessions-page", search: "Synthetic review" }),
           });
           listLatencies.push(performance.now() - start);
-          await delay(3000);
+          await delay(listIntervalMs);
         }
       }
     })
@@ -496,7 +516,7 @@ try {
   report.openClientsAfterLoad = clients.filter(
     (client) => client.ws.readyState === client.ws.OPEN,
   ).length;
-  if (report.openClientsAfterLoad !== 64) {
+  if (report.openClientsAfterLoad !== clientCount) {
     failures.push("A subscribed WebSocket closed during load");
   }
   const diagnostics = await stopDiagnostics();
@@ -510,7 +530,7 @@ try {
     actualAdmissionMs: admissionEndedAt - startedAt,
     drainMs: drainedAt - admissionEndedAt,
     measuredMs: cpu.wallMs,
-    clients: 64,
+    clients: clientCount,
     plugins: 40,
     startedTurns,
     completedTurns,
