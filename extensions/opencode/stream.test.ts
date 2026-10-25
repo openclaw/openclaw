@@ -5,6 +5,7 @@ import {
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
@@ -12,23 +13,12 @@ function toolCallMessage(
   name: string,
   argumentsValue: Record<string, unknown> = { query: "OpenClaw" },
 ): AssistantMessage {
-  return {
-    role: "assistant",
-    api: "openai-responses",
+  return makeAgentAssistantMessage({
     provider: "opencode",
     model: "gpt-5.6-sol",
     content: [{ type: "toolCall", id: "call_1", name, arguments: structuredClone(argumentsValue) }],
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
     stopReason: "toolUse",
-    timestamp: 1,
-  };
+  });
 }
 
 async function wrapOpenCodeStream(streamFn: StreamFn, modelId = "gpt-5.6-sol") {
@@ -113,16 +103,18 @@ async function capturePayload(model: Parameters<StreamFn>[0], options: Parameter
   return ((await options?.onPayload?.(initial, model)) ?? initial) as Record<string, unknown>;
 }
 
-function recordTool(name: string, field: string, valueSchema: Record<string, unknown> = {}) {
+function tool(name: string, field: string, schema: Record<string, unknown>) {
   return {
     type: "function",
     name,
     parameters: {
       type: "object",
-      properties: { [field]: { type: "object", patternProperties: { "^.*$": valueSchema } } },
+      properties: { [field]: schema },
     },
   };
 }
+const recordTool = (name: string, field: string, valueSchema: Record<string, unknown> = {}) =>
+  tool(name, field, { type: "object", patternProperties: { "^.*$": valueSchema } });
 
 describe("OpenCode stream adapter", () => {
   it("aliases the reserved web_search function across OpenCode Responses requests", async () => {
@@ -189,7 +181,6 @@ describe("OpenCode stream adapter", () => {
     const payload = { tools: functions(existingAlias) };
     const fixture = streamFixture((source) => source.end(toolCallMessage(existingAlias)));
     const stream = await runFixture(fixture, payload);
-
     expect(payload.tools[0]?.name).toBe(existingAlias);
     await expect(stream?.result()).resolves.toMatchObject(messageContent({ name: existingAlias }));
   });
@@ -272,47 +263,26 @@ describe("OpenCode stream adapter", () => {
   });
 
   it("rebuilds dynamic record metadata when a Responses request payload is rebuilt", async () => {
-    const firstPayload = {
-      tools: [recordTool("exec", "env", { type: "string" })],
-    };
-    const secondPayload = {
-      tools: [
-        {
-          type: "function",
-          name: "exec",
-          parameters: {
-            type: "object",
-            properties: { env: { type: "array", items: { type: "string" } } },
-          },
-        },
-      ],
-    };
+    const firstPayload = { tools: [recordTool("exec", "env", { type: "string" })] };
+    const arraySchema = { type: "array", items: { type: "string" } };
+    const secondPayload = { tools: [tool("exec", "env", arraySchema)] };
+    const literalArguments = { env: [{ key: "literal", value: "array" }] };
+    const source = createAssistantMessageEventStream();
     const baseStreamFn: StreamFn = async (model, _context, options) => {
       await options?.onPayload?.(firstPayload, model);
       await options?.onPayload?.(secondPayload, model);
-      const source = createAssistantMessageEventStream();
-      queueMicrotask(() =>
-        source.end(
-          toolCallMessage("exec", {
-            env: [{ key: "literal", value: "array" }],
-          }),
-        ),
-      );
+      queueMicrotask(() => source.end(toolCallMessage("exec", literalArguments)));
       return source;
     };
     const streamFn = await wrapOpenCodeStream(baseStreamFn);
-
     const stream = await runStream(streamFn, {});
-
     expect(firstPayload.tools[0]?.parameters.properties).toMatchObject({ env: { type: "array" } });
     expect(secondPayload.tools[0]?.parameters.properties.env).toEqual({
       type: "array",
       items: { type: "string" },
     });
     await expect(stream?.result()).resolves.toMatchObject(
-      messageContent({
-        arguments: { env: [{ key: "literal", value: "array" }] },
-      }),
+      messageContent({ arguments: literalArguments }),
     );
   });
 
@@ -325,7 +295,6 @@ describe("OpenCode stream adapter", () => {
       return source;
     };
     const streamFn = await wrapOpenCodeStream(baseStreamFn, "kimi-k2.6");
-
     const stream = await runStream(streamFn, {}, "kimi-k2.6", "openai-completions");
     expect(stream).toBe(source);
     expect(payload.tools[0]?.name).toBe("web_search");
