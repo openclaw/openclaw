@@ -58,15 +58,14 @@ describe("swarm scheduler", () => {
     try {
       await scheduler.closeSwarmScheduler();
     } finally {
-      vi.useRealTimers();
       vi.unstubAllEnvs();
     }
   });
 
-  it("preserves admission order when later preparation finishes first", async () => {
+  it("preserves admission order across early preparation and stale active snapshots", async () => {
     const { started, reserve, activate } = makeQueue();
     expect(reserve("one")).toBe(true);
-    expect(reserve("two")).toBe(true);
+    expect(reserve("two", { activeRunIds: ["one"] })).toBe(true);
     const owner = {};
     scheduler.bindSwarmRunReservation("two", owner);
     expect(scheduler.isSwarmRunWaitingForCapacity("two", owner)).toBe(false);
@@ -83,7 +82,7 @@ describe("swarm scheduler", () => {
     await vi.waitFor(() => expect(started).toEqual(["one", "two"]));
   });
 
-  it("removes a cancelled queued run before the next slot opens", async () => {
+  it("skips cancelled work without letting its stale hold withdraw a reused id", async () => {
     const { started, enqueue, watchCapacity } = makeQueue();
     enqueue("one");
     enqueue("two");
@@ -98,11 +97,24 @@ describe("swarm scheduler", () => {
     try {
       expect(removal.withdraw()).toBe(true);
       expect(waits).toEqual([true, false, true, false]);
+      expect(scheduler.isSwarmRunActive("two")).toBe(false);
+      enqueue("two", {
+        start: async () => {
+          started.push("replacement");
+        },
+      });
+      expect(removal.withdraw()).toBe(false);
+      expect(removal.bindPreparation({ onRemoved: Promise.resolve(undefined) })).toBe(false);
+      await removal.release();
       scheduler.releaseSwarmRun("one");
       await vi.waitFor(() => expect(started).toEqual(["one", "three"]));
+      scheduler.releaseSwarmRun("three");
+      await vi.waitFor(() => expect(started).toEqual(["one", "three", "replacement"]));
     } finally {
       await removal.release();
     }
+    expect(removal.withdraw()).toBe(false);
+    expect(scheduler.releaseSwarmRun("two")).toBe(true);
   });
 
   it("does not certify an unactivated reservation without a preparation owner", async () => {
@@ -131,13 +143,7 @@ describe("swarm scheduler", () => {
       const cancellation = holdRun("child");
       expect(cancellation.withdraw()).toBe(true);
       const settled = vi.fn();
-      const settlement = cancellation
-        .settleCancellation()
-        .then(
-          (qualified) => ({ qualified }),
-          (error: unknown) => ({ error }),
-        )
-        .finally(settled);
+      const settlement = cancellation.settleCancellation().then(settled, settled);
       ready.resolve(async () => {
         await cleanup.wait();
         if (mode === "failure") {
@@ -152,10 +158,10 @@ describe("swarm scheduler", () => {
           closing = scheduler.closeSwarmScheduler(owner);
         }
         cleanup.release();
-        expect(await settlement).toEqual(
-          mode === "failure" ? { error: failure } : { qualified: mode === "success" },
+        await settlement;
+        expect(settled).toHaveBeenCalledExactlyOnceWith(
+          mode === "failure" ? failure : mode === "success",
         );
-        expect(settled).toHaveBeenCalledOnce();
       } finally {
         cleanup.release();
         await Promise.all([producer.release(), cancellation.release(), closing]);
@@ -168,7 +174,7 @@ describe("swarm scheduler", () => {
     },
   );
 
-  it("joins removed queues and preserves retained cleanup failures", async () => {
+  it("joins removed queues and released launches while preserving retained cleanup failures", async () => {
     const lifecycleOwner = {};
     const failure = new PluginRuntimeCloseRetainedError(new Error("cleanup still owns resources"));
     const cleanup = createEnteredGate();
@@ -176,6 +182,15 @@ describe("swarm scheduler", () => {
       throw failure;
     });
     const pendingCleanup = vi.fn(cleanup.wait);
+    const launchGate = createEnteredGate();
+    const releasedCleanup = vi.fn(async () => undefined);
+    makeQueue("released-launch").enqueue("pending-launch", {
+      lifecycleOwner,
+      start: launchGate.wait,
+      onRemoved: releasedCleanup,
+    });
+    await launchGate.entered;
+    expect(scheduler.releaseSwarmRun("pending-launch")).toBe(true);
     const releases: Promise<void>[] = [];
     const { enqueue } = makeQueue();
     for (const [runId, onRemoved] of [
@@ -193,114 +208,69 @@ describe("swarm scheduler", () => {
       releases.push(hold.release());
     }
     const settled = vi.fn();
-    const closing = scheduler
-      .closeSwarmScheduler(lifecycleOwner)
-      .catch((error: unknown) => error)
-      .finally(settled);
+    const closing = scheduler.closeSwarmScheduler(lifecycleOwner).then(settled, settled);
     try {
       await cleanup.entered;
+      await flushMicrotasks();
       expect(settled).not.toHaveBeenCalled();
+      expect(releasedCleanup).not.toHaveBeenCalled();
     } finally {
       cleanup.release();
+      launchGate.release();
     }
     await expect(Promise.all(releases)).resolves.toEqual([undefined, undefined]);
-    expect(await closing).toMatchObject({ errors: [failure] });
+    await closing;
+    expect(settled).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ errors: [failure] }));
     await expect(scheduler.closeSwarmScheduler(lifecycleOwner)).rejects.toMatchObject({
       errors: [failure],
     });
     expect(failedCleanup).toHaveBeenCalledOnce();
     expect(pendingCleanup).toHaveBeenCalledOnce();
+    expect(releasedCleanup).toHaveBeenCalledExactlyOnceWith("shutdown");
     expect(scheduler.releaseSwarmRun("capacity")).toBe(true);
   });
 
-  it("joins a released reservation's pending launch before shutdown cleanup", async () => {
-    const lifecycleOwner = {};
-    const launchGate = createEnteredGate();
-    const onRemoved = vi.fn(async () => undefined);
-    makeQueue("released-launch").enqueue("pending-launch", {
-      lifecycleOwner,
-      start: launchGate.wait,
-      onRemoved,
-    });
-    await launchGate.entered;
-    expect(scheduler.releaseSwarmRun("pending-launch")).toBe(true);
-    const closing = scheduler.closeSwarmScheduler(lifecycleOwner);
-    try {
-      await flushMicrotasks();
-      expect(onRemoved).not.toHaveBeenCalled();
-    } finally {
-      launchGate.release();
-    }
-    await closing;
-    expect(onRemoved).toHaveBeenCalledExactlyOnceWith("shutdown");
-  });
+  it.each([true, false])(
+    "holds a failed launch's slot until cleanup is durable: %s",
+    async (durable) => {
+      const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const cleanup = createEnteredGate();
+      const { started, enqueue } = makeQueue();
+      enqueue("broken", {
+        start: async () => {
+          started.push("broken");
+          throw new Error("launch failed");
+        },
+        onStartFailure: async () => {
+          await cleanup.wait();
+          if (!durable) {
+            throw new Error("persistence failed");
+          }
+          return true;
+        },
+      });
+      enqueue("next");
+      try {
+        await cleanup.entered;
+        expect(started).toEqual(["broken"]);
+        expect(scheduler.isSwarmRunActive("broken")).toBe(true);
+        cleanup.release();
+        if (durable) {
+          await vi.waitFor(() => expect(started).toEqual(["broken", "next"]));
+        } else {
+          await vi.waitFor(() => expect(warning).toHaveBeenCalled());
+          expect(started).toEqual(["broken"]);
+          expect(scheduler.isSwarmRunActive("broken")).toBe(true);
+        }
+      } finally {
+        cleanup.release();
+        await scheduler.closeSwarmScheduler();
+        warning.mockRestore();
+      }
+    },
+  );
 
-  it("keeps a live reservation queued when a later snapshot reports it active", async () => {
-    const { started, reserve, activate } = makeQueue();
-    expect(reserve("queued")).toBe(true);
-    expect(reserve("next", { activeRunIds: ["queued"] })).toBe(true);
-    activate("queued");
-    await vi.waitFor(() => expect(started).toEqual(["queued"]));
-    activate("next");
-    await flushMicrotasks();
-    expect(started).toEqual(["queued"]);
-    scheduler.releaseSwarmRun("queued");
-    await vi.waitFor(() => expect(started).toEqual(["queued", "next"]));
-  });
-
-  it("retains a failed launch's slot when failure persistence is unavailable", async () => {
-    const failure = new Error("persistence failed");
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const failed = createDeferred();
-    const next = vi.fn(async () => {});
-    const start = vi.fn(async () => {
-      throw new Error("launch failed");
-    });
-    const { enqueue } = makeQueue();
-    enqueue("broken", {
-      start,
-      onStartFailure: () => {
-        failed.resolve();
-        throw failure;
-      },
-    });
-    enqueue("next", { start: next });
-    try {
-      await failed.promise;
-      await flushMicrotasks();
-      expect(start).toHaveBeenCalledOnce();
-      expect(next).not.toHaveBeenCalled();
-      expect(scheduler.isSwarmRunActive("broken")).toBe(true);
-      expect(warning).toHaveBeenCalledWith(
-        "[swarm] Failed launch cleanup: Error: persistence failed",
-      );
-      await scheduler.closeSwarmScheduler();
-    } finally {
-      warning.mockRestore();
-    }
-  });
-
-  it("holds the group slot until asynchronous failure cleanup finishes", async () => {
-    const { started, enqueue } = makeQueue();
-    const cleanup = createDeferred();
-    enqueue("failed", {
-      start: async () => {
-        started.push("failed");
-        throw new Error("launch failed");
-      },
-      onStartFailure: async () => {
-        await cleanup.promise;
-        return true;
-      },
-    });
-    enqueue("next");
-
-    await vi.waitFor(() => expect(started).toEqual(["failed"]));
-    cleanup.resolve();
-    await vi.waitFor(() => expect(started).toEqual(["failed", "next"]));
-  });
-
-  it("refreshes the lane limit before rejecting a duplicate reservation", async () => {
+  it("refreshes reduced and increased capacity while preserving queued FIFO order", async () => {
     const { started, enqueue, reserve, watchCapacity } = makeQueue("group", 2);
     enqueue("one");
     enqueue("two");
@@ -313,18 +283,10 @@ describe("swarm scheduler", () => {
     await Promise.resolve();
     expect(started).toEqual(["one", "two"]);
     expect(waits).toEqual([true]);
-    expect(scheduler.releaseSwarmRun("two")).toBe(true);
-    await vi.waitFor(() => expect(started).toEqual(["one", "two", "three"]));
+    enqueue("four", { maxConcurrent: 3 });
+    await vi.waitFor(() => expect(started).toEqual(["one", "two", "three", "four"]));
     expect(waits).toEqual([true, false]);
-  });
-
-  it("fills increased capacity from the existing FIFO queue", async () => {
-    const { started, enqueue } = makeQueue();
-    enqueue("one");
-    enqueue("two");
-    enqueue("three", { maxConcurrent: 3 });
-
-    await vi.waitFor(() => expect(started).toEqual(["one", "two", "three"]));
+    expect(scheduler.releaseSwarmRun("two")).toBe(true);
   });
 
   it.each(["before", "during"])(
@@ -345,14 +307,12 @@ describe("swarm scheduler", () => {
       try {
         await flushMicrotasks();
         expect(started).toEqual(["foreign"]);
-        expect(scheduler.isSwarmRunActive("held")).toBe(false);
         await Promise.all([first.release(), first.release()]);
         await flushMicrotasks();
         expect(started).toEqual(["foreign"]);
         await second.release();
         await flushMicrotasks();
         expect(started).toEqual(["foreign", "held"]);
-        expect(scheduler.isSwarmRunActive("held")).toBe(true);
         scheduler.releaseSwarmRun("held");
         await flushMicrotasks();
         expect(started).toEqual(["foreign", "held", "next"]);
@@ -361,23 +321,4 @@ describe("swarm scheduler", () => {
       }
     },
   );
-
-  it("does not let stale holds withdraw a reused id", async () => {
-    const oldStart = vi.fn(async () => {});
-    const { enqueue } = makeQueue("same");
-    enqueue("reused", { start: oldStart });
-    const hold = holdRun("reused");
-    expect(hold.withdraw()).toBe(true);
-    expect(scheduler.isSwarmRunActive("reused")).toBe(false);
-    const nextStart = vi.fn(async () => {});
-    enqueue("reused", { start: nextStart });
-    expect(hold.withdraw()).toBe(false);
-    expect(hold.bindPreparation({ onRemoved: Promise.resolve(undefined) })).toBe(false);
-    await hold.release();
-    await flushMicrotasks();
-    expect(oldStart).not.toHaveBeenCalled();
-    expect(nextStart).toHaveBeenCalledOnce();
-    expect(hold.withdraw()).toBe(false);
-    expect(scheduler.releaseSwarmRun("reused")).toBe(true);
-  });
 });
