@@ -64,6 +64,10 @@ type Frame = {
   payload?: unknown;
   error?: { message?: string };
 };
+const scopes = ["operator.read", "operator.write"];
+const revisionInstructions = ({ entry }: SkillsLibraryReceipt) =>
+  path.join(skillLibraryRevisionDir(entry.skillId, entry.revision), "SKILL.md");
+
 function waitForFrame(ws: WebSocket, matches: (frame: Frame) => boolean): Promise<Frame> {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
@@ -117,7 +121,6 @@ async function connectProfile(port: number, email: string, identityPath: string)
     const frame = await challenge;
     const nonce = (frame.payload as { nonce: string }).nonce;
     const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-    const scopes = ["operator.read", "operator.write"];
     const client = {
       id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
       version: "test",
@@ -305,8 +308,8 @@ describe("Gateway pinned manual library read", () => {
                 auth: {
                   mode: "trusted-proxy",
                   identityScopes: {
-                    "alice@example.test": ["operator.read", "operator.write"],
-                    "bob@example.test": ["operator.read", "operator.write"],
+                    "alice@example.test": scopes,
+                    "bob@example.test": scopes,
                   },
                   trustedProxy: {
                     userHeader: "x-forwarded-user",
@@ -320,7 +323,7 @@ describe("Gateway pinned manual library read", () => {
                     writer: {
                       sessions: { others: "none" },
                       agents: "*",
-                      scopes: ["operator.read", "operator.write"],
+                      scopes,
                     },
                   },
                 },
@@ -337,24 +340,35 @@ describe("Gateway pinned manual library read", () => {
             );
             await gateway.startupSettled;
             await waitForGatewayStartup(port);
-            const alice = await connectProfile(
-              port,
-              "alice@example.test",
-              state.path("alice-device", "client", "credentials.sqlite"),
-            );
-            sockets.push(alice);
-            const bob = await connectProfile(
-              port,
-              "bob@example.test",
-              state.path("bob-device", "client", "credentials.sqlite"),
-            );
-            sockets.push(bob);
-            const saved = (await rpc(alice, "skills.library.save", {
-              slug: "manual-guide",
-              content: instructions,
-              files: supporting,
-              expectedRevision: null,
-            })) as SkillsLibraryReceipt;
+            const connect = async (name: string) => {
+              const ws = await connectProfile(
+                port,
+                `${name}@example.test`,
+                state.path(`${name}-device`, "client", "credentials.sqlite"),
+              );
+              sockets.push(ws);
+              return ws;
+            };
+            const alice = await connect("alice");
+            const bob = await connect("bob");
+            const save = async (
+              ws: WebSocket,
+              slug: string,
+              previous?: SkillsLibraryReceipt,
+            ): Promise<SkillsLibraryReceipt> =>
+              (await rpc(ws, "skills.library.save", {
+                slug,
+                ...(previous ? { skillId: previous.entry.skillId } : {}),
+                expectedRevision: previous?.entry.revision ?? null,
+                content: previous ? instructions.replaceAll("R1", "R2") : instructions,
+                files: previous
+                  ? supporting.map((file) => ({
+                      ...file,
+                      content: file.content.replaceAll("R1", "R2"),
+                    }))
+                  : supporting,
+              })) as SkillsLibraryReceipt;
+            const saved = await save(alice, "manual-guide");
             expect(saved.entry.ownerProfileId).toBe(aliceProfile.id);
             const created = (await rpc(alice, "sessions.create", {
               agentId: "main",
@@ -373,22 +387,8 @@ describe("Gateway pinned manual library read", () => {
                 revision: saved.entry.revision,
               }),
             );
-            const newer = (await rpc(alice, "skills.library.save", {
-              slug: "manual-guide",
-              skillId: saved.entry.skillId,
-              expectedRevision: saved.entry.revision,
-              content: instructions.replaceAll("R1", "R2"),
-              files: supporting.map((file) => ({
-                ...file,
-                content: file.content.replaceAll("R1", "R2"),
-              })),
-            })) as SkillsLibraryReceipt;
-            const other = (await rpc(bob, "skills.library.save", {
-              slug: "other-guide",
-              content: instructions,
-              files: supporting,
-              expectedRevision: null,
-            })) as SkillsLibraryReceipt;
+            const newer = await save(alice, "manual-guide", saved);
+            const other = await save(bob, "other-guide");
             await expect(
               rpc(bob, "skills.library.read", { skillId: saved.entry.skillId }),
             ).rejects.toThrow(/SKILL_LIBRARY_NOT_FOUND/);
@@ -410,22 +410,12 @@ describe("Gateway pinned manual library read", () => {
               {
                 id: "other_profile",
                 name: "read",
-                args: {
-                  path: path.join(
-                    skillLibraryRevisionDir(other.entry.skillId, other.entry.revision),
-                    "SKILL.md",
-                  ),
-                },
+                args: { path: revisionInstructions(other) },
               },
               {
                 id: "unselected_revision",
                 name: "read",
-                args: {
-                  path: path.join(
-                    skillLibraryRevisionDir(newer.entry.skillId, newer.entry.revision),
-                    "SKILL.md",
-                  ),
-                },
+                args: { path: revisionInstructions(newer) },
               },
               { id: "unrelated", name: "read", args: { path: outside } },
               { id: "list", name: "ls", args: { path: skillRoot } },
@@ -492,10 +482,7 @@ describe("Gateway pinned manual library read", () => {
                 ).toBe(instructions);
                 await expect(
                   read.execute("compaction-unselected", {
-                    path: path.join(
-                      skillLibraryRevisionDir(newer.entry.skillId, newer.entry.revision),
-                      "SKILL.md",
-                    ),
+                    path: revisionInstructions(newer),
                   }),
                 ).rejects.toThrow(/Path escapes sandbox root/i);
               } finally {

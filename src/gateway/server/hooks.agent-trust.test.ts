@@ -1,6 +1,3 @@
-/**
- * Hook endpoint trust tests for agent dispatch and gateway network config.
- */
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -120,21 +117,47 @@ function buildAgentPayload(name: string, agentId?: string) {
     name,
     agentId,
     effectiveAgentId: agentId ?? "main",
-    idempotencyKey: undefined,
     wakeMode: "now" as const,
     sessionKey: "session-1",
     sessionMode: "isolated" as const,
     sourcePath: "/hooks/agent",
     deliver: false,
     channel: "last" as const,
-    to: undefined,
     delivery: { mode: "none" as const },
-    model: undefined,
-    thinking: undefined,
-    timeoutSeconds: undefined,
-    allowUnsafeExternalContent: undefined,
-    externalContentSource: undefined,
   };
+}
+
+function deliveryPayload(name: string, accountId?: string) {
+  return {
+    ...buildAgentPayload(name),
+    deliver: true,
+    channel: "telegram",
+    to: "123456",
+    accountId,
+    delivery: { mode: "announce", channel: "telegram", to: "123456", accountId },
+  };
+}
+
+const finishedRun = (summary = "done", delivered = false) => ({ status: "ok", summary, delivered });
+const waitForRuns = (count: number) =>
+  waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(count));
+const waitForIdle = () => waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+function dispatchNamed(name: string, sessionKey: string) {
+  return dispatchAgentHook({ ...buildAgentPayload(name), message: name.toLowerCase(), sessionKey });
+}
+function queueBlockedRun(gate: ReturnType<typeof createDeferred>, summary = "first done") {
+  runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+    await gate.promise;
+    return finishedRun(summary);
+  });
+}
+function expectFailureNotice(text: string) {
+  return waitForFast(() =>
+    expect(enqueueSessionEventMock).toHaveBeenCalledWith(
+      text,
+      expect.objectContaining({ agentId: "main", sessionKey: "agent:main:main", source: "hook" }),
+    ),
+  );
 }
 
 function dispatchAgentHook(payload: unknown): unknown {
@@ -280,7 +303,7 @@ describe("dispatchAgentHook trust handling", () => {
       observed = scope?.resolveGatewayContext?.();
       observedClient = scope?.client;
       observedBroker = getSpawnBroker();
-      return { status: "ok", summary: "done", delivered: false };
+      return finishedRun();
     });
     runWithSpawnBroker(broker, () =>
       createGatewayHooksRequestHandler({
@@ -296,55 +319,34 @@ describe("dispatchAgentHook trust handling", () => {
     expect(observed).toBe(gatewayContext);
     expect(observedClient).toBeUndefined();
     expect(observedBroker).toBe(broker);
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForIdle();
   });
 
-  it("rejects an invalid explicit delivery account before the agent runner", async () => {
-    validateExplicitMessageAccountSelectionMock.mockImplementationOnce(() => {
-      throw new Error('Unknown account "missing" for channel telegram.');
-    });
-
-    const result = await dispatchAgentHook({
-      ...buildAgentPayload("Invalid account"),
-      deliver: true,
-      channel: "telegram",
-      to: "123456",
-      accountId: "missing",
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "123456",
-        accountId: "missing",
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      statusCode: 400,
-      error: 'Unknown account "missing" for channel telegram.',
-      runId: expect.any(String),
-    });
-    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "rejects explicit delivery accounts (removed after queue: %s)",
+    async (queued) => {
+      const error = 'Unknown account "missing" for channel telegram.';
+      if (queued) {
+        validateExplicitMessageAccountSelectionMock.mockImplementationOnce(
+          ({ accountId }: { accountId?: unknown }) => accountId as string,
+        );
+      }
+      validateExplicitMessageAccountSelectionMock.mockImplementationOnce(() => {
+        throw new Error(error);
+      });
+      expect(await dispatchAgentHook(deliveryPayload("Invalid account", "missing"))).toMatchObject({
+        ok: false,
+        statusCode: 400,
+        error,
+        runId: expect.any(String),
+      });
+      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("binds omitted delivery accounts to the channel default", async () => {
-    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
-      status: "ok",
-      summary: "done",
-      delivered: true,
-    });
-
-    const result = await dispatchAgentHook({
-      ...buildAgentPayload("Default account"),
-      deliver: true,
-      channel: "telegram",
-      to: "123456",
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "123456",
-      },
-    });
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce(finishedRun("done", true));
+    const result = await dispatchAgentHook(deliveryPayload("Default account"));
 
     expect(result).toMatchObject({ ok: true });
     expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
@@ -355,36 +357,6 @@ describe("dispatchAgentHook trust handling", () => {
         }),
       }),
     );
-  });
-
-  it("revalidates an explicit delivery account against queued-run config", async () => {
-    validateExplicitMessageAccountSelectionMock
-      .mockImplementationOnce(({ accountId }: { accountId?: unknown }) => accountId as string)
-      .mockImplementationOnce(() => {
-        throw new Error('Unknown account "removed" for channel telegram.');
-      });
-
-    const result = await dispatchAgentHook({
-      ...buildAgentPayload("Removed account"),
-      deliver: true,
-      channel: "telegram",
-      to: "123456",
-      accountId: "removed",
-      delivery: {
-        mode: "announce",
-        channel: "telegram",
-        to: "123456",
-        accountId: "removed",
-      },
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      statusCode: 400,
-      error: 'Unknown account "removed" for channel telegram.',
-      runId: expect.any(String),
-    });
-    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
   });
 
   it("retains detached agent work after the hook request closes", async () => {
@@ -403,7 +375,7 @@ describe("dispatchAgentHook trust handling", () => {
         assert(signal, "hook execution must own its cancellation scope");
         signal.throwIfAborted();
         subordinateAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
-        return { status: "ok", summary: "done", delivered: false };
+        return finishedRun();
       },
     );
     const dispatcher = createGatewayHookDispatcher(buildMinimalParams());
@@ -433,76 +405,47 @@ describe("dispatchAgentHook trust handling", () => {
     }
   });
 
-  it("serializes canonical aliases for the same session in dispatch order", async () => {
-    const dispatch = resolveDispatchAgentHook();
+  it("serializes canonical aliases in dispatch order and loads fresh config for queued runs", async () => {
+    let currentConfig = mainRosterConfig();
+    loadConfigMock.mockImplementation(() => currentConfig);
     const firstGate = createDeferred();
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      await firstGate.promise;
-      return { status: "ok", summary: "first done", delivered: false };
-    });
-    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
-      status: "ok",
-      summary: "second done",
-      delivered: false,
-    });
-
-    dispatch({
-      ...buildAgentPayload("First"),
-      message: "first",
-      sessionKey: "main",
-    });
-    dispatch({
-      ...buildAgentPayload("Second"),
-      message: "second",
-      sessionKey: "agent:main:main",
-    });
-
-    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+    queueBlockedRun(firstGate);
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce(finishedRun("second done"));
+    dispatchNamed("First", "main");
+    dispatchNamed("Second", "agent:main:main");
+    await waitForRuns(1);
     expect(runCronIsolatedAgentTurnMock.mock.calls[0]?.[0]).toMatchObject({
       message: "first",
       sessionKey: "main",
     });
 
+    currentConfig = { ...mainRosterConfig(), session: { mainKey: "reloaded" } };
     firstGate.resolve();
 
-    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+    await waitForRuns(2);
     expect(runCronIsolatedAgentTurnMock.mock.calls[1]?.[0]).toMatchObject({
+      agentId: "main",
+      cfg: currentConfig,
       message: "second",
       sessionKey: "agent:main:main",
     });
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForIdle();
   });
 
   it("runs different sessions in parallel", async () => {
-    const dispatch = resolveDispatchAgentHook();
     const firstGate = createDeferred();
     const secondGate = createDeferred();
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(
-      async (params: { onExecutionStarted?: () => void }) => {
-        params.onExecutionStarted?.();
-        await firstGate.promise;
-        return { status: "ok", summary: "first done", delivered: false };
-      },
-    );
-
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(
-      async (params: { onExecutionStarted?: () => void }) => {
-        params.onExecutionStarted?.();
-        await secondGate.promise;
-        return { status: "ok", summary: "second done", delivered: false };
-      },
-    );
-
-    const firstAdmission = dispatch({
-      ...buildAgentPayload("First"),
-      message: "first",
-      sessionKey: "agent:main:session-a",
-    });
-    const secondAdmission = dispatch({
-      ...buildAgentPayload("Second"),
-      message: "second",
-      sessionKey: "agent:main:session-b",
-    });
+    for (const gate of [firstGate, secondGate]) {
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(
+        async (params: { onExecutionStarted?: () => void }) => {
+          params.onExecutionStarted?.();
+          await gate.promise;
+          return finishedRun();
+        },
+      );
+    }
+    const firstAdmission = dispatchNamed("First", "agent:main:session-a");
+    const secondAdmission = dispatchNamed("Second", "agent:main:session-b");
 
     try {
       const admissions = await Promise.all([firstAdmission, secondAdmission]);
@@ -515,74 +458,22 @@ describe("dispatchAgentHook trust handling", () => {
     } finally {
       firstGate.resolve();
       secondGate.resolve();
-      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await waitForIdle();
     }
   });
 
-  it("uses fresh config when a queued hook starts after reload", async () => {
-    const dispatch = resolveDispatchAgentHook();
-    let currentConfig = mainRosterConfig();
-    loadConfigMock.mockImplementation(() => currentConfig);
-    const firstGate = createDeferred();
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      await firstGate.promise;
-      return { status: "ok", summary: "first done", delivered: false };
-    });
-    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
-      status: "ok",
-      summary: "second done",
-      delivered: false,
-    });
-
-    dispatch({ ...buildAgentPayload("First"), message: "first", sessionKey: "main" });
-    dispatch({ ...buildAgentPayload("Second"), message: "second", sessionKey: "main" });
-    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
-
-    currentConfig = { ...mainRosterConfig(), session: { mainKey: "reloaded" } };
-    firstGate.resolve();
-
-    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
-    expect(runCronIsolatedAgentTurnMock.mock.calls[1]?.[0]).toMatchObject({
-      agentId: "main",
-      cfg: currentConfig,
-      message: "second",
-      sessionKey: "main",
-    });
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-  });
-
   it("continues a same-session hook queue after a failed run", async () => {
-    const dispatch = resolveDispatchAgentHook();
     runCronIsolatedAgentTurnMock.mockRejectedValueOnce(new Error("agent exploded"));
-    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
-      status: "ok",
-      summary: "second done",
-      delivered: false,
-    });
-
-    dispatch({
-      ...buildAgentPayload("First"),
-      message: "first",
-      sessionKey: "shared-session",
-    });
-    dispatch({
-      ...buildAgentPayload("Second"),
-      message: "second",
-      sessionKey: "shared-session",
-    });
-
-    await waitForFast(() =>
-      expect(enqueueSessionEventMock).toHaveBeenCalledWith(
-        "Hook First (error): Error: agent exploded",
-        expect.objectContaining({ agentId: "main", sessionKey: "agent:main:main", source: "hook" }),
-      ),
-    );
-    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(2));
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce(finishedRun("second done"));
+    dispatchNamed("First", "shared-session");
+    dispatchNamed("Second", "shared-session");
+    await expectFailureNotice("Hook First (error): Error: agent exploded");
+    await waitForRuns(2);
     expect(runCronIsolatedAgentTurnMock.mock.calls[1]?.[0]).toMatchObject({
       message: "second",
       sessionKey: "shared-session",
     });
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForIdle();
   });
 
   it("keeps cron admission details behind stable public errors", async () => {
@@ -600,13 +491,10 @@ describe("dispatchAgentHook trust handling", () => {
       error: "hook agent run was rejected because the target session changed",
       runId: expect.any(String),
     });
-    await waitForFast(() =>
-      expect(enqueueSessionEventMock).toHaveBeenCalledWith(
-        'Hook Conflict (error): Session "agent:private:canonical" changed while starting work. Retry.',
-        expect.objectContaining({ agentId: "main", sessionKey: "agent:main:main", source: "hook" }),
-      ),
+    await expectFailureNotice(
+      'Hook Conflict (error): Session "agent:private:canonical" changed while starting work. Retry.',
     );
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForIdle();
   });
 
   it("does not start same-session work after its admission timeout", async () => {
@@ -619,23 +507,15 @@ describe("dispatchAgentHook trust handling", () => {
         params.onExecutionStarted?.();
         firstRunStarted.resolve();
         await releaseFirstRun.promise;
-        return { status: "ok", summary: "first done", delivered: false };
+        return finishedRun("first done");
       },
     );
 
-    const firstAdmission = dispatchAgentHook({
-      ...buildAgentPayload("First"),
-      message: "first",
-      sessionKey: "shared-session",
-    });
+    const firstAdmission = dispatchNamed("First", "shared-session");
     await firstRunStarted.promise;
     await expect(firstAdmission).resolves.toMatchObject({ ok: true });
 
-    const timedOutAdmission = dispatchAgentHook({
-      ...buildAgentPayload("Second"),
-      message: "second",
-      sessionKey: "shared-session",
-    });
+    const timedOutAdmission = dispatchNamed("Second", "shared-session");
     await expect(timedOutAdmission).resolves.toMatchObject({
       ok: false,
       statusCode: 503,
@@ -644,7 +524,7 @@ describe("dispatchAgentHook trust handling", () => {
     expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
 
     releaseFirstRun.resolve();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await waitForIdle();
     expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
   });
 
@@ -674,24 +554,21 @@ describe("dispatchAgentHook trust handling", () => {
       model: "anthropic/claude-sonnet-4-6",
     });
 
-    await waitForFast(() =>
-      expect(enqueueSessionEventMock).toHaveBeenCalledWith(
-        `Hook Model hook (error): ${diagnosticSummary}`,
-        expect.objectContaining({ agentId: "main", sessionKey: "agent:main:main", source: "hook" }),
-      ),
-    );
+    await expectFailureNotice(`Hook Model hook (error): ${diagnosticSummary}`);
     const meta = logWarnMetaFor(
       "hook agent run completed",
       (candidate) => candidate.name === "Model hook",
     );
-    expect(meta.sourcePath).toBe("/hooks/agent");
-    expect(typeof meta.runId).toBe("string");
-    expect(typeof meta.jobId).toBe("string");
-    expect(meta.logicalSessionKey).toBe("session-1");
+    expect(meta).toMatchObject({
+      sourcePath: "/hooks/agent",
+      runId: expect.any(String),
+      jobId: expect.any(String),
+      logicalSessionKey: "session-1",
+      status: "error",
+      model: "anthropic/claude-sonnet-4-6",
+      summary: diagnosticSummary,
+    });
     expect(meta.sessionKey).toBeUndefined();
-    expect(meta.status).toBe("error");
-    expect(meta.model).toBe("anthropic/claude-sonnet-4-6");
-    expect(meta.summary).toBe(diagnosticSummary);
     expect(meta).not.toHaveProperty("consoleMessage");
     expect(logHooksWarnMock).toHaveBeenCalledWith(expect.stringContaining(diagnosticSummary), meta);
     expect(logHooksWarnMock).toHaveBeenCalledWith(

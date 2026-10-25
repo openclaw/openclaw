@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type {
   SessionEventOutcome,
@@ -106,9 +106,7 @@ function controlledOwnedHandoff() {
   let acceptanceReads = 0;
   mocks.enqueue.mockImplementationOnce((_text, options) => {
     const occurrence = options.occurrences?.[0];
-    if (!occurrence?.id) {
-      throw new Error("expected the hook's queued occurrence");
-    }
+    assert(occurrence?.id, "expected the hook's queued occurrence");
     const claim = claimSystemEventTurn(options.sessionKey, [occurrence], () => {}, options.agentId);
     expect(claim).toBeDefined();
     submitted.resolve();
@@ -153,6 +151,34 @@ function expectWake(
 ) {
   expect(response.status).toBe(status);
   expect(JSON.parse(response.body)).toMatchObject(body);
+}
+
+const acceptanceResult = (accepted: boolean) =>
+  accepted ? { ok: true as const } : { ok: false as const, error: "admission refused" };
+
+async function withJoinedWakes(
+  handlers: [ReturnType<typeof fixture>["handler"], ReturnType<typeof fixture>["handler"]?],
+  accepted: boolean,
+  inspect: (handoff: ReturnType<typeof controlledOwnedHandoff>) => void,
+) {
+  const handoff = controlledOwnedHandoff();
+  const first = post(handlers[0]);
+  let second: ReturnType<typeof post> | undefined;
+  try {
+    await awaitGateBeforeSettlement(handoff.submitted.promise, first, "First wake never submitted");
+    second = post(handlers[1] ?? handlers[0]);
+    await awaitGateBeforeSettlement(
+      handoff.joined.promise,
+      second,
+      "Joining request returned before original admission",
+    );
+    inspect(handoff);
+  } finally {
+    handoff.acceptance.resolve(acceptanceResult(accepted));
+    await Promise.all([first, second]);
+  }
+  assert(second, "second wake must have joined before inspecting responses");
+  return { handoff, responses: await Promise.all([first, second]) };
 }
 
 beforeEach(() => {
@@ -331,7 +357,7 @@ describe("authenticated immediate hook wake admission", () => {
         );
         expect(peekSystemEventEntries(queueKey)).toEqual(original);
       } finally {
-        acceptance.resolve(accepted ? { ok: true } : { ok: false, error: "admission refused" });
+        acceptance.resolve(acceptanceResult(accepted));
         await immediate;
       }
       const response = await immediate;
@@ -354,49 +380,24 @@ describe("authenticated immediate hook wake admission", () => {
     "joins concurrent immediate requests to one admission decision (accepted: %s)",
     async (accepted) => {
       const { handler } = fixture();
-      const handoff = controlledOwnedHandoff();
-      const first = post(handler);
-      let second: ReturnType<typeof post> | undefined;
-      try {
-        await awaitGateBeforeSettlement(
-          handoff.submitted.promise,
-          first,
-          "First wake never submitted",
-        );
-        second = post(handler);
-        await awaitGateBeforeSettlement(
-          handoff.joined.promise,
-          second,
-          "Coalesced wake returned before joining the original acceptance",
-        );
+      const { handoff, responses } = await withJoinedWakes([handler], accepted, (pending) => {
         expect(mocks.enqueue).toHaveBeenCalledOnce();
-        expect(handoff.cancel).not.toHaveBeenCalled();
+        expect(pending.cancel).not.toHaveBeenCalled();
         expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
         expect(
           peekSystemEventEntries(sessionKey).map((event) =>
             isSystemEventTurnOwned(sessionKey, event),
           ),
         ).toEqual([true]);
-      } finally {
-        handoff.acceptance.resolve(
-          accepted ? { ok: true } : { ok: false, error: "admission refused" },
-        );
-        await Promise.all([first, second]);
-      }
-      const responses = await Promise.all([first, second]);
-      expect(responses.map((response) => response.status)).toEqual(
-        accepted ? [200, 200] : [503, 503],
-      );
-      expect(responses.map((response) => JSON.parse(response.body))).toMatchObject(
-        accepted
-          ? [
-              { ok: true, eventOutcome: "queued" },
-              { ok: true, eventOutcome: "coalesced" },
-            ]
-          : [
-              { ok: false, error: "admission refused" },
-              { ok: false, error: "admission refused" },
-            ],
+      });
+      responses.forEach((response, index) =>
+        expectWake(
+          response,
+          accepted ? 200 : 503,
+          accepted
+            ? { ok: true, eventOutcome: index === 0 ? "queued" : "coalesced" }
+            : acceptanceResult(false),
+        ),
       );
       expect(mocks.enqueue).toHaveBeenCalledOnce();
       if (accepted) {
@@ -415,49 +416,29 @@ describe("authenticated immediate hook wake admission", () => {
     });
     const original = fixture(dispatcher);
     const joining = fixture(dispatcher);
-    const handoff = controlledOwnedHandoff();
-    const first = post(original.handler);
-    let second: ReturnType<typeof post> | undefined;
-    try {
-      await awaitGateBeforeSettlement(
-        handoff.submitted.promise,
-        first,
-        "First wake never submitted",
-      );
-      second = post(joining.handler);
-      await awaitGateBeforeSettlement(
-        handoff.joined.promise,
-        second,
-        "Joining request returned before original admission",
-      );
-      joining.revoke();
-    } finally {
-      handoff.acceptance.resolve({ ok: true });
-      await Promise.all([first, second]);
-    }
-    const responses = await Promise.all([first, second]);
+    const { handoff, responses } = await withJoinedWakes(
+      [original.handler, joining.handler],
+      true,
+      () => {
+        joining.revoke();
+      },
+    );
     expect(responses.map((response) => response.status)).toEqual([200, 409]);
     expect(handoff.cancel).not.toHaveBeenCalled();
     expect(mocks.enqueue).toHaveBeenCalledOnce();
     const retained = peekSystemEventEntries(sessionKey);
     expect(retained).toHaveLength(1);
     const occurrence = retained[0];
-    if (!occurrence) {
-      throw new Error("expected the original occurrence");
-    }
+    assert(occurrence, "expected the original occurrence");
     expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(true);
   });
 
   it("refuses a foreign-owned occurrence without consuming or cancelling it", async () => {
     const occurrence = enqueueRequiredSystemEventEntry("Wake notification", { sessionKey });
-    if (!occurrence) {
-      throw new Error("expected a queued occurrence");
-    }
+    assert(occurrence, "expected a queued occurrence");
     const cancel = vi.fn();
     const owner = claimSystemEventTurn(sessionKey, [occurrence], cancel, "main");
-    if (!owner) {
-      throw new Error("expected foreign queue ownership");
-    }
+    assert(owner, "expected foreign queue ownership");
     try {
       const response = await post(fixture().handler);
       expectWake(response, 503, {
