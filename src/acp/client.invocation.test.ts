@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -93,6 +93,17 @@ describe("ACP client self-invocation", () => {
     process.argv = [process.execPath, entry];
 
     await expectInvocation({ serverVerbose: true }, process.execPath, [entry, "acp", "--verbose"]);
+  });
+
+  it("pins a loose entry symlink before launching the ACP child", async () => {
+    const directory = tempDirs.make("openclaw-acp-symlink-");
+    const entry = path.join(directory, "openclaw.mjs");
+    const link = path.join(directory, "current.mjs");
+    await writeFile(entry, "export {};\n");
+    await symlink(entry, link);
+    process.argv = [process.execPath, link];
+
+    await expectInvocation({}, process.execPath, [entry, "acp"]);
   });
 
   it.each([

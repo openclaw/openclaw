@@ -35,7 +35,7 @@ describe("memory rebuild cache reuse", () => {
         fixture.createConfig({
           sources: ["memory"],
           cacheEnabled: true,
-          vectorEnabled: false,
+          vectorEnabled: true,
         }),
       );
       (manager as unknown as { cache: { maxEntries?: number } }).cache.maxEntries = 12;
@@ -76,18 +76,31 @@ describe("memory rebuild cache reuse", () => {
         await rebuild;
       }
 
-      expect(fixture.provider.embeddedBatchTexts.toSorted()).toEqual([
-        "cached text 0",
-        "cached text 1",
-        "cached text 2",
-        "cached text 3",
-      ]);
+      expect(fixture.provider.embeddedBatchTexts.toSorted()).toEqual(
+        emptyIndex ? ["cached text 0", "cached text 1", "cached text 2", "cached text 3"] : [],
+      );
       expect(writer.prepare("SELECT count(*) AS n FROM memory_index_chunks").get()).toEqual({
         n: 12,
       });
       expect(writer.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get()).toEqual({
         n: 12,
       });
+      if (!emptyIndex && !failPublication) {
+        await manager.close();
+        const changedModel = await fixture.getFreshManager(
+          fixture.createConfig({
+            sources: ["memory"],
+            cacheEnabled: true,
+            vectorEnabled: true,
+            model: "different-embedding-model",
+          }),
+        );
+        fixture.provider.embeddedBatchTexts.length = 0;
+        await changedModel.sync({ reason: "cli", force: true });
+        expect(fixture.provider.embeddedBatchTexts.toSorted()).toEqual(
+          Array.from({ length: 12 }, (_, i) => `cached text ${i}`).toSorted(),
+        );
+      }
     },
   );
 

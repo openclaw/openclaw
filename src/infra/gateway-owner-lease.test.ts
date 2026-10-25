@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
+import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import * as pidAlive from "../shared/pid-alive.js";
+import * as provenance from "../state/openclaw-agent-db-lease-provenance.js";
 import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
 import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -18,6 +20,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as leaseHeartbeat from "../state/openclaw-state-lease-heartbeat.js";
 import { renewOpenClawStateLeaseInTransaction } from "../state/openclaw-state-lease-store.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { mockLinuxNamespace } from "./gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
@@ -34,7 +37,10 @@ import * as stateOwners from "./gateway-state-owner.js";
 import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { writeGatewayServiceRestartIntentSync } from "./restart-intent.js";
-import { readSqliteDatabaseCleanClose } from "./sqlite-database-admission.js";
+import {
+  readSqliteDatabaseCleanClose,
+  readSqliteDatabaseIntegrityVerification,
+} from "./sqlite-database-admission.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -517,6 +523,37 @@ describe("Gateway owner lease", () => {
     const lease = owner.acquire();
     await lease.ready;
     expect(readGatewayOwnerLease({ env })?.state).toBe("live");
+  });
+
+  it("publishes its state file provenance after Gateway startup admission and listening", async () => {
+    const state = await createOpenClawTestState({ label: "gateway-owner-provenance" });
+    try {
+      await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+      const pathname = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeOpenClawStateDatabaseAsync();
+      // Existing-file startup inspects a private snapshot rather than certifying the live file.
+      renameSync(pathname, `${pathname}.seed`);
+      fs.copyFileSync(`${pathname}.seed`, pathname);
+      await runStartupConfigPreflight({ gateway: true });
+      const lock = await acquireLock(state.env);
+      try {
+        expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
+        vi.spyOn(provenance, "readAgentDatabaseLeaseProvenance").mockReturnValue(
+          "fixture:state-file",
+        );
+
+        lock?.markListening?.();
+
+        expect(readGatewayOwnerLease({ env: state.env, current: true })).toMatchObject({
+          listeningAt: expect.any(Number),
+          stateDatabaseProvenance: "fixture:state-file",
+        });
+      } finally {
+        await lock?.release();
+      }
+    } finally {
+      await state.cleanup();
+    }
   });
 
   it("repairs a missing publication identity on heartbeat and becomes live", async () => {

@@ -104,7 +104,7 @@ export function hydrateSessionActorState(
               "session_key",
             ])
             .where("session_participants.session_key", "=", eb.ref("session_nodes.session_key"))
-            .orderBy("first_prompted_at")
+            .orderBy("first_prompted_at", (order) => order.asc().nullsFirst())
             .orderBy("actor_id")
             .orderBy("identity_namespace"),
           ["first_prompted_at", "actor_id", "identity_namespace"],
@@ -315,8 +315,11 @@ export function hydrateSessionActorState(
   for (const row of rows) {
     const entry = parseReadableSessionEntryData(database, row, "full");
     const participants = decodeJsonProjection(row.actor_participants).map(readParticipantRecord);
-    // Keep exact persisted columns for no-op comparisons, without retaining aggregate payloads.
+    // Snapshot comparisons use decoded entries; only node columns need exact persisted bytes.
     const {
+      skills_snapshot_json: _skills,
+      system_prompt_report_json: _systemPrompt,
+      session_diff_baseline_json: _diffBaseline,
       actor_has_board: _hasBoard,
       actor_participants: _participants,
       actor_members: _members,

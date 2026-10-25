@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
 import { consumeRootOptionToken as consumeLauncherRootOptionToken } from "./cli-root-options.mjs";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.mjs";
@@ -11,11 +12,8 @@ import {
   resolveLauncherStopTimeoutMs,
 } from "./gateway-shutdown-budget.mjs";
 import { nodeRuntimePathEntries, withNodeRuntimePath } from "./node-runtime-env.mjs";
-import {
-  detectCurrentSqliteCapabilities,
-  nodeRuntimeFailure,
-  SQLITE_CAPABILITY_PROBE,
-} from "./node-sqlite.mjs";
+import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "./node-sqlite.mjs";
+import { createRuntimeProcessScriptFile } from "./runtime-process-scripts.generated.mjs";
 
 export { consumeLauncherRootOptionToken };
 
@@ -420,31 +418,29 @@ export function isUsableNode(
       probeEnv[key] = value;
     }
   }
+  let script;
   try {
-    const result = spawnSync(
-      resolved,
-      [
-        "-e",
-        `const probe = ${SQLITE_CAPABILITY_PROBE}; process.stdout.write(JSON.stringify({ version: process.versions.node, probe }));`,
-      ],
-      {
-        encoding: "utf8",
-        env: probeEnv,
-        timeout: 5_000,
-        killSignal: "SIGKILL",
-        maxBuffer: 65_536,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    script = createRuntimeProcessScriptFile("daemonRuntimeProbe");
+    const result = spawnSync(resolved, [fileURLToPath(script.url), "node"], {
+      encoding: "utf8",
+      env: probeEnv,
+      timeout: 5_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 65_536,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     const details = JSON.parse(result.stdout);
     return (
       result.status === 0 &&
-      !nodeRuntimeFailure(details.version, details.probe) &&
-      (!acceptVersion || acceptVersion(details.version))
+      !details.bunVersion &&
+      !nodeRuntimeFailure(details.nodeVersion, details.sqliteProbe) &&
+      (!acceptVersion || acceptVersion(details.nodeVersion))
     );
   } catch {
     return false;
+  } finally {
+    script?.dispose();
   }
 }
 

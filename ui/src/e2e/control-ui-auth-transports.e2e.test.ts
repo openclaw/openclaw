@@ -20,6 +20,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { verifyGatewayServedControlUiBundle } from "./control-ui-auth-proof.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway-env.test-support.ts";
 
 const viewport = { height: 900, width: 1280 };
 const trustedProxyUser = "qa-operator";
@@ -348,14 +349,7 @@ async function startRealGateway(allowedOrigin: string, signal: AbortSignal) {
     env: {
       OPENCLAW_GATEWAY_PASSWORD: undefined,
       OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      VITEST: "1",
+      ...deviceGatewayEnv,
     },
   });
   const state = gatewayState;

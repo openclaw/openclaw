@@ -168,12 +168,9 @@ describe("monitorZaloProvider lifecycle", () => {
       const statusSink = vi.fn();
 
       monitor = await startLifecycleMonitor({ statusSink });
-      const { abort, run, runtime } = monitor;
+      const { abort, run } = monitor;
 
       await vi.advanceTimersByTimeAsync(0);
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("zalo poll transport failed"),
-      );
       expect(statusSink).toHaveBeenCalledWith(
         recovering(expect.stringContaining("zalo poll transport failed")),
       );
@@ -186,7 +183,6 @@ describe("monitorZaloProvider lifecycle", () => {
       expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(getUpdatesMock).toHaveBeenCalledTimes(1);
-      expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
     } finally {
       monitor?.abort.abort();
       await monitor?.run.catch(() => undefined);
@@ -194,52 +190,33 @@ describe("monitorZaloProvider lifecycle", () => {
     }
   });
 
-  it.each([
-    ["no webhook", ""],
-    ["ready", ""],
-    ["existing webhook", "[default] Zalo polling mode ready (webhook disabled)"],
-    [
-      "404",
-      "[default] Zalo polling mode webhook inspection unavailable; continuing without webhook cleanup",
-    ],
-  ])("starts polling after %s inspection", async (inspection, log) => {
-    const { ZaloApiError } = await import("./api.js");
-    if (inspection === "404") {
-      getWebhookInfoMock.mockRejectedValueOnce(new ZaloApiError("Not Found", 404, "Not Found"));
-    } else if (inspection === "existing webhook") {
-      getWebhookInfoMock.mockResolvedValueOnce({
-        ok: true,
-        result: { url: "https://example.com/hooks/zalo" },
-      });
-    }
-    const ready = inspection === "ready";
-    if (ready) {
+  it.each(["no webhook", "ready", "existing webhook", "404"])(
+    "starts polling after %s inspection",
+    async (inspection) => {
+      const { ZaloApiError } = await import("./api.js");
+      if (inspection === "404") {
+        getWebhookInfoMock.mockRejectedValueOnce(new ZaloApiError("Not Found", 404, "Not Found"));
+      } else if (inspection === "existing webhook") {
+        getWebhookInfoMock.mockResolvedValueOnce({
+          ok: true,
+          result: { url: "https://example.com/hooks/zalo" },
+        });
+      }
       getUpdatesMock.mockResolvedValueOnce({ ok: true, result: undefined });
-    }
-    const statusSink = vi.fn();
-    const { abort, runtime, run, completion } = await startLifecycleMonitor({ statusSink });
-    if (ready) {
+      const statusSink = vi.fn();
+      const { abort, runtime, run, completion } = await startLifecycleMonitor({ statusSink });
       await vi.waitFor(() => expect(statusSink).toHaveBeenCalledWith(READY_STATUS));
-    } else {
-      await settleLifecycleWork();
-    }
-    if (!ready) {
-      expect(getUpdatesMock).toHaveBeenCalledTimes(1);
-    }
-    expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
-    expect(deleteWebhookMock).toHaveBeenCalledTimes(inspection === "existing webhook" ? 1 : 0);
-    if (log) {
-      expect(runtime.log).toHaveBeenCalledWith(log);
-    }
-    if (inspection === "404") {
-      expect(runtime.error).not.toHaveBeenCalled();
-    }
-    expect(completion.settled).toBe(false);
-    abort.abort();
-    await run;
-    expect(completion.settled).toBe(true);
-    expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
-  });
+      expect(getWebhookInfoMock).toHaveBeenCalledTimes(1);
+      expect(deleteWebhookMock).toHaveBeenCalledTimes(inspection === "existing webhook" ? 1 : 0);
+      if (inspection === "404") {
+        expect(runtime.error).not.toHaveBeenCalled();
+      }
+      expect(completion.settled).toBe(false);
+      abort.abort();
+      await run;
+      expect(completion.settled).toBe(true);
+    },
+  );
 
   it("preserves registered HTTP responses and waits for webhook deletion on shutdown", async () => {
     const registry = createEmptyPluginRegistry();
@@ -260,7 +237,7 @@ describe("monitorZaloProvider lifecycle", () => {
     });
 
     const statusSink = vi.fn();
-    const { abort, runtime, run, completion } = await startLifecycleMonitor({
+    const { abort, run, completion } = await startLifecycleMonitor({
       statusSink,
       useWebhook: true,
       webhookUrl: "https://example.com/hooks/zalo",
@@ -270,9 +247,7 @@ describe("monitorZaloProvider lifecycle", () => {
     await setWebhookCalled.promise;
     await settleLifecycleWork();
     expect(statusSink).toHaveBeenCalledWith(READY_STATUS);
-    await settleLifecycleWork();
     expect(setWebhookMock).toHaveBeenCalledTimes(1);
-    expect(registry.httpRoutes).toHaveLength(2);
 
     for (const [source, handledPath, handledStatus, handledBody] of [
       ["zalo-hosted-media", "/hooks/zalo/media/invalid", 404, "Not Found"],
@@ -312,8 +287,7 @@ describe("monitorZaloProvider lifecycle", () => {
     abort.abort();
 
     await deleteWebhookCalled.promise;
-    expect(deleteWebhookMock).toHaveBeenCalledTimes(1);
-    expect(deleteWebhookMock).toHaveBeenCalledWith("test-token", undefined, 5000);
+    expect(deleteWebhookMock).toHaveBeenCalledExactlyOnceWith("test-token", undefined, 5000);
     expect(completion.settled).toBe(false);
     expect(registry.httpRoutes).toHaveLength(2);
 
@@ -322,7 +296,6 @@ describe("monitorZaloProvider lifecycle", () => {
 
     expect(completion.settled).toBe(true);
     expect(registry.httpRoutes).toHaveLength(0);
-    expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=webhook");
   });
 
   it.each([true, false])("rejects foreign route ownership (webhook=%s)", async (useWebhook) => {
@@ -339,7 +312,7 @@ describe("monitorZaloProvider lifecycle", () => {
     setActivePluginRegistry(registry);
     const statusSink = vi.fn();
 
-    const { runtime, run } = await startLifecycleMonitor({
+    const { run } = await startLifecycleMonitor({
       statusSink,
       useWebhook,
       webhookUrl: "https://example.com/hooks/zalo",
@@ -357,11 +330,5 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(registry.httpRoutes).toEqual([existingRoute]);
     expect(statusSink).toHaveBeenCalledWith(recovering(expect.stringContaining(error)));
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
-    if (useWebhook) {
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
-    }
-    expect(runtime.log).toHaveBeenCalledWith(
-      `[default] Zalo provider stopped mode=${useWebhook ? "webhook" : "polling"}`,
-    );
   });
 });

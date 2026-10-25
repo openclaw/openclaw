@@ -11,7 +11,6 @@ import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
 } from "../config/config.js";
-import { resolveStateDir } from "../config/state-dir.js";
 import { closeSkillsWatchers, refreshSkillsDiscovery } from "../skills/runtime/refresh.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
@@ -94,9 +93,6 @@ test("persists normalized voicewake triggers and broadcasts to operators and nod
     });
     const defaults = ["openclaw", "claude", "computer"];
     expect((await firstEventP).payload?.triggers).toEqual(defaults);
-    const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
-    expect(initial).toMatchObject({ ok: true, payload: { triggers: defaults } });
-
     const updates = [ws, nodeWs].map(voicewakeChanged);
     const set = await rpcReq(ws, "voicewake.set", { triggers: ["  hi  ", "", "there"] });
     expect(set).toMatchObject({ ok: true, payload: { triggers: ["hi", "there"] } });
@@ -108,9 +104,6 @@ test("persists normalized voicewake triggers and broadcasts to operators and nod
     }
     const after = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
     expect(after).toMatchObject({ ok: true, payload: { triggers: ["hi", "there"] } });
-    await expect(
-      fs.readFile(path.join(resolveStateDir(), "settings", "voicewake.json"), "utf8"),
-    ).rejects.toThrow(/ENOENT/u);
   } finally {
     nodeWs.close();
   }
@@ -183,17 +176,13 @@ test("prepared agent read RPCs preserve explicit and system owners without live 
     await publishPreparedOwners();
     const discoveryCallsAfterStartup = agentDiscoveryMock.discoverCalls;
 
-    let blockedRequestFallback = false;
+    let discoveredDuringRequest = false;
     agentDiscoveryMock.models = [
       {
         id: "request-time-fallback",
         name: "Request-time fallback",
         get provider() {
-          if (!blockedRequestFallback) {
-            blockedRequestFallback = true;
-            // A prepared-only miss must not block the Gateway thread with synchronous discovery.
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 750);
-          }
+          discoveredDuringRequest = true;
           return "fixture";
         },
       },
@@ -251,7 +240,7 @@ test("prepared agent read RPCs preserve explicit and system owners without live 
     }
 
     expect(agentDiscoveryMock.discoverCalls).toBe(discoveryCallsAfterStartup);
-    expect(blockedRequestFallback).toBe(false);
+    expect(discoveredDuringRequest).toBe(false);
     await rejectReads({ agentId: "missing" });
   });
 

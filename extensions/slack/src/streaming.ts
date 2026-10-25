@@ -211,13 +211,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
   }
 }
 
-type StopSlackStreamResult = {
-  messageId?: string;
-};
-
-export async function stopSlackStream(
-  params: StopSlackStreamParams,
-): Promise<StopSlackStreamResult> {
+export async function stopSlackStream(params: StopSlackStreamParams) {
   const { session, chunks, metadata } = params;
 
   if (applySlackStreamStop(session) || session.stopped) {

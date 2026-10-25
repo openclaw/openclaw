@@ -41,6 +41,9 @@ const tokens = {
 const retired = new McpConnectionAuthorityError("retired");
 const unavailable = new McpConnectionAuthorityError("unavailable");
 const capture = () => captureMcpOAuthAuthorization({ identity, assertCurrent() {} });
+async function retain(resources: DisposableStack) {
+  return resources.adopt(await capture(), (handle) => handle.dispose());
+}
 const seedGrant = (authorizationId: string) =>
   seedMcpOAuthStoreForTest(identity.storeKey, { tokens, authorizationId });
 const recordRejected = (rejectedAccessToken: string) =>
@@ -65,98 +68,88 @@ it("binds legacy requester grants, preserves refresh, and never revives logout o
     await expect(capture()).rejects.toThrow(retired);
     seedMcpOAuthStoreForTest(identity.storeKey, { tokens });
     const sql = observeMainThreadSql();
-    const retained: Awaited<ReturnType<typeof capture>>[] = [];
-    const keep = async () => {
-      const handle = await capture();
-      retained.push(handle);
-      return handle;
-    };
+    using resources = new DisposableStack();
+    resources.defer(() => sql.restore());
+    const original = await retain(resources);
+    expect((await readMcpOAuthStoreReadOnly(identity.storeKey)).authorizationId).toBe(
+      original.authorizationId,
+    );
+    expect(original.authorizationId).not.toContain(tokens.access_token);
+    expect((await retain(resources)).authorizationId).toBe(original.authorizationId);
+    await withMcpOAuthProviderForTest({ identity }, async (provider) => {
+      await provider.saveTokens({ ...tokens, access_token: "fixture-refreshed" });
+      // Verification inside an existing flow cannot reacquire its own lease.
+      const insideFlow = await capture();
+      expect(insideFlow.authorizationId).toBe(original.authorizationId);
+      insideFlow.dispose();
+    });
+    await original.revalidate();
+    expect(original.assertCurrent).not.toThrow();
+    const readFailure = vi
+      .spyOn(oauthStore, "readMcpOAuthStoreReadOnly")
+      .mockRejectedValueOnce(new Error("fixture diagnostic must stay private"));
     try {
-      const original = await keep();
-      expect((await readMcpOAuthStoreReadOnly(identity.storeKey)).authorizationId).toBe(
-        original.authorizationId,
-      );
-      expect(original.authorizationId).not.toContain(tokens.access_token);
-      expect((await keep()).authorizationId).toBe(original.authorizationId);
-      await withMcpOAuthProviderForTest({ identity }, async (provider) => {
-        await provider.saveTokens({ ...tokens, access_token: "fixture-refreshed" });
-        // Verification inside an existing flow cannot reacquire its own lease.
-        const insideFlow = await capture();
-        expect(insideFlow.authorizationId).toBe(original.authorizationId);
-        insideFlow.dispose();
-      });
-      await original.revalidate();
-      expect(original.assertCurrent).not.toThrow();
-      const readFailure = vi
-        .spyOn(oauthStore, "readMcpOAuthStoreReadOnly")
-        .mockRejectedValueOnce(new Error("fixture diagnostic must stay private"));
-      try {
-        await expect(original.revalidate()).rejects.toThrow(unavailable);
-        expect(original.assertCurrent).toThrow(unavailable);
-      } finally {
-        readFailure.mockRestore();
-      }
-      await original.revalidate();
-      expect(original.assertCurrent).not.toThrow();
-      expect(await recordRejected(tokens.access_token)).toBe(false);
-      // The canonical writer's CAS also leaves stale challenges inert.
-      await expect(
-        mutate({
-          kind: "authorizationChallenge",
-          rejectedAccessToken: tokens.access_token,
-          requiresAuthorization: true,
-        }),
-      ).resolves.toMatchObject({ applied: false });
-      expect(original.assertCurrent).not.toThrow();
-      expect(await recordRejected("fixture-refreshed")).toBe(true);
-      expect(original.assertCurrent).toThrow(retired);
-      await expect(capture()).rejects.toThrow(retired);
-      await save();
-      const reconnected = await keep();
-      expect(reconnected.authorizationId).not.toBe(original.authorizationId);
-      expect(original.assertCurrent).toThrow(retired);
-      await withMcpOAuthProviderForTest(
-        { identity, replaceAuthorization: true },
-        async (replacement) => {
-          // Even identical credentials for the same native requester are a new login.
-          await replacement.saveTokens(tokens);
-        },
-      );
-      expect(reconnected.assertCurrent).toThrow(retired);
-      const replaced = await keep();
-      expect(replaced.authorizationId).not.toBe(reconnected.authorizationId);
-      await clear();
-      expect(replaced.assertCurrent).toThrow(retired);
-      await save();
-      const afterLogout = await keep();
-      expect(afterLogout.authorizationId).not.toBe(replaced.authorizationId);
-      expect(replaced.assertCurrent).toThrow(retired);
-      const disposed = await keep();
-      disposed.dispose();
-      disposed.dispose();
-      expect(disposed.assertCurrent).toThrow(retired);
-      sql.expectIdle();
-      await closeOpenClawStateDatabaseAsync();
-      // Explicit test teardown checkpoints the old host database; capture itself must stay worker-only.
-      sql.clear();
-      expect(afterLogout.assertCurrent).toThrow(retired);
-      const reopened = await keep();
-      expect(reopened.authorizationId).toBe(afterLogout.authorizationId);
-      expect(afterLogout.assertCurrent).toThrow(retired);
-      sql.expectIdle();
+      await expect(original.revalidate()).rejects.toThrow(unavailable);
+      expect(original.assertCurrent).toThrow(unavailable);
     } finally {
-      for (const handle of retained) {
-        handle.dispose();
-      }
-      sql.restore();
+      readFailure.mockRestore();
     }
+    await original.revalidate();
+    expect(original.assertCurrent).not.toThrow();
+    expect(await recordRejected(tokens.access_token)).toBe(false);
+    // The canonical writer's CAS also leaves stale challenges inert.
+    await expect(
+      mutate({
+        kind: "authorizationChallenge",
+        rejectedAccessToken: tokens.access_token,
+        requiresAuthorization: true,
+      }),
+    ).resolves.toMatchObject({ applied: false });
+    expect(original.assertCurrent).not.toThrow();
+    expect(await recordRejected("fixture-refreshed")).toBe(true);
+    expect(original.assertCurrent).toThrow(retired);
+    await expect(capture()).rejects.toThrow(retired);
+    await save();
+    const reconnected = await retain(resources);
+    expect(reconnected.authorizationId).not.toBe(original.authorizationId);
+    expect(original.assertCurrent).toThrow(retired);
+    await withMcpOAuthProviderForTest(
+      { identity, replaceAuthorization: true },
+      async (replacement) => {
+        // Even identical credentials for the same native requester are a new login.
+        await replacement.saveTokens(tokens);
+      },
+    );
+    expect(reconnected.assertCurrent).toThrow(retired);
+    const replaced = await retain(resources);
+    expect(replaced.authorizationId).not.toBe(reconnected.authorizationId);
+    await clear();
+    expect(replaced.assertCurrent).toThrow(retired);
+    await save();
+    const afterLogout = await retain(resources);
+    expect(afterLogout.authorizationId).not.toBe(replaced.authorizationId);
+    expect(replaced.assertCurrent).toThrow(retired);
+    const disposed = await retain(resources);
+    disposed.dispose();
+    disposed.dispose();
+    expect(disposed.assertCurrent).toThrow(retired);
+    sql.expectIdle();
+    await closeOpenClawStateDatabaseAsync();
+    // Explicit test teardown checkpoints the old host database; capture itself must stay worker-only.
+    sql.clear();
+    expect(afterLogout.assertCurrent).toThrow(retired);
+    const reopened = await retain(resources);
+    expect(reopened.authorizationId).toBe(afterLogout.authorizationId);
+    expect(afterLogout.assertCurrent).toThrow(retired);
+    sql.expectIdle();
   });
 });
 
 it("fences before the actual commit grant and restores authority only after a known rollback", async () => {
   await withOpenClawTestState({ label: "mcp-oauth-authority-grant" }, async () => {
     await save();
-    const retained = await capture();
+    using resources = new DisposableStack();
+    const retained = await retain(resources);
     const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
     let refuse = true;
     let grants = 0;
@@ -184,19 +177,15 @@ it("fences before the actual commit grant and restores authority only after a kn
           }
         }, attachment),
       );
-    try {
-      await expect(clear()).rejects.toThrow("fixture commit refused");
-      expect(grants).toBe(1);
-      expect(retained.assertCurrent).not.toThrow();
-      await retained.revalidate();
-      refuse = false;
-      await clear();
-      expect(grants).toBe(2);
-      expect(retained.assertCurrent).toThrow(retired);
-    } finally {
-      spy.mockRestore();
-      retained.dispose();
-    }
+    resources.defer(() => spy.mockRestore());
+    await expect(clear()).rejects.toThrow("fixture commit refused");
+    expect(grants).toBe(1);
+    expect(retained.assertCurrent).not.toThrow();
+    await retained.revalidate();
+    refuse = false;
+    await clear();
+    expect(grants).toBe(2);
+    expect(retained.assertCurrent).toThrow(retired);
   });
 });
 
@@ -204,45 +193,39 @@ it("reads foreign credential changes and refuses pending or uncertain owner fact
   await withOpenClawTestState({ label: "mcp-oauth-authority-foreign" }, async () => {
     // Test-only native writes stand in for another process: no host publication is emitted.
     seedGrant("fixture-foreign-original");
-    const retained = await capture();
-    try {
-      seedGrant("fixture-foreign-reconnected");
-      expect(retained.assertCurrent).not.toThrow();
-      await expect(retained.revalidate()).rejects.toThrow(retired);
-      expect(retained.assertCurrent).toThrow(retired);
-      const current = await capture();
-      const context = captureOpenClawStateWorkerContext();
-      const writer = retainMcpOAuthAuthorizationState(context.admission, identity.storeKey);
-      try {
-        const staleRead = writer.prepareRead();
-        const rollback = writer.fence();
-        expect(current.assertCurrent).toThrow(unavailable);
-        await expect(current.revalidate()).rejects.toThrow(unavailable);
-        rollback(true);
-        expect(current.assertCurrent).not.toThrow();
-        expect(() => staleRead({ authorizationId: current.authorizationId })).toThrow(unavailable);
-        const uncertain = writer.fence();
-        uncertain(false);
-        expect(current.assertCurrent).toThrow(unavailable);
-        await expect(current.revalidate()).rejects.toThrow(unavailable);
-        await expect(capture()).rejects.toThrow(unavailable);
-        // A later known refresh cannot certify an earlier unknown native outcome.
-        writer.fence()(true, { authorizationId: current.authorizationId });
-        expect(current.assertCurrent).toThrow(unavailable);
-      } finally {
-        writer.release();
-        current.dispose();
-      }
-    } finally {
-      retained.dispose();
-    }
+    using resources = new DisposableStack();
+    const retained = await retain(resources);
+    seedGrant("fixture-foreign-reconnected");
+    expect(retained.assertCurrent).not.toThrow();
+    await expect(retained.revalidate()).rejects.toThrow(retired);
+    expect(retained.assertCurrent).toThrow(retired);
+    const current = await retain(resources);
+    const context = captureOpenClawStateWorkerContext();
+    const writer = retainMcpOAuthAuthorizationState(context.admission, identity.storeKey);
+    resources.defer(() => writer.release());
+    const staleRead = writer.prepareRead();
+    const rollback = writer.fence();
+    expect(current.assertCurrent).toThrow(unavailable);
+    await expect(current.revalidate()).rejects.toThrow(unavailable);
+    rollback(true);
+    expect(current.assertCurrent).not.toThrow();
+    expect(() => staleRead({ authorizationId: current.authorizationId })).toThrow(unavailable);
+    const uncertain = writer.fence();
+    uncertain(false);
+    expect(current.assertCurrent).toThrow(unavailable);
+    await expect(current.revalidate()).rejects.toThrow(unavailable);
+    await expect(capture()).rejects.toThrow(unavailable);
+    // A later known refresh cannot certify an earlier unknown native outcome.
+    writer.fence()(true, { authorizationId: current.authorizationId });
+    expect(current.assertCurrent).toThrow(unavailable);
   });
 });
 
 it("retains the canonical clear fence when native settlement is unknown despite result failure", async () => {
   await withOpenClawTestState({ label: "mcp-oauth-authority-unknown" }, async () => {
     seedGrant("fixture-unknown");
-    const retained = await capture();
+    using resources = new DisposableStack();
+    const retained = await retain(resources);
     const context = captureOpenClawStateWorkerContext();
     const lease: OpenClawStateAsyncLeaseContext = {
       signal: new AbortController().signal,
@@ -270,20 +253,14 @@ it("retains the canonical clear fence when native settlement is unknown despite 
         }
         const { admission } = options.createAdmission({ settled: settlement.promise });
         try {
+          const facts = {
+            kind: "state-lease",
+            identity: leaseIdentity,
+            expiresAt: Date.now() + 60_000,
+          };
           for (const stage of ["transaction", "commit"] as const) {
             const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-            admission.port.postMessage(
-              {
-                stage,
-                decision: decision.buffer,
-                facts: {
-                  kind: "state-lease",
-                  identity: leaseIdentity,
-                  expiresAt: Date.now() + 60_000,
-                },
-              },
-              [],
-            );
+            admission.port.postMessage({ stage, decision: decision.buffer, facts }, []);
             admission.service();
             expect(Atomics.load(decision, 0)).toBe(1);
           }
@@ -306,7 +283,6 @@ it("retains the canonical clear fence when native settlement is unknown despite 
       settlement.resolve({ kind: "unknown", error: deliveryError });
       await expect(nativeOwner.drain()).rejects.toMatchObject({ code: "outcome-unknown" });
       nativeOwner.close();
-      retained.dispose();
     }
   });
 });

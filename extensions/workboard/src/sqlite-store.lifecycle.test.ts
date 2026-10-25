@@ -13,6 +13,7 @@ vi.mock(import("openclaw/plugin-sdk/database-engine-runtime"), async (importOrig
   openEngineWorkerStore,
 }));
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
+import { WorkboardStore } from "./store.js";
 
 const workerModuleUrl = new URL("./sqlite-store.worker.ts", import.meta.url);
 beforeEach(() => {
@@ -31,6 +32,29 @@ function workerFixture() {
 }
 
 describe("Workboard SQLite facade cleanup", () => {
+  it("retains the selected worker when wider lazy options contain a worker URL", async () => {
+    const execute = vi.fn(async () => ({ ok: true, value: [] }));
+    const close = vi.fn(async () => {});
+    openEngineWorkerStore.mockResolvedValue({ execute, close });
+    const options = {
+      lazy: true,
+      workerModuleUrl: new URL("file:///unselected-workboard-worker.mjs"),
+    };
+    const store = WorkboardStore.openSqlite(workerModuleUrl, options);
+    try {
+      await store.ready();
+      expect(openEngineWorkerStore).not.toHaveBeenCalled();
+      await store.list();
+      expect(openEngineWorkerStore).toHaveBeenCalledWith(
+        expect.objectContaining({ moduleUrl: workerModuleUrl }),
+        undefined,
+      );
+    } finally {
+      await store.close();
+    }
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("drains accepted operations before releasing the broker and seals later calls", async () => {
     const result = createDeferred<WorkboardSqliteResult<unknown>>();
     const { execute, close, stores } = workerFixture();

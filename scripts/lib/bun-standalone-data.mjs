@@ -47,3 +47,10 @@ export function standaloneEmbeddedPathsExpression(paths) {
       ? pathname : lookup(pathname);
   })()`;
 }
+
+/** Emit large native tables without one AOT stack temporary per object property.
+ * @param {object} value
+ */
+export function standaloneDataExpression(value) {
+  return `JSON.parse(${JSON.stringify(JSON.stringify(value))})`;
+}

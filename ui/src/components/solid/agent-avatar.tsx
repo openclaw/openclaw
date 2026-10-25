@@ -6,6 +6,7 @@ import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { AgentSelectOption } from "../agent-select-types.ts";
+import { useAvatarGatewayContext } from "./identity-avatar-view.ts";
 import { AgentOptionAvatar } from "./identity-avatar.tsx";
 
 export type AgentAvatarProps = {
@@ -16,10 +17,12 @@ export type AgentAvatarProps = {
 export const AgentAvatar = defineSolidBridge<AgentAvatarProps>(
   "openclaw-agent-avatar",
   (props) => {
+    const gateway = useAvatarGatewayContext();
     const loader = createIdentityAvatars();
     onSettled(() => loader.connect());
     const avatarSource = projectOwner(loader, (owner) => owner);
     const avatar = createMemo(() => {
+      gateway();
       const option = props.option;
       const identity = props.identity;
       const url = option.agent ? resolveAgentAvatarUrl(option.agent, identity) : null;

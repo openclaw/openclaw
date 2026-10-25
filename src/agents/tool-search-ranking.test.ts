@@ -29,10 +29,8 @@ function entry(partial: Partial<ToolSearchCatalogEntry>): ToolSearchCatalogEntry
 }
 
 const CATALOG = [
-  entry({ name: "web_search", description: "Search the web for current information" }),
   entry({ name: "read_file", description: "Read a file from disk" }),
   entry({ name: "cron_create", description: "Schedule a recurring task" }),
-  entry({ name: "spreadsheet_open", description: "Open a spreadsheet document" }),
   entry({
     name: "issue_create",
     description: "Open a new issue",
@@ -106,19 +104,26 @@ it("does not let a singular/plural collision invent an intent", () => {
   expect(queryTerms("open a new issue")).not.toContain(tokenizeDocument("search")[0]);
 });
 
-it("includes empty documents in length normalization without creating search hits", () => {
-  const value = { id: "match" };
+it("preserves exact scores for nonadjacent repeated terms and sparse document positions", () => {
   const index = buildLexicalIndex([
-    { value, terms: ["needle", "needle"] },
-    { value: { id: "empty" }, terms: [] },
+    { value: "empty-first", terms: [] },
+    { value: "alpha-heavy", terms: ["alpha", "beta", "alpha"] },
+    { value: "empty-middle", terms: [] },
+    { value: "beta-heavy", terms: ["beta", "alpha", "beta"] },
   ]);
-
-  expect(index).toMatchObject({ documentCount: 2, averageLength: 1 });
-  const hits = scoreLexical(index, [{ term: "needle", weight: 1 }]);
-  expect(hits).toHaveLength(1);
-  expect(hits[0]?.value).toBe(value);
-  expect(hits[0]?.matchedLiteral).toBe(true);
-  expect(hits[0]?.score).toBeCloseTo((Math.log(2) * 2 * 2.2) / (2 + 1.2 * 1.75));
+  expect(index.averageLength).toBe(1.5);
+  // Four documents, two matches per term, average length 1.5, matching length 3.
+  const single = (Math.log(2) * 2.2) / (1 + 1.2 * 1.75);
+  const repeated = (Math.log(2) * (2 * 2.2)) / (2 + 1.2 * 1.75);
+  expect(scoreLexical(index, [{ term: "alpha", weight: 1 }])).toEqual([
+    { value: "alpha-heavy", score: repeated, matchedLiteral: true },
+    { value: "beta-heavy", score: single, matchedLiteral: true },
+  ]);
+  expect(scoreLexical(index, [{ term: "beta", weight: 1 }])).toEqual([
+    { value: "alpha-heavy", score: single, matchedLiteral: true },
+    { value: "beta-heavy", score: repeated, matchedLiteral: true },
+  ]);
+  expect(scoreLexical(index, [{ term: "absent", weight: 1 }])).toEqual([]);
 });
 
 it("indexes non-Latin text rather than discarding it", () => {
@@ -128,17 +133,12 @@ it("indexes non-Latin text rather than discarding it", () => {
 });
 
 it("marks literal overlap so callers can rank it ahead of expansion-only hits", () => {
-  const index = buildLexicalIndex([
-    document("weather-a", "weather_now Report the weather"),
-    document("weather-b", "weather_hourly Hourly weather"),
-    document("weather-c", "weather_alerts Weather alerts"),
-    document("web", "web_search Search the web"),
-  ]);
+  const index = buildLexicalIndex([document("weather", "weather"), document("web", "search")]);
 
   const hits = scoreLexical(index, tokenizeQuery("weather"));
   const web = hits.find((hit) => hit.value === "web");
 
-  expect(hits.filter((hit) => hit.matchedLiteral).map((hit) => hit.value)).toContain("weather-a");
+  expect(hits.filter((hit) => hit.matchedLiteral).map((hit) => hit.value)).toEqual(["weather"]);
   expect(web?.matchedLiteral).toBe(false);
 });
 
@@ -161,47 +161,46 @@ it.each(["client", "mcp"] as const)(
     });
     const search = runtime([...CATALOG, hostile]);
 
-    await expect(search.search("pick a file")).resolves.toBeDefined();
-    expect(await names(search, "client_pick_file")).toContain("client_pick_file");
+    expect(await names(search, "pick a file")).toContain("client_pick_file");
   },
 );
 
 it("refreshes metadata inside anyOf branches after edits", async () => {
-  const branch = objectSchema({ orchard: { type: "string", description: "Collect apples" } });
+  const leaf = { type: "string", description: "Collect apples" };
+  const branch = objectSchema({ orchard: leaf });
   const catalogRef = createToolSearchCatalogRef();
   const tools = [
     {
       ...createStubTool("indexed_resource"),
-      parameters: { anyOf: [{ description: "Measure asteroids" }, branch] },
+      parameters: {
+        ...objectSchema({
+          resources: {
+            anyOf: [
+              { type: "null" },
+              {
+                type: "array",
+                items: {
+                  allOf: [{ type: "string", description: "Track comets" }],
+                },
+              },
+            ],
+          },
+        }),
+        anyOf: [{ description: "Measure asteroids" }, branch],
+      },
     },
   ];
   registerHeadlessToolSearchCatalog({ catalogRef, tools });
   const search = new ToolSearchRuntime({ catalogRef }, { ...searchConfig, mode: "tools" });
 
-  for (const query of ["asteroids", "orchard", "apples"]) {
+  for (const query of ["asteroids", "orchard", "apples", "comets"]) {
     expect(await names(search, query)).toEqual(["indexed_resource"]);
   }
-  branch.properties.orchard.description = "Observe meteors";
+  leaf.description = "Observe meteors";
   registerHeadlessToolSearchCatalog({ catalogRef, tools });
   expect(await names(search, "meteors")).toEqual(["indexed_resource"]);
   expect(await search.search("apples")).toEqual([]);
   expect(await search.search("orchard", { allowedIds: new Set() })).toEqual([]);
-});
-
-it("finds metadata through composed property and array-item schemas", async () => {
-  const items = { allOf: [{ type: "string", description: "Observe meteors" }] };
-  const search = catalogRuntime([
-    {
-      name: "indexed_resource",
-      parameters: objectSchema({
-        resources: {
-          anyOf: [{ type: "null" }, { type: "array", items }],
-        },
-      }),
-    },
-  ]);
-
-  expect(await names(search, "meteors")).toEqual(["indexed_resource"]);
 });
 
 it("prepares search text and its revision once across warm searches and runtimes", async () => {
@@ -216,9 +215,9 @@ it("prepares search text and its revision once across warm searches and runtimes
   }
   expect(render).toHaveBeenCalledTimes(catalog.length);
   expect(build).toHaveBeenCalledTimes(1);
-  allowedIds.delete(catalog[4]!.id);
+  allowedIds.delete(catalog[2]!.id);
   expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
-  allowedIds.add(catalog[4]!.id);
+  allowedIds.add(catalog[2]!.id);
   expect(await names(runtime(catalog), "repository", { allowedIds })).toEqual(["issue_create"]);
   expect(render).toHaveBeenCalledTimes(catalog.length);
   expect(build).toHaveBeenCalledTimes(2);

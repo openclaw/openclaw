@@ -1,4 +1,5 @@
 import { engineUnboundedRowLimit } from "../infra/database-engine/row-limit.js";
+import { engineGreatest } from "../infra/database-engine/scalar.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -229,22 +230,14 @@ function createSqliteLedgerQueries(db: EngineConnection) {
         query
           .updateTable("acp_replay_sessions")
           .set((eb) => ({
-            estimated_bytes: eb
-              .case()
-              .when(
+            estimated_bytes: engineGreatest(db, [
+              eb.val(0),
+              eb(
                 "estimated_bytes",
-                "<",
+                "-",
                 parameter((params) => params.freed),
-              )
-              .then(0)
-              .else(
-                eb(
-                  "estimated_bytes",
-                  "-",
-                  parameter((params) => params.freed),
-                ),
-              )
-              .end(),
+              ),
+            ]),
             complete: 0,
           }))
           .where(

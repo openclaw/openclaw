@@ -1,10 +1,14 @@
 import { realpath } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import type { ControlUiRootState } from "../../src/gateway/server-control-ui-root.js";
 
 /** Production HTTP delivery for immutable benchmark bundles in an isolated process. */
-export async function startControlUiBenchGatewayServer(outDir: string, port = 0) {
+export async function startControlUiBenchGatewayServer(
+  outDir: string,
+  port = 0,
+  assetLatencyMs = 0,
+) {
   let readFixture:
     | ((pathname: string) =>
         | {
@@ -49,8 +53,21 @@ export async function startControlUiBenchGatewayServer(outDir: string, port = 0)
   }
 
   let currentRoot = await prepareRoot(outDir);
+  let preloadHeadersEnabled = true;
   let closing: Promise<void> | undefined;
-  const server = createServer((request, response) => {
+  const requests: Array<{ method: string; url: string; navigationPreload: boolean }> = [];
+  const serve = (request: IncomingMessage, response: ServerResponse) => {
+    if (!preloadHeadersEnabled) {
+      // Paired measurement of the pre-hints delivery path, with the same files.
+      const setHeader = response.setHeader.bind(response);
+      response.setHeader = (name, value) =>
+        name.toLowerCase() === "link" ? response : setHeader(name, value);
+    }
+    requests.push({
+      method: request.method ?? "GET",
+      url: request.url ?? "/",
+      navigationPreload: request.headers["service-worker-navigation-preload"] !== undefined,
+    });
     const fixture = readFixture?.(new URL(request.url ?? "/", "http://localhost").pathname);
     if (fixture) {
       const send = () => {
@@ -90,6 +107,14 @@ export async function startControlUiBenchGatewayServer(outDir: string, port = 0)
         }
       },
     );
+  };
+  const server = createServer((request, response) => {
+    if (assetLatencyMs > 0) {
+      // Server-side delay also covers dedicated-worker module imports.
+      setTimeout(() => serve(request, response), assetLatencyMs);
+    } else {
+      serve(request, response);
+    }
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -105,6 +130,10 @@ export async function startControlUiBenchGatewayServer(outDir: string, port = 0)
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
+    requests,
+    setPreloadHeadersEnabled(enabled: boolean) {
+      preloadHeadersEnabled = enabled;
+    },
     setFixtureReader(reader: typeof readFixture) {
       readFixture = reader;
     },

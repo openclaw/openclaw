@@ -113,6 +113,7 @@ describe("envelope", () => {
     const replacement = seal({ ...sealOptions, from: "alice#2", body: { text: "different" } });
     await expect(open({ envelope: replacement })).rejects.toMatchObject({
       code: "replayed",
+      name: "ReplayedError",
       message: "replay id binding mismatch",
     });
   });

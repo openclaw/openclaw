@@ -2,7 +2,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as gitReads from "../infra/git-read-cache.js";
+import {
+  listAgentDatabaseAdmissionRefusals,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
 import { publicationRowDefaults } from "../state/github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -12,7 +17,10 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
-import { prepareControlUiSessionPrServiceTarget } from "./control-ui-session-pr-read.js";
+import {
+  createControlUiSessionPrRead,
+  prepareControlUiSessionPrServiceTarget,
+} from "./control-ui-session-pr-read.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -108,6 +116,78 @@ function stubOffline(message = "offline") {
   return fetcher;
 }
 
+it("reuses unchanged watcher currency and retires it on owner publications", async () => {
+  const f = fixture;
+  const child = "agent:main:currency-child";
+  await f.seed(child, f.other.id, { parentSessionKey: sessionKey });
+  const projection = getSessionRowProjection(f.context)!;
+  const read = createControlUiSessionPrRead({
+    client: f.client,
+    sessionKey,
+    getRuntimeConfig: f.context.getRuntimeConfig,
+    getSessionRowProjection: () => projection,
+    isCurrentClient: () => !f.client.invalidated,
+  })!;
+  const target = (await read())!;
+  expect(target.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
+    child,
+    sessionKey,
+  ]);
+  target.assertCurrent!();
+  const captures = vi.spyOn(projection, "capture");
+  const sharing = vi.spyOn(projection, "sharingTargetState");
+  try {
+    for (let index = 0; index < 20; index++) {
+      expect(await read()).toBe(target);
+      target.assertCurrent!();
+    }
+    expect(captures).not.toHaveBeenCalled();
+    expect(sharing).not.toHaveBeenCalled();
+
+    const admissions = listAgentDatabaseAdmissionRefusals();
+    try {
+      recordAgentDatabaseAdmissions([
+        {
+          agentId: "main",
+          paths: [],
+          code: "agent-database-inspection-pending",
+          reason: "Synthetic admission change",
+          repairHint: "Wait for admission",
+        },
+      ]);
+      expect(() => target.assertCurrent!()).toThrow("Session pull-request target changed");
+      expect(await read()).toBeUndefined();
+    } finally {
+      recordAgentDatabaseAdmissions(admissions);
+    }
+    expect((await read())?.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
+      child,
+      sessionKey,
+    ]);
+
+    await f.seed(child, f.other.id, {
+      parentSessionKey: sessionKey,
+      visibility: "draft",
+    });
+    await projection.ensureMaterialized();
+    expect(() => target.assertCurrent!()).toThrow("Task pull-request audience changed");
+    const narrowed = (await read())!;
+    expect(narrowed.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
+      sessionKey,
+    ]);
+
+    // Publishing the same config object still advances the owner's revision.
+    const cfg = f.context.getRuntimeConfig();
+    cfg.gateway!.roles!.definitions.reader!.scopes = [];
+    setRuntimeConfigSnapshot(cfg);
+    expect(() => narrowed.assertCurrent!()).toThrow("Session pull-request target changed");
+    expect(await read()).toBeUndefined();
+  } finally {
+    captures.mockRestore();
+    sharing.mockRestore();
+  }
+});
+
 it("shares lineage work across audiences without sharing visibility or stale descendants", async () => {
   const child = "agent:main:a-child";
   const hidden = "agent:main:b-hidden";
@@ -138,7 +218,7 @@ it("shares lineage work across audiences without sharing visibility or stale des
       lifecycleRevision: null,
     }));
   const allowsAll = () => true;
-  const allowsShared = (row: { key: string }) => row.key !== hidden;
+  const allowsShared = (key: string | undefined) => key !== hidden;
   const selected = prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions;
   expect(selected).toEqual(expected([child, hidden, leaf, sessionKey]));
   selected.reverse();
@@ -194,7 +274,7 @@ it("shares lineage work across audiences without sharing visibility or stale des
     prepareTaskPublicationSessions(
       projection,
       root,
-      () => (row) => row.entry.visibility !== "draft",
+      () => (_key, entry) => entry.visibility !== "draft",
     ).sessions,
   ).toEqual(expected([child, hidden, leaf, sessionKey]));
   expect(reads).toHaveBeenCalledTimes(afterCreation);

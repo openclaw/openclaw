@@ -54,11 +54,11 @@ import {
 } from "./model-account-connect-errors.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import type { RespondFn } from "./server-methods/types.js";
-import { usersAuthConnectHandlers } from "./server-methods/users-auth-connect.js";
 import {
   preparePersonalModelAccountSelection,
   prepareUserModelAccountAction,
 } from "./server-methods/users-model-account-access.js";
+import { usersHandlers as usersAuthConnectHandlers } from "./server-methods/users.js";
 import {
   createContext,
   createOperatorClient,

@@ -21,11 +21,8 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  getSessionKysely,
-  resolveSqliteTranscriptReadScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-read-scope.js";
+import { getSessionKysely, toDatabaseOptions } from "./session-accessor.sqlite-scope-helpers.js";
 import {
   assertSessionTranscriptContextAnchorInDatabase,
   type TranscriptSourceAuthority,

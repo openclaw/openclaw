@@ -30,6 +30,11 @@ function repository(): string {
   return root;
 }
 
+function commit(root: string, message: string) {
+  git(root, "add", ".");
+  git(root, "commit", "-qm", message);
+}
+
 // Version-one stored fingerprints prefix raw bytes with these NUL-separated fields.
 function storedFingerprint(
   name: string,
@@ -54,15 +59,12 @@ it
     const state = path.join(root, "state");
     await fs.mkdir(state);
     vi.stubEnv("OPENCLAW_STATE_DIR", state);
-    const pathname =
-      kind === "hardlink"
-        ? path.join(tempDirs.make("session-diff-live-db-"), "agent.sqlite")
-        : path.join(
-            root,
-            kind === "memory-reindex"
-              ? "agent.sqlite.memory-reindex-11111111-2222-3333-4444-555555555555"
-              : "agent.sqlite",
-          );
+    const directory = kind === "hardlink" ? tempDirs.make("session-diff-live-db-") : root;
+    const databaseName =
+      kind === "memory-reindex"
+        ? "agent.sqlite.memory-reindex-11111111-2222-3333-4444-555555555555"
+        : "agent.sqlite";
+    const pathname = path.join(directory, databaseName);
     const { DatabaseSync } = requireNodeSqlite();
     const writer = new DatabaseSync(pathname);
     try {
@@ -85,8 +87,7 @@ it
 
       // Query locks before any new SQLite connection can truncate the unlocked SHM.
       expect(locks()).toEqual(held);
-      expect(baseline?.files).toEqual([]);
-      expect(baseline?.truncated).toBe(true);
+      expect(baseline).toMatchObject({ files: [], truncated: true });
       const files = (await fs.readdir(root)).filter((name) => name !== ".git" && name !== "state");
       // A baseline captured by an older release must not reopen the same files either.
       const diff = await collectCheckoutDiff({
@@ -148,8 +149,7 @@ it.skipIf(process.platform === "win32")(
     const root = repository();
     await fs.writeFile(path.join(root, "old.txt"), "tracked bytes\n");
     await fs.writeFile(path.join(root, "deleted.txt"), "deleted bytes\n");
-    git(root, "add", ".");
-    git(root, "commit", "-qm", "base");
+    commit(root, "base");
     git(root, "mv", "old.txt", "renamed.txt");
     await fs.unlink(path.join(root, "deleted.txt"));
     await fs.mkdir(path.join(root, "~"));
@@ -206,12 +206,10 @@ it.each([undefined, "HEAD"])(
   async (baseCommit) => {
     const root = repository();
     await fs.writeFile(path.join(root, "base.txt"), "base\n");
-    git(root, "add", ".");
-    git(root, "commit", "-qm", "base");
+    commit(root, "base");
     git(root, "checkout", "-qb", "feature");
     await fs.writeFile(path.join(root, "feature.txt"), "added on branch\n");
-    git(root, "add", ".");
-    git(root, "commit", "-qm", "feature");
+    commit(root, "feature");
     await fs.appendFile(path.join(root, "feature.txt"), "pre-session edit\n");
     await fs.writeFile(path.join(root, "draft.txt"), "pre-session draft\n");
     const captured = await collectCheckoutDiffBaseline({ cwd: root });

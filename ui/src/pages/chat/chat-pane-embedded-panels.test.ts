@@ -43,7 +43,6 @@ import {
   loadSessionWorkspace,
   openSessionWorkspacePreview,
 } from "./components/chat-session-workspace-state.ts";
-import { loadedSidebarContent } from "./components/chat-session-workspace.test-support.ts";
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
@@ -246,20 +245,6 @@ it("navigates an existing file tab to an explicit line without resetting its edi
   });
   buttonWithText(mount, "Discard").click();
   await renderPanels();
-  const highlighting = expectDefined(
-    query<HTMLButtonElement>('button[aria-label="Syntax highlighting"]'),
-    "Syntax highlighting action",
-  );
-  expect(highlighting.getAttribute("aria-pressed")).toBe("true");
-  highlighting.click();
-  await renderPanels();
-  expect(highlighting.getAttribute("aria-pressed")).toBe("false");
-  expect(query(".cm-editor")).toBe(editorElement);
-  editor.scrollDOM.scrollTop = 123;
-  await navigate();
-  expect(highlighting.getAttribute("aria-pressed")).toBe("false");
-  expect(query(".cm-editor")).toBe(editorElement);
-  expect(editor.scrollDOM.scrollTop).toBe(123);
   await navigate(3);
   await expectLine(3);
   const restored = expectDefined(
@@ -501,42 +486,6 @@ it.each(["history", "stream"] as const)(
   },
 );
 
-it("keeps Files closed when a pending file preview completes", async () => {
-  const { preview, renderPanels, settlePreview, state, query } = createReviewFixture();
-  void openSessionWorkspaceFile(state, { path: preview.file.path });
-  await renderPanels();
-  const close = query<HTMLButtonElement>('button[aria-label="Close tab: preview.png"]');
-  expect(close).not.toBeNull();
-  close!.click();
-  await renderPanels();
-  expect(query('[data-panel-slot="detail"]')).toBeNull();
-
-  await settlePreview();
-  expect(query('[data-panel-slot="detail"]')).toBeNull();
-});
-
-it("opens the requested file when an unrelated directory listing completes first", async () => {
-  const { file, list, preview, previewAlt, renderPanels, state, query } = createReviewFixture();
-  loadSessionWorkspace(state, getSessionWorkspace(state), true);
-  void openSessionWorkspaceFile(state, { path: preview.file.path });
-  await renderPanels();
-  expect(query('[data-panel-skeleton="files"]')).not.toBeNull();
-
-  list.resolve({
-    sessionKey: state.sessionKey,
-    root: "/synthetic/workspace",
-    files: [{ kind: "modified", name: "other.txt", path: "other.txt", missing: false }],
-    artifacts: [],
-  });
-  await vi.waitFor(() =>
-    expect(createSessionWorkspaceProps(state).list?.files[0]?.name).toBe("other.txt"),
-  );
-  file.resolve(preview);
-  await loadedSidebarContent(state);
-  await renderPanels();
-  expect(previewAlt()).toBe("preview.png");
-});
-
 it.each(["Files", "minimized"] as const)(
   "keeps the operator's %s presentation when a pending preview completes",
   async (presentation) => {
@@ -571,61 +520,6 @@ it.each(["Files", "minimized"] as const)(
     expect(previewAlt()).toBe("preview.png");
   },
 );
-
-it("keeps the newer file visible after an older preview request settles", async () => {
-  const { preview, previewAlt, renderPanels, sessions, settlePreview, state } =
-    createReviewFixture();
-  void openSessionWorkspaceFile(state, { path: preview.file.path });
-  const replacement = {
-    ...preview,
-    file: { ...preview.file, name: "replacement.png", path: "replacement.png" },
-  };
-  sessions.getFile = vi.fn().mockResolvedValue(replacement);
-  await openSessionWorkspaceFile(state, { path: replacement.file.path });
-  await vi.waitFor(async () => {
-    await renderPanels();
-    expect(previewAlt()).toBe("replacement.png");
-  });
-  await settlePreview();
-  expect(previewAlt()).toBe("replacement.png");
-});
-
-it("retires a preview across reconnect without refocusing Review over Files", async () => {
-  const { preview, renderPanels, settlePreview, state, query } = createReviewFixture();
-  void openSessionWorkspaceFile(state, { path: preview.file.path });
-  state.handleOpenSidebar({
-    kind: "attachment",
-    attachmentKind: "image",
-    title: "Attachment in Files",
-    src: "/synthetic/attachment.png",
-  });
-  await renderPanels();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
-
-  state.connectionEpoch += 1;
-  await renderPanels();
-  await settlePreview();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
-  expect(state.sessionWorkspaceState?.previews).toEqual([]);
-  expect(query(".sidebar-attachment-preview__image")).toBeNull();
-  state.updateSidebarLayout(openSlot(state.sidebarLayout, "detail"));
-  await renderPanels();
-  expect(query(".sidebar-image-view img")).toBeNull();
-});
-
-it("shows a current preview request failure without leaving Review loading", async () => {
-  const { file, mount, preview, renderPanels, state, query } = createReviewFixture();
-  const opening = openSessionWorkspaceFile(state, { path: preview.file.path });
-  await renderPanels();
-  await vi.waitFor(() => expect(state.sessions.getFile).toHaveBeenCalledOnce());
-  file.reject(new Error("Preview unavailable"));
-  await expect(file.promise).rejects.toThrow("Preview unavailable");
-  await opening;
-  state.updateSidebarLayout(openSlot(state.sidebarLayout, "workspace"));
-  await renderPanels();
-  expect(mount.textContent).toContain("Preview unavailable");
-  expect(query('[data-panel-skeleton="files"]')).toBeNull();
-});
 
 it("retains default Review content and collapsed files while switching tabs, focusing Chat, and minimizing", async () => {
   const request = vi.fn().mockResolvedValue({

@@ -34,6 +34,7 @@ import {
 import type { AgentSession } from "../../sessions/agent-session.js";
 import { sessionManagerPrepareCurrentTurnReplay } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   appendCompletedToolWork,
@@ -284,12 +285,17 @@ describe("interrupted canonical user replay", () => {
           "Turn yielded.",
           false,
         );
-        await withReplaySession(fixture, false, async (session, submit) => {
+        const before = loadTranscriptEventsSync(fixture.target);
+        await withReplaySession(fixture, false, async (session, submit, manager) => {
           await submit();
-          expect(Reflect.get(session.messages.at(-1)!, "errorMessage")).toMatch(
-            /^Session transcript keyed user is outside the current turn: \S/,
-          );
+          const error = Reflect.get(session.messages.at(-1)!, "errorMessage");
+          expect(isSessionTranscriptTurnMismatchErrorMessage(error)).toBe(true);
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
+          expect(loadTranscriptEventsSync(fixture.target).slice(0, before.length)).toEqual(before);
+          const users = manager
+            .getBranch()
+            .filter((entry) => entry.type === "message" && entry.message.role === "user");
+          expect(users).toEqual([expect.objectContaining({ message: replacementUser })]);
         });
       },
       { selectedOwner: true, admittedReceipt: true, interruptedTurn: false },

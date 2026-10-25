@@ -57,6 +57,7 @@ const allowedAttrs = [
   "alt",
   "data-code",
   "data-code-encoding",
+  "data-code-highlight",
   "data-file-kind",
   "data-file-line",
   "data-file-path",

@@ -217,23 +217,31 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       .fn<() => AssistantMessageEvent>()
       .mockReturnValueOnce(firstChunk)
       .mockReturnValue({ type: "text_delta", contentIndex: 0, delta: "second value" });
+    let nextReads = 0;
+    let nextCalls = 0;
     const source: Awaited<ReturnType<StreamFn>> = {
       [Symbol.asyncIterator]() {
         let emitted = false;
-        return {
-          async next(): Promise<IteratorResult<AssistantMessageEvent>> {
-            if (emitted) {
-              return { done: true, value: undefined };
-            }
-            emitted = true;
-            return {
-              done: false,
-              get value() {
-                return readChunk();
-              },
+        const iterator: AsyncIterator<AssistantMessageEvent> = {
+          get next() {
+            nextReads++;
+            return async function (this: AsyncIterator<AssistantMessageEvent>) {
+              expect(this).toBe(iterator);
+              nextCalls++;
+              if (emitted) {
+                return { done: true as const, value: undefined };
+              }
+              emitted = true;
+              return {
+                done: false as const,
+                get value() {
+                  return readChunk();
+                },
+              };
             };
           },
         };
+        return iterator;
       },
       async result() {
         return makeAssistantMessageFixture({
@@ -260,6 +268,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
 
     expect(chunks).toEqual([firstChunk]);
     expect(readChunk).toHaveBeenCalledOnce();
+    expect(nextReads).toBe(1);
+    expect(nextCalls).toBe(2);
     expect(events.map((event) => event.type)).toEqual([
       "model.call.started",
       "model.call.completed",

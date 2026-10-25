@@ -451,14 +451,10 @@ serveOwnedWorkerTasks(
       if (request.kind === "projection-status") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteReadSnapshotSync } = await import("../../infra/sqlite-transaction.js");
         const { sessionTranscriptIndexNeedsReconcile } =
           await import("./session-transcript-index.js");
         const result = withOpenClawAgentDatabaseReadOnly(
-          ({ db }) =>
-            runSqliteReadSnapshotSync(db, () =>
-              sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
-            ),
+          ({ db }) => sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
           { ...request.database, env: request.env },
         );
         return result.found && result.value;

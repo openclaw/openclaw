@@ -155,7 +155,7 @@ it("records a redacted blocked CLI turn on the selected actor", async () => {
 });
 
 it("covers an incognito native-login turn only while its attested login holds", async () => {
-  const { target, binding } = await create("native-login");
+  const { target, params: baseParams, binding } = await create("native-login");
   // The child's native Claude login; the stub profile endpoint names each token's own account.
   const configDir = fs.mkdtempSync(join(os.tmpdir(), "openclaw-incognito-claude-"));
   mockClaudeManagedSettings(join(configDir, "managed"));
@@ -182,16 +182,11 @@ it("covers an incognito native-login turn only while its attested login holds", 
   try {
     login("account-a");
     const params: PreparedCliRunContext["params"] = {
-      ...target,
-      sessionTarget: target,
-      sessionFile: target.sessionKey,
+      ...baseParams,
       admittedRunContext: await admission.admit("embedded"),
       runId: "native-cli-run",
       provider: "claude-cli",
       model: "test-model",
-      prompt: "current ask",
-      workspaceDir: env.OPENCLAW_STATE_DIR!,
-      timeoutMs: 1000,
       config: {
         plugins: {
           entries: { anthropic: { config: { historyRecovery: { attestNativeLogin: true } } } },

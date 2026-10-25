@@ -24,6 +24,7 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
@@ -209,12 +210,6 @@ async function nativeCompactionArgs(
 
 function expectCall(mock: Mock, fields: Record<string, unknown>, ...rest: unknown[]) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields), ...rest);
-}
-
-function expectNoCalls(...mocks: Mock[]) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 const abortedCompaction = { ok: false, compacted: false, reason: "compaction aborted" };

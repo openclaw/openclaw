@@ -135,25 +135,6 @@ type SchemaNodeMapper = (
   ancestors: SchemaAncestors,
 ) => Record<string, unknown>;
 
-function mapSchemaChildren(
-  value: unknown,
-  mapper: SchemaNodeMapper,
-  preserveStringArrays: boolean,
-  ancestors: SchemaAncestors,
-): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      preserveStringArrays && isStringArray(entry)
-        ? entry
-        : mapJsonSchemaNode(entry, mapper, ancestors),
-    ]),
-  );
-}
-
 function mapJsonSchemaNode(
   schema: JsonSchemaValue,
   mapper: SchemaNodeMapper,
@@ -179,7 +160,20 @@ function mapJsonSchemaNode(
   return Object.fromEntries(
     Object.entries(mapper(schema, ancestors)).map(([key, value]) => {
       if (schemaMapKeywords.has(key)) {
-        return [key, mapSchemaChildren(value, mapper, key === "dependencies", childrenAncestors)];
+        const preserveStringArrays = key === "dependencies";
+        return [
+          key,
+          isRecord(value)
+            ? Object.fromEntries(
+                Object.entries(value).map(([childKey, entry]) => [
+                  childKey,
+                  preserveStringArrays && isStringArray(entry)
+                    ? entry
+                    : mapJsonSchemaNode(entry, mapper, childrenAncestors),
+                ]),
+              )
+            : value,
+        ];
       }
       if (schemaValueKeywords.has(key)) {
         return [key, mapJsonSchemaNode(value, mapper, childrenAncestors)];
@@ -273,38 +267,6 @@ function normalizeAdditionalPropertiesSchema(
   };
 }
 
-function normalizeJsonSchemaObject(
-  schema: Record<string, unknown>,
-  options: NormalizationOptions,
-): Record<string, unknown> {
-  const schemaWithNullableEnum =
-    schema.nullable === true &&
-    schema.enumIncludesNull === true &&
-    Array.isArray(schema.enum) &&
-    !schema.enum.some((entry) => entry === null)
-      ? { ...schema, enum: [...schema.enum, null] }
-      : schema;
-  const normalizedSchema = normalizeAdditionalPropertiesSchema(
-    expandJsonSchemaTypeArray(schemaWithNullableEnum),
-  );
-  return Object.fromEntries(
-    Object.entries(normalizedSchema)
-      .filter(([key]) => key !== "format" || options.format !== "annotation")
-      .map(([key, value]) => {
-        if (key === "$dynamicRef" && normalizedSchema.$ref === undefined) {
-          return ["$ref", value];
-        }
-        if (key === "pattern" && typeof value === "string") {
-          return [key, repairJsonSchemaPatternForUnicodeRegExp(value)];
-        }
-        if (key === "patternProperties" && isRecord(value)) {
-          return [key, normalizePatternProperties(value)];
-        }
-        return [key, value];
-      }),
-  );
-}
-
 function isJsonValue(
   value: unknown,
   active = new WeakSet<object>(),
@@ -383,7 +345,34 @@ export function normalizeJsonSchemaForTypeBox(
   schema: JsonSchemaValue,
   options: NormalizationOptions = {},
 ): JsonSchemaValue {
-  return mapJsonSchema(schema, (node) => normalizeJsonSchemaObject(node, options));
+  return mapJsonSchema(schema, (node) => {
+    const schemaWithNullableEnum =
+      node.nullable === true &&
+      node.enumIncludesNull === true &&
+      Array.isArray(node.enum) &&
+      !node.enum.some((entry) => entry === null)
+        ? { ...node, enum: [...node.enum, null] }
+        : node;
+    const normalizedSchema = normalizeAdditionalPropertiesSchema(
+      expandJsonSchemaTypeArray(schemaWithNullableEnum),
+    );
+    return Object.fromEntries(
+      Object.entries(normalizedSchema)
+        .filter(([key]) => key !== "format" || options.format !== "annotation")
+        .map(([key, value]) => {
+          if (key === "$dynamicRef" && normalizedSchema.$ref === undefined) {
+            return ["$ref", value];
+          }
+          if (key === "pattern" && typeof value === "string") {
+            return [key, repairJsonSchemaPatternForUnicodeRegExp(value)];
+          }
+          if (key === "patternProperties" && isRecord(value)) {
+            return [key, normalizePatternProperties(value)];
+          }
+          return [key, value];
+        }),
+    );
+  });
 }
 
 /** Capture a schema's format policy without changing default or reference placement. */

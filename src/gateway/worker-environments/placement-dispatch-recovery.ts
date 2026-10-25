@@ -14,6 +14,7 @@ import {
 } from "./placement-dispatch-failure.js";
 import {
   cleanupPendingWorkspaceResultOrphans,
+  subscribeWorkspaceResultOrphanChanges,
   type PendingWorkspaceResultOrphanCleanup,
 } from "./placement-dispatch-orphan-cleanup.js";
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
@@ -430,11 +431,17 @@ export function createPlacementRecoveryActions(
     }
     const candidates = await placements.readRecoveryCandidates();
     if (mode === "startup") {
+      const lookups = initialPlacements.map((placement) => ({
+        placement,
+        target: undefined,
+        dirty: false,
+      }));
       orphanCleanupPending =
-        initialPlacements.length > 0
+        lookups.length > 0
           ? {
-              placements: [...initialPlacements],
+              placements: lookups,
               initialDiscoveryPending: true,
+              unresolved: new Set(lookups),
               rootsBySession: new Map(),
               completedRoots: new Set(),
             }
@@ -511,5 +518,11 @@ export function createPlacementRecoveryActions(
     }
   };
 
-  return { reconcile, reconcileActive, isInterruptedTurn };
+  return {
+    reconcile,
+    reconcileActive,
+    isInterruptedTurn,
+    subscribeOrphanWorkspaceChanges: () =>
+      subscribeWorkspaceResultOrphanChanges(() => orphanCleanupPending),
+  };
 }

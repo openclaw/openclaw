@@ -1,10 +1,10 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
@@ -21,13 +21,7 @@ import {
 } from "./components/chat-transcript.test-support.ts";
 
 function sessionsResult(rows: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 1,
-    path: "",
-    count: rows.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: rows,
-  };
+  return sessionListResult(1, rows);
 }
 
 describe.each([false, true])("chat run activity (recovery ready: %s)", (recoveryScopeReady) => {

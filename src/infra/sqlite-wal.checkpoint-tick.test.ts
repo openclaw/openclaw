@@ -1,11 +1,11 @@
 import { setImmediate as realImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { readSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   sqliteMaintenanceFixture,
   sqliteSchedulerClock,
-  sqliteWriteGate,
 } from "./sqlite-maintenance-fixture.test-support.js";
 import {
   cancelSqliteWalWriteAdmission,
@@ -85,7 +85,7 @@ describe("sqlite WAL checkpoint tick", () => {
     vi.useFakeTimers();
     const { db } = createDatabase();
     const maintenance = resources.maintain(db, { checkpointIntervalMs: 100 });
-    const gate = sqliteWriteGate();
+    const gate = createEnteredGate();
     resources.retain(gate.release);
     const execute = vi.fn(async () => {
       await gate.wait();
