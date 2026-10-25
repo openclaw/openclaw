@@ -93,6 +93,19 @@ describe("deepseek provider plugin", () => {
     ).resolves.toEqual({ token: "config-deepseek-key" });
   });
 
+  it("skips DeepSeek balance while chat uses another base URL", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    // Config, environment and auth-profile candidates all serve the configured chat base URL.
+    const chat = { baseUrl: "https://chat-proxy.example/v1", models: [] };
+    await expect(
+      provider.resolveUsageAuth?.({
+        config: { models: { providers: { deepseek: chat } } },
+        env: {},
+        resolveApiKeyCandidatesFromConfigAndStore: async () => ["chat-key"],
+      } as never),
+    ).resolves.toEqual({ handled: true });
+  });
+
   it("fetches DeepSeek usage balance through the provider hook", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
     const mockFetch = createProviderUsageFetch(async () =>
