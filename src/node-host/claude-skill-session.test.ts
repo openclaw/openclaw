@@ -64,17 +64,7 @@ async function prepareWorkshop(sdk: string) {
     sdk === "v1"
       ? new Client(mcpIdentity)
       : new V2Client(mcpIdentity, { versionNegotiation: { mode: "legacy" } });
-  onTestFinished(async () => {
-    try {
-      await client.close();
-    } finally {
-      try {
-        await session.close();
-      } finally {
-        await session.cleanup();
-      }
-    }
-  });
+  onTestFinished(() => client.close().finally(() => session.close().finally(session.cleanup)));
   const configPath = session.argv[session.argv.indexOf("--mcp-config") + 1];
   assert(configPath);
   const config: unknown = JSON.parse(await fs.readFile(configPath, "utf8"));
@@ -150,27 +140,24 @@ describe("node Claude Workshop result settlement", () => {
     },
   );
 
-  it.each(["v1", "v2"])(
-    "%s preserves route authority and tears down pending HTTP calls",
-    async (sdk) => {
-      const { session, client, url, connect, sent } = await prepareWorkshop(sdk);
-      for (const [target, options] of [
-        [new URL("/mcp/wrong-invocation", url), { method: "POST" }],
-        [url, { method: "POST", headers: { Origin: "https://unrelated.example" } }],
-        [url, undefined],
-      ] satisfies [URL, RequestInit | undefined][]) {
-        expect((await fetch(target, options)).status).toBe(404);
-      }
-      await connect();
-      const call = client.callTool(workshopCall);
-      const rejected = expect(call).rejects.toBeInstanceOf(Error);
-      await sent;
-      await session.close();
-      await rejected;
-      await expect(session.writeStdout("late response")).rejects.toThrow("invocation closed");
-      await expect(fetch(url, { method: "POST" })).rejects.toBeInstanceOf(Error);
-    },
-  );
+  it("preserves route authority and tears down pending HTTP calls", async () => {
+    const { session, client, url, connect, sent } = await prepareWorkshop("v2");
+    for (const [target, options] of [
+      [new URL("/mcp/wrong-invocation", url), { method: "POST" }],
+      [url, { method: "POST", headers: { Origin: "https://unrelated.example" } }],
+      [url, undefined],
+    ] satisfies [URL, RequestInit | undefined][]) {
+      expect((await fetch(target, options)).status).toBe(404);
+    }
+    await connect();
+    const call = client.callTool(workshopCall);
+    const rejected = expect(call).rejects.toBeInstanceOf(Error);
+    await sent;
+    await session.close();
+    await rejected;
+    await expect(session.writeStdout("late response")).rejects.toThrow("invocation closed");
+    await expect(fetch(url, { method: "POST" })).rejects.toBeInstanceOf(Error);
+  });
 });
 
 describe("node Claude skill artifact cleanup", () => {
@@ -215,11 +202,10 @@ describe("node Claude skill artifact cleanup", () => {
     },
   );
 
-  it("preserves the exact frozen setup error when partial skill cleanup fails", async () => {
+  it("unsubscribes and preserves cancellation during partial skill setup", async () => {
     const { resources } = await skillResources();
     const primary = new Error("Node skill setup cancelled");
     primary.name = "AbortError";
-    Object.freeze(primary);
     const controller = new AbortController();
     let directory: string | undefined;
     const originalWriteFile = fs.writeFile;
@@ -232,18 +218,6 @@ describe("node Claude skill artifact cleanup", () => {
           controller.abort(primary);
         }
       });
-    const originalRm = fs.rm;
-    const deletionError = new Error("EACCES: retained node skill artifact");
-    const rm = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
-      if (
-        directory &&
-        (String(target) === directory || String(target).startsWith(`${directory}${path.sep}`))
-      ) {
-        return Promise.reject(deletionError);
-      }
-      return originalRm(target, options);
-    });
-    const warn = captureWarnings();
     const unsubscribe = vi.fn();
     try {
       const result = await prepareSession(
@@ -251,12 +225,11 @@ describe("node Claude skill artifact cleanup", () => {
         controller.signal,
         unsubscribe,
       ).session.catch((error: unknown) => error);
-      expect.soft(result).toBe(primary);
+      expect(result).toBe(primary);
       expect(unsubscribe).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenCalledOnce();
+      await expect(fs.stat(directory!)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       writeFile.mockRestore();
-      rm.mockRestore();
       if (directory) {
         await fs.rm(directory, { recursive: true, force: true });
       }

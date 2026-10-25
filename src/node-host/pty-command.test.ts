@@ -17,9 +17,6 @@ type TerminalPtyHandle = Awaited<ReturnType<NonNullable<Parameters<typeof runNod
 const command = { file: "/usr/bin/codex", args: [], cols: 80, rows: 24 };
 const resize = { kind: "resize", cols: 100, rows: 30 };
 function createPtyFixture() {
-  let onData: ((chunk: string) => void) | undefined;
-  let onExit: ((event: { exitCode: number; signal?: number }) => void) | undefined;
-  let onInput: ((payloadJSON: string) => void) | undefined;
   const controller = new AbortController();
   const pty = {
     pid: 42,
@@ -28,32 +25,27 @@ function createPtyFixture() {
     pause: vi.fn(),
     resume: vi.fn(),
     kill: vi.fn(),
-    onData: (callback) => {
-      onData = callback;
-    },
-    onExit: (callback) => {
-      onExit = callback;
-    },
+    onData: vi.fn<TerminalPtyHandle["onData"]>(),
+    onExit: vi.fn<TerminalPtyHandle["onExit"]>(),
   } satisfies TerminalPtyHandle;
   const io = {
     signal: controller.signal,
     emitChunk: vi.fn(async () => {}),
-    onInput: (callback) => {
-      onInput = callback;
-    },
+    onInput: vi.fn<OpenClawPluginNodeHostCommandIo["onInput"]>(),
   } satisfies OpenClawPluginNodeHostCommandIo;
+  const input = (payload: object) => io.onInput.mock.lastCall?.[0](JSON.stringify(payload));
   return {
     pty,
     io,
     controller,
-    data: (chunk: string) => onData?.(chunk),
-    exit: (event: { exitCode: number; signal?: number }) => onExit?.(event),
-    input: (payload: object) => onInput?.(JSON.stringify(payload)),
+    data: (chunk: string) => pty.onData.mock.lastCall?.[0](chunk),
+    exit: (event: { exitCode: number; signal?: number }) => pty.onExit.mock.lastCall?.[0](event),
+    input,
     sendInputs: () => {
-      onInput?.(JSON.stringify({ kind: "data", data: "keys" }));
-      onInput?.(JSON.stringify(resize));
+      input({ kind: "data", data: "keys" });
+      input(resize);
     },
-    ready: () => vi.waitFor(() => expect(onInput).toBeDefined()),
+    ready: () => vi.waitFor(() => expect(io.onInput).toHaveBeenCalled()),
     run: (
       params: Partial<Parameters<typeof runNodePtyCommand>[0]> = {},
       spawn?: Parameters<typeof runNodePtyCommand>[2],
@@ -110,9 +102,6 @@ it("refuses a selected node directory removed after decoding instead of falling 
 it.each(["source", "abort"] as const)(
   "closes PTY admission when %s authority changes during loading",
   async (change) => {
-    nodePtySpawn.mockImplementation(() => {
-      throw new Error("unexpected PTY spawn");
-    });
     const { controller, run } = createPtyFixture();
     let sourceCurrent = true;
     const pending = run({

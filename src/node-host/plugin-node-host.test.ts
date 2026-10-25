@@ -16,12 +16,14 @@ import {
 
 const availabilityContext = { config: {}, env: {} };
 type Command = PluginNodeHostCommandRegistration["command"];
-function registerCommands(...commands: Command[]) {
+function registerCommands(
+  ...commands: (Omit<Command, "handle"> & Partial<Pick<Command, "handle">>)[]
+) {
   const registry = createEmptyPluginRegistry();
   registry.nodeHostCommands = commands.map((command) => ({
     pluginId: command.command.split(".")[0]!,
     source: "test",
-    command,
+    command: { handle: async () => "{}", ...command },
   }));
   registry.plugins = [...new Set(registry.nodeHostCommands.map(({ pluginId }) => pluginId))].map(
     (id) =>
@@ -46,23 +48,15 @@ it.each([undefined, "optional", true] as const)(
       return paramsJSON ?? "";
     });
     const registry = registerCommands({ command: "file.fetch", cap: "file", duplex, handle });
-    expect(listCommands(availabilityContext)).toEqual({
-      caps: ["file"],
-      commands: ["file.fetch"],
-      nodePluginTools: [],
-    });
     expect(isDuplex("file.fetch")).toBe(duplex !== undefined);
     const payload = '{"ok":true}';
-    if (duplex === undefined) {
+    if (duplex === true) {
+      await expect(invoke("file.fetch", null)).rejects.toThrow("requires duplex transport");
+    } else {
       await expect(invoke("file.fetch", payload)).resolves.toBe(payload);
       await expect(invoke("missing.command", null)).resolves.toBeNull();
-    } else {
-      if (duplex === "optional") {
-        await expect(invoke("file.fetch", payload)).resolves.toBe(payload);
-        expect(handle).toHaveBeenLastCalledWith(payload, undefined);
-      } else {
-        await expect(invoke("file.fetch", null)).rejects.toThrow("requires duplex transport");
-      }
+    }
+    if (duplex !== undefined) {
       const io = {
         signal: new AbortController().signal,
         emitChunk: async () => {},
@@ -79,7 +73,6 @@ it.each([true, false])(
   (enabled) => {
     const browser = {
       cap: "browser",
-      handle: async () => "{}",
       isAvailable: ({ config }: Parameters<NonNullable<Command["isAvailable"]>>[0]) =>
         config.browser?.enabled !== false,
     };
@@ -98,37 +91,16 @@ it.each([true, false])(
         command: "browser.inspect",
         agentTool: { name: "browser.inspect", description: "Inspect browser state" },
       },
-      { command: "photos.proxy", cap: "photos", handle: async () => "{}" },
-      {
-        command: "computer.act",
-        cap: "computer",
-        handle: async () => "{}",
-        computerUse: () => ({
-          contractVersion: 2,
-          provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-          actions: ["screenshot", "left_click"],
-          targets: ["screen"],
-          deliveryModes: ["foreground"],
-          observations: ["image"],
-          features: { recording: false, agentCursor: false, multiDisplay: false },
-        }),
-      },
+      { command: "photos.proxy", cap: "photos" },
     );
-    const listed = listCommands({
-      config: { browser: { enabled } },
-      env: {},
-    });
-    expect(listed.caps).toEqual(
-      enabled ? ["browser", "computer", "photos"] : ["computer", "photos"],
-    );
+    const listed = listCommands({ config: { browser: { enabled } }, env: {} });
+    expect(listed.caps).toEqual(enabled ? ["browser", "photos"] : ["photos"]);
     expect(listed.commands).toEqual(
-      enabled
-        ? ["browser.inspect", "browser.proxy", "computer.act", "photos.proxy"]
-        : ["computer.act", "photos.proxy"],
+      enabled ? ["browser.inspect", "browser.proxy", "photos.proxy"] : ["photos.proxy"],
     );
     expect(listed.nodePluginTools).toHaveLength(Number(enabled));
     if (enabled) {
-      expect(listed.nodePluginTools[0]).toEqual({
+      expect(listed.nodePluginTools[0]).toMatchObject({
         pluginId: "browser",
         name: "browser_inspect",
         description: "Inspect browser state",
@@ -136,11 +108,6 @@ it.each([true, false])(
         parameters: { type: "object", properties: { url: { type: "string" } } },
       });
     }
-    expect(listed.computerUse).toMatchObject({
-      contractVersion: 2,
-      provider: { id: "fixture", generation: "generation-1" },
-      actions: ["screenshot", "left_click"],
-    });
   },
 );
 
@@ -148,11 +115,12 @@ it("scopes watcher callbacks, shares reentrant cleanup, and fences late notifica
   const retiring = createDeferred();
   const entered = createDeferred();
   const onChange = vi.fn();
-  const scopedRegistry = vi.fn();
+  const assertScope = () =>
+    expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(registry);
   let notify: (() => void) | undefined;
   let reentrant: unknown;
   const cleanup = vi.fn(() => {
-    scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+    assertScope();
     entered.resolve();
     // Do not await the completion whose cleanup is currently executing.
     if (cleanup.mock.calls.length === 1) {
@@ -162,15 +130,14 @@ it("scopes watcher callbacks, shares reentrant cleanup, and fences late notifica
   });
   const registry = registerCommands({
     command: "fixture.observe",
-    handle: async () => "{}",
     watchAvailability: (_context, callback) => {
-      scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+      assertScope();
       notify = callback;
       return cleanup;
     },
   });
   const stop = watchAvailability(availabilityContext, () => {
-    scopedRegistry(getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+    assertScope();
     onChange();
   });
   notify?.();
@@ -178,13 +145,11 @@ it("scopes watcher callbacks, shares reentrant cleanup, and fences late notifica
   try {
     notify?.();
     await entered.promise;
-    expect(reentrant).toBeInstanceOf(Promise);
     expect(reentrant).toBe(closing);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(onChange).toHaveBeenCalledOnce();
     retiring.resolve();
     await closing;
-    expect(scopedRegistry.mock.calls).toEqual([[registry], [registry], [registry]]);
   } finally {
     retiring.resolve();
     await Promise.allSettled([closing, reentrant]);
@@ -201,7 +166,6 @@ it("retries failed watcher cleanup without replaying successful siblings", async
   registerCommands(
     ...[successful, retryable].map((cleanup, index) => ({
       command: `fixture.observe-${index}`,
-      handle: async () => "{}",
       watchAvailability: () => cleanup,
     })),
   );

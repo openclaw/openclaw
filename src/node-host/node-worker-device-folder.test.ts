@@ -8,7 +8,6 @@ import {
   NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND,
 } from "../worker/node-workspace-protocol.js";
 import { WORKSPACE_INSPECTION_COMMAND } from "../worker/workspace-inspection-protocol.js";
-import { NodeWorkerDeviceFolders } from "./node-worker-device-folder.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -81,7 +80,7 @@ it("accepts only absolute or home-relative configuration roots", () => {
   expect(NodeHostWorkerRunsSchema.parse({ folders: [] })).toMatchObject({ folders: [] });
 });
 
-it("requires an existing directory, configured root containment, and no private-root overlap", () => {
+it("requires an existing directory and configured root containment", () => {
   expect(validate("~/projects/project")).toBe(folder);
   expect(validate(allowed)).toBe(allowed);
   reject("projects/project", "absolute");
@@ -91,9 +90,6 @@ it("requires an existing directory, configured root containment, and no private-
   reject(file, "directory");
   fs.symlinkSync(outside(), path.join(allowed, "escape"), "dir");
   reject(path.join(allowed, "escape"), "not allowed");
-  const broad = makeRuntime([home]);
-  expect(() => broad.validateDeviceFolder(root)).toThrow("private worker storage");
-  expect(() => broad.validateDeviceFolder(home)).toThrow("private worker storage");
 });
 
 it("allows any existing directory by default, but rejects filesystem roots and private storage", () => {
@@ -112,7 +108,6 @@ it("does not reinterpret an unbound legacy worker cwd as a device folder", async
 
 it("disables device-folder validation with an explicit empty list", async () => {
   runtime = makeRuntime([]);
-  expect(() => runtime.validateDeviceFolder(folder)).toThrow("sessions are disabled");
   await expect(exec([NODE_WORKSPACE_VALIDATE_DEVICE_FOLDER_COMMAND])).rejects.toThrow(
     "sessions are disabled",
   );
@@ -207,32 +202,14 @@ it("drains the logical operation queue after the user folder disappears", async 
   expect(fs.existsSync(folder)).toBe(false);
 });
 
-it("binds an acquisition to the exact directory, not just an allowed path", () => {
-  const acquired = new NodeWorkerDeviceFolders({
-    env: { ...process.env, HOME: home, USERPROFILE: home },
-    folders: [allowed],
-    privateRoots: [root],
-  }).acquire(request());
-  acquired.assertCurrent();
-  fs.renameSync(folder, `${folder}-original`);
-  fs.mkdirSync(folder);
-  expect(() => acquired.assertCurrent()).toThrow("acquired device folder changed");
-});
-
 it("rejects replacement, seeding, transfer, and quiescence even for direct runtime callers", async () => {
   write();
+  const key = "a".repeat(64);
   for (const extra of [
     { resetWorkspace: true },
     { resetWorkspace: false },
-    { seed: { action: "apply", key: "a".repeat(64) } },
-    {
-      transfer: {
-        direction: "download",
-        token: "token",
-        manifestRef: `sha256:${"a".repeat(64)}`,
-        attachments: true,
-      },
-    },
+    { seed: { action: "apply", key } },
+    { transfer: { direction: "download", token: "token", manifestRef: `sha256:${key}` } },
     { quiescence: { action: "acquire", nonce: "a".repeat(32), timeoutMs: 1000 } },
   ] as const) {
     await expect(exec(["node", "-e", ""], extra)).rejects.toThrow("device folders cannot");

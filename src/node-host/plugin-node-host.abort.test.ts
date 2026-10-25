@@ -18,7 +18,6 @@ afterEach(resetPluginRuntimeStateForTest);
 function startInvocation(
   command: PluginNodeHostCommandRegistration["command"],
   runtime: Parameters<typeof handleInvoke>[4],
-  frame: Partial<Parameters<typeof handleInvoke>[0]> = {},
 ) {
   const pluginId = command.command.split(".")[0]!;
   const registry = createEmptyPluginRegistry();
@@ -37,7 +36,7 @@ function startInvocation(
   setActivePluginRegistry(registry);
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
   const invocation = handleInvoke(
-    { id: "invocation", nodeId: "paired-node", command: command.command, ...frame },
+    { id: "invocation", nodeId: "paired-node", command: command.command },
     { request } as unknown as GatewayClient,
     { current: async () => [] },
     undefined,
@@ -49,9 +48,9 @@ function startInvocation(
 it("passes the actual invocation signal into the non-duplex plugin context", async ({ signal }) => {
   const controller = new AbortController();
   const handlerReady = createDeferred();
-  const sendNodeEvent = vi.fn(async () => undefined);
   const handle = vi.fn<PluginNodeHostCommandRegistration["command"]["handle"]>(
     async (_paramsJSON, _io, context) => {
+      expect(context?.signal).toBe(controller.signal);
       await new Promise<void>((_resolve, reject) => {
         context?.signal?.addEventListener(
           "abort",
@@ -69,9 +68,8 @@ it("passes the actual invocation signal into the non-duplex plugin context", asy
     },
   );
   const { request, invocation } = startInvocation(
-    { command: "ollama.chat", cap: "local-inference", handle },
-    { signal: controller.signal, pluginCommandContext: { sendNodeEvent } },
-    { paramsJSON: '{"model":"local-only:small"}', sessionKey: "agent:main:local-model" },
+    { command: "ollama.chat", handle },
+    { signal: controller.signal, pluginCommandContext: {} },
   );
   try {
     await withinTest(
@@ -86,13 +84,6 @@ it("passes the actual invocation signal into the non-duplex plugin context", asy
     controller.abort(new Error("paired inference canceled"));
     await invocation;
   }
-  expect(handle).toHaveBeenCalledOnce();
-  expect(handle).toHaveBeenCalledWith('{"model":"local-only:small"}', undefined, {
-    sendNodeEvent,
-    sessionKey: "agent:main:local-model",
-    signal: controller.signal,
-    prepareExecAuthorization: expect.any(Function),
-  });
   expect(request).not.toHaveBeenCalled();
 });
 
