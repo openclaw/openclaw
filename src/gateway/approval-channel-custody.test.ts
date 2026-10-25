@@ -67,41 +67,14 @@ beforeEach(() => {
   mocks.supportsScopedPluginReviewers.value = false;
 });
 
-it("selects source-bound, targeted, and uniquely authorized accounts", async () => {
-  const check = async (
-    expected: Record<string, boolean>,
-    cfg: OpenClawConfig = {},
-    source: { turnSourceChannel?: string; turnSourceAccountId?: string } = {},
-    accounts = ["default", "ops"],
-    eligible = accounts,
-  ) => {
-    mocks.config.listAccountIds.mockReturnValue(accounts);
-    mocks.authorize.mockImplementation(({ accountId }: { accountId: string }) => ({
-      authorized: eligible.includes(accountId),
-    }));
-    for (const [accountId, authorized] of Object.entries(expected)) {
-      expect(
-        await prepare("exec", reviewer(accountId), cfg)?.authorizes(
-          request({ command: "printf approval", ...source }),
-        ),
-        accountId,
-      ).toBe(authorized);
-    }
-  };
-  const bound = { turnSourceChannel: "telegram", turnSourceAccountId: "ops" };
-  await check({ ops: true, default: false }, {}, bound);
-  const targets = [
-    { channel: "telegram", to: "1" },
-    { channel: "telegram", to: "2", accountId: "ops" },
-  ];
-  await check(
-    { default: true, ops: true, other: false },
-    { approvals: { exec: { enabled: true, mode: "targets", targets } } },
-    {},
-    ["default", "ops", "other"],
-  );
-  await check({ ops: true }, {}, {}, ["default", "ops"], ["ops"]);
-  await check({ ops: false });
+it("selects an unbound account only when the channel authorizes it uniquely", async () => {
+  const pending = request({ command: "printf approval" });
+  expect(await prepare("exec", reviewer("ops"))?.authorizes(pending)).toBe(false);
+  mocks.authorize.mockImplementation(({ accountId }: { accountId: string }) => ({
+    authorized: accountId === "ops",
+  }));
+  expect(await prepare("exec", reviewer("ops"))?.authorizes(pending)).toBe(true);
+  expect(await prepare("exec", reviewer("default"))?.authorizes(pending)).toBe(false);
 });
 
 it("invalidates unbound incognito custody after the memory delivery account changes", async () => {

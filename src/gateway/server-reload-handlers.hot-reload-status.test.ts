@@ -170,27 +170,24 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
   const storeOwnerKey = Symbol.for("openclaw.test.managedReloadStoreOwner");
   registerSystemEventStoreOwner(storeOwnerKey, retireStoreOwner);
   try {
-    const neutralConfig: OpenClawConfig = {
+    const presentation: OpenClawConfig = {
       ...initialConfig,
       ui: { prefs: { sidebarEntries: ["route:usage"] } },
     };
-    commit("ui.prefs.sidebarEntries", neutralConfig);
-    commit("logging.level", {
-      ...neutralConfig,
-      logging: { level: "debug" },
-    });
-    expect(retireStoreOwner).not.toHaveBeenCalled();
-
-    const replacementConfig: OpenClawConfig = {
-      ...neutralConfig,
+    const replacement: OpenClawConfig = {
+      ...presentation,
       session: { store: "/tmp/replacement-sessions.json" },
     };
-    commit("session.store", replacementConfig);
-    expect(retireStoreOwner).toHaveBeenCalledOnce();
-    commit("env.OPENCLAW_STATE_DIR", replacementConfig);
-    expect(retireStoreOwner).toHaveBeenCalledTimes(2);
-    commit("ui.prefs.sidebarEntries", replacementConfig);
-    expect(retireStoreOwner).toHaveBeenCalledTimes(2);
+    for (const [path, config, retirements] of [
+      ["ui.prefs.sidebarEntries", presentation, 0],
+      ["logging.level", { ...presentation, logging: { level: "debug" } }, 0],
+      ["session.store", replacement, 1],
+      ["env.OPENCLAW_STATE_DIR", replacement, 2],
+      ["ui.prefs.sidebarEntries", replacement, 2],
+    ] as const) {
+      commit(path, config);
+      expect(retireStoreOwner).toHaveBeenCalledTimes(retirements);
+    }
   } finally {
     registerSystemEventStoreOwner(storeOwnerKey, () => {});
     publishSystemEventStoreResolver(undefined);

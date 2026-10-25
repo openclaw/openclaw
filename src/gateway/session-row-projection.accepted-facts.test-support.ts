@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { expect, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -155,12 +156,11 @@ export async function withAcceptedSuffix(
         });
       }
       reading = projection.ensureMaterialized();
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         paused.promise,
-        reading.then(() => {
-          throw new Error("Drain bypassed the released-custody boundary");
-        }),
-      ]);
+        reading,
+        "Drain bypassed the released-custody boundary",
+      );
       expect(releases).toBe(1);
       const suffix = projection.findBySessionId({
         agentId: "main",
