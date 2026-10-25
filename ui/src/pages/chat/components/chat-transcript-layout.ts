@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import type { Virtualizer } from "@tanstack/virtual-core";
+import { createContext } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
@@ -10,7 +11,7 @@ import type { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 export type TranscriptContent = GuardedTranscriptItem | JSX.Element;
 
 export type TranscriptRow<T = unknown> =
-  | { kind: "item"; key: string; item: T }
+  | { kind: "item"; key: string; item: T; revision?: string }
   | { kind: "content"; key: string; content: TranscriptContent };
 
 export type TranscriptLayoutProps = {
@@ -31,3 +32,5 @@ export type TranscriptLayoutProps = {
   presented: PresentationValue;
   onCommit: () => void;
 };
+
+export const TranscriptRowKeyContext = createContext<() => string | undefined>(() => undefined);

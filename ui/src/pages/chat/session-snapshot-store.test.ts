@@ -97,7 +97,7 @@ async function persist(store: SessionSnapshotStore, cacheKey: string, value: Cha
   store.write(cacheKey, value);
   await store.flush();
 }
-const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 3) => ({
+const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion = 4) => ({
   projectionVersion,
   sessionKey: cacheKey,
   savedAt: 1,

@@ -42,7 +42,7 @@ import {
   discardPrewarmedChatSnapshot,
   peekPrewarmedChatSnapshot,
 } from "./session-snapshot-prewarm.ts";
-const CHAT_SNAPSHOT_PROJECTION_VERSION = 3;
+const CHAT_SNAPSHOT_PROJECTION_VERSION = 4;
 const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
@@ -83,7 +83,7 @@ const snapshotSchema = json.object(
     ),
     widgetHeights: json.optional(
       json.refine(
-        json.record(json.refine(json.number, (height) => height >= 48 && height <= 8000)),
+        json.record(json.refine(json.number, (height) => height >= 1 && height <= 8000)),
         (heights) => Object.keys(heights).length <= 100,
       ),
     ),

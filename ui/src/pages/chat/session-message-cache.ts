@@ -4,6 +4,7 @@ import {
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
 import type { ProgressCard } from "@openclaw/gateway-protocol";
+import { createSignal } from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
@@ -69,7 +70,8 @@ export type ChatSessionSnapshot = {
 
 export type ChatWidgetLayout = {
   read: (key: string) => number | undefined;
-  write: (key: string, height: number) => void;
+  write: (key: string, height: number, rowKey?: string) => void;
+  invalidateRow: (rowKey: string | undefined) => void;
 };
 
 export function createChatWidgetLayout(
@@ -77,29 +79,61 @@ export function createChatWidgetLayout(
   host: ChatMessageCacheHost,
   target: ChatMessageCacheTarget,
 ): ChatWidgetLayout {
+  const [rowRevision, setRowRevision] = createSignal(0);
   const cacheKey = resolveChatSnapshotKey(host, target);
   let sessionId = cache.get(cacheKey)?.snapshot.sessionId;
+  let reservations: Record<string, number> | undefined;
   const current = () => {
     const snapshot = cache.get(cacheKey)?.snapshot;
     // A row can mount before the history owner commits its first cache snapshot.
     if (sessionId === undefined && snapshot) {
       sessionId = snapshot.sessionId;
     }
-    return resolveChatSnapshotKey(host, target) === cacheKey && snapshot?.sessionId === sessionId
-      ? snapshot
-      : undefined;
+    if (
+      !snapshot ||
+      resolveChatSnapshotKey(host, target) !== cacheKey ||
+      snapshot.sessionId !== sessionId
+    ) {
+      return;
+    }
+    reservations ??= snapshot?.widgetHeights ?? {};
+    return snapshot;
+  };
+  const invalidateRow = (rowKey: string | undefined) => {
+    const snapshot = current();
+    if (!snapshot || !rowKey) {
+      return;
+    }
+    const retain = ([key]: [string, number]) =>
+      !(key.startsWith("row:v1:") && key.endsWith(`:${JSON.stringify(rowKey)}`));
+    reservations = Object.fromEntries(Object.entries(reservations ?? {}).filter(retain));
+    const widgetHeights = Object.fromEntries(
+      Object.entries(snapshot.widgetHeights ?? {}).filter(retain),
+    );
+    cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
+    setRowRevision((revision) => revision + 1);
   };
   return {
-    read: (key) => current()?.widgetHeights?.[key],
-    write: (key, height) => {
+    read: (key) => {
+      rowRevision();
       const snapshot = current();
-      if (!snapshot || !Number.isFinite(height) || height < 48 || height > 8000) {
+      if (!snapshot) {
+        return;
+      }
+      return key.startsWith("row:v1:") ? reservations?.[key] : snapshot?.widgetHeights?.[key];
+    },
+    write: (key, measuredHeight, rowKey) => {
+      const snapshot = current();
+      const row = key.startsWith("row:v1:");
+      const height = row ? Math.max(measuredHeight, reservations?.[key] ?? 0) : measuredHeight;
+      if (!snapshot || !Number.isFinite(height) || height < (row ? 1 : 48) || height > 8000) {
         return;
       }
       if (snapshot.widgetHeights?.[key] === height) {
         return;
       }
       const widgetHeights = { ...snapshot.widgetHeights };
+      const shrank = rowKey && height < (widgetHeights[key] ?? 0);
       delete widgetHeights[key];
       widgetHeights[key] = height;
       const keys = Object.keys(widgetHeights);
@@ -107,7 +141,11 @@ export function createChatWidgetLayout(
         delete widgetHeights[keys[0]!];
       }
       cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
+      if (shrank) {
+        invalidateRow(rowKey);
+      }
     },
+    invalidateRow,
   };
 }
 

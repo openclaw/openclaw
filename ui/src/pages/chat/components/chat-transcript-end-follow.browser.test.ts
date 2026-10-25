@@ -56,7 +56,7 @@ class EndFollowFixture extends TranscriptTestHost {
       { kind: "content", key: "growing-run", content: this.last },
     ];
     const content = this.transcript.renderSession("agent:main:end-follow", (session) => {
-      session.setContentReady(true);
+      session.layout.ready = true;
       return session.render(
         rows,
         (row) => (row.kind === "content" ? row.content : null),

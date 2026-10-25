@@ -48,6 +48,48 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("reserves an unchanged row while keeping widths, revisions and widget resizes independent", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"notice"';
+    context.write(widgetSnapshot([], "session-1", { widgetHeights: { [row]: 300 } }));
+    const layout = context.layout();
+    layout.write(row, 100);
+    layout.write('row:v1:400:gutter:revision-1:"notice"', 200);
+    layout.write('row:v1:768:gutter:revision-2:"notice"', 39);
+    layout.write("canvas:widget", 300);
+    layout.write("canvas:widget", 100);
+    const restored = context.layout();
+    expect([
+      restored.read(row),
+      restored.read('row:v1:400:gutter:revision-1:"notice"'),
+      restored.read('row:v1:768:gutter:revision-2:"notice"'),
+      restored.read("canvas:widget"),
+    ]).toEqual([300, 200, 39, 100]);
+  });
+  it("retires only the containing row's footprints when its widget shrinks or a disclosure changes", () => {
+    const context = createCacheContext();
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    const narrow = 'row:v1:400:gutter:revision-1:"widget-row"';
+    const neighbor = 'row:v1:768:gutter:revision-1:"neighbor"';
+    context.write(
+      widgetSnapshot([], "session-1", {
+        widgetHeights: { [row]: 700, [narrow]: 700, [neighbor]: 700 },
+      }),
+    );
+    const layout = context.layout();
+    layout.write("canvas:widget", 600);
+    layout.write("canvas:widget", 200, "widget-row");
+    expect([layout.read(row), layout.read(narrow), layout.read(neighbor)]).toEqual([
+      undefined,
+      undefined,
+      700,
+    ]);
+    layout.write(row, 300);
+    layout.write(row, 200);
+    expect(context.layout().read(row)).toBe(200);
+    layout.invalidateRow("neighbor");
+    expect(layout.read(neighbor)).toBeUndefined();
+  });
   it("retains a scoped board through transcript replacement and clears it authoritatively", () => {
     const cache: ChatMessageCache = new Map();
     const host = {

@@ -167,7 +167,7 @@ it.each(["resize clamp", "native return"] as const)(
         updateRequested = false;
         render(
           transcript.renderSession(`agent:main:composer-reader-${movement}`, (session) => {
-            session.setContentReady(true);
+            session.layout.ready = true;
             return session.render(
               rows,
               (row) => (row.kind === "content" ? row.content : null),

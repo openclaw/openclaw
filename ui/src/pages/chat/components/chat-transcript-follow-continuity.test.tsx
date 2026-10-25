@@ -102,7 +102,7 @@ it.each(["none", "wheel", "programmatic"] as const)(
     setTranscriptViewport(container, () => scrollHeight);
     const scrollTo = mockScroll(container, true);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    session.setContentReady(true);
+    session.layout.ready = true;
     scrollReader(container, 4200);
     renderRows(rows);
     await vi.advanceTimersByTimeAsync(150);

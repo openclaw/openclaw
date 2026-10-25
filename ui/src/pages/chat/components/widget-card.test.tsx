@@ -161,7 +161,7 @@ afterEach(async () => {
 describe("widget-card", () => {
   it("retains saved geometry while active widget content waits for admission", () => {
     const preview = documentPreview("saved-widget", { sandbox: "strict" });
-    const widgetLayout = { read: vi.fn(() => 700), write: vi.fn() };
+    const widgetLayout = { read: vi.fn(() => 700), write: vi.fn(), invalidateRow: vi.fn() };
     const host = mountWidget(preview, { mediaReadAllowed: false, widgetLayout });
     const shell = host.querySelector('[data-content-kind="canvas-html"]');
     expect(shell).not.toBeNull();

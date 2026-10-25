@@ -32,6 +32,34 @@ export class TranscriptInitialRange {
     });
   }
 
+  restore(height: number, minimum: (index: number) => number): void {
+    if (!this.pending) {
+      return;
+    }
+    const virtualizer = this.virtualizer();
+    for (let index = 0; index < virtualizer.options.count; index++) {
+      const size = minimum(index);
+      if (size) {
+        virtualizer.resizeItem(index, size);
+      }
+    }
+    if (!this.tailRows) {
+      return;
+    }
+    let covered = 0,
+      count = 0;
+    for (let index = virtualizer.options.count - 1; index >= 0 && covered < height; index--) {
+      const size = virtualizer.itemSizeCache.get(virtualizer.options.getItemKey(index));
+      if (size === undefined) {
+        return;
+      }
+      covered += size;
+      count++;
+    }
+    this.tailRows = Math.max(1, count);
+    this.refresh();
+  }
+
   extend(element: HTMLDivElement): boolean {
     const virtualizer = this.virtualizer();
     if (
