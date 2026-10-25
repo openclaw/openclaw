@@ -96,39 +96,16 @@ describe("Responses server compaction host/transport parity", () => {
       { ...AZURE_ROUTE, extraParams: { ...CUSTOM_THRESHOLD, responsesServerCompaction: true } },
     ],
   ])("keeps %s gates aligned", (_name, threshold, overrides) => {
-    const {
-      provider,
-      api,
-      baseUrl,
-      compat,
-      contextTokens,
-      contextWindow,
-      preparedWindow,
-      extraParams,
-    } = {
+    const { provider, api, baseUrl, preparedWindow, extraParams, ...modelOptions } = {
       provider: "openai",
       api: "openai-responses" as const,
       baseUrl: OPENAI_URL,
       ...overrides,
     };
+    const { contextTokens, contextWindow } = modelOptions;
+    const model = buildModelConfig({ api, baseUrl, ...modelOptions });
     const cfg: OpenClawConfig = {
-      models:
-        baseUrl === undefined
-          ? undefined
-          : providerConfig(
-              provider,
-              api,
-              [
-                buildModelConfig({
-                  api,
-                  baseUrl,
-                  compat,
-                  contextTokens,
-                  contextWindow: contextWindow ?? TEST_CONTEXT_WINDOW,
-                }),
-              ],
-              baseUrl,
-            ),
+      models: baseUrl === undefined ? undefined : providerConfig(provider, api, [model], baseUrl),
       agents: {
         defaults: { models: { [modelKey(provider, TEST_MODEL_ID)]: { params: extraParams } } },
       },
@@ -146,7 +123,7 @@ describe("Responses server compaction host/transport parity", () => {
         provider,
         api,
         baseUrl: baseUrl ?? OPENAI_URL,
-        compat,
+        compat: model.compat,
         contextTokens: contextTokens ?? preparedWindow,
         contextWindow: contextWindow ?? preparedWindow ?? TEST_CONTEXT_WINDOW,
       },
@@ -159,10 +136,11 @@ describe("Responses server compaction host/transport parity", () => {
     applyOpenAIResponsesPayloadPolicy(payload, policy);
     const transportEnabled = payload.context_management !== undefined;
 
-    expect(hostThreshold !== undefined).toBe(transportEnabled);
-    expect(policy.compactThreshold).toBe(hostThreshold);
-    expect(transportEnabled).toBe(threshold !== undefined);
-    expect(hostThreshold).toBe(threshold);
+    expect({ hostThreshold, transportEnabled, policyThreshold: policy.compactThreshold }).toEqual({
+      hostThreshold: threshold,
+      transportEnabled: threshold !== undefined,
+      policyThreshold: threshold,
+    });
   });
 });
 

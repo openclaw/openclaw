@@ -23,7 +23,6 @@ import { buildTestCtx } from "./test-ctx.js";
 
 type Prepared = Parameters<typeof runPreparedReply>[0];
 
-/** Keep actual command authorization, directive routing/application, and run construction. */
 async function prepareIngress(body: string, authorized = true): Promise<Prepared> {
   const cfg: Prepared["cfg"] = {
     session: {},
@@ -95,8 +94,6 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
       ...routed.result,
       ...levels,
       defaultActivation: routed.result.defaultActivation,
-      ctx,
-      sessionCtx,
       // Directives can rewrite agent text. Capture conversation after that owner.
       conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
     };
@@ -141,48 +138,36 @@ export function registerSteeringIntentProducerCases(params: {
     });
 
     it.each([
-      {
-        name: "ordinary prose",
-        body: "continue the task",
-        authorized: true,
-        kind: "continue-existing",
+      ["ordinary prose", "continue the task", true, "continue-existing"],
+      ["accepted exec policy", "/exec security=deny continue the task", true, "new-execution"],
+      ["accepted elevation off", "/elevated off continue the task", true, "new-execution"],
+      [
+        "unauthorized exec text",
+        "/exec security=deny continue the task",
+        false,
+        "continue-existing",
+      ],
+    ] as const)(
+      "retains %s through actual reply-run construction",
+      async (name, body, authorized, kind) => {
+        const input = await prepareIngress(body, authorized);
+        await params.runPrepared(input);
+        const produced = params.requireRunReplyAgentCall();
+        expect(produced.steeringIntent).toEqual({ kind });
+        expect(produced.followupRun.run.elevatedLevel).toBe("off");
+        if (name === "accepted exec policy") {
+          expect(produced.followupRun.run.execOverrides?.security).toBe("deny");
+          expect(produced.followupRun.prompt).not.toContain("/exec");
+        }
+        if (name === "unauthorized exec text") {
+          expect(input.command.isAuthorizedSender).toBe(false);
+          expect(produced.followupRun.run.execOverrides?.security).toBeUndefined();
+          expect(produced.followupRun.prompt).toContain(body);
+        }
+        // Both ordinary default off and explicitly requested off have the same
+        // resolved value above; intent must survive the producer independently.
       },
-      {
-        name: "accepted exec policy",
-        body: "/exec security=deny continue the task",
-        authorized: true,
-        kind: "new-execution",
-      },
-      {
-        name: "accepted elevation off",
-        body: "/elevated off continue the task",
-        authorized: true,
-        kind: "new-execution",
-      },
-      {
-        name: "unauthorized exec text",
-        body: "/exec security=deny continue the task",
-        authorized: false,
-        kind: "continue-existing",
-      },
-    ] as const)("retains $name through actual reply-run construction", async (testCase) => {
-      const input = await prepareIngress(testCase.body, testCase.authorized);
-      await params.runPrepared(input);
-      const produced = params.requireRunReplyAgentCall();
-      expect(produced.steeringIntent).toEqual({ kind: testCase.kind });
-      expect(produced.followupRun.run.elevatedLevel).toBe("off");
-      if (testCase.name === "accepted exec policy") {
-        expect(produced.followupRun.run.execOverrides?.security).toBe("deny");
-        expect(produced.followupRun.prompt).not.toContain("/exec");
-      }
-      if (testCase.name === "unauthorized exec text") {
-        expect(input.command.isAuthorizedSender).toBe(false);
-        expect(produced.followupRun.run.execOverrides?.security).toBeUndefined();
-        expect(produced.followupRun.prompt).toContain(testCase.body);
-      }
-      // Both ordinary default off and explicitly requested off have the same
-      // resolved value above; intent must survive the producer independently.
-    });
+    );
 
     it.each(["/exec security=deny continue the task", "/elevated off continue the task"])(
       "keeps %s out of the question probe and active backend",
