@@ -7,6 +7,10 @@
  * hashes. queueMs includes input creation and GC; elapsedMs includes deliberate
  * blocking and GC, so neither is production latency. arrayBuffers can still
  * count transferred backing stores; use external and detachment alongside it.
+ * For untraced recovery latency, use mode latency without --expose-gc. It warms
+ * worker startup, then times the same recovery workload without blockers, GC,
+ * encoder instrumentation, or sampling. Run five fresh-process alternating
+ * baseline/candidate pairs; report elapsedMs median and mean plus host load.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -17,6 +21,7 @@ import { setImmediate, setTimeout } from "node:timers/promises";
 import {
   computeWorkspaceManifest,
   prepareWorkspaceTreeInput,
+  serializeWorkspaceManifest,
 } from "../../src/gateway/worker-environments/workspace-manifest-worker.js";
 import type { WorkerWorkspaceManifestEntry } from "../../src/gateway/worker-environments/workspace-manifest.js";
 import { createWorkspacePatch } from "../../src/gateway/worker-environments/workspace-reconcile-recovery.js";
@@ -31,7 +36,7 @@ const scratch = path.resolve(process.argv[2]!);
 const mode = process.argv[3] ?? "recovery";
 const count = Number(process.argv[4] ?? 80_000);
 assert.ok(Number.isSafeInteger(count) && count > 0);
-assert.ok(["prepare", "recovery", "owner"].includes(mode));
+assert.ok(["prepare", "recovery", "owner", "latency"].includes(mode));
 const root = path.join(scratch, "files");
 const digest = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const filename = (index: number) =>
@@ -54,6 +59,34 @@ if (mode === "prepare") {
     await fs.writeFile(path.join(root, filename(index)), "", { mode: 0o644 });
   }
   console.log(JSON.stringify({ prepared: count }));
+} else if (mode === "latency") {
+  try {
+    await serializeWorkspaceManifest({ version: 1, baseCommit: null, entries: [] });
+    const start = performance.now();
+    const output = await createWorkspacePatch({
+      root,
+      stagingRoot: root,
+      baseEntries: entries(),
+      appliedEntries: entries(),
+    });
+    const elapsedMs = performance.now() - start;
+    console.log(
+      JSON.stringify({
+        mode,
+        count,
+        node: process.version,
+        elapsedMs,
+        result: {
+          baseTree: output.baseTree,
+          patchBytes: output.patch.byteLength,
+          patchSha256: digest(output.patch),
+          packSha256: digest(output.basePack),
+        },
+      }),
+    );
+  } finally {
+    await drainGlobalSingletonLifecycleState();
+  }
 } else {
   assert.ok(global.gc, "requires --expose-gc");
   const release = createDeferredCore();
