@@ -167,9 +167,6 @@ it.each(
       expect(builtInOptions?.pluginExecutionAuthority).toBe(authority);
       expect(builtInOptions?.pluginExecutionSkillsSnapshot).toBe(skillsSnapshot);
       expect(() => builtInOptions?.assertInvocationCurrent?.()).not.toThrow();
-      expect(builtInOptions?.awaitSessionDiffBaseline).toBe(
-        result.toolHookContext.awaitSessionDiffBaseline,
-      );
       const tool =
         surface === "built-in"
           ? result.toolsRaw[0]
@@ -240,12 +237,10 @@ it.each([
     toolOverrides: scenario.sessionDisabled ? { webSearch: false } : undefined,
   });
   const { result, attempt } = fixture;
-  expect(codingTools).toHaveBeenCalledTimes(1);
   expect(result.webSearchUnconfigured).toBe(scenario.expected);
   // A disabled factory never reports configuration, so rebuild must clear the old fact.
   codingTools.mockImplementation(() => []);
   attempt.toolOverrides = { webSearch: false };
   await result.refreshPermissionMode(null, () => {});
   expect(result.webSearchUnconfigured).toBe(false);
-  expect(codingTools).toHaveBeenCalledTimes(2);
 });

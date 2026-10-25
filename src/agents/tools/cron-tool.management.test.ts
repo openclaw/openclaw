@@ -109,7 +109,7 @@ it("does not expose stream creation through a management grant", async () => {
           payload: { kind: "agentTurn", message: "handle events" },
         },
       }),
-    ).rejects.toThrow("can only list, get, update, run, or remove automations");
+    ).rejects.toThrow("can only list, get, update, run, remove, or bind automations");
     expect(calls).toEqual([]);
   });
 });
@@ -171,7 +171,9 @@ it.each([false, true])(
       "unknown",
       undefined,
       async (tool, calls) => {
-        const actions = readOnly ? ["list", "get"] : ["list", "get", "update", "run", "remove"];
+        const actions = readOnly
+          ? ["list", "get"]
+          : ["list", "get", "update", "run", "remove", "bind"];
         expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
         for (const key of ["in", "text", "mode", "contextMessages", "sessionKey"]) {
           expect(tool.parameters).not.toHaveProperty(`properties.${key}`);
@@ -202,7 +204,7 @@ it.each([false, true])(
             await expect(tool.execute(`manager-${action}`, { action, jobId })).rejects.toThrow(
               action === "status"
                 ? "read-only during recovery"
-                : "can only list, get, update, run, or remove automations",
+                : "can only list, get, update, run, remove, or bind automations",
             );
           }
           await expect(tool.execute("manager-remove", { action: "remove", jobId })).rejects.toThrow(

@@ -12,7 +12,10 @@ import {
   workspacePackageExportAliasEntries,
 } from "../src/plugins/sdk-alias-workspace.ts";
 import { createStandaloneArtifactAdapter } from "./lib/bun-standalone-artifacts.mjs";
-import { bundleStandaloneModules, relinkStandaloneModules } from "./lib/bun-standalone-bundle.mjs";
+import {
+  bundleStandaloneModules,
+  finalizeStandaloneModules,
+} from "./lib/bun-standalone-bundle.mjs";
 import { createStandaloneCodegenAdapter } from "./lib/bun-standalone-codegen.mjs";
 import {
   assertStandaloneCompiler,
@@ -799,11 +802,12 @@ do {
   }
   discoverMore = Boolean(sourceGraph) && sourceEntrypoints().length !== discoveredRoots;
 } while (discoverMore);
-result = await relinkStandaloneModules(
+result = await finalizeStandaloneModules(
   { ...buildOptions, entrypoints: sourceEntrypoints() },
   result,
   Bun.build,
   parse,
+  { sourceAot: Boolean(sourceGraph) },
 );
 if (!result.success) {
   throw new AggregateError(result.logs, "Standalone final link failed");

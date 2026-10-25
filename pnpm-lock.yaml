@@ -1515,6 +1515,34 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/knowledge:
+    dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.26.13
+        version: 0.26.13
+      dompurify:
+        specifier: 3.4.17
+        version: 3.4.17
+      marked:
+        specifier: 18.1.1
+        version: 18.1.1
+      typebox:
+        specifier: 1.4.1
+        version: 1.4.1
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/levanto:
     devDependencies:
       '@openclaw/plugin-sdk':

@@ -87,7 +87,7 @@ it.each([
 
 it.each(["overview", "channels", "cron"] as const)(
   "shows authoritative agent workspace and effective model on the %s panel",
-  (activePanel) => {
+  async (activePanel) => {
     const container = renderAgents({
       configForm: contextConfig({ fallbacks: ["google/gemini-3-pro"] }),
       readData: () => ({
@@ -100,8 +100,10 @@ it.each(["overview", "channels", "cron"] as const)(
         }),
       }),
     });
-    expect(contextValue(container, "Workspace")).toBe(resolvedAgentWorkspace);
-    expect(contextValue(container, "Primary Model")).toBe(`${inheritedAgentModel} (+1 fallback)`);
+    await waitForSolid(() => {
+      expect(contextValue(container, "Workspace")).toBe(resolvedAgentWorkspace);
+      expect(contextValue(container, "Primary Model")).toBe(`${inheritedAgentModel} (+1 fallback)`);
+    });
   },
 );
 
