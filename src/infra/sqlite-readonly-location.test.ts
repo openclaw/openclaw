@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -31,15 +31,21 @@ import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js"
 
 const sqlite = requireNodeSqlite();
 const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
+let cacheRoot: string;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     try {
       await Promise.all(writers.splice(0).map((writer) => writer.stop()));
     } finally {
       cleanup();
     }
   });
+});
+beforeEach(() => {
+  cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-cache-");
+  vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
 });
 
 function createTempDatabasePath(sql?: string): string {
@@ -53,6 +59,24 @@ function createTempDatabasePath(sql?: string): string {
 function withDatabase<T>(pathname: string, inspect: (db: DatabaseSync) => T, readOnly = false): T {
   using database = new sqlite.DatabaseSync(pathname, { readOnly });
   return inspect(database);
+}
+
+function expectRows(database: DatabaseSync, sql: string, rows: unknown[]) {
+  expect(database.prepare(sql).all()).toEqual(rows);
+}
+
+function expectIntegrity(database: DatabaseSync) {
+  expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+}
+
+function startWriter(databasePath: string, mode: "WAL" | "MEMORY", busyTimeout?: number) {
+  const writer = startSqliteConcurrentWriter(databasePath, mode, busyTimeout);
+  writers.push(writer);
+  return writer;
+}
+
+function expectEmptyCache(root: string) {
+  expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
 }
 
 function inspectSnapshot(
@@ -86,8 +110,8 @@ function readLogicalFamily(pathname: string): Map<string, Buffer> {
 it.each(["cache", "update-tmpdir"])(
   "keeps %s inspections byte-neutral across writer commits",
   async (placement) => {
-    const cacheRoot = path.join(tempDirs.make("openclaw-sqlite-snapshot-cache-"), "missing");
-    const homeCache = path.join(path.dirname(cacheRoot), "home-cache");
+    const placementRoot = path.join(cacheRoot, "missing");
+    const homeCache = path.join(cacheRoot, "home-cache");
     const databasePath = createTempDatabasePath();
     const writer = new sqlite.DatabaseSync(databasePath);
     try {
@@ -96,12 +120,12 @@ it.each(["cache", "update-tmpdir"])(
       );
       await withEnvAsync(
         placement === "cache"
-          ? { XDG_CACHE_HOME: cacheRoot }
+          ? { XDG_CACHE_HOME: placementRoot }
           : {
               XDG_CACHE_HOME: homeCache,
-              TMPDIR: cacheRoot,
-              TMP: cacheRoot,
-              TEMP: cacheRoot,
+              TMPDIR: placementRoot,
+              TMP: placementRoot,
+              TEMP: placementRoot,
               OPENCLAW_UPDATE_IN_PROGRESS: "1",
             },
         () =>
@@ -113,7 +137,7 @@ it.each(["cache", "update-tmpdir"])(
                 preserveSourceArtifacts: true,
               });
               inspectSnapshot(prepared, (snapshot) => {
-                expect(prepared.location.startsWith(`${cacheRoot}${path.sep}`)).toBe(true);
+                expect(prepared.location.startsWith(`${placementRoot}${path.sep}`)).toBe(true);
                 expect(fs.statSync(path.dirname(prepared.location)).mode & 0o777).toBe(0o700);
                 expect(readFamily(databasePath)).toEqual(familyBefore);
                 if (placement === "update-tmpdir") {
@@ -135,7 +159,6 @@ it.each(["cache", "update-tmpdir"])(
 it.each([13, 778])(
   "retains SQLite destination write failure %i and identifies the snapshot cache",
   async (errcode) => {
-    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-full-");
     const databasePath = createTempDatabasePath("CREATE TABLE probe (value TEXT);");
     const quotaError = Object.assign(new Error("disk I/O error"), {
       code: "ERR_SQLITE_ERROR",
@@ -150,43 +173,37 @@ it.each([13, 778])(
     space.bavail = 2;
     vi.spyOn(fs, "statfsSync").mockReturnValue(space);
 
-    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-      const failure = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
-        (error: unknown) => error,
-      );
-      expect(failure).toMatchObject({
-        cause: quotaError,
-        message: expect.stringContaining(`SQLite errcode=${errcode}`),
-      });
-      if (errcode === 13) {
-        expect((failure as Error).message).toContain(
-          `estimated ${fs.statSync(databasePath).size} bytes needed; 8192 bytes available`,
-        );
-        expect((failure as Error).message).not.toContain("doctor --fix");
-        expect((failure as Error).message).toContain("source has no live WAL sidecars");
-      }
+    const failure = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toMatchObject({
+      cause: quotaError,
+      message: expect.stringContaining(`SQLite errcode=${errcode}`),
     });
-    expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+    if (errcode === 13) {
+      expect((failure as Error).message).toContain(
+        `estimated ${fs.statSync(databasePath).size} bytes needed; 8192 bytes available`,
+      );
+      expect((failure as Error).message).not.toContain("doctor --fix");
+      expect((failure as Error).message).toContain("source has no live WAL sidecars");
+    }
+    expectEmptyCache(cacheRoot);
   },
 );
 
 it("reports live WAL capacity without retrying or retaining an incomplete backup", async () => {
   const databasePath = createTempDatabasePath("CREATE TABLE writes(id INTEGER PRIMARY KEY)");
-  const cacheRoot = tempDirs.make("openclaw-live-snapshot-full-");
-  const writer = startSqliteConcurrentWriter(databasePath, "WAL");
-  writers.push(writer);
+  const writer = startWriter(databasePath, "WAL");
   await writer.waitFor("ready");
   const backup = vi.spyOn(sqlite, "backup").mockImplementationOnce(async (_source, destination) => {
     fs.writeFileSync(String(destination), "partial snapshot");
     throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
   });
-  await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-    await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toThrow(
-      /estimated \d+ bytes needed; \d+ bytes available; source has live WAL sidecars/,
-    );
-  });
+  await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toThrow(
+    /estimated \d+ bytes needed; \d+ bytes available; source has live WAL sidecars/,
+  );
   expect(backup).toHaveBeenCalledOnce();
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expectEmptyCache(cacheRoot);
 });
 
 it.each([
@@ -196,7 +213,6 @@ it.each([
 ] as const)(
   "identifies %s private cache allocation failure before backup or copying",
   async (_mode, prepare, empty, code) => {
-    const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-allocation-");
     const databasePath = createTempDatabasePath(
       empty ? undefined : "CREATE TABLE probe (value TEXT);",
     );
@@ -214,18 +230,16 @@ it.each([
       throw allocationError;
     });
 
-    await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-      const error = await Promise.resolve()
-        .then(() => prepare(databasePath))
-        .catch((cause: unknown) => cause);
-      expect(error).toMatchObject({
-        cause: allocationError,
-        message: expect.stringContaining(stagingRoot),
-      });
-      expect((error as Error).message).toContain("XDG_CACHE_HOME");
-      expect((error as Error).message.includes("free disk space/quota")).toBe(code === "EDQUOT");
-      expect((error as Error).message.match(/snapshot staging root/gu)).toHaveLength(1);
+    const error = await Promise.resolve()
+      .then(() => prepare(databasePath))
+      .catch((cause: unknown) => cause);
+    expect(error).toMatchObject({
+      cause: allocationError,
+      message: expect.stringContaining(stagingRoot),
     });
+    expect((error as Error).message).toContain("XDG_CACHE_HOME");
+    expect((error as Error).message.includes("free disk space/quota")).toBe(code === "EDQUOT");
+    expect((error as Error).message.match(/snapshot staging root/gu)).toHaveLength(1);
 
     expect(backup).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
@@ -234,7 +248,6 @@ it.each([
 );
 
 it("preserves source failures inside the snapshot cache without staging guidance", async () => {
-  const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-cached-source-");
   const stagingRoot = path.join(cacheRoot, "openclaw");
   fs.mkdirSync(stagingRoot, { mode: 0o700 });
   const databasePath = path.join(stagingRoot, "source.sqlite");
@@ -245,18 +258,15 @@ it("preserves source failures inside the snapshot cache without staging guidance
   });
   vi.spyOn(sqlite, "backup").mockRejectedValueOnce(sourceError);
 
-  await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-    const error = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
-      (cause: unknown) => cause,
-    );
-    expect(error).toBe(sourceError);
-    expect((error as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
-  });
+  const error = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
+    (cause: unknown) => cause,
+  );
+  expect(error).toBe(sourceError);
+  expect((error as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
   expect(fs.readdirSync(stagingRoot)).toEqual(["source.sqlite"]);
 });
 
 it("identifies filesystem failures whose path belongs to the staging destination", async () => {
-  const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-destination-path-");
   const databasePath = createTempDatabasePath("CREATE TABLE probe (value TEXT);");
   vi.spyOn(sqlite, "backup").mockImplementationOnce(async (_source, destination) => {
     throw Object.assign(new Error("destination permission denied"), {
@@ -265,17 +275,14 @@ it("identifies filesystem failures whose path belongs to the staging destination
     });
   });
 
-  await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-    await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toMatchObject({
-      cause: { code: "EACCES", path: expect.stringContaining(cacheRoot) },
-      message: expect.stringContaining(cacheRoot),
-    });
+  await expect(prepareSqliteReadOnlyLocationInProcess(databasePath)).rejects.toMatchObject({
+    cause: { code: "EACCES", path: expect.stringContaining(cacheRoot) },
+    message: expect.stringContaining(cacheRoot),
   });
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expectEmptyCache(cacheRoot);
 });
 
 it("preserves source corruption without reporting a snapshot staging quota failure", async () => {
-  const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-corrupt-source-");
   const databasePath = createTempDatabasePath(
     "CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('corrupt');",
   );
@@ -297,29 +304,26 @@ it("preserves source corruption without reporting a snapshot staging quota failu
     true,
   );
 
-  await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-    const inProcessError = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
-      (error: unknown) => error,
-    );
-    const workerError = await prepareSqliteReadOnlyLocation(databasePath).catch(
-      (error: unknown) => error,
-    );
+  const inProcessError = await prepareSqliteReadOnlyLocationInProcess(databasePath).catch(
+    (error: unknown) => error,
+  );
+  const workerError = await prepareSqliteReadOnlyLocation(databasePath).catch(
+    (error: unknown) => error,
+  );
 
-    expect(inProcessError).toMatchObject({
-      code: "ERR_SQLITE_ERROR",
-      errcode: 11,
-      message: "database disk image is malformed",
-    });
-    expect(workerError).toBeInstanceOf(Error);
-    expect((workerError as Error).message).toContain(
-      "database disk image is malformed (code=ERR_SQLITE_ERROR, errcode=11)",
-    );
-    expect((workerError as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
+  expect(inProcessError).toMatchObject({
+    code: "ERR_SQLITE_ERROR",
+    errcode: 11,
+    message: "database disk image is malformed",
   });
+  expect(workerError).toBeInstanceOf(Error);
+  expect((workerError as Error).message).toContain(
+    "database disk image is malformed (code=ERR_SQLITE_ERROR, errcode=11)",
+  );
+  expect((workerError as Error).message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
 });
 
 it("keeps synchronous destination EDQUOT actionable without changing the source", async () => {
-  const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-sync-full-");
   const databasePath = createTempDatabasePath("CREATE TABLE probe (value TEXT);");
   const before = readFamily(databasePath);
   const quotaError = Object.assign(new Error("Disk quota exceeded"), { code: "EDQUOT" });
@@ -333,18 +337,16 @@ it("keeps synchronous destination EDQUOT actionable without changing the source"
     throw quotaError;
   });
 
-  await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
-    expect(() => prepareSqliteReadOnlyLocationSyncInProcess(databasePath)).toThrowError(
-      expect.objectContaining({
-        cause: quotaError,
-        message: expect.stringContaining(cacheRoot),
-      }),
-    );
-  });
+  expect(() => prepareSqliteReadOnlyLocationSyncInProcess(databasePath)).toThrowError(
+    expect.objectContaining({
+      cause: quotaError,
+      message: expect.stringContaining(cacheRoot),
+    }),
+  );
   expect(sync).toHaveBeenCalledOnce();
   expect(measuredBeforeCleanup).toBe(true);
   expect(readFamily(databasePath)).toEqual(before);
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expectEmptyCache(cacheRoot);
 });
 
 it("keeps worker stderr valid at the Node buffer end", async () => {
@@ -490,9 +492,9 @@ it("retries a same-size WAL reset and publishes only the new consistent pair", a
   try {
     const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
     inspectSnapshot(prepared, (snapshot) => {
-      expect(snapshot.prepare("SELECT value FROM before_reset").all()).toEqual([{ value: "A" }]);
-      expect(snapshot.prepare("SELECT value FROM after_reset").all()).toEqual([{ value: "B" }]);
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expectRows(snapshot, "SELECT value FROM before_reset", [{ value: "A" }]);
+      expectRows(snapshot, "SELECT value FROM after_reset", [{ value: "B" }]);
+      expectIntegrity(snapshot);
     });
     expect(injected).toBe(true);
     expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
@@ -504,44 +506,32 @@ it("retries a same-size WAL reset and publishes only the new consistent pair", a
 
 it("rolls back contended MEMORY writes before committing another batch", async () => {
   const databasePath = createTempDatabasePath();
-  const reader = new sqlite.DatabaseSync(databasePath);
+  using reader = new sqlite.DatabaseSync(databasePath);
   reader.exec(
     "CREATE TABLE pair (name TEXT PRIMARY KEY, value INTEGER NOT NULL); INSERT INTO pair VALUES ('left', 0), ('right', 0); BEGIN;",
   );
-  expect(reader.prepare("SELECT value FROM pair ORDER BY name").all()).toEqual([
-    { value: 0 },
-    { value: 0 },
-  ]);
-  const writer = startSqliteConcurrentWriter(databasePath, "MEMORY", 0);
-  writers.push(writer);
-  try {
-    // Hold a native reader until COMMIT reports BUSY. Only the producer
-    // wait is disabled; real locking and rollback still own the outcome.
-    expect(await writer.waitFor("busy")).toEqual({
-      event: "busy",
-      commits: 0,
-      transaction: false,
-    });
-    expect(reader.prepare("SELECT value FROM pair ORDER BY name").all()).toEqual([
-      { value: 0 },
-      { value: 0 },
-    ]);
-    reader.exec("ROLLBACK");
-    expect((await writer.waitFor("ready")).commits).toBeGreaterThan(0);
-    expect((await writer.progress()).commits).toBeGreaterThan(1);
-    await writer.stop();
-    const values = reader
-      .prepare("SELECT value FROM pair ORDER BY name")
-      .all()
-      .map((row) => row.value);
-    expect(values).toHaveLength(2);
-    expect(values[0]).toBeGreaterThan(0);
-    expect(values[0]).toBe(values[1]);
-    expect(reader.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-  } finally {
-    reader.close();
-    await writer.stop();
-  }
+  expectRows(reader, "SELECT value FROM pair ORDER BY name", [{ value: 0 }, { value: 0 }]);
+  const writer = startWriter(databasePath, "MEMORY", 0);
+  // Hold a native reader until COMMIT reports BUSY. Only the producer
+  // wait is disabled; real locking and rollback still own the outcome.
+  expect(await writer.waitFor("busy")).toEqual({
+    event: "busy",
+    commits: 0,
+    transaction: false,
+  });
+  expectRows(reader, "SELECT value FROM pair ORDER BY name", [{ value: 0 }, { value: 0 }]);
+  reader.exec("ROLLBACK");
+  expect((await writer.waitFor("ready")).commits).toBeGreaterThan(0);
+  expect((await writer.progress()).commits).toBeGreaterThan(1);
+  await writer.stop();
+  const values = reader
+    .prepare("SELECT value FROM pair ORDER BY name")
+    .all()
+    .map((row) => row.value);
+  expect(values).toHaveLength(2);
+  expect(values[0]).toBeGreaterThan(0);
+  expect(values[0]).toBe(values[1]);
+  expectIntegrity(reader);
 });
 
 it("backs up live MEMORY-journal transactions atomically", async () => {
@@ -551,49 +541,44 @@ it("backs up live MEMORY-journal transactions atomically", async () => {
       CREATE TABLE payload (data BLOB NOT NULL);
       INSERT INTO payload VALUES (zeroblob(8388608));
     `);
-  const writer = startSqliteConcurrentWriter(databasePath, "MEMORY");
-  writers.push(writer);
-  try {
-    const ready = await writer.waitFor("ready");
-    expect(ready.commits).toBeGreaterThan(0);
-    expect(writer.pid).not.toBe(process.pid);
-    // Hold a real half-written transaction so read admission does not race
-    // an unbounded stream of commits; the snapshot must exclude that write.
-    const held = await writer.holdTransaction();
-    expect(held.commits).toBeGreaterThanOrEqual(ready.commits);
-    expect(held.transaction).toBe(true);
-    expect(held.values).toEqual([held.commits + 1, held.commits]);
+  const writer = startWriter(databasePath, "MEMORY");
+  const ready = await writer.waitFor("ready");
+  expect(ready.commits).toBeGreaterThan(0);
+  expect(writer.pid).not.toBe(process.pid);
+  // Hold a real half-written transaction so read admission does not race
+  // an unbounded stream of commits; the snapshot must exclude that write.
+  const held = await writer.holdTransaction();
+  expect(held.commits).toBeGreaterThanOrEqual(ready.commits);
+  expect(held.transaction).toBe(true);
+  expect(held.values).toEqual([held.commits + 1, held.commits]);
 
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-    inspectSnapshot(prepared, (snapshot) => {
-      const values = snapshot
-        .prepare("SELECT value FROM pair ORDER BY name")
-        .all()
-        .map((row) => (row as { value: number }).value);
-      expect(values).toEqual([held.commits, held.commits]);
-      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    });
-    const progress = await writer.progress();
-    expect(progress.commits).toBeGreaterThan(held.commits);
-    expect(progress.transaction).toBe(false);
-    const unfinished = await writer.holdTransaction();
-    expect(unfinished.transaction).toBe(true);
-    expect(unfinished.values).toEqual([unfinished.commits + 1, unfinished.commits]);
-    await writer.stop();
-    withDatabase(
-      databasePath,
-      (source) => {
-        expect(source.prepare("SELECT value FROM pair ORDER BY name").all()).toEqual([
-          { value: unfinished.commits },
-          { value: unfinished.commits },
-        ]);
-        expect(source.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      },
-      true,
-    );
-  } finally {
-    await writer.stop();
-  }
+  const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
+  inspectSnapshot(prepared, (snapshot) => {
+    const values = snapshot
+      .prepare("SELECT value FROM pair ORDER BY name")
+      .all()
+      .map((row) => (row as { value: number }).value);
+    expect(values).toEqual([held.commits, held.commits]);
+    expectIntegrity(snapshot);
+  });
+  const progress = await writer.progress();
+  expect(progress.commits).toBeGreaterThan(held.commits);
+  expect(progress.transaction).toBe(false);
+  const unfinished = await writer.holdTransaction();
+  expect(unfinished.transaction).toBe(true);
+  expect(unfinished.values).toEqual([unfinished.commits + 1, unfinished.commits]);
+  await writer.stop();
+  withDatabase(
+    databasePath,
+    (source) => {
+      expectRows(source, "SELECT value FROM pair ORDER BY name", [
+        { value: unfinished.commits },
+        { value: unfinished.commits },
+      ]);
+      expectIntegrity(source);
+    },
+    true,
+  );
 });
 
 it("retries a transient missing pathname without publishing the unverified attempt", async () => {
@@ -615,7 +600,7 @@ it("retries a transient missing pathname without publishing the unverified attem
 
   const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
   inspectSnapshot(prepared, (snapshot) => {
-    expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "ok" }]);
+    expectRows(snapshot, "SELECT value FROM probe", [{ value: "ok" }]);
     expect(injected).toBe(true);
   });
 });
@@ -635,7 +620,7 @@ it("copies an orphan SHM privately without creating a source WAL", async () => {
 
   const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
   inspectSnapshot(prepared, (snapshot) => {
-    expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "committed" }]);
+    expectRows(snapshot, "SELECT value FROM probe", [{ value: "committed" }]);
   });
 
   expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
@@ -656,39 +641,32 @@ it.each([
   "backs up an active WAL database during $mode inspection while another connection keeps writing",
   async ({ prepare }) => {
     const databasePath = createTempDatabasePath();
-    const seed = new sqlite.DatabaseSync(databasePath);
-    seed.exec(`
+    withDatabase(databasePath, (seed) =>
+      seed.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA wal_autocheckpoint = 0;
     CREATE TABLE writes (sequence INTEGER PRIMARY KEY);
     CREATE TABLE payload (data BLOB NOT NULL);
     INSERT INTO payload VALUES (zeroblob(16777216));
     PRAGMA wal_checkpoint(TRUNCATE);
-  `);
-    seed.close();
-    const writer = startSqliteConcurrentWriter(databasePath, "WAL");
-    writers.push(writer);
-    try {
-      const ready = await writer.waitFor("ready");
-      expect(ready.commits).toBeGreaterThan(0);
-      expect(writer.pid).not.toBe(process.pid);
+  `),
+    );
+    const writer = startWriter(databasePath, "WAL");
+    const ready = await writer.waitFor("ready");
+    expect(ready.commits).toBeGreaterThan(0);
+    expect(writer.pid).not.toBe(process.pid);
 
-      const prepared = await prepare(databasePath);
-      inspectSnapshot(prepared, (snapshot) => {
-        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
-          integrity_check: "ok",
-        });
-        expect(snapshot.prepare("SELECT COUNT(*) AS count FROM payload").get()).toEqual({
-          count: 1,
-        });
-        expect(
-          snapshot.prepare("SELECT COUNT(*) AS count FROM writes").get()?.count,
-        ).toBeGreaterThan(0);
+    const prepared = await prepare(databasePath);
+    inspectSnapshot(prepared, (snapshot) => {
+      expectIntegrity(snapshot);
+      expect(snapshot.prepare("SELECT COUNT(*) AS count FROM payload").get()).toEqual({
+        count: 1,
       });
-      expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
-    } finally {
-      await writer.stop();
-    }
+      expect(snapshot.prepare("SELECT COUNT(*) AS count FROM writes").get()?.count).toBeGreaterThan(
+        0,
+      );
+    });
+    expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
   },
 );
 
@@ -719,7 +697,7 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
     const prepared = await prepareSnapshot(source, snapshotOptions(source));
     try {
       using db = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
-      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      expectIntegrity(db);
       const rows = db.prepare("SELECT generation FROM snapshot_pair ORDER BY id").all();
       expect(rows[0]?.generation).toBeGreaterThan(0);
       expect(rows[0]).toEqual(rows[1]);

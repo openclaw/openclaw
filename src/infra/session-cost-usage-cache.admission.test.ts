@@ -62,6 +62,11 @@ import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function storedRow(key = "session.jsonl", valueJson = '{"totalTokens":7}', updatedAt = 1) {
+  return { key, valueJson, updatedAt, bodyBytes: 0 };
+}
+
 function holdWriter(options: Parameters<typeof writerAdmission.runOpenClawAgentWorkerWrite>[0]) {
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -133,11 +138,8 @@ it.each(["rollup", "prune"] as const)(
         { agentId, path: databasePath },
         { operationLabel: "session-cost-usage.rollup.write" },
       );
-      let lock: ReturnType<typeof prepareLock> | undefined;
-      if (operation === "rollup") {
-        lock = prepareLock(agentId, databasePath);
-        expect(await lock.acquire()).toBe(true);
-      }
+      await using lock =
+        operation === "rollup" ? await acquireUsageLock(agentId, databasePath) : undefined;
       const readLock = () =>
         database.db
           .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
@@ -163,31 +165,18 @@ it.each(["rollup", "prune"] as const)(
       });
       const written = Promise.allSettled([writing]);
       try {
-        try {
-          await setImmediate();
-          expect(readSnapshot()).toEqual(before);
-          expect(settled).toBe(false);
-        } finally {
-          release.resolve();
-          await reservation;
-          await written;
-        }
-        await expect(writing).resolves.toBeUndefined();
-        expect(readRows(agentId, databasePath)).toEqual(
-          operation === "prune"
-            ? []
-            : [
-                {
-                  key: "session.jsonl",
-                  valueJson: '{"totalTokens":2}',
-                  updatedAt: 2,
-                  bodyBytes: 0,
-                },
-              ],
-        );
+        await setImmediate();
+        expect(readSnapshot()).toEqual(before);
+        expect(settled).toBe(false);
       } finally {
-        await lock?.release();
+        release.resolve();
+        await reservation;
+        await written;
       }
+      await expect(writing).resolves.toBeUndefined();
+      expect(readRows(agentId, databasePath)).toEqual(
+        operation === "prune" ? [] : [storedRow("session.jsonl", '{"totalTokens":2}', 2)],
+      );
     });
   },
 );
@@ -294,9 +283,7 @@ it.each([
           if (refresh) {
             expect(rows.map((row) => row.key)).toEqual([sessionFile]);
           } else {
-            expect(rows).toEqual([
-              { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
-            ]);
+            expect(rows).toEqual([storedRow()]);
           }
         }
       } finally {
@@ -705,9 +692,7 @@ it.each([
       expect(await lock.writeRollup([rollupRow()])).toBe(true);
       const database = openOpenClawAgentDatabase({ agentId, path: storePath, env: state.env });
       expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry).toEqual(written);
-      expect(readRows(agentId, storePath)).toEqual([
-        { key: "session.jsonl", valueJson: '{"totalTokens":7}', updatedAt: 1, bodyBytes: 0 },
-      ]);
+      expect(readRows(agentId, storePath)).toEqual([storedRow()]);
     });
   },
 );
@@ -838,7 +823,7 @@ it("releases refresh waiters after failed cleanup without retiring their success
       const row = rollupRow("fresh-session", '{"totalTokens":2}', 2);
       expect(await successor.writeRollup([row])).toBe(true);
       expect(readRows(agentId, databasePath)).toEqual([
-        { key: "fresh-session", valueJson: '{"totalTokens":2}', updatedAt: 2, bodyBytes: 0 },
+        storedRow("fresh-session", '{"totalTokens":2}', 2),
       ]);
       await owner.release();
       expect(await isRefreshing(agentId, databasePath)).toBe(true);
