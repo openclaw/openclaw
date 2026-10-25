@@ -1,4 +1,6 @@
 // Synthetic persistSessionTranscriptTurn benchmark; no model or live state.
+// Install diagnostics before loading the transcript workers.
+import "./bench-transcript-turn-preload.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
