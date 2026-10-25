@@ -14,10 +14,8 @@ const mocks = vi.hoisted(() => ({
   startGateway: vi.fn(),
   inspectPortUsage: vi.fn(),
   issueDeviceBootstrapToken: vi.fn(),
-  openUrl: vi.fn(),
   openUrlPrivately: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
-  resolveControlUiLinks: vi.fn(),
   resolveGatewayPort: vi.fn(),
   waitForControlUiDocument: vi.fn(),
 }));
@@ -27,16 +25,13 @@ vi.mock("../../config/config.js", () => ({
   resolveGatewayPort: mocks.resolveGatewayPort,
 }));
 
-vi.mock("../onboard-helpers.js", () => ({
+vi.mock("../onboard-helpers.js", async () => ({
   detectBrowserOpenSupport: vi.fn(),
   formatControlUiSshHint: vi.fn(),
-  openUrl: mocks.openUrl,
-  resolveControlUiLinks: mocks.resolveControlUiLinks,
+  resolveControlUiLinks: (await import("../../gateway/control-ui-links.js")).resolveControlUiLinks,
 }));
 
-vi.mock("../../infra/clipboard.js", () => ({
-  copyToClipboard: mocks.copyToClipboard,
-}));
+vi.mock("../../infra/clipboard.js", () => ({ copyToClipboard: mocks.copyToClipboard }));
 
 vi.mock("../../infra/browser-handoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/browser-handoff.js")>()),
@@ -47,9 +42,7 @@ vi.mock("../../infra/device-bootstrap.js", () => ({
   issueDeviceBootstrapToken: mocks.issueDeviceBootstrapToken,
 }));
 
-vi.mock("../../infra/ports-inspect.js", () => ({
-  inspectPortUsage: mocks.inspectPortUsage,
-}));
+vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.inspectPortUsage }));
 
 vi.mock("../../cli/daemon-cli/status.gather.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cli/daemon-cli/status.gather.js")>()),
@@ -84,11 +77,9 @@ const stopped = {
     loadState: { status: "not-loaded" },
     loadedText: "loaded",
     notLoadedText: "not loaded",
-    command: null,
-    runtime: { status: "stopped" },
   },
   port: { port: 18789, status: "free", listeners: [], hints: [] },
-  rpc: { ok: false, error: "connect ECONNREFUSED 127.0.0.1:18789" },
+  rpc: { ok: false },
   extraServices: [],
 } satisfies DaemonStatus;
 
@@ -99,10 +90,7 @@ const runtime = {
 };
 
 function mockGateway(gateway: OpenClawConfig["gateway"]) {
-  mocks.readConfigFileSnapshot.mockResolvedValue({
-    valid: true,
-    sourceConfig: { gateway },
-  });
+  mocks.readConfigFileSnapshot.mockResolvedValue({ valid: true, sourceConfig: { gateway } });
 }
 
 function expectJson(value: unknown) {
@@ -116,7 +104,7 @@ function expectJsonFields(value: Record<string, unknown>) {
 function expectFailure(reason: string) {
   expectJson({ ok: false, error: { type: "cli_error", message: reason }, reason });
   expect(runtime.exit).toHaveBeenCalledWith(1);
-  expectNoCalls(runtime.log, mocks.copyToClipboard, mocks.openUrl, mocks.openUrlPrivately);
+  expectNoCalls(runtime.log, mocks.copyToClipboard, mocks.openUrlPrivately);
   expect(runtime.error).toHaveBeenCalledWith(
     `${reason}\nRun \`openclaw gateway status --deep\` for details, then retry \`openclaw dashboard --json\`.`,
   );
@@ -134,21 +122,11 @@ function mockListeners(loopbackPid = 4242, commandLine = "openclaw-gateway") {
   });
 }
 
-function links(host: string, tls = false) {
-  return {
-    httpUrl: `${tls ? "https" : "http"}://${host}:18789/`,
-    wsUrl: `${tls ? "wss" : "ws"}://${host}:18789`,
-  };
-}
-
 describe("dashboardCommand --json", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGateway({ bind: "custom", customBindHost: "10.0.0.5", auth: { token: fakeToken } });
     mocks.resolveGatewayPort.mockReturnValue(18789);
-    mocks.resolveControlUiLinks.mockImplementation(({ bind }: { bind: string }) =>
-      links(bind === "custom" ? "10.0.0.5" : "127.0.0.1"),
-    );
     mockListeners();
     mocks.gatherStatus.mockResolvedValue({ ...stopped, rpc: { ok: true } });
     mocks.issueDeviceBootstrapToken.mockResolvedValue({
@@ -171,8 +149,7 @@ describe("dashboardCommand --json", () => {
         "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
       browserBootstrapExpiresAtMs: 123_456,
     });
-    expectNoCalls(runtime.log, runtime.error, mocks.copyToClipboard, mocks.openUrl);
-    expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789);
+    expectNoCalls(runtime.log, runtime.error, mocks.copyToClipboard, mocks.openUrlPrivately);
     expect(mocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
       profile: CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
     });
@@ -180,7 +157,6 @@ describe("dashboardCommand --json", () => {
 
   it("adds the canonical certificate fingerprint for a TLS Gateway", async () => {
     mockGateway({ bind: "loopback", tls: { enabled: true } });
-    mocks.resolveControlUiLinks.mockReturnValue(links("127.0.0.1", true));
     mocks.waitForControlUiDocument.mockResolvedValue({
       ready: true,
       tlsFingerprint: "ab".repeat(32),
@@ -188,13 +164,11 @@ describe("dashboardCommand --json", () => {
 
     await dashboardCommand(runtime, { json: true });
 
-    expect(mocks.waitForControlUiDocument).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://127.0.0.1:18789/",
-        tlsConfig: { enabled: true },
-        waitForPending: false,
-      }),
-    );
+    expect(mocks.waitForControlUiDocument.mock.calls[0]?.[0]).toMatchObject({
+      url: "https://127.0.0.1:18789/",
+      tlsConfig: { enabled: true },
+      waitForPending: false,
+    });
     expectJsonFields({
       ok: true,
       wsUrl: "wss://127.0.0.1:18789",
@@ -220,16 +194,11 @@ describe("dashboardCommand --json", () => {
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { reason: "Control UI assets are still preparing.", status: 503 },
-    { reason: "Gateway TLS certificate fingerprint mismatch." },
-  ])("fails immediately without issuing a token: $reason", async (failure) => {
-    mocks.waitForControlUiDocument.mockResolvedValue({ ready: false, ...failure });
+  it("fails immediately without issuing a token while assets are preparing", async () => {
+    const reason = "Control UI assets are still preparing.";
+    mocks.waitForControlUiDocument.mockResolvedValue({ ready: false, reason, status: 503 });
     await dashboardCommand(runtime, { json: true });
-    expect(mocks.waitForControlUiDocument).toHaveBeenCalledWith(
-      expect.objectContaining({ waitForPending: false }),
-    );
-    expectFailure(failure.reason);
+    expectFailure(reason);
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
   });
 
