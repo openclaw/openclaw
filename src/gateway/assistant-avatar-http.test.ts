@@ -120,15 +120,16 @@ function avatarFixture(basePath = "", initialIdentity: { avatar?: string; emoji?
     agents: { entries },
   };
   const auth = { mode: "token" as const, token: "test-token", allowTailscale: false };
+  const resolve = async (agentId = "main", httpBasePath?: string) =>
+    resolveGatewayAssistantAvatar({
+      cfg: config,
+      identity: await resolveAssistantIdentity({ cfg: config, agentId }),
+      httpBasePath,
+    });
   return {
     workspace,
     cfg: config,
-    async projectInline(this: void) {
-      return resolveGatewayAssistantAvatar({
-        cfg: config,
-        identity: await resolveAssistantIdentity({ cfg: config, agentId: "main" }),
-      });
-    },
+    projectInline: () => resolve(),
     setAvatar(this: void, avatar: string | undefined, agentId = "main") {
       const identity = entries[agentId]?.identity;
       if (identity) {
@@ -139,11 +140,7 @@ function avatarFixture(basePath = "", initialIdentity: { avatar?: string; emoji?
       setRuntimeConfigSnapshot(config);
     },
     async project(this: void, agentId = "main") {
-      const { avatar } = await resolveGatewayAssistantAvatar({
-        cfg: config,
-        identity: await resolveAssistantIdentity({ cfg: config, agentId }),
-        httpBasePath: basePath,
-      });
+      const { avatar } = await resolve(agentId, basePath);
       return avatar;
     },
     async request(this: void, url: string, method = "GET", etag?: string, authorized = true) {
@@ -211,28 +208,26 @@ it("coalesces concurrent thumbnail requests for the same admitted source", async
   expect(images[5]).toBe(images[0]);
 });
 
-it("retries failed thumbnail preparation without retaining the rejected result", async () => {
+it.each(["thumbnail", "notification"] as const)("retries failed %s preparation", async (kind) => {
   const source = {
-    dataUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>',
-    revision: "retry-svg",
+    dataUrl:
+      kind === "thumbnail"
+        ? 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg"/>'
+        : encodeDataUrl(png(1, Buffer.from([255, 150, 0, 255]))),
+    revision: `retry-${kind}`,
   };
   const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("decode failed"));
-  await expect(readThumbnail(source)).rejects.toThrow("decode failed");
-  const recovered = await readThumbnail(source);
-  expect(await readThumbnail(source)).toBe(recovered);
-  expect(fetch).toHaveBeenCalledTimes(2);
-});
-
-it("retries a failed notification image on the next delivery", async () => {
-  const source = {
-    dataUrl: encodeDataUrl(png(1, Buffer.from([255, 150, 0, 255]))),
-    revision: "retry-notification-icon",
-  };
-  const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("decode failed"));
-  expect(await readIcon(source)).toBeUndefined();
-  const icon = await readIcon(source);
-  expect(icon).toMatch(/^data:image\/png;base64,/);
-  expect(await readIcon(source)).toBe(icon);
+  const read = kind === "thumbnail" ? readThumbnail : readIcon;
+  if (kind === "thumbnail") {
+    await expect(read(source)).rejects.toThrow("decode failed");
+  } else {
+    expect(await read(source)).toBeUndefined();
+  }
+  const recovered = await read(source);
+  if (kind === "notification") {
+    expect(recovered).toMatch(/^data:image\/png;base64,/);
+  }
+  expect(await read(source)).toBe(recovered);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 

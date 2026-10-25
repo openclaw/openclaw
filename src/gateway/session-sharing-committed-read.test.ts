@@ -180,15 +180,13 @@ it.each(["resident", "fixed"] as const)(
       using _ = { [Symbol.dispose]: () => captured.release?.() };
       const grant = await withoutSql(async () => {
         const messages = vi.spyOn(Worker.prototype, "postMessage");
-        try {
-          const prepared = await authorization.prepareWorkerGrant!();
-          if (mode === "resident") {
-            expect(messages).not.toHaveBeenCalled();
-          }
-          return prepared;
-        } finally {
-          messages.mockRestore();
+        using resources = new DisposableStack();
+        resources.defer(() => messages.mockRestore());
+        const prepared = await authorization.prepareWorkerGrant!();
+        if (mode === "resident") {
+          expect(messages).not.toHaveBeenCalled();
         }
+        return prepared;
       });
       await using grantCleanup = new AsyncDisposableStack();
       grantCleanup.defer(() => grant.release());
@@ -255,8 +253,10 @@ it.each([false, true])(
       await materialize(resident);
       const warm = await capture();
       warm.assertCurrent();
-      const messages = vi.spyOn(Worker.prototype, "postMessage");
-      try {
+      {
+        const messages = vi.spyOn(Worker.prototype, "postMessage");
+        using resources = new DisposableStack();
+        resources.defer(() => messages.mockRestore());
         await withoutSql(
           async () => {
             for (let turn = 0; turn < 50; turn += 1) {
@@ -272,8 +272,6 @@ it.each([false, true])(
           },
           () => observeSqliteReadSql(StatementSync.prototype),
         );
-      } finally {
-        messages.mockRestore();
       }
       const prepared = await capture("chat.send", {
         ...scope,
