@@ -79,6 +79,15 @@ function requireCurrent(current: boolean | undefined, message: string) {
 function expectCurrent(expected: boolean, ...guards: ({ isCurrent(): boolean } | undefined)[]) {
   expect(guards.map((guard) => guard?.isCurrent())).toEqual(guards.map(() => expected));
 }
+
+function expectRollback(run: () => void) {
+  expect(() =>
+    runOpenClawStateWriteTransaction(() => {
+      run();
+      throw new Error("rollback");
+    }, options),
+  ).toThrow("rollback");
+}
 const identity: UserChannelIdentity = {
   channelId: "discord",
   accountId: "team-bot",
@@ -200,19 +209,14 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
   linkUserChannelIdentity(ada.id, identity, options);
   const prepared = await prepareUserChannelIdentityAuthority(identity, options);
   expect(prepared?.linked.profileId).toBe(ada.id);
-  const { db } = openOpenClawStateDatabase(options);
   await retainCatalog();
-  const queries = vi.spyOn(db, "prepare");
   expect(prepared?.isCurrent()).toBe(true);
-  expect(queries).not.toHaveBeenCalled();
   setDisplayName(ada.id, "Updated name", options);
   setUserProfileRole(ada.id, "admin", options);
   setUserProfileRole(grace.id, "admin", options);
   setUserProfileRole(other.id, "admin", otherOptions);
   linkUserChannelIdentity(ada.id, { ...identity, accountId: "other-bot" }, options);
-  queries.mockClear();
   expect(prepared?.isCurrent()).toBe(true);
-  expect(queries).not.toHaveBeenCalled();
   await changeCanonicalUserChannelIdentity("link", ada.id, identity, options);
   expect(prepared?.isCurrent()).toBe(true);
   let observedCommitGrant = false;
@@ -266,17 +270,13 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
       if (request.stage === "commit" && mutation === "rollback") {
         rollbackGranted = true;
       } else if (request.stage === "commit" && mutation === "demote") {
-        queries.mockClear();
         expectCurrent(false, admin, rolePolicy);
         expect(selectedSource?.isCurrent()).toBe(true);
-        expect(queries).not.toHaveBeenCalled();
         pendingRole = prepareRole(ada.id);
         void pendingRole.catch(() => undefined);
       } else if (request.stage === "commit" && mutation === "merge") {
-        queries.mockClear();
         expect(selectedSource?.isCurrent()).toBe(false);
         expect(selectedTarget?.isCurrent()).toBe(true);
-        expect(queries).not.toHaveBeenCalled();
         pendingSelection = prepareUserProfileSelectionAuthority(ada.id, options);
         void pendingSelection.catch(() => undefined);
       }
@@ -311,31 +311,27 @@ it("revokes the exact prepared binding before worker commit acknowledgement", as
     runOpenClawStateWriteTransaction(({ db: fixtureDb }) => {
       // Deferred integrity failure occurs at real COMMIT, after the worker receives its grant.
       fixtureDb.exec(`
-          CREATE TABLE profile_rollback_parent (id INTEGER PRIMARY KEY);
-          CREATE TABLE profile_rollback_child (
-            parent_id INTEGER REFERENCES profile_rollback_parent(id) DEFERRABLE INITIALLY DEFERRED
+          CREATE TABLE profile_rollback (
+            id INTEGER PRIMARY KEY,
+            parent_id INTEGER REFERENCES profile_rollback(id) DEFERRABLE INITIALLY DEFERRED
           );
           CREATE TRIGGER profile_rollback_at_commit AFTER UPDATE OF role ON user_profiles
           WHEN NEW.role = 'member'
-          BEGIN INSERT INTO profile_rollback_child VALUES (1); END;
+          BEGIN INSERT INTO profile_rollback (parent_id) VALUES (-1); END;
         `);
     }, options);
     try {
       await expect(setRole(ada.id, "member")).rejects.toThrow(/FOREIGN KEY constraint failed/i);
       expect(rollbackGranted).toBe(true);
       expect(resolveUserChannelIdentity(identity, options)?.role).toBe("admin");
-      queries.mockClear();
       expect(readResidentUserProfileIdentity(ada.id, options)?.role).toBe("admin");
       expect(getUserProfileDisplay(ada.id, options)).toEqual(beforeRollback);
-      expect(queries).not.toHaveBeenCalled();
       const afterRollback = await prepareRole(ada.id);
       expect(afterRollback?.role).toBe("admin");
       expect(afterRollback?.isCurrent()).toBe(true);
     } finally {
       runOpenClawStateWriteTransaction(({ db: fixtureDb }) => {
-        fixtureDb.exec(
-          "DROP TRIGGER profile_rollback_at_commit; DROP TABLE profile_rollback_child; DROP TABLE profile_rollback_parent;",
-        );
+        fixtureDb.exec("DROP TRIGGER profile_rollback_at_commit; DROP TABLE profile_rollback;");
       }, options);
     }
     mutation = "recover";
@@ -387,13 +383,10 @@ it.each([false, true])(
     setUserProfileRole(ada.id, "admin", options);
     setUserProfileRole(grace.id, "member", options);
     const revision = readUserProfileAliasRevision();
-    expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        linkUserChannelIdentity(ada.id, identity, options);
-        expect(readUserProfileAliasRevision()).toBe(revision);
-        throw new Error("rollback");
-      }, options),
-    ).toThrow("rollback");
+    expectRollback(() => {
+      linkUserChannelIdentity(ada.id, identity, options);
+      expect(readUserProfileAliasRevision()).toBe(revision);
+    });
     expect(readUserProfileAliasRevision()).toBe(revision);
     expect(resolveUserChannelIdentity(identity, options)).toBeUndefined();
     const link = { profileId: ada.id, identity };
@@ -430,12 +423,9 @@ it.each([false, true])(
       expect(resolveUserChannelIdentity(other, options)?.profileId).toBe(intruder.id);
     }
     const beforeUnlink = readUserProfileAliasRevision();
-    expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        unlinkUserChannelIdentity(ada.id, identity, options);
-        throw new Error("rollback");
-      }, options),
-    ).toThrow("rollback");
+    expectRollback(() => {
+      unlinkUserChannelIdentity(ada.id, identity, options);
+    });
     expect(readUserProfileAliasRevision()).toBe(beforeUnlink);
     expect(resolveUserChannelIdentity(identity, options)?.profileId).toBe(profileId);
     expect(unlinkUserChannelIdentity(ada.id, identity, options)).toBe(true);

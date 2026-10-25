@@ -4,10 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
@@ -25,6 +24,7 @@ import {
   releaseOpenClawAgentDatabaseLease as releaseAgentLease,
   runWithAgentDatabaseMaintenanceAuthority as withMaintenanceAuthority,
 } from "./openclaw-agent-db-lease.js";
+import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
 import { withAgentDatabaseMaintenanceLease as withMaintenance } from "./openclaw-agent-db-maintenance-lease.js";
 import { migrateOpenClawAgentDatabaseForMaintenance as migrateAgentDb } from "./openclaw-agent-db-maintenance.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
@@ -40,10 +40,7 @@ import { seedLegacyAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { runExistingOpenClawStateWriteTransaction as writeExistingState } from "./openclaw-state-db-existing-write.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -53,17 +50,12 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, fork: vi.fn(actual.fork) };
 });
 
-const roots: string[] = [];
-afterEach(async () => {
+const roots = useAgentDatabaseDirectories(() => {
   vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  cleanupTempDirs(roots);
 });
 
 function fixture() {
-  const root = makeTempDir(roots, "agent-maintenance-");
+  const root = roots.make("agent-maintenance-");
   const env = { OPENCLAW_STATE_DIR: root };
   const database = openAgentDb({ agentId: "worker", env });
   const options = { agentId: "worker", pathname: database.path };
@@ -144,17 +136,11 @@ function afterFailedIntegrity(run: () => void, once = false) {
   const check = integrityWorker.assertSqliteIntegrityInWorker;
   const spy = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
   return spy[once ? "mockImplementationOnce" : "mockImplementation"](async (...args) => {
-    let failed = false;
-    let failure: unknown;
-    try {
-      await check(...args);
-    } catch (error) {
-      failed = true;
-      failure = error;
-    }
-    expect(failed).toBe(true);
-    run();
-    throw failure;
+    await check(...args).catch((error: unknown) => {
+      run();
+      throw error;
+    });
+    throw new Error("Expected the corrupted database to fail integrity admission");
   });
 }
 

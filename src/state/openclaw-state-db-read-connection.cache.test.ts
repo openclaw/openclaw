@@ -311,7 +311,7 @@ it("retires stale readers after a missing file identity", async () => {
 it("pins audit schema facts and consumes peer DDL publications made during inspection", async () => {
   const { pathname, read, workerRead } = fixture();
   const reader = read(({ db }) => db);
-  const peer = sqlite.openNodeSqliteDatabase(pathname);
+  using peer = sqlite.openNodeSqliteDatabase(pathname);
   const original = executionIdentityContext.inspectExecutionIdentityRunInDatabase;
   const inspect = vi.spyOn(executionIdentityContext, "inspectExecutionIdentityRunInDatabase");
   inspect.mockImplementationOnce((db, input, schema) => {
@@ -328,25 +328,21 @@ it("pins audit schema facts and consumes peer DDL publications made during inspe
       type: "audit.run.inspect",
       result: { status: "inspected" },
     });
-  try {
-    expect(await workerRead({ type: "nodeHost.config" })).toMatchObject({
-      ok: true,
-      type: "nodeHost.config",
-    });
-    expect(inspect).not.toHaveBeenCalled();
-    await audit();
-    expect(reader.isTransaction).toBe(false);
-    await audit();
-    expect(inspect.mock.lastCall?.[2].executionIdentityContexts).toBe(true);
-    expect(read(({ db }) => db)).toBe(reader);
-    expect(await workerRead({ type: "nodeHost.config" })).toMatchObject({
-      ok: true,
-      type: "nodeHost.config",
-    });
-    expect(reader.isTransaction).toBe(false);
-  } finally {
-    peer.close();
-  }
+  expect(await workerRead({ type: "nodeHost.config" })).toMatchObject({
+    ok: true,
+    type: "nodeHost.config",
+  });
+  expect(inspect).not.toHaveBeenCalled();
+  await audit();
+  expect(reader.isTransaction).toBe(false);
+  await audit();
+  expect(inspect.mock.lastCall?.[2].executionIdentityContexts).toBe(true);
+  expect(read(({ db }) => db)).toBe(reader);
+  expect(await workerRead({ type: "nodeHost.config" })).toMatchObject({
+    ok: true,
+    type: "nodeHost.config",
+  });
+  expect(reader.isTransaction).toBe(false);
 });
 
 it("retains readers until native close capability completes", async () => {

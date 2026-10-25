@@ -152,6 +152,17 @@ const capture = (env: ReturnType<typeof makeEnv>, agentId = "first") =>
   captureOpenClawAgentDatabaseExecution({ agentId, env });
 const faultState = new Int32Array(fault.enabled);
 
+function releaseOnExit(...resources: { release(): Promise<void> }[]) {
+  return {
+    async [Symbol.asyncDispose]() {
+      Atomics.store(faultState, 0, 0);
+      for (const resource of resources) {
+        await resource.release();
+      }
+    },
+  };
+}
+
 function initialize(execution: ReturnType<typeof capture>, sessionId: string, key = sessionId) {
   return execution.runExisting(source, (scope) =>
     scope.execute({
@@ -167,33 +178,28 @@ it("recovers after a full agent database write settles", async () => {
   await execution.prepare(source);
   const context = captureOpenClawStateWorkerContext({ env });
   const idleLease = createOpenClawStateWorkerLease(context);
+  await using _ = releaseOnExit(idleLease, execution);
+  await idleLease.ready;
+  Atomics.store(faultState, 0, 6);
+  const sharedFailure: unknown = await executeOpenClawStateWorker(context, {
+    type: "capture.persistPayload",
+    input: { data: randomBytes(1_000_000), contentType: "application/octet-stream" },
+  }).catch((error: unknown) => error);
+  expect(sharedFailure).toMatchObject({ code: "outcome-unknown" });
+  Atomics.store(faultState, 0, 5);
+  const failure: unknown = await initialize(execution, "full".repeat(100_000), "full").catch(
+    (error: unknown) => error,
+  );
+  Atomics.store(faultState, 0, 0);
+  expect(failure).toMatchObject({ code: "outcome-unknown" });
+  const recovered = capture(env);
   try {
-    await idleLease.ready;
-    Atomics.store(faultState, 0, 6);
-    const sharedFailure: unknown = await executeOpenClawStateWorker(context, {
-      type: "capture.persistPayload",
-      input: { data: randomBytes(1_000_000), contentType: "application/octet-stream" },
-    }).catch((error: unknown) => error);
-    expect(sharedFailure).toMatchObject({ code: "outcome-unknown" });
-    Atomics.store(faultState, 0, 5);
-    const failure: unknown = await initialize(execution, "full".repeat(100_000), "full").catch(
-      (error: unknown) => error,
-    );
-    Atomics.store(faultState, 0, 0);
-    expect(failure).toMatchObject({ code: "outcome-unknown" });
-    const recovered = capture(env);
-    try {
-      await expect(initialize(recovered, "recovered")).resolves.toMatchObject({
-        kind: "session-transcript-initialized",
-      });
-      expect(Atomics.load(faultState, 3)).toBe(2);
-    } finally {
-      await recovered.release();
-    }
+    await expect(initialize(recovered, "recovered")).resolves.toMatchObject({
+      kind: "session-transcript-initialized",
+    });
+    expect(Atomics.load(faultState, 3)).toBe(2);
   } finally {
-    Atomics.store(faultState, 0, 0);
-    await idleLease.release();
-    await execution.release();
+    await recovered.release();
   }
 });
 
@@ -213,35 +219,31 @@ it.each(["retry", "deadline", "shutdown"] as const)(
         clock.mockReturnValue(performance.now() + 2_000);
       }
     });
-    try {
-      const preparing = execution.prepare(source);
-      if (ending === "retry") {
-        await preparing;
-      } else {
-        await expect(preparing).rejects.toThrow(ending === "shutdown" ? /closed/ : /locked/);
-      }
-      expect(Atomics.load(faultState, 2)).toBeGreaterThan(attempts);
-      Atomics.store(faultState, 0, 0);
-      if (ending !== "shutdown") {
-        expect(terminal).not.toHaveBeenCalled();
-        execution.assertCurrent();
-        await execution.prepare(source);
-        const operation = vi.fn(async () => "recovered");
-        expect(await execution.runExisting(source, operation)).toBe("recovered");
-        expect(operation).toHaveBeenCalledOnce();
-        const failure = Object.assign(new Error("database is locked"), { errcode: 5 });
-        const rejected = vi.fn(async () => {
-          throw failure;
-        });
-        await expect(execution.runExisting(source, rejected)).rejects.toBe(failure);
-        expect(rejected).toHaveBeenCalledOnce();
-        await closeOpenClawAgentDatabasesAsync();
-      }
-      expect(() => execution.assertCurrent()).toThrow(/closed/);
-    } finally {
-      Atomics.store(faultState, 0, 0);
-      await execution.release();
+    await using _ = releaseOnExit(execution);
+    const preparing = execution.prepare(source);
+    if (ending === "retry") {
+      await preparing;
+    } else {
+      await expect(preparing).rejects.toThrow(ending === "shutdown" ? /closed/ : /locked/);
     }
+    expect(Atomics.load(faultState, 2)).toBeGreaterThan(attempts);
+    Atomics.store(faultState, 0, 0);
+    if (ending !== "shutdown") {
+      expect(terminal).not.toHaveBeenCalled();
+      execution.assertCurrent();
+      await execution.prepare(source);
+      const operation = vi.fn(async () => "recovered");
+      expect(await execution.runExisting(source, operation)).toBe("recovered");
+      expect(operation).toHaveBeenCalledOnce();
+      const failure = Object.assign(new Error("database is locked"), { errcode: 5 });
+      const rejected = vi.fn(async () => {
+        throw failure;
+      });
+      await expect(execution.runExisting(source, rejected)).rejects.toBe(failure);
+      expect(rejected).toHaveBeenCalledOnce();
+      await closeOpenClawAgentDatabasesAsync();
+    }
+    expect(() => execution.assertCurrent()).toThrow(/closed/);
   },
 );
 
@@ -289,59 +291,54 @@ it("does not fence an actor when its worker stops before command admission", asy
   }).acquire({ database: identity, sessionKey }, { assertCurrent() {}, assertReadable() {} });
   const authorize = vi.fn();
   const authority = { assertCurrent() {}, authorize };
-  try {
-    await expect(
-      actor.appendTranscriptEvent(
-        {
-          commandId: "initial-message",
-          phaseId: "setup",
-          append: {
-            kind: "message",
-            input: {
-              scope,
-              cwd: "/synthetic",
-              messageJson: JSON.stringify({ role: "user", content: "hello" }),
-            },
-            initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 1 } },
-          },
-        },
-        authority,
-      ),
-    ).resolves.toMatchObject({ kind: "committed" });
-    authorize.mockClear();
-    Atomics.store(faultState, 0, 2);
-    const failed = await actor.patch(
+  await using _ = releaseOnExit(actor, execution);
+  await expect(
+    actor.appendTranscriptEvent(
       {
-        commandId: fault.marker,
-        phaseId: "before-admission",
-        reducers: [{ kind: "activity", updatedAt: 2 }],
+        commandId: "initial-message",
+        phaseId: "setup",
+        append: {
+          kind: "message",
+          input: {
+            scope,
+            cwd: "/synthetic",
+            messageJson: JSON.stringify({ role: "user", content: "hello" }),
+          },
+          initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 1 } },
+        },
       },
       authority,
-    );
-    Atomics.store(faultState, 0, 0);
-    expect(authorize).not.toHaveBeenCalled();
-    expect(failed).toMatchObject({ kind: "rolled-back" });
-    expect(await readEntries(execution, sessionKey)).toMatchObject({
-      entries: [{ sessionKey, entry: { updatedAt: 1 } }],
-    });
-    await expect(
-      actor.patch(
-        {
-          commandId: "after-worker-restart",
-          phaseId: "recovery",
-          reducers: [{ kind: "activity", updatedAt: 3 }],
-        },
-        authority,
-      ),
-    ).resolves.toMatchObject({ kind: "committed" });
-    expect(await readEntries(execution, sessionKey)).toMatchObject({
-      entries: [{ sessionKey, entry: { updatedAt: 3 } }],
-    });
-  } finally {
-    Atomics.store(faultState, 0, 0);
-    await actor.release();
-    await execution.release();
-  }
+    ),
+  ).resolves.toMatchObject({ kind: "committed" });
+  authorize.mockClear();
+  Atomics.store(faultState, 0, 2);
+  const failed = await actor.patch(
+    {
+      commandId: fault.marker,
+      phaseId: "before-admission",
+      reducers: [{ kind: "activity", updatedAt: 2 }],
+    },
+    authority,
+  );
+  Atomics.store(faultState, 0, 0);
+  expect(authorize).not.toHaveBeenCalled();
+  expect(failed).toMatchObject({ kind: "rolled-back" });
+  expect(await readEntries(execution, sessionKey)).toMatchObject({
+    entries: [{ sessionKey, entry: { updatedAt: 1 } }],
+  });
+  await expect(
+    actor.patch(
+      {
+        commandId: "after-worker-restart",
+        phaseId: "recovery",
+        reducers: [{ kind: "activity", updatedAt: 3 }],
+      },
+      authority,
+    ),
+  ).resolves.toMatchObject({ kind: "committed" });
+  expect(await readEntries(execution, sessionKey)).toMatchObject({
+    entries: [{ sessionKey, entry: { updatedAt: 3 } }],
+  });
 });
 
 function readEntries(
@@ -491,21 +488,17 @@ it("keeps unavailable cleanup failures outside retry handling while preserving t
       });
   });
   Atomics.store(faultState, 0, 1);
-  try {
-    const failure: unknown = await execution
-      .runExisting(source, operation)
-      .catch((error: unknown) => error);
-    expect(operation).toHaveBeenCalledOnce();
-    expect(failure).toMatchObject({
-      cause: expect.objectContaining({ cause: primary, errors: [primary, expect.any(Error)] }),
-    });
-    expect(classifyGatewayStorageFailure(failure)).toBe("unavailable");
-    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(false);
-    expect(isSqliteWorkerError(failure, "unavailable")).toBe(false);
-  } finally {
-    Atomics.store(faultState, 0, 0);
-    await execution.release();
-  }
+  await using _ = releaseOnExit(execution);
+  const failure: unknown = await execution
+    .runExisting(source, operation)
+    .catch((error: unknown) => error);
+  expect(operation).toHaveBeenCalledOnce();
+  expect(failure).toMatchObject({
+    cause: expect.objectContaining({ cause: primary, errors: [primary, expect.any(Error)] }),
+  });
+  expect(classifyGatewayStorageFailure(failure)).toBe("unavailable");
+  expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(false);
+  expect(isSqliteWorkerError(failure, "unavailable")).toBe(false);
 });
 
 it("keeps another agent's admitted database usable after a deleted agent refuses preparation", async () => {
