@@ -293,7 +293,8 @@ describe("CLI executable implementation identity", () => {
           windowsHide: true,
         },
       );
-      expect(child).toMatchObject({ error: undefined, status: 0, stdout: "identity-ok" });
+      expect(child.error).toBeUndefined();
+      expect(child).toMatchObject({ status: 0, stdout: "identity-ok" });
     });
 
     it("does not bind a missing PATH command to an executable in the current directory", async () => {

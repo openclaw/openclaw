@@ -97,8 +97,16 @@ describe("assistant message embed policy", () => {
       vi.stubGlobal(
         "ResizeObserver",
         class {
-          observe() {}
-          disconnect() {}
+          private readonly targets = new Set<Element>();
+          observe(target: Element) {
+            this.targets.add(target);
+          }
+          unobserve(target: Element) {
+            this.targets.delete(target);
+          }
+          disconnect() {
+            this.targets.clear();
+          }
         },
       );
       const host = document.createElement("div");

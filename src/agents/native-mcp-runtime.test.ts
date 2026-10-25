@@ -40,12 +40,12 @@ afterAll(async () => {
   await receipts.close();
 });
 
-async function fixture(era: "legacy" | "modern" = "legacy") {
+async function fixture(era: "legacy" | "modern" = "legacy", requestTimeoutMs?: number) {
   const directory = tempDirs.make("native-mcp-owner-");
   const file = path.join(directory, "server.mjs");
   await writeNativeMcpFixture(file, receipts.endpoint, era);
   const create = (requester: string) => {
-    const runtime = createFixtureRuntime(directory, file, requester);
+    const runtime = createFixtureRuntime(directory, file, requester, requestTimeoutMs);
     runtimes.push(runtime);
     return runtime;
   };
@@ -450,7 +450,7 @@ describe("private MCP projection operations at the session owner", () => {
   it("preserves owner deadlines, human-input holds, and uncertain child cleanup", async ({
     signal,
   }) => {
-    const { runtime, acquire } = await fixture();
+    const { runtime, acquire } = await fixture("legacy", 5_000);
     const caller = context();
     const samplingEntered = createDeferred<AbortSignal>();
     const samplingRelease = createDeferred();

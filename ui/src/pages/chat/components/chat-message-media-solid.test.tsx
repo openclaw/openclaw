@@ -270,17 +270,25 @@ it("cancels an offscreen poster request and releases a parked poster without rep
   vi.stubGlobal(
     "IntersectionObserver",
     class {
-      constructor(callback: IntersectionObserverCallback) {
-        intersections.push((isIntersecting) =>
-          callback(
-            [{ isIntersecting } as IntersectionObserverEntry],
-            this as unknown as IntersectionObserver,
-          ),
-        );
+      private readonly targets = new Set<Element>();
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        intersections.push((isIntersecting) => {
+          if (this.targets.has(target)) {
+            this.callback(
+              [{ target, isIntersecting } as IntersectionObserverEntry],
+              this as unknown as IntersectionObserver,
+            );
+          }
+        });
       }
-      observe() {}
-      unobserve() {}
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
   const createObjectURL = vi.fn(() => "blob:video-poster");
@@ -352,8 +360,16 @@ it.each(["document", "audio", "video"] as const)(
     vi.stubGlobal(
       "IntersectionObserver",
       class {
-        observe() {}
-        disconnect() {}
+        private readonly targets = new Set<Element>();
+        observe(target: Element) {
+          this.targets.add(target);
+        }
+        unobserve(target: Element) {
+          this.targets.delete(target);
+        }
+        disconnect() {
+          this.targets.clear();
+        }
       },
     );
     const url = managedSource();

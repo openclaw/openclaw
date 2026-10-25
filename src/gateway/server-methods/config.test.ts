@@ -476,13 +476,7 @@ it("uses write-snapshot policies before merging manifest-backed model IDs", asyn
     ],
   });
   storedConfig = configFor("myproxy", "https://proxy.example/v1", {
-    models: [
-      modelDefinition("vendor/modern-model", {
-        name: "Before",
-        contextWindow: 200_000,
-        reasoning: false,
-      }),
-    ],
+    models: [modelDefinition("vendor/modern-model", { name: "Before" })],
   });
 
   const sourceConfig = structuredClone(storedConfig);

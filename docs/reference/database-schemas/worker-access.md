@@ -1706,6 +1706,16 @@ writes retain their transactions. Heartbeat claims remain one conditional update
 so competing runs cannot claim the same outcome.
 Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
 
+Resident session run adoption without a turn can also use one SQLite node write.
+The entry writer certifies that the prepared update has no window, snapshot,
+conversation, cleanup, or identity effects. Inside native write custody, the
+existing receipt owner prepares the exact pending token, publication, serialized
+reply, and final admission before the statement executes. Native success installs
+them through the same postcommit owner; rejected preparation and definite statement
+failure preserve the prior resident state. An uncertain outcome invalidates it
+and uses normal recovery. Cold, compound, nested, oversized-reply, and PostgreSQL
+adoptions retain their managed transactions.
+
 Private receipt envelopes identify the operation, physical source and connection
 incarnation, domain, and exact affected keys. Each key contains a postimage,
 explicit absence, unchanged facts, or unknown coverage. Missing coverage is never
@@ -5811,8 +5821,10 @@ workers still require native exit before replacement. Schema and update behavior
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing
 per-transcript queue, then recheck the live session before publishing. Message
-lookup keeps its current-only, byte-limit, and reset-archive behavior; counts keep
-their projection-readiness retry. Incognito transcripts use the memory actor. Schemas, retained data, and update behavior are unchanged.
+lookup keeps its current-only, byte-limit, and reset-archive behavior. Projection
+waiters read status once, then await the reconcile owner's per-session completion;
+committed ready receipts can release a session before unrelated rebuilds finish.
+Incognito transcripts use the memory actor. Schemas, retained data, and update behavior are unchanged.
 
 Exact transcript-event matching also uses the history worker for disk discovery,
 payload decoding, and selection. Callers supply a serializable selection for the

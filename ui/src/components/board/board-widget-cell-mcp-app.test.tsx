@@ -134,21 +134,33 @@ function stubVisibility(visible: (index: number) => boolean) {
   vi.stubGlobal(
     "IntersectionObserver",
     class {
+      private readonly targets = new Set<Element>();
       constructor(private readonly callback: IntersectionObserverCallback) {}
       observe(target: Element) {
+        this.targets.add(target);
         const index = observed;
         observed += 1;
         vi.spyOn(target, "getBoundingClientRect").mockImplementation(
           () => new DOMRect(0, visible(index) ? 0 : 5_000, 0, 200),
         );
-        emit = () =>
+        emit = () => {
+          if (!this.targets.has(target)) {
+            return;
+          }
           this.callback(
             [{ isIntersecting: visible(index), target } as IntersectionObserverEntry],
             this as never,
           );
-        emit();
+        };
+        queueMicrotask(emit);
       }
-      disconnect = disconnect;
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+        disconnect();
+      }
     },
   );
   return { disconnect, observed: () => observed, emit: () => emit() };
