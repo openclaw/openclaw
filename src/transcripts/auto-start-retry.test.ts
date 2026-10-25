@@ -23,14 +23,14 @@ function trackedService(ctx: Parameters<typeof createTranscriptsAutoStartService
   return service;
 }
 
-type RetryOptions = {
-  whenOccupied?: boolean;
-  title?: string;
-  realTimers?: boolean;
-  acceptFrom?: number;
-};
-
-function retryFixture(options: RetryOptions = {}) {
+function retryFixture(
+  options: {
+    whenOccupied?: boolean;
+    title?: string;
+    realTimers?: boolean;
+    acceptFrom?: number;
+  } = {},
+) {
   if (!options.realTimers) {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   }
@@ -60,6 +60,20 @@ async function stopAfterAction(service: Service, action: "stop" | "retry") {
   await service.stop();
 }
 
+function pendingStart({ start, service }: ReturnType<typeof retryFixture>, throws = false) {
+  const entered = createDeferred<TranscriptStartRequest>();
+  const gate = releaseGate();
+  start.mockImplementation(async (request) => {
+    entered.resolve(request);
+    await gate.promise;
+    if (throws) {
+      throw new Error("provider failed after shutdown");
+    }
+    return { ok: false, error: "provider unavailable" };
+  });
+  return { request: entered.promise, release: gate.resolve, settled: service.start().settled };
+}
+
 describe("configured transcript failed-start custody", () => {
   // Settle owned startup/cleanup before the outer fixture closes SQLite and resets timers.
   afterEach(async () => {
@@ -71,32 +85,42 @@ describe("configured transcript failed-start custody", () => {
     }
   });
   it.each([
-    { whenOccupied: false, accepted: false },
-    { whenOccupied: true, accepted: false },
-    { whenOccupied: false, accepted: true },
+    { whenOccupied: false, attempts: 12, accepted: false },
+    { whenOccupied: true, attempts: 12, accepted: false },
+    { whenOccupied: false, attempts: 3, accepted: true },
+    { whenOccupied: false, attempts: 1, accepted: false },
+    { whenOccupied: false, attempts: 2, accepted: false },
   ])(
-    "discards only exhausted empty admissions (occupied=$whenOccupied, accepted=$accepted)",
-    async ({ whenOccupied, accepted }) => {
-      const attempts = accepted ? 3 : 12;
+    "retains normalized retry custody (occupied=$whenOccupied, attempts=$attempts, accepted=$accepted)",
+    async ({ whenOccupied, attempts, accepted }) => {
       const { f, service, start } = retryFixture({
         whenOccupied,
         acceptFrom: accepted ? attempts : undefined,
+        title: "Meeting \ud800",
       });
       await service.start().settled;
       const original = start.mock.calls[0]![0].session;
+      expect(await f.store.listSessionEntries()).toMatchObject([
+        { session: { title: "Meeting \ufffd" } },
+      ]);
+      expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
       for (let attempt = 2; attempt <= attempts; attempt++) {
         expect(await f.store.listSessionEntries()).toHaveLength(1);
         await vi.advanceTimersByTimeAsync(5_000);
         await service.start().settled;
-        expect(start).toHaveBeenCalledTimes(attempt);
       }
       expect(start.mock.calls.map(([request]) => request.session.sessionId)).toEqual(
         Array.from({ length: attempts }, () => original.sessionId),
       );
       expect((await f.read()).configuredSources[0]).toMatchObject(
-        accepted ? { state: "armed" } : { state: "not-active", startDiagnostic: "start-failed" },
+        accepted
+          ? { state: "armed" }
+          : {
+              ...(attempts === 12 ? { state: "not-active" } : {}),
+              startDiagnostic: attempts < 12 ? "retrying" : "start-failed",
+            },
       );
-      expect(await f.store.listSessionEntries()).toHaveLength(accepted ? 1 : 0);
+      expect(await f.store.listSessionEntries()).toHaveLength(attempts < 12 ? 1 : 0);
       await service.stop();
       expect(await f.store.listSessionEntries()).toHaveLength(accepted ? 1 : 0);
       await vi.advanceTimersByTimeAsync(65_000);
@@ -104,67 +128,40 @@ describe("configured transcript failed-start custody", () => {
     },
   );
 
-  it.each(["stop", "retry"] as const)(
-    "preserves a rewrite during pending provider startup before %s",
-    async (action) => {
-      const { f, service, start } = retryFixture();
-      const entered = createDeferred<TranscriptStartRequest>();
-      const release = releaseGate();
-      start.mockImplementation(async (request) => {
-        entered.resolve(request);
-        await release.promise;
-        return { ok: false, error: "provider unavailable" };
-      });
-      const starting = service.start().settled;
-      const request = await entered.promise;
-      const rewritten = { ...request.session, title: "Operator rewrite during startup" };
-      await f.store.writeSession(rewritten);
-      release.resolve();
-      await starting;
-      await stopAfterAction(service, action);
-      expect(start).toHaveBeenCalledOnce();
-      expect(await f.store.readSession(request.session.sessionId)).toEqual(rewritten);
-    },
-  );
-
-  it.each(["stop", "retry"] as const)(
-    "retains SQLite-normalized title custody through %s after failed startup",
-    async (action) => {
-      const { f, service, start } = retryFixture({ title: "Meeting \ud800" });
-      await service.start().settled;
-      expect(await f.store.listSessionEntries()).toMatchObject([
-        { session: { title: "Meeting \ufffd" } },
-      ]);
-      expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
-      await stopAfterAction(service, action);
-      expect(start).toHaveBeenCalledTimes(action === "retry" ? 2 : 1);
-      expect(await f.store.listSessionEntries()).toEqual([]);
-    },
-  );
-
-  it.each(["stop", "retry"] as const)(
-    "preserves an external write between failed restoration and %s custody",
-    async (action) => {
-      const { f, service, start } = retryFixture();
-      const writeSession = f.store.writeSession.bind(f.store);
+  it.each([
+    ["pending", "stop"],
+    ["pending", "retry"],
+    ["restored", "stop"],
+    ["restored", "retry"],
+  ] as const)("preserves a %s rewrite through %s custody", async (phase, action) => {
+    const setup = retryFixture();
+    const { f, service, start } = setup;
+    const writeSession = f.store.writeSession.bind(f.store);
+    const rewrite = (session: TranscriptStartRequest["session"]) =>
+      writeSession({ ...session, title: "Operator-owned meeting" });
+    if (phase === "pending") {
+      const pending = pendingStart(setup);
+      await rewrite((await pending.request).session);
+      pending.release();
+      await pending.settled;
+    } else {
       let rewritten = false;
       vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(async (...args) => {
         const result = await writeSession(...args);
         if (args[0].stoppedAt && !rewritten) {
           rewritten = true;
-          // A distinct writer commits after restoration, before its caller resumes.
-          await writeSession({ ...args[0], title: "Operator-owned meeting" });
+          await rewrite(args[0]);
         }
         return result;
       });
       await service.start().settled;
-      const { session } = (await f.store.listSessionEntries())[0]!;
-      expect(session.title).toBe("Operator-owned meeting");
-      await stopAfterAction(service, action);
-      expect(start).toHaveBeenCalledOnce();
-      expect(await f.store.readSession(session.sessionId)).toEqual(session);
-    },
-  );
+    }
+    const { session } = (await f.store.listSessionEntries())[0]!;
+    expect(session.title).toBe("Operator-owned meeting");
+    await stopAfterAction(service, action);
+    expect(start).toHaveBeenCalledOnce();
+    expect(await f.store.readSession(session.sessionId)).toEqual(session);
+  });
 
   it("preserves a failed row adopted by a replacement service and lets its retry start", async () => {
     const { f, service: retiring, start } = retryFixture({ whenOccupied: true, acceptFrom: 3 });
@@ -238,23 +235,17 @@ describe("configured transcript failed-start custody", () => {
   it.each([false, true])(
     "discards failed late startup after the stop deadline (occupied=%s)",
     async (whenOccupied) => {
-      const { f, service, start } = retryFixture({ whenOccupied });
-      const entered = createDeferred<TranscriptStartRequest>();
-      const gate = releaseGate();
-      start.mockImplementation(async (request) => {
-        entered.resolve(request);
-        await gate.promise;
-        throw new Error("provider failed after shutdown");
-      });
-      const starting = service.start().settled;
-      const request = await entered.promise;
+      const setup = retryFixture({ whenOccupied });
+      const { f, service, start } = setup;
+      const pending = pendingStart(setup, true);
+      const request = await pending.request;
       const stopping = service.stop();
       await vi.advanceTimersByTimeAsync(5_000);
       await stopping;
       expect(request.abortSignal?.aborted).toBe(true);
       expect(f.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("stop timed out"));
-      gate.resolve();
-      await starting;
+      pending.release();
+      await pending.settled;
       // The original cleanup owner keeps joining after its caller's deadline.
       await service.stop();
       expect(await f.store.listSessionEntries()).toEqual([]);

@@ -596,44 +596,7 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it("does not let a modified export block canonical session updates", async () => {
-  const target = await admit(session("mutable-export"), ["canonical"]);
-  const artifacts = await store.materializeSessionArtifacts(target, "transcript");
-  fs.appendFileSync(artifacts.transcriptPath, '{"text":"external edit"}\n');
-
-  await expect(
-    store.writeSession({ ...target, stoppedAt: "2026-07-01T11:00:00.000Z" }),
-  ).resolves.toMatchObject({ inserted: false, inputRevision: expect.any(String) });
-  await expect(store.readSession(target.sessionId)).resolves.toMatchObject({
-    stoppedAt: "2026-07-01T11:00:00.000Z",
-  });
-  await expect(writeNotes(target, "canonical")).resolves.toBe(
-    path.join(store.sessionDir(target), "summary.md"),
-  );
-  await expect(store.readSummary(target)).resolves.toMatchObject({
-    summary: { sessionId: target.sessionId },
-  });
-  await expect(store.materializeSessionArtifacts(target, "transcript")).rejects.toThrow(
-    "run openclaw doctor --fix",
-  );
-});
-
-it("resolves descriptor exports through canonical SQLite identity", async () => {
-  const target = await admit({ ...session("canonical-export"), title: "Canonical title" });
-
-  const artifacts = await store.materializeSessionArtifacts(
-    { ...target, title: "Stale title" },
-    "metadata",
-  );
-
-  expect(readText(artifacts.metadataPath)).toContain("Canonical title");
-  await expect(
-    store.materializeSessionArtifacts(session("phantom-export"), "metadata"),
-  ).rejects.toThrow("transcripts session not found");
-  expect(fs.existsSync(store.sessionDir(session("phantom-export")))).toBe(false);
-});
-
-it("stores summaries in SQLite and materializes artifacts beneath a shared export parent", async () => {
+it("exports canonical durable notes, recovers concurrent manifests, and preserves externally edited artifacts", async () => {
   const exportRoot = path.join(suiteStateDir, "transcripts");
   fs.mkdirSync(exportRoot, { recursive: true });
   fs.chmodSync(exportRoot, 0o770);
@@ -641,37 +604,25 @@ it("stores summaries in SQLite and materializes artifacts beneath a shared expor
     ...session("ansi-\u001b[31mprovider\u001b[0m", "2026-05-22T10:00:00.000Z"),
     title: "ANSI import",
   };
-  const utterance = { text: "We decided to ship the CLI.", speaker: { label: "Sam" } };
-  await admit(target, [utterance]);
-  const summary = summarizeTranscripts({ session: target, utterances: [utterance] });
-  const markdownPath = await store.writeSummary(summary, target);
-  const artifacts = await store.materializeSessionArtifacts(target, "all");
-
-  expect(markdownPath).toBe(path.join(store.sessionDir(target), "summary.md"));
+  await admit(target, ["Saved speech"]);
+  expect(await writeNotes(target, "Saved speech")).toBe(
+    path.join(store.sessionDir(target), "summary.md"),
+  );
+  const artifacts = await store.materializeSessionArtifacts({ ...target, title: "Stale" }, "all");
+  expect(readText(artifacts.metadataPath)).toContain(target.title);
   expect(JSON.parse(readText(path.join(artifacts.sessionDir, "summary.json")))).toMatchObject({
     sessionId: target.sessionId,
   });
-  expect(readText(artifacts.transcriptPath)).toContain('"text":"We decided to ship the CLI."');
+  expect(readText(artifacts.transcriptPath)).toContain('"text":"Saved speech"');
   await closeDatabase();
-  const reopened = createStore();
-  await expect(reopened.readSummary(target)).resolves.toMatchObject({
+  await expect(createStore().readSummary(target)).resolves.toMatchObject({
     summary: { sessionId: target.sessionId },
   });
-});
-
-it("repairs an interrupted manifest update and serializes concurrent exports", async () => {
-  const target = await admit(session("recover-export"), ["recover me"]);
-  await writeNotes(target, "recover me");
-  await store.materializeSessionArtifacts(target, "all");
   updateExports(target, { export_manifest_json: "{}" });
-
-  await expect(
-    Promise.all([
-      store.materializeSessionArtifacts(target, "summary"),
-      store.materializeSessionArtifacts(target, "transcript"),
-    ]),
-  ).resolves.toHaveLength(2);
-
+  await Promise.all([
+    store.materializeSessionArtifacts(target, "summary"),
+    store.materializeSessionArtifacts(target, "transcript"),
+  ]);
   const manifest = stateDatabase()
     .prepare("SELECT export_manifest_json FROM meeting_transcript_sessions WHERE session_id = ?")
     .get(target.sessionId) as { export_manifest_json: string };
@@ -680,4 +631,18 @@ it("repairs an interrupted manifest update and serializes concurrent exports", a
     "summary.md": expect.any(String),
     "transcript.jsonl": expect.any(String),
   });
+  fs.appendFileSync(artifacts.transcriptPath, '{"text":"external edit"}\n');
+  const updated = { ...target, stoppedAt: "2026-07-01T11:00:00.000Z" };
+  await store.writeSession(updated);
+  expect(await store.readSession(target.sessionId)).toEqual(updated);
+  await writeNotes(target, "Updated notes");
+  expect((await store.readSummary(target)).summary?.overview).toBe("Updated notes");
+  await expect(store.materializeSessionArtifacts(target, "transcript")).rejects.toThrow(
+    "run openclaw doctor --fix",
+  );
+  const missing = session("phantom-export");
+  await expect(store.materializeSessionArtifacts(missing, "metadata")).rejects.toThrow(
+    "transcripts session not found",
+  );
+  expect(fs.existsSync(store.sessionDir(missing))).toBe(false);
 });
