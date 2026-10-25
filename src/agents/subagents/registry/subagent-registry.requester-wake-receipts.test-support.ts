@@ -223,6 +223,13 @@ export function registerRequesterWakeReceiptBoundaryTests({
     onReceiptsHeld(holds.releaseAll);
     return holds;
   };
+  const expectPendingWake = (runId: string) =>
+    expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toMatchObject({
+      status: "pending",
+      attemptCount: 0,
+    });
+  const expectPublished = (publication: Promise<unknown>) =>
+    expect(publication).resolves.toEqual({ applied: true, publication: "published" });
   it.each<{
     name: string;
     rejectRequesterWake?: boolean;
@@ -232,9 +239,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
     outcomeDrift?: boolean;
     receiptReplacement?: "reply" | "delivery";
   }>([
-    {
-      name: "delivers the visible requester final",
-    },
+    { name: "delivers the visible requester final" },
     {
       name: "publishes a requester transition before queued same-owner cleanup",
       receiptDrift: true,
@@ -360,10 +365,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
         );
         try {
           heldReceipts.transition.release.resolve();
-          await expect(heldReceipts.publications.transition.promise).resolves.toEqual({
-            applied: true,
-            publication: "published",
-          });
+          await expectPublished(heldReceipts.publications.transition.promise);
           await successor;
           if (receiptReplacement) {
             expect(planSuccessor).toHaveBeenCalledOnce();
@@ -412,23 +414,14 @@ export function registerRequesterWakeReceiptBoundaryTests({
       // Alpha was already delivered before yield. Join the rejected wake owner
       // before observing recovery; delivered cleanup does not imply it settled.
       await settleWakeOwner?.(true);
-      expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 0,
-      });
+      expectPendingWake(alpha.runId);
       await vi.advanceTimersByTimeAsync(29_999);
       await settleWakeOwner?.(true);
-      expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 0,
-      });
+      expectPendingWake(alpha.runId);
       expect(getRequesterWakeCalls()).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1);
       await settleWakeOwner?.(true);
-      expect(registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake).toMatchObject({
-        status: "pending",
-        attemptCount: 0,
-      });
+      expectPendingWake(alpha.runId);
       await registry.testing.sweepOnceForTests();
       await settleWakeOwner?.(true);
       await waitForDeliveredCleanup(alpha.runId);
@@ -553,10 +546,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           expect(getGatewayContextResolver(entry)).toBeDefined();
           expect(held.executions).not.toContain("reconcile");
         } else {
-          await expect(held.publications.complete.promise).resolves.toEqual({
-            applied: true,
-            publication: "published",
-          });
+          await expectPublished(held.publications.complete.promise);
         }
         if (change !== "unchanged") {
           database.db.exec(
@@ -566,10 +556,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await vi.advanceTimersByTimeAsync(60_000);
           await held.reconcile.entered.promise;
           held.reconcile.release.resolve();
-          await expect(held.publications.reconcile.promise).resolves.toEqual({
-            applied: true,
-            publication: "published",
-          });
+          await expectPublished(held.publications.reconcile.promise);
           database.db.exec("DROP TRIGGER reject_quiet_retirement_replay");
           replayTrigger = false;
         }

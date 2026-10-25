@@ -74,32 +74,26 @@ export function registerRestoredRollbackPublicationTest({
     vi.useRealTimers();
     const now = Date.now();
     mockSingleCollectorConcurrency();
-    mockRestoredRuns(() => [
-      makeQueuedRun({
-        runId: "run-restored-stop-one",
-        childSessionIdentity: { sessionId: "one", lifecycleRevision: "revision-one" },
-        groupId: "restore-stop",
-        createdAt: now,
-      }),
-      makeQueuedRun({
-        runId: "run-restored-stop-two",
-        childSessionIdentity: { sessionId: "two", lifecycleRevision: "revision-two" },
-        groupId: "restore-stop",
-        createdAt: now + 1,
-      }),
-    ]);
-    mocks.entries = {
-      "agent:main:subagent:run-restored-stop-one": {
-        sessionId: "one",
-        lifecycleRevision: "revision-one",
-        updatedAt: now,
-      },
-      "agent:main:subagent:run-restored-stop-two": {
-        sessionId: "two",
-        lifecycleRevision: "revision-two",
-        updatedAt: now,
-      },
-    };
+    const identities = ["one", "two"].map((sessionId) => ({
+      sessionId,
+      lifecycleRevision: `revision-${sessionId}`,
+    }));
+    mockRestoredRuns(() =>
+      identities.map((identity, index) =>
+        makeQueuedRun({
+          runId: `run-restored-stop-${identity.sessionId}`,
+          childSessionIdentity: { ...identity },
+          groupId: "restore-stop",
+          createdAt: now + index,
+        }),
+      ),
+    );
+    mocks.entries = Object.fromEntries(
+      identities.map((identity) => [
+        `agent:main:subagent:run-restored-stop-${identity.sessionId}`,
+        { ...identity, updatedAt: now },
+      ]),
+    );
     let agentCalls = 0;
     const dispatchedSessionKeys: unknown[] = [];
     const launchEntered = createDeferred();
@@ -335,23 +329,20 @@ export function registerRestoredRequesterWakeSettlementTests({
           },
         }),
       );
-      mocks.restoreSubagentRunsFromDisk.mockImplementation((async (params: {
-        runs: Map<string, SubagentRunRecord>;
-      }) => {
+      type RestoreParams = { runs: Map<string, SubagentRunRecord> };
+      mocks.restoreSubagentRunsFromDisk.mockImplementation((async ({ runs }: RestoreParams) => {
         let inserted = 0;
         for (const entry of restored) {
-          if (!params.runs.has(entry.runId)) {
-            params.runs.set(entry.runId, entry);
+          if (!runs.has(entry.runId)) {
+            runs.set(entry.runId, entry);
             inserted += 1;
           }
         }
         return inserted;
       }) as never);
-      mocks.restoreSubagentRunsFromDisk.mockImplementationOnce((async (params: {
-        runs: Map<string, SubagentRunRecord>;
-      }) => {
+      mocks.restoreSubagentRunsFromDisk.mockImplementationOnce((async ({ runs }: RestoreParams) => {
         if (restoreTiming === "partial restore") {
-          params.runs.set(restored[0]!.runId, restored[0]!);
+          runs.set(restored[0]!.runId, restored[0]!);
         }
         throw new Error("transient sqlite read failure");
       }) as never);
