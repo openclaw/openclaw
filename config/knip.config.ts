@@ -978,6 +978,14 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
       'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
     );
   }
+  const typedShimImplementation = source.match(
+    /\brun(?:Node|Tsx)CliShim\(\s*import\.meta\.url\s*,\s*\{[\s\S]*?\bimplementation\s*:\s*["'](\.\/[^"'\r\n]+\.mts)["']/u,
+  )?.[1];
+  if (typedShimImplementation) {
+    // Keep implementation exports auditable: the shim executes the module but
+    // does not consume every named export merely by loading it.
+    return `${source}\nimport ${JSON.stringify(typedShimImplementation)};`;
+  }
   return source;
 }
 

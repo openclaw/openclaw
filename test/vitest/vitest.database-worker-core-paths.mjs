@@ -87,6 +87,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/update-command.conformance.test.ts",
   "src/infra/database-engine/transcript-identity-insert.conformance.test.ts",
   "src/infra/database-engine/session-entry-write.conformance.test.ts",
+  "src/infra/database-engine/nullable-ordering.conformance.test.ts",
   "src/infra/database-engine/physical-facts.test.ts",
   "src/infra/database-engine/bridge-prestart.test.ts",
   "src/infra/database-engine/port.test.ts",
@@ -820,6 +821,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/attempt-prompt-phase.admission.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-replay-cohort.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-session-recovery.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-execution-settle.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-stream-prepare.test.ts",
@@ -1399,6 +1401,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/message-progress-retention.conformance.test.ts",
   "src/infra/database-engine/session-archive-alias.conformance.test.ts",
   "src/infra/database-engine/outcome-surfaces.postgres.test.ts",
+  "src/node-host/node-worker-launch-claim.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

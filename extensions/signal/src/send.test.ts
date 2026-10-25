@@ -3,7 +3,6 @@ import {
   signalAccountConfig as accountConfig,
   signalJsonServer,
   listenSignalServer as listen,
-  closeSignalServer as close,
   type SignalRpcEnvelope,
 } from "./signal-rpc.test-support.js";
 
@@ -271,7 +270,7 @@ describe("Signal quoted-message provider replay safety", () => {
         testCase.transportKind === "container" ? "quote_timestamp" : "params.quoteTimestamp";
       expect(requests[0]).toHaveProperty(quoteTimestampPath, 1700000000001);
     } finally {
-      await close(server);
+      await server[Symbol.asyncDispose]();
     }
   });
 });
@@ -386,7 +385,7 @@ describe("Signal native JSON-RPC recipient delivery", () => {
       ]);
       expect(responses).toHaveLength(0);
     } finally {
-      await close(server);
+      await server[Symbol.asyncDispose]();
     }
   });
 });

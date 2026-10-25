@@ -4,6 +4,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { getQaBusState, pollQaBus, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
@@ -123,22 +124,6 @@ function createOversizedJsonServer(pathname: string): { server: Server; closed: 
     writeChunks();
   });
   return { server, closed };
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
 }
 
 describe("qa-bus client", () => {
@@ -402,7 +387,7 @@ describe("qa-bus client", () => {
     abort.abort();
 
     try {
-      await withTimeout(request, 500, "poll abort did not settle");
+      await withTimeout(request, 500, { message: "poll abort did not settle" });
       throw new Error("expected poll abort to reject");
     } catch (error) {
       expect(error).toBeInstanceOf(Error);
@@ -455,10 +440,10 @@ describe("qa-bus client", () => {
       text: "hello",
     });
     const rejection = expect(
-      withTimeout(request, 1_000, "stalled response body did not settle"),
+      withTimeout(request, 1_000, { message: "stalled response body did not settle" }),
     ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
 
-    await withTimeout(bodyStarted, 500, "server did not start the response body");
+    await withTimeout(bodyStarted, 500, { message: "server did not start the response body" });
     timeout.abort(new DOMException("qa-bus request timed out", "TimeoutError"));
     await rejection;
     expect(timeoutSpy).toHaveBeenCalledTimes(1);
