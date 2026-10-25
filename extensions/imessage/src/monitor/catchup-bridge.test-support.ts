@@ -93,7 +93,7 @@ function run(
   });
 }
 
-async function expectCursorRowid(lastSeenRowid: number) {
+async function expectCursorRowid(lastSeenRowid: number, lastSeenMs?: number) {
   const cursor = await getIMessageRuntime()
     .state.openKeyedStoreV2<IMessageCatchupCursor>({
       namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
@@ -101,6 +101,9 @@ async function expectCursorRowid(lastSeenRowid: number) {
     })
     .lookup(resolveIMessageCatchupCursorKey("default"));
   expect(cursor?.lastSeenRowid).toBe(lastSeenRowid);
+  if (lastSeenMs !== undefined) {
+    expect(cursor?.lastSeenMs).toBe(lastSeenMs);
+  }
 }
 
 function collectGuids(dispatched: string[]) {
@@ -238,10 +241,12 @@ describe("runIMessageCatchup", () => {
       },
     ]);
 
-    const summary = await run(client);
+    const dispatchPayload = vi.fn();
+    const summary = await run(client, { dispatchPayload });
 
     expect(summary).toMatchObject({ querySucceeded: true, replayed: 0, fetchedCount: 0 });
-    await expectCursorRowid(999);
+    expect(dispatchPayload).not.toHaveBeenCalled();
+    await expectCursorRowid(999, Date.parse("2026-05-08T11:55:00.000Z"));
   });
 
   it("filters rows that fail payload validation", async () => {
