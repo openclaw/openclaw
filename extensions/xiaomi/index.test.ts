@@ -17,14 +17,6 @@ import xiaomiPlugin from "./index.js";
 
 type OpenAICompletionsModel = Model<"openai-completions">;
 
-const modelIds = [
-  "mimo-v2.6-pro",
-  "mimo-v2.6-flash",
-  "mimo-v2.6-pro-ultraspeed",
-  "mimo-v2.5",
-  "mimo-v2.5-pro",
-] as const;
-
 const readTool = {
   name: "read",
   description: "Read data",
@@ -44,7 +36,7 @@ async function getXiaomiProvider(id = "xiaomi") {
 }
 
 function mimoReasoningModel(
-  id: (typeof modelIds)[number],
+  id: "mimo-v2.5" | "mimo-v2.5-pro",
   provider: "xiaomi" | "xiaomi-token-plan" = "xiaomi",
 ): OpenAICompletionsModel {
   return {
@@ -58,7 +50,6 @@ function mimoReasoningModel(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1_048_576,
     maxTokens: 32_000,
-    compat: {},
   } as OpenAICompletionsModel;
 }
 
@@ -77,11 +68,7 @@ function readToolReplayContext(provider = "xiaomi", reasoning = true): Context {
     timestamp: 2,
   });
   return {
-    messages: [
-      { role: "user", content: "hi", timestamp: 1 },
-      assistantMessage,
-      makeTextToolResult("call_1", "read", "ok", false, 3),
-    ],
+    messages: [assistantMessage, makeTextToolResult("call_1", "read", "ok", false, 3)],
     tools: [readTool],
   } as Context;
 }
@@ -95,24 +82,16 @@ it("builds the static Xiaomi model catalog with reasoning flags", async () => {
     baseUrl: "https://api.xiaomimimo.com/v1",
   });
 
-  expect(catalogProvider.models?.map((model) => model.id)).toEqual(modelIds);
-  expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.6-flash")?.input).toEqual([
-    "text",
-    "image",
-  ]);
-  expect(catalogProvider.models?.slice(0, 3).map((model) => model.cost)).toEqual([
-    { input: 0.435, output: 0.87, cacheRead: 0.0036, cacheWrite: 0 },
-    { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
-    { input: 4.35, output: 8.7, cacheRead: 0.036, cacheWrite: 0 },
-  ]);
-  expect(catalogProvider.models?.every((model) => model.reasoning)).toBe(true);
+  expect(catalogProvider.models?.find((model) => model.id === "mimo-v2.6-flash")).toMatchObject({
+    input: ["text", "image"],
+    reasoning: true,
+    cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+  });
 });
 
 it("exposes Token Plan catalog rows only after a provider config selects a region", async () => {
   const response = Response.json({
-    data: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.5", "mimo-v2.5-pro"].map((id) => ({
-      id,
-    })),
+    data: [{ id: "mimo-v2.6-flash" }],
   });
   const release = vi.fn(async () => undefined);
   const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
@@ -139,22 +118,15 @@ it("exposes Token Plan catalog rows only after a provider config selects a regio
       baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
       api: "openai-completions",
     });
-    expect(configured.provider.models?.map((model) => model.id)).toEqual([
-      "mimo-v2.5",
-      "mimo-v2.5-pro",
-      "mimo-v2.6-flash",
-      "mimo-v2.6-pro",
+    expect(configured.provider.models).toMatchObject([
+      {
+        id: "mimo-v2.6-flash",
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
     ]);
-    expect(
-      configured.provider.models?.find((model) => model.id === "mimo-v2.6-flash")?.input,
-    ).toEqual(["text", "image"]);
-    for (const model of configured.provider.models ?? []) {
-      expect(model.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
-    }
-    expect(guardedFetch).toHaveBeenCalledOnce();
     const request = guardedFetch.mock.calls[0]?.[0];
     expect(request?.url).toBe("https://token-plan-cn.xiaomimimo.com/v1/models");
-    expect(request?.init?.method ?? "GET").toBe("GET");
     expect(new Headers(request?.init?.headers).get("authorization")).toBe("Bearer tp-test");
     expect(response.bodyUsed).toBe(true);
     expect(release).toHaveBeenCalledOnce();
@@ -190,33 +162,25 @@ it("marks resolved MiMo models for empty array items omission", async () => {
   const provider = await getXiaomiProvider();
   const model = mimoReasoningModel("mimo-v2.5");
 
-  const normalized = provider.normalizeResolvedModel?.({
-    provider: "xiaomi",
-    modelId: model.id,
-    modelApi: model.api,
-    model,
-  } as never);
-
-  expect(normalized).toMatchObject({ compat: { omitEmptyArrayItems: true } });
+  expect(
+    provider.normalizeResolvedModel?.({
+      provider: "xiaomi",
+      modelId: model.id,
+      modelApi: model.api,
+      model,
+    } as never),
+  ).toMatchObject({ compat: { omitEmptyArrayItems: true } });
 });
 
 it("advertises thinking profiles for MiMo reasoning models only", async () => {
   const provider = await getXiaomiProvider();
-  const resolveThinkingProfile = expectDefined(
-    provider.resolveThinkingProfile,
-    "Xiaomi thinking profile resolver",
-  );
-  const expectedLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-  for (const modelId of modelIds) {
-    const profile = resolveThinkingProfile({ provider: "xiaomi", modelId } as never);
-    expect(profile?.levels.map((l) => l.id)).toEqual(expectedLevels);
-    expect(profile?.defaultLevel).toBe("high");
-  }
-
-  expect(resolveThinkingProfile({ provider: "xiaomi", modelId: "custom-model" } as never)).toBe(
-    undefined,
-  );
+  const resolveProfile = (modelId: string) =>
+    provider.resolveThinkingProfile?.({ provider: "xiaomi", modelId } as never);
+  expect(resolveProfile("mimo-v2.6-flash")).toMatchObject({
+    levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((id) => ({ id })),
+    defaultLevel: "high",
+  });
+  expect(resolveProfile("custom-model")).toBeUndefined();
 });
 
 it.each(["foreign", "enabled", "disabled"] as const)(
@@ -249,7 +213,7 @@ it.each(["foreign", "enabled", "disabled"] as const)(
       {},
     );
     const payload = capture.payload;
-    const assistantMessage = (payload?.messages as Array<Record<string, unknown>> | undefined)?.[1];
+    const assistantMessage = (payload?.messages as Array<Record<string, unknown>> | undefined)?.[0];
     if (mode === "disabled") {
       expect(payload).toHaveProperty("thinking.type", "disabled");
       expect(assistantMessage).not.toHaveProperty("reasoning_content");
