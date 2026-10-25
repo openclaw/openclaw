@@ -173,7 +173,7 @@ function installStreamingReplyProbe() {
           const tail = source.slice(boundary < 0 ? 0 : boundary + 2);
           // Plain paragraphs have no hidden destinations or formatting delimiters.
           if (/^[A-Za-z][A-Za-z\d .,;:'!-]{8,}$/u.test(tail)) {
-            const expected = tail.slice(-24);
+            const expected = tail.trimEnd();
             const sample = current;
             queueMicrotask(() =>
               requestAnimationFrame(() => {
@@ -183,10 +183,12 @@ function installStreamingReplyProbe() {
                   painted.disconnect();
                   const bubble = document.querySelector(".chat-bubble.streaming .chat-text");
                   const viewport = bubble?.closest(".chat-thread");
+                  const paragraph = Array.from(bubble?.querySelectorAll("p") ?? []).at(-1);
+                  const present = paragraph?.textContent?.startsWith(expected) ?? false;
                   let visible = false;
-                  if (bubble && viewport) {
+                  if (paragraph && viewport && present) {
                     const bounds = viewport.getBoundingClientRect();
-                    const walker = document.createTreeWalker(bubble, NodeFilter.SHOW_TEXT);
+                    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
                     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
                       const end = node.textContent?.lastIndexOf(expected) ?? -1;
                       if (end < 0) {
@@ -195,7 +197,7 @@ function installStreamingReplyProbe() {
                       const range = document.createRange();
                       range.setStart(node, end + expected.length - 1);
                       range.setEnd(node, end + expected.length);
-                      visible = Array.from(range.getClientRects()).some(
+                      visible ||= Array.from(range.getClientRects()).some(
                         (rect) =>
                           rect.bottom > bounds.top && rect.top < bounds.bottom && rect.width > 0,
                       );
@@ -203,7 +205,7 @@ function installStreamingReplyProbe() {
                   }
                   textVisibility.push({
                     index: sample.index,
-                    present: bubble?.textContent?.includes(expected) ?? false,
+                    present,
                     visible,
                     nextFrameMs: performance.now() - startedAt - sample.at,
                   });

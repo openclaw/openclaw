@@ -83,7 +83,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private headerHeight = 0;
   private appliedHeaderHeight = 0;
   private readonly initialRange: TranscriptInitialRange;
-  private readonly endAnchor = new TranscriptEndAnchor();
+  private readonly endAnchor = new TranscriptEndAnchor((fn) => this.renderer.queueAfterCommit(fn));
   private readonly recordEndLayoutCorrection = (before: number, after: number) => {
     this.endAnchor.recordLayoutCorrection(before, after);
     this.scheduleEndReconcile();

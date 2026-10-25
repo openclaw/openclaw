@@ -48,7 +48,7 @@ it.each([true, false])(
   "preserves only an existing end anchor through measured prepend correction (%s)",
   (following) => {
     const { scroller, bubble, instance, messageElements, measureRows } = fixture();
-    const endAnchor = new TranscriptEndAnchor();
+    const endAnchor = new TranscriptEndAnchor(() => {});
     const anchor = new TranscriptPrependAnchor(messageElements, (before, after) =>
       endAnchor.recordLayoutCorrection(before, after),
     );
@@ -198,7 +198,7 @@ it("preserves native wheel movement after a projection captures the reader", () 
     state: new TranscriptOffsetState(),
     getScrollElement: () => scroller,
     prependAnchor: anchor,
-    endAnchor: new TranscriptEndAnchor(),
+    endAnchor: new TranscriptEndAnchor(() => {}),
     canFollowEnd: () => true,
     isProgrammaticScroll: () => false,
     cancelScroll: () => anchor.clear(),
