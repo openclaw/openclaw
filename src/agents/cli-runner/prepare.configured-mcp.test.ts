@@ -32,7 +32,7 @@ import {
   createTestMcpLoopbackClientGrant,
 } from "../cli-runner.test-helpers.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
-import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
+import { mockCliMcpPreparation, withCliContext } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import { resetCliRunnerPrepareTestDeps } from "./prepare.test-support.js";
 
@@ -42,6 +42,15 @@ const PROBE_SERVER_INSTRUCTIONS =
   "\nPROBE_TAIL: preserve the complete native guidance.";
 
 const claudeBackend = createClaudeMcpCliBackend();
+
+function readMcpServers(context: Awaited<ReturnType<typeof prepareCliRunContext>>) {
+  const args = context.preparedBackend.backend.args ?? [];
+  return (
+    JSON.parse(fs.readFileSync(args[args.indexOf("--mcp-config") + 1] ?? "", "utf-8")) as {
+      mcpServers: Record<string, unknown>;
+    }
+  ).mcpServers;
+}
 
 async function startProbeServer() {
   const state = { calls: 0 };
@@ -112,7 +121,14 @@ describe("configured MCP servers on CLI turns", () => {
     });
     fixture = createCliRunnerPrepareFixture((params) => {
       setRuntimeConfigSnapshot(params.config ?? {});
-      return prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params });
+      return prepareCliRunContext({
+        skillsSnapshot: { prompt: "", skills: [] },
+        provider: "claude-cli",
+        model: "opus",
+        modelHasVision: false,
+        sourceReplyDeliveryMode: "automatic",
+        ...params,
+      });
     });
   });
 
@@ -151,23 +167,16 @@ describe("configured MCP servers on CLI turns", () => {
         const context = await fixture.prepare({
           sessionKey: sessionTarget.sessionKey,
           sessionId: sessionTarget.sessionId,
-          provider: "claude-cli",
-          model: "opus",
-          modelHasVision: false,
-          sourceReplyDeliveryMode: "automatic",
           config,
           toolOverrides: { mcpServers: { openclaw: false }, webSearch: false },
           ...(source === "run" ? { execOverrides: { host: "node" as const } } : {}),
         });
-        try {
+        await withCliContext(context, async () => {
           expect(context.params.cliToolAvailability).toBeUndefined();
           expect(context.hostOwnedTools).toBeUndefined();
           const args = context.preparedBackend.backend.args ?? [];
           expect(args[args.indexOf("--disallowedTools") + 1]?.split(",")).toContain("WebSearch");
-          const bundle = JSON.parse(
-            fs.readFileSync(args[args.indexOf("--mcp-config") + 1] ?? "", "utf-8"),
-          ) as { mcpServers: Record<string, unknown> };
-          expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
+          expect(Object.keys(readMcpServers(context))).toEqual(["openclaw"]);
           const minted = mintGrant.mock.lastCall?.[0];
           expect(minted).toBeDefined();
           const scoped = await resolveMcpLoopbackScopedTools({
@@ -183,9 +192,7 @@ describe("configured MCP servers on CLI turns", () => {
             "probe:pong",
           );
           expect(probeServer.calls).toBe(1);
-        } finally {
-          await context.preparedBackend.cleanup?.();
-        }
+        });
       } finally {
         await disposeAllSessionMcpRuntimes();
         await scheduler.stop();
@@ -236,10 +243,6 @@ describe("configured MCP servers on CLI turns", () => {
           const context = await fixture.prepare({
             sessionKey: sessionTarget.sessionKey,
             sessionId: sessionTarget.sessionId,
-            provider: "claude-cli",
-            model: "opus",
-            modelHasVision: false,
-            sourceReplyDeliveryMode: "automatic",
             config,
             ...(completion
               ? createPersistedCompletionHandoff(
@@ -249,14 +252,10 @@ describe("configured MCP servers on CLI turns", () => {
                 )
               : {}),
           });
-          try {
+          await withCliContext(context, async () => {
             const minted = mintGrant.mock.lastCall?.[0];
-            const args = context.preparedBackend.backend.args ?? [];
-            const bundle = JSON.parse(
-              fs.readFileSync(args[args.indexOf("--mcp-config") + 1] ?? "", "utf-8"),
-            ) as { mcpServers: Record<string, unknown> };
             // The CLI never reaches the configured server directly.
-            expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
+            expect(Object.keys(readMcpServers(context))).toEqual(["openclaw"]);
             const scoped = minted
               ? await resolveMcpLoopbackScopedTools({
                   cfg: config,
@@ -283,9 +282,7 @@ describe("configured MCP servers on CLI turns", () => {
                 ? getTextContent(await probe.execute("configured-mcp", { word: "pong" }))
                 : undefined,
             });
-          } finally {
-            await context.preparedBackend.cleanup?.();
-          }
+          });
         }
       } finally {
         await disposeAllSessionMcpRuntimes();

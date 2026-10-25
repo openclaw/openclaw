@@ -34,31 +34,21 @@ const loopbackRuntime = () => ({
 });
 
 export function createCliMcpTool(name: string, label: string, description: string) {
-  return {
-    name,
-    label,
-    description,
-    parameters: { type: "object", properties: {} },
-    execute: vi.fn(),
-  };
+  return createCliTool(name, label, description);
 }
 
 export function mockCliMcpPreparation(overrides: Record<string, unknown> = {}) {
   const mint = vi.fn(createTestMcpLoopbackClientGrant);
   const revoke = vi.fn(() => true);
   setCliRunnerPrepareTestDeps({
-    isWorkspaceBootstrapPending: async () => false,
+    ...emptyCliPreparation(),
     makeBootstrapWarn: () => () => undefined,
-    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
     getActiveMcpLoopbackRuntime: loopbackRuntime,
     createMcpLoopbackServerConfig: createTestMcpLoopbackServerConfig,
     mintMcpLoopbackClientGrant: mint,
     bindMcpLoopbackClientGrantAdmission: () => true,
     revokeMcpLoopbackClientGrant: revoke,
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
     getCliLiveSessionGeneration: () => undefined,
-    loadManifestModelCatalog: () => [],
     ...overrides,
   });
   return { mint, revoke };
@@ -100,7 +90,7 @@ export function registerCliMcpPreparationTests({
       nativeAuthOnly: true,
       config: {},
     });
-    try {
+    await withCliContext(context, async () => {
       const { env } = resolveCliChildEnv(context.preparedBackend, context.params);
       expect(env.GEMINI_CLI_HOME).toBe(home);
       const settingsPath = expectDefined(
@@ -110,9 +100,7 @@ export function registerCliMcpPreparationTests({
       expect(settingsPath).toBe(context.preparedBackend.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH);
       const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
       expect(settings.mcp.allowed).toEqual(["openclaw"]);
-    } finally {
-      await context.preparedBackend.cleanup?.();
-    }
+    });
   });
 
   it("preserves already-admitted authority through MCP grant transfer", async () => {
@@ -352,7 +340,7 @@ export function registerCliMcpPreparationTests({
         config: createConfig(),
       });
 
-      try {
+      await withCliContext(context, async () => {
         const { admittedRunContext } = context.params;
         expect(admittedRunContext.operationalRunInstance).toBe(admission.operationalRunInstance);
         expect(projectTools.mock.calls[0]?.[0].admittedRunContext).toBe(admittedRunContext);
@@ -360,9 +348,7 @@ export function registerCliMcpPreparationTests({
         expect(bindAdmission.mock.calls).toEqual([
           [{ token, runtimeOwnerToken, admittedRunContext }],
         ]);
-      } finally {
-        await context.preparedBackend.cleanup?.();
-      }
+      });
     } finally {
       admission.close();
     }

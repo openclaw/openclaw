@@ -109,6 +109,14 @@ function emitModelCall(runId: string, sessionId: string, agentId?: string) {
   );
 }
 
+function emitCommentary(runId: string, progressText: string, itemId?: string) {
+  emitAgentEvent({
+    runId,
+    stream: "item",
+    data: { kind: "preamble", phase: "end", progressText, ...(itemId ? { itemId } : {}) },
+  });
+}
+
 describe("Claude CLI run diagnostics", () => {
   afterEach(() => {
     resetAgentEventsForTest();
@@ -189,16 +197,7 @@ describe("Claude CLI run diagnostics", () => {
           config: { diagnostics: { otel: { enabled: true, captureContent: true } } },
         });
         runWithDiagnosticTraceContext(undefined, () =>
-          emitAgentEvent({
-            runId,
-            stream: "item",
-            data: {
-              kind: "preamble",
-              itemId: "cli-1",
-              phase: "end",
-              progressText: "Checking files.",
-            },
-          }),
+          emitCommentary(runId, "Checking files.", "cli-1"),
         );
         emitModelCall(runId, "session-owner", "main");
         return success("ok", 5);
@@ -237,25 +236,19 @@ describe("Claude CLI run diagnostics", () => {
     captureContent();
     const runId = "run-claude-hierarchy-error";
     const diagnostics = captureLifecycle(runId);
-    const commentary = (progressText: string) =>
-      emitAgentEvent({
-        runId,
-        stream: "item",
-        data: { kind: "preamble", phase: "end", progressText },
-      });
     await expect(
       diagnostics.run(
         async (lifecycle) => {
           lifecycle.setExecutionContext({ agentId: "main", config: {} });
           lifecycle.publishCapturedContent({ userPrompt: "prepare the release" });
-          commentary("Before error.");
+          emitCommentary(runId, "Before error.");
           lifecycle.setPhase("cleanup");
           throw new Error("managed session cleanup failed");
         },
         { sessionId: "session-2" },
       ),
     ).rejects.toThrow("managed session cleanup failed");
-    commentary("After error.");
+    emitCommentary(runId, "After error.");
     await flushDiagnosticEvents();
     expect(diagnostics.types().toSorted()).toEqual([
       "agent.commentary",
@@ -266,31 +259,21 @@ describe("Claude CLI run diagnostics", () => {
     ]);
     expect(diagnostics.eventOf("run.completed").outcome).toBe("error");
     expect(diagnostics.eventOf("harness.run.error").phase).toBe("cleanup");
-    expect(
-      diagnostics.events
-        .filter(({ event }) => event.type === "run.completed" || event.type === "harness.run.error")
-        .every(({ privateData }) => privateData.errorMessage === "managed session cleanup failed"),
-    ).toBe(true);
-    expect(diagnostics.record("run.completed")?.privateData.messageContent).toMatchObject({
-      userPrompt: "prepare the release",
-    });
-    expect(diagnostics.record("harness.run.error")?.privateData.harnessContent).toMatchObject({
-      userPrompt: "prepare the release",
-    });
+    for (const [event, field] of [
+      ["run.completed", "messageContent"],
+      ["harness.run.error", "harnessContent"],
+    ] as const) {
+      expect(diagnostics.record(event)?.privateData).toMatchObject({
+        errorMessage: "managed session cleanup failed",
+        [field]: { userPrompt: "prepare the release" },
+      });
+    }
   });
 
   it.each([
-    {
-      label: "abort",
-      error: Object.assign(new Error("operation was aborted"), { code: "ABORT_ERR" }),
-      harnessOutcome: "aborted",
-    },
-    {
-      label: "timeout",
-      error: new Error("CLI exceeded timeout (30s) and was terminated"),
-      harnessOutcome: "timed_out",
-    },
-  ])("completes the harness once for a thrown $label", async ({ error, harnessOutcome }) => {
+    [Object.assign(new Error("operation was aborted"), { code: "ABORT_ERR" }), "aborted"],
+    [new Error("CLI exceeded timeout (30s) and was terminated"), "timed_out"],
+  ] as const)("completes the harness once for %s", async (error, harnessOutcome) => {
     const diagnostics = captureLifecycle(`run-claude-hierarchy-${harnessOutcome}`);
     await expect(
       diagnostics.run(

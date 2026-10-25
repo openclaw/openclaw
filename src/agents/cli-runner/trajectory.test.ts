@@ -20,6 +20,8 @@ const { prepareContext } = vi.hoisted(() => ({ prepareContext: vi.fn() }));
 vi.mock("./prepare.runtime.js", () => ({ prepareCliRunContext: prepareContext }));
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-trajectory-");
+const expectReply = (run: ReturnType<typeof runCliAgent>) =>
+  expect(run).resolves.toMatchObject({ payloads: [{ text: "fixture reply" }] });
 
 async function runCliAgent(params: RunCliAgentParams) {
   const admission = prepareSystemAgentRunAdmission({}, params.runId, "main", "trajectory-fixture");
@@ -162,9 +164,7 @@ async function fixture(
 
 it("persists a complete pure Claude CLI turn by default before resolving", async () => {
   const { context, events } = await fixture({ defaults: true });
-  await expect(runCliAgent(context.params)).resolves.toMatchObject({
-    payloads: [{ text: "fixture reply" }],
-  });
+  await expectReply(runCliAgent(context.params));
   const recorded = await events();
   expect(recorded.map((event) => event.type)).toEqual([
     "session.started",
@@ -205,19 +205,19 @@ it("still executes and cleans up when trajectory metadata capture fails", async 
   context.preparedBackend.cleanup = async () => {
     cleanedUp = true;
   };
-  await expect(runCliAgent(context.params)).resolves.toMatchObject({
-    payloads: [{ text: "fixture reply" }],
-  });
+  await expectReply(runCliAgent(context.params));
   expect(cleanedUp).toBe(true);
   expect(await events()).toEqual([]);
 });
 
-it("does not persist isolated completion into a borrowed session target", async () => {
-  const { context, events } = await fixture();
-  context.params.isolatedCompletion = true;
-  await expect(runCliAgent(context.params)).resolves.toMatchObject({
-    payloads: [{ text: "fixture reply" }],
-  });
+it.each([
+  { name: "isolated completion", options: {}, isolatedCompletion: true },
+  { name: "environment opt-out", options: { disabled: true }, isolatedCompletion: undefined },
+  { name: "run opt-out", options: { disableTrajectory: true }, isolatedCompletion: undefined },
+])("executes without persisting trajectory for $name", async ({ options, isolatedCompletion }) => {
+  const { context, events } = await fixture(options);
+  context.params.isolatedCompletion = isolatedCompletion;
+  await expectReply(runCliAgent(context.params));
   expect(await events()).toEqual([]);
 });
 
@@ -253,27 +253,9 @@ it.each([
   });
 });
 
-it("leaves trajectory disabled while still executing the CLI", async () => {
-  const { context, events } = await fixture({ disabled: true });
-  await expect(runCliAgent(context.params)).resolves.toMatchObject({
-    payloads: [{ text: "fixture reply" }],
-  });
-  expect(await events()).toEqual([]);
-});
-
-it("honors the disableTrajectory opt-out while still executing the CLI", async () => {
-  const { context, events } = await fixture({ disableTrajectory: true });
-  await expect(runCliAgent(context.params)).resolves.toMatchObject({
-    payloads: [{ text: "fixture reply" }],
-  });
-  expect(await events()).toEqual([]);
-});
-
 it("records both retry prompts but ends a recovered CLI turn only once", async () => {
   const { context, events } = await fixture({ recover: true });
-  await expect(runCliAgent(context.params)).resolves.toMatchObject({
-    payloads: [{ text: "fixture reply" }],
-  });
+  await expectReply(runCliAgent(context.params));
   const recorded = await events();
   expect(recorded.map((event) => event.type)).toEqual([
     "session.started",
