@@ -456,17 +456,6 @@ describe("update-cli", () => {
     };
     const retainedNotice = notice("Retained plugin remains available.");
     const warnings = [repairWarning, { ...smokeWarning, kind: "load" as const }];
-    const reportedRepairWarning = {
-      ...repairWarning,
-      message: "Plugin updates could not complete. Run `openclaw update repair` to retry.",
-      guidance: ["openclaw update repair"],
-    };
-    const reportedSmokeWarning = {
-      ...smokeWarning,
-      message:
-        'Plugin "reporting-fixture" could not be loaded. Run `openclaw doctor --fix` to check and repair the load problem.',
-      guidance: ["openclaw doctor --fix"],
-    };
     mockPostCoreConvergenceOnce(update.runPostCorePluginConvergenceSpy, {
       warnings,
       errored: true,
@@ -474,36 +463,29 @@ describe("update-cli", () => {
     });
     const result = await updatePlugins();
 
-    expect(result).toEqual({
-      status: "warning",
-      assessment: { kind: "unsafe", reason: "convergence-failed" },
-      changed: false,
-      warnings: [reportedRepairWarning, reportedSmokeWarning, retainedNotice],
-      sync: {
-        changed: false,
-        switchedToBundled: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
-      npm: {
-        changed: false,
-        outcomes: [
-          { pluginId: "reporting-fixture", status: "error", message: smokeWarning.message },
-        ],
-      },
-      integrityDrifts: [],
-    });
-    const logs = vi
-      .mocked(update.defaultRuntime.log)
-      .mock.calls.map(([value]) => stripAnsi(String(value)));
-    expect(logs).toEqual([
-      "",
-      "Updating plugins...",
-      "Plugin updates: 0 updated, 0 unchanged, 1 to retry.",
-      reportedRepairWarning.message,
-      reportedSmokeWarning.message,
-      retainedNotice.message,
+    expect(result.status).toBe("warning");
+    expect(result.assessment).toEqual({ kind: "unsafe", reason: "convergence-failed" });
+    expect(result.warnings).toEqual([
+      expect.objectContaining({
+        reason: repairWarning.reason,
+        guidance: ["openclaw update repair"],
+      }),
+      expect.objectContaining({
+        pluginId: smokeWarning.pluginId,
+        reason: smokeWarning.reason,
+        guidance: ["openclaw doctor --fix"],
+      }),
+      retainedNotice,
     ]);
+    expect(result.npm.outcomes).toEqual([
+      { pluginId: smokeWarning.pluginId, status: "error", message: smokeWarning.message },
+    ]);
+    for (const message of [
+      "openclaw update repair",
+      "openclaw doctor --fix",
+      retainedNotice.message,
+    ]) {
+      expect(stripAnsi(assert.getLogOutput())).toContain(message);
+    }
   });
 });

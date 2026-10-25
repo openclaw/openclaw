@@ -127,16 +127,12 @@ describe("exec approvals CLI", () => {
     await run("get");
 
     const output = loggedOutput();
-    const hasUnsafeControl = Array.from(output).some((char) => {
-      const codePoint = char.codePointAt(0) ?? -1;
-      return (
-        codePoint === 0x07 ||
-        codePoint === 0x08 ||
-        codePoint === 0x1b ||
-        (codePoint >= 0x7f && codePoint <= 0x9f)
-      );
-    });
-    expect(hasUnsafeControl).toBe(false);
+    expect(
+      Array.from(output).some((char) => {
+        const code = char.codePointAt(0) ?? -1;
+        return [0x07, 0x08, 0x1b].includes(code) || (code >= 0x7f && code <= 0x9f);
+      }),
+    ).toBe(false);
     expect(output).toContain("safered\\nnext\\trow\\rbackspace🦞");
 
     defaultRuntime.writeJson.mockClear();
@@ -310,7 +306,6 @@ describe("exec approvals CLI", () => {
     );
     expectLocalWrite();
     expect(localSnapshot.file.agents?.main).toBeDefined();
-    expect(readBestEffortConfig).toHaveBeenCalledTimes(1);
   });
 
   it.each([

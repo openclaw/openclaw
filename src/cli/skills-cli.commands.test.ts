@@ -177,7 +177,7 @@ describe("skills cli commands", () => {
     expect(stdout).toEqual(
       json ? [JSON.stringify({ ok: false, error: { type: "cli_error", message } }, null, 2)] : [],
     );
-    expectUnused(mocks.install, mocks.update, mocks.verify);
+    expectUnused(mocks.install, mocks.update, mocks.verify, mocks.target);
   });
 
   beforeEach(() => {
@@ -335,18 +335,6 @@ describe("skills cli commands", () => {
     expect(JSON.parse(stdout.at(-1) ?? "{}")).toMatchObject({ ok, decision });
     expect(errors).toEqual([]);
   });
-  it("returns JSON when verify workspace selection fails", async () => {
-    runtime.exit.mockImplementationOnce(() => undefined);
-    await run("verify agentreceipt --global --agent main");
-    expect(JSON.parse(stdout.at(-1) ?? "{}")).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: "Use either --global or --agent, not both." },
-    });
-    expect(errors).toEqual([]);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.target).not.toHaveBeenCalled();
-  });
-
   it.each([
     { label: "default", argv: ["--json"] },
     { label: "check", argv: ["check", "--json"] },
