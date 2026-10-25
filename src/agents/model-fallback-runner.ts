@@ -198,7 +198,7 @@ async function runWithModelFallbackInternal<T>(
         }),
       })
     : null;
-  const attempts: FallbackAttempt[] = [];
+  const attempts: FallbackAttempt[] = stickyFallback?.attempts ?? [];
   const profileIdsByCandidate = new Map<ModelFallbackCandidate, string[]>();
   let lastError: unknown;
   let selectionChanged = false;
@@ -518,9 +518,7 @@ async function runWithModelFallbackInternal<T>(
           requestedModel: params.model,
           stage: isPrimary ? "initial" : "fallback",
           selectionChanged,
-          fallbackReason: isPrimary
-            ? undefined
-            : (attempts.at(-1)?.reason ?? stickyFallback?.reason),
+          fallbackReason: isPrimary ? undefined : attempts.at(-1)?.reason,
         },
       },
       // Keep the lane available while the outer loop still has another candidate.

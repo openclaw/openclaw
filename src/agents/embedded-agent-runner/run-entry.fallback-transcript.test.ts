@@ -39,7 +39,6 @@ vi.mock("../harness/selection.js", () => ({
 describe("run entry durable fallback notices", () => {
   const files = useTempSessionsFixture("fallback-transcript-");
   afterEach(() => {
-    resetStickyRateLimitFallbacksForTest();
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
   });

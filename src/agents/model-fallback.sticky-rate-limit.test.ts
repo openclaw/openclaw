@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithModelFallback } from "./model-fallback-runner.js";
-import { resetStickyRateLimitFallbacksForTest } from "./model-fallback-sticky.js";
+import { MODEL_FALLBACK_SKIPPED_CODE } from "./model-fallback.types.js";
 
 const start = Date.UTC(2026, 0, 1);
 const minute = 60_000;
@@ -38,7 +38,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetStickyRateLimitFallbacksForTest();
   vi.useRealTimers();
 });
 
@@ -55,7 +54,11 @@ describe("session rate-limit fallback stickiness", () => {
 
     vi.setSystemTime(start + minute);
     const second = vi.fn(async () => "warm reply");
-    await runTurn("sticky-session", second, true);
+    const warm = await runTurn("sticky-session", second, true);
+    // The skipped selected model keeps the rate-limit reason visible to /status.
+    expect(warm.attempts).toMatchObject([
+      { model: "primary", reason: "rate_limit", code: MODEL_FALLBACK_SKIPPED_CODE },
+    ]);
     expect(second).toHaveBeenCalledExactlyOnceWith(
       "sticky-provider",
       "backup",

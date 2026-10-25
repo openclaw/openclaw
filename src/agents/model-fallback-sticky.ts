@@ -1,9 +1,10 @@
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type {
-  FallbackAttempt,
-  ModelCandidate,
-  ModelFallbackCandidate,
+import {
+  MODEL_FALLBACK_SKIPPED_CODE,
+  type FallbackAttempt,
+  type ModelCandidate,
+  type ModelFallbackCandidate,
 } from "./model-fallback.types.js";
 import { modelKey } from "./model-ref-shared.js";
 
@@ -21,7 +22,8 @@ type StickyEntry = {
 
 type StickyRateLimitFallback = {
   candidates: ModelFallbackCandidate[];
-  reason: "rate_limit" | undefined;
+  /** Seeds the run's attempts: a skipped selected model keeps the fallback reason visible. */
+  attempts: FallbackAttempt[];
   record: (winner: ModelCandidate, attempts: readonly FallbackAttempt[]) => void;
 };
 
@@ -56,7 +58,15 @@ export function takeStickyRateLimitFallback(
       : -1;
   const stickyCandidate = stickyIndex > 0 ? candidates[stickyIndex] : undefined;
   let orderedCandidates = candidates;
-  if (stickyCandidate) {
+  let skippedAttempt: FallbackAttempt | undefined;
+  if (stickyCandidate && requested) {
+    skippedAttempt = {
+      provider: requested.provider,
+      model: requested.model,
+      error: `Trying ${modelKey(stickyCandidate.provider, stickyCandidate.model)} first after a recent rate limit in this session`,
+      reason: "rate_limit",
+      code: MODEL_FALLBACK_SKIPPED_CODE,
+    };
     orderedCandidates = [
       stickyCandidate,
       ...candidates.slice(0, stickyIndex),
@@ -68,7 +78,7 @@ export function takeStickyRateLimitFallback(
   }
   return {
     candidates: orderedCandidates,
-    reason: stickyCandidate ? "rate_limit" : undefined,
+    attempts: skippedAttempt ? [skippedAttempt] : [],
     record(winner, attempts) {
       const winnerKey = modelKey(winner.provider, winner.model);
       if (!requested || winnerKey === requestedKey) {
@@ -80,6 +90,7 @@ export function takeStickyRateLimitFallback(
         !reuseSticky &&
         !attempts.some(
           (attempt) =>
+            attempt !== skippedAttempt &&
             attempt.reason === "rate_limit" &&
             modelKey(attempt.provider, attempt.model) === requestedKey,
         )
