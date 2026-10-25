@@ -67,10 +67,9 @@ async function initializeManager(
   provider = new FakeProvider(),
 ) {
   const storePath = createTestStorePath();
-  const call = makePersistedCall(callOverrides);
-  await writeCallsToStore(storePath, [call]);
+  await writeCallsToStore(storePath, [makePersistedCall(callOverrides)]);
   const manager = await restoreManager(storePath, { maxDurationSeconds }, provider);
-  return { call, manager, provider, storePath };
+  return { manager, provider, storePath };
 }
 
 async function restoreManager(
@@ -172,14 +171,8 @@ it("restores existing records through the retained runtime without a data migrat
 it("prefers active provider state before persisted fallback", async () => {
   const storePath = createTestStorePath();
   await writeCallsToStore(storePath, [
-    completedCall({
-      callId: "call-target",
-      providerCallId: "provider-completed",
-    }),
-    makePersistedCall({
-      callId: "call-active",
-      providerCallId: "call-target",
-    }),
+    completedCall({ callId: "call-target", providerCallId: "provider-completed" }),
+    makePersistedCall({ callId: "call-active", providerCallId: "call-target" }),
   ]);
   const manager = await restoreManager(storePath);
 
@@ -321,22 +314,17 @@ it("summarizes repeated restored-call verification outcomes", async () => {
 });
 
 it("uses call start as max-duration anchor for restored listening calls without answeredAt", async () => {
-  const state = "listening";
   vi.useFakeTimers();
   const now = new Date("2026-03-17T03:07:00Z").getTime();
   vi.setSystemTime(now);
   const startedAt = now - 290_000;
   const { manager, provider, storePath } = await initializeManager(
-    {
-      state,
-      startedAt,
-      answeredAt: undefined,
-    },
+    { state: "listening", startedAt, answeredAt: undefined },
     300,
   );
 
   const activeCall = requireSingleActiveCall(manager);
-  expect(activeCall).toMatchObject({ state, answeredAt: startedAt });
+  expect(activeCall).toMatchObject({ state: "listening", answeredAt: startedAt });
   expect(
     (await loadActiveCallsFromStore(storePath)).activeCalls.get(activeCall.callId)?.answeredAt,
   ).toBe(startedAt);
@@ -349,9 +337,7 @@ it("uses call start as max-duration anchor for restored listening calls without 
   await vi.advanceTimersByTimeAsync(1_100);
   expect(endCall).toHaveBeenCalledOnce();
   await requireRecord(endCall.mock.results[0], "timeout completion").value;
-  expect(manager.getActiveCalls()).toHaveLength(0);
-  const hangupCall = requireSingleHangupCall(provider);
-  expect(hangupCall.reason).toBe("timeout");
+  await expectExpired(manager, provider, storePath);
 });
 
 it("keeps terminal identity when a replay key is retained or evicted", async () => {

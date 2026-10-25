@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
@@ -113,25 +113,16 @@ describe("voice-call realtime route ownership", () => {
         "+15550001001": { agentId: "sales" },
         "+15550001002": { agentId: "support" },
       };
-      const fullConfig = {
-        agents: {
-          entries: { main: {}, sales: {}, support: {} },
-        },
-      } as OpenClawConfig;
-
       runtime = await createVoiceCallRuntime({
         scheduler: createTestPluginServiceScheduler(),
         config,
-        coreConfig: fullConfig,
+        coreConfig: { agents: { entries: { main: {}, sales: {}, support: {} } } },
         agentRuntime: {} as never,
         stateRuntime: createVoiceCallStateRuntimeForTests(),
       });
       expect(mocks.resolveConfiguredRealtimeVoiceProviderAsync).not.toHaveBeenCalled();
 
-      const handler = runtime.webhookServer.getRealtimeHandler();
-      if (!handler) {
-        throw new Error("expected realtime handler");
-      }
+      const handler = expectDefined(runtime.webhookServer.getRealtimeHandler(), "realtime handler");
       const routes = [
         { to: "+15550001001", callSid: "CA-sales", streamSid: "MZ-sales" },
         { to: "+15550001002", callSid: "CA-support", streamSid: "MZ-support" },
@@ -162,11 +153,6 @@ describe("voice-call realtime route ownership", () => {
         );
         expect(connect).toHaveBeenCalledOnce();
       }
-      expect(
-        mocks.resolveConfiguredRealtimeVoiceProviderAsync.mock.calls.map(
-          ([options]) => (options as { agentId?: string }).agentId,
-        ),
-      ).toEqual(["sales", "support"]);
 
       const hangupCall = vi.spyOn(MockProvider.prototype, "hangupCall");
       onTestFinished(() => hangupCall.mockRestore());

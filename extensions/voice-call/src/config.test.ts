@@ -211,10 +211,7 @@ describe("validateProviderConfig", () => {
   it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
     const config = normalizeVoiceCallConfig({
       ...createBaseConfig("twilio"),
-      twilio: {
-        accountSid: "AC123",
-        authToken: envRef("TWILIO_AUTH_TOKEN"),
-      },
+      twilio: { accountSid: "AC123", authToken: envRef("TWILIO_AUTH_TOKEN") },
     });
 
     expect(config.twilio?.authToken).toEqual(envRef("TWILIO_AUTH_TOKEN"));
@@ -247,7 +244,6 @@ describe("validateProviderConfig", () => {
       telnyx: { ...missingPublicKey.telnyx, publicKey: "public-key" },
     };
     expect(validateProviderConfig(withPublicKey)).toEqual(valid);
-
     const skippedVerification = {
       ...missingPublicKey,
       inboundPolicy: "disabled" as const,
@@ -301,10 +297,7 @@ describe("validateProviderConfig", () => {
   it("accepts streaming.enabled with provider=twilio", () => {
     const config = createBaseConfig("twilio");
     config.streaming.enabled = true;
-    config.twilio = {
-      accountSid: "AC123",
-      authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
-    };
+    config.twilio = { accountSid: "AC123", authToken: envRef("TWILIO_AUTH_TOKEN") };
 
     expect(validateProviderConfig(config)).toEqual(valid);
   });
@@ -330,10 +323,7 @@ describe("Tailscale external HTTPS port", () => {
     { name: "legacy mode", input: { tailscale: { mode: "funnel", port: 4545 } } },
     {
       name: "unified provider",
-      input: {
-        tailscale: { port: 4545 },
-        tunnel: { provider: "tailscale-funnel" },
-      },
+      input: { tailscale: { port: 4545 }, tunnel: { provider: "tailscale-funnel" } },
     },
   ])("rejects unsupported Funnel port for $name", ({ input }) => {
     expect.assertions(2);
@@ -341,15 +331,14 @@ describe("Tailscale external HTTPS port", () => {
       normalizeVoiceCallConfig(input);
     } catch (error) {
       expect(error).toBeInstanceOf(z.ZodError);
-      if (!(error instanceof z.ZodError)) {
-        throw error;
-      }
-      expect(error.issues).toContainEqual(
-        expect.objectContaining({
-          path: ["tailscale", "port"],
-          message: "Tailscale Funnel HTTPS port must be one of 443, 8443, 10000",
-        }),
-      );
+      expect(error).toMatchObject({
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            path: ["tailscale", "port"],
+            message: "Tailscale Funnel HTTPS port must be one of 443, 8443, 10000",
+          }),
+        ]),
+      });
     }
   });
 });
@@ -407,27 +396,18 @@ describe("resolveVoiceCallConfig session routing", () => {
       ["voice:call:legacy-call", "agent:voice:voice:call:legacy-call"],
       ["meet-room-1", "agent:voice:meet-room-1"],
       ["agent:main:shared-room", "agent:voice:agent:main:shared-room"],
+      ["agent:other:Matrix:Channel:!AbC:x", "agent:voice:agent:other:matrix:channel:!AbC:x"],
       [
-        "agent:other:Matrix:Channel:!RoomAbC:example.org",
-        "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org",
-      ],
-      [
-        "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org",
-        "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org",
+        "agent:voice:agent:other:matrix:channel:!AbC:x",
+        "agent:voice:agent:other:matrix:channel:!AbC:x",
       ],
       ["Signal:Group:AbC123=", "agent:voice:signal:group:AbC123="],
       ["agent:broken", "agent:voice:agent:broken"],
       ["agent::broken", "agent:voice:agent::broken"],
-      [
-        "agent::Matrix:Channel:!RoomAbC:example.org",
-        "agent:voice:agent::matrix:channel:!RoomAbC:example.org",
-      ],
+      ["agent::Matrix:Channel:!AbC:x", "agent:voice:agent::matrix:channel:!AbC:x"],
       ["agent:other:room::part", "agent:voice:agent:other:room::part"],
       ["agent:voice:room::part", "agent:voice:room::part"],
-      [
-        "agent:voice::Matrix:Channel:!RoomAbC:example.org",
-        "agent:voice:agent:voice::matrix:channel:!RoomAbC:example.org",
-      ],
+      ["agent:voice::Matrix:Channel:!AbC:x", "agent:voice:agent:voice::matrix:channel:!AbC:x"],
       ["agent:bad/id:room", "agent:voice:agent:bad/id:room"],
     ] as const) {
       expect(resolveSession(config, { explicitSessionKey: sessionKey })).toBe(expected);
@@ -483,15 +463,11 @@ describe("resolveVoiceCallConfig session routing", () => {
   });
 
   it("falls back to global voice settings when no per-number route matches", () => {
-    const config = sessionConfig({
-      inboundGreeting: "Hello from global.",
-      numbers: { "+15550001111": { inboundGreeting: "Hello from route." } },
-    });
+    const config = sessionConfig({ numbers: { "+15550001111": { inboundGreeting: "Hello." } } });
 
     const effective = resolveVoiceCallEffectiveConfig(config, "+15550002222");
     expect(effective.numberRouteKey).toBeUndefined();
     expect(effective.config).toBe(config);
-    expect(effective.config.inboundGreeting).toBe("Hello from global.");
   });
 
   it("uses dialed-number fallback only for inbound calls", () => {
@@ -510,20 +486,17 @@ describe("resolveVoiceCallConfig session routing", () => {
 
 describe("normalizeVoiceCallConfig", () => {
   it("drops undefined map entries without dropping configured routes or provider secrets", () => {
+    const numbers = { "+15550001111": { inboundGreeting: "Hello." } };
+    const streaming = { custom: { apiKey: "synthetic-token" } };
+    const realtime = { custom: { model: "test-model" } };
     const normalized = normalizeVoiceCallConfig({
-      numbers: {
-        "+15550001111": { inboundGreeting: "Hello from route." },
-        "+15550002222": undefined,
-      },
-      streaming: { providers: { absent: undefined, custom: { apiKey: "synthetic-token" } } },
-      realtime: { providers: { absent: undefined, custom: { model: "test-model" } } },
+      numbers: { ...numbers, "+15550002222": undefined },
+      streaming: { providers: { ...streaming, absent: undefined } },
+      realtime: { providers: { ...realtime, absent: undefined } },
     });
-
-    expect(normalized.numbers).toEqual({
-      "+15550001111": { inboundGreeting: "Hello from route." },
-    });
-    expect(normalized.streaming.providers).toEqual({ custom: { apiKey: "synthetic-token" } });
-    expect(normalized.realtime.providers).toEqual({ custom: { model: "test-model" } });
+    expect(normalized.numbers).toEqual(numbers);
+    expect(normalized.streaming.providers).toEqual(streaming);
+    expect(normalized.realtime.providers).toEqual(realtime);
   });
 
   it.each([

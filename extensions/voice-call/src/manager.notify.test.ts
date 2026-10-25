@@ -204,9 +204,8 @@ describe("CallManager notify and mapping", () => {
       metadata: { initialMessage: "Retry me" },
     });
     await answerCall(manager, callId, "evt-retry-2");
-    const afterSuccess = requireCall(manager, callId);
     expect(provider.playTtsCalls).toHaveLength(2);
-    expect(afterSuccess.metadata).not.toHaveProperty("initialMessage");
+    expect(requireCall(manager, callId).metadata).not.toHaveProperty("initialMessage");
     await expectNotifyHangup(manager, provider, callId);
   });
 
@@ -227,8 +226,7 @@ describe("CallManager notify and mapping", () => {
       provider.releaseCurrentPlayback();
       await Promise.all(playbacks);
     }
-    const call = requireCall(manager, callId);
-    expect(call.metadata).not.toHaveProperty("initialMessage");
+    expect(requireCall(manager, callId).metadata).not.toHaveProperty("initialMessage");
     expectFirstPlayTtsText(provider, "Hello");
   });
 });
@@ -358,7 +356,6 @@ describe("CallManager inbound allowlist", () => {
     await Promise.resolve();
     await manager.processEvent(inbound("provider-flaky", "+15553333333", "call.ringing"));
     expect(manager.getCallByProviderCallId("provider-flaky")).toBeUndefined();
-    expect(provider.hangupCalls).toHaveLength(2);
     expect(provider.hangupCalls.map((call) => call.providerCallId)).toEqual([
       "provider-flaky",
       "provider-flaky",

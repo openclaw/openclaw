@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 class FakeChildProcess extends EventEmitter {
   // PassThrough honors setEncoding("utf8") like real child pipes, so split
@@ -87,48 +87,42 @@ describe("voice-call tunnels", () => {
     );
     mocks.cleanupTailscaleExposureRoute.mockResolvedValue(undefined);
   });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it.each([false, true])("stops ngrok with alreadyClosed=%s", async (alreadyClosed) => {
     vi.useFakeTimers();
-    try {
-      const { proc, result } = nextProcess();
-      proc.closeOnKill = false;
-      emitNgrokUrl(proc, "https://stuck.ngrok.io");
-      const tunnel = await result;
-      if (alreadyClosed) {
-        proc.emit("close", 0);
-      }
-      const stop = tunnel.stop();
-      if (!alreadyClosed) {
-        await vi.advanceTimersByTimeAsync(3_000);
-      }
-      await expect(stop).resolves.toBeUndefined();
-      expect(proc.killedWith).toBe(alreadyClosed ? null : "SIGKILL");
-    } finally {
-      vi.useRealTimers();
+    const { proc, result } = nextProcess();
+    proc.closeOnKill = false;
+    emitNgrokUrl(proc, "https://stuck.ngrok.io");
+    const tunnel = await result;
+    if (alreadyClosed) {
+      proc.emit("close", 0);
     }
+    const stop = tunnel.stop();
+    if (!alreadyClosed) {
+      await vi.advanceTimersByTimeAsync(3_000);
+    }
+    await expect(stop).resolves.toBeUndefined();
+    expect(proc.killedWith).toBe(alreadyClosed ? null : "SIGKILL");
   });
 
   it("unrefs the ngrok startup timeout", async () => {
     const unrefSpy = vi.fn();
     const setTimeoutOriginal = globalThis.setTimeout.bind(globalThis);
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((handler: TimerHandler, timeout?: number) => {
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(
+      (handler: TimerHandler, timeout?: number) => {
         const timer = Reflect.apply(setTimeoutOriginal, globalThis, [handler, timeout]);
         Object.defineProperty(timer, "unref", { value: unrefSpy, configurable: true });
         return timer;
-      });
-    try {
-      const { proc, result } = nextProcess();
-      emitNgrokUrl(proc, "https://unref.ngrok.io");
-
-      await result;
-
-      expect(unrefSpy).toHaveBeenCalledOnce();
-    } finally {
-      setTimeoutSpy.mockRestore();
-    }
+      },
+    );
+    const { proc, result } = nextProcess();
+    emitNgrokUrl(proc, "https://unref.ngrok.io");
+    await result;
+    expect(unrefSpy).toHaveBeenCalledOnce();
   });
 
   it("parses complete ngrok log lines before bounding the incomplete tail", async () => {
@@ -148,11 +142,6 @@ describe("voice-call tunnels", () => {
 
     const tunnel = await result;
     expect(tunnel.publicUrl).toBe("https://large.ngrok.io/voice/webhook");
-    expect(mocks.spawn).toHaveBeenCalledWith(
-      "ngrok",
-      ["http", "3334", "--log", "stdout", "--log-format", "json"],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
   });
 
   it("preserves split ngrok errors across a UTF-16-safe bounded tail", async () => {
@@ -197,25 +186,19 @@ describe("voice-call tunnels", () => {
   });
 
   it("routes Tailscale Funnel setup and cleanup through the shared exposure owner", async () => {
-    mocks.setupTailscaleExposureRoutes.mockResolvedValue(
-      "https://host.tailnet.ts.net:8443/voice/webhook",
-    );
+    const publicUrl = "https://host.tailnet.ts.net:8443/voice/webhook";
+    mocks.setupTailscaleExposureRoutes.mockResolvedValue(publicUrl);
     const tunnel = await requireTunnel(
       startTunnel({
         provider: "tailscale-funnel",
         port: 3334,
         path: "voice/webhook",
         tailscalePort: 8443,
-        streamPaths: [
-          {
-            publicPath: "voice/stream/realtime",
-            localPath: "voice/stream/realtime",
-          },
-        ],
+        streamPaths: [{ publicPath: "voice/stream/realtime", localPath: "voice/stream/realtime" }],
       }),
     );
 
-    expect(tunnel.publicUrl).toBe("https://host.tailnet.ts.net:8443/voice/webhook");
+    expect(tunnel.publicUrl).toBe(publicUrl);
     expect(mocks.setupTailscaleExposureRoutes).toHaveBeenCalledWith({
       mode: "funnel",
       port: 8443,

@@ -79,8 +79,7 @@ async function startCall(streaming = false) {
   });
   config.serve.port = 0;
   const provider = new SpeechProvider(streaming ? "twilio" : "telnyx");
-  const ctx = state.createContext({ config });
-  const manager = new CallManager(config, ctx.storePath);
+  const manager = new CallManager(config, state.createContext({ config }).storePath);
   managers.push(manager);
   const createGuard = manager.createAutoResponseGuard.bind(manager);
   vi.spyOn(manager, "createAutoResponseGuard").mockImplementation((call) => {
@@ -191,6 +190,17 @@ async function withPausedPersistence(
 }
 
 type TestCall = Awaited<ReturnType<typeof startCall>>;
+async function replaceStream() {
+  const call = await startCall(true);
+  const old = await call.openStream("stream-old");
+  old.callbacks.onTranscript?.("old question");
+  const first = await responseAt(0);
+  const replacement = await call.openStream("stream-new");
+  replacement.callbacks.onTranscript?.("new question");
+  const current = await responseAt(1);
+  return { call, old, first, replacement, current };
+}
+
 async function deliverAcrossIgnoredEvent(
   call: TestCall,
   first: Awaited<ReturnType<typeof responseAt>>,
@@ -285,13 +295,10 @@ describe("automatic phone reply ownership", () => {
       });
       callbacks.onTranscript?.("replacement question");
       await vi.waitFor(() =>
-        expect(mocks.generate).toHaveBeenCalledWith(
-          expect.objectContaining({ userMessage: "replacement question" }),
-        ),
+        expect(mocks.generate.mock.calls.map(([params]) => params.userMessage)).toEqual([
+          "replacement question",
+        ]),
       );
-      expect(mocks.generate.mock.calls.map(([params]) => params.userMessage)).toEqual([
-        "replacement question",
-      ]);
       expect(call.manager.getCall(call.callId)?.transcript.map((entry) => entry.text)).toEqual([
         "obsolete question",
         "replacement question",
@@ -357,13 +364,7 @@ describe("automatic phone reply ownership", () => {
   });
 
   it("ignores a late final transcript from a predecessor stream", async () => {
-    const call = await startCall(true);
-    const old = await call.openStream("stream-old");
-    old.callbacks.onTranscript?.("old question");
-    await responseAt(0);
-    const replacement = await call.openStream("stream-new");
-    replacement.callbacks.onTranscript?.("new question");
-    const current = await responseAt(1);
+    const { call, old, current } = await replaceStream();
     call.provider.clearTtsQueue.mockClear();
     old.callbacks.onTranscript?.("late old transcript");
     expect(await current.early("current reply")).toBe(true);
@@ -374,18 +375,12 @@ describe("automatic phone reply ownership", () => {
   });
 
   it("fences a disconnected stream's generation without disrupting its replacement", async () => {
-    const call = await startCall(true);
-    const old = await call.openStream("stream-old");
-    old.callbacks.onTranscript?.("old question");
-    const first = await responseAt(0);
-    const replacement = await call.openStream("stream-new");
-    replacement.callbacks.onTranscript?.("new question");
-    const second = await responseAt(1);
+    const { call, old, first, replacement, current } = await replaceStream();
     const closed = waitForClose(old.ws);
     old.ws.close();
     await closed;
     await first.finish("obsolete reply");
-    await second.finish("replacement reply");
+    await current.finish("replacement reply");
     call.expectPlayback("replacement reply");
     const disconnected = waitForClose(replacement.ws);
     replacement.callbacks.onTranscript?.("last question");

@@ -16,6 +16,8 @@ import {
 import type { CallRecord } from "./types.js";
 
 type CallDeliveryMessage = { sessionKey: string; text: string; idempotencyKey: string };
+const requester = "agent:owner:telegram:direct:42";
+const brief = { task: "Book a plumber", approvals: "No deposit" };
 
 function createDelivery(
   manager: CallManager,
@@ -60,9 +62,6 @@ function createDelivery(
   });
 }
 
-// These manager scenarios cover lifecycle races that a real carrier cannot reliably trigger.
-// Required outcomes: terminal redelivery never duplicates reports; pending final speech flushes
-// before the report; failed sends are recorded; stopping joins accepted work and clears timers.
 describe("requester call delivery", () => {
   afterEach(() => vi.useRealTimers());
 
@@ -82,18 +81,15 @@ describe("requester call delivery", () => {
     });
     const delivery = createDelivery(manager, config, messages, summarize, beforeDeliver);
     const result = await manager.initiateCall("+15550000001", "voice-session", {
-      requesterSessionKey: "agent:owner:telegram:direct:42",
+      requesterSessionKey: requester,
     });
     const call = expectDefined(manager.getCall(result.callId), "initiated call");
-    call.metadata = {
-      ...call.metadata,
-      brief: { task: "Book a plumber", approvals: "No deposit" },
-    };
+    call.metadata = { ...call.metadata, brief };
     return { manager, call, config, delivery, messages, storePath, summarize };
   }
 
   async function speech(
-    manager: Awaited<ReturnType<typeof setup>>["manager"],
+    manager: CallManager,
     call: CallRecord,
     speaker: "bot" | "user",
     text: string,
@@ -110,7 +106,7 @@ describe("requester call delivery", () => {
     });
   }
 
-  async function end(manager: Awaited<ReturnType<typeof setup>>["manager"], call: CallRecord) {
+  async function end(manager: CallManager, call: CallRecord) {
     await manager.processEvent({
       id: "ended",
       callId: call.callId,
@@ -118,6 +114,21 @@ describe("requester call delivery", () => {
       type: "call.ended",
       reason: "hangup-user",
     });
+  }
+
+  async function finish(
+    manager: CallManager,
+    call: CallRecord,
+    delivery: ReturnType<typeof createDelivery>,
+  ) {
+    await end(manager, call);
+    await delivery.observe(call);
+    await delivery.stop();
+  }
+
+  function setupLive() {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    return setup({ live: { transcript: true, minIntervalMs: 1000 } });
   }
 
   it.each([true, false])(
@@ -138,15 +149,13 @@ describe("requester call delivery", () => {
       await speech(manager, call, "bot", "Can you visit Friday?");
       await speech(manager, call, "user", "Friday at 09:00, reference P123.");
       await end(manager, call);
-      await end(manager, call);
-      await delivery.observe(call);
-      await delivery.stop();
+      await finish(manager, call, delivery);
       expect(messages).toHaveLength(1);
       expect(messages[0]).toMatchObject({
-        sessionKey: "agent:owner:telegram:direct:42",
+        sessionKey: requester,
         idempotencyKey: `voice-call:${call.callId}:report:0`,
       });
-      const { text } = expectDefined(messages[0], "first delivery message");
+      const text = messages[0]?.text;
       for (const line of [
         "Achieved:",
         "End reason: hangup-user",
@@ -158,22 +167,16 @@ describe("requester call delivery", () => {
       ]) {
         expect(text).toContain(line);
       }
-      expect(text.includes("reference P123")).toBe(includeTranscript);
+      expect(text?.includes("reference P123")).toBe(includeTranscript);
       expect(summarize).toHaveBeenCalledOnce();
-      expect(expectDefined(summarize.mock.calls[0], "call summary request")[0].message).toContain(
-        JSON.stringify({ task: "Book a plumber", approvals: "No deposit" }),
-      );
-      expect(
-        (await manager.getCallFromMemoryOrStore(call.callId))?.metadata?.callReport,
-      ).toMatchObject({ status: "delivered" });
+      expect(summarize.mock.calls[0]?.[0].message).toContain(JSON.stringify(brief));
+      const saved = await manager.getCallFromMemoryOrStore(call.callId);
+      expect(saved?.metadata?.callReport).toMatchObject({ status: "delivered" });
     },
   );
 
   it("batches only final speech from both sides and flushes before the report", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { manager, call, delivery, messages } = await setup({
-      live: { transcript: true, minIntervalMs: 1000 },
-    });
+    const { manager, call, delivery, messages } = await setupLive();
     await manager.processEvent({
       id: "partial",
       callId: call.callId,
@@ -188,29 +191,22 @@ describe("requester call delivery", () => {
     await vi.advanceTimersByTimeAsync(1000);
     // The batch position is persisted before sending, so the send follows a store write.
     await vi.waitFor(() => expect(messages).toHaveLength(1));
-    const { text } = expectDefined(messages[0], "first delivery message");
+    const text = messages[0]?.text;
     expect(text).toContain("Callee: Hello");
     expect(text).toContain("Assistant: Can you visit Friday?");
     expect(text).not.toContain("partial");
     await speech(manager, call, "user", "Friday at 09:00");
-    await end(manager, call);
-    await delivery.observe(call);
-    await delivery.stop();
+    await finish(manager, call, delivery);
     expect(messages.map((message) => message.idempotencyKey.includes(":live:"))).toEqual([
       true,
       true,
       false,
     ]);
-    expect(expectDefined(messages[1], "terminal live transcript").text).toContain(
-      "Friday at 09:00",
-    );
+    expect(messages[1]?.text).toContain("Friday at 09:00");
   });
 
   it("resumes live transcript batches after a restart without resending earlier lines", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { manager, call, config, delivery, messages, storePath } = await setup({
-      live: { transcript: true, minIntervalMs: 1000 },
-    });
+    const { manager, call, config, delivery, messages, storePath } = await setupLive();
     await speech(manager, call, "user", "Hello");
     await speech(manager, call, "bot", "Can you visit Friday?");
     await vi.advanceTimersByTimeAsync(1000);
@@ -232,7 +228,7 @@ describe("requester call delivery", () => {
     await nextDelivery.stop();
 
     expect(resumed).toHaveLength(1);
-    const text = expectDefined(resumed[0], "resumed live batch").text;
+    const text = resumed[0]?.text;
     expect(text).toContain("Callee: Friday at 09:00");
     expect(text).not.toContain("Hello");
     expect(text).not.toContain("Can you visit Friday?");
@@ -240,17 +236,13 @@ describe("requester call delivery", () => {
 
   it("reports inbound calls only to their configured session", async () => {
     const { manager, call, delivery, messages } = await setup({
-      reports: { enabled: true, inboundSessionKey: "agent:owner:telegram:direct:42" },
+      reports: { enabled: true, inboundSessionKey: requester },
     });
     call.direction = "inbound";
     delete call.metadata?.requesterSessionKey;
     delete call.sessionKey;
-    await end(manager, call);
-    await delivery.observe(call);
-    await delivery.stop();
-    expect(expectDefined(messages[0], "first delivery message").sessionKey).toBe(
-      "agent:owner:telegram:direct:42",
-    );
+    await finish(manager, call, delivery);
+    expect(messages[0]?.sessionKey).toBe(requester);
   });
 
   it("records interrupted live delivery without replaying its uncertain transcript batch", async () => {
@@ -311,36 +303,24 @@ describe("requester call delivery", () => {
     };
     await end(manager, call);
     await delivery.observe(call);
-    expect(expectDefined(messages[0], "first delivery message").text).toContain(
-      "Assistant: Confirmed Friday at 09:00",
-    );
+    expect(messages[0]?.text).toContain("Assistant: Confirmed Friday at 09:00");
     await delivery.stop();
   });
 
   it("records a failed report and still settles call shutdown", async () => {
-    const { manager, call } = await setup();
-    const delivery = createDelivery(
-      manager,
-      normalizeVoiceCallConfig({ reports: { enabled: true } }),
-      [],
-      undefined,
-      async () => {
-        throw new Error("session route unavailable");
-      },
-    );
-    await end(manager, call);
-    await delivery.observe(call);
-    await delivery.stop();
-    expect(
-      (await manager.getCallFromMemoryOrStore(call.callId))?.metadata?.callReport,
-    ).toMatchObject({ status: "failed", error: "session route unavailable" });
+    const { manager, call, delivery } = await setup({}, async () => {
+      throw new Error("session route unavailable");
+    });
+    await finish(manager, call, delivery);
+    const saved = await manager.getCallFromMemoryOrStore(call.callId);
+    expect(saved?.metadata?.callReport).toMatchObject({
+      status: "failed",
+      error: "session route unavailable",
+    });
   });
 
   it("stop cancels delayed live batches and ignores later call updates", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { manager, call, delivery, messages } = await setup({
-      live: { transcript: true, minIntervalMs: 1000 },
-    });
+    const { manager, call, delivery, messages } = await setupLive();
     await speech(manager, call, "user", "Hello");
     await delivery.stop();
     await vi.advanceTimersByTimeAsync(1000);

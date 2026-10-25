@@ -24,7 +24,7 @@ import { findCallInStore } from "./manager/store.js";
 import * as callStore from "./manager/store.js";
 import { setVoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
-import { CallRecordSchema, type InitiateCallInput } from "./types.js";
+import { CallRecordSchema, type CallRecord, type InitiateCallInput } from "./types.js";
 import { speakOnRealtimeBridge } from "./webhook/realtime-call-session-control.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
@@ -221,6 +221,16 @@ async function createDelayedStore(
   };
 }
 
+function answeredEvent(call: CallRecord, id: string) {
+  return {
+    id,
+    type: "call.answered" as const,
+    callId: call.callId,
+    providerCallId: call.providerCallId,
+    timestamp: Date.now(),
+  };
+}
+
 it("reserves pending capacity without publishing or dialing an uncommitted call", async () => {
   const { manager, provider, holdNextWrite } = await createDelayedStore();
   const dial = vi.spyOn(provider, "initiateCall");
@@ -408,50 +418,37 @@ it.each(["committed", "failed", "retired"] as const)(
 );
 
 it("keeps failed event drafts private and admits a duplicate only after rollback", async () => {
-  const { manager, storePath, holdNextWrite } = await createDelayedStore();
+  const { manager, read, holdNextWrite } = await createDelayedStore();
   const placement = await manager.initiateCall("+15550000001");
   const call = manager.getCall(placement.callId)!;
   const gate = holdNextWrite();
-  const event = {
-    id: "answered-replay",
-    type: "call.answered" as const,
-    callId: call.callId,
-    providerCallId: call.providerCallId,
-    timestamp: Date.now(),
-  };
+  const event = answeredEvent(call, "answered-replay");
   const first = manager.processEvent(event);
   void first.catch(() => {});
   await gate.entered;
   const second = manager.processEvent({ ...event });
-  expect(manager.getCall(call.callId) === call).toBe(true);
-  expect(call.state).toBe("initiated");
-  expect(call.answeredAt).toBeUndefined();
+  expect(manager.getCall(call.callId)).toBe(call);
+  expect(call).toMatchObject({ state: "initiated", answeredAt: undefined });
   expect(call.processedEventIds).not.toContain(event.id);
   gate.fail();
   await expect(first).rejects.toThrow("Synthetic delayed persistence failure");
   await expect(second).resolves.toMatchObject({ kind: "processed" });
-  expect(manager.getCall(call.callId) === call).toBe(true);
+  expect(manager.getCall(call.callId)).toBe(call);
   expect(call.state).toBe("answered");
   expect(call.processedEventIds.filter((id) => id === event.id)).toHaveLength(1);
   resetPluginStateStoreForTests();
-  expect((await findCallInStore(storePath, call.callId))?.state).toBe("answered");
+  expect((await read(call.callId))?.state).toBe("answered");
 });
 
 it("drains an admitted event on stop without starting late playback or accepting new events", async () => {
-  const { manager, provider, storePath, holdNextWrite } = await createDelayedStore();
+  const { manager, provider, read, holdNextWrite } = await createDelayedStore();
   const placement = await manager.initiateCall("+15550000001", undefined, {
     mode: "notify",
     message: "Synthetic notification",
   });
   const call = manager.getCall(placement.callId)!;
   const gate = holdNextWrite();
-  const event = manager.processEvent({
-    id: "stop-during-answered",
-    type: "call.answered",
-    callId: call.callId,
-    providerCallId: call.providerCallId,
-    timestamp: Date.now(),
-  });
+  const event = manager.processEvent(answeredEvent(call, "stop-during-answered"));
   await gate.entered;
   let stopped = false;
   const stop = manager.stop().then(() => {
@@ -472,7 +469,7 @@ it("drains an admitted event on stop without starting late playback or accepting
   await stop;
   expect(provider.playTtsCalls).toHaveLength(0);
   resetPluginStateStoreForTests();
-  expect((await findCallInStore(storePath, call.callId))?.state).toBe("answered");
+  expect((await read(call.callId))?.state).toBe("answered");
 });
 
 it("does not hang up a rejected inbound call after stop begins during persistence", async () => {

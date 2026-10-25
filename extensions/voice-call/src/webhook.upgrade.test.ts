@@ -233,7 +233,7 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
   });
 });
 
-function rejectedUpgradeHarness() {
+function rejectedUpgradeHarness(closing = false) {
   const config = normalizeVoiceCallConfig({ realtime: { enabled: true } });
   const resolveRegistration = vi.fn((): never => {
     throw new Error("Rejected upgrades must not acquire a provider");
@@ -246,13 +246,6 @@ function rejectedUpgradeHarness() {
     "/voice/webhook",
     streamDisconnectLifecycle,
   );
-  onTestFinished(async () => {
-    try {
-      await handler.close();
-    } finally {
-      streamDisconnectLifecycle.close();
-    }
-  });
   let flush = () => {};
   let response = "";
   const socket = new Duplex({
@@ -262,8 +255,20 @@ function rejectedUpgradeHarness() {
       flush = callback;
     },
   });
+  const shutdown = createDeferred<void>();
+  const pendingClose = closing ? handler.close(shutdown.promise) : undefined;
+  onTestFinished(async () => {
+    flush();
+    socket.destroy();
+    shutdown.resolve();
+    try {
+      await pendingClose;
+      await handler.close();
+    } finally {
+      streamDisconnectLifecycle.close();
+    }
+  });
   return {
-    handler,
     resolveRegistration,
     socket,
     flush: () => flush(),
@@ -284,39 +289,24 @@ describe("realtime upgrade rejection", () => {
   ] as const)(
     "flushes HTTP %s before closing without acquiring a provider",
     async (status, reason) => {
-      const { handler, resolveRegistration, socket, response, flush, reject } =
-        rejectedUpgradeHarness();
-      const shutdown = createDeferred<void>();
-      const closing = status === 503 ? handler.close(shutdown.promise) : undefined;
+      const { resolveRegistration, socket, response, flush, reject } = rejectedUpgradeHarness(
+        status === 503,
+      );
       const closed = once(socket, "close");
-      try {
-        reject();
-        expect(response()).toBe(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
-        expect(socket.destroyed).toBe(false);
-        expect(resolveRegistration).not.toHaveBeenCalled();
-        flush();
-        await closed;
-        expect(socket.destroyed).toBe(true);
-      } finally {
-        flush();
-        socket.destroy();
-        shutdown.resolve();
-        await closing;
-        await handler.close();
-      }
+      reject();
+      expect(response()).toBe(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\n\r\n`);
+      expect(socket.destroyed).toBe(false);
+      expect(resolveRegistration).not.toHaveBeenCalled();
+      flush();
+      await closed;
+      expect(socket.destroyed).toBe(true);
     },
   );
 
   it("owns raw socket errors while rejection bytes are buffered", async () => {
-    const { handler, socket, flush, reject } = rejectedUpgradeHarness();
-    try {
-      reject();
-      expect(() => socket.emit("error", new Error("synthetic raw socket failure"))).not.toThrow();
-      expect(socket.destroyed).toBe(true);
-    } finally {
-      flush();
-      socket.destroy();
-      await handler.close();
-    }
+    const { socket, reject } = rejectedUpgradeHarness();
+    reject();
+    expect(() => socket.emit("error", new Error("synthetic raw socket failure"))).not.toThrow();
+    expect(socket.destroyed).toBe(true);
   });
 });
