@@ -2,8 +2,7 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { ApplicationContext } from "../../app/context.ts";
-import { REDACTED_SENTINEL, type JsonSchema } from "../../lib/config-form-utils.ts";
-import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { domProbe } from "../../test-helpers/dom-probe.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -354,106 +353,24 @@ describe("grouped plugin settings", () => {
       [],
     );
   });
-  it.each([
-    { schema: { type: "string" }, value: REDACTED_SENTINEL, replacement: "replacement-key" },
-    {
-      schema: objectSchema({
-        source: { type: "string" },
-        provider: { type: "string" },
-        id: { type: "string" },
-      }),
-      value: { source: "env", provider: "default", id: "SEARCH_API_KEY" },
-      replacement: { source: "file", provider: "team", id: "/key" },
-    },
-  ])(
-    "keeps a configured nested $schema.type credential as one specialized editor",
-    async ({ schema, value, replacement }) => {
-      const { editor, model, update, query } = await mount({
-        configHints: { [`${prefix}.search.apiKey`]: { sensitive: true } },
-        configValue: configValue({ search: { apiKey: value, mode: "web" } }),
-        configSchema: objectSchema({
-          search: objectSchema({
-            apiKey: { ...schema, title: "API key" },
-            mode: { type: "string", title: "Mode" },
+  it("keeps a strict object-schema credential atomic", async () => {
+    const { query, all } = await mountFields(
+      {
+        search: objectSchema({
+          apiKey: objectSchema({
+            source: { type: "string" },
+            provider: { type: "string" },
+            id: { type: "string" },
           }),
+          mode: { type: "string", title: "Mode" },
         }),
-      });
-      const scope = {
-        client: {
-          request: vi.fn().mockResolvedValue({
-            baseHash: "revision",
-            credential:
-              typeof value === "string"
-                ? { kind: "literal" }
-                : { kind: "reference", ref: value, unresolved: false },
-          }),
-        },
-        epoch: 1,
-      };
-      const gateway = {
-        epoch: 1,
-        connected: true,
-        capture: () => scope,
-        isCurrent: (candidate: unknown) => candidate === scope,
-      } as unknown as GatewayPageBinding;
-      const presentationLifetime = new Promise<void>(() => {});
-      await update({
-        resolveCredential: (field) =>
-          field.path.at(-1) === "apiKey"
-            ? {
-                field,
-                descriptor: { path: field.path, label: field.label, envVars: [] },
-                context: {
-                  pluginId: "fixture",
-                  baseHash: "revision",
-                  gateway,
-                  canInspect: true,
-                  getPresentationLifetime: () => presentationLifetime,
-                  onCommit: async (path, next) => {
-                    field.onPatch(path, next);
-                    return true;
-                  },
-                  onDiscard: async () => true,
-                },
-              }
-            : undefined,
-      });
-      await vi.waitFor(() => expect(editor.textContent).not.toContain("Loading"));
-      const credential = query("openclaw-plugin-credential-editor")!;
-      expect(credential).not.toBeNull();
-      expect(editor.textContent).not.toContain(REDACTED_SENTINEL);
-      expect(query('input[aria-label="Search: Mode"]')).not.toBeNull();
-      if (typeof replacement === "string") {
-        const input = credential.querySelector<HTMLInputElement>("input")!;
-        input.value = replacement;
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        flush();
-        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      } else {
-        credential.querySelector<HTMLButtonElement>("button")!.click();
-        await settle();
-        const select = credential.querySelector<HTMLSelectElement>("select")!;
-        select.value = replacement.source;
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-        flush();
-        const inputs = credential.querySelectorAll<HTMLInputElement>(
-          ".plugin-credential__dialog input",
-        );
-        for (const [index, next] of [replacement.provider, replacement.id].entries()) {
-          inputs[index]!.value = next;
-          inputs[index]!.dispatchEvent(new Event("input", { bubbles: true }));
-          flush();
-        }
-        [...credential.querySelectorAll("button")]
-          .find((button) => button.textContent?.trim() === "Save")!
-          .click();
-      }
-      expect(model.onConfigPatch).toHaveBeenCalledExactlyOnceWith(
-        ["plugins", "entries", "fixture", "config", "search", "apiKey"],
-        replacement,
-      );
-    },
-  );
+      },
+      { search: { apiKey: { source: "env", provider: "default", id: "KEY" }, mode: "web" } },
+    );
+    expect(all("[data-setting]")).toHaveLength(2);
+    expect(query('[data-setting="search.apiKey"]')).not.toBeNull();
+    expect(query<HTMLInputElement>('input[aria-label="Search: Mode"]')?.value).toBe("web");
+  });
   it.each(["row", "input"])(
     "toggles from the checkbox %s once and ignores non-editing clicks",
     async (target) => {

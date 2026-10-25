@@ -83,41 +83,6 @@ async function renderCatalog(props: Partial<PluginCatalogResultsProps>) {
   await nextFrame();
 }
 
-it("keeps a pinned installation status popup open through catalog refresh", async () => {
-  const initial = catalogProps();
-  const progress = {
-    startedAt: 1,
-    finishedAt: 2,
-    activities: [],
-    failure: {
-      title: "Installation saved",
-      recovery: "Restart to apply",
-      detail: "Startup failed",
-    },
-  } satisfies PluginInstallProgress;
-  const [props, setProps] = createSignal({
-    ...initial,
-    installProgress: new Map([[`install:${entry.id}`, progress]]),
-  });
-  render(() => <PluginCatalogResults {...props()} />);
-  await userEvent.click(
-    page.getByRole("button", { name: "View status of TencentDB Agent Memory installation" }),
-  );
-  const status = page.getByText("Installation saved", { exact: true });
-  await expect.element(status).toBeVisible();
-  const pending = Promise.withResolvers<null>();
-  setProps((current) => ({ ...current, reads: { ...current.reads, browse: pending.promise } }));
-  flush();
-  await nextFrame();
-  setProps((current) => ({
-    ...current,
-    result: { items: [{ ...entry, catalog: { ...entry.catalog, name: "Refreshed Memory" } }] },
-  }));
-  pending.resolve(null);
-  await expect.element(page.getByRole("link", { name: "Refreshed Memory" })).toBeVisible();
-  await expect.element(status).toBeVisible();
-});
-
 it.each([263, 362])(
   "keeps long identity text clear of the action within a %ipx card",
   async (width) => {

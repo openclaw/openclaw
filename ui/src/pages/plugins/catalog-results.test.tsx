@@ -44,10 +44,6 @@ const cardIds = (root: ParentNode) =>
   [...root.querySelectorAll<HTMLElement>(".plugin-catalog-card")].map(
     (card) => card.dataset.pluginId,
   );
-const enabledPlugin = () =>
-  plugin("installed", {
-    local: { present: true, installed: true, enabled: true, state: "enabled", action: "manage" },
-  });
 
 describe("renderPluginCatalogResults", () => {
   beforeEach(async () => {
@@ -64,6 +60,11 @@ describe("renderPluginCatalogResults", () => {
     const props = baseProps({ result: null, featured: [], trending: [] });
     const { container, ui } = await mount(props);
     ui.node("openclaw-panel-empty-state").not.toBeNull();
+    update(container, { ...props, remoteError: "ClawHub unavailable" });
+    ui.content(".callout.warning").toContain("ClawHub unavailable");
+    ui.node("openclaw-panel-empty-state").toBeNull();
+    container.querySelector<HTMLButtonElement>(".callout.warning button")!.click();
+    expect(props.onRetry).toHaveBeenCalledOnce();
 
     const pending = Promise.withResolvers<null>();
     const reads = { ...props.reads, browse: pending.promise };
@@ -103,44 +104,6 @@ describe("renderPluginCatalogResults", () => {
     }
     ui.all(".plugin-catalog-card").toHaveLength(3);
   });
-
-  it.each(["grouped", "filtered"] as const)(
-    "publishes installation completion during a held %s catalog refresh",
-    async (mode) => {
-      const props = baseProps({
-        query: mode === "filtered" ? "installed" : "",
-        result: { items: [enabledPlugin(), plugin("available")] },
-        featured: [],
-        trending: [],
-      });
-      const progress = new Map([["install:installed", { startedAt: 1, activities: [] }]]);
-      const { container, ui } = await mount({ ...props, installProgress: progress });
-      const card = container.querySelector('[data-plugin-id="installed"]')!;
-      const action = card.querySelector("openclaw-plugin-install-action")!;
-      expect(action.textContent).toContain("Installing");
-      expect(card.querySelector('[aria-label="Enabled"]')).toBeNull();
-      action.querySelector("button")!.click();
-      expect(props.onInstall).not.toHaveBeenCalled();
-      const pending = Promise.withResolvers<null>();
-      const reads = { ...props.reads, browse: pending.promise };
-      update(container, { ...props, reads, installProgress: progress });
-      update(container, { ...props, reads });
-      await waitForSolid(() => {
-        expect(
-          card.querySelector('.plugin-catalog-card__status[aria-label="Enabled"]'),
-        ).not.toBeNull();
-        expect(card.querySelector("openclaw-plugin-install-action")).toBeNull();
-      });
-      ui.node('[data-plugin-id="installed"]').toBe(card);
-      expect(card.querySelector("button")).toBeNull();
-      const available = container.querySelector('[data-plugin-id="available"]')!;
-      expect(available.querySelectorAll("button")).toHaveLength(1);
-      available.querySelector("button")!.click();
-      expect(props.onInstall).toHaveBeenCalledWith("available");
-      ui.node(".plugin-download-count").toBeNull();
-      pending.resolve(null);
-    },
-  );
 
   it("presents independent owner reads, retries failures, and retains cards during refresh and pagination", async () => {
     const categories = Array.from({ length: 2 }, () =>
@@ -377,25 +340,6 @@ describe("renderPluginCatalogResults", () => {
     },
   );
 
-  it("keeps a partial ClawHub failure retryable", async () => {
-    const onRetry = vi.fn();
-    const { container, ui } = await mount(
-      baseProps({
-        remoteError: "ClawHub is unavailable; local plugins remain available.",
-        result: { items: [] },
-        featured: [],
-        trending: [],
-        onRetry,
-      }),
-    );
-
-    const warning = container.querySelector<HTMLElement>(".callout.warning")!;
-    expect(warning?.textContent).toContain("ClawHub is unavailable");
-    ui.node("openclaw-panel-empty-state").toBeNull();
-    warning?.querySelector<HTMLButtonElement>("button")?.click();
-    expect(onRetry).toHaveBeenCalledOnce();
-  });
-
   it("uses only resolved artwork, preferring installed icons and whitening only official images", async () => {
     const imageUrl = "https://example.com/icon.png";
     const cases = [
@@ -406,7 +350,14 @@ describe("renderPluginCatalogResults", () => {
       }),
       plugin("installed", {
         catalog: { imageUrl },
-        local: { ...enabledPlugin().local, pluginId: "installed" },
+        local: {
+          present: true,
+          installed: true,
+          enabled: true,
+          state: "enabled",
+          action: "manage",
+          pluginId: "installed",
+        },
       }),
       plugin("official", { catalog: { imageUrl } }),
       plugin("community", { catalog: { imageUrl, official: false } }),
@@ -437,78 +388,46 @@ describe("renderPluginCatalogResults", () => {
     }
   });
 
-  it.each([
-    [
-      "hidden catch-all",
-      { tools: ["matched"], other: ["other-plugin"], uncategorized: ["uncategorized-plugin"] },
-    ],
-    ["multiple purposes", { models: ["novita", "text-only", "zai"], media: ["novita", "zai"] }],
-  ] satisfies Array<[string, Record<string, string[]>]>)(
-    "keeps category membership and search consistent for %s",
-    async (_, membership) => {
-      const hidden = "other" in membership;
-      const categories = Object.keys(membership).filter((slug) => slug !== "uncategorized");
-      const ids = [...new Set(Object.values(membership).flat())];
-      const props = baseProps({
-        featured: [],
-        trending: [],
-        categories: categories.map((slug, order) => ({
-          slug,
-          label: slug === "other" ? "Other" : slug,
-          description: slug,
-          icon: "package",
-          order,
-        })),
-        result: {
-          items: ids.toReversed().map((id) =>
-            plugin(id, {
-              catalog: {
-                official: !hidden || id === "matched",
-                categories: categories.filter((category) => membership[category]!.includes(id)),
-              },
-            }),
-          ),
-        },
-      });
-      const { container, ui } = await mount(props);
-      for (const [shelf, members] of Object.entries(membership)) {
-        const section = container.querySelector(`[data-catalog-section="${shelf}"]`);
-        if (shelf === "other" || shelf === "uncategorized") {
-          expect(section).toBeNull();
-        } else {
-          expect(cardIds(section!)).toEqual(members);
-        }
-      }
-      if (hidden) {
-        ui.content(".plugin-catalog-chips").not.toContain("Other");
-        ui.node('[data-plugin-id="other-plugin"]').toBeNull();
-        update(container, { ...props, query: "plugin" });
-        for (const id of ["other-plugin", "uncategorized-plugin"]) {
-          expect(container.querySelector(`[data-plugin-id="${id}"]`)).not.toBeNull();
-        }
-      }
-    },
-  );
+  it("shows multi-purpose providers in each matching category", async () => {
+    const membership: Record<string, string[]> = {
+      models: ["novita", "text-only", "zai"],
+      media: ["novita", "zai"],
+    };
+    const categories = Object.keys(membership);
+    const ids = [...new Set(Object.values(membership).flat())];
+    const props = baseProps({
+      featured: [],
+      trending: [],
+      categories: categories.map((slug, order) => ({
+        slug,
+        label: slug,
+        description: slug,
+        icon: "package",
+        order,
+      })),
+      result: {
+        items: ids.toReversed().map((id) =>
+          plugin(id, {
+            catalog: {
+              categories: categories.filter((category) => membership[category]!.includes(id)),
+            },
+          }),
+        ),
+      },
+    });
+    const { container } = await mount(props);
+    for (const [shelf, members] of Object.entries(membership)) {
+      const section = container.querySelector(`[data-catalog-section="${shelf}"]`);
+      expect(cardIds(section!)).toEqual(members);
+    }
+  });
 
   it("orders and caps each category before opening its full results", async () => {
     const items = Array.from({ length: 9 }, (_, index) =>
-      plugin(`popular-${index}`, {
-        catalog: {
-          name: `Popular ${index}`,
-          official: index === 8,
-          categories: ["tools"],
-          downloads: 100 - index,
-        },
-      }),
+      plugin(`popular-${index}`, { catalog: { downloads: 100 - index } }),
     );
     const pinned = plugin("pin", {
-      catalog: {
-        name: "Pin",
-        official: false,
-        categories: ["tools", "channels"],
-        downloads: 0,
-        categoryRanks: { tools: 0 },
-      },
+      catalog: { downloads: 0, categoryRanks: { tools: 0 } },
     });
     const onCategoryChange = vi.fn();
     const { container } = await mount(

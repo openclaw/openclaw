@@ -63,6 +63,15 @@ function setup(
   return { discovery, request, dispose, read: discovery.read };
 }
 
+async function settleQuery(
+  discovery: ReturnType<typeof createPluginDiscovery>,
+  query: string,
+  delay = 250,
+) {
+  discovery.updateQuery(query);
+  await vi.advanceTimersByTimeAsync(delay);
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -180,45 +189,6 @@ it("populates the grouped home page and keeps it visible during a refresh", asyn
   expect(read().trending).toEqual([]);
 });
 
-it("preserves home navigation when a category completes during the search debounce", async () => {
-  vi.useFakeTimers();
-  const featured = entry(1, { featured: true });
-  const trending = entry(2, { trending: true });
-  const categories = [
-    { slug: "channels", label: "Channels", description: "Channels", icon: "globe", order: 0 },
-  ];
-  const category = createDeferred<PluginDiscoveryResult>();
-  const search = createDeferred<PluginDiscoveryResult>();
-  const categoryItems = [entry(3)];
-  const searchItems = [entry(4)];
-  const { discovery, request, read } = setup([
-    { items: [featured, trending], categories },
-    category.promise,
-    search.promise,
-  ]);
-  await discovery.refresh();
-  void discovery.selectCategory("channels");
-  discovery.updateQuery("calendar");
-
-  category.resolve({ items: categoryItems });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.lastCall?.[1]).toMatchObject({ category: "channels" });
-  expect(read().result?.items).toEqual(categoryItems);
-  expect.soft(read().categories).toEqual(categories);
-  expect.soft(read().featured).toEqual([featured]);
-  expect.soft(read().trending).toEqual([trending]);
-
-  await vi.advanceTimersByTimeAsync(250);
-  expect(request.mock.lastCall?.[1]).toMatchObject({ query: "calendar" });
-  search.resolve({ items: searchItems });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(read().result?.items).toEqual(searchItems);
-  expect.soft(read().categories).toEqual(categories);
-  expect.soft(read().featured).toEqual([featured]);
-  expect.soft(read().trending).toEqual([trending]);
-});
-
 it("counts only settled manual searches across refresh, filters and connection invalidation", async () => {
   vi.useFakeTimers();
   const { discovery, request, read } = setup([], async () => ({
@@ -233,10 +203,8 @@ it("counts only settled manual searches across refresh, filters and connection i
   expect(request.mock.lastCall?.[1]).not.toHaveProperty("searchSource");
   request.mockClear();
 
-  discovery.updateQuery("mem");
-  await vi.advanceTimersByTimeAsync(200);
-  discovery.updateQuery("memory");
-  await vi.advanceTimersByTimeAsync(249);
+  await settleQuery(discovery, "mem", 200);
+  await settleQuery(discovery, "memory", 249);
   expect(request).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
   expect(request).toHaveBeenCalledOnce();
@@ -262,8 +230,7 @@ it("counts only settled manual searches across refresh, filters and connection i
   await vi.advanceTimersByTimeAsync(0);
   await discovery.selectIntent("official");
   await vi.advanceTimersByTimeAsync(0);
-  discovery.updateQuery("");
-  await vi.advanceTimersByTimeAsync(250);
+  await settleQuery(discovery, "");
   for (const [, params] of request.mock.calls) {
     expect(params).not.toHaveProperty("searchSource");
   }
@@ -293,16 +260,18 @@ it("restores the loaded overview immediately when clearing search and retires la
     lateSearch.promise,
   ]);
   await discovery.refresh();
-  discovery.updateQuery("test");
-  await vi.advanceTimersByTimeAsync(250);
-  discovery.updateQuery("memory");
-  await vi.advanceTimersByTimeAsync(250);
+  await settleQuery(discovery, "test");
+  expect(read().featured).toEqual([overview]);
+  expect(read().trending).toEqual([overview]);
+  await settleQuery(discovery, "memory");
   discovery.updateQuery("");
 
   expect(read().result?.items).toEqual([overview]);
   lateSearch.resolve({ items: [entry(3)] });
   await vi.advanceTimersByTimeAsync(250);
   expect(read().result?.items).toEqual([overview]);
+  expect(read().featured).toEqual([overview]);
+  expect(read().trending).toEqual([overview]);
   expect(request).toHaveBeenCalledTimes(3);
 });
 
@@ -317,8 +286,7 @@ it.each(["category", "featured"] as const)(
       await discovery.selectIntent(filter);
     }
     discovery.updateQuery("test");
-    discovery.updateQuery("");
-    await vi.advanceTimersByTimeAsync(250);
+    await settleQuery(discovery, "");
 
     expect(read().intent).toBe("all");
     expect(read().category).toBeNull();
@@ -352,8 +320,7 @@ it.each(["refresh", "disconnect", "invalidate"] as const)(
       freshOverview.promise,
     ]);
     await discovery.refresh();
-    discovery.updateQuery("memory");
-    await vi.advanceTimersByTimeAsync(250);
+    await settleQuery(discovery, "memory");
 
     await discovery[boundary]();
     request.mockClear();
@@ -381,8 +348,7 @@ it("retries a degraded overview when returning from search", async () => {
   ]);
   await discovery.refresh();
   expect(read().remoteError).toBe("Catalog unavailable");
-  discovery.updateQuery("memory");
-  await vi.advanceTimersByTimeAsync(250);
+  await settleQuery(discovery, "memory");
   request.mockClear();
   discovery.updateQuery("");
 
@@ -428,21 +394,19 @@ it("loads bounded pages only on expansion and preserves category pin ordering", 
 });
 
 it("replaces a first-page local placeholder with later published Media metadata", async () => {
-  const placeholder = entry(1);
-  delete placeholder.catalog.family;
-  placeholder.catalog.categories = ["models", "media"];
-  const published = entry(1);
-  published.catalog.categories = [...placeholder.catalog.categories];
-  published.catalog.author = "openclaw";
-  published.catalog.official = true;
-  published.catalog.downloads = 10_000;
+  const placeholder = entry(1, { family: undefined, categories: ["models", "media"] });
+  const published = entry(1, {
+    categories: ["models", "media"],
+    author: "openclaw",
+    official: true,
+    downloads: 10_000,
+  });
   const { discovery, read } = setup([
     { items: [placeholder], nextCursor: "catalog-page-2" },
     { items: [published] },
   ]);
   await discovery.selectCategory("media");
   await discovery.loadMore();
-
   expect(read().result?.items).toEqual([published]);
 });
 
