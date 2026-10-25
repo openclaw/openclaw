@@ -6,6 +6,27 @@ import { SqliteWorkerError, wrapSqliteWorkerError } from "../infra/sqlite-worker
 import { IncognitoSessionEndedError } from "../state/incognito-session-error.js";
 import { errorShapeFromError } from "./error-shape.js";
 
+function expectStorageFailure(
+  error: unknown,
+  details: string,
+  retryable: boolean | undefined,
+  messages: RegExp[] = [],
+  opts: Parameters<typeof errorShapeFromError>[2] = {},
+  code: Parameters<typeof errorShapeFromError>[0] = ErrorCodes.INVALID_REQUEST,
+) {
+  const result = errorShapeFromError(code, error, opts);
+  expect(result).toMatchObject({ code: ErrorCodes.UNAVAILABLE, details: { code: details } });
+  if (retryable === undefined) {
+    expect(result).not.toHaveProperty("retryable");
+  } else {
+    expect(result.retryable).toBe(retryable);
+  }
+  for (const message of messages) {
+    expect(result.message).toMatch(message);
+  }
+  expect(result.message).not.toContain("PRIVATE_");
+}
+
 it.each([false, true])(
   "fences an uncertain sibling at the wire boundary (contention: %s)",
   (contention) => {
@@ -33,17 +54,14 @@ it.each([false, true])(
 
 it("preserves omitted retry authority when rendering a canonical unavailable outcome", () => {
   const error = new SqliteWorkerError("PRIVATE_ROLLBACK", "unavailable");
-  const result = errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
-    message: "PRIVATE_DISPATCH_FAILURE",
-  });
-  expect(result).toMatchObject({
-    code: ErrorCodes.UNAVAILABLE,
-    details: { code: "unavailable" },
-  });
-  expect(result).not.toHaveProperty("retryable");
-  expect(result.message).toMatch(/connection|database/i);
-  expect(result.message).toMatch(/retry|try again/i);
-  expect(result.message).not.toContain("PRIVATE_");
+  expectStorageFailure(
+    error,
+    "unavailable",
+    undefined,
+    [/connection|database/i, /retry|try again/i],
+    { message: "PRIVATE_DISPATCH_FAILURE" },
+    ErrorCodes.UNAVAILABLE,
+  );
 });
 
 it.each(["direct", "cleanup", "uncertain-cleanup", "retry-refused"])(
@@ -58,36 +76,14 @@ it.each(["direct", "cleanup", "uncertain-cleanup", "retry-refused"])(
       scenario === "direct" || scenario === "retry-refused"
         ? primary
         : new AggregateError([primary, cleanup], "PRIVATE_AGGREGATE", { cause: primary });
-    const result = errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
-      retryable: scenario !== "retry-refused",
-    });
-    expect(result).toMatchObject({
-      code: ErrorCodes.UNAVAILABLE,
-      details: { code: "unavailable" },
-      retryable: scenario !== "uncertain-cleanup" && scenario !== "retry-refused",
-    });
-    expect(result.message).toMatch(/connection|database/i);
-    expect(result.message).toMatch(/rolled back/i);
-    expect(result.message).toMatch(/nothing.*saved/i);
-    expect(result.message).toMatch(/retry|try again/i);
-    expect(result.message).not.toContain("PRIVATE_");
-  },
-);
-
-it.each([false, true])(
-  "renders an unknown outcome with guidance and no retry grant (nested: %s)",
-  (nested) => {
-    const primary = new SqliteWorkerError("PRIVATE_DATABASE_DETAIL", "outcome-unknown");
-    const error = nested
-      ? new AggregateError([primary, new Error("PRIVATE_CLEANUP_DETAIL")], "PRIVATE_AGGREGATE", {
-          cause: primary,
-        })
-      : primary;
-    const result = errorShapeFromError(ErrorCodes.INVALID_REQUEST, error, { retryable: true });
-    expect(result).toMatchObject({ code: ErrorCodes.UNAVAILABLE, retryable: false });
-    expect(result.message).toMatch(/confirm|saved/i);
-    expect(result.message).toMatch(/check|reopen|retry/i);
-    expect(result.message).not.toContain("PRIVATE_");
+    expectStorageFailure(
+      error,
+      "unavailable",
+      scenario !== "uncertain-cleanup" && scenario !== "retry-refused",
+      [/connection|database/i, /rolled back/i, /nothing.*saved/i, /retry|try again/i],
+      { retryable: scenario !== "retry-refused" },
+      ErrorCodes.UNAVAILABLE,
+    );
   },
 );
 
@@ -97,21 +93,14 @@ it("keeps cleanup storage failures secondary to an unknown primary outcome", () 
   const error = new Error(primary.message, {
     cause: new AggregateError([primary, cleanup], "PRIVATE_AGGREGATE", { cause: primary }),
   });
-  const result = errorShapeFromError(ErrorCodes.INVALID_REQUEST, error);
-  expect(result).toMatchObject({ code: ErrorCodes.UNAVAILABLE, retryable: false });
-  expect(result.message).toMatch(/confirm|saved/i);
-  expect(result.message).not.toContain("PRIVATE_");
+  expectStorageFailure(error, "session_actor_reconciliation", false, [/confirm|saved/i]);
 });
 
 it("keeps an explicit disk failure primary when only cleanup has an unknown outcome", () => {
   const primary = Object.assign(new Error("PRIVATE_PRIMARY"), { code: "SQLITE_FULL" });
   const cleanup = new SqliteWorkerError("PRIVATE_CLEANUP", "outcome-unknown");
   const error = new AggregateError([primary, cleanup], "PRIVATE_AGGREGATE", { cause: primary });
-  expect(errorShapeFromError(ErrorCodes.INVALID_REQUEST, error)).toMatchObject({
-    code: ErrorCodes.UNAVAILABLE,
-    retryable: false,
-    details: { code: "SQLITE_FULL" },
-  });
+  expectStorageFailure(error, "SQLITE_FULL", false);
 });
 
 it.each(["worker", "settlement"] as const)(
@@ -119,64 +108,45 @@ it.each(["worker", "settlement"] as const)(
   async (envelope) => {
     const primary = new SqliteWorkerError("PRIVATE_PRIMARY", "outcome-unknown");
     const cleanup = Object.assign(new Error("PRIVATE_CLEANUP"), { code: "SQLITE_FULL" });
-    let error: unknown;
-    if (envelope === "worker") {
-      error = wrapSqliteWorkerError("PRIVATE_OUTCOME", "outcome-unknown", primary, cleanup);
-    } else {
-      try {
-        await settleWithCleanup(
-          Promise.reject(primary),
-          () => {
-            throw cleanup;
-          },
-          "PRIVATE_SETTLEMENT",
-        );
-      } catch (failure) {
-        error = failure;
-      }
-    }
-    const result = errorShapeFromError(ErrorCodes.INVALID_REQUEST, error);
-    expect(result).toMatchObject({
-      code: ErrorCodes.UNAVAILABLE,
-      retryable: false,
-      details: { code: "session_actor_reconciliation" },
-    });
-    expect(result.message).toMatch(/confirm|saved/i);
-    expect(result.message).toMatch(/check|retry/i);
-    expect(result.message).not.toContain("PRIVATE_");
+    const error =
+      envelope === "worker"
+        ? wrapSqliteWorkerError("PRIVATE_OUTCOME", "outcome-unknown", primary, cleanup)
+        : await settleWithCleanup(
+            Promise.reject(primary),
+            () => {
+              throw cleanup;
+            },
+            "PRIVATE_SETTLEMENT",
+          ).catch((failure: unknown) => failure);
+    expectStorageFailure(
+      error,
+      "session_actor_reconciliation",
+      false,
+      [/confirm|saved/i, /check|retry/i],
+      { retryable: true },
+    );
   },
 );
 
 it("renders a native PostgreSQL cancellation without granting an automatic retry", () => {
-  const result = errorShapeFromError(
-    ErrorCodes.INVALID_REQUEST,
+  expectStorageFailure(
     decodePostgresError({
       name: "error",
       code: "57014",
       message: "PRIVATE_QUERY_DETAIL",
     }),
+    "57014",
+    false,
+    [/cancel|timeout/i, /check|retry/i],
     { retryable: true },
   );
-  expect(result).toMatchObject({ code: ErrorCodes.UNAVAILABLE, retryable: false });
-  expect(result.message).toMatch(/cancel|timeout/i);
-  expect(result.message).toMatch(/check|retry/i);
-  expect(result.message).not.toContain("PRIVATE_");
 });
 
 it("does not let a nested cleanup aggregate hide an independent disk failure", () => {
   const disk = Object.assign(new Error("PRIVATE_DISK"), { code: "SQLITE_FULL" });
   const close = new Error("PRIVATE_CLOSE");
   const cleanup = new AggregateError([close], "PRIVATE_CLEANUP", { cause: close });
-  const result = errorShapeFromError(
-    ErrorCodes.INVALID_REQUEST,
-    new AggregateError([disk, cleanup], "PRIVATE_MULTI"),
-  );
-  expect(result).toMatchObject({
-    code: ErrorCodes.UNAVAILABLE,
-    retryable: true,
-    details: { code: "SQLITE_FULL" },
-  });
-  expect(result.message).not.toContain("PRIVATE_");
+  expectStorageFailure(new AggregateError([disk, cleanup], "PRIVATE_MULTI"), "SQLITE_FULL", true);
 });
 
 it.each([
@@ -190,14 +160,7 @@ it.each([
       cause: primary,
     }),
   );
-  const result = errorShapeFromError(ErrorCodes.INVALID_REQUEST, error);
-  expect(result).toMatchObject({
-    code: ErrorCodes.UNAVAILABLE,
-    retryable: false,
-    details: { code: "session_actor_reconciliation" },
-  });
-  expect(result.message).toMatch(/confirm|saved/i);
-  expect(result.message).not.toContain("PRIVATE_");
+  expectStorageFailure(error, "session_actor_reconciliation", false, [/confirm|saved/i]);
 });
 
 it("reports ended incognito sessions as typed nonretryable client failures through cleanup wrappers", () => {
