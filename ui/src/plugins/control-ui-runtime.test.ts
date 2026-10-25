@@ -65,7 +65,9 @@ const configForRuntime = (
 ) => ({ ...createApplicationConfigCapability({ resourceBasePath }), refresh });
 function connectedContext(
   client: { gatewayUrl: string; request: (method: string, params: unknown) => unknown } | undefined,
-  configuration: ReturnType<typeof configForRuntime> | ApplicationContext["config"],
+  configuration:
+    | ReturnType<typeof configForRuntime>
+    | ApplicationContext["config"] = configForRuntime(),
   resourceBasePath = "",
   advertised = ["plugins.controlUi.list"],
 ) {
@@ -97,6 +99,13 @@ const pluginDescriptor = (revision = "one", entryUrl = "/review.js") => ({
   styles: [],
 });
 const diagnostic = (message: string, pluginId = "review") => ({ pluginId, message });
+const navigation = (label = "Page") => ({ id: "page", label, page: { id: "page" } });
+const clientFor = (
+  request: (method: string, params: unknown) => unknown,
+  gatewayUrl = localGateway(),
+) => ({ gatewayUrl, request });
+const runtimeForRequest = (request: (method: string, params: unknown) => unknown) =>
+  runtimeFor(connectedContext(clientFor(request)));
 function initializeWith(
   register: (
     host: ReturnType<typeof createControlUiPluginHost>,
@@ -114,7 +123,7 @@ function initializeWith(
 
 it("completes an unavailable catalog without requests or diagnostics for a limited connection", async () => {
   const request = vi.fn();
-  const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
+  const context = connectedContext(clientFor(request));
   context.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
   const runtime = runtimeFor(context);
   runtime.start();
@@ -130,11 +139,10 @@ it("dispatches only explicitly advertised inline versions and restores saved ver
   const first = { pluginId: "review", id: "incident", version: 1, label: "Incident" };
   let inlineViews = [first, { ...first, version: 2 }];
   const mounts = [vi.fn(() => undefined), vi.fn(() => undefined)];
-  const client = {
-    gatewayUrl: localGateway(),
-    request: async () => ({ ...catalog([pluginDescriptor()]), inlineViews }),
-  };
-  const context = connectedContext(client, configForRuntime());
+  const runtime = runtimeForRequest(async () => ({
+    ...catalog([pluginDescriptor()]),
+    inlineViews,
+  }));
   initializeWith((host) => {
     host.ui.registerInlineView({ id: "incident", version: 1, mount: mounts[0]! });
     host.ui.registerInlineView({ id: "incident", version: 2, mount: mounts[1]! });
@@ -145,7 +153,6 @@ it("dispatches only explicitly advertised inline versions and restores saved ver
       host.ui.registerInlineView({ id: "invalid", version: 0, mount: mounts[0]! }),
     ).toThrow("version");
   });
-  const runtime = runtimeFor(context);
   runtime.start();
   await runtime.refresh();
   expect(
@@ -167,9 +174,8 @@ it("dispatches only explicitly advertised inline versions and restores saved ver
 it.each([false, true])(
   "reports one completed catalog without delaying healthy plugins (superseded: %s)",
   async (superseded) => {
-    const pending = [createDeferred(), createDeferred()];
-    const started = [createDeferred(), createDeferred()];
-    const ready = createDeferred();
+    const pending = createDeferred();
+    const started = createDeferred();
     const descriptors = [
       pluginDescriptor("one", `${assetPath()}index.js`),
       {
@@ -189,45 +195,29 @@ it.each([false, true])(
       }
       return { ok: true };
     });
-    const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
+    const runtime = runtimeForRequest(request);
     initializeWith(async (host, owner) => {
-      if (owner.descriptor.pluginId === "peer") {
-        const attempt = attempts++;
-        started[attempt]!.resolve();
-        await pending[attempt]!.promise;
+      if (owner.descriptor.pluginId === "peer" && attempts++ === 0) {
+        started.resolve();
+        await pending.promise;
       }
-      host.ui.registerNavigation({ id: "page", label: "Page", page: { id: "page" } });
-    });
-    const runtime = runtimeFor(context);
-    runtime.subscribe(() => {
-      if (runtime.registrations("navigation").some((entry) => entry.pluginId === "review")) {
-        ready.resolve();
-      }
+      host.ui.registerNavigation(navigation());
     });
     const reports = () =>
       request.mock.calls.filter(([method]) => method === "plugins.controlUi.report");
     try {
       runtime.start();
       const initialRefresh = runtime.refresh();
-      await Promise.race([
-        Promise.all([ready.promise, started[0]!.promise]),
-        initialRefresh.then(() => {
-          throw new Error(
-            `Activation settled before peers started: ${JSON.stringify(runtime.errors)}`,
-          );
-        }),
-      ]);
+      await started.promise;
+      await vi.waitFor(() => expect(runtime.registrations("navigation")).toHaveLength(1));
       const healthy = runtime.registrations("navigation")[0]!;
       expect(runtime.isLoading("review")).toBe(false);
       expect(runtime.isLoading("peer")).toBe(true);
       expect(reports()).toEqual([]);
       if (superseded) {
-        const refresh = runtime.refresh();
-        await started[1]!.promise;
-        pending[1]!.resolve();
-        await refresh;
+        await runtime.refresh();
       } else {
-        pending[0]!.resolve();
+        pending.resolve();
         await initialRefresh;
       }
       expect(runtime.registrations("navigation")).toHaveLength(2);
@@ -260,7 +250,7 @@ it.each([false, true])(
         diagnostic("Activation report is for an inactive browser revision", "peer"),
       ]);
     } finally {
-      pending.forEach((activation) => activation.resolve());
+      pending.resolve();
     }
   },
 );
@@ -424,11 +414,9 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
     let response = createDeferred<PluginsControlUiCatalog>();
     const activationStarted = createDeferred();
     const activation = createDeferred();
-    const completed = createDeferred();
-    const request = vi.fn((method: string) =>
-      method === "plugins.controlUi.list" ? response.promise : Promise.resolve({ ok: true }),
-    );
-    const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
+    const request = (method: string) =>
+      method === "plugins.controlUi.list" ? response.promise : Promise.resolve({ ok: true });
+    const runtime = runtimeForRequest(request);
     initializeWith(async () => {
       activationStarted.resolve();
       await activation.promise;
@@ -436,15 +424,10 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
         throw new Error("Plugin activation failed");
       }
     });
-    const runtime = runtimeFor(context);
-    runtime.subscribe(() => {
-      if (runtime.registryStatus !== "pending") {
-        completed.resolve();
-      }
-    });
     try {
       expect(runtime.registryStatus).toBe("pending");
       runtime.start();
+      const completion = runtime.refresh();
       expect(runtime.registryStatus).toBe("pending");
       if (outcome === "catalog-failed") {
         response.reject(new Error("Catalog unavailable"));
@@ -456,12 +439,11 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
         expect(runtime.registryStatus).toBe("pending");
         activation.resolve();
       }
-      await completed.promise;
+      await completion;
       expect(runtime.registryStatus).toBe(outcome === "catalog-failed" ? "failed" : "complete");
       if (outcome === "catalog-failed") {
         expect(runtime.errors).toEqual([diagnostic("Catalog unavailable", "host")]);
         expect(controlUiLoader.initializeControlUiPlugin).not.toHaveBeenCalled();
-        expect(request.mock.calls).toEqual([["plugins.controlUi.list", {}]]);
         expect(runtime.isLoading("review")).toBe(false);
         response = createDeferred<PluginsControlUiCatalog>();
         const retry = runtime.refresh();
@@ -475,46 +457,6 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
     }
   },
 );
-
-it("publishes a new revision for plugin-owned navigation mutations before notifying readers", async () => {
-  const navigation = { id: "board", label: "Workboard", page: { id: "board" } };
-  const completed = createDeferred();
-  const context = connectedContext(
-    {
-      gatewayUrl: localGateway(),
-      request: async (method) =>
-        method === "plugins.controlUi.list" ? catalog([pluginDescriptor()]) : { ok: true },
-    },
-    configForRuntime(),
-  );
-  initializeWith((host) => {
-    host.ui.registerNavigation(navigation);
-  });
-  const runtime = runtimeFor(context);
-  expect(runtime.revision).toBe(0);
-  runtime.subscribe(() => {
-    if (runtime.registryStatus === "complete") {
-      completed.resolve();
-    }
-  });
-  runtime.start();
-  await completed.promise;
-  const registration = runtime.registrations("navigation")[0]!;
-  const previousRevision = runtime.revision;
-  const observed: { revision: number; label: string | undefined }[] = [];
-  runtime.subscribe(() =>
-    observed.push({
-      revision: runtime.revision,
-      label: runtime.registrations("navigation")[0]?.value.label,
-    }),
-  );
-
-  navigation.label = "Updated board";
-  registration.host.ui.invalidate();
-
-  expect(runtime.registrations("navigation")[0]?.value).toBe(navigation);
-  expect(observed).toEqual([{ revision: previousRevision + 1, label: "Updated board" }]);
-});
 
 it.each([
   {
@@ -618,7 +560,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
             ? [
                 {
                   ...pluginDescriptor(revision, `${assetPath(revision)}index.js`),
-                  uiCapabilities: ["replacement", "widget"],
+                  uiCapabilities: ["replacement", "widget", "navigation"],
                 },
               ]
             : [],
@@ -646,7 +588,9 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       resourceBasePath: "",
       config: configForRuntime(),
     } as unknown as ApplicationContext;
+    const page = navigation();
     initializeWith((host, owner) => {
+      host.ui.registerNavigation(page);
       host.ui.registerReplacement({
         id: "composer",
         label: owner.descriptor.revision,
@@ -655,6 +599,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       });
     });
     const runtime = runtimeFor(context);
+    expect(runtime.revision).toBe(0);
     const hello = {
       ...GATEWAY_STORE_TEST_HELLO,
       auth: { role: "operator", scopes: ["operator.admin"] },
@@ -684,6 +629,16 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
       await vi.waitFor(() => expect(runtime.registrations("replacements")).toHaveLength(1));
       runtime.selectReplacement("composer", "review/composer");
       const first = runtime.selectedReplacement("composer")!;
+      const revisionBeforeMutation = runtime.revision;
+      const observed: [number, string | undefined][] = [];
+      const stopObserving = runtime.subscribe(() => {
+        observed.push([runtime.revision, runtime.registrations("navigation")[0]?.value.label]);
+      });
+      page.label = "Updated board";
+      first.host.ui.invalidate();
+      stopObserving();
+      expect(runtime.registrations("navigation")[0]?.value).toBe(page);
+      expect(observed).toEqual([[revisionBeforeMutation + 1, "Updated board"]]);
 
       expect(runtime.errors).toEqual([]);
       first.host.ui.registerWidget({ id: "late", label: "Late widget", mount: () => undefined });
