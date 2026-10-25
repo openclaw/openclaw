@@ -545,6 +545,22 @@ export async function withEmbeddedTuiStateLock<T>(
   }
 }
 
+/**
+ * Own the console subsystem filter while the TUI owns the terminal.
+ *
+ * Both local and remote TUIs draw the whole screen, so any subsystem log written
+ * to the terminal overwrites their output. Logging to files is unaffected.
+ */
+export function createTuiConsoleOwnership(): { claim: () => void; release: () => void } {
+  const previous = loggingState.consoleSubsystemFilter
+    ? [...loggingState.consoleSubsystemFilter]
+    : null;
+  return {
+    claim: () => setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]),
+    release: () => setConsoleSubsystemFilter(previous),
+  };
+}
+
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   if (opts.local === true && opts.backend === undefined) {
     return await withEmbeddedTuiStateLock(async () => await runTuiUnlocked(opts));
@@ -553,6 +569,23 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 }
 
 async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
+  const consoleOwnership = createTuiConsoleOwnership();
+  consoleOwnership.claim();
+  // An early process exit never reaches the normal finish path.
+  const releaseConsoleOnProcessExit = () => consoleOwnership.release();
+  process.once("exit", releaseConsoleOnProcessExit);
+  try {
+    return await runTuiWithOwnedConsole(opts, consoleOwnership);
+  } finally {
+    process.off("exit", releaseConsoleOnProcessExit);
+    consoleOwnership.release();
+  }
+}
+
+async function runTuiWithOwnedConsole(
+  opts: RunTuiOptions,
+  consoleOwnership: ReturnType<typeof createTuiConsoleOwnership>,
+): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config =
     opts.config ??
@@ -680,14 +713,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
           password: opts.password,
           tlsFingerprint: opts.tlsFingerprint,
         });
-  }
-  const previousConsoleSubsystemFilter = isLocalMode
-    ? loggingState.consoleSubsystemFilter
-      ? [...loggingState.consoleSubsystemFilter]
-      : null
-    : null;
-  if (isLocalMode) {
-    setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
   }
 
   const tui = new TuiMainScreen(new TuiProcessTerminal());
@@ -1050,16 +1075,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
 
   const withTuiSuspended = async <T>(work: () => Promise<T>): Promise<T> => {
     await drainAndStopTuiSafely(tui);
-    if (isLocalMode) {
-      setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
-    }
+    consoleOwnership.release();
     try {
       return await work();
     } finally {
       if (!exitRequested) {
-        if (isLocalMode) {
-          setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
-        }
+        consoleOwnership.claim();
         tui.start();
         tui.setFocus(editor);
         updateHeader();
@@ -1679,12 +1700,11 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   );
   const finished = new Promise<void>((resolve) => {
     deferredFinish.setFinish(() => {
+      // Hand the terminal back before the remaining disposers can fail.
+      consoleOwnership.release();
       disposeStatus();
       disposeEventHandlers();
       promptControllers.forEach((controller) => controller.dispose());
-      if (isLocalMode) {
-        setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
-      }
       cleanupTerminalLossHandler?.();
       cleanupTerminalLossHandler = undefined;
       process.off("SIGINT", handleCtrlC);
