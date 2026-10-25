@@ -30,7 +30,7 @@ function widget(instanceId: string): BoardWidget {
     sizeH: 8,
   });
 }
-function response(instanceId: string, paused = false, targetId = instanceId) {
+function response(instanceId = "first", paused = false, targetId = instanceId) {
   return {
     ...dashboardIdentity,
     instanceId,
@@ -42,10 +42,6 @@ function response(instanceId: string, paused = false, targetId = instanceId) {
   };
 }
 type RequestHandler = Parameters<typeof createBrowserClient>[0];
-const dashboard =
-  (handle: RequestHandler): RequestHandler =>
-  async (envelope) =>
-    envelope.path === "/dashboard" ? handle(envelope) : { running: false, tabs: [] };
 function mount(
   handle: RequestHandler,
   active = true,
@@ -80,6 +76,7 @@ function mount(
   provider.append(element);
   document.body.append(provider);
   const panel = () => element.querySelector("openclaw-browser-panel");
+  const actions = () => requests.filter((entry) => entry.path === "/dashboard");
   return {
     element,
     request,
@@ -95,39 +92,48 @@ function mount(
         event: "plugin.browser.dashboard_changed",
         payload: { ...dashboardIdentity, instanceId },
       }),
-    actions: () => requests.filter((entry) => entry.path === "/dashboard"),
+    actions,
+    methods: () => actions().map((entry) => entry.method),
+    waitForMethods: (methods: string[]) =>
+      vi.waitFor(() => expect(actions().map((entry) => entry.method)).toEqual(methods)),
     waitForTarget: (targetId: string) =>
       vi.waitFor(() => expect(panel()?.fixedTab?.targetId).toBe(targetId)),
-    waitForText: (text: string) => vi.waitFor(() => expect(element.textContent).toContain(text)),
+    waitForText: (text: string, present = true) =>
+      vi.waitFor(() => expect(element.textContent?.includes(text)).toBe(present)),
     waitForPanel: () => vi.waitFor(() => expect(panel()).not.toBeNull()),
   };
 }
+const dashboard =
+  (handle: RequestHandler): RequestHandler =>
+  async (envelope) =>
+    envelope.path === "/dashboard" ? handle(envelope) : { running: false, tabs: [] };
+const mountDashboard = (
+  handle: RequestHandler,
+  ...options: [active?: boolean, scopes?: readonly string[], advertised?: readonly string[]]
+) => mount(dashboard(handle), ...options);
 afterEach(() => document.body.replaceChildren());
 
 describe("Browser dashboard presentation", () => {
   it.each([false, true])("routes dashboard access and transfers for admin=%s", async (admin) => {
-    const h = mount(
-      dashboard(async () => response("first")),
-      true,
-      [admin ? "operator.admin" : "operator.sessions.write"],
-    );
+    const h = mountDashboard(async () => response(), true, [
+      admin ? "operator.admin" : "operator.sessions.write",
+    ]);
     await h.waitForPanel();
     const panel = h.panel()!;
     await panel.updateComplete;
-    expect(h.request).toHaveBeenCalledWith(
-      admin ? "browser.request" : "browser.dashboard.request",
-      expect.objectContaining(
-        admin
-          ? { target: "host", path: "/dashboard" }
-          : {
-              sessionKey,
-              dashboard: { name: "status", instanceId: "first" },
-              method: "POST",
-              path: "/dashboard",
-            },
-      ),
-      { timeoutMs: 150_000 },
+    const [method, params, options] = h.request.mock.calls[0]!;
+    expect(method).toBe(admin ? "browser.request" : "browser.dashboard.request");
+    expect(params).toMatchObject(
+      admin
+        ? { target: "host", path: "/dashboard" }
+        : {
+            sessionKey,
+            dashboard: { name: "status", instanceId: "first" },
+            method: "POST",
+            path: "/dashboard",
+          },
     );
+    expect(options).toEqual({ timeoutMs: 150_000 });
     expect(panel.dashboardTarget?.sessionScoped).toBe(admin ? undefined : true);
     const menu = await openBrowserActions(panel);
     const download = menu.querySelector('[role="menuitem"][aria-label="Download file"]');
@@ -146,7 +152,7 @@ describe("Browser dashboard presentation", () => {
   ])(
     "does not dispatch without scoped write access and advertised capability (%j)",
     async (scopes, methods) => {
-      const { element, request } = mount(async () => response("first"), true, scopes, methods);
+      const { element, request } = mount(async () => response(), true, scopes, methods);
       await element.updateComplete;
       expect(request).not.toHaveBeenCalled();
       expect(element.textContent).toContain("Connect to a Gateway with browser access");
@@ -158,8 +164,7 @@ describe("Browser dashboard presentation", () => {
     let attempts = 0;
     const h = mount(
       async () => {
-        attempts += 1;
-        if (attempts === 1) {
+        if (++attempts === 1) {
           throw new Error("Session browser requires a supported sandbox backend");
         }
         return retrying.promise;
@@ -173,15 +178,13 @@ describe("Browser dashboard presentation", () => {
     expect(h.request.mock.calls[0]?.[0]).toBe("browser.dashboard.request");
     h.button("Retry")!.click();
     await vi.waitFor(() => expect(attempts).toBe(2));
-    await vi.waitFor(() =>
-      expect(h.element.textContent).not.toContain("supported sandbox backend"),
-    );
+    await h.waitForText("supported sandbox backend", false);
     expect(h.panel()).toBeNull();
     expect(h.request.mock.calls.map(([method]) => method)).toEqual([
       "browser.dashboard.request",
       "browser.dashboard.request",
     ]);
-    retrying.resolve(response("first"));
+    retrying.resolve(response());
     await h.waitForPanel();
   });
 
@@ -189,15 +192,12 @@ describe("Browser dashboard presentation", () => {
     const stopping = createDeferred<ReturnType<typeof response>>();
     const retrying = createDeferred<ReturnType<typeof response>>();
     let stops = 0;
-    const h = mount(
-      dashboard(async (envelope) => {
-        if (envelope.method === "DELETE") {
-          stops += 1;
-          return stops === 1 ? stopping.promise : retrying.promise;
-        }
-        return response("first");
-      }),
-    );
+    const h = mountDashboard(async (envelope) => {
+      if (envelope.method === "DELETE") {
+        return ++stops === 1 ? stopping.promise : retrying.promise;
+      }
+      return response();
+    });
     await h.waitForPanel();
     const panel = h.panel();
     h.button("Stop browser")!.click();
@@ -210,7 +210,7 @@ describe("Browser dashboard presentation", () => {
     await vi.waitFor(() => expect(h.button("Stop browser")?.disabled).toBe(false));
     h.button("Stop browser")!.click();
     await vi.waitFor(() => expect(stops).toBe(2));
-    await vi.waitFor(() => expect(h.element.textContent).not.toContain("Browser stop failed"));
+    await h.waitForText("Browser stop failed", false);
     expect(h.button("Stop browser")?.disabled).toBe(true);
     retrying.resolve(response("first", true));
     await h.waitForText("browser is stopped");
@@ -219,17 +219,13 @@ describe("Browser dashboard presentation", () => {
 
   it("keeps panel visibility live during a background inspection and retains its failure", async () => {
     const inspection = createDeferred<ReturnType<typeof response>>();
-    const h = mount(
-      dashboard(async (envelope) =>
-        envelope.method === "GET" ? inspection.promise : response("first"),
-      ),
+    const h = mountDashboard(async (envelope) =>
+      envelope.method === "GET" ? inspection.promise : response(),
     );
     await h.waitForPanel();
     const panel = h.panel()!;
     h.changed();
-    await vi.waitFor(() =>
-      expect(h.actions().filter((entry) => entry.method === "GET")).toHaveLength(1),
-    );
+    await h.waitForMethods(["POST", "GET"]);
     h.element.active = false;
     await vi.waitFor(() => expect(panel.presented).toBe(false));
     expect(h.panel()).toBe(panel);
@@ -237,25 +233,21 @@ describe("Browser dashboard presentation", () => {
     await h.waitForText("Dashboard inspection failed");
     expect(h.panel()).toBe(panel);
     expect(panel.presented).toBe(false);
-    expect(h.actions().map((entry) => entry.method)).toEqual(["POST", "GET"]);
+    expect(h.methods()).toEqual(["POST", "GET"]);
   });
 
   it("admits the replacement widget while a retired widget command is pending", async () => {
     const stopping = createDeferred<ReturnType<typeof response>>();
-    const h = mount(
-      dashboard(async (envelope) => {
-        if (envelope.method === "DELETE") {
-          return stopping.promise;
-        }
-        const instanceId = envelope.body?.instanceId;
-        return response(typeof instanceId === "string" ? instanceId : "first");
-      }),
-    );
+    const h = mountDashboard(async (envelope) => {
+      if (envelope.method === "DELETE") {
+        return stopping.promise;
+      }
+      const instanceId = envelope.body?.instanceId;
+      return response(typeof instanceId === "string" ? instanceId : "first");
+    });
     await h.waitForTarget("first");
     h.button("Stop browser")!.click();
-    await vi.waitFor(() =>
-      expect(h.actions().filter((entry) => entry.method === "DELETE")).toHaveLength(1),
-    );
+    await h.waitForMethods(["POST", "DELETE"]);
     h.element.widget = widget("current");
     await h.waitForTarget("current");
     stopping.resolve(response("first", true));
@@ -268,17 +260,15 @@ describe("Browser dashboard presentation", () => {
   it("keeps an unfinished Stop visible until closure is confirmed", async () => {
     let stopping = false;
     let paused = false;
-    const { element, requests, changed, button, waitForText } = mount(
-      dashboard(async (envelope) => {
-        if (envelope.method === "DELETE") {
-          stopping = true;
-          paused = true;
-          changed();
-          throw new Error("Temporary browser close failure");
-        }
-        return { ...response("first", paused), stopping };
-      }),
-    );
+    const { element, methods, changed, button, waitForText } = mountDashboard(async (envelope) => {
+      if (envelope.method === "DELETE") {
+        stopping = true;
+        paused = true;
+        changed();
+        throw new Error("Temporary browser close failure");
+      }
+      return { ...response("first", paused), stopping };
+    });
     await vi.waitFor(() => expect(button("Stop browser")).toBeDefined());
     button("Stop browser")!.click();
     await waitForText("Browser stop is pending");
@@ -286,27 +276,22 @@ describe("Browser dashboard presentation", () => {
     expect(button("Resume browser")).toBeUndefined();
     button("Retry stop")!.click();
     await vi.waitFor(() =>
-      expect(requests.filter((entry) => entry.method === "DELETE")).toHaveLength(2),
+      expect(methods().filter((method) => method === "DELETE")).toHaveLength(2),
     );
     stopping = false;
     changed();
     await waitForText("browser is stopped");
     expect(button("Retry stop")).toBeUndefined();
     expect(button("Resume browser")).toBeDefined();
-    expect(requests.filter((entry) => entry.method === "POST")).toHaveLength(1);
+    expect(methods().filter((method) => method === "POST")).toHaveLength(1);
   });
 
   it("observes an agent stop/resume without reopening or replacing the dashboard", async () => {
     const opening = createDeferred<ReturnType<typeof response>>();
     let paused = false;
     let targetId = "first";
-    const h = mount(
-      dashboard(async (envelope) => {
-        if (envelope.method === "POST") {
-          return opening.promise;
-        }
-        return response("first", paused, targetId);
-      }),
+    const h = mountDashboard(async (envelope) =>
+      envelope.method === "POST" ? opening.promise : response("first", paused, targetId),
     );
     await vi.waitFor(() => expect(h.requests).toHaveLength(1));
     await h.waitForText("Loading page…");
@@ -315,7 +300,7 @@ describe("Browser dashboard presentation", () => {
     expect(h.button("Reconnect")?.disabled).toBe(true);
     paused = true;
     h.changed();
-    opening.resolve(response("first"));
+    opening.resolve(response());
     await h.waitForText("browser is stopped");
     expect(h.panel()).toBeNull();
     paused = false;
@@ -324,7 +309,7 @@ describe("Browser dashboard presentation", () => {
     await h.waitForTarget("resumed-target");
     h.changed("retired-instance");
     await h.element.updateComplete;
-    expect(h.actions().map((entry) => entry.method)).toEqual(["POST", "GET", "GET"]);
+    expect(h.methods()).toEqual(["POST", "GET", "GET"]);
     expect(h.element.widget?.instanceId).toBe("first");
   });
 
@@ -333,17 +318,11 @@ describe("Browser dashboard presentation", () => {
     async (identity) => {
       const old = createDeferred<ReturnType<typeof response>>();
       const instanceId = identity === "widget" ? "current" : "first";
-      let initial = true;
-      const h = mount(
-        dashboard(async () => {
-          if (initial) {
-            initial = false;
-            return old.promise;
-          }
-          return response(instanceId, false, "current");
-        }),
-        false,
-      );
+      const handle = vi
+        .fn<RequestHandler>()
+        .mockReturnValueOnce(old.promise)
+        .mockResolvedValue(response(instanceId, false, "current"));
+      const h = mountDashboard(handle, false);
       await h.element.updateComplete;
       expect(h.request).not.toHaveBeenCalled();
       h.element.active = true;
@@ -377,23 +356,21 @@ describe("Browser dashboard presentation", () => {
 
   it("reopens a dashboard when inspection finds no live browser tab", async () => {
     let opens = 0;
-    const { changed, actions, waitForTarget } = mount(
-      dashboard(async (envelope) => {
-        if (envelope.method === "GET") {
-          return { ...response("first", true), paused: false };
-        }
-        opens += 1;
-        return response("first", false, opens === 1 ? "initial" : "reopened");
-      }),
-    );
+    const { changed, methods, waitForTarget } = mountDashboard(async (envelope) => {
+      if (envelope.method === "GET") {
+        return { ...response("first", true), paused: false };
+      }
+      opens += 1;
+      return response("first", false, opens === 1 ? "initial" : "reopened");
+    });
     await waitForTarget("initial");
     changed();
     await waitForTarget("reopened");
-    expect(actions().map((entry) => entry.method)).toEqual(["POST", "GET", "POST"]);
+    expect(methods()).toEqual(["POST", "GET", "POST"]);
   });
 
   it("hides without closing and stops/resumes through the dashboard owner", async () => {
-    const h = mount(dashboard(async (envelope) => response("first", envelope.method === "DELETE")));
+    const h = mountDashboard(async (envelope) => response("first", envelope.method === "DELETE"));
     await h.waitForPanel();
     const panel = h.panel();
     h.element.active = false;
@@ -408,7 +385,7 @@ describe("Browser dashboard presentation", () => {
     expect(h.panel()).toBeNull();
     h.button("Resume browser")!.click();
     await h.waitForPanel();
-    expect(h.actions().map((value) => value.method)).toEqual(["POST", "DELETE", "POST"]);
+    expect(h.methods()).toEqual(["POST", "DELETE", "POST"]);
     expect(h.actions()[2]?.body).toMatchObject({
       ...dashboardIdentity,
       resume: true,
