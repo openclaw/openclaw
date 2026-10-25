@@ -8,6 +8,9 @@ import {
   planStandaloneRuntime,
   pruneStandaloneRuntime,
 } from "../../scripts/lib/bun-standalone-sidecar.mjs";
+import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-source-entries.mjs";
+import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-source-graph.mjs";
+import { standaloneSourceGraphSha256 } from "../../scripts/lib/bun-standalone-source-identity.mjs";
 import {
   assertStandaloneDestinations,
   compileStandaloneArtifacts,
@@ -132,6 +135,63 @@ async function compile(
 }
 
 describe("matched standalone support artifacts", () => {
+  it.skipIf(process.platform === "win32")(
+    "binds typed source and transforms to build identity while retaining relocation and support equality",
+    async () => {
+      const capture = async (annotation: string, transformedSuffix = "") => {
+        const input = fixture();
+        const sourceRoot = path.join(input.root, "source");
+        fs.mkdirSync(path.join(sourceRoot, "src"), { recursive: true });
+        fs.writeFileSync(path.join(sourceRoot, "package.json"), '{"type":"module"}\n');
+        const source = `export function identity(value: ${annotation}): ${annotation} { return value; }\n`;
+        fs.writeFileSync(path.join(sourceRoot, "src/index.ts"), source);
+        fs.writeFileSync(path.join(sourceRoot, "src/helper.ts"), "export const helper = true;\n");
+        fs.writeFileSync(path.join(sourceRoot, "tsconfig.json"), "{}\n");
+        const sourceEntries = createStandaloneSourceEntries({
+          sourceRoot,
+          configs: [
+            {
+              entry: { entry: "src/index.ts" },
+              alias: { "@fixture/helper": path.join(sourceRoot, "src/helper.ts") },
+              cwd: sourceRoot,
+              tsconfig: path.join(sourceRoot, "tsconfig.json"),
+            },
+          ],
+        });
+        const graph = createStandaloneSourceGraph({
+          sourceRoot,
+          outputRoot: input.outputRoot,
+          runtimeRoot: input.runtimeRoot,
+          sourceEntries,
+          embeddedPaths: {},
+        });
+        const entry = graph.addEntry("dist/entry.mjs");
+        if (!entry) {
+          throw new Error("Missing typed source entry");
+        }
+        graph.recordLoaded(entry, source + transformedSuffix);
+        const sourceGraphSha256 = standaloneSourceGraphSha256(sourceRoot, graph.manifest());
+        const artifacts = await compile(input, { sourceGraphSha256 });
+        return { sourceGraphSha256, artifacts };
+      };
+      const first = await capture("number");
+      const relocated = await capture("number");
+      const typeChanged = await capture("string");
+      const transformChanged = await capture("number", "// changed compiler input\n");
+      expect(relocated.artifacts[0].build).toEqual(first.artifacts[0].build);
+      for (const changed of [typeChanged, transformChanged]) {
+        expect(changed.sourceGraphSha256).not.toBe(first.sourceGraphSha256);
+        expect(changed.artifacts[0].build.id).not.toBe(first.artifacts[0].build.id);
+        expect(changed.artifacts[0].build.moduleGraphSha256).toBe(
+          first.artifacts[0].build.moduleGraphSha256,
+        );
+      }
+      for (const captured of [first, relocated, typeChanged, transformChanged]) {
+        expect(captured.artifacts[1].build.id).toBe(captured.artifacts[0].build.id);
+      }
+    },
+  );
+
   it("keeps bundled plugin fingerprints bound to the executing image's captured identity", () => {
     const runtimeRoot = tempDirs.make("standalone-fingerprint-");
     const entry = "dist/extensions/demo/state-operation-api.js";
