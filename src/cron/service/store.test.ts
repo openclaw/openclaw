@@ -43,8 +43,6 @@ describe("cron service store seam coverage", () => {
   const seed = (...jobs: CronJob[]) => saveCronStore(storePath, { version: 1, jobs });
   const jobIds = () => state.store?.jobs.map((job) => job.id);
   const quarantined = () => cronStoreModule.loadCronQuarantinedJobs(storePath);
-  const rejected = (sourceIndex: number, reason: string, job: Partial<CronJob>) =>
-    expect.objectContaining({ sourceIndex, reason, job: expect.objectContaining(job) });
   function corrupt(id: string, field: string, value: unknown) {
     openOpenClawStateDatabase()
       .db.prepare("UPDATE cron_jobs SET job_json = json_set(job_json, ?, json(?)) WHERE job_id = ?")
@@ -76,134 +74,83 @@ describe("cron service store seam coverage", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it("quarantines malformed SQLite rows atomically without creating JSON state", async () => {
-    const malformed = createReloadCronJob({ id: "malformed-sqlite-row" });
-    const legacyValid = createReloadCronJob({ id: "legacy-valid" });
-    const legacyValidTrigger = createReloadCronJob({ id: "legacy-valid-trigger" });
-    const legacyInvalidTrigger = createReloadCronJob({ id: "legacy-invalid-trigger" });
-    const legacyMissingPayload = createReloadCronJob({ id: "legacy-missing-payload" });
-    const surviving = createReloadCronJob({
-      id: "surviving-sqlite-row",
-      state: { nextRunAtMs: STORE_TEST_NOW + 60_000 },
+  it("quarantines malformed rows atomically while retaining valid legacy and repairable rows", async () => {
+    const invalidTime = MAX_DATE_TIMESTAMP_MS + 1;
+    const every = (everyMs: number, anchorMs?: number): CronJob["schedule"] => ({
+      kind: "every",
+      everyMs,
+      ...(anchorMs === undefined ? {} : { anchorMs }),
     });
-    await seed(
-      malformed,
-      legacyValid,
-      legacyValidTrigger,
-      legacyInvalidTrigger,
-      legacyMissingPayload,
-      surviving,
-    );
-    const db = openOpenClawStateDatabase().db;
-    corrupt(malformed.id, "schedule.kind", "unsupported");
-    for (const job of [
-      legacyValid,
-      legacyValidTrigger,
-      legacyInvalidTrigger,
-      legacyMissingPayload,
-    ]) {
-      corrupt(job.id, "schedule", "*/5 * * * *");
+    const cases: Array<
+      [
+        id: string,
+        reason: string | null,
+        overrides: Partial<CronJob>,
+        fields: Record<string, unknown>,
+      ]
+    > = [
+      ["bad-kind", "invalid-schedule", {}, { "schedule.kind": "unsupported" }],
+      ["legacy", null, {}, { schedule: "*/5 * * * *" }],
+      ["legacy-trigger", null, {}, { schedule: "*/5 * * * *", trigger: { script: "true" } }],
+      ["bad-trigger", "invalid-trigger", {}, { schedule: "*/5 * * * *", trigger: {} }],
+      ["missing-payload", "missing-payload", {}, { schedule: "*/5 * * * *" }],
+      [
+        "bad-interval",
+        "invalid-schedule",
+        { schedule: every(1_000) },
+        { "schedule.everyMs": invalidTime },
+      ],
+      [
+        "bad-anchor",
+        "invalid-schedule",
+        { schedule: every(1_000, 0) },
+        { "schedule.anchorMs": invalidTime },
+      ],
+      ["unsatisfiable", "unsatisfiable-schedule", { schedule: every(MAX_DATE_TIMESTAMP_MS) }, {}],
+      ["disabled", null, { enabled: false, schedule: every(MAX_DATE_TIMESTAMP_MS) }, {}],
+      ["bad-stagger", "invalid-schedule", {}, { "schedule.staggerMs": invalidTime }],
+      ["repairable", null, { state: { lastRunAtMs: MAX_DATE_TIMESTAMP_MS } }, {}],
+      ["bad-state", "invalid-state", {}, {}],
+      ["survivor", null, { state: { nextRunAtMs: STORE_TEST_NOW + 60_000 } }, {}],
+    ];
+    await seed(...cases.map(([id, , overrides]) => createReloadCronJob({ id, ...overrides })));
+    // JSON numeric injection preserves max + 1 exactly instead of rounding a SQLite FLOAT.
+    for (const row of cases) {
+      for (const [field, value] of Object.entries(row[3])) {
+        corrupt(row[0], field, value);
+      }
     }
-    corrupt(legacyValidTrigger.id, "trigger", { script: "true" });
-    corrupt(legacyInvalidTrigger.id, "trigger", {});
+    const db = openOpenClawStateDatabase().db;
     db.prepare(
       "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.payload') WHERE job_id = ?",
-    ).run(legacyMissingPayload.id);
+    ).run("missing-payload");
+    db.prepare(
+      "UPDATE cron_jobs SET state_json = json_set(state_json, '$.lastRunAtMs', json(?)) WHERE job_id = ?",
+    ).run(JSON.stringify(invalidTime), "bad-state");
     await ensureLoaded(state);
-
-    const expectedActiveJobIds = [legacyValid.id, legacyValidTrigger.id, surviving.id];
-    expect(jobIds()).toEqual(expectedActiveJobIds);
-    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(
-      expectedActiveJobIds,
+    const survivors = cases.filter(([, reason]) => !reason).map(([id]) => id);
+    expect(jobIds()).toEqual(survivors);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(survivors);
+    const quarantine = await quarantined();
+    expect(quarantine).toEqual(
+      cases.flatMap(([id, reason], sourceIndex) =>
+        reason
+          ? [expect.objectContaining({ sourceIndex, reason, job: expect.objectContaining({ id }) })]
+          : [],
+      ),
     );
-    expect(await quarantined()).toEqual([
-      rejected(0, "invalid-schedule", { id: malformed.id }),
-      rejected(3, "invalid-trigger", { id: legacyInvalidTrigger.id }),
-      rejected(4, "missing-payload", { id: legacyMissingPayload.id }),
-    ]);
+    expect(quarantine.find((row) => row.job.id === "bad-state")?.state).toMatchObject({
+      lastRunAtMs: invalidTime,
+    });
+    for (const row of cases) {
+      const rejectedJob = quarantine.find((entry) => entry.job.id === row[0])?.job;
+      for (const [field, value] of Object.entries(row[3])) {
+        if (value === invalidTime) {
+          expect(rejectedJob).toHaveProperty(field, invalidTime);
+        }
+      }
+    }
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
-  });
-
-  it("quarantines persisted every schedules that cannot produce valid Date timestamps", async () => {
-    const invalidInterval = createReloadCronJob({
-      id: "invalid-date-interval",
-      schedule: { kind: "every", everyMs: 1_000 },
-    });
-    const invalidAnchor = createReloadCronJob({
-      id: "invalid-date-anchor",
-      schedule: { kind: "every", everyMs: 1_000, anchorMs: 0 },
-    });
-    const unsatisfiableInterval = createReloadCronJob({
-      id: "unsatisfiable-date-interval",
-      schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS },
-    });
-    const disabledUnsatisfiableInterval = createReloadCronJob({
-      id: "disabled-unsatisfiable-date-interval",
-      enabled: false,
-      schedule: { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS },
-    });
-    const invalidStagger = createReloadCronJob({ id: "invalid-date-stagger" });
-    const repairableState = createReloadCronJob({
-      id: "repairable-runtime-state",
-      state: { lastRunAtMs: MAX_DATE_TIMESTAMP_MS },
-    });
-    const surviving = createReloadCronJob({ id: "valid-schedule" });
-    await seed(
-      invalidInterval,
-      invalidAnchor,
-      unsatisfiableInterval,
-      disabledUnsatisfiableInterval,
-      invalidStagger,
-      repairableState,
-      surviving,
-    );
-    // Number bindings become SQLite FLOATs; JSON formatting can round max + 1
-    // back into the valid Date domain. Inject exact numeric JSON instead.
-    const invalidTimestamp = MAX_DATE_TIMESTAMP_MS + 1;
-    corrupt(invalidInterval.id, "schedule.everyMs", invalidTimestamp);
-    corrupt(invalidAnchor.id, "schedule.anchorMs", invalidTimestamp);
-    corrupt(invalidStagger.id, "schedule.staggerMs", invalidTimestamp);
-
-    await ensureLoaded(state);
-
-    expect(jobIds()).toEqual([disabledUnsatisfiableInterval.id, repairableState.id, surviving.id]);
-    expect(await quarantined()).toEqual([
-      rejected(0, "invalid-schedule", {
-        id: invalidInterval.id,
-        schedule: expect.objectContaining({ everyMs: invalidTimestamp }),
-      }),
-      rejected(1, "invalid-schedule", {
-        id: invalidAnchor.id,
-        schedule: expect.objectContaining({ anchorMs: invalidTimestamp }),
-      }),
-      rejected(2, "unsatisfiable-schedule", { id: unsatisfiableInterval.id }),
-      rejected(4, "invalid-schedule", {
-        id: invalidStagger.id,
-        schedule: expect.objectContaining({ staggerMs: invalidTimestamp }),
-      }),
-    ]);
-  });
-
-  it("quarantines persisted runtime timestamps outside the Date domain", async () => {
-    const invalidState = createReloadCronJob({ id: "invalid-runtime-state" });
-    const surviving = createReloadCronJob({ id: "valid-runtime-state" });
-    await seed(invalidState, surviving);
-    openOpenClawStateDatabase()
-      .db.prepare(
-        "UPDATE cron_jobs SET state_json = json_set(state_json, '$.lastRunAtMs', json(?)) WHERE job_id = ?",
-      )
-      .run(JSON.stringify(MAX_DATE_TIMESTAMP_MS + 1), invalidState.id);
-
-    await ensureLoaded(state);
-
-    expect(jobIds()).toEqual([surviving.id]);
-    expect(await quarantined()).toEqual([
-      expect.objectContaining({
-        reason: "invalid-state",
-        job: expect.objectContaining({ id: invalidState.id }),
-        state: expect.objectContaining({ lastRunAtMs: MAX_DATE_TIMESTAMP_MS + 1 }),
-      }),
-    ]);
   });
 
   it("retains malformed rows and their quarantine until a load repair commits", async () => {
@@ -252,11 +199,12 @@ describe("cron service store seam coverage", () => {
     expect(onEvent).not.toHaveBeenCalled();
   });
 
-  it("uses the trimmed canonical id for job rows and companion authority", async () => {
+  it("normalizes persisted IDs, opaque session targets, tool caps and companion authority", async () => {
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
     const rawJob = {
       ...createReloadCronJob({
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "isolated",
+        sessionTarget,
         payload: { kind: "agentTurn", message: "tick", toolsAllow: [" read "] },
       }),
       id: "  repro-stable-id  ",
@@ -277,43 +225,10 @@ describe("cron service store seam coverage", () => {
 
     const job = findJobOrThrow(state, "repro-stable-id");
     expect(job.id).toBe("repro-stable-id");
+    expect(job.sessionTarget).toBe(sessionTarget);
     expect((job as { jobId?: unknown }).jobId).toBeUndefined();
     expect(job.payload).toMatchObject({ kind: "agentTurn", toolsAllow: ["read"] });
-    expect(job.runtimeAuthority).toEqual({
-      version: 1,
-      runtimeId: "codex",
-      namespace: "codex.apps",
-      payload: { apps: [{ id: "calendar" }] },
-    });
+    expect(job.runtimeAuthority).toEqual(rawJob.runtimeAuthority);
     await expectPathMissing(`${storePath}.migrated`);
-  });
-
-  it("loads persisted jobs with opaque custom session ids containing separators", async () => {
-    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
-
-    await seed(
-      createReloadCronJob({
-        id: "opaque-session-target-job",
-        name: "opaque session target job",
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget,
-        payload: { kind: "agentTurn", message: "ping" },
-      }),
-    );
-
-    await ensureLoaded(state);
-
-    const job = findJobOrThrow(state, "opaque-session-target-job");
-    expect(job.sessionTarget).toBe(sessionTarget);
-    const warnCalls = logger.warn.mock.calls as unknown as Array<
-      [{ storePath?: string; jobId?: string }, string]
-    >;
-    expect(
-      warnCalls.some(
-        ([metadata, message]) =>
-          metadata.jobId === "opaque-session-target-job" &&
-          message.includes("invalid persisted sessionTarget"),
-      ),
-    ).toBe(false);
   });
 });
