@@ -135,9 +135,8 @@ describe("legacy node-host Doctor migration", () => {
       const refused = await migrate();
       expect(refused.changes).toEqual([]);
       expect(refused.warningDisposition).toBe("recoverable");
-      expect(refused.warnings.join("\n")).toMatch(
-        /must be valid UTF-8.*Back up .+, replace it .*retry Doctor/s,
-      );
+      expect(refused.warnings.join("\n")).toContain("must be valid UTF-8");
+      expect(refused.warnings.join("\n")).toMatch(/Back up .+, replace it .*retry Doctor/);
       expect(read()).toBeUndefined();
       for (const [file, bytes] of originals) {
         expect(await fsp.readFile(file)).toEqual(bytes);
