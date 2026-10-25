@@ -32,7 +32,10 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 installRequesterCronAuthorityTestHooks();
 
-beforeEach(resetAuthorityRunHarness);
+beforeEach(() => {
+  resetAuthorityRunHarness();
+  delete ownerSurface.last;
+});
 
 afterEach(() => {
   runEmbeddedAgentMock.mockReset();
@@ -66,9 +69,9 @@ function hookShapedJob(toolsAllow?: string[]): CronJob {
 
 // The owner-only surface the last run's tools got: its sender bit and which
 // owner-only tools it may call.
-let lastOwnerSurface:
-  | { senderIsOwner: boolean | undefined; callable: Record<string, boolean> }
-  | undefined;
+const ownerSurface: {
+  last?: { senderIsOwner: boolean | undefined; callable: Record<string, boolean> };
+} = {};
 
 type AutomationsOutcome =
   | { offered: false }
@@ -96,7 +99,7 @@ async function runAndTouchSibling(params: {
       runParams,
       async (constructed) => {
         const ownerOnly: readonly string[] = GATEWAY_OWNER_ONLY_CORE_TOOLS;
-        lastOwnerSurface = {
+        ownerSurface.last = {
           senderIsOwner: runParams.senderIsOwner,
           callable: Object.fromEntries(
             constructed
@@ -196,10 +199,11 @@ it("channel join introductions are offered no automations tool", async () => {
 // Owner status for ingress turns is a separate decision: hook turns keep the
 // embedded owner surface (no sender bit, every owner-only tool except intent).
 it("hook turns keep their existing owner-only surface", async () => {
-  lastOwnerSurface = undefined;
   await runAndTouchSibling({ trigger: "event", ingressBoundary: "gateway.hooks.agent" });
-  expect(lastOwnerSurface?.senderIsOwner).toBeUndefined();
-  const callable = lastOwnerSurface?.callable ?? {};
+  const surface = ownerSurface.last;
+  expect(surface).toBeDefined();
+  expect(surface?.senderIsOwner).toBeUndefined();
+  const callable = surface?.callable ?? {};
   expect(callable[AUTOMATIONS_TOOL_NAME]).toBe(true);
   expect(Object.keys(callable).length).toBeGreaterThan(1);
   for (const [name, available] of Object.entries(callable)) {
