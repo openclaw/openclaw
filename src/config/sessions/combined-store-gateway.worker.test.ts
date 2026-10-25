@@ -418,7 +418,7 @@ it("federates worker rows under the same physical owners and keeps incognito pro
     updatedAt: 2,
     label: "first",
     skillsSnapshot: { prompt: "private snapshot", skills: [] },
-  };
+  } satisfies Parameters<typeof upsertSessionEntryCore>[1];
   await upsertSessionEntryCore(scope, entry);
   const expected = loadCombinedStore(cfg);
   const result = await loadCombinedStoreAsync(cfg);
