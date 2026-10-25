@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import * as os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -26,9 +27,15 @@ import {
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
 
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return { ...actual, availableParallelism: vi.fn(actual.availableParallelism) };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.mocked(os.availableParallelism).mockReset();
   await drainGlobalSingletonLifecycleState();
   vi.unstubAllEnvs();
 });
@@ -222,7 +229,8 @@ it("joins only matching pending staged reads and forgets settled results", async
   }
 });
 
-it("does not join pre-mutation reads or let their settlement evict newer readers", async () => {
+it.each([2, 4])("isolates ref mutations and old settlement with %i CPUs", async (cores) => {
+  vi.mocked(os.availableParallelism).mockReturnValue(cores);
   const fixture = await stagedFixture(0);
   const oldEntered = createDeferredCore();
   const newEntered = createDeferredCore();
@@ -252,9 +260,9 @@ it("does not join pre-mutation reads or let their settlement evict newer readers
     await updateWorkspaceResultRefs(fixture.repository, [{ ref: fixture.stagedResultRef }]);
     const second = read();
     operations.push(second);
-    await newEntered.promise;
     releaseOld.resolve();
     expect((await first).changedEntries.length).toBeGreaterThan(0);
+    await newEntered.promise;
     const third = read();
     operations.push(third);
     const outcomes = Promise.allSettled([second, third]);
