@@ -11,7 +11,6 @@ import {
   prepareAuthProfileSourceReceipt,
   type AuthProfileMigrationSourceReceipt,
 } from "../commands/doctor-auth-migration-receipts.js";
-import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
@@ -22,6 +21,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { createDoctorPrompterFixture } from "./doctor-health-context.test-support.js";
 import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
@@ -56,22 +56,12 @@ const { recordAuthProfileMigrationImported } = (globalThis as Record<PropertyKey
   recordAuthProfileMigrationImported: (receipt: AuthProfileMigrationSourceReceipt) => void;
 };
 
-function makePrompter(shouldRepair: boolean): DoctorPrompter {
+function makePrompter(shouldRepair: boolean) {
   return {
+    ...createDoctorPrompterFixture(shouldRepair, true),
     confirm: vi.fn(async () => false),
-    confirmAutoFix: vi.fn(async () => shouldRepair),
     confirmAggressiveAutoFix: vi.fn(async () => false),
     confirmRuntimeRepair: vi.fn(async () => false),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
   };
 }
 
@@ -79,18 +69,12 @@ function makeLegacyConfig(): OpenClawConfig {
   return {
     auth: {
       profiles: {
-        "openai:bravo": {
-          provider: "openai",
-          mode: "api_key",
-        },
-        "openai-codex:bravo": {
-          provider: "openai-codex",
-          mode: "oauth",
-        },
+        "openai:bravo": { provider: "openai", mode: "api_key" },
+        "openai-codex:bravo": { provider: "openai-codex", mode: "oauth" },
       },
       order: { "openai-codex": ["openai-codex:bravo"] },
     },
-  } as OpenClawConfig;
+  };
 }
 
 async function makeState(): Promise<OpenClawTestState> {
@@ -104,38 +88,39 @@ async function makeState(): Promise<OpenClawTestState> {
 }
 
 async function writeLegacyRotationState(state: OpenClawTestState): Promise<string> {
-  return await state.writeText(
-    "agents/main/agent/auth-state.json",
-    `${JSON.stringify({
-      version: 1,
-      order: { "openai-codex": ["openai-codex:bravo"] },
-      lastGood: { "openai-codex": "openai-codex:bravo" },
-      usageStats: { "openai-codex:bravo": { lastUsed: 123 } },
-    })}\n`,
-  );
+  return await state.writeJson("agents/main/agent/auth-state.json", {
+    version: 1,
+    order: { "openai-codex": ["openai-codex:bravo"] },
+    lastGood: { "openai-codex": "openai-codex:bravo" },
+    usageStats: { "openai-codex:bravo": { lastUsed: 123 } },
+  });
 }
 
 async function writeLegacyCredentialStore(state: OpenClawTestState): Promise<string> {
-  return await state.writeText(
-    "agents/main/agent/auth-profiles.json",
-    `${JSON.stringify({
-      version: 1,
-      profiles: {
-        "openai:bravo": {
-          type: "api_key",
-          provider: "openai",
-          key: "existing-key",
-        },
-        "openai-codex:bravo": {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "legacy-access",
-          refresh: "legacy-refresh",
-          expires: 1_900_000_000_000,
-        },
+  return await state.writeJson("agents/main/agent/auth-profiles.json", {
+    version: 1,
+    profiles: {
+      "openai:bravo": { type: "api_key", provider: "openai", key: "existing-key" },
+      "openai-codex:bravo": {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "legacy-access",
+        refresh: "legacy-refresh",
+        expires: 1_900_000_000_000,
       },
-    })}\n`,
-  );
+    },
+  });
+}
+
+function context(state: OpenClawTestState, shouldRepair: boolean) {
+  const cfg = makeLegacyConfig();
+  return createDoctorHealthFlowContext({
+    cfg,
+    cfgForPersistence: shouldRepair ? structuredClone(cfg) : cfg,
+    prompter: makePrompter(shouldRepair),
+    env: state.env,
+    configPath: path.join(state.stateDir, "openclaw.json"),
+  });
 }
 
 function loadMigratedStore(state: OpenClawTestState) {
@@ -188,15 +173,9 @@ describe("interactive Doctor auth migration", () => {
       }
       const remainingPath = outcome === "declined" ? await writeLegacyCredentialStore(state) : null;
       const statePath = outcome === "declined" ? await writeLegacyRotationState(state) : null;
-      const cfg = makeLegacyConfig();
-      const originalConfig = structuredClone(cfg);
-      const prompter = makePrompter(false);
-      const ctx = createDoctorHealthFlowContext({
-        cfg,
-        prompter,
-        env: state.env,
-        configPath: path.join(state.stateDir, "openclaw.json"),
-      });
+      const ctx = context(state, false);
+      const originalConfig = structuredClone(ctx.cfg);
+      const { prompter } = ctx;
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
       await authProfileMigrationContribution().run(ctx);
@@ -241,16 +220,9 @@ describe("interactive Doctor auth migration", () => {
 
   it("commits config credentials and standalone state with one mapping after acceptance", async () => {
     const state = await makeState();
-    const cfg = makeLegacyConfig();
     await writeLegacyCredentialStore(state);
     await writeLegacyRotationState(state);
-    const ctx = createDoctorHealthFlowContext({
-      cfg,
-      cfgForPersistence: structuredClone(cfg),
-      prompter: makePrompter(true),
-      env: state.env,
-      configPath: path.join(state.stateDir, "openclaw.json"),
-    });
+    const ctx = context(state, true);
 
     await authProfileMigrationContribution().run(ctx);
 

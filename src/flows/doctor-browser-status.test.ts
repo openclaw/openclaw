@@ -12,6 +12,7 @@ import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import { runBrowserHealth } from "./doctor-health-contribution-runners.gateway.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
+import type { HealthFinding } from "./health-checks.js";
 
 const capture = vi.hoisted(() => ({ note: vi.fn(), load: vi.fn(), surface: {} }));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: capture.note }));
@@ -28,8 +29,6 @@ vi.mock("openclaw/plugin-sdk/text-utility-runtime", async (importOriginal) => {
     },
   };
 });
-// Load the real public artifact through the shared test loader, keeping plugin
-// implementation types out of the core typecheck graph.
 const browserDoctor = await loadBundledPluginFacade<typeof import("../commands/doctor-browser.js")>(
   { pluginId: "browser", artifactBasename: "browser-doctor.js" },
 );
@@ -110,6 +109,18 @@ const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/brows
 function repairContext() {
   return { cfg: ctx.cfg, runtime: ctx.runtime, mode: "fix" as const, configPath: ctx.configPath };
 }
+function expectFinding(
+  findings: readonly HealthFinding[] | undefined,
+  fields: Partial<HealthFinding>,
+) {
+  expect(findings).toContainEqual(expect.objectContaining(fields));
+}
+async function runRepair() {
+  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
+  expect(run.remainingFindings).toEqual(run.findings);
+  expect(accesses).toEqual([]);
+  return run;
+}
 
 it.each([false, true])(
   "reports browser setup once without inspecting profiles or inventing failed repair (import %s)",
@@ -133,32 +144,25 @@ it.each([false, true])(
     expect(ctx.healthFindings).toEqual([]);
     const findings = await check.detect(repairContext());
     expect(findings).toHaveLength(allowSystemProfileImport ? 2 : 1);
-    expect(findings).toContainEqual(
-      expect.objectContaining({
-        severity: "info",
-        category: "recommended",
-        message: expect.stringContaining("native bootstrap was not inspected"),
-        fixHint: expect.stringContaining("openclaw browser extension status --json"),
-      }),
-    );
+    expectFinding(findings, {
+      severity: "info",
+      category: "recommended",
+      message: expect.stringContaining("native bootstrap was not inspected"),
+      fixHint: expect.stringContaining("openclaw browser extension status --json"),
+    });
     if (allowSystemProfileImport) {
-      expect(findings).toContainEqual(
-        expect.objectContaining({
-          severity: "info",
-          message: expect.stringContaining("explicit Chromium user data directory"),
-          fixHint: expect.stringContaining("No action needed"),
-        }),
-      );
+      expectFinding(findings, {
+        severity: "info",
+        message: expect.stringContaining("explicit Chromium user data directory"),
+        fixHint: expect.stringContaining("No action needed"),
+      });
     }
-    expect("repair" in check).toBe(true);
-    const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
+    const run = await runRepair();
     expect(run).toMatchObject({
       changes: [],
       effects: [],
       warnings: expect.arrayContaining([expect.stringContaining("repair skipped")]),
     });
-    expect(run.remainingFindings).toEqual(run.findings);
-    expect(accesses).toEqual([]);
   },
 );
 
@@ -174,9 +178,8 @@ it("retains an actionable inspection gap when the bundled browser surface cannot
       fixHint: expect.stringContaining("bundled browser plugin"),
     }),
   ]);
-  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
+  const run = await runRepair();
   expect(run.remainingFindings).toEqual(ctx.healthFindings);
-  expect(accesses).toEqual([]);
 });
 
 it("names a configured missing executable and gives its repair instead of a plugin-load failure", async () => {
@@ -190,24 +193,17 @@ it("names a configured missing executable and gives its repair instead of a plug
     },
   };
   await runBrowserHealth(ctx);
-  expect(ctx.healthFindings).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        category: "fix-now",
-        message: expect.stringContaining("/synthetic/missing-browser"),
-        fixHint: expect.stringContaining("browser.profiles.work.executablePath"),
-      }),
-    ]),
-  );
+  expectFinding(ctx.healthFindings, {
+    category: "fix-now",
+    message: expect.stringContaining("/synthetic/missing-browser"),
+    fixHint: expect.stringContaining("browser.profiles.work.executablePath"),
+  });
+  const messages = ctx.healthFindings?.map((finding) => finding.message).join("\n");
   expect(ctx.healthFindings?.map((finding) => finding.fixHint).join("\n")).not.toContain(
     "bundled browser plugin",
   );
-  expect(ctx.healthFindings?.map((finding) => finding.message).join("\n")).toContain(
-    "A configured browser executable could not be used",
-  );
-  expect(ctx.healthFindings?.map((finding) => finding.message).join("\n")).not.toContain(
-    "No Chromium-based browser executable was found on this host",
-  );
+  expect(messages).toContain("A configured browser executable could not be used");
+  expect(messages).not.toContain("No Chromium-based browser executable was found on this host");
   expect(accesses).toEqual([]);
 });
 
@@ -239,12 +235,10 @@ it.each([
     const result = await check.repair?.(repairContext(), []);
     expect(result).toMatchObject({ changes: output.changes, warnings: output.warnings });
     expect([result?.status, result?.reason]).toEqual([status, reason]);
-    const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
-    expect(run.remainingFindings).toEqual(run.findings);
+    const run = await runRepair();
     expect(run.warnings.join("\n")).toContain(
       status === "failed" ? `repair failed: ${reason}` : "repair left",
     );
-    expect(accesses).toEqual([]);
   },
 );
 
@@ -260,10 +254,8 @@ it.each(["loader", "repair hook"])("keeps %s errors as failures", async (source)
   const result = await check.repair?.(repairContext(), []);
   expect(result).toMatchObject({ status: "failed", changes: [] });
   expect(result?.warnings?.join("\n")).toContain("synthetic browser repair unavailable");
-  const run = await runDoctorHealthRepairs(repairContext(), { checks: [check] });
-  expect(run.remainingFindings).toEqual(run.findings);
+  const run = await runRepair();
   expect(run.warnings.join("\n")).toContain("repair failed:");
-  expect(accesses).toEqual([]);
 });
 
 it("does not load or invoke native-host repair in dry-run", async () => {

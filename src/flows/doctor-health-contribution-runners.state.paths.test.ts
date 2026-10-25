@@ -76,18 +76,20 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
   };
   fixture.database = database;
   const queries = getNodeSqliteKysely<Pick<DB, "agent_databases" | "update_runs">>(db);
+  const insert = (rows: ReturnType<typeof databaseRow>[]) =>
+    executeSqliteQuerySync(db, queries.insertInto("agent_databases").values(rows));
+  const update = (pathname: string, values: Partial<ReturnType<typeof databaseRow>>) =>
+    executeSqliteQuerySync(
+      db,
+      queries.updateTable("agent_databases").set(values).where("path", "=", pathname),
+    );
   const namespaced = path.toNamespacedPath(path.join(stateDir, relative));
   const external = path.toNamespacedPath(String.raw`D:\other\openclaw-agent.sqlite`);
-  executeSqliteQuerySync(
-    db,
-    queries
-      .insertInto("agent_databases")
-      .values([
-        databaseRow(relative, 18, 100, 10),
-        databaseRow(namespaced),
-        databaseRow(external, 20, 300, 30),
-      ]),
-  );
+  insert([
+    databaseRow(relative, 18, 100, 10),
+    databaseRow(namespaced),
+    databaseRow(external, 20, 300, 30),
+  ]);
   const readRows = () =>
     executeSqliteQuerySync(db, queries.selectFrom("agent_databases").selectAll().orderBy("path"))
       .rows;
@@ -117,7 +119,14 @@ function seedDatabase(stateDir = String.raw`C:\synthetic\state`) {
         repair_json: "[]",
       }),
     );
-  return { database, queries, namespaced, external, readRows, versions, startUpdate };
+  const matches = (baseline: ReturnType<typeof versions>, candidate = false) =>
+    updateStateSchemaVersionsMatch(baseline, versions(), {
+      sharedPath: database.path,
+      ...(candidate
+        ? { candidateSchemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } }
+        : {}),
+    });
+  return { database, insert, update, external, readRows, versions, startUpdate, matches };
 }
 
 function context(env: NodeJS.ProcessEnv = {}, shouldRepair = true): DoctorHealthFlowContext {
@@ -153,29 +162,14 @@ describe("Doctor Windows database path repair", () => {
       const baseline = state.versions();
       state.startUpdate();
       await initialDoctorHealthContribution("doctor:state-integrity").run(context());
-      expect(
-        updateStateSchemaVersionsMatch(baseline, state.versions(), {
-          sharedPath: state.database.path,
-        }),
-      ).toBe(true);
-      expect(
-        updateStateSchemaVersionsMatch(baseline, state.versions(), {
-          sharedPath: state.database.path,
-          candidateSchemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 },
-        }),
-      ).toBe(true);
+      expect(state.matches(baseline)).toBe(true);
+      expect(state.matches(baseline, true)).toBe(true);
     },
   );
 
   it("keeps newer canonical facts when the namespace alias is older", async () => {
     const state = seedDatabase();
-    executeSqliteQuerySync(
-      state.database.db,
-      state.queries
-        .updateTable("agent_databases")
-        .set({ last_seen_at: 500, size_bytes: null })
-        .where("path", "=", relative),
-    );
+    state.update(relative, { last_seen_at: 500, size_bytes: null });
     await initialDoctorHealthContribution("doctor:state-integrity").run(context());
     expect(state.readRows().find((row) => row.path === relative)).toEqual(
       databaseRow(relative, 18, 500, null),
@@ -191,10 +185,7 @@ describe("Doctor Windows database path repair", () => {
       400,
       40,
     );
-    executeSqliteQuerySync(
-      state.database.db,
-      state.queries.insertInto("agent_databases").values(retained),
-    );
+    state.insert([retained]);
     await initialDoctorHealthContribution("doctor:state-integrity").run(context());
     const repaired = state.readRows();
     expect(repaired).toHaveLength(3);
@@ -217,11 +208,7 @@ describe("Doctor Windows database path repair", () => {
       "Skipped agent database path repair while update 00000000-0000-4000-8000-000000000001 is in progress. Run openclaw doctor --fix after the update finishes.",
     ]);
     expect(fixture.note).toHaveBeenCalledWith(ctx.updateWarnings?.[0], "Doctor warnings");
-    expect(
-      updateStateSchemaVersionsMatch(baseline, state.versions(), {
-        sharedPath: state.database.path,
-      }),
-    ).toBe(true);
+    expect(state.matches(baseline)).toBe(true);
   });
 
   it.each([{ OPENCLAW_UPDATE_IN_PROGRESS: "1" }])(
