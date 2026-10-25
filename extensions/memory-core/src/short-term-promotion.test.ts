@@ -33,6 +33,7 @@ import {
   deleteShortTermLockEntryIfCurrent,
   withMemoryWorkspaceLock,
 } from "./memory-workspace-lock.js";
+import { isContaminatedDreamingSnippet } from "./short-term-promotion-utils.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -519,6 +520,215 @@ describe("short-term promotion", () => {
     );
     const ranked = await rankAllCandidates(workspaceDir);
     expect(ranked.map((candidate) => candidate.snippet)).toEqual([ordinary]);
+  });
+
+  it("ignores contaminated dreaming snippets when recording short-term recalls", async (workspaceDir) => {
+    await recordMemoryRecalls(workspaceDir, "action preference", [
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        1,
+        1,
+        0.92,
+        "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+      ),
+    ]);
+
+    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+    expect(store.version).toBe(1);
+    expect(store.entries).toEqual({});
+  });
+
+  it("ignores bullet-prefixed dreaming snippets when recording short-term recalls", async (workspaceDir) => {
+    await recordMemoryRecalls(workspaceDir, "action preference", [
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        1,
+        5,
+        0.92,
+        [
+          "- Candidate: Default to action.",
+          "  - confidence: 0.76",
+          "  - evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1",
+          "  - recalls: 3",
+          "  - status: staged",
+        ].join("\n"),
+      ),
+    ]);
+
+    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+    expect(store.version).toBe(1);
+    expect(store.entries).toEqual({});
+  });
+
+  baseIt("classifies non-durable promotion snippets without blocking durable guidance", () => {
+    const rejected = [
+      "Output Directory Path: /home/user/data/temp/feishu_project_issues/7058806450",
+      "summary.md: **Not generated.** The pipeline aborted before reaching the summary step because no log files were downloaded.",
+      "Worktree: **Not created.** `.monorepo_worktree.json` does not exist after step 6/9.",
+      "| Method | Error | Root Cause | | drfile download | [400] incorrect username or password | password=*** placeholder |",
+      // Multiline input is normalized inside the predicate.
+      "Error: boom\n    at run (/tmp/openclaw-run/index.js:1:2)",
+      // Promotion call sites pass pre-normalized single-line snippets, so the
+      // gate must also catch stack frames embedded mid-sentence.
+      "wrapper failed at run (/tmp/openclaw-run/index.js:1:2) during startup",
+      "2026-08-05T03:00:00Z ERROR failed to download logs",
+      '```json\n{"error":"timeout"}\n```',
+      "OPENAI_API_KEY=sk-proj_123456789abcdefghijklmnop", // pragma: allowlist secret
+      "password=hunter2secret", // pragma: allowlist secret
+      "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abcdefghijklmnopqrstuvwxyz.123456789abcd", // pragma: allowlist secret
+      "uat-client: refresh_token expired for ou_...57cdd, clearing error: need_user_authorization",
+      "The job failed with exit code 1; attempt 3/5 failed and retries are exhausted.",
+    ];
+    for (const snippet of rejected) {
+      expect(isContaminatedDreamingSnippet(snippet), snippet).toBe(true);
+    }
+
+    const retained = [
+      "User prefers concise status updates during long debugging work.",
+      "Analyze each driver case by downloading trip logs, creating a release worktree, and cross-checking logs with source code.",
+      // A timestamp is a durable fact on its own; only diagnostic context makes it noise.
+      "The service launched at 2026-08-05T03:00:00Z with the new collector.",
+      // Credential field names and templates carry no secret value.
+      "Configure api_key=<your-key> in the environment before starting the worker.",
+      "Set Authorization: Bearer <token> for the gateway.",
+      "Authorization: Bearer",
+      // Durable guidance that discusses credentials without embedding a value
+      // stays eligible; bare-label matching used to discard it.
+      "How to store an API key: put it in ~/.openclaw/credentials/ and never commit it.",
+      "The secret for the staging env lives in the vault; do not commit it.",
+      // Durable-intent carve-out: a standing rule mentioning transient
+      // vocabulary is guidance, not a failure artifact.
+      "Standing rule: when a job exits with exit code 1, re-run the collector before reporting failure.",
+      "Rule: when exit code 1 occurs, rerun the collector.",
+      "Remember: scratch files for analysis always use /tmp/ so they never land in the repo.",
+    ];
+    for (const snippet of retained) {
+      expect(isContaminatedDreamingSnippet(snippet), snippet).toBe(false);
+    }
+  });
+
+  it("records durable guidance but excludes non-durable snippets through record, load, and rank", async (workspaceDir) => {
+    await recordMemoryRecalls(workspaceDir, "promotion quality", [
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        1,
+        1,
+        0.92,
+        "wrapper failed at run (/tmp/openclaw-run/index.js:1:2) during startup",
+      ),
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        2,
+        2,
+        0.91,
+        "uat-client: refresh_token expired for ou_...57cdd, clearing error: need_user_authorization",
+      ),
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        3,
+        3,
+        0.9,
+        "How to store an API key: put it in ~/.openclaw/credentials/ and never commit it.",
+      ),
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        4,
+        4,
+        0.89,
+        "Standing rule: when a job exits with exit code 1, re-run the collector before reporting failure.",
+      ),
+      memoryRecallResult(
+        "memory/2026-04-03.md",
+        5,
+        5,
+        0.88,
+        "The service launched at 2026-08-05T03:00:00Z with the new collector.",
+      ),
+    ]);
+
+    const durableGuidance = [
+      "How to store an API key: put it in ~/.openclaw/credentials/ and never commit it.",
+      "Standing rule: when a job exits with exit code 1, re-run the collector before reporting failure.",
+      "The service launched at 2026-08-05T03:00:00Z with the new collector.",
+    ];
+
+    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+    expect(
+      Object.values(store.entries)
+        .map((entry) => entry.snippet)
+        .toSorted(),
+    ).toEqual(durableGuidance);
+
+    const ranked = await rankAllCandidates(workspaceDir);
+    expect(ranked.map((candidate) => candidate.snippet).toSorted()).toEqual(durableGuidance);
+  });
+
+  it("ignores raw session and transcript snippets when recording short-term recalls", async (workspaceDir) => {
+    await recordMemoryRecalls(workspaceDir, "session recap", [
+      memoryRecallResult(
+        "memory/2026-06-18.md",
+        1,
+        1,
+        0.92,
+        "Session: 2026-06-18 10:37:05 EDT; Session Key: agent:cody:discord:channel:1502199757592989836; Session ID: 6d52b6a2-a2e1-4839-a69a-a532b9090a6d; Source: discord",
+      ),
+      memoryRecallResult(
+        "memory/2026-06-18.md",
+        2,
+        2,
+        0.91,
+        "Conversation Summary: assistant: Traced all three. No changes made.",
+      ),
+      memoryRecallResult(
+        "memory/2026-06-18.md",
+        3,
+        3,
+        0.9,
+        "user: Save important context from this session to the daily memory file. STRICT RULES: 1. The file MUST be named exactly memory/2026-06-18.md",
+      ),
+    ]);
+
+    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+    expect(store.version).toBe(1);
+    expect(store.entries).toEqual({});
+  });
+
+  it("ignores already-promoted score metadata snippets when recording short-term recalls", async (workspaceDir) => {
+    await recordMemoryRecalls(workspaceDir, "promotion metadata", [
+      memoryRecallResult(
+        "memory/2026-06-18.md",
+        1,
+        1,
+        0.94,
+        "2026-06-13 09:20 America/New_York - Polycore PR #112 re-review... [score=0.837 recalls=0 avg=0.620 source=memory/2026-06-13.md:10-12]",
+      ),
+    ]);
+
+    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+    expect(store.version).toBe(1);
+    expect(store.entries).toEqual({});
+  });
+
+  it("keeps ordinary snippets that only quote dreaming prompt markers", async (workspaceDir) => {
+    const snippet =
+      "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.";
+    await recordMemoryRecalls(workspaceDir, "debug note", [
+      {
+        path: "memory/2026-04-03.md",
+        source: "memory",
+        startLine: 1,
+        endLine: 1,
+        score: 0.75,
+        snippet,
+      },
+    ]);
+
+    const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
+    const entries = Object.values(store.entries);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.snippet).toBe(snippet);
+    const ranked = await rankAllCandidates(workspaceDir);
+    expect(ranked.map((candidate) => candidate.snippet)).toEqual([snippet]);
   });
 
   baseIt.each([
@@ -1548,6 +1758,93 @@ describe("short-term promotion", () => {
       .catch(() => "");
     expect(memoryText).not.toContain("Promoted From Short-Term Memory");
     expect(memoryText).not.toContain("staged dream scratchwork");
+  });
+
+  it("skips direct candidates that exceed maxAgeDays during apply", async (workspaceDir) => {
+    const applied = await applyShortTermPromotions({
+      workspaceDir,
+      maxAgeDays: 7,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      candidates: [
+        promotionCandidateFixture({
+          key: "memory:memory/2026-04-01.md:1:1",
+          path: "memory/2026-04-01.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "Expired short-term note.",
+          ageDays: 10,
+          conceptTags: ["expired"],
+        }),
+      ],
+    });
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toContain("age threshold");
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
+  it("does not append contaminated dreaming snippets during direct apply", async (workspaceDir) => {
+    const applied = await applyShortTermPromotions({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      candidates: [
+        {
+          key: "memory:memory/2026-04-03.md:1:1",
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet:
+            "Candidate: Default to action. confidence: 0.76 evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged",
+          recallCount: 4,
+          signalCount: 4,
+          avgScore: 0.97,
+          maxScore: 0.97,
+          uniqueQueries: 2,
+          firstRecalledAt: "2026-04-03T00:00:00.000Z",
+          lastRecalledAt: "2026-04-04T00:00:00.000Z",
+          ageDays: 0,
+          score: 0.99,
+          recallDays: ["2026-04-03", "2026-04-04"],
+          conceptTags: ["assistant"],
+          components: {
+            frequency: 1,
+            relevance: 1,
+            diversity: 1,
+            recency: 1,
+            consolidation: 1,
+            conceptual: 1,
+          },
+        },
+      ],
+    });
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe("contamination filter");
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
+  });
+
+  it("does not append non-durable promotion snippets during direct apply", async (workspaceDir) => {
+    const applied = await applyAllCandidates(workspaceDir, [
+      promotionCandidateFixture({
+        key: "memory:memory/2026-04-03.md:1:1",
+        path: "memory/2026-04-03.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory",
+        snippet: "wrapper failed at run (/tmp/openclaw-run/index.js:1:2) during startup",
+        conceptTags: ["assistant"],
+      }),
+    ]);
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates[0]?.reason).toBe("contamination filter");
+    await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
   });
 
   it("applies promotion candidates to MEMORY.md and marks them promoted", async (workspaceDir) => {
