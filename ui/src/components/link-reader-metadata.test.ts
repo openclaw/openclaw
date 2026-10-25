@@ -145,6 +145,57 @@ it("shares metadata delivery and panel replay across a mounting batch of provide
   expect(requestMetadata).not.toHaveBeenCalled();
 });
 
+it("writes inline badge attributes only when metadata changes", async () => {
+  const client = createTestGatewayClient(() => Promise.resolve(open));
+  const { anchor } = makeProvider(client);
+  await Promise.resolve();
+  const observer = new MutationObserver(() => {});
+  observer.observe(anchor, {
+    attributes: true,
+    attributeFilter: ["aria-description", "data-link-reader-tone"],
+  });
+  onTestFinished(() => observer.disconnect());
+  const mutations = () =>
+    observer
+      .takeRecords()
+      .map((record) => record.attributeName)
+      .toSorted((left, right) => String(left).localeCompare(String(right)));
+  const publish = (preview: ControlUiLinkReaderDocument) =>
+    window.dispatchEvent(
+      new CustomEvent(LINK_READER_METADATA_UPDATED_EVENT, {
+        detail: {
+          client,
+          agentId: undefined,
+          sessionKey: undefined,
+          target: { href: url, reader },
+          preview,
+        },
+      }),
+    );
+
+  publish(open);
+  expect(mutations()).toEqual(["aria-description", "data-link-reader-tone"]);
+  for (let index = 0; index < 20; index += 1) {
+    publish(open);
+  }
+  expect(mutations()).toEqual([]);
+  expect(anchor.getAttribute("aria-description")).toBe("Open");
+  expect(anchor.dataset.linkReaderTone).toBe("positive");
+
+  publish(merged);
+  expect(mutations()).toEqual(["aria-description", "data-link-reader-tone"]);
+  expect(anchor.getAttribute("aria-description")).toBe("Merged");
+  expect(anchor.dataset.linkReaderTone).toBe("accent");
+
+  const cleared = { ...merged, badge: undefined };
+  publish(cleared);
+  expect(mutations()).toEqual(["aria-description", "data-link-reader-tone"]);
+  expect(anchor.hasAttribute("aria-description")).toBe(false);
+  expect(anchor.hasAttribute("data-link-reader-tone")).toBe(false);
+  publish(cleared);
+  expect(mutations()).toEqual([]);
+});
+
 it("isolates metadata callbacks and retires duplicate registrations independently", () => {
   const client = createTestGatewayClient(() => Promise.resolve(merged));
   const scope = { client, agentId: undefined, sessionKey: undefined };

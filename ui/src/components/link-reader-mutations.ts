@@ -1,10 +1,39 @@
 type Registration = { notify: () => void; active: boolean };
 const documents = new WeakMap<Document, ReturnType<typeof createInlineObserver>>();
 
+function isElementNode(node: Node): node is Element {
+  return node.nodeType === Node.ELEMENT_NODE;
+}
+
+function containsAnchor(nodes: NodeList): boolean {
+  for (const node of nodes) {
+    if (
+      isElementNode(node) &&
+      (node.localName === "a" || node.getElementsByTagName("a").length > 0)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function createInlineObserver(document: Document) {
   const targets = new Map<Node, Set<Registration>>();
   let rebuildQueued = false;
   const deliver = (records: MutationRecord[]) => {
+    // Label edits cannot change anchor membership or href. Keep other child lists:
+    // cleanup may have emptied a removed subtree before these records are delivered.
+    const changes = records.filter(
+      (record) =>
+        record.type !== "childList" ||
+        !isElementNode(record.target) ||
+        record.target.localName !== "a" ||
+        containsAnchor(record.addedNodes) ||
+        containsAnchor(record.removedNodes),
+    );
+    if (changes.length === 0) {
+      return;
+    }
     const nearest = new Map<Node, Node | null>();
     const trail: Node[] = [];
     const findTarget = (start: Node | null): Node | null => {
@@ -25,7 +54,7 @@ function createInlineObserver(document: Document) {
       return node;
     };
     const pending = new Set<Registration>();
-    for (const record of records) {
+    for (const record of changes) {
       for (let node = findTarget(record.target); node; node = findTarget(node.parentNode)) {
         for (const registration of targets.get(node) ?? []) {
           pending.add(registration);

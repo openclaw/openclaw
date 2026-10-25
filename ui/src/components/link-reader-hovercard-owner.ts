@@ -211,8 +211,10 @@ export class HovercardOwner {
       if (!preview?.badge) {
         delete anchor.dataset.linkReaderTone;
         anchor.removeAttribute("aria-description");
-      } else {
+      } else if (anchor.getAttribute("aria-description") !== preview.badge.label) {
         anchor.setAttribute("aria-description", preview.badge.label);
+      }
+      if (preview?.badge && anchor.dataset.linkReaderTone !== preview.badge.tone) {
         anchor.dataset.linkReaderTone = preview.badge.tone;
       }
     }

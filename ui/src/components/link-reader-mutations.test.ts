@@ -81,8 +81,8 @@ it("keeps nested and shadow-island routing current between delivery batches", as
   other.append(gap);
   await Promise.resolve();
   calls.length = 0;
-  firstLink.textContent = "Moved first";
-  secondLink.textContent = "Moved second";
+  firstLink.href = "https://example.test/moved-first";
+  secondLink.href = "https://example.test/moved-second";
   await Promise.resolve();
   expect(calls).toEqual(["inner", "other", "sibling"]);
 
@@ -91,6 +91,33 @@ it("keeps nested and shadow-island routing current between delivery batches", as
   shadowHost.setAttribute("aria-description", "unrelated");
   await Promise.resolve();
   expect(calls).toEqual([]);
+});
+
+it("ignores plain anchor content while retaining href and removed-subtree changes", async () => {
+  const host = document.body.appendChild(document.createElement("section"));
+  const wrapper = host.appendChild(document.createElement("div"));
+  const anchor = wrapper.appendChild(document.createElement("a"));
+  anchor.href = "https://example.test/original";
+  anchor.textContent = "Original label";
+  const notify = vi.fn();
+  onTestFinished(observeLinkReaderInline(host, notify));
+
+  const label = document.createElement("span");
+  label.textContent = "Updated label";
+  anchor.replaceChildren(label);
+  await Promise.resolve();
+  expect(notify).not.toHaveBeenCalled();
+
+  anchor.href = "https://example.test/replaced";
+  await Promise.resolve();
+  expect(notify).toHaveBeenCalledOnce();
+
+  notify.mockClear();
+  wrapper.remove();
+  // Component cleanup can empty a detached subtree before the observer delivers it.
+  wrapper.replaceChildren();
+  await Promise.resolve();
+  expect(notify).toHaveBeenCalledOnce();
 });
 
 it("isolates callbacks and keeps duplicate registrations independently disposable", async () => {
