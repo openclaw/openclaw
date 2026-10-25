@@ -1,4 +1,3 @@
-// Covers provider-driven plugin auto-enable decisions.
 import { afterAll, describe, expect, it } from "vitest";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import {
@@ -16,6 +15,17 @@ function autoEnable(config: OpenClawConfig, plugins?: ManifestPlugin[]) {
     env,
     ...(plugins ? { manifestRegistry: makeRegistry(plugins) } : {}),
   });
+}
+const restricted = (config: OpenClawConfig, plugins?: ManifestPlugin[]) =>
+  autoEnable({ ...config, plugins: { allow: ["telegram"] } }, plugins);
+function expectEnabled(result: ReturnType<typeof autoEnable>, id: string, reason?: string) {
+  expect(result.config.plugins).toMatchObject({
+    allow: ["telegram", id],
+    entries: { [id]: { enabled: true } },
+  });
+  if (reason) {
+    expect(result.autoEnabledReasons).toEqual({ [id]: [reason] });
+  }
 }
 function provider(
   id: string,
@@ -59,58 +69,33 @@ describe("applyPluginAutoEnable providers", () => {
       "archive-objects storage provider selected",
     ],
   ])("activates the selected bundled contract owner %s", (id, config, contracts, reason) => {
-    const result = autoEnable({ ...config, plugins: { allow: ["telegram"] } }, [
-      provider(id, contracts, "bundled"),
-    ]);
-    expect(result.config.plugins).toMatchObject({
-      allow: ["telegram", id],
-      entries: { [id]: { enabled: true } },
-    });
-    expect(result.autoEnabledReasons).toEqual({ [id]: [reason] });
+    const result = restricted(config, [provider(id, contracts, "bundled")]);
+    expectEnabled(result, id, reason);
   });
 
-  const googleProviderCases: Array<{ name: string; config: OpenClawConfig }> = [
+  it.each<OpenClawConfig>([
+    { auth: { profiles: { "google:default": { provider: "google", mode: "api_key" } } } },
     {
-      name: "Google auth profile",
-      config: { auth: { profiles: { "google:default": { provider: "google", mode: "api_key" } } } },
-    },
-    {
-      name: "Google provider config",
-      config: {
-        models: {
-          providers: {
-            google: {
-              apiKey: "configured-google-key",
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              models: [],
-            },
+      models: {
+        providers: {
+          google: {
+            apiKey: "configured-google-key",
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [],
           },
         },
       },
     },
-  ];
-
-  it.each(googleProviderCases)(
-    "auto-enables the Google plugin from $name under a restrictive allowlist",
-    ({ config }) => {
-      const result = autoEnable({ ...config, plugins: { allow: ["telegram"] } });
-
-      expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
-      expect(result.config.plugins?.allow).toEqual(["telegram", "google"]);
-    },
-  );
+  ])("auto-enables Google from auth or provider config: %j", (config) => {
+    expectEnabled(restricted(config), "google");
+  });
 
   it("auto-enables selected web search provider plugins under restrictive allowlists", () => {
-    const result = autoEnable(
-      {
-        tools: { web: { search: { provider: "brave" } } },
-        plugins: { allow: ["telegram"] },
-      },
-      [provider("brave", { webSearchProviders: ["brave"] })],
-    );
+    const result = restricted({ tools: { web: { search: { provider: "brave" } } } }, [
+      provider("brave", { webSearchProviders: ["brave"] }),
+    ]);
 
-    expect(result.config.plugins?.entries?.brave?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["telegram", "brave"]);
+    expectEnabled(result, "brave");
     expect(result.changes).toContain("brave web search provider selected, enabled automatically.");
   });
 
@@ -140,10 +125,9 @@ describe("applyPluginAutoEnable providers", () => {
   });
 
   it("does not auto-enable selected web search provider plugins when web search is disabled", () => {
-    const result = autoEnable(
+    const result = restricted(
       {
         tools: { web: { search: { enabled: false, provider: "brave" } } },
-        plugins: { allow: ["telegram"] },
         agents: { defaults: { model: "codex/gpt-5.4" } },
       },
       [
@@ -152,9 +136,8 @@ describe("applyPluginAutoEnable providers", () => {
       ],
     );
 
-    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expectEnabled(result, "codex");
     expect(result.config.plugins?.entries?.brave).toBeUndefined();
-    expect(result.config.plugins?.allow).toEqual(["telegram", "codex"]);
     expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
     expect(result.changes).not.toContain(
       "brave web search provider selected, enabled automatically.",

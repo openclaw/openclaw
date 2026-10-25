@@ -32,34 +32,39 @@ function validate(
       return backend ? { pluginId: "fixture", backend } : undefined;
     },
   });
-  return validateConfigObjectRawWithPlugins(config, { pluginMetadataSnapshot });
+  const result = validateConfigObjectRawWithPlugins(config, { pluginMetadataSnapshot });
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error("Expected valid utility route");
+  }
+  return result;
 }
+
+const withDefaults = (
+  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
+  includeWorker = true,
+) => ({
+  agents: { defaults, ...(includeWorker ? { entries: { worker: {} } } : {}) },
+});
+
+const runtimeModel = (id: string) => ({ agentRuntime: { id } });
+const warning = (model: string) => ({
+  path: "agents.defaults.utilityModel",
+  message: `Utility model "${model}" uses CLI backend "fixture-cli", which cannot enforce the tool-free utility contract. Choose a capable utility model or add capable utilityModel fallbacks; the explicit route is unchanged.`,
+});
 
 describe("utility model capability warnings", () => {
   it("accepts the explicit route and warns before its exact tool cap fails at runtime", () => {
     const utilityModel = { primary: "fixture-cli/small", fallbacks: ["local/capable"] };
-    const result = validate({ agents: { defaults: { utilityModel }, entries: { worker: {} } } });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("Expected valid utility route");
-    }
+    const result = validate(withDefaults({ utilityModel }));
     expect(result.config.agents?.defaults?.utilityModel).toEqual(utilityModel);
-    expect(result.warnings).toContainEqual({
-      path: "agents.defaults.utilityModel",
-      message:
-        'Utility model "fixture-cli/small" uses CLI backend "fixture-cli", which cannot enforce the tool-free utility contract. Choose a capable utility model or add capable utilityModel fallbacks; the explicit route is unchanged.',
-    });
+    expect(result.warnings).toContainEqual(warning("fixture-cli/small"));
   });
 
   it("points per-agent warnings at the authored entry ID", () => {
     const utilityModel = "fixture-cli/small";
     const result = validate({ agents: { entries: { Worker: { utilityModel } } } });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("Expected valid utility route");
-    }
     expect(result.config.agents?.entries?.Worker?.utilityModel).toBe(utilityModel);
     expect(result.warnings).toContainEqual(
       expect.objectContaining({ path: "agents.entries.Worker.utilityModel" }),
@@ -69,14 +74,10 @@ describe("utility model capability warnings", () => {
   it("resolves manifest model aliases before checking the canonical runtime pin", () => {
     const utilityModel = "local/small";
     const result = validate(
-      {
-        agents: {
-          defaults: {
-            utilityModel,
-            models: { "local/canonical": { agentRuntime: { id: "fixture-cli" } } },
-          },
-        },
-      },
+      withDefaults(
+        { utilityModel, models: { "local/canonical": runtimeModel("fixture-cli") } },
+        false,
+      ),
       [unsupportedBackend],
       createPluginMetadataSnapshotFixture({
         plugins: [
@@ -90,16 +91,8 @@ describe("utility model capability warnings", () => {
       }),
     );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("Expected valid utility route");
-    }
     expect(result.config.agents?.defaults?.utilityModel).toBe(utilityModel);
-    expect(result.warnings).toContainEqual({
-      path: "agents.defaults.utilityModel",
-      message:
-        'Utility model "local/canonical" uses CLI backend "fixture-cli", which cannot enforce the tool-free utility contract. Choose a capable utility model or add capable utilityModel fallbacks; the explicit route is unchanged.',
-    });
+    expect(result.warnings).toContainEqual(warning("local/canonical"));
   });
 
   it.each([
@@ -110,12 +103,13 @@ describe("utility model capability warnings", () => {
     const result = validate(
       {
         auth: { profiles: { "fixture-cli-profile": { provider: "fixture-cli", mode: "oauth" } } },
-        agents: {
-          defaults: {
+        ...withDefaults(
+          {
             utilityModel,
-            ...(runtime ? { models: { "local/small": { agentRuntime: { id: runtime } } } } : {}),
+            ...(runtime ? { models: { "local/small": runtimeModel(runtime) } } : {}),
           },
-        },
+          false,
+        ),
       },
       [unsupportedBackend],
       createPluginMetadataSnapshotFixture({
@@ -136,10 +130,6 @@ describe("utility model capability warnings", () => {
       }),
     );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("Expected valid utility route");
-    }
     expect(result.config.agents?.defaults?.utilityModel).toBe(utilityModel);
     expect(result.warnings).toHaveLength(warnings);
   });
@@ -158,7 +148,6 @@ describe("utility model capability warnings", () => {
         entries: { worker: { utilityModel: override } },
       },
     });
-    expect(result.ok).toBe(true);
     expect(
       result.warnings.filter(({ message }) => message.startsWith("Utility model")),
     ).toHaveLength(expected);
@@ -184,7 +173,6 @@ describe("utility model capability warnings", () => {
         },
         [{ ...unsupportedBackend, ...policy }],
       );
-      expect(result.ok).toBe(true);
       expect(result.warnings).toContainEqual(
         expect.objectContaining({
           message: expect.stringContaining('Utility model "local/small"'),
@@ -196,34 +184,25 @@ describe("utility model capability warnings", () => {
   it.each(["execution-args", "prepare-execution"] as const)(
     "keeps a capable CLI route quiet: %s",
     (toolAvailabilityEnforcement) => {
-      const result = validate(
-        { agents: { defaults: { utilityModel: "fixture-cli/small" }, entries: { worker: {} } } },
-        [
-          {
-            ...unsupportedBackend,
-            nativeToolMode: "selectable",
-            toolAvailabilityEnforcement,
-            resolveExecutionArgs: () => [],
-            prepareExecution: () => undefined,
-          },
-        ],
-      );
-      expect(result.ok).toBe(true);
+      const result = validate(withDefaults({ utilityModel: "fixture-cli/small" }), [
+        {
+          ...unsupportedBackend,
+          nativeToolMode: "selectable",
+          toolAvailabilityEnforcement,
+          resolveExecutionArgs: () => [],
+          prepareExecution: () => undefined,
+        },
+      ]);
       expect(result.warnings).toEqual([]);
     },
   );
 
   it("respects a mapped runtime pin on a standalone CLI provider", () => {
     const result = validate(
-      {
-        agents: {
-          defaults: {
-            utilityModel: "fixture-cli/small",
-            models: { "fixture-cli/small": { agentRuntime: { id: "capable-cli" } } },
-          },
-          entries: { worker: {} },
-        },
-      },
+      withDefaults({
+        utilityModel: "fixture-cli/small",
+        models: { "fixture-cli/small": runtimeModel("capable-cli") },
+      }),
       [
         { ...unsupportedBackend, modelProvider: undefined },
         {
@@ -236,7 +215,6 @@ describe("utility model capability warnings", () => {
         },
       ],
     );
-    expect(result.ok).toBe(true);
     expect(result.warnings).toEqual([]);
   });
 });

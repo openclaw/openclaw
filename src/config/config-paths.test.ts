@@ -17,14 +17,7 @@ describe("concrete config path readers and mutation guards", () => {
     "reads diagnostic %s keys while all mutation parsers reject them",
     (key) => {
       const path = `tools.media.audio.request.headers.${key}`;
-      expect(tokenizeConcreteConfigPath(path).tokens).toEqual([
-        "tools",
-        "media",
-        "audio",
-        "request",
-        "headers",
-        key,
-      ]);
+      expect(tokenizeConcreteConfigPath(path).tokens).toEqual(path.split("."));
       for (const parse of [
         parseConcreteConfigPath,
         parseConcreteConfigPathTokens,
@@ -147,26 +140,23 @@ describe("config path own-property traversal", () => {
     });
   }
 
-  for (const inheritedKind of ["setter", "non-writable"] as const) {
-    it(`creates an own parent over an inherited ${inheritedKind} property`, () => {
-      const { setter, object: root } = inheritedProperty("branch", inheritedKind, {
-        leaf: "prototype",
-      });
-
-      expect(() => setConfigValueAtPath(root, ["branch", "leaf"], "own")).not.toThrow();
-      expect(setter).not.toHaveBeenCalled();
-      expectOwnProperty(root, "branch", { leaf: "own" });
-    });
-
-    it(`creates an own leaf over an inherited ${inheritedKind} property`, () => {
-      const { setter, object: parent } = inheritedProperty("leaf", inheritedKind, "prototype");
-      const root = { parent };
-
-      expect(() => setConfigValueAtPath(root, ["parent", "leaf"], "own")).not.toThrow();
-      expect(setter).not.toHaveBeenCalled();
-      expectOwnProperty(parent, "leaf", "own");
-    });
-  }
+  it.each([
+    ["setter", "parent"],
+    ["setter", "leaf"],
+    ["non-writable", "parent"],
+    ["non-writable", "leaf"],
+  ] as const)("creates an own %s-shadowing %s", (kind, location) => {
+    const isParent = location === "parent";
+    const key = isParent ? "branch" : "leaf";
+    const { setter, object } = inheritedProperty(
+      key,
+      kind,
+      isParent ? { leaf: "prototype" } : "prototype",
+    );
+    setConfigValueAtPath(isParent ? object : { branch: object }, ["branch", "leaf"], "own");
+    expect(setter).not.toHaveBeenCalled();
+    expectOwnProperty(object, key, isParent ? { leaf: "own" } : "own");
+  });
 });
 
 describe("raw diagnostic path traversal", () => {
