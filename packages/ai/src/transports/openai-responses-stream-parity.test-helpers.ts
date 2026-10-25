@@ -1,7 +1,10 @@
 import type { AssistantMessage, AssistantMessageEvent } from "@openclaw/llm-core";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { createAssistantOutput } from "./assistant-output.js";
+import { outputMessage, responseEvents } from "./openai-responses-prompt-observer.test-support.js";
 import { processResponsesStream as processTransportStream } from "./openai-responses-stream-internal.js";
+import { wireCall } from "./openai-stream-cases.test-support.js";
+export { completedResponse as completed } from "./openai-stream-cases.test-support.js";
 
 type ProcessResult = {
   events: { type: string; contentIndex?: number; delta?: string; content?: string }[];
@@ -21,10 +24,6 @@ const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   baseUrl: "https://api.openai.com/v1",
 });
 
-async function* eventStream(events: readonly Record<string, unknown>[]) {
-  yield* events;
-}
-
 function projectEvent(event: AssistantMessageEvent): ProcessResult["events"][number] | undefined {
   if (!("contentIndex" in event)) {
     return undefined;
@@ -39,15 +38,11 @@ function projectEvent(event: AssistantMessageEvent): ProcessResult["events"][num
 
 function projectBlock(block: AssistantMessage["content"][number]) {
   if (block.type === "thinking") {
-    let encrypted = false;
-    if (block.thinkingSignature) {
-      try {
-        const item = JSON.parse(block.thinkingSignature) as { encrypted_content?: unknown };
-        encrypted = typeof item.encrypted_content === "string" && item.encrypted_content.length > 0;
-      } catch {
-        encrypted = false;
-      }
-    }
+    const item = block.thinkingSignature
+      ? (JSON.parse(block.thinkingSignature) as { encrypted_content?: unknown })
+      : undefined;
+    const encrypted =
+      typeof item?.encrypted_content === "string" && item.encrypted_content.length > 0;
     return { type: "thinking" as const, thinking: block.thinking, encrypted };
   }
   if (block.type === "text") {
@@ -71,7 +66,7 @@ export async function runFixture(
   let error: string | null = null;
   try {
     await processTransportStream(
-      eventStream(events),
+      responseEvents(...events),
       output,
       { push: (event) => captured.push(event as AssistantMessageEvent) },
       model,
@@ -89,12 +84,6 @@ export async function runFixture(
   };
 }
 
-export const completed = (id: string, output: unknown[] = []) => ({
-  type: "response.completed",
-  sequence_number: 99,
-  response: { id, status: "completed", output },
-});
-
 export function outputItem(event: "added" | "done", item: Record<string, unknown>, index?: number) {
   return {
     type: `response.output_item.${event}`,
@@ -104,17 +93,15 @@ export function outputItem(event: "added" | "done", item: Record<string, unknown
 }
 export function message(id: string, text: string, phase?: "commentary" | "final_answer") {
   return {
-    ...startedMessage(id),
-    status: "completed",
+    ...outputMessage(text, id),
+    id,
     ...(phase ? { phase } : {}),
-    content: [{ type: "output_text", text, annotations: [] }],
   };
 }
 export function startedMessage(id: string, phase?: "final_answer") {
   return {
+    ...outputMessage("", id),
     id,
-    type: "message",
-    role: "assistant",
     status: "in_progress",
     ...(phase ? { phase } : {}),
     content: [],
@@ -137,11 +124,7 @@ export function tool(
   name = "lookup",
 ) {
   return {
-    id: `fc_${id}`,
-    call_id: `call_${id}`,
-    type: "function_call",
-    name,
-    arguments: args,
+    ...wireCall(id, name, args),
     ...(status === undefined ? {} : { status }),
   };
 }
@@ -185,12 +168,10 @@ export const thinkingBlock = (thinking: string, encrypted = false) => ({
 });
 
 function expected(
-  responseId: string | null,
   events: ProcessResult["events"],
   content: ProcessResult["content"],
-  outcome: Partial<Pick<ProcessResult, "error" | "stopReason">> = {},
 ): ProcessResult {
-  return { responseId, events, content, error: null, stopReason: "stop", ...outcome };
+  return { responseId: "resp", events, content, error: null, stopReason: "stop" };
 }
 
 export function fixture(
@@ -200,7 +181,7 @@ export function fixture(
   content: ProcessResult["content"],
   outcome: Partial<Pick<ProcessResult, "responseId" | "error" | "stopReason">> = {},
 ): ParityFixture {
-  return { name, events, canonical: { ...expected("resp", emitted, content), ...outcome } };
+  return { name, events, canonical: { ...expected(emitted, content), ...outcome } };
 }
 
 export function outputTextDelta(item_id: string, delta: string, output_index = 0) {

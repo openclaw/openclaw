@@ -30,6 +30,17 @@ const context = {
     fixtures.userMessage("runtime context", 2, { runtimeContext: { retained: true } }),
   ],
 } satisfies Context;
+const syntheticMessages = convertToLlm([
+  fixtures.userMessage("real request", 1),
+  { role: "compactionSummary", summary: "old summary", tokensBefore: 100, timestamp: 2 },
+  {
+    role: "custom",
+    customType: "test-notice",
+    content: "synthetic notice",
+    display: false,
+    timestamp: 3,
+  },
+]);
 const checkpoint = (value = "opaque") => ({
   type: "response.output_item.done",
   output_index: 0,
@@ -118,43 +129,6 @@ describe.each([
     expect(result.usage.input_tokens_details).toEqual({ cached_tokens: 900 });
   });
 
-  it("does not retain summaries or custom context as human-authored messages", async () => {
-    const result = await compact({
-      ...context,
-      messages: convertToLlm([
-        fixtures.userMessage("real request", 1),
-        { role: "compactionSummary", summary: "old summary", tokensBefore: 100, timestamp: 2 },
-        {
-          role: "custom",
-          customType: "test-notice",
-          content: "synthetic notice",
-          display: false,
-          timestamp: 3,
-        },
-      ]),
-    });
-    expect(JSON.stringify(requests[0]?.body)).toContain("old summary");
-    expect(JSON.stringify(result.output)).not.toContain("old summary");
-    expect(JSON.stringify(result.output)).not.toContain("synthetic notice");
-    expect(JSON.stringify(result.output)).toContain("real request");
-  });
-
-  it.each<[string, unknown]>([
-    ["unfinished stream", undefined],
-    ["cancelled terminal", completed("cancelled")],
-    [
-      "failed terminal",
-      failed("failed", { error: { code: "server_error", message: "synthetic failure" } }),
-    ],
-    [
-      "incomplete terminal",
-      failed("incomplete", { output: [], incomplete_details: { reason: "max_output_tokens" } }),
-    ],
-  ])("rejects %s without adopting its checkpoint", async (_name, terminal) => {
-    events = [checkpoint(), ...(terminal ? [terminal] : [])];
-    await expect(compact()).rejects.toThrow();
-  });
-
   it("does not adopt an item after cancellation or carry it into the next attempt", async () => {
     const controller = new AbortController();
     afterFetch = () => controller.abort();
@@ -165,7 +139,12 @@ describe.each([
   });
 
   it("retains earlier users across two compactions and persisted replay", async () => {
-    const first = await compact();
+    const first = await compact({ ...context, messages: syntheticMessages });
+    expect(JSON.stringify(requests[0]?.body)).toContain("old summary");
+    expect(first.output).toEqual([
+      fixtures.inputMessage("real request"),
+      { type: "compaction", encrypted_content: "opaque" },
+    ]);
     const owner = fixtures.createAssistant(model, [], { timestamp: 3 });
     captureOpenAIResponsesCompaction(
       owner,
@@ -187,7 +166,7 @@ describe.each([
       { type: "compaction", encrypted_content: "second" },
     ]);
     expect(JSON.stringify(requests[1]?.body)).toContain("opaque");
-    expect(JSON.stringify(requests[1]?.body)).toContain("remember copper");
+    expect(JSON.stringify(requests[1]?.body)).toContain("real request");
   });
 });
 it("bounds retained multilingual input without reviving older users", async () => {
@@ -202,6 +181,22 @@ it("bounds retained multilingual input without reviving older users", async () =
   });
 });
 it.each<[string, unknown[]]>([
+  ["unfinished stream", [checkpoint()]],
+  ["cancelled terminal", [checkpoint(), completed("cancelled")]],
+  [
+    "failed terminal",
+    [
+      checkpoint(),
+      failed("failed", { error: { code: "server_error", message: "synthetic failure" } }),
+    ],
+  ],
+  [
+    "incomplete terminal",
+    [
+      checkpoint(),
+      failed("incomplete", { output: [], incomplete_details: { reason: "max_output_tokens" } }),
+    ],
+  ],
   ["duplicate item", [checkpoint(), checkpoint(), completed()]],
   ["empty item", [checkpoint(""), completed()]],
 ])("rejects %s without adopting its checkpoint", async (_name, sequence) => {
