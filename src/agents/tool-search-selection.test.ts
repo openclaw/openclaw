@@ -71,38 +71,37 @@ function promptPolicy(ctx: ReturnType<typeof catalog>, tools: AnyAgentTool[], wi
     ...(withPrompt ? { catalogPrompt: { config: ctx.config } } : {}),
   });
 }
+function applyCatalog(
+  ctx: Pick<ReturnType<typeof catalog>, "config" | "catalogRef">,
+  tools: AnyAgentTool[],
+  directToolNames?: string[],
+) {
+  const apply =
+    resolveToolSearchConfig(ctx.config).mode === "directory"
+      ? applyToolSchemaDirectoryCatalog
+      : applyToolSearchCatalog;
+  return apply({ ...ctx, tools: [...createToolSearchTools(ctx), ...tools], directToolNames });
+}
 
 describe("Tool Search selectors", () => {
   it.each([
-    { selection: {}, expected: [true, true, true] },
-    { selection: { include: [] }, expected: [false, false, false] },
-    { selection: { exclude: [] }, expected: [true, true, true] },
-    { selection: { include: [{ source: "mcp" }] }, expected: [false, true, false] },
-    { selection: { include: [{ name: " GITHUB_READ_* " }] }, expected: [true, true, true] },
-    {
-      selection: { include: [{ source: "mcp", name: "github_read_*" }] },
-      expected: [false, true, false],
-    },
-    {
-      selection: { include: [{ source: "mcp", name: "github_write_*" }] },
-      expected: [false, false, false],
-    },
-    {
-      selection: { include: [{ source: "mcp" }, { source: "client" }] },
-      expected: [false, true, true],
-    },
-    {
-      selection: { include: [{ name: "*" }], exclude: [{ source: "mcp" }] },
-      expected: [true, false, true],
-    },
-    {
-      selection: { exclude: [{ source: "client", name: "*read*" }, { source: "openclaw" }] },
-      expected: [false, true, false],
-    },
-    { selection: { include: [{ name: "github_read_.*" }] }, expected: [false, false, false] },
-  ] satisfies Array<{ selection: ToolSearchSelection; expected: boolean[] }>)(
-    "matches source/name AND, list OR, and exclusions: $selection",
-    ({ selection, expected }) => {
+    [{}, [true, true, true]],
+    [{ include: [] }, [false, false, false]],
+    [{ exclude: [] }, [true, true, true]],
+    [{ include: [{ source: "mcp" }] }, [false, true, false]],
+    [{ include: [{ name: " GITHUB_READ_* " }] }, [true, true, true]],
+    [{ include: [{ source: "mcp", name: "github_read_*" }] }, [false, true, false]],
+    [{ include: [{ source: "mcp", name: "github_write_*" }] }, [false, false, false]],
+    [{ include: [{ source: "mcp" }, { source: "client" }] }, [false, true, true]],
+    [{ include: [{ name: "*" }], exclude: [{ source: "mcp" }] }, [true, false, true]],
+    [
+      { exclude: [{ source: "client", name: "*read*" }, { source: "openclaw" }] },
+      [false, true, false],
+    ],
+    [{ include: [{ name: "github_read_.*" }] }, [false, false, false]],
+  ] satisfies Array<[ToolSearchSelection, boolean[]]>)(
+    "matches source/name AND, list OR, and exclusions: %j",
+    (selection, expected) => {
       const selected = createToolSearchSelectionMatcher(selection);
       expect(
         (["openclaw", "mcp", "client"] as const).map((source) =>
@@ -139,11 +138,7 @@ describe("Tool Search selectors", () => {
         tool("github_read_issue", "mcp"),
       ];
       const deferred = tool("github_write_issue", "mcp");
-      const apply = mode === "directory" ? applyToolSchemaDirectoryCatalog : applyToolSearchCatalog;
-      const surface = apply({
-        ...ctx,
-        tools: [...createToolSearchTools(ctx), ...direct, deferred],
-      });
+      const surface = applyCatalog(ctx, [...direct, deferred]);
       const client = tool("client_pick_file");
       const clients = addClientToolsToToolCatalog({
         tools: [client],
@@ -171,12 +166,7 @@ describe("Tool Search selectors", () => {
       using ctx = catalog({ include: [{ name: "*" }] }, mode);
       const trusted = [tool("read"), tool("message")];
       const lookalikes = [tool("write", "mcp"), tool("message", "mcp")];
-      const apply = mode === "directory" ? applyToolSchemaDirectoryCatalog : applyToolSearchCatalog;
-      const surface = apply({
-        ...ctx,
-        tools: [...createToolSearchTools(ctx), ...trusted, ...lookalikes],
-        directToolNames: ["message"],
-      });
+      const surface = applyCatalog(ctx, [...trusted, ...lookalikes], ["message"]);
       expect(surface.tools).toContain(trusted[0]);
       // Directory's existing cross-source collision gate also hides trusted message.
       expect(surface.tools.includes(trusted[1]!)).toBe(mode === "tools");
@@ -192,10 +182,7 @@ describe("Tool Search selectors", () => {
     setPluginToolMeta(native, { pluginId: "acme", optional: false });
     const direct = tool("acme_lookup", "mcp");
     const apply = (includeDirect: boolean) =>
-      applyToolSchemaDirectoryCatalog({
-        ...ctx,
-        tools: [...createToolSearchTools(ctx), native, ...(includeDirect ? [direct] : [])],
-      });
+      applyCatalog(ctx, [native, ...(includeDirect ? [direct] : [])]);
     const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(ctx.config));
     const ambiguous = "Ambiguous tool name: acme_lookup; use an exact tool id.";
     const surface = apply(true);
@@ -238,13 +225,7 @@ describe("Tool Search selectors", () => {
     const apply = (selection: ToolSearchSelection) => {
       const config: OpenClawConfig = { tools: { toolSearch: { mode: "tools", ...selection } } };
       const ctx = { config, catalogRef };
-      const surface = applyToolSearchCatalog({
-        ...ctx,
-        tools: [
-          ...createToolSearchTools(ctx),
-          ...filterToolsByPolicy(targets, { deny: ["denied_lookup"] }),
-        ],
-      });
+      const surface = applyCatalog(ctx, filterToolsByPolicy(targets, { deny: ["denied_lookup"] }));
       return { surface, ctx };
     };
     const first = apply({ include: [{ name: "*lookup" }] });
@@ -268,7 +249,7 @@ describe("Tool Search selectors", () => {
 
   it("preserves availability across the direct/catalog split and applies prompt restrictions", () => {
     using ctx = catalog({ include: [{ name: "dependent" }] });
-    const { config, catalogRef } = ctx;
+    const { catalogRef } = ctx;
     const dependency = tool("dependency");
     const dependent = bindAgentToolAvailability(tool("dependent"), {
       prepare: (target, callable) => {
@@ -277,11 +258,7 @@ describe("Tool Search selectors", () => {
           : "dependency unavailable";
       },
     });
-    const surface = applyToolSearchCatalog({
-      config,
-      catalogRef,
-      tools: [...createToolSearchTools({ config, catalogRef }), dependent, dependency],
-    });
+    const surface = applyCatalog(ctx, [dependent, dependency]);
     const entry = () => expectDefined(catalogRef.current?.entries[0], "dependent entry");
     expect(entry().description).toBe("dependency available");
     const policy = promptPolicy(ctx, surface.tools, false);
@@ -299,10 +276,7 @@ describe("Tool Search selectors", () => {
       const direct = tool("acme_lookup", "plugin");
       setPluginToolMeta(direct, { pluginId: "acme", optional: false });
       const foreign = tool("acme_lookup", source === "mcp" ? "mcp" : "core");
-      const surface = applyToolSearchCatalog({
-        ...ctx,
-        tools: [...createToolSearchTools(ctx), direct, ...(source === "mcp" ? [foreign] : [])],
-      });
+      const surface = applyCatalog(ctx, [direct, ...(source === "mcp" ? [foreign] : [])]);
       if (source === "client") {
         addClientToolsToToolCatalog({
           catalogRef,

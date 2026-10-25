@@ -207,37 +207,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     },
   );
 
-  it("preserves an incomplete tool-authored summary over stale silence when fallbacks exhaust", async () => {
-    const terminalSummary =
-      "Web fetch completed.\nOrigin: https://example.com\nStatus: 200\n\n" +
-      "Agent couldn't generate a response.";
-    const incomplete = incompleteResult(
-      terminalSummary,
-      "Agent couldn't generate a response.",
-      {
-        terminalReply: { disposition: "silent" },
-        toolSummary: { calls: 1, tools: ["web_fetch"] },
-      },
-      { terminalPresentation: true },
-    );
-
-    const result = await runCandidates([incomplete], {
-      fallbacksOverride: [],
-    });
-
-    expect(result.outcome).toBe("exhausted");
-    expect(result.result).toBe(incomplete);
-    expect(result.result.payloads).toEqual([{ text: terminalSummary, isError: true }]);
-    expect(result.attempts).toMatchObject([
-      {
-        provider: contract.primaryProvider,
-        model: contract.primaryModel,
-        reason: "format",
-        code: "incomplete_result",
-      },
-    ]);
-  });
-
   it("keeps an internal missing-result notice private after a later provider candidate fails", async () => {
     const missing = incompleteResult(
       undefined,
@@ -274,12 +243,13 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
   });
 
   it.each([
-    [false, undefined],
-    [true, undefined],
-    [true, false],
+    [false, undefined, false],
+    [true, undefined, false],
+    [true, false, false],
+    [true, undefined, true],
   ] as const)(
-    "preserves the preferred exhausted summary (richer=%s, suppress=%s)",
-    async (richer, suppressErrorNotice) => {
+    "preserves the preferred exhausted summary (richer=%s, suppress=%s, no fallback=%s)",
+    async (richer, suppressErrorNotice, noFallback) => {
       const primary = incompleteResult(
         "Primary terminal summary",
         "Primary incomplete",
@@ -287,6 +257,8 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           ? {
               ...(suppressErrorNotice === undefined ? {} : { suppressErrorNotice }),
               agentMeta: agentMeta("primary"),
+              terminalReply: { disposition: "silent" },
+              toolSummary: { calls: 1, tools: ["web_fetch"] },
             }
           : {},
         richer ? { terminalPresentation: true } : {},
@@ -309,9 +281,30 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
             }
           : {},
       );
-      const result = await runCandidates([primary, fallback]);
-      expect(result).toMatchObject({ outcome: "exhausted", ...winner });
-      expect(result.attempts).toHaveLength(2);
+      const result = await runCandidates(
+        noFallback ? [primary] : [primary, fallback],
+        noFallback ? { fallbacksOverride: [] } : {},
+      );
+      expect(result).toMatchObject({
+        outcome: "exhausted",
+        ...(noFallback
+          ? { provider: contract.primaryProvider, model: contract.primaryModel }
+          : winner),
+      });
+      expect(result.attempts).toHaveLength(noFallback ? 1 : 2);
+      expect(result.attempts[0]).toMatchObject({
+        provider: contract.primaryProvider,
+        model: contract.primaryModel,
+        reason: "format",
+        code: "incomplete_result",
+      });
+      if (noFallback) {
+        expect(result.result).toBe(primary);
+        expect(result.result.payloads).toEqual([
+          { text: "Primary terminal summary", isError: true },
+        ]);
+        return;
+      }
       if (!richer) {
         expect(result.result).toBe(fallback);
         return;

@@ -11,6 +11,11 @@ import {
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  harnessRegistry,
+  providerConfig,
+  snapshot as catalogSnapshot,
+} from "./model-catalog-fixtures.test-support.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -90,10 +95,7 @@ describe("prepared model runtime snapshots", () => {
         : undefined,
     );
     const row = { provider: "anthropic", id: modelId, name: modelId, reasoning: false };
-    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
-      entries: [row],
-      routeVariants: [row],
-    });
+    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue(catalogSnapshot([row]));
     // A sparse user override must not become an explicit reasoning opt-out.
     const config = {
       ...configFor(`anthropic/${modelId}`, {
@@ -104,14 +106,10 @@ describe("prepared model runtime snapshots", () => {
           },
         },
       }),
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com",
-            models: [{ id: modelId, name: modelId }],
-          },
-        },
-      },
+      ...providerConfig("anthropic", {
+        baseUrl: "https://api.anthropic.com",
+        models: [{ id: modelId, name: modelId }],
+      }),
     } as unknown as OpenClawConfig;
     const snapshot = await publish(
       inputFor("claude-cli-capabilities", config, { agentId: "main" }),
@@ -126,21 +124,11 @@ describe("prepared model runtime snapshots", () => {
     const stagedConfig = configFor("openai/gpt-5.6");
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) => {
       // Fresh acquisitions cannot reuse the registry retired by an earlier generation.
-      const registry = createEmptyPluginRegistry();
-      if ((params as { selections?: unknown }).selections) {
-        registry.agentHarnesses.push({
-          pluginId: "codex",
-          source: "test",
-          harness: {
-            id: "codex",
-            label: "Codex",
-            supports: () => ({ supported: true }),
-            runAttempt: async () => {
-              throw new Error("unused");
-            },
-          },
-        });
+      if (!(params as { selections?: unknown }).selections) {
+        return createEmptyPluginRegistry();
       }
+      const registry = harnessRegistry("codex", { label: "Codex" });
+      registry.agentHarnesses[0]!.source = "test";
       return registry;
     });
     await refresh({}, { gatewayLifecycle: true });

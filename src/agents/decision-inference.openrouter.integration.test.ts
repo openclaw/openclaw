@@ -27,9 +27,7 @@ const traceKey = Symbol.for("openclaw.test.openrouter-decision-path");
 const modelId = "typesafe/jev-1.13";
 const modelRef = `openrouter/${modelId}`;
 const resolvedModel = "typesafe/jev-1.13-20260917";
-afterEach(async () => {
-  await harness.resetDecisionTestRuntime(traceKey);
-});
+afterEach(() => harness.resetDecisionTestRuntime(traceKey));
 
 it.each([
   { route: "canonical", auth: "api-key" },
@@ -121,9 +119,6 @@ it.each([
                 enabled: true,
                 llm: {
                   allowedCompletionModels: [modelRef],
-                  allowAgentIdOverride: false,
-                  allowModelOverride: false,
-                  allowAuthProfileOverride: false,
                 },
               },
             },
@@ -141,9 +136,6 @@ it.each([
               models: [],
               headers: {
                 "X-Fixture-Tenant": "synthetic-replaced-tenant",
-                ...(route === "declared-proxy"
-                  ? { Authorization: "Bearer synthetic-replaced-auth" }
-                  : {}),
               },
               params: {
                 provider: { data_collection: "deny", only: ["typesafe"], allow_fallbacks: false },
@@ -151,19 +143,19 @@ it.each([
               request: {
                 allowPrivateNetwork: true,
                 headers: { "x-fixture-tenant": "fixture-tenant" },
-                ...(route === "declared-proxy"
-                  ? {
-                      auth: {
-                        mode: "header" as const,
-                        headerName: "x-fixture-auth",
-                        value: "synthetic-prepared-custom",
-                      },
-                    }
-                  : {}),
               },
             },
           },
         };
+        if (route === "declared-proxy") {
+          const provider = cfg.models.providers!.openrouter!;
+          provider.headers!.Authorization = "Bearer synthetic-replaced-auth";
+          provider.request!.auth = {
+            mode: "header",
+            headerName: "x-fixture-auth",
+            value: "synthetic-prepared-custom",
+          };
+        }
         const sourceConfig = structuredClone(cfg);
         const sourceProvider = sourceConfig.models!.providers!.openrouter!;
         sourceProvider.request!.headers = {
@@ -220,8 +212,8 @@ it.each([
                 },
               },
             };
-            const evaluate = (overrides: Parameters<typeof harness.decisionOptions>[0] = {}) =>
-              runtime.evaluateV2(batch, harness.decisionOptions({ agentId: "main", ...overrides }));
+            const evaluate = () =>
+              runtime.evaluateV2(batch, harness.decisionOptions({ agentId: "main" }));
             const selectModel = (decisionModel: string) =>
               setRuntimeConfigSnapshot({
                 ...cfg,
@@ -279,11 +271,8 @@ it.each([
               return;
             }
             const calls = received.length;
-            const expectNoDispatch = async (
-              reason: string,
-              overrides: Parameters<typeof evaluate>[0] = {},
-            ) => {
-              expect(await evaluate(overrides)).toMatchObject({ status: "unavailable", reason });
+            const expectNoDispatch = async (reason: string) => {
+              expect(await evaluate()).toMatchObject({ status: "unavailable", reason });
               expect(received).toHaveLength(calls);
             };
             const foreign = structuredClone(cfg);
@@ -301,17 +290,14 @@ it.each([
                 throw new Error("Missing registered OpenRouter V2 provider");
               }
               const providerEvaluate = provider.evaluate.bind(provider);
-              let closedDuringPreparation = false;
               vi.spyOn(provider, "evaluate").mockImplementationOnce((offered, context) => {
                 // Revoke authority after preparation yields, before physical dispatch.
                 queueMicrotask(() => {
-                  closedDuringPreparation = true;
                   selectModel("");
                 });
                 return providerEvaluate(offered, context);
               });
               await expectNoDispatch("retiring");
-              expect(closedDuringPreparation).toBe(true);
               setRuntimeConfigSnapshot(cfg, sourceConfig);
             }
             // Authentication latches the generation; test it last so other errors prove recovery.
