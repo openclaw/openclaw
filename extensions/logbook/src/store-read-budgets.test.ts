@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LogbookOperations } from "./store-contract.js";
 import { createSqliteWorkerBackend } from "./store.worker.js";
-import { cardDraft, frameInput } from "./test-fixtures.test-support.js";
+import { batchInput, cardDraft, frameInput } from "./test-fixtures.test-support.js";
 
 const reads = vi.hoisted(() => ({
   cardQueries: 0,
@@ -47,11 +47,10 @@ vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
             reads.observationRows += 1;
           } else {
             reads.frameRows += 1;
-            for (const value of Object.values(row)) {
-              if (typeof value === "string") {
-                reads.frameTextBytes += Buffer.byteLength(value);
-              }
-            }
+            reads.frameTextBytes += Object.values(row).reduce<number>(
+              (bytes, value) => bytes + (typeof value === "string" ? Buffer.byteLength(value) : 0),
+              0,
+            );
           }
         };
         for (const method of ["get", "all"] as const) {
@@ -111,8 +110,8 @@ function openBackend() {
 describe("Logbook native statement and read budgets", () => {
   it("polls only pending batches in timestamp/id order without sorting historical rows", () => {
     const { backend, databasePath, check } = openBackend();
-    const writer = new DatabaseSync(databasePath);
-    try {
+    {
+      using writer = new DatabaseSync(databasePath);
       writer.exec(`
         WITH RECURSIVE history(id) AS (
           VALUES (1) UNION ALL SELECT id + 1 FROM history WHERE id < 1000
@@ -124,8 +123,6 @@ describe("Logbook native statement and read budgets", () => {
                (1002, '${day}', 2000, 3000, 'pending', 0, 0),
                (1003, '${day}', 2000, 3000, 'pending', 0, 0);
       `);
-    } finally {
-      writer.close();
     }
     for (const id of [1002, 1003, 1001]) {
       check({ type: "nextPendingBatch", input: undefined }).toMatchObject({
@@ -146,10 +143,10 @@ describe("Logbook native statement and read budgets", () => {
   });
 
   it("clears stale errors while retaining or replacing the batch model", () => {
-    const { backend, status, latest } = openBackend();
+    const { backend, status, latest, check } = openBackend();
     const id = insertCandidate(backend, 1);
     assert(typeof id === "number");
-    backend.execute({ type: "createBatch", input: { day, startMs: 1, endMs: 2, frameIds: [id] } });
+    backend.execute({ type: "createBatch", input: batchInput([id]) });
     status({ status: "error", error: "First failure", model: "synthetic/first" });
     status({ status: "running", error: "Warmup status" });
     status({ status: "pending" });
@@ -165,6 +162,13 @@ describe("Logbook native statement and read budgets", () => {
       error: undefined,
       model: "synthetic/second",
     });
+    status({ status: "running" });
+    backend.execute({ type: "resetRunningBatches", input: undefined });
+    expect(latest()).toMatchObject({ status: "pending", model: "synthetic/second" });
+    status({ status: "error", error: "retry" });
+    check({ type: "resetErrorBatches", input: undefined }).toBe(1);
+    check({ type: "resetErrorBatches", input: undefined }).toBe(0);
+    expect(latest()).toMatchObject({ status: "pending", error: undefined });
   });
 
   it("hydrates timeline cards once and counts cards without hydrating their payloads", () => {
@@ -181,16 +185,14 @@ describe("Logbook native statement and read budgets", () => {
       type: "replaceCardsInWindow",
       input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, drafts },
     });
-    reads.cardQueries = 0;
-    reads.cardRows = 0;
+    Object.assign(reads, { cardQueries: 0, cardRows: 0 });
     check({ type: "timelineForDay", input: { day } }).toMatchObject({
       cards: drafts.map((draft) => expect.objectContaining(draft)),
       stats: { trackedMs: 8 * 60_000 },
     });
     expect(reads).toMatchObject({ cardQueries: 1, cardRows: 8 });
 
-    reads.cardQueries = 0;
-    reads.cardRows = 0;
+    Object.assign(reads, { cardQueries: 0, cardRows: 0 });
     check({ type: "countCardsForDay", input: { day } }).toBe(8);
     expect(reads).toMatchObject({ cardQueries: 1, cardRows: 0 });
   });
@@ -201,7 +203,7 @@ describe("Logbook native statement and read budgets", () => {
     assert(typeof frameId === "number", "Expected a frame id from the native backend");
     const batchId = backend.execute({
       type: "createBatch",
-      input: { day, startMs: 0, endMs: Number.MAX_SAFE_INTEGER, frameIds: [frameId] },
+      input: batchInput([frameId], 0, Number.MAX_SAFE_INTEGER),
     });
     assert(typeof batchId === "number", "Expected a batch id from the native backend");
     const segments = Array.from({ length: 201 }, (_, index) => ({
@@ -230,9 +232,6 @@ describe("Logbook native statement and read budgets", () => {
       input: frameInput({
         capturedAtMs,
         path: `captures/${"nested/".repeat(12)}${capturedAtMs}.jpg`,
-        width: 640,
-        height: 480,
-        byteSize: 10,
         idle,
       }),
     });
@@ -240,47 +239,29 @@ describe("Logbook native statement and read budgets", () => {
 
   it("selects ordered pending and range metadata without decoding unused text or narrowing full readers", () => {
     const { backend, check } = openBackend();
-    insertCandidate(backend, 3000);
-    insertCandidate(backend, 1000);
-    insertCandidate(backend, 1000);
-    insertCandidate(backend, 2000);
-    insertCandidate(backend, 500, true);
-    insertCandidate(backend, 750);
+    const times = [3000, 1000, 1000, 2000, 500, 750];
+    times.forEach((time, index) => insertCandidate(backend, time, index === 4));
     check({ type: "lastFrame", input: undefined }).toEqual({
       capturedAtMs: 3000,
       contentHash: "synthetic",
     });
-    backend.execute({
-      type: "createBatch",
-      input: { day, startMs: 750, endMs: 751, frameIds: [6] },
-    });
-    const expected = [
-      { id: 2, capturedAtMs: 1000 },
-      { id: 3, capturedAtMs: 1000 },
-      { id: 4, capturedAtMs: 2000 },
-      { id: 1, capturedAtMs: 3000 },
-    ];
+    backend.execute({ type: "createBatch", input: batchInput([6], 750, 751) });
+    const expected = [2, 3, 4, 1].map((id) => ({ id, capturedAtMs: times[id - 1] }));
     for (const limit of [0, 2, 10]) {
-      reads.frameRows = 0;
-      reads.frameTextBytes = 0;
+      Object.assign(reads, { frameRows: 0, frameTextBytes: 0 });
       const pending = backend.execute({ type: "unbatchedActiveFrames", input: { limit } });
       expect(reads.frameRows).toBe(Math.min(limit, expected.length));
       expect.soft(reads.frameTextBytes).toBe(0);
       expect(pending).toEqual(expected.slice(0, limit));
     }
 
-    reads.frameRows = 0;
-    reads.frameTextBytes = 0;
+    Object.assign(reads, { frameRows: 0, frameTextBytes: 0 });
     const range = backend.execute({ type: "framesInRange", input: { startMs: 500, endMs: 3000 } });
     expect(reads.frameRows).toBe(5);
     expect.soft(reads.frameTextBytes).toBe(0);
-    expect(range).toEqual([
-      { id: 5, capturedAtMs: 500, idle: true },
-      { id: 6, capturedAtMs: 750, idle: false },
-      { id: 2, capturedAtMs: 1000, idle: false },
-      { id: 3, capturedAtMs: 1000, idle: false },
-      { id: 4, capturedAtMs: 2000, idle: false },
-    ]);
+    expect(range).toEqual(
+      [5, 6, 2, 3, 4].map((id) => ({ id, capturedAtMs: times[id - 1], idle: id === 5 })),
+    );
 
     const payload = { day, path: `captures/${"nested/".repeat(12)}750.jpg` };
     check({ type: "frameById", input: { id: 6 } }).toMatchObject(payload);
@@ -299,8 +280,7 @@ describe("Logbook native statement and read budgets", () => {
       }
       insertCandidate(backend, -1);
       insertCandidate(backend, 120_000);
-      reads.frameRows = 0;
-      reads.frameTextBytes = 0;
+      Object.assign(reads, { frameRows: 0, frameTextBytes: 0 });
       backend.execute({
         type: "replaceCardsInWindow",
         input: { day, startMs: 0, endMs: 120_000, drafts: keyframeDrafts },

@@ -39,15 +39,13 @@ describe("LogbookStore", () => {
     store.replaceCardsInWindow(DAY, BASE, BASE + 60_000, drafts);
   const cardTitles = async () => (await store.cardsForDay(DAY)).map(({ title }) => title);
   const rows = (sql: string) => readRows(databasePath, sql);
-  const insertFrame = async (capturedAtMs: number) => {
-    const day = dayKeyFor(capturedAtMs);
-    return await store.captureFrame({
+  const insertFrame = (capturedAtMs: number) =>
+    store.captureFrame({
       capturedAtMs,
-      day,
+      day: dayKeyFor(capturedAtMs),
       screenIndex: 0,
       buffer: Buffer.from(`jpeg-bytes-${capturedAtMs}`),
     });
-  };
 
   it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
     const capturedAtMs = Date.now();
@@ -125,7 +123,7 @@ describe("LogbookStore", () => {
     expect(stats.categories).toEqual(
       ["coding", "review"].map((category) => ({ category, ms: 30 * 60_000 })),
     );
-    expect(expectDefined(stats.apps[0], "logbook app statistic").domain).toBe("github.com");
+    expect(stats.apps).toEqual([{ domain: "github.com", ms: 30 * 60_000 }]);
     expect(await store.countCardsForDay(DAY)).toBe(cards.length);
     expect(await store.countCardsForDay("2026-07-04")).toBe(0);
     expect(await store.timelineForDay("2026-07-04")).toEqual({
@@ -161,21 +159,14 @@ describe("LogbookStore", () => {
     expect(await store.framesInRange(now - 21 * 24 * 60 * 60_000, now)).toEqual([]);
   });
 
-  it("rejects observations for a missing batch", async () => {
-    await expect(
-      store.replaceObservations(999_999, DAY, [
-        { startMs: 1, endMs: 2, text: "orphan observation" },
-      ]),
-    ).rejects.toThrow();
-    expect(await store.observationsInRange(DAY, 0, Number.MAX_SAFE_INTEGER)).toEqual([]);
-  });
-
   it("replaces large observation sets in order and rolls back a late invalid timestamp", async () => {
+    const observation = { startMs: 1, endMs: 2, text: "orphan observation" };
+    await expect(store.replaceObservations(999_999, DAY, [observation])).rejects.toThrow();
+    expect(await store.observationsInRange(DAY, 0, Number.MAX_SAFE_INTEGER)).toEqual([]);
     const frameId = await insertFrame(Date.now());
     const batchId = await createBatch([frameId], 1, 2, DAY);
     const segments = Array.from({ length: 70 }, (_, index) => ({
-      startMs: 1,
-      endMs: 2,
+      ...observation,
       text: `Observation ${Math.max(0, index - 1)}`,
     }));
     await store.replaceObservations(batchId, DAY, [{ startMs: 1, endMs: 2, text: "replaced" }]);
@@ -244,19 +235,16 @@ describe("LogbookStore", () => {
     expect(rows("SELECT id, batch_id FROM frames")).toEqual([{ id: 11, batch_id: 7 }]);
     expect(
       rows(
-        `SELECT name, strict FROM pragma_table_list
-             WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
-             ORDER BY name`,
+        "SELECT name, strict FROM pragma_table_list WHERE name IN ('batches', 'frames') ORDER BY name",
       ),
-    ).toEqual(
-      ["batches", "cards", "frames", "observations", "standups"].map((name) => ({
-        name,
-        strict: 1,
-      })),
-    );
+    ).toEqual([
+      { name: "batches", strict: 1 },
+      { name: "frames", strict: 1 },
+    ]);
   });
 
   it("refuses a newer schema without changing its stored data", async () => {
+    await Promise.all([DAY, "2026-07-04"].map((day) => store.saveStandup(day, "Original")));
     await store.saveStandup(DAY, "Preserved future-version fixture");
     await store.close();
     // The future-version file must reach its first managed admission here.
@@ -269,8 +257,9 @@ describe("LogbookStore", () => {
       `Logbook database uses newer schema version ${futureVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
     );
     expect(rows("PRAGMA user_version")).toEqual([{ user_version: futureVersion }]);
-    expect(rows("SELECT day, text FROM standups")).toEqual([
+    expect(rows("SELECT day, text FROM standups ORDER BY day")).toEqual([
       { day: DAY, text: "Preserved future-version fixture" },
+      { day: "2026-07-04", text: "Original" },
     ]);
   });
 

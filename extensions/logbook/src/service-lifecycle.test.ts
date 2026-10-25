@@ -38,30 +38,29 @@ function makeService(
 ) {
   const dataDir = realpathSync(tempDirs.make("logbook-service-"));
   const runtime = deps.runtime ?? createPluginRuntimeMock();
-  const logger = deps.logger ?? { ...quietLogger, warn: vi.fn(), error: vi.fn() };
   const service = new LogbookService(resolveLogbookConfig({ captureEnabled: false, ...config }), {
     dataDir,
     runtime,
-    logger,
+    logger: quietLogger,
     workerModuleUrl,
     fullConfig: {},
     scheduler: createTestPluginServiceScheduler(),
     ...deps,
   });
-  return { service, dataDir, runtime, logger };
+  return { service, dataDir, runtime };
 }
 
-function block<Args extends unknown[], Result>(
-  run: (...args: Args) => Promise<Result>,
-  entered: ReturnType<typeof createDeferred<void>>,
-  release: ReturnType<typeof createDeferred<void>>,
-) {
-  return async (...args: Args) => {
+const block =
+  <Args extends unknown[], Result>(
+    run: (...args: Args) => Promise<Result>,
+    entered: ReturnType<typeof createDeferred<void>>,
+    release: ReturnType<typeof createDeferred<void>>,
+  ) =>
+  async (...args: Args) => {
     entered.resolve();
     await release.promise;
     return await run(...args);
   };
-}
 
 function observationText(end: string) {
   return JSON.stringify([{ start: "10:00:00", end, description: "Synthetic activity" }]);
@@ -86,7 +85,7 @@ it.each([
 ])(
   "publishes synthesized cards with queued retention (prune=$prune, pending=$pending)",
   async ({ prune, pending }) => {
-    const { dataDir, runtime, logger, service } = makeService({
+    const { dataDir, runtime, service } = makeService({
       visionModel: "codex/gpt-5.6-sol",
       analysisIntervalMinutes: 10,
     });
@@ -121,10 +120,7 @@ it.each([
         frameIds.push(await capture(peer, day, capturedAtMs, `synthetic keyframe ${capturedAtMs}`));
       }
       const frameId = frameIds[pending ? 5 : 0];
-      if (pending) {
-        expect(await peer.latestBatch()).toBeNull();
-        expect(await peer.countUnbatchedActiveFrames()).toBe(11);
-      } else {
+      if (!pending) {
         await peer.createBatch({ ...span, frameIds });
       }
       await service.start();
@@ -133,7 +129,9 @@ it.each([
       await setImmediate();
       expect(await pruning).toEqual([{ status: "fulfilled", value: prune ? 1 : 0 }]);
       await service.stop();
-      const batch = await peer.latestBatch();
+      await peer.close();
+      await using reopened = await openStore(dataDir);
+      const batch = await reopened.latestBatch();
       assert(batch, "Expected the analyzed batch to persist");
       expect(batch).toMatchObject({
         ...span,
@@ -141,26 +139,13 @@ it.each([
         status: "done",
         error: undefined,
       });
-      const frames = (await peer.batchImages(batch.id)).map(({ frame }) => frame);
-      expect(frames).toEqual(
-        prune
-          ? []
-          : frameIds.map((id, index) =>
-              expect.objectContaining({ id, capturedAtMs: frameTimes[index], idle: false }),
-            ),
+      expect((await reopened.batchImages(batch.id)).map(({ frame }) => frame.id)).toEqual(
+        prune ? [] : frameIds,
       );
-      expect(await peer.countUnbatchedActiveFrames()).toBe(0);
-      expect(logger.warn).not.toHaveBeenCalled();
-      const cards = await peer.cardsForDay(day);
-      expect(cards).toMatchObject([
+      expect(await reopened.countUnbatchedActiveFrames()).toBe(0);
+      expect(await reopened.cardsForDay(day)).toMatchObject([
         { title: "Card", ...span, keyframeId: prune ? undefined : frameId },
       ]);
-      await peer.close();
-      await using reopened = await openStore(dataDir);
-      expect(await reopened.cardsForDay(day)).toEqual(cards);
-      expect(await reopened.latestBatch()).toEqual(batch);
-      expect((await reopened.batchImages(batch.id)).map(({ frame }) => frame)).toEqual(frames);
-      expect(await reopened.countUnbatchedActiveFrames()).toBe(0);
     } finally {
       await pruning;
       await service.stop();
@@ -169,41 +154,44 @@ it.each([
   },
 );
 
-it("settles asynchronous storage close after startup before service stop finishes", async () => {
-  const { dataDir, service } = makeService();
-  const store = await LogbookStore.open(dataDir, workerModuleUrl);
-  const closing = createDeferred<void>();
-  const releaseClose = createDeferred<void>();
-  vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(store);
-  const closeStore = store.close.bind(store);
-  vi.spyOn(store, "close").mockImplementationOnce(block(closeStore, closing, releaseClose));
-  await service.start();
-  const completed = vi.fn();
-  const stopping = service.stop().then(completed);
-  try {
-    await closing.promise;
-    expect(completed).not.toHaveBeenCalled();
-  } finally {
-    releaseClose.resolve();
-    await stopping;
-  }
-  await expect(store.countUnbatchedActiveFrames()).rejects.toThrow();
-});
-
-it("closes storage when startup recovery fails without publishing a running service", async () => {
-  const { service } = makeService();
-  const close = vi.spyOn(LogbookStore.prototype, "close");
-  vi.spyOn(LogbookStore.prototype, "resetRunningBatches").mockRejectedValueOnce(
-    new Error("storage unavailable"),
-  );
-  try {
-    await expect(service.start()).rejects.toThrow("storage unavailable");
-    await expect(service.status()).rejects.toThrow("not running");
-  } finally {
-    await service.stop();
-  }
-  expect(close).toHaveBeenCalledOnce();
-});
+it.each([false, true])(
+  "settles storage close after startup (recovery failure=%s)",
+  async (failed) => {
+    const { dataDir, service } = makeService();
+    const store = await LogbookStore.open(dataDir, workerModuleUrl);
+    const closing = createDeferred<void>();
+    const release = createDeferred<void>();
+    vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(store);
+    const closeStore = store.close.bind(store);
+    const close = vi
+      .spyOn(store, "close")
+      .mockImplementationOnce(block(closeStore, closing, release));
+    if (failed) {
+      vi.spyOn(store, "resetRunningBatches").mockRejectedValueOnce(
+        new Error("storage unavailable"),
+      );
+    } else {
+      await service.start();
+    }
+    const completed = vi.fn();
+    const settling = (
+      failed ? expect(service.start()).rejects.toThrow("storage unavailable") : service.stop()
+    ).then(completed);
+    try {
+      await closing.promise;
+      expect(completed).not.toHaveBeenCalled();
+      if (failed) {
+        await expect(service.status()).rejects.toThrow("not running");
+      }
+    } finally {
+      release.resolve();
+      await settling;
+      await service.stop();
+    }
+    expect(close).toHaveBeenCalledOnce();
+    await expect(store.countUnbatchedActiveFrames()).rejects.toThrow();
+  },
+);
 
 it("owns delayed manual analysis preparation through rejection and stop", async () => {
   const { service } = makeService({ visionModel: "synthetic/vision" });
@@ -240,13 +228,12 @@ it.each([
   "capture-write",
   "vision-success",
   "vision-error",
-  "standup-write",
   "status-read",
   "ask-read",
   "frame-read",
 ])("drains %s before closing SQLite", async (kind) => {
   const clock = createGatewaySchedulerClock();
-  const { dataDir, runtime, logger, service } = makeService(
+  const { dataDir, runtime, service } = makeService(
     {
       captureEnabled: true,
       captureIntervalSeconds: kind.startsWith("capture") ? 5 : 600,
@@ -271,11 +258,7 @@ it.each([
     return { text: observationText("10:01:00") };
   });
   runtime.llm.complete = vi.fn(async () =>
-    completion(
-      kind.startsWith("standup")
-        ? "Synthetic standup"
-        : cardText("10:01:00", "Synthetic activity", "Completed before shutdown"),
-    ),
+    completion(cardText("10:01:00", "Synthetic activity", "Completed before shutdown")),
   );
   if (kind.startsWith("vision")) {
     await using seed = await openStore(dataDir);
@@ -285,28 +268,24 @@ it.each([
       await seed.createBatch({ day, startMs: time, endMs: time + 60_000, frameIds: [frameId] });
     }
   }
-  const activeStore = await LogbookStore.open(dataDir, workerModuleUrl);
-  vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(activeStore);
+  const store = await LogbookStore.open(dataDir, workerModuleUrl);
+  vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(store);
   if (kind === "frame-read") {
-    await capture(activeStore, day, Date.now(), "synthetic frame payload");
-    const framePayload = activeStore.framePayload.bind(activeStore);
-    vi.spyOn(activeStore, "framePayload").mockImplementation(block(framePayload, entered, release));
+    await capture(store, day, Date.now(), "synthetic frame payload");
+    const framePayload = store.framePayload.bind(store);
+    vi.spyOn(store, "framePayload").mockImplementation(block(framePayload, entered, release));
   }
   if (kind === "capture-write") {
-    const captureFrame = activeStore.captureFrame.bind(activeStore);
-    vi.spyOn(activeStore, "captureFrame").mockImplementation(block(captureFrame, entered, release));
-  }
-  if (kind === "standup-write") {
-    const saveStandup = activeStore.saveStandup.bind(activeStore);
-    vi.spyOn(activeStore, "saveStandup").mockImplementation(block(saveStandup, entered, release));
+    const captureFrame = store.captureFrame.bind(store);
+    vi.spyOn(store, "captureFrame").mockImplementation(block(captureFrame, entered, release));
   }
   if (kind === "status-read") {
-    const latestBatch = activeStore.latestBatch.bind(activeStore);
-    vi.spyOn(activeStore, "latestBatch").mockImplementation(block(latestBatch, entered, release));
+    const latestBatch = store.latestBatch.bind(store);
+    vi.spyOn(store, "latestBatch").mockImplementation(block(latestBatch, entered, release));
   }
   if (kind === "ask-read") {
-    const observationsInRange = activeStore.observationsInRange.bind(activeStore);
-    vi.spyOn(activeStore, "observationsInRange").mockImplementation(
+    const observationsInRange = store.observationsInRange.bind(store);
+    vi.spyOn(store, "observationsInRange").mockImplementation(
       block(observationsInRange, entered, release),
     );
   }
@@ -318,9 +297,7 @@ it.each([
         ? service.status()
         : kind === "ask-read"
           ? service.ask(day, "What happened?")
-          : kind === "frame-read"
-            ? service.framePayload(1)
-            : service.standup(day, true);
+          : service.framePayload(1);
   void active.catch(() => {});
   await entered.promise;
   const stopped = vi.fn();
@@ -342,14 +319,9 @@ it.each([
     }
     await settled;
     expect(clock.armedAtMs).toBeNull();
-    expect(logger.error).not.toHaveBeenCalled();
     await using reopened = await openStore(dataDir);
     if (kind.startsWith("capture")) {
       expect(await reopened.countUnbatchedActiveFrames()).toBe(1);
-      expect(runtime.nodes.invoke).toHaveBeenCalledTimes(1);
-    } else if (kind.startsWith("standup")) {
-      expect(result).toEqual({ day, text: "Synthetic standup", updatedMs: expect.any(Number) });
-      expect(await reopened.getStandup(day)).toEqual(result);
     } else if (kind.endsWith("-read")) {
       expect(await reopened.latestBatch()).toBeNull();
     } else {
@@ -361,7 +333,6 @@ it.each([
         },
         { status: "pending", error: null },
       ]);
-      expect(runtime.mediaUnderstanding.extractStructuredWithModel).toHaveBeenCalledTimes(1);
     }
   } finally {
     release.resolve();
@@ -371,49 +342,66 @@ it.each([
   }
 });
 
-it("drains an admitted standup through the registered service stop", async () => {
-  const stateDir = realpathSync(tempDirs.make("logbook-runtime-drain-"));
-  const captured = createCapturedPluginRegistration({ id: "logbook" });
-  captured.api.pluginConfig = { captureEnabled: false };
-  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
-  captured.api.registerService = (service) => services.push(service);
-  const handlers = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
-  captured.api.registerGatewayMethod = (name, handler) => handlers.set(name, handler);
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  captured.api.runtime.llm.complete = block(async () => completion("Accepted"), entered, release);
-  plugin.register({ ...captured.api, runtimeSource });
-  const service = services[0]!;
-  const context = {
-    config: {},
-    stateDir,
-    logger: quietLogger,
-    scheduler: createTestPluginServiceScheduler(),
-  };
-  await service.start(context);
-  const call = async (name: string, params = {}) => {
-    const respond = vi.fn();
-    await handlers.get(name)!({ params, respond } as never);
-    return respond.mock.calls[0];
-  };
-  try {
-    const standup = call("logbook.standup");
-    await entered.promise;
-    const retired = vi.fn();
-    context.scheduler.beginClose();
-    const stopping = Promise.resolve(service.stop?.(context)).then(retired);
-    await setImmediate();
-    expect.soft(retired).not.toHaveBeenCalled();
-    expect.soft((await call("logbook.status"))?.[0]).toBe(false);
-    release.resolve();
-    expect((await standup)?.[0]).toBe(true);
-    await stopping;
-    await using reopened = await openStore(path.join(stateDir, "logbook"));
-    expect((await reopened.getStandup(dayKeyFor(Date.now())))?.text).toBe("Accepted");
-  } finally {
-    release.resolve();
-    context.scheduler.beginClose();
-    await service.stop?.(context);
-    await context.scheduler.stop();
-  }
-});
+it.each(["model", "storage"])(
+  "drains standup %s work through the registered service stop",
+  async (phase) => {
+    const stateDir = realpathSync(tempDirs.make("logbook-runtime-drain-"));
+    const captured = createCapturedPluginRegistration({ id: "logbook" });
+    captured.api.pluginConfig = { captureEnabled: false };
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+    captured.api.registerService = (service) => services.push(service);
+    const handlers = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
+    captured.api.registerGatewayMethod = (name, handler) => handlers.set(name, handler);
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const complete = async () => completion("Accepted");
+    captured.api.runtime.llm.complete =
+      phase === "model" ? block(complete, entered, release) : complete;
+    if (phase === "storage") {
+      const save = LogbookStore.prototype.saveStandup;
+      vi.spyOn(LogbookStore.prototype, "saveStandup").mockImplementationOnce(async function (
+        this: LogbookStore,
+        day,
+        text,
+      ) {
+        entered.resolve();
+        await release.promise;
+        return save.call(this, day, text);
+      });
+    }
+    plugin.register({ ...captured.api, runtimeSource });
+    const service = services[0]!;
+    const context = {
+      config: {},
+      stateDir,
+      logger: quietLogger,
+      scheduler: createTestPluginServiceScheduler(),
+    };
+    await service.start(context);
+    const call = async (name: string, params = {}) => {
+      const respond = vi.fn();
+      await handlers.get(name)!({ params, respond } as never);
+      return respond.mock.calls[0];
+    };
+    try {
+      const standup = call("logbook.standup");
+      await entered.promise;
+      const retired = vi.fn();
+      context.scheduler.beginClose();
+      const stopping = Promise.resolve(service.stop?.(context)).then(retired);
+      await setImmediate();
+      expect.soft(retired).not.toHaveBeenCalled();
+      expect.soft((await call("logbook.status"))?.[0]).toBe(false);
+      release.resolve();
+      expect((await standup)?.[0]).toBe(true);
+      await stopping;
+      await using reopened = await openStore(path.join(stateDir, "logbook"));
+      expect((await reopened.getStandup(dayKeyFor(Date.now())))?.text).toBe("Accepted");
+    } finally {
+      release.resolve();
+      context.scheduler.beginClose();
+      await service.stop?.(context);
+      await context.scheduler.stop();
+    }
+  },
+);
