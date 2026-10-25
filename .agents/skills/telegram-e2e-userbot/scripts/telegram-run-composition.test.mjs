@@ -64,6 +64,20 @@ function childClosed(child) {
   });
 }
 
+function assertPrivateGatewayConfig(env) {
+  const config = JSON.parse(fs.readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+  const root = path.dirname(env.OPENCLAW_CONFIG_PATH);
+  const tokenFile = config.channels.telegram.tokenFile;
+  assert.equal(path.dirname(tokenFile), root);
+  assert.equal(fs.readFileSync(tokenFile, "utf8"), "synthetic-token");
+  for (const directory of [root, env.OPENCLAW_STATE_DIR, config.agents.entries.main.workspace]) {
+    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+  }
+  for (const file of [tokenFile, env.OPENCLAW_CONFIG_PATH]) {
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  }
+}
+
 async function composition(context, mode, acquisitionReady = Promise.resolve()) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-run-composition-"));
   context.after(() => fixture.cleanup(), { timeout: TEST_TIMEOUT_MS });
@@ -323,6 +337,9 @@ sys.exit(record.main())
     );
     children.push({ child, command, argv, options, closed: childClosed(child) });
     if (isGateway) {
+      if (mode === "success") {
+        assertPrivateGatewayConfig(options.env);
+      }
       // Transfer the bound socket without exposing a free-port gap to other tests.
       child.once("message", () => {
         listener.close((error) => {

@@ -253,27 +253,6 @@ test("runner rejects a live SUT identity that differs from the lease", () => {
   assert.doesNotThrow(() => assertSutMatchesLease({ id: "42", username: "sut_bot" }, credential));
 });
 
-test("gateway token stays in a private run-owned file until scratch cleanup", async () => {
-  const token = "42:synthetic-file-token";
-  const temp = writeConfig({ ...configParams, sutToken: token });
-  const configText = fs.readFileSync(temp.configPath, "utf8");
-  const config = JSON.parse(configText);
-  const tokenFile = config.channels.telegram.tokenFile;
-  assert.equal(path.dirname(tokenFile), temp.root);
-  assert.equal(fs.readFileSync(tokenFile, "utf8"), token);
-  assert.equal(Object.hasOwn(config.channels.telegram, "botToken"), false);
-  assert.equal(configText.includes(token), false);
-  for (const directory of [temp.root, temp.stateDir, temp.workspace]) {
-    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
-  }
-  for (const file of [tokenFile, temp.configPath]) {
-    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  }
-  await currentTelegramRun().close();
-  assert.equal(fs.existsSync(tokenFile), false);
-  assert.equal(fs.existsSync(temp.root), false);
-});
-
 test("source Gateway selects the checkout's Telegram plugin entry over its built peer", () => {
   const repoRoot = path.resolve(import.meta.dirname, "../../../..");
   const params = { ...configParams, repoRoot };
