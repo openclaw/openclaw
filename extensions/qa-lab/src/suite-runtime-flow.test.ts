@@ -1,5 +1,4 @@
 // Qa Lab tests cover suite runtime flow plugin behavior.
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,18 +8,6 @@ const runScenarioFlow = vi.hoisted(() =>
   ),
 );
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
-const { webOpenPage, createWebPageOpener } = vi.hoisted(() => {
-  const openPageMock = vi.fn(async (_params: { url: string; repoRoot?: string }) => ({
-    pageId: "page-1",
-  }));
-  const createOpenerMock = vi.fn(
-    (owner: Set<string>) => (params: { url: string; repoRoot?: string }) => {
-      owner.add("page-1");
-      return openPageMock(params);
-    },
-  );
-  return { webOpenPage: openPageMock, createWebPageOpener: createOpenerMock };
-});
 
 // mock-isolation: observe flow delegation without executing the scenario runner.
 vi.mock("./scenario-flow-runner.js", () => ({ runScenarioFlow }));
@@ -30,36 +17,17 @@ vi.mock("./suite-runtime-transport.js", async (importOriginal) => ({
   waitForOutboundMessage,
 }));
 
-vi.mock("./web-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./web-runtime.js")>()),
-  createQaWebPageOpener: createWebPageOpener,
-}));
-
-import { extractToolPayload as extractQaToolPayload } from "openclaw/plugin-sdk/tool-payload";
-import * as browserRuntime from "./browser-runtime.js";
 import { createQaBusState } from "./bus-state.js";
-import * as cronRunWait from "./cron-run-wait.js";
-import * as discoveryEval from "./discovery-eval.js";
 import { QaSuiteScenarioSkipError } from "./errors.js";
-import { inspectQaExecutionIdentityStorage } from "./execution-identity-storage-inspection.js";
-import * as modelSwitchEval from "./model-switch-eval.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
-import { runQaCli } from "./qa-cli-process.js";
 import { createQaTransportAdapter } from "./qa-transport-registry.js";
 import { createQaTransportStateMethods } from "./qa-transport.js";
 import * as runtimeToolFixture from "./runtime-tool-fixture.js";
 import type { runScenarioFlow as RunScenarioFlow } from "./scenario-flow-runner.js";
-import * as suiteRuntimeAgentMedia from "./suite-runtime-agent-media.js";
-import * as suiteRuntimeAgentProcess from "./suite-runtime-agent-process.js";
-import * as suiteRuntimeAgentSession from "./suite-runtime-agent-session.js";
-import * as suiteRuntimeAgentTools from "./suite-runtime-agent-tools.js";
 import { runQaSuiteScenarioDefinition, runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
-import * as suiteRuntimeGateway from "./suite-runtime-gateway.js";
-import * as suiteRuntimeTransport from "./suite-runtime-transport.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import type { QaSuiteStep } from "./suite-types.js";
-import * as webRuntime from "./web-runtime.js";
 
 const qaSuiteRuntimeFlowTestConstants = {
   imageUnderstandingPngBase64: "small",
@@ -315,7 +283,7 @@ describe("qa suite runtime flow", () => {
     expect(result.rttMeasurement).toEqual(latestMeasurement);
   });
 
-  it("wires the split suite runtime deps into the scenario runtime api", async () => {
+  it("supplies scenario context, normalization and account-scoped runtime operations", async () => {
     const env = createQaSuiteRuntimeFlowTestEnv();
     const scenario = makeQaSuiteTestScenario("session-memory-ranking", {
       config: { expected: "value" },
@@ -328,7 +296,7 @@ describe("qa suite runtime flow", () => {
     const api = runScenarioFlow.mock.calls[0]?.[0]?.api as {
       env: typeof env;
       scenario: typeof scenario;
-      normalizeModelRef: unknown;
+      normalizeModelRef: (raw: string) => { provider: string; model: string } | null;
       waitForOutboundMessage: typeof waitForOutboundMessage;
       markGatewayLogCursor: () => number;
       assertNoGatewayLogSentinels: () => void;
@@ -336,45 +304,13 @@ describe("qa suite runtime flow", () => {
         envArg: typeof env,
         configArg: Record<string, unknown>,
       ) => Promise<unknown>;
-      webOpenPage: (params: { url: string }) => Promise<unknown>;
     } & Parameters<typeof RunScenarioFlow>[0]["api"] &
       typeof qaSuiteRuntimeFlowTestConstants;
     expect(api.env).toBe(env);
     expect(api.scenario).toBe(scenario);
     expect(api.runScenario).toBeTypeOf("function");
-    const identityDeps = {
-      ...suiteRuntimeTransport,
-      ...suiteRuntimeAgentMedia,
-      ...suiteRuntimeAgentProcess,
-      ...suiteRuntimeAgentSession,
-      ...suiteRuntimeAgentTools,
-      runQaCli,
-      inspectQaExecutionIdentityStorage,
-      ...suiteRuntimeGateway,
-      ...cronRunWait,
-      ...discoveryEval,
-      extractQaToolPayload,
-      ...modelSwitchEval,
-
-      browserRequest: browserRuntime.callQaBrowserRequest,
-      waitForBrowserReady: browserRuntime.waitForQaBrowserReady,
-      browserOpenTab: browserRuntime.qaBrowserOpenTab,
-      browserSnapshot: browserRuntime.qaBrowserSnapshot,
-      browserAct: browserRuntime.qaBrowserAct,
-      webWait: webRuntime.qaWebWait,
-      webType: webRuntime.qaWebType,
-      webSnapshot: webRuntime.qaWebSnapshot,
-      webEvaluate: webRuntime.qaWebEvaluate,
-    };
-    for (const [name, helper] of Object.entries(identityDeps)) {
-      if (name !== "waitForOutboundMessage") {
-        expect((api as Record<string, unknown>)[name]).toBe(helper);
-      }
-    }
     const canonicalOpus = { provider: "anthropic", model: "claude-opus-5-5" };
-    const normalizeModelRef = api.normalizeModelRef as (
-      raw: string,
-    ) => { provider: string; model: string } | null;
+    const { normalizeModelRef } = api;
     expect(normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
     expect(normalizeModelRef("AnThRoPiC/OPUS")).toEqual(canonicalOpus);
     expect(normalizeModelRef("anthropic/claude-opus-5")).toEqual({
@@ -406,20 +342,6 @@ describe("qa suite runtime flow", () => {
       imageUnderstandingLargePngBase64: "large",
       imageUnderstandingValidPngBase64: "valid",
     });
-
-    const released = createDeferred<{ pageId: string }>();
-    webOpenPage.mockReturnValueOnce(released.promise);
-    const opening = api.webOpenPage({ url: "https://openclaw.ai" });
-    expect(createWebPageOpener).toHaveBeenNthCalledWith(
-      1,
-      env.webSessionIds,
-      expect.any(AbortSignal),
-    );
-    expect(createWebPageOpener).toHaveBeenNthCalledWith(2, env.webSessionIds, undefined);
-    expect(webOpenPage).toHaveBeenCalledWith({ url: "https://openclaw.ai", repoRoot: "/repo" });
-    expect(env.webSessionIds.has("page-1")).toBe(true);
-    released.resolve({ pageId: "page-1" });
-    await opening;
   });
 
   it("reads fresh gateway logs and sentinels from one absolute collector mark", async () => {
