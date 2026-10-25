@@ -33,15 +33,6 @@ export const buildSessionLookup = (
   legacyKey: undefined,
 });
 
-const withActual = vi.hoisted(
-  () =>
-    <T extends object, Key extends keyof T>(mocks: T, ...keys: Key[]) =>
-    async (importOriginal: <Module>() => Promise<Module>) => ({
-      ...(await importOriginal<object>()),
-      ...Object.fromEntries(keys.map((key) => [key, mocks[key]])),
-    }),
-);
-
 const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: vi.fn().mockResolvedValue(undefined),
   deleteMediaBuffer: vi.fn(async () => {}),
@@ -104,63 +95,89 @@ const runtimeMocks = vi.hoisted(() => ({
 
 export { runtimeMocks };
 
-vi.mock("../agents/agent-scope.js", withActual(runtimeMocks, "resolveSessionAgentId"));
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
+  resolveSessionAgentId: runtimeMocks.resolveSessionAgentId,
+}));
 
 vi.mock("../channels/message/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../channels/message/runtime.js")>()),
   sendDurableMessageBatchCore: runtimeMocks.sendDurableMessageBatch,
 }));
 
-vi.mock("../channels/plugins/index.js", withActual(runtimeMocks, "normalizeChannelId"));
+vi.mock("../channels/plugins/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/index.js")>()),
+  normalizeChannelId: runtimeMocks.normalizeChannelId,
+}));
 
-vi.mock("../commands/agent.js", withActual(runtimeMocks, "agentCommandFromIngress"));
+vi.mock("../commands/agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/agent.js")>()),
+  agentCommandFromIngress: runtimeMocks.agentCommandFromIngress,
+}));
 
-vi.mock("../config/io.js", withActual(runtimeMocks, "getRuntimeConfig"));
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
+  getRuntimeConfig: runtimeMocks.getRuntimeConfig,
+}));
 
-vi.mock(
-  "../config/sessions/main-session.js",
-  withActual(runtimeMocks, "resolveSystemMainSessionTarget"),
-);
+vi.mock("../config/sessions/main-session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/main-session.js")>()),
+  resolveSystemMainSessionTarget: runtimeMocks.resolveSystemMainSessionTarget,
+}));
 
-vi.mock(
-  "../config/sessions/session-accessor.js",
-  withActual(runtimeMocks, "upsertSessionEntryCore"),
-);
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  upsertSessionEntryCore: runtimeMocks.upsertSessionEntryCore,
+}));
 
 vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
   loadOrCreateProcessDeviceIdentityAsync: runtimeMocks.loadOrCreateProcessDeviceIdentity,
 }));
 
-vi.mock("../infra/device-pairing.js", withActual(runtimeMocks, "updatePairedDevicePresence"));
+vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-pairing.js")>()),
+  updatePairedDevicePresence: runtimeMocks.updatePairedDevicePresence,
+}));
 
-vi.mock(
-  "../auto-reply/reply/session-event-handoff.js",
-  withActual(runtimeMocks, "captureSessionEventTargetForHost", "enqueueSessionEventForHost"),
-);
+vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/session-event-handoff.js")>()),
+  captureSessionEventTargetForHost: runtimeMocks.captureSessionEventTargetForHost,
+  enqueueSessionEventForHost: runtimeMocks.enqueueSessionEventForHost,
+}));
 
-vi.mock("../infra/push-apns.js", withActual(runtimeMocks, "registerApnsRegistration"));
+vi.mock("../infra/push-apns.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/push-apns.js")>()),
+  registerApnsRegistration: runtimeMocks.registerApnsRegistration,
+}));
 
-vi.mock("../infra/system-events.js", withActual(runtimeMocks, "enqueueSystemEventEntry"));
+vi.mock("../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/system-events.js")>()),
+  enqueueSystemEventEntry: runtimeMocks.enqueueSystemEventEntry,
+}));
 
-vi.mock("../media/store.js", withActual(runtimeMocks, "deleteMediaBuffer"));
+vi.mock("../media/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../media/store.js")>()),
+  deleteMediaBuffer: runtimeMocks.deleteMediaBuffer,
+}));
 
-vi.mock("./chat-attachment-policy.js", withActual(runtimeMocks, "resolveChatAttachmentMaxBytes"));
+vi.mock("./chat-attachment-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chat-attachment-policy.js")>()),
+  resolveChatAttachmentMaxBytes: runtimeMocks.resolveChatAttachmentMaxBytes,
+}));
 
-vi.mock(
-  "./chat-attachments.js",
-  withActual(
-    runtimeMocks,
-    "INLINE_IMAGE_DURABLE_OMISSION_MARKER",
-    "parseMessageWithAttachments",
-    "persistInboundImagesForTranscript",
-  ),
-);
+vi.mock("./chat-attachments.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chat-attachments.js")>()),
+  INLINE_IMAGE_DURABLE_OMISSION_MARKER: runtimeMocks.INLINE_IMAGE_DURABLE_OMISSION_MARKER,
+  parseMessageWithAttachments: runtimeMocks.parseMessageWithAttachments,
+  persistInboundImagesForTranscript: runtimeMocks.persistInboundImagesForTranscript,
+}));
 
-vi.mock(
-  "./session-utils.js",
-  withActual(runtimeMocks, "resolveGatewayModelSupportsImages", "resolveSessionModelRef"),
-);
+vi.mock("./session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils.js")>()),
+  resolveGatewayModelSupportsImages: runtimeMocks.resolveGatewayModelSupportsImages,
+  resolveSessionModelRef: runtimeMocks.resolveSessionModelRef,
+}));
 
 // mock-isolation: Node-event fixtures supply session rows without opening unrelated persistent stores.
 vi.mock("./session-utils-store-worker.js", () => ({
@@ -169,7 +186,10 @@ vi.mock("./session-utils-store-worker.js", () => ({
   ),
 }));
 
-vi.mock("./ws-log.js", withActual(runtimeMocks, "formatForLog"));
+vi.mock("./ws-log.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ws-log.js")>()),
+  formatForLog: runtimeMocks.formatForLog,
+}));
 
 const deviceProof = {
   publicKey: "public-key",

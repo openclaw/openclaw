@@ -1,22 +1,39 @@
+// Covers plugin config contract validation and ownership boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  discover: vi.fn(),
-  metadata: vi.fn(),
-  bundled: vi.fn(),
-  registry: vi.fn(),
-  snapshot: vi.fn(),
+const mocks = vi.hoisted(() => {
+  const loadManifestRegistry = vi.fn();
+  return {
+    discoverOpenClawPlugins: vi.fn(() => ({ candidates: [], diagnostics: [] })),
+    findBundledPluginMetadataById: vi.fn(),
+    loadBundledManifestRegistry: vi.fn(),
+    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
+    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
+    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  };
+});
+
+vi.mock("./discovery.js", () => ({
+  discoverOpenClawPlugins: mocks.discoverOpenClawPlugins,
 }));
-vi.mock("./discovery.js", () => ({ discoverOpenClawPlugins: mocks.discover }));
+
 vi.mock("./bundled-plugin-metadata.js", () => ({
-  findBundledPluginMetadataById: mocks.metadata,
+  findBundledPluginMetadataById: mocks.findBundledPluginMetadataById,
 }));
-vi.mock("./manifest-registry.js", () => ({ loadPluginManifestRegistryCore: mocks.bundled }));
+
+vi.mock("./manifest-registry.js", () => ({
+  loadPluginManifestRegistryCore: mocks.loadBundledManifestRegistry,
+}));
+
+vi.mock("./manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistryForInstalledIndex,
+}));
+
 vi.mock("./plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: mocks.registry,
-  loadPluginRegistrySnapshot: mocks.snapshot,
+  loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
 }));
 
 import {
@@ -33,7 +50,18 @@ function createRegistry(
 ): PluginManifestRegistry {
   return {
     diagnostics: [],
-    plugins: id ? [createPluginManifestRecordFixture({ id, origin, configContracts })] : [],
+    plugins: id
+      ? [
+          createPluginManifestRecordFixture({
+            id,
+            origin,
+            configContracts,
+            source: `/tmp/${id}/openclaw.plugin.json`,
+            rootDir: `/tmp/${id}`,
+            manifestPath: `/tmp/${id}/openclaw.plugin.json`,
+          }),
+        ]
+      : [],
   };
 }
 
@@ -56,11 +84,11 @@ function expectContracts(
 
 describe("resolvePluginConfigContractsById", () => {
   beforeEach(() => {
-    vi.resetAllMocks();
-    mocks.discover.mockReturnValue({ candidates: [], diagnostics: [] });
-    mocks.bundled.mockReturnValue(createRegistry());
-    mocks.registry.mockReturnValue(createRegistry());
-    mocks.snapshot.mockReturnValue({ plugins: [] });
+    mocks.discoverOpenClawPlugins.mockReset().mockReturnValue({ candidates: [], diagnostics: [] });
+    mocks.findBundledPluginMetadataById.mockReset();
+    mocks.loadBundledManifestRegistry.mockReset().mockReturnValue(createRegistry());
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReset().mockReturnValue(createRegistry());
+    mocks.loadPluginRegistrySnapshot.mockReset().mockReturnValue({ plugins: [] });
   });
 
   it("uses a supplied manifest registry as the authoritative contract source", () => {
@@ -77,43 +105,98 @@ describe("resolvePluginConfigContractsById", () => {
       "config",
       tokenContract,
     );
-    expect(mocks.registry).not.toHaveBeenCalled();
-    expect(mocks.discover).not.toHaveBeenCalled();
-    expect(mocks.bundled).not.toHaveBeenCalled();
-    expect(mocks.metadata).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
+    expect(mocks.discoverOpenClawPlugins).not.toHaveBeenCalled();
+    expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.findBundledPluginMetadataById).not.toHaveBeenCalled();
   });
 
   it("does not fall back to bundled registry when registry already resolved a plugin without config contracts", () => {
-    mocks.registry.mockReturnValue(createRegistry("brave", "bundled"));
-    expect(resolvePluginConfigContractsById({ pluginIds: ["brave"] })).toEqual(new Map());
-    expect(mocks.bundled).not.toHaveBeenCalled();
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createRegistry("brave", "bundled"),
+    );
+
+    expect(
+      resolvePluginConfigContractsById({
+        pluginIds: ["brave"],
+      }),
+    ).toEqual(new Map());
+    expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
   });
 
-  const migration = { compatibilityMigrationPaths: ["plugins.entries.voice-call.config"] };
-  it.each([
-    { source: "supplied bundled registry", supplied: true, origin: "bundled", stale: false },
-    { source: "stale bundled SecretInputs", supplied: false, origin: "bundled", stale: true },
-    { source: "runtime bundled discovery", supplied: false, origin: "config", stale: false },
-  ] as const)("hydrates contracts from $source", ({ supplied, origin, stale }) => {
-    const id = "voice-call";
-    const contracts = { secretInputs: { paths: [twilioPath, realtimePath] } };
-    const registry = createRegistry(
-      id,
-      origin,
-      stale ? { ...migration, secretInputs: { paths: [twilioPath] } } : undefined,
+  it("hydrates supplied bundled registry records from explicit bundled discovery", () => {
+    mocks.loadBundledManifestRegistry.mockReturnValue(
+      createRegistry("prepared-plugin", "bundled", tokenContract),
     );
-    mocks.registry.mockReturnValue(registry);
-    mocks.bundled.mockReturnValue(createRegistry(id, "bundled", contracts));
+
     expectContracts(
       {
-        pluginIds: [id],
-        ...(supplied ? { manifestRegistry: registry } : {}),
-        fallbackToBundledMetadataForResolvedBundled: origin === "bundled",
-        ...(!stale ? { fallbackBundledPluginIds: [id] } : {}),
+        pluginIds: ["prepared-plugin"],
+        manifestRegistry: createRegistry("prepared-plugin", "bundled"),
+        fallbackToBundledMetadataForResolvedBundled: true,
+        fallbackBundledPluginIds: ["prepared-plugin"],
       },
-      id,
+      "prepared-plugin",
       "bundled",
-      stale ? { ...migration, ...contracts } : contracts,
+      tokenContract,
+    );
+  });
+
+  it("refreshes stale bundled SecretInput contracts from bundled registry", () => {
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createRegistry("voice-call", "bundled", {
+        compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
+        secretInputs: {
+          paths: [twilioPath],
+        },
+      }),
+    );
+    mocks.loadBundledManifestRegistry.mockReturnValue(
+      createRegistry("voice-call", "bundled", {
+        secretInputs: {
+          paths: [twilioPath, realtimePath],
+        },
+      }),
+    );
+
+    expectContracts(
+      {
+        pluginIds: ["voice-call"],
+        fallbackToBundledMetadataForResolvedBundled: true,
+      },
+      "voice-call",
+      "bundled",
+      {
+        compatibilityMigrationPaths: ["plugins.entries.voice-call.config"],
+        secretInputs: { paths: [twilioPath, realtimePath] },
+      },
+    );
+    expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadBundledManifestRegistry).toHaveBeenCalledTimes(1);
+  });
+
+  it("can hydrate missing contracts for plugin ids known to be bundled by runtime discovery", () => {
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createRegistry("voice-call", "config"),
+    );
+    mocks.loadBundledManifestRegistry.mockReturnValue(
+      createRegistry("voice-call", "bundled", {
+        secretInputs: {
+          paths: [{ path: "tts.providers.*.apiKey", expected: "string" }],
+        },
+      }),
+    );
+
+    expectContracts(
+      {
+        pluginIds: ["voice-call"],
+        fallbackBundledPluginIds: ["voice-call"],
+      },
+      "voice-call",
+      "bundled",
+      {
+        secretInputs: { paths: [{ path: "tts.providers.*.apiKey", expected: "string" }] },
+      },
     );
   });
 });
