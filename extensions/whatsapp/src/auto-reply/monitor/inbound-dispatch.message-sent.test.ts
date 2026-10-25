@@ -16,7 +16,7 @@ import {
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWebSendApi } from "../../inbound/send-api.js";
 import { normalizeWhatsAppSendResult } from "../../inbound/send-result.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
@@ -30,6 +30,9 @@ import {
 const sessionKey = "agent:main:whatsapp:direct:+1000";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
+type Platform = Pick<AdmittedWebInboundMessage["platform"], "reply" | "sendMedia">;
+const toJid = "1000@s.whatsapp.net";
+const deliveryCaption = "voice caption";
 
 function mockMedia(kind: "audio" | "video") {
   vi.mocked(loadWebMedia).mockResolvedValueOnce({
@@ -65,10 +68,10 @@ function expectActivity() {
   });
 }
 
-function guardActivity(message: string) {
-  recordChannelActivity.mockReset().mockImplementation(() => {
+function guardActivity() {
+  recordChannelActivity.mockImplementation(() => {
     if (recordChannelActivity.mock.calls.length > 1) {
-      throw new Error(message);
+      throw new Error("duplicate logical activity bookkeeping");
     }
   });
 }
@@ -147,7 +150,7 @@ vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
 
 function createPlan(
   deliverReply: Parameters<typeof createWhatsAppReplyPlan>[0]["deliverReply"],
-  platform?: Pick<AdmittedWebInboundMessage["platform"], "reply" | "sendMedia">,
+  platform?: Platform,
 ) {
   const msg = createTestWebInboundMessage({
     event: { id: "wa-inbound-1" },
@@ -180,12 +183,7 @@ function createPlan(
     ChatType: "direct",
     CommandAuthorized: false,
   };
-  const replyLogger = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
+  const replyLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const plan = createWhatsAppReplyPlan({
     cfg: { channels: { whatsapp: {} } } as never,
     connectionId: "conn-1",
@@ -212,7 +210,7 @@ function createPlan(
 
 async function dispatchObservedPlatformReply(params: {
   payload: { text: string; mediaUrls?: string[] };
-  platform: Pick<AdmittedWebInboundMessage["platform"], "reply" | "sendMedia">;
+  platform: Platform;
   deferredMediaUrls?: string[];
 }) {
   const pluginHook = vi.fn();
@@ -283,6 +281,9 @@ afterEach(() => {
   clearInternalHooks();
   resetGlobalHookRunner();
 });
+beforeEach(() => {
+  recordChannelActivity.mockReset();
+});
 
 describe("WhatsApp canonical message_sent delivery", () => {
   it("finalizes every deferred attachment through core after replacement", async () => {
@@ -337,7 +338,6 @@ describe("WhatsApp canonical message_sent delivery", () => {
   });
 
   it("preserves accepted voice receipts through real dispatch after caption rejection", async () => {
-    recordChannelActivity.mockClear();
     mockMedia("audio");
     const sendMedia = vi.fn(async () =>
       normalizeWhatsAppSendResult({ key: { id: "dispatch-voice-accepted" } } as WAMessage, "media"),
@@ -359,118 +359,58 @@ describe("WhatsApp canonical message_sent delivery", () => {
     expectActivity();
   });
 
-  it("records activity once for producer-backed media without duplicate bookkeeping", async () => {
-    guardActivity("outer owner duplicated producer activity bookkeeping");
-    const messageId = "dispatch-producer-media-guarded";
-    const { sendMessage, sendMedia, reply } = producerPlatform("video", [
-      {
-        key: {
-          id: messageId,
-          remoteJid: "1000@s.whatsapp.net",
-          fromMe: true,
-          participant: "observer@s.whatsapp.net",
-        },
-      },
-    ]);
-    mockMedia("video");
-
-    const { deliveryResult, failure, internalHook, pluginHook, replyLogger } =
-      await dispatchObservedPlatformReply({
-        payload: {
-          text: "caption",
-          mediaUrls: ["/tmp/producer-video.mp4"],
-        },
-        platform: { reply, sendMedia },
-      });
-
-    expect(failure).toMatchObject({
-      dispatched: true,
-      dispatchResult: { queuedFinal: true },
-    });
-    await expectObserved({ pluginHook, internalHook }, messageId, true);
-    expect(deliveryResult).toMatchObject({
-      receipt: {
-        primaryPlatformMessageId: messageId,
-        platformMessageIds: [messageId],
-        raw: [
-          {
+  it.each(["video", "audio"] as const)(
+    "records one logical activity for producer-backed %s",
+    async (kind) => {
+      guardActivity();
+      mockMedia(kind);
+      const messageIds = kind === "audio" ? ["voice", "caption"] : ["video"];
+      const meta = { fromMe: true, participant: "observer@s.whatsapp.net" };
+      const { sendMessage, sendMedia, reply } = producerPlatform(
+        kind,
+        messageIds.map((id) => ({ key: { id, remoteJid: toJid, ...meta } })),
+      );
+      const { deliveryResult, failure, internalHook, pluginHook, replyLogger } =
+        await dispatchObservedPlatformReply({
+          payload: {
+            text: deliveryCaption,
+            mediaUrls: [`/tmp/producer.${kind === "audio" ? "ogg" : "mp4"}`],
+          },
+          platform: { reply, sendMedia },
+        });
+      expect(failure).toMatchObject({ dispatched: true, dispatchResult: { queuedFinal: true } });
+      expect(deliveryResult).toMatchObject({
+        messageIds,
+        receipt: {
+          primaryPlatformMessageId: messageIds[0],
+          platformMessageIds: messageIds,
+          parts: messageIds.map((platformMessageId, index) => ({
+            platformMessageId,
+            index,
+            raw: { toJid, meta: { ...meta, kind: index === 0 ? "media" : "text" } },
+          })),
+          raw: messageIds.map((messageId) => ({
             channel: "whatsapp",
             messageId,
-            toJid: "1000@s.whatsapp.net",
-            meta: {
-              fromMe: true,
-              participant: "observer@s.whatsapp.net",
-              providerAccepted: true,
-            },
-          },
-        ],
-        parts: [
-          {
-            platformMessageId: messageId,
-            index: 0,
-            raw: {
-              toJid: "1000@s.whatsapp.net",
-              meta: {
-                fromMe: true,
-                participant: "observer@s.whatsapp.net",
-              },
-            },
-          },
-        ],
-      },
-    });
-    expect(sendMessage).toHaveBeenCalledOnce();
-    expect(sendMedia).toHaveBeenCalledOnce();
-    expect(reply).not.toHaveBeenCalled();
-    expect(replyLogger.warn).not.toHaveBeenCalled();
-    expectActivity();
-    recordChannelActivity.mockReset();
-  });
-
-  it("shares one logical activity scope across real separately accepted voice and caption sends", async () => {
-    guardActivity("caption producer incorrectly repeated logical activity bookkeeping");
-    mockMedia("audio");
-    const messageIds = ["dispatch-scoped-voice", "dispatch-scoped-caption"];
-    const { sendMessage, sendMedia, reply } = producerPlatform(
-      "audio",
-      messageIds.map((id) => ({
-        key: { id, remoteJid: "1000@s.whatsapp.net", fromMe: true },
-      })),
-    );
-
-    const { deliveryResult, failure, internalHook, pluginHook, replyLogger } =
-      await dispatchObservedPlatformReply({
-        payload: { text: "voice caption", mediaUrls: ["/tmp/scoped-voice.ogg"] },
-        platform: { reply, sendMedia },
+            toJid,
+            meta: { ...meta, providerAccepted: true },
+          })),
+        },
       });
-
-    expect(failure).toMatchObject({
-      dispatched: true,
-      dispatchResult: { queuedFinal: true },
-    });
-    expect(deliveryResult).toMatchObject({
-      messageIds,
-      receipt: {
-        primaryPlatformMessageId: "dispatch-scoped-voice",
-        platformMessageIds: messageIds,
-        parts: ["media", "text"].map((kind, index) => ({
-          platformMessageId: messageIds[index],
-          raw: { meta: { kind } },
-        })),
-        raw: messageIds.map((messageId) => ({ messageId, toJid: "1000@s.whatsapp.net" })),
-      },
-    });
-    await expectObserved({ pluginHook, internalHook }, "dispatch-scoped-voice", true);
-    expect(sendMessage).toHaveBeenCalledTimes(2);
-    expect(sendMedia).toHaveBeenCalledOnce();
-    expect(reply).toHaveBeenCalledExactlyOnceWith("voice caption", undefined);
-    expect(replyLogger.warn).not.toHaveBeenCalled();
-    expectActivity();
-    recordChannelActivity.mockReset();
-  });
+      await expectObserved({ pluginHook, internalHook }, messageIds[0]!, true);
+      expect(sendMessage).toHaveBeenCalledTimes(messageIds.length);
+      expect(sendMedia).toHaveBeenCalledOnce();
+      if (kind === "audio") {
+        expect(reply).toHaveBeenCalledExactlyOnceWith(deliveryCaption, undefined);
+      } else {
+        expect(reply).not.toHaveBeenCalled();
+      }
+      expect(replyLogger.warn).not.toHaveBeenCalled();
+      expectActivity();
+    },
+  );
 
   it("keeps the first accepted chunk visible to observers when a later chunk throws a nested partial", async () => {
-    recordChannelActivity.mockClear();
     const bookkeepingError = new Error("second accepted chunk bookkeeping failed");
     mockMedia("audio");
     const firstChunk = normalizeWhatsAppSendResult(
@@ -506,7 +446,6 @@ describe("WhatsApp canonical message_sent delivery", () => {
   });
 
   it("preserves inner accepted media receipts and one activity attempt through full dispatch", async () => {
-    recordChannelActivity.mockClear();
     const bookkeepingError = new Error("accepted dispatch media bookkeeping failed");
     recordChannelActivity.mockImplementationOnce(() => {
       throw bookkeepingError;
