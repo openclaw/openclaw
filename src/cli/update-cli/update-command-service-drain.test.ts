@@ -84,6 +84,17 @@ function expectResume() {
   );
 }
 
+async function expectStopAt(
+  f: ReturnType<typeof fixture>,
+  work: Promise<unknown>,
+  milliseconds: number,
+) {
+  await vi.advanceTimersByTimeAsync(milliseconds - 1);
+  expect(f.stop).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(work).resolves.toBe("stopped");
+}
+
 const delay = (ms: number) =>
   new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -114,7 +125,7 @@ function ready(): Extract<GatewaySuspendPrepareResult, { status: "ready" }> {
 
 function draining(
   kind: GatewaySuspendBlocker["kind"],
-  message: string,
+  message = `1 active ${kind}`,
   retryAfterMs = 100,
 ): Extract<GatewaySuspendPrepareResult, { status: "draining" }> {
   return {
@@ -316,49 +327,41 @@ it("retains stop authority after checking an offline Gateway port", async () => 
   expect(f.stop).not.toHaveBeenCalled();
 });
 
-it.each(["admitted work", "published resident", "expired observation"] as const)(
+it.each(["admitted work", "published resident", "expired observation"])(
   "warns before stopping at the drain deadline: %s",
   async (scenario) => {
-    const observation: GatewaySuspendPrepareResult =
-      scenario === "admitted work"
-        ? draining("embedded-run", "1 active agent turn", 60_000)
-        : scenario === "published resident"
-          ? {
-              ...draining("root-request", "2 active gateway requests"),
-              writeCustody: undefined,
-              activeCount: 5,
-              blockers: [
-                { kind: "root-request", count: 2, message: "2 active gateway requests" },
-                { kind: "cron-run", count: 3, message: "3 active cron runs" },
-              ],
-            }
-          : {
-              ...draining("cron-run", "1 active cron run"),
-              writeCustody: [{ phase: "backup", count: 1 }],
-            };
+    const published = scenario === "published resident";
+    const observation: Extract<GatewaySuspendPrepareResult, { status: "draining" }> = {
+      ...draining("root-request", undefined, 60_000),
+      writeCustody: published ? undefined : [],
+    };
+    observation.blockers.push({ kind: "cron-run", count: 3, message: "3 active cron runs" });
+    observation.activeCount = 4;
     const f = fixture({
       observations: [observation],
-      ...(scenario === "published resident" ? { resident: { pid: 42 } } : {}),
+      ...(published ? { resident: { pid: 42 } } : {}),
     });
     if (scenario === "expired observation") {
+      observation.writeCustody = [{ phase: "backup", count: 1 }];
       failLaterObservations();
     }
     const timeoutMs = scenario === "admitted work" ? undefined : f.params.timeoutMs;
-    const running = f.run({ timeoutMs });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.stop).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(timeoutMs ?? 30_000);
-    await expect(running).resolves.toBe("stopped");
+    await expectStopAt(f, f.run({ timeoutMs }), timeoutMs ?? 30_000);
     expect(f.warn).toHaveBeenCalledOnce();
     expect(f.warn).toHaveBeenCalledWith(
-      expect.stringMatching(
-        scenario === "admitted work"
-          ? /25000ms.*1 active agent turn.*interrupted.*330s/
-          : scenario === "published resident"
-            ? /WARNING:.*budget unknown.*root-request=2, cron-run=3.*cannot distinguish migrations\/backups from ordinary work.*next Gateway starts with a 330s/
-            : /cron-run=1.*Current lifecycle observation unavailable.*resident unavailable/,
-      ),
+      expect.stringMatching(/root-request=1, cron-run=3.*interrupted.*330s/),
     );
+    if (published) {
+      expect(f.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/budget unknown.*cannot distinguish migrations\/backups/),
+      );
+    } else if (scenario === "expired observation") {
+      expect(f.warn).toHaveBeenCalledWith(
+        expect.stringMatching(/Current lifecycle observation unavailable.*resident unavailable/),
+      );
+    } else {
+      expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("25000ms"));
+    }
     expect(f.stop).toHaveBeenCalledOnce();
     expect(f.events.at(-1)).toBe("stop");
     expect(f.events.at(-2)).toMatch(/^warning:/);
@@ -406,12 +409,8 @@ it.each([
       { ...draining("embedded-run", "1 active turn", 60_000), expiresAtMs: Date.now() + 45_000 },
     ],
   });
-  const running = f.interrupt({ timeoutMs });
-  await vi.advanceTimersByTimeAsync(drainMs - 1);
-  expect(f.stop).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
+  await expectStopAt(f, f.interrupt({ timeoutMs }), drainMs);
   expect(f.events).toContain("handoff");
-  await expect(running).resolves.toBe("stopped");
 });
 
 it.each([
@@ -435,12 +434,8 @@ it.each([
       }
       return await call(request);
     });
-    const running = f.interrupt({ timeoutMs });
-    await vi.advanceTimersByTimeAsync(elapsedMs - 1);
-    expect(f.stop).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
+    await expectStopAt(f, f.interrupt({ timeoutMs }), elapsedMs);
     expect(f.events).toContain("handoff");
-    await expect(running).resolves.toBe("stopped");
   },
 );
 
@@ -582,27 +577,25 @@ const juneStaleConnection = "gateway closed (1011): gateway message handler unav
 const legacyResident = { pid: 42, state: "alive", path: "/tmp/openclaw-fixture/gateway.lock" };
 
 async function expectNormalDeadline(f: ReturnType<typeof fixture>) {
-  const running = f.run();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.stop).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(f.params.timeoutMs);
-  await expect(running).resolves.toBe("stopped");
+  await expectStopAt(f, f.run(), f.params.timeoutMs);
   expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("drain deadline reached"));
 }
 
+function closeError(reason = "gateway message handler unavailable") {
+  return createGatewayCloseTransportError({
+    code: 1011,
+    reason,
+    connectionDetails: {
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    },
+    requestDispatched: false,
+  });
+}
+
 function staleConnectionError(message: string) {
-  return message === juneStaleConnection
-    ? createGatewayCloseTransportError({
-        code: 1011,
-        reason: "gateway message handler unavailable",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "Gateway target: ws://127.0.0.1:18789",
-        },
-        requestDispatched: false,
-      })
-    : new Error(message);
+  return message === juneStaleConnection ? closeError() : new Error(message);
 }
 
 it.each(
@@ -691,16 +684,7 @@ it.each(["plain error", "protocol response", "extended close reason"])(
       retainGatewayResponsePayload(response, undefined);
       error = response;
     } else if (kind === "extended close reason") {
-      error = createGatewayCloseTransportError({
-        code: 1011,
-        reason: "gateway message handler unavailable\nfor a different reason",
-        connectionDetails: {
-          url: "ws://127.0.0.1:18789",
-          urlSource: "local loopback",
-          message: "Gateway target: ws://127.0.0.1:18789",
-        },
-        requestDispatched: false,
-      });
+      error = closeError("gateway message handler unavailable\nfor a different reason");
     } else {
       error = new Error(juneStaleConnection);
     }

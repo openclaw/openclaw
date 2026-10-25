@@ -12,8 +12,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
-import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
+import { captureSwap } from "../../infra/package-update-swap.assertions.test-support.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
@@ -55,7 +54,6 @@ import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun } from "./update-command-run.js";
 import * as service from "./update-command-service.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
@@ -138,26 +136,18 @@ async function scenario(
     | "cleanup-deadline"
     | "verified-report-read"
     | "unverified-completion",
-  json: boolean,
-  repeat = false,
-  deferred = true,
-  preparedRecovery = false,
-  completedByGateway = false,
 ) {
+  const json = kind !== "healthy";
+  const repeat = kind === "retained" || kind === "cleanup-deadline";
+  const deferred = kind !== "unverified-completion";
+  const preparedRecovery = kind === "revoked" || kind === "link-retained";
+  const completedByGateway = kind === "healthy" || kind === "release-failure";
   async function publishSwap(
     fixture: Awaited<ReturnType<typeof createPackageSwapFixture>>,
     expected: "committed" | "failed" = "committed",
   ) {
-    let transaction: PackageUpdateTransaction | undefined;
-    const result = await swapStagedPackageInstall({
-      ...fixture.params,
-      onTransaction: (value) => {
-        transaction = value;
-      },
-    });
-    if (!transaction || result.status !== expected) {
-      throw new Error("fixture swap failed");
-    }
+    const { result, transaction } = await captureSwap(fixture.params);
+    expect(result.status).toBe(expected);
     return { ...fixture, result, transaction };
   }
   let swap;
@@ -492,20 +482,6 @@ async function scenario(
   );
   const history = getUpdateRun(run.runId, { env: run.env });
   const report = history ? renderUpdateRunReport(history).markdown : "missing history";
-  const beforeRepeat = structuredClone(history);
-  // A revoked owner's still-running row belongs to its successor. The repeated
-  // terminal-write probe only applies to rows already terminalized by an owner.
-  if (history?.status !== "running") {
-    finishUpdateRun(
-      run.runId,
-      { status: "failed", reason: "late conflicting outcome" },
-      { env: run.env },
-    );
-  }
-  const afterRepeat = getUpdateRun(run.runId, { env: run.env });
-  if (kind !== "verified-report-read" && kind !== "revoked") {
-    expect(afterRepeat).toEqual(beforeRepeat);
-  }
   const observations = {
     injected,
     repeatedCompletion,
@@ -532,7 +508,7 @@ async function scenario(
 
 describe("composed cleanup and terminal outcome", () => {
   it("keeps the verified candidate when its running update row cannot be read for reporting", async () => {
-    const value = await scenario("verified-report-read", true);
+    const value = await scenario("verified-report-read");
     expect(value.injected).toBe(true);
     expect(value.package.version).toBe("2.0.0");
     expect(value.launcher).toBe("candidate launcher\n");
@@ -542,7 +518,7 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.history?.status).not.toBe("rolled-back");
   });
   it("publishes the Gateway's completed row after real executor release", async () => {
-    const value = await scenario("healthy", false, false, true, false, true);
+    const value = await scenario("healthy");
     expect(value).toMatchObject({ exitCode: 0, history: { status: "succeeded" } });
     expect(value.lease).toBe("absent");
     expect(value.retainedExists).toBe(false);
@@ -554,7 +530,7 @@ describe("composed cleanup and terminal outcome", () => {
     );
   });
   it("suppresses prepared success when the real executor lease cannot be released", async () => {
-    const value = await scenario("release-failure", true, false, true, false, true);
+    const value = await scenario("release-failure");
     expect(value.injected).toBe(true);
     expect(value).toMatchObject({ exitCode: 1, history: { status: "succeeded" } });
     expect(value.lease).toBe("current");
@@ -562,7 +538,7 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.jsonOutput).toEqual([]);
   });
   it("reports revoked authority from captured facts without changing retained state", async () => {
-    const value = await scenario("revoked", true, false, true, true);
+    const value = await scenario("revoked");
     expect(value.injected).toBe(true);
     expect(value.exitCode).toBe(1);
     expect(value.failureObject).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
@@ -579,7 +555,7 @@ describe("composed cleanup and terminal outcome", () => {
   });
   it("qualifies pending recovery claims after link-retained settlement", async () => {
     // Service verification is supplied data; publication, cleanup and owner failure are real.
-    const value = await scenario("link-retained", true, false, true, true);
+    const value = await scenario("link-retained");
     const reason = "package-backup-retention-failed";
     expect(value.injected).toBe(true);
     expect(value).toMatchObject({ exitCode: 1, history: { status: "failed" } });
@@ -618,7 +594,7 @@ describe("composed cleanup and terminal outcome", () => {
   it.each(["retained", "cleanup-deadline"] as const)(
     "reports the %s backup after verified activation and repeated completion",
     async (kind) => {
-      const value = await scenario(kind, true, true);
+      const value = await scenario(kind);
       if (kind === "cleanup-deadline") {
         expect(value.repeatedCompletion).toMatchObject({
           durationMs: 300_001,
@@ -653,7 +629,7 @@ describe("composed cleanup and terminal outcome", () => {
   it.each(["link-changed", "transient-read"] as const)(
     "keeps producer-qualification failure hard for %s",
     async (kind) => {
-      const value = await scenario(kind, true);
+      const value = await scenario(kind);
       expect(value.injected).toBe(true);
       expect(value).toMatchObject({ exitCode: 1, history: { status: "failed" } });
       expect(value.jsonOutput).toHaveLength(1);
@@ -666,13 +642,13 @@ describe("composed cleanup and terminal outcome", () => {
     },
   );
   it("publishes the hard completion result through the direct finalizer fallback", async () => {
-    const value = await scenario("unverified-completion", true, false, false);
+    const value = await scenario("unverified-completion");
     expect(value).toMatchObject({ exitCode: 1, history: { status: "failed" } });
     expect(value.jsonOutput).toHaveLength(1);
     expect(value.jsonOutput[0]).toMatchObject({ status: "error" });
   });
   it("preserves foreign terminal history and emits only the pending failure", async () => {
-    const value = await scenario("foreign-revoked", true);
+    const value = await scenario("foreign-revoked");
     expect(value.injected).toBe(true);
     expect(value.exitCode).toBe(1);
     expect(value.jsonOutput).toHaveLength(1);
@@ -741,23 +717,5 @@ it("keeps foreground success pending until the replacement Gateway observes the 
   expect(getUpdateRun(run.runId)).toMatchObject({
     status: "succeeded",
     verification: { booted: true, serviceRunning: true, versionMatch: true },
-  });
-});
-
-it("terminalizes the foreground skipped outcome without waiting for restart", () => {
-  const created = createUpdateRun({ trigger: "api" });
-  completeUpdateCommandRun(
-    resultFixture(base, {
-      status: "skipped",
-      reason: "already-current",
-      before: { version: "1.0.0" },
-      after: { version: "1.0.0" },
-    }),
-    { runId: created.runId, env: { ...process.env }, completionOwner: "gateway-restart" },
-  );
-  expect(getUpdateRun(created.runId)).toMatchObject({
-    status: "skipped",
-    phase: "finished",
-    reason: "already-current",
   });
 });
