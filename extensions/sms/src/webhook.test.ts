@@ -38,22 +38,6 @@ function deliveryHarness(overrides: Partial<SmsWebhookHandlerParams> = {}) {
   return { account, delivery, handler: createHandler({ ...overrides, account, delivery }) };
 }
 
-function parseTestTwilioForm(body: string): Record<string, string> {
-  return Object.fromEntries(new URLSearchParams(body));
-}
-
-function createSignedBody(
-  params: { account?: ResolvedSmsAccount; body?: string; messageSid?: string } = {},
-) {
-  const account = params.account ?? createSmsTestAccount();
-  const form =
-    params.body !== undefined
-      ? parseTestTwilioForm(params.body)
-      : createSmsTestForm({ MessageSid: params.messageSid ?? "SM123" }, account);
-  const payload = signForm(form, account);
-  return { ...payload, body: params.body ?? payload.body };
-}
-
 function createLoopbackSocket(remoteAddress = "127.0.0.1"): Socket {
   const socket = new Socket();
   Object.defineProperty(socket, "remoteAddress", { value: remoteAddress });
@@ -69,31 +53,7 @@ function configureRequest(req: IncomingMessage): IncomingMessage {
   return req;
 }
 
-function createFailingRequest(error?: Error): IncomingMessage {
-  return configureRequest(
-    new Readable({
-      read() {
-        this.destroy(error);
-      },
-    }) as IncomingMessage,
-  );
-}
-
-function createPendingRequest(): IncomingMessage {
-  return configureRequest(new Readable({ read() {} }) as IncomingMessage);
-}
-
 type TestResponse = ReturnType<typeof createResponse>;
-
-async function dispatch(
-  handler: ReturnType<typeof createHandler>,
-  payload: { body: string; signature: string },
-  options?: Parameters<typeof createSmsTestRequest>[1],
-) {
-  const res = createResponse();
-  await handler(createSmsTestRequest(payload, options), res);
-  return res;
-}
 
 async function expectStatus(
   handler: ReturnType<typeof createHandler>,
@@ -101,7 +61,8 @@ async function expectStatus(
   statusCode = 200,
   options?: Parameters<typeof createSmsTestRequest>[1],
 ) {
-  const res = await dispatch(handler, payload, options);
+  const res = createResponse();
+  await handler(createSmsTestRequest(payload, options), res);
   expect(res.statusCode).toBe(statusCode);
   return res;
 }
@@ -124,15 +85,20 @@ function proxyPost(
 }
 
 function createSignedSmsPayload(
-  messageSid: string,
+  messageSid = "SM123",
   overrides: { from?: string; to?: string } = {},
+  account = createSmsTestAccount(),
 ): { body: string; signature: string } {
   return signForm(
-    createSmsTestForm({
-      MessageSid: messageSid,
-      From: overrides.from ?? "+15551234567",
-      To: overrides.to ?? "+15557654321",
-    }),
+    createSmsTestForm(
+      {
+        MessageSid: messageSid,
+        From: overrides.from ?? "+15551234567",
+        To: overrides.to ?? "+15557654321",
+      },
+      account,
+    ),
+    account,
   );
 }
 
@@ -170,10 +136,10 @@ describe("createSmsWebhookHandler", () => {
       expect(bodyRead).toBe(true);
       throw new Error("SMS credential owner unavailable");
     });
-    const { body, signature } = createSignedBody();
+    const { body, signature } = createSignedSmsPayload();
     const handler = createHandler();
     const res = createResponse();
-    const req = createPendingRequest();
+    const req = configureRequest(new Readable({ read() {} }) as IncomingMessage);
     req.headers = {
       "content-length": String(Buffer.byteLength(body)),
       "x-twilio-signature": signature,
@@ -196,19 +162,24 @@ describe("createSmsWebhookHandler", () => {
       }),
     });
 
-    const res = await dispatch(handler, { body, signature });
+    const res = await expectStatus(handler, { body, signature });
 
     expectDurable(res);
-    expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
+    expect(enqueueSmsIngress).toHaveBeenCalledWith(Object.fromEntries(new URLSearchParams(body)));
   });
 
   it("rethrows unexpected request read failures for Gateway-owned retry responses", async () => {
     const handler = createHandler();
     const res = createResponse();
 
-    await expect(handler(createFailingRequest(new Error("read failed")), res)).rejects.toThrow(
-      "read failed",
+    const req = configureRequest(
+      new Readable({
+        read() {
+          this.destroy(new Error("read failed"));
+        },
+      }) as IncomingMessage,
     );
+    await expect(handler(req, res)).rejects.toThrow("read failed");
     expect(res.endMock).not.toHaveBeenCalled();
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
   });
@@ -324,7 +295,7 @@ describe("createSmsWebhookHandler", () => {
 
   it("rejects a signed webhook without a stable MessageSid", async () => {
     const body = "AccountSid=AC123&From=%2B15551234567&To=%2B15557654321&Body=hello";
-    const payload = createSignedBody({ body });
+    const payload = signForm(Object.fromEntries(new URLSearchParams(body)));
     const handler = createHandler();
     await expectStatus(handler, payload, 400);
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
@@ -333,7 +304,7 @@ describe("createSmsWebhookHandler", () => {
   it("accepts the legacy SmsMessageSid event id alias", async () => {
     const body =
       "AccountSid=AC123&From=%2B15551234567&To=%2B15557654321&Body=hello&SmsMessageSid=SM-alias";
-    const payload = createSignedBody({ body });
+    const payload = signForm(Object.fromEntries(new URLSearchParams(body)));
     const handler = createHandler();
     await expectStatus(handler, payload, 200);
     expect(enqueueSmsIngress).toHaveBeenCalledWith(
@@ -343,7 +314,7 @@ describe("createSmsWebhookHandler", () => {
 
   it("durably accepts a signed account mismatch for non-retryable drain classification", async () => {
     const body = `AccountSid=AC-other&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=${createMessageSid(8)}`;
-    const payload = createSignedBody({ body });
+    const payload = signForm(Object.fromEntries(new URLSearchParams(body)));
     const handler = createHandler();
 
     await expectStatus(handler, payload, 200);
@@ -365,7 +336,7 @@ describe("createSmsWebhookHandler", () => {
     expect(delivery.record).not.toHaveBeenCalled();
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
 
-    const valid = createSignedBody({ account, messageSid: "SM-valid-after-invalid-burst" });
+    const valid = createSignedSmsPayload("SM-valid-after-invalid-burst", {}, account);
     await expectStatus(handler, valid, 200, { headers: { "x-forwarded-for": "203.0.113.10" } });
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(1);
   });
@@ -382,22 +353,17 @@ describe("createSmsWebhookHandler", () => {
     const defaultHandler = createHandler({ account: defaultAccount });
 
     for (let i = 0; i < 30; i += 1) {
-      const valid = createSignedBody({
-        account: supportAccount,
-        messageSid: `SM-support-${i}`,
-      });
+      const valid = createSignedSmsPayload(`SM-support-${i}`, {}, supportAccount);
       await expectStatus(supportHandler, valid, 200);
     }
-    const rateLimited = createSignedBody({
-      account: supportAccount,
-      messageSid: "SM-support-rate-limited",
-    });
+    const rateLimited = createSignedSmsPayload("SM-support-rate-limited", {}, supportAccount);
     await expectStatus(supportHandler, rateLimited, 429);
 
-    const defaultValid = createSignedBody({
-      account: defaultAccount,
-      messageSid: "SM-default-after-support-limit",
-    });
+    const defaultValid = createSignedSmsPayload(
+      "SM-default-after-support-limit",
+      {},
+      defaultAccount,
+    );
     await expectStatus(defaultHandler, defaultValid, 200);
   });
 

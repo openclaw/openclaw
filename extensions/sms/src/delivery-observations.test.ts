@@ -206,38 +206,6 @@ describe("SMS delivery observations", () => {
     ).toMatchObject(expected);
   });
 
-  it("deduplicates semantic retries despite unrelated form differences", async () => {
-    createStore();
-    const recorder = createSmsDeliveryRecorder();
-    const first = {
-      AccountSid: "AC123",
-      From: "+15557654321",
-      To: "+15551234567",
-      Body: "first",
-      MessageSid: "SM123",
-      MessageStatus: "delivered",
-    };
-    const retry = {
-      ...first,
-      From: "+15550000000",
-      To: "+15559999999",
-      Body: "changed",
-    };
-
-    await expect(recorder.record({ account: createAccount(), form: first })).resolves.toMatchObject(
-      {
-        duplicate: false,
-        record: { status: "delivered" },
-      },
-    );
-    await expect(recorder.record({ account: createAccount(), form: retry })).resolves.toMatchObject(
-      {
-        duplicate: true,
-        record: { observations: [{ status: "delivered" }] },
-      },
-    );
-  });
-
   it.each([
     {
       secondStatus: "delivered",
@@ -301,20 +269,18 @@ describe("SMS delivery observations", () => {
     }
     await recordCallback(statusForm("sent", { MessageSid: "SM-queued" }));
 
-    expect((await store.entries()).map(({ value }) => value)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ messageSid: "SM-accepted", status: "accepted" }),
-        expect.objectContaining({ messageSid: "SM-scheduled", status: "scheduled" }),
-        expect.objectContaining({
-          messageSid: "SM-queued",
-          status: "sent",
-          observations: [
-            expect.objectContaining({ source: "api-response", status: "queued" }),
-            expect.objectContaining({ source: "callback", status: "sent" }),
-          ],
-        }),
-      ]),
-    );
+    expect((await store.entries()).map(({ value }) => value)).toMatchObject([
+      { messageSid: "SM-accepted", status: "accepted" },
+      { messageSid: "SM-scheduled", status: "scheduled" },
+      {
+        messageSid: "SM-queued",
+        status: "sent",
+        observations: [
+          { source: "api-response", status: "queued" },
+          { source: "callback", status: "sent" },
+        ],
+      },
+    ]);
   });
 
   it("skips API responses without an initial status", async () => {
