@@ -20,6 +20,9 @@ describe("published embeddings during rebuild", () => {
     { name: "dimensions", meta: { vectorDims: 2 }, vector: encodeMemoryEmbedding([1, 2]) },
     { name: "wrong vector length", meta: {}, vector: encodeMemoryEmbedding([1, 2]) },
     { name: "missing dimensions", meta: { vectorDims: undefined } },
+    { name: "fractional dimensions", meta: { vectorDims: 3.5 } },
+    { name: "invalid JSON metadata", meta: {}, serializedMeta: "{" },
+    { name: "non-object metadata", meta: {}, serializedMeta: "null" },
     { name: "fts only", meta: { model: "fts-only", provider: "none" } },
     { name: "empty vector", meta: {}, vector: new Uint8Array() },
     { name: "malformed vector", meta: {}, vector: new Uint8Array(7) },
@@ -28,7 +31,8 @@ describe("published embeddings during rebuild", () => {
       meta: {},
       vector: new Uint8Array(new Float64Array([Number.NaN, 0, 0]).buffer),
     },
-  ])("reuses only compatible chunk vectors: $name", ({ meta, vector, expected }) => {
+  ])("reuses only compatible chunk vectors: $name", (testCase) => {
+    const { meta, vector, expected, serializedMeta } = testCase;
     using db = new DatabaseSync(":memory:");
     ensureMemoryIndexSchema({
       db,
@@ -45,7 +49,7 @@ describe("published embeddings during rebuild", () => {
     };
     db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
       "memory_index_meta_v1",
-      JSON.stringify(metadata),
+      serializedMeta ?? JSON.stringify(metadata),
     );
     const insert = db.prepare(`INSERT INTO memory_index_chunks
       (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)

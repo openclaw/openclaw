@@ -9,9 +9,19 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { isValidMemoryEmbedding } from "./manager-embedding-cache.js";
-import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
+import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import { MEMORY_INDEX_META_KEY } from "./manager-retrieval-read.js";
+
+const rebuildIdentitySchema = Type.Object({
+  provider: Type.String(),
+  model: Type.String(),
+  providerKey: Type.String(),
+  embeddingInputFormatVersion: Type.Optional(Type.Integer({ minimum: 0 })),
+  vectorDims: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+});
 
 export type MemoryRebuildEmbeddingQuery = {
   chunks: Array<{ source: MemorySource; path: string; hash: string }>;
@@ -58,25 +68,21 @@ export function loadMemoryRebuildEmbeddings(params: {
   if (!row) {
     return;
   }
-  let meta: MemoryIndexMeta;
+  let meta: unknown;
   try {
-    // The memory owner writes this metadata together with the published chunks.
-    meta = JSON.parse(row.value) as MemoryIndexMeta;
+    meta = JSON.parse(row.value);
   } catch {
     return;
   }
   const { identity, query } = params;
   if (
-    !meta ||
+    !Value.Check(rebuildIdentitySchema, meta) ||
     meta.model === "fts-only" ||
     meta.provider !== identity.provider ||
     meta.model !== identity.model ||
     meta.providerKey !== identity.providerKey ||
     (meta.embeddingInputFormatVersion ?? 0) !==
       resolveEmbeddingInputFormatVersion(identity.model) ||
-    !Number.isSafeInteger(meta.vectorDims) ||
-    !meta.vectorDims ||
-    meta.vectorDims < 0 ||
     (query.dimensions !== undefined && query.dimensions !== meta.vectorDims)
   ) {
     return;
