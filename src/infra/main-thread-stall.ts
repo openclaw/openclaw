@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const STALL_MS = 250;
@@ -157,7 +158,9 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       clearInterval(heartbeat);
       // Use a raw heartbeat: scheduler jobs allocate an async work scope per tick.
       heartbeatAt = now();
-      heartbeat = enabled ? setInterval(observeLoop, HEARTBEAT_MS).unref() : undefined;
+      heartbeat = enabled
+        ? runInDetachedAsyncContext(() => setInterval(observeLoop, HEARTBEAT_MS).unref())
+        : undefined;
     },
     drain() {
       // The health sampler may be the first timer to resume after a blocked loop.

@@ -23,6 +23,24 @@ function fixture() {
 }
 
 describe("main-thread stall attribution", () => {
+  it("does not retain the request context that enables heartbeat sampling", async () => {
+    const request = new AsyncLocalStorage<string>();
+    const observed: (string | undefined)[] = [];
+    const monitor = createMainThreadStallMonitor(() => {
+      observed.push(request.getStore());
+      return performance.now();
+    });
+    monitors.push(monitor);
+    request.run("request-context", () => monitor.setEventLoopSampling(true));
+    observed.length = 0;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
+    monitor.stop();
+    expect(observed.length).toBeGreaterThan(0);
+    expect(observed.every((context) => context === undefined)).toBe(true);
+  });
+
   it("retains an observed blocked-loop interval while unrelated work runs before reporting", () => {
     vi.useFakeTimers();
     const { monitor, elapse } = fixture();
