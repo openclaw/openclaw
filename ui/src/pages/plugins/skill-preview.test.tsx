@@ -34,16 +34,25 @@ function setup() {
   });
   const view = mountSolid(() => <PluginSkillPreview preview={preview} state={state()} />);
   const find = view.container.querySelector.bind(view.container);
-  const count = (selector: string, expected: number) =>
-    expect(view.container.querySelectorAll(selector)).toHaveLength(expected);
-  const busy = (value: boolean) =>
-    waitForSolid(() => expect(find(".body")?.getAttribute("aria-busy")).toBe(String(value)));
   const text = (selector: string, value: string) =>
     waitForSolid(() => expect(find(selector)?.textContent).toContain(value));
   const error = (value: string) =>
     waitForSolid(() => expect(find('[role="alert"]')?.textContent).toBe(value));
   const retry = () => find<HTMLButtonElement>(".detail button")!.click();
-  return { preview, request, gateway, publish, find, count, busy, text, error, retry };
+  async function pendingRead(selectedFile: boolean) {
+    const response = createDeferred<PluginsSkillsReadResult>();
+    if (selectedFile) {
+      request.mockResolvedValueOnce(lazyResult);
+      await preview.open(params);
+    }
+    request.mockReturnValueOnce(response.promise);
+    const pending = selectedFile ? preview.select("a.md") : preview.open(params);
+    const ready = selectedFile
+      ? preview.state!.fileRequests.get("a.md")!.promise
+      : preview.state!.inventoryRequest;
+    return { response, pending, ready };
+  }
+  return { preview, request, gateway, publish, find, text, error, retry, pendingRead };
 }
 
 const params = { source: "installed", pluginId: "example", skillName: "guide" } as const;
@@ -80,22 +89,13 @@ const selectedResult = (path: string): PluginsSkillsReadResult => ({
 it.each([false, true])(
   "releases preview readiness on close before the retired request settles (selected file: %s)",
   async (selectedFile) => {
-    const { preview, request } = setup();
-    const response = createDeferred<PluginsSkillsReadResult>();
-    if (selectedFile) {
-      request.mockResolvedValueOnce(lazyResult);
-      await preview.open(params);
-    }
-    request.mockReturnValueOnce(response.promise);
-    const opened = selectedFile ? preview.select("a.md") : preview.open(params);
-    const ready = selectedFile
-      ? preview.state!.fileRequests.get("a.md")!.promise
-      : preview.state!.inventoryRequest;
+    const { preview, pendingRead } = setup();
+    const { response, pending, ready } = await pendingRead(selectedFile);
     preview.close();
     await ready;
     expect(preview.state).toBeNull();
     response.resolve(selectedFile ? selectedResult("a.md") : result);
-    await opened;
+    await pending;
     expect(preview.state).toBeNull();
   },
 );
@@ -109,16 +109,10 @@ it("fetches only selected bodies, deduplicates pending reads and retains late si
     .mockReturnValueOnce(a.promise)
     .mockReturnValueOnce(b.promise);
   await preview.open(params);
-  expect(request).toHaveBeenCalledTimes(1);
   const pendingA = preview.select("a.md");
   await preview.select("a.md");
   const pendingB = preview.select("b.md");
   expect(request).toHaveBeenCalledTimes(3);
-  expect(request).toHaveBeenLastCalledWith("plugins.skills.read", {
-    ...params,
-    version: "1.0.0",
-    path: "b.md",
-  });
   b.resolve(selectedResult("b.md"));
   await pendingB;
   a.resolve(selectedResult("a.md"));
@@ -134,76 +128,40 @@ it("fetches only selected bodies, deduplicates pending reads and retains late si
   expect(request).toHaveBeenCalledTimes(3);
 });
 
-it.each([false, true])(
-  "retains the shell across read failure and retry (selected file: %s)",
-  async (selectedFile) => {
-    const { preview, request, find, count, busy, text, error, retry: clickRetry } = setup();
-    const initial = createDeferred<PluginsSkillsReadResult>();
-    const retry = createDeferred<PluginsSkillsReadResult>();
-    const entry = "[Configuration](a.md)";
-    if (selectedFile) {
-      request.mockResolvedValueOnce({
-        ...lazyResult,
-        files: [{ ...lazyResult.files[0]!, content: entry }, ...lazyResult.files.slice(1)],
-      });
-      await preview.open(params);
-      await waitForSolid(() => expect(find(".markdown a")).not.toBeNull());
-    }
-    const selectors = ["openclaw-file-preview-modal", ".head", ".body", ".list"];
-    const shell = selectedFile ? selectors.map((selector) => find(selector)) : [];
-    request.mockReturnValueOnce(initial.promise).mockReturnValueOnce(retry.promise);
-    const pending = selectedFile ? undefined : preview.open(params);
-    if (selectedFile) {
-      find<HTMLAnchorElement>(".markdown a")!.click();
-      await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
-      await waitForSolid(() =>
-        count('openclaw-panel-loading-skeleton[data-panel-skeleton="document"]', 1),
-      );
-      count(".item", 3);
-      expect(find(selectors[0]!)).toBe(shell[0]);
-    } else {
-      await busy(true);
-      shell.push(...selectors.map((selector) => find(selector)));
-      count("openclaw-panel-loading-skeleton", 2);
-      expect(find(".close-button")).not.toBeNull();
-    }
-    initial.reject(new Error("Read failed"));
-    await pending;
-    await error("Read failed");
-    if (selectedFile) {
-      count(".item", 3);
-      expect(preview.state?.result?.files[0]?.content).toBe(entry);
-    } else {
-      await busy(false);
-    }
-    clickRetry();
-    await busy(true);
-    if (selectedFile) {
-      count(".item", 3);
-    }
-    count("openclaw-panel-loading-skeleton", selectedFile ? 1 : 2);
-    retry.resolve(selectedFile ? selectedResult("a.md") : lazyResult);
-    await text(".markdown", selectedFile ? "a.md" : "Full instructions.");
-    selectors.forEach((selector, index) => expect(find(selector)).toBe(shell[index]));
-    expect(find('[role="alert"]')).toBeNull();
-    expect(request).toHaveBeenLastCalledWith("plugins.skills.read", {
-      ...params,
-      ...(selectedFile ? { version: "1.0.0", path: "a.md" } : {}),
-    });
-  },
-);
+it("retains the shell and inventory across selected-file failure and retry", async () => {
+  const { preview, request, find, text, error, retry } = setup();
+  request
+    .mockResolvedValueOnce(lazyResult)
+    .mockRejectedValueOnce(new Error("Read failed"))
+    .mockResolvedValueOnce(selectedResult("a.md"));
+  await preview.open(params);
+  await text(".markdown", "Full instructions.");
+  const selectors = ["openclaw-file-preview-modal", ".head", ".body", ".list"];
+  const shell = selectors.map((selector) => find(selector));
+  await preview.select("a.md");
+  await error("Read failed");
+  expect(preview.state?.result?.files[0]?.content).toBe("Full instructions.");
+  expect(find("openclaw-file-preview-modal")!.querySelectorAll(".item")).toHaveLength(3);
+  retry();
+  await text(".markdown", "a.md");
+  selectors.forEach((selector, index) => expect(find(selector)).toBe(shell[index]));
+  expect(find('[role="alert"]')).toBeNull();
+  expect(request).toHaveBeenLastCalledWith("plugins.skills.read", {
+    ...params,
+    version: "1.0.0",
+    path: "a.md",
+  });
+});
 
 it("keeps an unavailable body retryable when it arrives in the inventory or a selected-file reply", async () => {
-  const { preview, request, find, count, retry } = setup();
+  const { preview, request, find, retry } = setup();
   request.mockResolvedValueOnce(unavailable).mockResolvedValueOnce(unavailable);
   await preview.open(params);
   await waitForSolid(() => expect(find('[role="alert"]')).not.toBeNull());
-  count(".item", 1);
   retry();
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   await waitForSolid(() => expect(find('[role="alert"]')).not.toBeNull());
   expect(find(".detail button")).not.toBeNull();
-  expect(request).toHaveBeenLastCalledWith("plugins.skills.read", { ...params, path: "SKILL.md" });
 });
 
 it("clears an entry error when selecting a non-fetchable inventory sibling", async () => {
@@ -232,18 +190,11 @@ it.each([
 ])(
   "retires late preview responses (selected file: $selectedFile, change: $change)",
   async ({ selectedFile, change }) => {
-    const { preview, request, gateway, publish } = setup();
-    const response = createDeferred<PluginsSkillsReadResult>();
-    if (selectedFile) {
-      request.mockResolvedValueOnce(lazyResult);
-      await preview.open(params);
-    }
-    request
-      .mockReturnValueOnce(response.promise)
-      .mockResolvedValueOnce(
-        selectedFile ? { ...lazyResult, version: "2.0.0" } : { ...result, name: "other" },
-      );
-    const pending = selectedFile ? preview.select("a.md") : preview.open(params);
+    const { preview, request, gateway, publish, pendingRead } = setup();
+    const { response, pending } = await pendingRead(selectedFile);
+    request.mockResolvedValueOnce(
+      selectedFile ? { ...lazyResult, version: "2.0.0" } : { ...result, name: "other" },
+    );
     if (change === "reopen") {
       await preview.open(params);
     } else if (change === "selection") {

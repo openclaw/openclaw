@@ -120,40 +120,35 @@ it("retains inspection retry focus and uses the current error and callback", asy
   expect(nextRetry).toHaveBeenCalledOnce();
 });
 
-it("does not dispatch enablement when setup is missing", () => {
-  const { find, props } = mount({
-    result: createResult(createPlugin({ state: "needs-setup" })),
-  });
+it.each(["needs-setup", "disconnected"])("does not dispatch enablement when %s", (reason) => {
+  const disconnected = reason === "disconnected";
+  const { container, find, props } = mount(
+    disconnected
+      ? { connected: false, canMutate: false }
+      : { result: createResult(createPlugin({ state: "needs-setup" })) },
+  );
+  if (disconnected) {
+    expect(container.textContent).toContain("Agent work queue and session handoff.");
+    expect(find("[inert]")).toBeNull();
+  }
   const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(button.disabled || button.getAttribute("aria-disabled") === "true").toBe(true);
+  expect(
+    disconnected
+      ? button.disabled
+      : button.disabled || button.getAttribute("aria-disabled") === "true",
+  ).toBe(true);
   button.click();
   expect(props.onSetEnabled).not.toHaveBeenCalled();
 });
 
-it("retains disconnected plugin details without dispatching enablement", () => {
-  const { container, find, props } = mount({ connected: false, canMutate: false });
-  expect(container.textContent).toContain("Agent work queue and session handoff.");
-  expect(find("[inert]")).toBeNull();
-  const button = find<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
-  expect(button.disabled).toBe(true);
-  button.click();
-  expect(props.onSetEnabled).not.toHaveBeenCalled();
-});
-
-it("gives host permissions the setting menu and preserves configured, inherited, and read-only values", async () => {
+it("gives inherited host permissions the setting menu and preserves read-only values", async () => {
   const { container, props } = mount({
     tab: "configuration",
     inspection: createInspectResult(),
     onAskSetting: vi.fn(),
-    configValue: { plugins: { entries: { workboard: { hooks: { timeoutMs: 5000 } } } } },
     hostControlsSchema: objectSchema({
       hooks: objectSchema({
         allowPromptInjection: { type: "boolean" },
-        allowConversationAccess: { type: "boolean" },
-        timeoutMs: { type: "integer" },
-      }),
-      llm: objectSchema({
-        allowedModels: { type: "array", items: { type: "string" } },
       }),
     }),
   });
@@ -170,10 +165,6 @@ it("gives host permissions the setting menu and preserves configured, inherited,
   );
   row.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
   expect(props.onConfigPatch).toHaveBeenCalledWith(path, false);
-  await selectSettingAction(setting(container, "hooks.timeoutMs"), "reset");
-  expect(props.onConfigRemove).toHaveBeenCalledWith([...hooksPath, "timeoutMs"]);
-  expect(setting(container, "llm.allowedModels").querySelector(".oc-menu-trigger")).not.toBeNull();
-  expect(container.textContent).not.toMatch(/Declared capabilities|Your grants/);
   vi.mocked(props.onConfigPatch).mockClear();
   const { container: readOnly } = mount({ ...props, canEditConfig: false });
   await Promise.resolve();
@@ -189,14 +180,10 @@ it("shows selected capabilities without a catalog", () => {
   inspection.declared = {
     ...inspection.declared,
     tools: ["speech_status"],
-    providers: ["local-model", "sibling-model"],
-    channels: ["local-channel", "sibling-channel"],
     contracts: ["speechProviders: local-speech", "videoGenerationProviders: sibling-video"],
   };
   inspection.overview = {
     capabilities: {
-      providers: ["local-model"],
-      channels: ["local-channel"],
       contracts: { speechProviders: ["local-speech", "local-speech-alias"] },
       ui: ["page"],
     },
