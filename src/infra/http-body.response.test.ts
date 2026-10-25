@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { makeStallingStream } from "../test-helpers/http.js";
 import {
   cancelUnreadResponseBody,
   readResponseTextPrefix,
@@ -27,20 +28,6 @@ function makeStream(chunks: Uint8Array[], delayMs?: number) {
       }
       controller.close();
     },
-  });
-}
-
-function makeStallingStream(
-  initialChunks: Uint8Array[],
-  onCancel?: UnderlyingSource<Uint8Array>["cancel"],
-) {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const chunk of initialChunks) {
-        controller.enqueue(chunk);
-      }
-    },
-    cancel: onCancel,
   });
 }
 

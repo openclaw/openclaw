@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../test-helpers/http.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { fetchClawHubJson, type ClawHubFetchOptions } from "./clawhub-client.js";
@@ -14,12 +15,7 @@ const search = (options: ClawHubFetchOptions) =>
 
 function createStalledBodyResponse(firstChunk: string, init: ResponseInit = {}) {
   const cancel = vi.fn();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(firstChunk));
-    },
-    cancel,
-  });
+  const body = makeStallingStream([new TextEncoder().encode(firstChunk)], cancel);
   return {
     response: new Response(body, init),
     cancel,
