@@ -237,33 +237,28 @@ it.each([
 it("summarizes repeated restored-call verification outcomes", async () => {
   const now = Date.now();
   const storePath = createTestStorePath();
-  await writeCallsToStore(storePath, [
-    ...(
-      [
-        ["missing-provider-a", undefined, 10_000],
-        ["missing-provider-b", undefined, 10_000],
-        ["expired-a", "expired-provider-a", 600_000],
-        ["terminal-a", "terminal-provider-a", 20_000],
-        ["terminal-b", "terminal-provider-b", 20_000],
-      ] as const
-    ).map(([callId, providerCallId, age]) =>
+  const rows = [
+    ["missing-provider-a", undefined, 10_000],
+    ["missing-provider-b", undefined, 10_000],
+    ["expired-a", "expired-provider-a", 600_000],
+    ["terminal-a", "terminal-provider-a", 20_000],
+    ["terminal-b", "terminal-provider-b", 20_000],
+    ["active-a", "active-provider-a"],
+    ["unknown-a", "unknown-provider-a"],
+    ["failure-a", "failure-provider-a"],
+  ] as const;
+  await writeCallsToStore(
+    storePath,
+    rows.map(([callId, providerCallId, age]) =>
       makePersistedCall({
         callId,
         providerCallId,
-        state: "initiated",
-        startedAt: now - age,
-        answeredAt: undefined,
+        state: age ? "initiated" : "answered",
+        startedAt: now - (age ?? 30_000),
+        answeredAt: age ? undefined : now - 25_000,
       }),
     ),
-    ...["active", "unknown", "failure"].map((outcome) =>
-      makePersistedCall({
-        callId: `${outcome}-a`,
-        providerCallId: `${outcome}-provider-a`,
-        startedAt: now - 30_000,
-        answeredAt: now - 25_000,
-      }),
-    ),
-  ]);
+  );
 
   const provider = new FakeProvider();
   provider.getCallStatus = async ({ providerCallId }) => {

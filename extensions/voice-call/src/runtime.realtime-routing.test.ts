@@ -29,25 +29,20 @@ vi.mock("./realtime-voice.runtime.js", async (importOriginal) => {
 });
 
 function createOwner(agentId: string, id: string, model: string) {
-  const connected = createDeferred<void>();
-  const connect = vi.fn(async () => connected.resolve());
-  const requests: RealtimeVoiceBridgeCreateRequest[] = [];
+  const connected = createDeferred<RealtimeVoiceBridgeCreateRequest | undefined>();
   const provider: RealtimeVoiceProviderPlugin = {
     id,
     label: id,
     isConfigured: () => true,
-    createBridge: vi.fn((request) => {
-      requests.push(request);
-      return makeBridge({ connect });
-    }),
+    createBridge: vi.fn((request) =>
+      makeBridge({ connect: async () => connected.resolve(request) }),
+    ),
   };
   return {
     agentId,
     provider,
     providerConfig: { credentialOwner: agentId, model },
     connected,
-    connect,
-    requests,
   };
 }
 
@@ -85,7 +80,7 @@ describe("voice-call realtime route ownership", () => {
 
     const stopWaiting = () => {
       for (const owner of owners) {
-        owner.connected.resolve();
+        owner.connected.resolve(undefined);
       }
     };
     signal.addEventListener("abort", stopWaiting, { once: true });
@@ -136,19 +131,18 @@ describe("voice-call realtime route ownership", () => {
       }
 
       signal.throwIfAborted();
-      await Promise.all(owners.map((owner) => owner.connected.promise));
+      const requests = await Promise.all(owners.map((owner) => owner.connected.promise));
       signal.throwIfAborted();
-      for (const { provider, connect, agentId, providerConfig } of owners) {
+      for (const { provider, agentId, providerConfig } of owners) {
         expect(provider.createBridge).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ agentId, providerConfig }),
         );
-        expect(connect).toHaveBeenCalledOnce();
       }
 
       const hangupCall = vi.spyOn(MockProvider.prototype, "hangupCall");
       onTestFinished(() => hangupCall.mockRestore());
       const closed = Promise.all(sockets.map((ws) => waitForClose(ws)));
-      sales.requests[0]?.onClose?.("completed");
+      requests[0]?.onClose?.("completed");
       sockets[1]?.close(1000);
       await closed;
       await vi.waitFor(() => expect(runtime?.manager.getActiveCalls()).toHaveLength(0), {
@@ -163,11 +157,8 @@ describe("voice-call realtime route ownership", () => {
         expect(hangupCall).toHaveBeenCalledWith(
           expect.objectContaining({ providerCallId, reason }),
         );
-        expect(history).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ providerCallId, endReason: reason, state: reason }),
-          ]),
-        );
+        const terminal = { providerCallId, endReason: reason, state: reason };
+        expect(history).toContainEqual(expect.objectContaining(terminal));
       }
     } finally {
       signal.removeEventListener("abort", stopWaiting);

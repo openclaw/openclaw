@@ -19,6 +19,7 @@ import * as callStore from "./manager/store.js";
 import { setVoiceCallStateRuntime } from "./runtime-state.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { CallRecordSchema, type CallRecord, type InitiateCallInput } from "./types.js";
+import { makeBridge } from "./webhook/realtime-call-control.test-helpers.js";
 import { speakOnRealtimeBridge } from "./webhook/realtime-call-session-control.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
@@ -280,16 +281,7 @@ it.each(["committed", "failed", "retired"] as const)(
     });
     const createBridge = vi.fn<RealtimeVoiceProviderPlugin["createBridge"]>(() => {
       bridgeCreated.resolve();
-      return {
-        connect: async () => {},
-        sendAudio: () => {},
-        setMediaTimestamp: () => {},
-        submitToolResult: () => {},
-        acknowledgeMark: () => {},
-        close: () => {},
-        isConnected: () => true,
-        triggerGreeting: () => {},
-      };
+      return makeBridge({ submitToolResult: () => {} });
     });
     const streamDisconnectLifecycle = new StreamDisconnectGrace(() => {});
     const handler = new RealtimeCallHandler(

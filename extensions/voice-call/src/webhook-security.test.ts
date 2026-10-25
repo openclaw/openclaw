@@ -84,33 +84,22 @@ function createSignedTelnyxWebhookRequest(timestamp = String(Math.floor(Date.now
   };
 }
 
-const skipVerificationRequestKeyCases = [
-  {
-    name: "Plivo",
-    prefix: /^plivo:skip:/,
-    ctx: context({ rawBody: "CallUUID=uuid&CallStatus=in-progress" }),
-    verify: (ctx: WebhookContext) => verifyPlivoWebhook(ctx, "token", { skipVerification: true }),
-  },
-  {
-    name: "Telnyx",
-    prefix: /^telnyx:skip:/,
-    ctx: context({ rawBody: JSON.stringify({ data: { event_type: "call.initiated" } }) }),
-    verify: (ctx: WebhookContext) =>
-      verifyTelnyxWebhook(ctx, undefined, { skipVerification: true }),
-  },
-];
-
 describe("skip verification request keys", () => {
-  it.each(skipVerificationRequestKeyCases)(
-    "$name returns a stable request key when verification is skipped",
-    ({ prefix, ctx, verify }) => {
-      const first = verify(ctx);
-      const second = verify(ctx);
-
+  it.each(["plivo", "telnyx"] as const)(
+    "%s returns a stable request key when verification is skipped",
+    (provider) => {
+      const ctx = context({ rawBody: "synthetic-skipped-request" });
+      const verify = () =>
+        provider === "plivo"
+          ? verifyPlivoWebhook(ctx, "token", { skipVerification: true })
+          : verifyTelnyxWebhook(ctx, undefined, { skipVerification: true });
+      const first = verify();
       expect(first.ok).toBe(true);
-      expect(first.verifiedRequestKey).toMatch(prefix);
-      expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
-      expect(second.isReplay).toBe(true);
+      expect(first.verifiedRequestKey).toMatch(new RegExp(`^${provider}:skip:`));
+      expect(verify()).toMatchObject({
+        verifiedRequestKey: first.verifiedRequestKey,
+        isReplay: true,
+      });
     },
   );
 
@@ -365,61 +354,53 @@ describe("verifyTwilioWebhook", () => {
     expect(result.reason).not.toContain("secret-turn-token");
   });
 
-  it.each<{
-    name: string;
-    host: string;
-    forwarded: string;
-    url?: string;
-    proto?: "https";
-    options?: Parameters<typeof verifyTwilio>[1];
-    remoteAddress?: string;
-    expected: string;
-  }>([
-    {
-      name: "ngrok loopback still requires a valid signature",
-      host: "127.0.0.1:3334",
-      forwarded: "local.ngrok-free.app",
-      url: "http://127.0.0.1:3334/voice/webhook",
-      proto: "https",
-      options: { allowNgrokFreeTierLoopbackBypass: true },
-      remoteAddress: "127.0.0.1",
-      expected: "Invalid signature",
-    },
-    {
-      name: "forwarding requires explicit trust",
-      host: "legitimate.example.com",
-      forwarded: "attacker.evil.com",
-      expected: "https://legitimate.example.com/voice/webhook",
-    },
-    {
-      name: "forwarded host must be allowlisted",
-      host: "localhost:3000",
-      forwarded: "attacker.evil.com",
-      options: { allowedHosts: ["myapp.ngrok.io", "webhook.example.com"] },
-      expected: "https://localhost/voice/webhook",
-    },
-    {
-      name: "trusted proxy requires a remote IP",
-      host: "legitimate.example.com",
-      forwarded: "proxy.example.com",
-      proto: "https",
-      options: { trustForwardingHeaders: true, trustedProxyIPs: ["203.0.113.10"] },
-      expected: "https://legitimate.example.com/voice/webhook",
-    },
-  ])("$name", ({ host, forwarded, url, proto, options, remoteAddress, expected }) => {
-    const result = verifyTwilio(
-      {
-        headers: {
-          host,
-          ...(proto ? { "x-forwarded-proto": proto } : {}),
-          "x-forwarded-host": forwarded,
-          "x-twilio-signature": "invalid",
-        },
-        url: url ?? "http://localhost:3000/voice/webhook",
-        ...(remoteAddress ? { remoteAddress } : {}),
+  function forwardedRequest(host: string, forwarded: string, extra: Partial<WebhookContext> = {}) {
+    return {
+      url: "http://localhost:3000/voice/webhook",
+      ...extra,
+      headers: {
+        host,
+        "x-forwarded-host": forwarded,
+        "x-twilio-signature": "invalid",
+        ...extra.headers,
       },
-      options,
-    );
+    };
+  }
+  it.each<
+    [string, ReturnType<typeof forwardedRequest>, Parameters<typeof verifyTwilio>[1], string]
+  >([
+    [
+      "ngrok loopback still requires a signature",
+      forwardedRequest("127.0.0.1:3334", "local.ngrok-free.app", {
+        url: "http://127.0.0.1:3334/voice/webhook",
+        remoteAddress: "127.0.0.1",
+        headers: { "x-forwarded-proto": "https" },
+      }),
+      { allowNgrokFreeTierLoopbackBypass: true },
+      "Invalid signature",
+    ],
+    [
+      "forwarding requires trust",
+      forwardedRequest("legitimate.example.com", "attacker.evil.com"),
+      undefined,
+      "https://legitimate.example.com/voice/webhook",
+    ],
+    [
+      "forwarded host must be allowlisted",
+      forwardedRequest("localhost:3000", "attacker.evil.com"),
+      { allowedHosts: ["myapp.ngrok.io", "webhook.example.com"] },
+      "https://localhost/voice/webhook",
+    ],
+    [
+      "trusted proxy requires a remote IP",
+      forwardedRequest("legitimate.example.com", "proxy.example.com", {
+        headers: { "x-forwarded-proto": "https" },
+      }),
+      { trustForwardingHeaders: true, trustedProxyIPs: ["203.0.113.10"] },
+      "https://legitimate.example.com/voice/webhook",
+    ],
+  ])("%s", (_name, request, options, expected) => {
+    const result = verifyTwilio(request, options);
     expect(result.ok).toBe(false);
     expect(result.reason).toContain(expected);
   });

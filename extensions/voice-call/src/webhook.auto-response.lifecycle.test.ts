@@ -1,14 +1,20 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RealtimeTranscriptionSessionCreateRequest } from "openclaw/plugin-sdk/realtime-transcription";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { normalizeVoiceCallConfig } from "./config.js";
-import { CallManager } from "./manager.js";
 import {
-  createEventManagerHarness,
-  FakeProvider,
-  finalizeTestManagerCalls,
-} from "./manager.test-harness.js";
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type MockInstance,
+} from "vitest";
+import { normalizeVoiceCallConfig } from "./config.js";
+import type { CallManager } from "./manager.js";
+import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
 import * as callStore from "./manager/store.js";
 import { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
@@ -22,20 +28,16 @@ const mocks = vi.hoisted(() => ({
   createTranscription: vi.fn<(request: RealtimeTranscriptionSessionCreateRequest) => void>(),
 }));
 vi.mock("./response-generator.js", () => ({ generateVoiceResponse: mocks.generate }));
-vi.mock("./realtime-transcription.runtime.js", () => {
+vi.mock("./realtime-transcription.runtime.js", async () => {
+  const { createStubSession, createStubSttProvider } =
+    await import("./media-stream.test-support.js");
   const provider = {
+    ...createStubSttProvider((request) => {
+      mocks.createTranscription(request);
+      return createStubSession();
+    }),
     id: "test-transcription",
     label: "Test transcription",
-    isConfigured: () => true,
-    createSession: (request: RealtimeTranscriptionSessionCreateRequest) => {
-      mocks.createTranscription(request);
-      return {
-        connect: async () => {},
-        sendAudio: () => {},
-        close: () => {},
-        isConnected: () => true,
-      };
-    },
   };
   return {
     getRealtimeTranscriptionProvider: () => provider,
@@ -63,9 +65,6 @@ class SpeechProvider extends FakeProvider {
   unregisterCallStream = this.streamOwner.unregisterCallStream.bind(this.streamOwner);
 }
 
-const state = createEventManagerHarness();
-const managers: CallManager[] = [];
-const servers: VoiceCallWebhookServer[] = [];
 const pendingResponses: ReturnType<typeof createDeferred<ResponseResult>>[] = [];
 const responseCompletions: ReturnType<typeof createDeferred<void>>[] = [];
 
@@ -79,8 +78,7 @@ async function startCall(streaming = false) {
   });
   config.serve.port = 0;
   const provider = new SpeechProvider(streaming ? "twilio" : "telnyx");
-  const manager = new CallManager(config, state.createContext({ config }).storePath);
-  managers.push(manager);
+  const { manager } = await createManagerHarness(config, provider);
   const createGuard = manager.createAutoResponseGuard.bind(manager);
   vi.spyOn(manager, "createAutoResponseGuard").mockImplementation((call) => {
     const guard = createGuard(call);
@@ -94,7 +92,6 @@ async function startCall(streaming = false) {
       },
     };
   });
-  await manager.initialize(provider, "https://example.test/voice/webhook");
   const started = await manager.initiateCall("+15550000001", undefined, { mode: "conversation" });
   expect(started.success).toBe(true);
   const server = new VoiceCallWebhookServer(
@@ -105,7 +102,7 @@ async function startCall(streaming = false) {
     {},
     {} as never,
   );
-  servers.push(server);
+  onTestFinished(() => server.stop());
   const url = await server.start();
   let eventId = 0;
   const speech = async (transcript: string, isFinal = true, id?: string, turnToken?: string) => {
@@ -207,7 +204,9 @@ async function deliverAcrossIgnoredEvent(
 }
 
 beforeEach(() => {
-  state.setup();
+  resetPluginStateStoreForTests();
+  // Registered before the harness: servers and managers retire before state resets.
+  onTestFinished(resetPluginStateStoreForTests);
   mocks.createTranscription.mockClear();
   mocks.generate.mockReset().mockImplementation(async () => {
     const response = createDeferred<ResponseResult>();
@@ -219,14 +218,7 @@ afterEach(async () => {
   for (const response of pendingResponses.splice(0)) {
     response.resolve({ text: "", deliveredEarly: false });
   }
-  for (const server of servers.splice(0)) {
-    await server.stop();
-  }
   await Promise.all(responseCompletions.splice(0).map((completion) => completion.promise));
-  for (const manager of managers.splice(0)) {
-    await finalizeTestManagerCalls(manager);
-  }
-  await state.cleanup();
 });
 
 describe("automatic phone reply ownership", () => {

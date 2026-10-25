@@ -4,13 +4,20 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createManagerHarness, FakeProvider, markCallAnswered } from "./manager.test-harness.js";
 import type { HangupCallInput } from "./types.js";
 
-class FailFirstPlayTtsProvider extends FakeProvider {
-  override async playTts(input: Parameters<FakeProvider["playTts"]>[0]): Promise<void> {
-    this.playTtsCalls.push(input);
-    if (this.playTtsCalls.length === 1) {
-      throw new Error("synthetic tts failure");
-    }
+function failProvider(
+  method: "playTts" | "startListening" | "hangupCall",
+  name: FakeProvider["name"],
+  message: string,
+  always = false,
+) {
+  const provider = new FakeProvider(name);
+  const attempts = vi.spyOn(provider, method);
+  if (always) {
+    attempts.mockRejectedValue(new Error(message));
+  } else {
+    attempts.mockRejectedValueOnce(new Error(message));
   }
+  return { provider, attempts };
 }
 
 class DelayedPlayTtsProvider extends FakeProvider {
@@ -25,22 +32,6 @@ class DelayedPlayTtsProvider extends FakeProvider {
   releaseCurrentPlayback(): void {
     this.playback?.resolve();
     this.playback = undefined;
-  }
-}
-
-class FailStartListeningProvider extends FakeProvider {
-  override async startListening(
-    input: Parameters<FakeProvider["startListening"]>[0],
-  ): Promise<void> {
-    this.startListeningCalls.push(input);
-    throw new Error("synthetic start listening failure");
-  }
-}
-
-class FailHangupProvider extends FakeProvider {
-  override async hangupCall(input: Parameters<FakeProvider["hangupCall"]>[0]): Promise<void> {
-    this.hangupCalls.push(input);
-    throw new Error("synthetic hangup failure");
   }
 }
 
@@ -136,14 +127,20 @@ describe("CallManager notify and mapping", () => {
   it("logs a failed notify auto-hangup and leaves the call active for retry", async () => {
     useNotifyClock();
     const warn = captureWarning();
-    const { manager, provider, callId } = await answered(
+    const { provider, attempts } = failProvider(
+      "hangupCall",
+      "plivo",
+      "synthetic hangup failure",
+      true,
+    );
+    const { manager, callId } = await answered(
       { outbound: { notifyHangupDelaySec: 1 } },
-      new FailHangupProvider("plivo"),
+      provider,
       "Notify",
       "notify",
     );
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(provider.hangupCalls).toHaveLength(1);
+    expect(attempts).toHaveBeenCalledOnce();
     expect(manager.getCall(callId)).toBeDefined();
     expect(warn).toHaveBeenCalledWith(
       `[voice-call] Notify mode failed to hang up call ${callId}: synthetic hangup failure`,
@@ -167,13 +164,15 @@ describe("CallManager notify and mapping", () => {
 
   it("logs fire-and-forget initial-message failures instead of leaking unhandled rejections", async () => {
     const warn = captureWarning();
-    const { provider, callId } = await answered(
-      { streaming: { enabled: false } },
-      new FailStartListeningProvider("twilio"),
+    const { provider, attempts } = failProvider(
+      "startListening",
+      "twilio",
+      "synthetic start listening failure",
+      true,
     );
+    const { callId } = await answered({ streaming: { enabled: false } }, provider);
     expectFirstPlayTtsText(provider, "Hello");
-    expect(provider.startListeningCalls).toHaveLength(1);
-    expect(provider.startListeningCalls[0]).toMatchObject({ callId, providerCallId: "call-uuid" });
+    expect(attempts).toHaveBeenCalledExactlyOnceWith({ callId, providerCallId: "call-uuid" });
     expect(warn).toHaveBeenCalledOnce();
     expect(String(expectDefined(warn.mock.calls.at(0), "console warn")[0])).toContain(
       `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
@@ -182,19 +181,15 @@ describe("CallManager notify and mapping", () => {
 
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {
     useNotifyClock();
-    const { manager, provider, callId } = await answered(
-      {},
-      new FailFirstPlayTtsProvider("plivo"),
-      "Retry me",
-      "notify",
-    );
-    expect(provider.playTtsCalls).toHaveLength(1);
+    const { provider, attempts } = failProvider("playTts", "plivo", "synthetic tts failure");
+    const { manager, callId } = await answered({}, provider, "Retry me", "notify");
+    expect(attempts).toHaveBeenCalledOnce();
     expect(requireCall(manager, callId)).toMatchObject({
       state: "listening",
       metadata: { initialMessage: "Retry me" },
     });
     await answerCall(manager, callId, "evt-retry-2");
-    expect(provider.playTtsCalls).toHaveLength(2);
+    expect(attempts).toHaveBeenCalledTimes(2);
     expect(requireCall(manager, callId).metadata).not.toHaveProperty("initialMessage");
     await expectNotifyHangup(manager, provider, callId);
   });
@@ -332,21 +327,13 @@ describe("CallManager inbound allowlist", () => {
   });
 
   it("retries rejected inbound hangup after a transient provider failure", async () => {
-    class FlakyHangupProvider extends FakeProvider {
-      override async hangupCall(input: Parameters<FakeProvider["hangupCall"]>[0]): Promise<void> {
-        this.hangupCalls.push(input);
-        if (this.hangupCalls.length === 1) {
-          throw new Error("provider down");
-        }
-      }
-    }
-    const provider = new FlakyHangupProvider();
+    const { provider, attempts } = failProvider("hangupCall", "plivo", "provider down");
     const { manager } = await createManagerHarness({ inboundPolicy: "disabled" }, provider);
     await manager.processEvent(inbound("provider-flaky", "+15553333333"));
     await Promise.resolve();
     await manager.processEvent(inbound("provider-flaky", "+15553333333", "call.ringing"));
     expect(manager.getCallByProviderCallId("provider-flaky")).toBeUndefined();
-    expect(provider.hangupCalls.map((call) => call.providerCallId)).toEqual([
+    expect(attempts.mock.calls.map(([call]) => call.providerCallId)).toEqual([
       "provider-flaky",
       "provider-flaky",
     ]);

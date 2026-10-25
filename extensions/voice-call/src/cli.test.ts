@@ -46,15 +46,12 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function captureStdout(onOutput?: (output: string) => void) {
   let output = "";
-  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+  vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
     output += String(chunk);
     onOutput?.(output);
     return true;
   }) as typeof process.stdout.write);
-  return {
-    output: () => output,
-    restore: () => writeSpy.mockRestore(),
-  };
+  return () => output;
 }
 
 function runCli(program: Command, args: string[]) {
@@ -67,12 +64,8 @@ function commandArgs(command: string, options: Record<string, string>) {
 
 async function captureCli(program: Command, args: string[]) {
   const capture = captureStdout();
-  try {
-    await runCli(program, args);
-    return capture.output();
-  } finally {
-    capture.restore();
-  }
+  await runCli(program, args);
+  return capture();
 }
 
 const continueArgs = ["continue", "--call-id", "call-1", "--message", "hello"];
@@ -247,7 +240,7 @@ describe("voice-call CLI status fallback", () => {
         expect(handlers()).toHaveLength(1);
         handlers()[0]?.(signal);
         if (phase === "printed") {
-          expect(JSON.parse(capturer.output())).toEqual({ callId: "call-owned" });
+          expect(JSON.parse(capturer())).toEqual({ callId: "call-owned" });
           handlers()[0]?.(signal);
         } else {
           expect(stop).not.toHaveBeenCalled();
@@ -275,7 +268,6 @@ describe("voice-call CLI status fallback", () => {
         release.resolve();
         stopped.resolve();
         await outcome;
-        capturer.restore();
         process.exitCode = originalExitCode;
       }
     },
@@ -450,11 +442,9 @@ describe("voice-call CLI status fallback", () => {
         sentinel,
       );
     } finally {
-      capturer.restore();
-      readSyncSpy.mockRestore();
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
-    return { output: capturer.output(), shortened };
+    return { output: capturer(), shortened };
   }
 
   const firstRecord = '{"event":"first"}\n';

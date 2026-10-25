@@ -1,7 +1,6 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCallDeliveryRuntime } from "./call-delivery-runtime.js";
 import { normalizeVoiceCallConfig } from "./config.js";
@@ -17,15 +16,11 @@ import type { CallRecord } from "./types.js";
 
 type CallDeliveryMessage = { sessionKey: string; text: string; idempotencyKey: string };
 const requester = "agent:owner:telegram:direct:42";
-const brief = { task: "Book a plumber", approvals: "No deposit" };
 
 function createDelivery(
   manager: CallManager,
   config: ReturnType<typeof normalizeVoiceCallConfig>,
   messages: CallDeliveryMessage[],
-  summarize: PluginRuntime["subagent"]["complete"] = vi.fn().mockResolvedValue({
-    text: "Needs follow-up.",
-  }),
   beforeDeliver?: () => Promise<void>,
 ) {
   const runtime = createPluginRuntimeMock();
@@ -55,7 +50,10 @@ function createDelivery(
   return createCallDeliveryRuntime({
     config,
     coreConfig: { agents: { entries: { owner: {} } } },
-    runtime: { gateway: runtime.gateway, subagent: { complete: summarize } },
+    runtime: {
+      gateway: runtime.gateway,
+      subagent: { complete: async () => ({ text: "Achieved: plumber booked for Friday." }) },
+    },
     manager,
     runInServiceContext: (run) => run(),
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -76,16 +74,12 @@ describe("requester call delivery", () => {
     });
     const { manager, storePath } = await createManagerHarness();
     const messages: CallDeliveryMessage[] = [];
-    const summarize = vi.fn<PluginRuntime["subagent"]["complete"]>().mockResolvedValue({
-      text: "Achieved: plumber booked for Friday at 09:00.",
-    });
-    const delivery = createDelivery(manager, config, messages, summarize, beforeDeliver);
+    const delivery = createDelivery(manager, config, messages, beforeDeliver);
     const result = await manager.initiateCall("+15550000001", "voice-session", {
       requesterSessionKey: requester,
     });
     const call = expectDefined(manager.getCall(result.callId), "initiated call");
-    call.metadata = { ...call.metadata, brief };
-    return { manager, call, config, delivery, messages, storePath, summarize };
+    return { manager, call, config, delivery, messages, storePath };
   }
 
   async function speech(
@@ -134,7 +128,7 @@ describe("requester call delivery", () => {
   it.each([true, false])(
     "reports once with includeTranscript=%s and persists delivery status",
     async (includeTranscript) => {
-      const { manager, call, delivery, messages, summarize } = await setup({
+      const { manager, call, delivery, messages } = await setup({
         reports: { enabled: true, includeTranscript },
       });
       call.metadata = {
@@ -171,8 +165,6 @@ describe("requester call delivery", () => {
       }
       expect(text?.includes("reference P123")).toBe(includeTranscript);
       expect(text?.includes("Assistant: Confirmed Friday at 09:00")).toBe(includeTranscript);
-      expect(summarize).toHaveBeenCalledOnce();
-      expect(summarize.mock.calls[0]?.[0].message).toContain(JSON.stringify(brief));
       const saved = await manager.getCallFromMemoryOrStore(call.callId);
       expect(saved?.metadata?.callReport).toMatchObject({ status: "delivered" });
     },

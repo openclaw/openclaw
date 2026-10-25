@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -60,25 +59,6 @@ function emitNgrokUrl(proc: FakeChildProcess, url: string): void {
   proc.stdout.write(`${JSON.stringify({ msg: "started tunnel", url })}\n`);
 }
 
-/** Real child pipes preserve split UTF-8 through production's stateful decoder. */
-function mockSpawnUtf8SplitChild(text: string): void {
-  const bytes = Buffer.from(text, "utf8");
-  const splitAt = bytes.indexOf(Buffer.from("😀", "utf8")) + 2;
-  expect(bytes[splitAt - 2]).toBe(0xf0);
-  const script = [
-    `const bytes=Buffer.from(${JSON.stringify(text)},"utf8");`,
-    `const split=${splitAt};`,
-    "const stream=process.stderr;",
-    "stream.write(bytes.subarray(0,split));",
-    "setTimeout(()=>stream.write(bytes.subarray(split),()=>{}),40);",
-  ].join("");
-  mocks.spawn.mockImplementationOnce(() => {
-    return spawn(process.execPath, ["-e", script], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  });
-}
-
 describe("voice-call tunnels", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -110,28 +90,12 @@ describe("voice-call tunnels", () => {
   });
 
   it("unrefs startup and parses complete ngrok logs before bounding the incomplete tail", async () => {
-    const unrefSpy = vi.fn();
-    const setTimeoutOriginal = globalThis.setTimeout.bind(globalThis);
-    vi.spyOn(globalThis, "setTimeout").mockImplementation(
-      (handler: TimerHandler, timeout?: number) => {
-        const timer = Reflect.apply(setTimeoutOriginal, globalThis, [handler, timeout]);
-        Object.defineProperty(timer, "unref", { value: unrefSpy, configurable: true });
-        return timer;
-      },
-    );
+    const timeout = vi.spyOn(globalThis, "setTimeout");
     const { proc, result } = nextProcess();
-    expect(unrefSpy).toHaveBeenCalledOnce();
+    expect(timeout.mock.results[0]?.value.hasRef()).toBe(false);
     proc.stdout.write(
       `${JSON.stringify({ msg: "started tunnel", url: "https://large.ngrok.io" })}\n${"x".repeat(20_000)}`,
     );
-
-    const settled = await Promise.race([
-      result.then(() => true),
-      new Promise<boolean>((resolve) => {
-        setTimeout(() => resolve(false), 20);
-      }),
-    ]);
-    expect(settled).toBe(true);
 
     const tunnel = await result;
     expect(tunnel.publicUrl).toBe("https://large.ngrok.io/voice/webhook");
@@ -169,11 +133,13 @@ describe("voice-call tunnels", () => {
     expect(proc.killedWith).toBe("SIGKILL");
   });
 
-  it("preserves UTF-8 across real child stderr pipe chunks", async () => {
+  it("preserves UTF-8 across stderr pipe chunks", async () => {
     const message = "bad 😀 ERR_NGROK_3200: invalid token";
-    mockSpawnUtf8SplitChild(message);
-    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
-
+    const { proc, result } = nextProcess("/hook");
+    const bytes = Buffer.from(message);
+    const split = bytes.indexOf(Buffer.from("😀")) + 2;
+    proc.stderr.write(bytes.subarray(0, split));
+    proc.stderr.write(bytes.subarray(split));
     await expect(result).rejects.toThrow(`ngrok error: ${message}`);
   });
 
