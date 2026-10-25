@@ -13,7 +13,6 @@ import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-
 import type { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import type { AgentEventPayload } from "../../../infra/agent-events.js";
 import type {
   SessionIdentityMutation,
@@ -161,11 +160,6 @@ export function createSubagentRegistryMockState() {
     removeInternalSessionEffectsSession: vi.fn(async () => {}),
     resolveAgentTimeoutMs: vi.fn(() => 1_000),
     dispatchRecoveryAgent: vi.fn(),
-    getGatewayRecoveryRuntime: vi.fn(() => ({
-      dispatchAgent: mocks.dispatchRecoveryAgent as GatewayRecoveryRuntime["dispatchAgent"],
-      waitForAgent: vi.fn(),
-      sendRecoveryNotice: vi.fn(),
-    })),
     lifecycleGeneration: "test-generation",
   };
   return Object.assign(mocks, {
