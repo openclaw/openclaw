@@ -1277,6 +1277,17 @@ try {
     }
     if (fixture.sidebarPersistentChildren) {
       const { parentKey, childKeys } = fixture.sidebarPersistentChildren;
+      // Warmup must reveal the windowed parent below the personal pins before using its toggle.
+      await page.waitForFunction((key) => {
+        if (document.querySelector(`[data-child-session-toggle="${key}"]`)) {
+          return true;
+        }
+        const viewport = document.querySelector<HTMLElement>(".sidebar-shell__body");
+        if (viewport) {
+          viewport.scrollTop += viewport.clientHeight * 0.75;
+        }
+        return false;
+      }, parentKey);
       const toggle = page.locator(`[data-child-session-toggle="${parentKey}"]`);
       if ((await toggle.getAttribute("aria-expanded")) !== "true") {
         await toggle.click();
@@ -1350,6 +1361,12 @@ try {
       }
       await page.evaluate(() => new Promise(requestAnimationFrame));
     }
+    await page.locator(".sidebar-shell__body").evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page
+      .locator(`.sidebar-session-content [data-session-key="${fixture.pinnedKeys[1]}"]`)
+      .waitFor();
   }
   const warmStates: Array<Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"]> = [];
   const snapshotSaves: Array<
