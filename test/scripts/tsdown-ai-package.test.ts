@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { build } from "tsdown";
 import { expect, it } from "vitest";
@@ -33,6 +34,19 @@ it("streams Mistral from the built AI package without installing the SDK", async
     logLevel: "silent",
   });
   try {
+    const parserSource = path.resolve("packages/markdown-core/src/reasoning-tags.ts");
+    const parserModules = bundles.flatMap((bundle) =>
+      bundle.chunks
+        .filter(
+          (chunk) =>
+            chunk.type === "chunk" &&
+            Object.keys(chunk.modules).some((id) => path.resolve(id) === parserSource),
+        )
+        .map(
+          (chunk) => pathToFileURL(fs.realpathSync(path.join(chunk.outDir, chunk.fileName))).href,
+        ),
+    );
+    expect(parserModules.length).toBeGreaterThan(0);
     linkDependencies(root, manifest.dependencies);
     expect(fs.readFileSync(path.join(outDir, "mistral.LICENSE"), "utf8")).toContain(
       "Apache License",
@@ -41,18 +55,18 @@ it("streams Mistral from the built AI package without installing the SDK", async
       import assert from "node:assert/strict";
       import { registerHooks } from "node:module";
       const loadedDependencies = new Set();
+      const parserModules = new Set(${JSON.stringify(parserModules)});
       let startedProvider = false;
       registerHooks({ resolve(specifier, context, next) {
         assert(!specifier.startsWith("@mistralai/"), "Mistral SDK must be bundled");
         loadedDependencies.add(specifier);
         return next(specifier, context);
       }, load(url, context, next) {
-        const result = next(url, context);
-        if (!startedProvider && result.source != null) {
-          assert(!String(result.source).includes("function createReasoningTagTextPartitioner("),
+        if (!startedProvider) {
+          assert(!parserModules.has(url),
             "generic built imports must not load the reasoning parser");
         }
-        return result;
+        return next(url, context);
       }});
       const { createApiRegistry, createNodeLlmRuntime } = await import("./dist/index.mjs");
       const { registerBuiltInApiProviders } = await import("./dist/providers.mjs");
