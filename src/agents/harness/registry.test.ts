@@ -107,7 +107,12 @@ it("warns once per harness across reset failures and registry replacement while 
   expect([failingReset, healthyReset, warn].map((mock) => mock.mock.calls.length)).toEqual([
     6, 2, 2,
   ]);
-  expect(warn.mock.calls.map(([, detail]) => detail.harnessId).toSorted()).toEqual(ids);
+  for (const id of ids) {
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("session reset hook failed"), {
+      harnessId: id,
+      error: expect.any(Error),
+    });
+  }
 });
 
 it.each([
