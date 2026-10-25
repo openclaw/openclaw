@@ -6,14 +6,12 @@ import { formatSignalMediaText } from "../media-text.js";
 import type { SignalDataMessage, SignalEventHandlerDeps } from "./event-handler.types.js";
 
 const hooks = vi.hoisted(() => ({
-  create: vi.fn<typeof import("openclaw/plugin-sdk/hook-runtime").createInternalHookEvent>(),
   trigger: vi.fn(async () => undefined),
 }));
 vi.mock("openclaw/plugin-sdk/hook-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/hook-runtime")>();
   return {
     ...actual,
-    createInternalHookEvent: hooks.create.mockImplementation(actual.createInternalHookEvent),
     triggerInternalHook: hooks.trigger,
   };
 });
@@ -39,12 +37,10 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
-  { renderSignalMentions },
   { resolveSignalReplyContextWithPersistence },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
-  import("./mentions.js"),
   import("../reply-authors.js"),
 ]);
 
@@ -243,16 +239,22 @@ describe("signal mention gating", () => {
       { account: "+15550002222" },
       "please \uFFFC",
       { number: "1 (555) 000-2222", start: 7, length: 1 },
-      "@1 (555) 000-2222",
+      "please @1 (555) 000-2222",
     ],
   ] as const)("allows native bot mentions: %j", async (account, message, mention, body) => {
     const handler = createMentionHandler({
       mentionPattern: null,
       ...account,
     });
-    await handler(makeGroupEvent({ message, mentions: [mention] }));
+    await handler(
+      makeGroupEvent({
+        message,
+        mentions: [{ name: "ignored" }, mention, { number: "+1555", start: 999, length: 1 }],
+      }),
+    );
     expect(getCapturedCtx()).toMatchObject({
       Body: expect.stringContaining(body),
+      CommandBody: body,
       WasMentioned: true,
     });
   });
@@ -271,18 +273,7 @@ describe("signal mention gating", () => {
   );
 });
 
-it("renderSignalMentions skips missing identifiers and out-of-bounds spans", () => {
-  const normalized = renderSignalMentions("\uFFFC hi", [
-    { name: "ignored" },
-    { uuid: "valid", start: 0, length: 1 },
-    { number: "+1555", start: 999, length: 1 },
-  ]);
-
-  expect(normalized).toBe("@valid hi");
-});
-
 async function receiveSilentIngest(overrideGroup = false) {
-  hooks.create.mockClear();
   hooks.trigger.mockClear();
   const handler = createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
@@ -303,40 +294,39 @@ async function receiveSilentIngest(overrideGroup = false) {
 describe("signal mention-skip silent ingest", () => {
   it("emits internal message:received when ingest is enabled", async () => {
     await receiveSilentIngest();
-    expect(hooks.create).toHaveBeenCalledTimes(1);
-    expect(hooks.create).toHaveBeenCalledWith(
-      "message",
-      "received",
-      expect.stringContaining("signal"),
-      {
-        from: "group:group-123",
-        content: "hello without mention",
-        timestamp: 1700000000000,
-        channelId: "signal",
-        accountId: "default",
-        conversationId: "group:group-123",
-        messageId: "1700000000000",
-        metadata: {
-          to: "group:group-123",
-          provider: "signal",
-          surface: "signal",
-          threadId: undefined,
-          senderId: "+15550001111",
-          senderName: "Alice",
-          senderUsername: undefined,
-          senderE164: undefined,
-          guildId: undefined,
-          channelName: undefined,
-          topicName: undefined,
+    expect(hooks.trigger).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        type: "message",
+        action: "received",
+        sessionKey: expect.stringContaining("signal"),
+        context: {
+          from: "group:group-123",
+          content: "hello without mention",
+          timestamp: 1700000000000,
+          channelId: "signal",
+          accountId: "default",
+          conversationId: "group:group-123",
+          messageId: "1700000000000",
+          metadata: {
+            to: "group:group-123",
+            provider: "signal",
+            surface: "signal",
+            threadId: undefined,
+            senderId: "+15550001111",
+            senderName: "Alice",
+            senderUsername: undefined,
+            senderE164: undefined,
+            guildId: undefined,
+            channelName: undefined,
+            topicName: undefined,
+          },
         },
-      },
+      }),
     );
-    expect(hooks.trigger).toHaveBeenCalledTimes(1);
   });
 
   it("does not emit when group ingest is false and wildcard ingest is true", async () => {
     await receiveSilentIngest(true);
-    expect(hooks.create).not.toHaveBeenCalled();
     expect(hooks.trigger).not.toHaveBeenCalled();
   });
 });

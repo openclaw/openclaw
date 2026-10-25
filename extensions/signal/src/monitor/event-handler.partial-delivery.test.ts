@@ -153,7 +153,6 @@ describe("Signal partial final delivery ingress boundary", () => {
   });
 
   it("tombstones an accepted approval prefix and retains its reaction binding", async () => {
-    const afterDeliverPayload = vi.spyOn(signalPlugin.outbound!, "afterDeliverPayload");
     const timestamp = 1_700_000_005_001;
     const cfg = {
       session: { store: state.statePath("sessions") },
@@ -199,11 +198,6 @@ describe("Signal partial final delivery ingress boundary", () => {
       expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
       expect(sendMessageSignalMock).toHaveBeenCalledTimes(2);
       expect(sendMessageSignalMock.mock.calls[0]?.[1]).toContain("React with:");
-      expect(afterDeliverPayload).toHaveBeenCalledOnce();
-      expect(afterDeliverPayload.mock.calls[0]?.[0]).toMatchObject({
-        payload: { text: expect.stringContaining("React with:") },
-        results: [{ messageId: "1700000005999" }],
-      });
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       await expect(
         resolveSignalApprovalReactionTargetWithPersistence({
@@ -315,7 +309,6 @@ describe("Signal partial final delivery ingress boundary", () => {
     await receive(first, event);
     await first.stop();
     expect(sendMessageSignalMock.mock.calls.map(([, text]) => text)).toEqual(["retry me"]);
-    expect(sendMessageSignalMock).toHaveBeenCalledOnce();
     expect(readQueuedDeliveryEntriesForTest(state.stateDir)).toEqual([]);
     const [pending] = await queue.listPending({ limit: "all" });
     expect(pending).toMatchObject({

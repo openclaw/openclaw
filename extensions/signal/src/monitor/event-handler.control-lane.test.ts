@@ -58,9 +58,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   return {
     ...actual,
     recordInboundSession: (...args: Parameters<typeof actual.recordInboundSession>) =>
-      fixture.realSession
-        ? actual.recordInboundSession(...args)
-        : mocked.recordInboundSession(...args),
+      (fixture.realSession ? actual : mocked).recordInboundSession(...args),
     readChannelAllowFromStore: (...args: Parameters<typeof actual.readChannelAllowFromStore>) =>
       fixture.realSession
         ? actual.readChannelAllowFromStore(...args)
@@ -167,13 +165,8 @@ function signalText(message: string, timestamp: number, sourceNumber?: string) {
   });
 }
 
-function dispatchedCommandBody(index: number): string | undefined {
-  const call = dispatchMock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected dispatch call ${index}`);
-  }
-  return call[0].ctx.CommandBody;
-}
+const dispatchedCommandBody = (index: number) =>
+  dispatchMock.mock.calls[index]?.[0].ctx.CommandBody;
 
 function expectDispatch(index: number, body: string) {
   expect(dispatchMock).toHaveBeenCalledTimes(index + 1);
