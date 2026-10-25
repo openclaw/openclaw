@@ -11,10 +11,7 @@ import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
-import {
-  isSessionRunActive,
-  isSessionRunCompactionBlocked,
-} from "../../sessions/session-controller.queries.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { supersedeReplyRunByRunId } from "../../sessions/session-controller.stop-runtime.js";
 import {
@@ -171,20 +168,6 @@ describe("embedded run ownership", () => {
     unused(unknown, normal);
   });
 
-  it("keeps queued reply operations out of compact abort checks", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
-      sessionId: "session-reply-run",
-      resetTriggered: false,
-    });
-
-    expect(isSessionRunCompactionBlocked("session-reply-run")).toBe(false);
-
-    operation.setPhase("running");
-
-    expect(isSessionRunCompactionBlocked("session-reply-run")).toBe(true);
-  });
-
   it("aborts every active run in all mode", () => {
     const abortA = vi.fn();
     const abortB = vi.fn();
@@ -208,7 +191,6 @@ describe("embedded run ownership", () => {
     const { operation, backend } = startReply(handle);
     expect(abortEmbeddedAgentRun(sessionId)).toBe(false);
     expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(false);
-    expect(isSessionRunCompactionBlocked(sessionId)).toBe(true);
     expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
     expect(operation.result).toBeNull();
     expect(isSessionRunActive(sessionId)).toBe(true);

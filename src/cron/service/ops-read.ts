@@ -85,7 +85,10 @@ export async function readJob(state: CronServiceState, id: string) {
         !state.store?.jobs.some((job) => job.id === id)
       ) {
         // Setup acknowledges its newly committed ID through cron.get; no tick exists in an empty scheduler.
-        await reloadProvisionedCronJobs(state);
+        const generation = state.lifecycleGeneration;
+        const previousIds = new Set(state.store?.jobs.map((job) => job.id));
+        await ensureLoaded(state, { forceReload: true });
+        await reloadProvisionedCronJobs(state, generation, previousIds);
       } else {
         await ensureLoadedForRead(state);
       }

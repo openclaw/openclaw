@@ -136,6 +136,7 @@ it.each([false, true])(
         const fields: Record<string, string> = {
           "{{.State.Running}}": "true",
           "{{.Id}}": id,
+          "{{.Id}} {{.HostConfig.ReadonlyRootfs}}": `${id} true`,
           "{{.ImageName}}\t{{.Image}}": `${cfg.docker.image}\tsha256:fixture`,
         };
         return commandResult(

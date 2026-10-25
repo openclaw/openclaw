@@ -9,7 +9,6 @@ import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
-import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type {
   ImageGenerationProviderPlugin,
@@ -294,7 +293,6 @@ export type OpenClawPluginApi = {
   /** Add a plugin-owned lifetime requirement to authenticated person admission. */
   registerGatewayAccessPolicy: (policy: PluginGatewayAccessPolicy) => void;
   /** Register a sandboxed board widget source kind owned by this plugin. */
-  registerBoardWidgetContentKind: (definition: PluginBoardWidgetContentKind) => void;
   /** Register a read-only external-session catalog with optional native adoption actions. */
   registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (

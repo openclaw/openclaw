@@ -7,7 +7,7 @@ import {
 } from "../../lib/chat/history-message-identity.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { extractThinkingCached } from "../../lib/chat/message-extract.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import {
   senderIdentityKey,
@@ -17,14 +17,11 @@ import {
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { assistantMessageIsInterrupted, assistantMessageKind } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
-import {
-  createChatItemsGroupingCache,
-  rowsAfterHiddenTurns,
-} from "./chat-thread-grouping-cache.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsIndependentBoundary,
   assistantMessageIsAutomationResult,
+  chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
@@ -32,26 +29,6 @@ import {
 } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import type { ChatReasoning } from "./tool-stream-contract.ts";
-
-/**
- * Keys a sender without a typed identity by its id alone; names change, ids do
- * not. The Gateway stores a profile user's id as `senderId` (typed identities
- * persist only when their id equals it), so an untyped id that matches a
- * counted profile is that person. Any other untyped id is its own person.
- */
-function untypedSenderPersonKey(
-  sender: SenderIdentity,
-  people: ReadonlySet<string>,
-  localPerson: string | undefined,
-): string {
-  if (!sender.id) {
-    return JSON.stringify(["sender-label", sender.username ?? sender.name ?? ""]);
-  }
-  const profile = sessionParticipantIdentityKey({ type: "profile", id: sender.id });
-  return people.has(profile) || profile === localPerson
-    ? profile
-    : JSON.stringify(["sender", sender.id]);
-}
 
 type ReplyState = {
   sender?: MessageGroup["sender"];
@@ -119,8 +96,23 @@ function stampReplyAttribution(
     }
   }
   // Untyped senders resolve after every typed person is known, so order never splits one.
+  /**
+   * Keys a sender without a typed identity by its id alone; names change, ids do
+   * not. The Gateway stores a profile user's id as `senderId` (typed identities
+   * persist only when their id equals it), so an untyped id that matches a
+   * counted profile is that person. Any other untyped id is its own person.
+   */
   for (const sender of untypedSenders) {
-    people.add(untypedSenderPersonKey(sender, people, localPerson));
+    if (!sender.id) {
+      people.add(JSON.stringify(["sender-label", sender.username ?? sender.name ?? ""]));
+      continue;
+    }
+    const profile = sessionParticipantIdentityKey({ type: "profile", id: sender.id });
+    people.add(
+      people.has(profile) || profile === localPerson
+        ? profile
+        : JSON.stringify(["sender", sender.id]),
+    );
   }
   // Automatic attribution is only useful when several people share the thread.
   const shared = people.size >= 2;
@@ -185,7 +177,115 @@ export type ReplyAttributionContext = {
   localPerson?: string;
 };
 
-const groupChatItems = createChatItemsGroupingCache(groupChatItemSegment);
+const groupedSegments = new WeakMap<
+  object,
+  { inputs: unknown[]; items: Array<ChatItem | MessageGroup> }
+>();
+
+/** Search hides rows, not turns: a row after a hidden turn start never joins the group before it. */
+function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<string> {
+  const visible = new Set(items.map((item) => item.key));
+  const rows = new Set<string>();
+  let hiddenTurn = false;
+  for (const item of context) {
+    if (!visible.has(item.key)) {
+      hiddenTurn ||= chatItemStartsDisplayTurn(item);
+    } else if (hiddenTurn) {
+      rows.add(item.key);
+      hiddenTurn = false;
+    }
+  }
+  return rows;
+}
+
+function groupChatItems(
+  items: ChatItem[],
+  visibleReasoning: ReadonlySet<string>,
+  rowsAfterHiddenTurn?: ReadonlySet<string>,
+  showReasoning = false,
+): Array<ChatItem | MessageGroup> {
+  const reasoningKey = JSON.stringify([...visibleReasoning]);
+  const result: Array<ChatItem | MessageGroup> = [];
+  let source: Array<Extract<ChatItem, { kind: "message" }>> = [];
+  const flush = () => {
+    if (source.length === 0) {
+      return;
+    }
+    const owner = asRecord(source[0]?.message);
+    const inputs: unknown[] = [reasoningKey, showReasoning];
+    for (const item of source) {
+      inputs.push(
+        item.key,
+        item.message,
+        normalizeMessage(item.message),
+        item.duplicateCount,
+        item.startsTurn,
+        rowsAfterHiddenTurn?.has(item.key) === true,
+      );
+    }
+    const cached = owner && groupedSegments.get(owner);
+    // Duplicate collapse annotates wrappers, never the retained cache inputs.
+    const grouped =
+      cached &&
+      cached.inputs.length === inputs.length &&
+      inputs.every((input, index) => input === cached.inputs[index])
+        ? cached.items
+        : groupChatItemSegment(
+            source.map((item) => ({ ...item })),
+            visibleReasoning,
+            rowsAfterHiddenTurn,
+            showReasoning,
+          );
+    if (grouped !== cached?.items) {
+      const segment = { inputs, items: grouped };
+      // Hidden or retained source objects must not keep overlapping old snapshots alive.
+      for (const item of source) {
+        const message = asRecord(item.message);
+        if (message) {
+          const previous = groupedSegments.get(message);
+          if (previous && previous !== segment && previous.inputs.length > 0) {
+            previous.inputs = [];
+            previous.items = [];
+          }
+          groupedSegments.set(message, segment);
+        }
+      }
+    }
+    // Attribution is transcript-wide and must never annotate cached local groups.
+    for (const item of grouped) {
+      result.push(item.kind === "group" ? { ...item } : item);
+    }
+    source = [];
+  };
+  for (const [index, item] of items.entries()) {
+    if (item.kind !== "message") {
+      flush();
+      result.push(item);
+      continue;
+    }
+    const previous = items[index - 1];
+    if (
+      previous?.kind === "message" &&
+      normalizeRoleForGrouping(normalizeMessage(item.message).role) === "user"
+    ) {
+      const normalized = normalizeMessage(previous.message);
+      const role = normalizeRoleForGrouping(normalized.role);
+      // A visible non-user row guarantees a grouping and duplicate boundary.
+      // Keep hidden rows and consecutive inputs together for the canonical grouper.
+      if (
+        role !== "user" &&
+        (role !== "assistant" ||
+          resolveMessageVisibleContent(previous.message, normalized) === "non-text" ||
+          resolveMessageDisplayMarkdown(previous.message, normalized).trim())
+      ) {
+        flush();
+      }
+    }
+    source.push(item);
+  }
+  flush();
+  return result;
+}
 
 export function groupMessages(
   items: ChatItem[],

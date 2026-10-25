@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
+import {
+  privateRequesterRouteCases,
+  visibleCompletion,
+} from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
   setSessionStore,
@@ -107,7 +110,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       expect(trigger).toContain("must go through the message tool, send your answer with it");
       expect(trigger).toContain("avoid repeating an update already delivered");
     } else if (!yielded) {
-      expect(trigger).toContain("send it through an available, permitted messaging tool");
+      expect(trigger).not.toContain("messaging tool");
+      expect(trigger).toContain("Your final reply is recorded in this session for the requester");
       expect(trigger).toContain("briefly record the reviewed outcome and any remaining work");
       expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
       expect(deliverSpy).toHaveBeenCalledOnce();
@@ -116,4 +120,22 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
       );
     }
   });
+
+  it.each(privateRequesterRouteCases())(
+    "guides private $name settles according to the requester route",
+    async ({ origin, canDeliver }) => {
+      settledPrivateChildren({});
+      expect(
+        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ requesterOrigin: origin })),
+      ).toBe(true);
+      const trigger = String(deliveredCallArg().triggerMessage);
+      if (canDeliver) {
+        expect(trigger).toContain("send it through an available, permitted messaging tool");
+      } else {
+        expect(trigger).not.toContain("messaging tool");
+        expect(trigger).toContain("Your final reply is recorded in this session for the requester");
+        expect(trigger).toContain("no messaging send is needed");
+      }
+    },
+  );
 });

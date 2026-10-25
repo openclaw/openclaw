@@ -265,6 +265,9 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         });
       }
     } catch (error) {
+      params.runtime.error(
+        `Warning: Doctor could not complete Gateway restoration: ${formatErrorMessage(error)}. After Doctor exits, run ${formatCliCommand("openclaw gateway status --deep", env)}; resolve the reported failure, then run ${formatCliCommand("openclaw gateway start", env)}.`,
+      );
       if (hasCommandProcessCleanupError(error)) {
         cleanupFailure ??= { error };
         throw error;

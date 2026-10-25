@@ -56,6 +56,21 @@ it("keeps an invisible stream pending until visible text arrives and honors repl
   expect(stream.replace("\u2060")).toEqual({ text: "", delta: null });
 });
 
+it("keeps plain-tool code protection independent across interleaved streams and replacements", () => {
+  const literal = createTextProjection([plainToolCallTextFilter]);
+  const hidden = createTextProjection([plainToolCallTextFilter]);
+  const opening = "```text\n[tool:read] ";
+  literal.append(opening);
+  hidden.append("Before\n[tool:read] ");
+  const payload = "{}\n";
+  expect(literal.append(payload).text).toBe(opening + payload);
+  expect(hidden.append(payload + "After").text).toBe("Before\nAfter");
+
+  expect(hidden.replace("[tool:read] {}\n").text).toBe("");
+  expect(literal.append("```\n").text).toBe(opening + payload + "```\n");
+  expect(hidden.append("Fresh").text).toBe("Fresh");
+});
+
 it.each([1, 7, 32])(
   "preserves Markdown and strips bracket payloads in %i-character chunks",
   (size) => {

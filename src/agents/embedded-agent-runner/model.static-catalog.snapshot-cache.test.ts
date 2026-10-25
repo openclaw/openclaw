@@ -5,6 +5,7 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { setManifestPlugins } from "./model.static-catalog.test-helpers.js";
 
 const manifestMocks = vi.hoisted(() => ({
   getGatewayPluginMetadataSnapshot: vi.fn(),
@@ -77,23 +78,6 @@ function setCurrentManifestPlugins(
   const snapshot = createPluginMetadataSnapshotFixture({ plugins });
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
   return snapshot;
-}
-
-function setManifestPlugins(plugins: ReturnType<typeof createMistralManifestPlugin>[]) {
-  const byPluginDir = new Map(plugins.map((plugin) => [`/fixtures/${plugin.id}`, plugin]));
-  manifestMocks.listOpenClawPluginManifestMetadata.mockReturnValue(
-    [...byPluginDir].map(([pluginDir, plugin]) => ({
-      pluginDir,
-      manifest: plugin,
-      origin: plugin.origin,
-    })),
-  );
-  manifestMocks.loadPluginManifest.mockImplementation((pluginDir: string) => {
-    const plugin = byPluginDir.get(pluginDir);
-    return plugin
-      ? { ok: true, manifest: plugin }
-      : { ok: false, error: "missing manifest", manifestPath: `${pluginDir}/openclaw.plugin.json` };
-  });
 }
 
 function expectNoManifestReads() {
@@ -284,7 +268,7 @@ describe("bundled static model catalog snapshot cache", () => {
   it("refreshes a retained no-snapshot resolver at the plugin metadata lifecycle boundary", () => {
     const env = { HOME: "/custom-home" };
     const firstPlugin = createMistralManifestPlugin();
-    setManifestPlugins([firstPlugin]);
+    setManifestPlugins(manifestMocks, [firstPlugin]);
     const resolveModel = createBundledStaticCatalogModelResolver({ env });
 
     expect(resolveModel(mistralLookup)?.id).toBe("mistral-medium-3-5");
@@ -293,7 +277,7 @@ describe("bundled static model catalog snapshot cache", () => {
       "mistral-medium-next",
       "Mistral Medium Next",
     );
-    setManifestPlugins([replacementPlugin]);
+    setManifestPlugins(manifestMocks, [replacementPlugin]);
     expect(resolveModel(mistralLookup)?.id).toBe("mistral-medium-3-5");
     expect(resolveModel({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
     clearPluginMetadataLifecycleCaches();

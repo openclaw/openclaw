@@ -40,8 +40,10 @@ export function normalizeApplicationContext(value: ApplicationContext): Applicat
   return value;
 }
 
-export function createApplicationGateway(
-  initial: ApplicationGatewaySnapshot = {
+export function createApplicationGatewaySnapshot(
+  overrides: Partial<ApplicationGatewaySnapshot> = {},
+): ApplicationGatewaySnapshot {
+  return {
     client: null,
     phase: "stopped",
     offlineStable: false,
@@ -51,7 +53,12 @@ export function createApplicationGateway(
     sessionKey: "",
     lastError: null,
     lastErrorCode: null,
-  },
+    ...overrides,
+  };
+}
+
+export function createApplicationGateway(
+  initial: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot(),
 ) {
   let snapshot = initial;
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();

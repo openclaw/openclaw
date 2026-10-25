@@ -3,6 +3,45 @@ import { en } from "./en.ts";
 
 const enCron = {
   cron: {
+    adminRequired: "Browsing only. Automation changes require operator.admin access.",
+    runNotStarted: {
+      notDue: "This automation is not due yet.",
+      alreadyRunning: "This automation is already running.",
+      recoveryPending: "Scheduler recovery is still in progress.",
+      invalidSpec: "This automation has an invalid schedule or payload.",
+      stopped: "The scheduler is stopped.",
+      unknown: "This automation could not be started.",
+    },
+    errors: {
+      nameRequired: "Name is required.",
+      activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
+      activeHoursTimezone: "Enter a valid IANA timezone, local, or user.",
+      scheduleAtInvalid: "Enter a valid date/time.",
+      everyAmountInvalid: "Interval must be greater than 0.",
+      triggerIntervalTooShort:
+        "Condition-triggered automations must run at least every 30 seconds.",
+      cronExprRequired: "Cron expression is required.",
+      staggerAmountInvalid: "Stagger must be greater than 0.",
+      triggerScriptRequired: "Trigger script is required when the condition trigger is enabled.",
+      triggerScriptPayloadUnsupported:
+        "Script payloads cannot use condition triggers because both own the same saved state.",
+      triggerScheduleUnsupported:
+        "Condition triggers require an interval, cron, or stream schedule.",
+      systemTextRequired: "System text is required.",
+      agentMessageRequired: "Agent message is required.",
+      timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
+      deliveryModeRequired:
+        "Choose a delivery mode explicitly, or run openclaw doctor --fix to repair legacy settings.",
+      webhookUrlRequired: "Webhook URL is required.",
+      webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
+      invalidRunTime: "Invalid run time.",
+      invalidIntervalAmount: "Invalid interval amount.",
+      cronExprRequiredShort: "Cron expression required.",
+      invalidStaggerAmount: "Invalid stagger amount.",
+      systemEventTextRequired: "System event text required.",
+      agentMessageRequiredShort: "Agent message required.",
+      nameRequiredShort: "Name required.",
+    },
     tabs: {
       filterLabel: "Automation status",
       all: "All",
@@ -415,8 +454,10 @@ const enCron = {
 
 export const registerCronEnglish = Object.assign(
   () => {
-    // SAFETY: The canonical English catalog owns cron as an object; extend its lazy page copy.
-    Object.assign(en.cron as TranslationMap, enCron.cron);
+    const { runNotStarted, errors, ...cron } = enCron.cron;
+    Object.assign(en.cron, cron);
+    Object.assign(en.cron.runNotStarted, runNotStarted);
+    Object.assign(en.cron.errors, errors);
   },
   { catalog: enCron },
 );

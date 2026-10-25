@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import {
   UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
@@ -15,6 +14,10 @@ import type {
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import { deferPackageStateVerification } from "../../infra/package-update-verification-step.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   getUpdateDoctorConfigFailureReason,
@@ -126,12 +129,15 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   });
   let doctorArgv: string[];
   if (context) {
+    const workerRuntime = params.nodeRunner ?? resolveNodeRunner();
     doctorArgv = [
-      params.nodeRunner ?? resolveNodeRunner(),
-      path.join(
-        params.root,
-        "dist",
-        runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+      workerRuntime,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl({
+          ...runtimeProcessEntrypoints.updateMigratedFinalize,
+          root: params.root,
+        }),
+        workerRuntime,
       ),
       "--doctor",
     ];

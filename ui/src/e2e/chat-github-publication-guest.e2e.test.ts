@@ -141,7 +141,7 @@ suite.define(() => {
       const status = await gateway.waitForRequest("sessions.github.status");
       expect(status.params).toEqual({ sessionKey, agentId: "main", requestId });
       const publishedGroup = await openDetailsPullRequests(page);
-      const openPr = publishedGroup.getByRole("link", { name: "Open PR", exact: true });
+      const openPr = publishedGroup.getByRole("link", { name: /^Open PR:/ });
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
       const environment = page.locator(".chat-environment__branch");
       expect(

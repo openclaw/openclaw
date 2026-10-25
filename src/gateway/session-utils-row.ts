@@ -2,6 +2,7 @@ import {
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
@@ -73,6 +74,7 @@ import {
   readStoreChildSessionLinks,
   type SessionChildLink,
   resolveSessionChildOwners,
+  resolveSessionChildController,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
@@ -440,7 +442,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     };
   }
 
-  const row: GatewaySessionRow = {
+  const row = omitUndefinedFields<GatewaySessionRow>({
     key,
     sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
     // Only explicitly requested summaries may clear swarm state in event merges.
@@ -596,13 +598,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastAccountId: deliveryFields.lastAccountId,
     lastThreadId: deliveryFields.lastThreadId,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
-  };
-  // JSON omits undefined fields; keep the resident projection equally sparse.
-  for (const field in row) {
-    if (Reflect.get(row, field) === undefined) {
-      Reflect.deleteProperty(row, field);
-    }
-  }
+  });
   return Object.freeze({
     row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(row),
     source: Object.freeze({
@@ -641,7 +637,9 @@ export function replaceSessionRowFacts(
   const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
   freezeTrustedJsonSnapshot(nextSource.childLinks);
   return Object.freeze({
-    row: row ? freezeTrustedJsonSnapshot({ ...materialized.row, ...row }) : materialized.row,
+    row: row
+      ? freezeTrustedJsonSnapshot(omitUndefinedFields({ ...materialized.row, ...row }))
+      : materialized.row,
     source: Object.freeze(nextSource),
   });
 }
@@ -659,7 +657,7 @@ export function presentSessionRow(
   row.snapshotAt = now;
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
-  const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
+  const { subagentRun, fields } = projectGatewaySessionRunState({
     key: row.key,
     parsedKey: source.parsedKey,
     entry,
@@ -679,7 +677,8 @@ export function presentSessionRow(
     (typeof row.totalTokens === "number" && row.totalTokens > 0) ||
     usage?.totalTokensFresh === true;
   row.agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
-  row.spawnedBy = row.controlOwnerSessionKey = subagentOwner || entry?.spawnedBy;
+  row.spawnedBy = entry?.spawnedBy;
+  row.controlOwnerSessionKey = entry ? resolveSessionChildController(row.key, entry) : undefined;
   row.goal = resolveGatewaySessionGoal(entry, now, {
     totalTokens: row.totalTokens,
     totalTokensFresh: row.totalTokensFresh,

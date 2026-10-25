@@ -20,7 +20,49 @@ import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
 } from "../infra/sqlite-worker-contract.js";
-import { Agent } from "./agent-core.js";
+import { Agent, type AgentOptions, type AgentTool } from "./agent-core.js";
+
+const emptyResult = async () => ({ content: [], details: {} });
+const tool = (name: string, execute: AgentTool["execute"]) => ({ ...makeTool(name), execute });
+const preparedTool = (name: string, execute = emptyResult) =>
+  attachInternalToolExecutionPreparer(makeTool(name), async () => ({
+    kind: "ready",
+    args: {},
+    execute,
+    dispose() {},
+  }));
+
+function scenario(tools: AgentTool[], options: AgentOptions = {}, streamed = false) {
+  const calls = tools.map(({ name }) => makeCall(name));
+  const streamFn = vi.fn(
+    options.streamFn ??
+      (streamed
+        ? () => {
+            const stream = createAssistantMessageEventStream();
+            const asyncCalls = calls.map((call) => Object.assign(call, { async: true as const }));
+            startToolCalls(stream, asyncCalls);
+            finishMessageStream(stream, makeAssistantMessage(asyncCalls));
+            return stream;
+          }
+        : createTurnSequenceStream([calls])),
+  );
+  const agent = new Agent({
+    toolExecution: "parallel",
+    ...options,
+    streamFn,
+    initialState: { tools },
+  });
+  return { agent, streamFn };
+}
+
+async function failedPrompt(agent: Agent, streamFn?: ReturnType<typeof scenario>["streamFn"]) {
+  const outcome = await agent.prompt("Run tools").catch((error: unknown) => error);
+  expect(agent.state.isStreaming).toBe(false);
+  if (streamFn) {
+    expect(streamFn).toHaveBeenCalledOnce();
+  }
+  return outcome;
+}
 
 function expectFailureGraph(error: unknown, ...originals: Error[]) {
   expect(hasSqliteWorkerOutcomeUnknown(error)).toBe(true);
@@ -32,30 +74,21 @@ function expectFailureGraph(error: unknown, ...originals: Error[]) {
 
 it("stops before another model request when the outcome hook rejects an unknown write", async () => {
   const uncertain = new SqliteWorkerError("Synthetic outcome hook failure", "outcome-unknown");
-  const executeWrite = vi.fn(async () => ({ content: [], details: {} }));
-  const executeNext = vi.fn(async () => ({ content: [], details: {} }));
-  const streamFn = vi.fn(createTurnSequenceStream([[makeCall("write")], [makeCall("next")]]));
-  const agent = new Agent({
-    streamFn,
+  const executeWrite = vi.fn(emptyResult);
+  const executeNext = vi.fn(emptyResult);
+  const { agent, streamFn } = scenario([tool("write", executeWrite), tool("next", executeNext)], {
+    streamFn: createTurnSequenceStream([[makeCall("write")], [makeCall("next")]]),
     afterToolOutcome: async ({ toolCall }) => {
       if (toolCall.name === "write") {
         throw uncertain;
       }
     },
-    initialState: {
-      tools: [
-        { ...makeTool("write"), execute: executeWrite },
-        { ...makeTool("next"), execute: executeNext },
-      ],
-    },
   });
-  const outcome = await agent.prompt("Write and continue").catch((error: unknown) => error);
+  const outcome = await failedPrompt(agent, streamFn);
   expectFailureGraph(outcome, uncertain);
   expect(outcome).toBe(uncertain);
   expect(executeWrite).toHaveBeenCalledOnce();
-  expect(streamFn).toHaveBeenCalledOnce();
   expect(executeNext).not.toHaveBeenCalled();
-  expect(agent.state.isStreaming).toBe(false);
 });
 
 it.each(["execution", "after-call"] as const)(
@@ -65,45 +98,34 @@ it.each(["execution", "after-call"] as const)(
     const uncertain = new SqliteWorkerError("Synthetic unsettled sibling", "outcome-unknown");
     const siblingStarted = Promise.withResolvers<void>();
     let siblingSettled = false;
-    const streamFn = vi.fn(createTurnSequenceStream([[makeCall("first"), makeCall("sibling")]]));
-    const agent = new Agent({
-      toolExecution: "parallel",
-      streamFn,
-      afterToolCall: async ({ toolCall }) => {
-        if (phase === "after-call" && toolCall.name === "first") {
-          throw primary;
-        }
+    const { agent, streamFn } = scenario(
+      [
+        tool("first", async () => {
+          await siblingStarted.promise;
+          if (phase === "execution") {
+            throw primary;
+          }
+          return emptyResult();
+        }),
+        tool("sibling", async () => {
+          siblingStarted.resolve();
+          await nextTurn();
+          siblingSettled = true;
+          throw uncertain;
+        }),
+      ],
+      {
+        afterToolCall: async ({ toolCall }) => {
+          if (phase === "after-call" && toolCall.name === "first") {
+            throw primary;
+          }
+        },
       },
-      initialState: {
-        tools: [
-          {
-            ...makeTool("first"),
-            async execute() {
-              await siblingStarted.promise;
-              if (phase === "execution") {
-                throw primary;
-              }
-              return { content: [], details: {} };
-            },
-          },
-          {
-            ...makeTool("sibling"),
-            async execute() {
-              siblingStarted.resolve();
-              await nextTurn();
-              siblingSettled = true;
-              throw uncertain;
-            },
-          },
-        ],
-      },
-    });
-    const outcome = await agent.prompt("Run both tools").catch((error: unknown) => error);
+    );
+    const outcome = await failedPrompt(agent, streamFn);
     expectFailureGraph(outcome, primary, uncertain);
     expect(outcome).toMatchObject({ cause: primary });
     expect(siblingSettled).toBe(true);
-    expect(streamFn).toHaveBeenCalledOnce();
-    expect(agent.state.isStreaming).toBe(false);
   },
 );
 
@@ -116,12 +138,6 @@ it.each([false, true])(
     let siblingEntered = false;
     let siblingSettled = false;
     let completionFailed = false;
-    const prestart = attachInternalToolExecutionPreparer(makeTool("prestart"), async () => ({
-      kind: "ready",
-      args: {},
-      execute: async () => ({ content: [], details: {} }),
-      dispose() {},
-    }));
     const failSibling = async () => {
       siblingEntered = true;
       if (!preStartRejection) {
@@ -131,21 +147,10 @@ it.each([false, true])(
       siblingSettled = true;
       throw uncertain;
     };
-    const sibling = { ...makeTool("sibling"), execute: failSibling };
-    if (preStartRejection) {
-      attachInternalToolExecutionPreparer(sibling, async () => ({
-        kind: "ready",
-        args: {},
-        execute: failSibling,
-        dispose() {},
-      }));
-    }
-    const streamFn = vi.fn(createTurnSequenceStream([[makeCall("prestart"), makeCall("sibling")]]));
-    const agent = new Agent({
-      toolExecution: "parallel",
-      streamFn,
-      initialState: { tools: [prestart, sibling] },
-    });
+    const sibling = preStartRejection
+      ? preparedTool("sibling", failSibling)
+      : tool("sibling", failSibling);
+    const { agent, streamFn } = scenario([preparedTool("prestart"), sibling]);
     agent.subscribe((event) => {
       if (event.type === "tool_execution_end" && event.toolCallId === "prestart") {
         completionFailed = true;
@@ -153,13 +158,9 @@ it.each([false, true])(
         throw primary;
       }
     });
-    const outcome = await agent
-      .prompt("Complete preparation and drain the sibling")
-      .catch((error: unknown) => error);
+    const outcome = await failedPrompt(agent, streamFn);
     expectFailureGraph(outcome, primary, uncertain);
     expect(completionFailed && siblingEntered && siblingSettled).toBe(true);
-    expect(streamFn).toHaveBeenCalledOnce();
-    expect(agent.state.isStreaming).toBe(false);
   },
 );
 
@@ -170,25 +171,18 @@ it("publishes a successful accepted sibling after a pre-start completion fails",
     await releaseSibling.promise;
     return { content: [{ type: "text" as const, text: "Accepted work completed" }], details: {} };
   });
-  const prestart = attachInternalToolExecutionPreparer(makeTool("prestart"), async () => ({
-    kind: "ready",
-    args: {},
-    execute: async () => ({ content: [], details: {} }),
-    dispose() {},
-  }));
-  const streamFn = vi.fn(createTurnSequenceStream([[makeCall("prestart"), makeCall("sibling")]]));
   const siblingEnds: string[] = [];
-  const agent = new Agent({
-    toolExecution: "parallel",
-    streamFn,
-    afterToolCall: async ({ toolCall }) =>
-      toolCall.name === "sibling"
-        ? { content: [{ type: "text", text: "Finalized accepted work" }] }
-        : undefined,
-    afterToolOutcome: async ({ toolCall }) =>
-      toolCall.name === "sibling" ? { details: { outcomeObserved: true } } : undefined,
-    initialState: { tools: [prestart, { ...makeTool("sibling"), execute: executeSibling }] },
-  });
+  const { agent, streamFn } = scenario(
+    [preparedTool("prestart"), tool("sibling", executeSibling)],
+    {
+      afterToolCall: async ({ toolCall }) =>
+        toolCall.name === "sibling"
+          ? { content: [{ type: "text", text: "Finalized accepted work" }] }
+          : undefined,
+      afterToolOutcome: async ({ toolCall }) =>
+        toolCall.name === "sibling" ? { details: { outcomeObserved: true } } : undefined,
+    },
+  );
   agent.subscribe((event) => {
     if (event.type !== "tool_execution_end") {
       return;
@@ -199,7 +193,7 @@ it("publishes a successful accepted sibling after a pre-start completion fails",
     }
     siblingEnds.push(event.toolCallId);
   });
-  const outcome = await agent.prompt("Complete both tools").catch((error: unknown) => error);
+  const outcome = await failedPrompt(agent, streamFn);
   expectFailureGraph(outcome, uncertain);
   expect(executeSibling).toHaveBeenCalledOnce();
   expect(siblingEnds).toEqual(["sibling"]);
@@ -215,8 +209,6 @@ it("publishes a successful accepted sibling after a pre-start completion fails",
       isError: false,
     }),
   ]);
-  expect(streamFn).toHaveBeenCalledOnce();
-  expect(agent.state.isStreaming).toBe(false);
 });
 
 it.each(["turn-end", "skipped-tail"] as const)(
@@ -224,30 +216,24 @@ it.each(["turn-end", "skipped-tail"] as const)(
   async (publication) => {
     const uncertain = new SqliteWorkerError("Synthetic unconfirmed write", "outcome-unknown");
     const publicationFailure = new Error("Synthetic terminal publication failure");
-    const executeTail = vi.fn(async () => ({ content: [], details: {} }));
+    const executeTail = vi.fn(emptyResult);
     let writeSettled = false;
     let publicationFailed = false;
-    const calls = [
-      makeCall("write"),
-      ...(publication === "skipped-tail" ? [makeCall("tail")] : []),
-    ];
-    const streamFn = vi.fn(createTurnSequenceStream([calls]));
-    const agent = new Agent({
-      toolExecution: "sequential",
-      streamFn,
-      initialState: {
-        tools: [
-          {
-            ...makeTool("write"),
-            async execute() {
-              writeSettled = true;
-              throw uncertain;
-            },
-          },
-          { ...makeTool("tail"), execute: executeTail },
-        ],
+    const { agent, streamFn } = scenario(
+      [
+        tool("write", async () => {
+          writeSettled = true;
+          throw uncertain;
+        }),
+        tool("tail", executeTail),
+      ],
+      {
+        toolExecution: "sequential",
+        streamFn: createTurnSequenceStream([
+          [makeCall("write"), ...(publication === "skipped-tail" ? [makeCall("tail")] : [])],
+        ]),
       },
-    });
+    );
     agent.subscribe((event) => {
       if (
         !publicationFailed &&
@@ -261,14 +247,10 @@ it.each(["turn-end", "skipped-tail"] as const)(
         throw publicationFailure;
       }
     });
-    const outcome = await agent
-      .prompt("Run the write before its publication")
-      .catch((error: unknown) => error);
+    const outcome = await failedPrompt(agent, streamFn);
     expectFailureGraph(outcome, uncertain, publicationFailure);
     expect(writeSettled && publicationFailed).toBe(true);
     expect(executeTail).not.toHaveBeenCalled();
-    expect(streamFn).toHaveBeenCalledOnce();
-    expect(agent.state.isStreaming).toBe(false);
   },
 );
 
@@ -279,41 +261,24 @@ it("retains returned and rejected failures from separate streamed tool batches",
   const primaryFailed = Promise.withResolvers<void>();
   let siblingSettled = false;
   let publicationFailed = false;
-  const calls = [makeCall("first"), makeCall("sibling")].map((call) =>
-    Object.assign(call, { async: true as const }),
+  const { agent, streamFn } = scenario(
+    [
+      tool("first", async () => {
+        await siblingStarted.promise;
+        primaryFailed.resolve();
+        throw primary;
+      }),
+      tool("sibling", async () => {
+        siblingStarted.resolve();
+        await primaryFailed.promise;
+        await nextTurn();
+        siblingSettled = true;
+        return emptyResult();
+      }),
+    ],
+    {},
+    true,
   );
-  const streamFn = vi.fn(() => {
-    const stream = createAssistantMessageEventStream();
-    startToolCalls(stream, calls);
-    finishMessageStream(stream, makeAssistantMessage(calls));
-    return stream;
-  });
-  const agent = new Agent({
-    toolExecution: "parallel",
-    streamFn,
-    initialState: {
-      tools: [
-        {
-          ...makeTool("first"),
-          async execute() {
-            await siblingStarted.promise;
-            primaryFailed.resolve();
-            throw primary;
-          },
-        },
-        {
-          ...makeTool("sibling"),
-          async execute() {
-            siblingStarted.resolve();
-            await primaryFailed.promise;
-            await nextTurn();
-            siblingSettled = true;
-            return { content: [], details: {} };
-          },
-        },
-      ],
-    },
-  });
   agent.subscribe((event) => {
     if (
       event.type === "message_end" &&
@@ -324,48 +289,33 @@ it("retains returned and rejected failures from separate streamed tool batches",
       throw uncertain;
     }
   });
-  const outcome = await agent.prompt("Run both streamed tools").catch((error: unknown) => error);
+  const outcome = await failedPrompt(agent, streamFn);
   expectFailureGraph(outcome, primary, uncertain);
   expect(siblingSettled && publicationFailed).toBe(true);
-  expect(streamFn).toHaveBeenCalledOnce();
-  expect(agent.state.isStreaming).toBe(false);
 });
 
 it("releases an admitted sequential async batch when its predecessor fails locally", async () => {
   const uncertain = new SqliteWorkerError("Synthetic predecessor failure", "outcome-unknown");
   const waitingAdmitted = Promise.withResolvers<void>();
-  const executeWaiting = vi.fn(async () => ({ content: [], details: {} }));
+  const executeWaiting = vi.fn(emptyResult);
   const releaseWaiting = vi.fn();
   const beforeCalls: string[] = [];
-  const calls = [makeCall("first"), makeCall("waiting")].map((call) =>
-    Object.assign(call, { async: true as const }),
+  const { agent, streamFn } = scenario(
+    [
+      tool("first", async () => {
+        await waitingAdmitted.promise;
+        await nextTurn();
+        throw uncertain;
+      }),
+      { ...tool("waiting", executeWaiting), executionMode: "sequential" },
+    ],
+    {
+      beforeToolCall: async ({ toolCall }) => {
+        beforeCalls.push(toolCall.name);
+      },
+    },
+    true,
   );
-  const streamFn = vi.fn(() => {
-    const stream = createAssistantMessageEventStream();
-    startToolCalls(stream, calls);
-    finishMessageStream(stream, makeAssistantMessage(calls));
-    return stream;
-  });
-  const agent = new Agent({
-    toolExecution: "parallel",
-    streamFn,
-    beforeToolCall: async ({ toolCall }) => {
-      beforeCalls.push(toolCall.name);
-    },
-    initialState: {
-      tools: [
-        {
-          ...makeTool("first"),
-          async execute() {
-            await waitingAdmitted.promise;
-            await nextTurn();
-            throw uncertain;
-          },
-        },
-        { ...makeTool("waiting"), executionMode: "sequential", execute: executeWaiting },
-      ],
-    },
-  });
   setInternalBeforeToolBatch(agent, async ({ calls: admittedCalls }) => {
     if (admittedCalls.some(({ toolCall }) => toolCall.name === "waiting")) {
       waitingAdmitted.resolve();
@@ -373,13 +323,11 @@ it("releases an admitted sequential async batch when its predecessor fails local
     }
     return undefined;
   });
-  const outcome = await agent.prompt("Run both streamed tools").catch((error: unknown) => error);
+  const outcome = await failedPrompt(agent, streamFn);
   expectFailureGraph(outcome, uncertain);
   expect(releaseWaiting).toHaveBeenCalledExactlyOnceWith(["waiting"]);
   expect(beforeCalls).toEqual(["first"]);
   expect(executeWaiting).not.toHaveBeenCalled();
-  expect(streamFn).toHaveBeenCalledOnce();
-  expect(agent.state.isStreaming).toBe(false);
 });
 
 it.each(["reject", "complete"] as const)(
@@ -404,30 +352,20 @@ it.each(["reject", "complete"] as const)(
       },
       dispose() {},
     }));
-    const streamFn = vi.fn(createTurnSequenceStream([[makeCall("first"), makeCall("sibling")]]));
-    const agent = new Agent({
-      toolExecution: "parallel",
-      streamFn,
-      initialState: {
-        tools: [
-          {
-            ...makeTool("first"),
-            async execute() {
-              await guardEntered.promise;
-              throw primary;
-            },
-          },
-          sibling,
-        ],
-      },
-    });
+    const { agent, streamFn } = scenario([
+      tool("first", async () => {
+        await guardEntered.promise;
+        throw primary;
+      }),
+      sibling,
+    ]);
     const siblingEnds: unknown[] = [];
     agent.subscribe((event) => {
       if (event.type === "tool_execution_end" && event.toolCallId === "sibling") {
         siblingEnds.push(event.result);
       }
     });
-    const outcome = await agent.prompt("Run both guards").catch((error: unknown) => error);
+    const outcome = await failedPrompt(agent, streamFn);
     if (settlement === "reject") {
       expectFailureGraph(outcome, primary, uncertain);
     } else {
@@ -444,25 +382,13 @@ it.each(["reject", "complete"] as const)(
       );
     }
     expect(guardSettled).toBe(true);
-    expect(streamFn).toHaveBeenCalledOnce();
-    expect(agent.state.isStreaming).toBe(false);
   },
 );
 
 it("keeps pre-start publication failure primary when admission release also fails", async () => {
   const uncertain = new SqliteWorkerError("Synthetic publication failure", "outcome-unknown");
   const cleanup = new Error("Synthetic admission release failure");
-  const tool = attachInternalToolExecutionPreparer(makeTool("prestart"), async () => ({
-    kind: "ready",
-    args: {},
-    execute: async () => ({ content: [], details: {} }),
-    dispose() {},
-  }));
-  const agent = new Agent({
-    toolExecution: "parallel",
-    streamFn: createTurnSequenceStream([[makeCall("prestart")]]),
-    initialState: { tools: [tool] },
-  });
+  const { agent } = scenario([preparedTool("prestart")]);
   setInternalBeforeToolBatch(agent, async () =>
     attachInternalToolBatchLifecycle(
       {},
@@ -478,12 +404,9 @@ it("keeps pre-start publication failure primary when admission release also fail
       throw uncertain;
     }
   });
-  const outcome = await agent
-    .prompt("Publish the prepared result")
-    .catch((error: unknown) => error);
+  const outcome = await failedPrompt(agent);
   expectFailureGraph(outcome, uncertain, cleanup);
   expect(outcome).toMatchObject({ cause: uncertain });
-  expect(agent.state.isStreaming).toBe(false);
 });
 
 it.each(["execution", "admission", "ordinary"] as const)(
@@ -501,7 +424,7 @@ it.each(["execution", "admission", "ordinary"] as const)(
     const cleanup = new Error("Synthetic preparation disposal failure");
     let lateSettled = false;
     let updateCount = 0;
-    const tool = attachInternalToolExecutionPreparer(
+    const progressTool = attachInternalToolExecutionPreparer(
       makeTool("progress"),
       async ({ onUpdate }) => ({
         kind: "ready",
@@ -517,10 +440,7 @@ it.each(["execution", "admission", "ordinary"] as const)(
         },
       }),
     );
-    const agent = new Agent({
-      streamFn: createTurnSequenceStream([[makeCall("progress")]]),
-      initialState: { tools: [tool] },
-    });
+    const { agent } = scenario([progressTool]);
     if (phase === "admission") {
       setInternalBeforeToolBatch(agent, async () =>
         attachInternalToolBatchLifecycle(
@@ -544,11 +464,8 @@ it.each(["execution", "admission", "ordinary"] as const)(
       lateSettled = true;
       throw latePublication;
     });
-    const outcome = await agent
-      .prompt("Run the progress-producing tool")
-      .catch((error: unknown) => error);
+    const outcome = await failedPrompt(agent);
     expectFailureGraph(outcome, primary, publication, latePublication, cleanup);
     expect(lateSettled).toBe(true);
-    expect(agent.state.isStreaming).toBe(false);
   },
 );

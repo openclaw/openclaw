@@ -13,10 +13,11 @@ import type {
 } from "./control-ui-contract.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "./control-ui-contract.js";
 import { enqueuePrDelivery, invalidatePrReader } from "./control-ui-session-pr-delivery.js";
+import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import {
   createControlUiSessionPrPreparedRead,
   addControlUiSessionPrMembership,
-  type PreparedSessionPrState,
+  type WatchedKeyState,
   loadSessionPullRequests,
   pushedSnapshot,
   retainControlUiSessionPrBranchSnapshot,
@@ -36,13 +37,6 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 const CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS = 60_000;
 const CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS = 10_000;
 const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
-
-type WatchedKeyState = PreparedSessionPrState & {
-  sessionKeysByConnId: Map<string, Set<string>>;
-  refreshedAt?: number;
-  cancelRefresh?: () => void;
-  delivery?: Promise<void>;
-};
 
 type SubscriptionDeps = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -415,6 +409,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
           const sessions = Object.create(null) as ControlUiSessionPullRequestsChanged["sessions"];
           sessions[sessionKey] = snapshot;
           // A socket callback can replace the session or retire another viewer synchronously.
+          recordSessionPrDiagnostic("broadcast", state.target);
           deps.broadcastToConnIds(
             CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
             { sessions },

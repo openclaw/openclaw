@@ -575,7 +575,7 @@ function BoardWidgetCellContent(
               {props.widget!.contentKind === "mcp-app"
                 ? t("board.widget.kindMcp")
                 : props.widget!.contentKind === "plugin"
-                  ? props.widget!.kindLabel || contribution()?.label || t("board.widget.kindPlugin")
+                  ? contribution()?.label || t("board.widget.kindPlugin")
                   : t("board.widget.kindHtml")}
             </span>
             <BoardGrantedCapabilities widget={props.widget!} />

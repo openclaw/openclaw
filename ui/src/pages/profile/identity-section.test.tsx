@@ -17,12 +17,14 @@ function mountIdentity(overrides: Partial<IdentitySectionProps> = {}) {
     avatarUrl: "/api/users/profile-1/avatar?v=2",
     displayName: "Ada Lovelace",
     gitCoauthorEnabled: false,
+    prAttributionEnabled: false,
     busy: null,
     error: null,
     onDisplayNameInput: vi.fn(),
     onSaveDisplayName: vi.fn(),
     onAvatarSelect: vi.fn(),
     onGitCoauthorChange: vi.fn(),
+    onPrAttributionChange: vi.fn(),
     ...overrides,
   };
   unmount?.();

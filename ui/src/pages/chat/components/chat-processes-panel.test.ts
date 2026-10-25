@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsProcessesListResult } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
@@ -424,4 +425,58 @@ it("retires a held Stop before a same-session replacement connection renders", a
   expect(
     replacement.mock.calls.filter(([method]) => method === "sessions.processes.stop"),
   ).toHaveLength(1);
+});
+
+it("keeps history in the panel and recovers legacy Details after access denial", async () => {
+  const result = {
+    ...completeList,
+    processes: [
+      process({ name: "Live watch", processId: "watch", instanceId: "watch-1", canStop: true }),
+      process({ name: "Completed build", status: "completed", canStop: false, endedAt: 2 }),
+    ],
+  };
+  let denied = false;
+  const { connection, mount } = mountProcesses(() => {
+    if (denied) {
+      throw new GatewayProtocolRequestError({
+        code: "FORBIDDEN",
+        message: "Process access removed",
+      });
+    }
+    return result;
+  });
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:preview";
+  const details = document.createElement("openclaw-chat-details-session");
+  details.props = {
+    sessionKey: panel.sessionKey,
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    onOpenProcesses: () => {},
+  };
+  details.presented = true;
+  details.desktop = false;
+  const surfaces = document.createElement("div");
+  surfaces.append(panel, details);
+  mount(surfaces);
+  await settle(details, 0);
+  expect(details.querySelector('[data-process-id="build"]')).toBeNull();
+  expect(details.textContent).toContain("Live watch");
+  panel.querySelector<HTMLButtonElement>(".chat-processes__finished-toggle")!.click();
+  await settle(panel, 0);
+  expect(panel.textContent).toContain("Completed build");
+  denied = true;
+  connection.publishEvent("sessions.processes.changed", {
+    sessionKey: panel.sessionKey,
+    agentId: "main",
+  });
+  await settle(details, 0);
+  expect(details.querySelector('[role="alert"]')?.textContent).toContain("Process access removed");
+  expect(details.querySelector("[data-process-id]")).toBeNull();
+  denied = false;
+  details.querySelector<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
+  await settle(details, 0);
+  expect(details.querySelector('[role="alert"]')).toBeNull();
+  expect(details.textContent).toContain("Live watch");
 });

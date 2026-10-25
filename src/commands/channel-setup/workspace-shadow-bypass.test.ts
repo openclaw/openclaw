@@ -2,6 +2,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../../plugins/plugin-metadata.test-support.js";
 
 const listChannelPluginCatalogEntries = vi.hoisted(() => vi.fn((_opts?: unknown): unknown[] => []));
 const listChatChannels = vi.hoisted(() => vi.fn((): unknown[] => []));
@@ -94,18 +95,14 @@ function createCatalogEntry(
 }
 
 function createManifestChannelPlugin(id: string, channels: string[]): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
     channels,
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
     origin: "workspace",
     rootDir: `/tmp/openclaw-test/${id}`,
     source: `/tmp/openclaw-test/${id}/index.ts`,
     manifestPath: `/tmp/openclaw-test/${id}/openclaw.plugin.json`,
-  };
+  });
 }
 
 function mockWorkspaceOnlyCatalogEntry(entry: ReturnType<typeof createCatalogEntry>) {

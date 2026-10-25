@@ -9,7 +9,6 @@ import { expect, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import {
-  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -23,13 +22,12 @@ import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agen
 import { invalidateOperatorRolePolicy } from "../../gateway/operator-role-policy.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
-import { createGatewayCronAgentJobRunner } from "../../gateway/server-cron-agent-run.js";
+import { createGatewayCronAgentDeps } from "../../gateway/server-cron-agent-run.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
 import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { waitForPluginCacheRetirement } from "../../plugins/plugin-cache.js";
-import { listPluginCommandScheduleHosts } from "../../plugins/plugin-command-schedule-hosts.js";
 import { getPluginInstanceIncarnation } from "../../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
@@ -39,18 +37,17 @@ import {
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginCommandContext, PluginCommandResult } from "../../plugins/types.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
-import { handlePluginCommand } from "./commands-plugin.js";
+import {
+  createPersistedPluginCommandParams,
+  createPluginCommandInvocation,
+} from "./commands-plugin.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
-import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
-import { finalizeInboundContext } from "./inbound-context.js";
 export const pluginId = "command-controller";
 
 type Handler = (ctx: PluginCommandContext) => PluginCommandResult | Promise<PluginCommandResult>;
@@ -201,7 +198,7 @@ export async function withCommandPlugin(
       () => gateway,
       () => registry,
     );
-    const runAgentJob = createGatewayCronAgentJobRunner({
+    const gatewayCronAgentDeps = createGatewayCronAgentDeps({
       deps: {},
       storePath: cronStorePath,
       resolveCronAgent: () => ({ agentId: "main", cfg }),
@@ -223,9 +220,9 @@ export async function withCommandPlugin(
           sessionEventPrompts.push(text);
           return { status: "error", error: "ordinary session prompt" };
         },
-        resolvePluginCommandScheduleHosts: () => listPluginCommandScheduleHosts(registry),
+        resolvePluginCommandScheduleHosts: gatewayCronAgentDeps.resolvePluginCommandScheduleHosts,
         runIsolatedAgentJob: async (request) => {
-          const result = await runAgentJob({
+          const result = await gatewayCronAgentDeps.runIsolatedAgentJob({
             ...request,
             onExecutionStarted: (info) => {
               if (info) {
@@ -269,30 +266,7 @@ export async function withCommandPlugin(
       },
     );
     await state.writeConfig(cfg);
-    const params = (body = "/review-panel") => {
-      const value = buildCommandTestParams(
-        body,
-        cfg,
-        {
-          ...inbound,
-          Body: body,
-          CommandBody: body,
-          RawBody: body,
-          // The fixture ingress was created with plain text; project this as the
-          // authenticated command turn, as real command dispatch does.
-          CommandAuthorized: true,
-          CommandTurn: undefined,
-        },
-        { workspaceDir: state.workspaceDir },
-      );
-      value.sessionKey = sessionKey;
-      value.storePath = storePath;
-      value.sessionEntry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath }),
-        "persisted command requester",
-      );
-      return value;
-    };
+    const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
     const transcriptContents = async (role: "user" | "assistant") => {
       const events = await loadTranscriptEvents({
         agentId: "main",
@@ -437,50 +411,12 @@ export async function withCommandPlugin(
 }
 
 export function commandInvocation(fixture: Fixture, body = "/review-panel") {
-  const params = fixture.params(body);
-  const state = commandDispatchState(params);
-  const recorder = expectDefined(state.params.replyOptions?.userTurnTranscriptRecorder, "recorder");
-  params.opts = {
-    withCommandNativeSubagents: (binding, run) =>
-      runWithCommandNativeSubagents(state, binding, run),
-  };
-  return { params, state, recorder, run: () => handlePluginCommand(params, true) };
-}
-
-function commandDispatchState(
-  params: HandleCommandsParams,
-): Parameters<typeof runWithCommandNativeSubagents>[0] {
-  const entry = expectDefined(params.sessionEntry, "command session");
-  return {
-    cfg: params.cfg,
-    ctx: finalizeInboundContext(params.ctx),
-    sessionAgentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionStoreEntry: { sessionKey: params.sessionKey, entry },
-    params: {
-      replyOptions: {
-        runId: "command-turn",
-        operatorAuthority: getCommandOwnerAuthority(params.ctx)?.operatorAuthority,
-        toolsAllow: ["sessions_spawn", "agents_wait", "automations", "read"],
-        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-          input: { text: params.command.commandBodyNormalized },
-          target: {
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sessionId: entry.sessionId,
-            sessionEntry: entry,
-            storePath: params.storePath,
-            config: params.cfg,
-          },
-        }),
-      },
-    },
-    turnAdoption: undefined,
-    getPreDispatchAbortSignal: () => undefined,
-    getDispatchAbortSignal: () => params.opts?.abortSignal,
-    assertProgressCurrent: () => {},
-    assertCurrentBindingRoute: async () => {},
-  };
+  return createPluginCommandInvocation(fixture.params(body), [
+    "sessions_spawn",
+    "agents_wait",
+    "automations",
+    "read",
+  ]);
 }
 
 export function scheduleRequest(overrides: { requestId?: string; maxRuns?: number } = {}) {

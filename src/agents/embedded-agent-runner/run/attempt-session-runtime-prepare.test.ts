@@ -63,6 +63,19 @@ import {
 
 type PrepareInput = Parameters<typeof prepareEmbeddedAttemptSessionRuntime>[0];
 
+function createCheckpointWriter(entries: SessionEntry[], prefix: string) {
+  return async (customType: string, data: unknown) => {
+    entries.push({
+      type: "custom",
+      customType,
+      data,
+      id: `${prefix}-${entries.length}`,
+      parentId: null,
+      timestamp: "2026-10-01T00:00:00Z",
+    });
+  };
+}
+
 function createFixture() {
   const order: string[] = [];
   const activeMarker = { type: "custom", customType: "openclaw.cache-ttl", data: "active" };
@@ -274,16 +287,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     const fixture = createFixture();
     fixture.transcriptPolicy.inHistorySystemUpdates = true;
     const entries: SessionEntry[] = [];
-    const appendCustomEntryAsync = async (customType: string, data: unknown) => {
-      entries.push({
-        type: "custom",
-        customType,
-        data,
-        id: `profile-marker-${entries.length}`,
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-      });
-    };
+    const appendCustomEntryAsync = createCheckpointWriter(entries, "profile-marker");
     Object.assign(fixture.sessionManager, {
       getBranch: () => entries,
       getSessionTarget: () => undefined,
@@ -466,16 +470,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     const fixture = createFixture();
     fixture.transcriptPolicy.inHistorySystemUpdates = true;
     const entries: SessionEntry[] = [];
-    const appendCustomEntryAsync = async (customType: string, data: unknown) => {
-      entries.push({
-        type: "custom",
-        customType,
-        data,
-        id: `marker-${entries.length}`,
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-      });
-    };
+    const appendCustomEntryAsync = createCheckpointWriter(entries, "marker");
     Object.assign(fixture.sessionManager, {
       getBranch: () => entries,
       getToolResultProjectionEntries: () => entries,
@@ -633,10 +628,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
 
   it("settles pending user-turn persistence before reconciling the session boundary", async () => {
     const fixture = createFixture();
-    let releasePersistence: (() => void) | undefined;
-    const pendingPersistence = new Promise<void>((resolve) => {
-      releasePersistence = resolve;
-    });
+    const { promise: pendingPersistence, resolve: releasePersistence } = createDeferredCore();
     const waitForRuntimePersistence = vi.fn(async () => await pendingPersistence);
     fixture.input.attempt.userTurnTranscriptRecorder = {
       waitForRuntimePersistence,

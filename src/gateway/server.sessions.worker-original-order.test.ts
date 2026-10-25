@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "vitest";
-import * as workerProtocol from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../process/exec.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
@@ -14,6 +13,7 @@ import * as sessions from "./test/server-sessions.test-helpers.js";
 import { bootstrapWorker } from "./worker-environments/bootstrap.js";
 import type { WorkerInstallationArtifact } from "./worker-environments/bundle.js";
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
+import { WORKER_PROTOCOL_FEATURES } from "./worker-environments/placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { deriveEnvironmentIntent } from "./worker-environments/service-contract.js";
 import {
@@ -46,10 +46,7 @@ const BUNDLE_HASH = "a".repeat(64);
 const RECEIPT = {
   bundleHash: BUNDLE_HASH,
   openclawVersion: "2026.8.1",
-  protocolFeatures: [
-    workerProtocol.WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-    workerProtocol.WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  ],
+  protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
 };
 const INSTALLATION: WorkerInstallationArtifact = {
   install: "bundle",

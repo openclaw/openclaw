@@ -4,6 +4,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
 
 type SupervisorSpawnMock = {
   mockImplementationOnce: (implementation: (input: SpawnInput) => Promise<ManagedRun>) => unknown;
@@ -46,16 +47,7 @@ export async function startDeferredNotifyRun(params: {
     run,
     finish: async () => {
       activity.resultSettled = true;
-      exit.resolve({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
+      exit.resolve(createRunExit());
       await run.promise;
     },
   };

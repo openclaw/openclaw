@@ -197,6 +197,11 @@ access cancels the collected turn and blocks further effects.
   prompt and its attachments. The cancellation record prevents replay after
   reconnect. Stop and timeout cancellations keep their recovery messages.
 
+After a successful session reset, an unsent follow-up reply retained for retry
+still belongs to the original session generation. Recovery does not replay it
+into the reset session. Recovery without a reset and replies to new turns
+continue normally.
+
 Gateway-backed clients (including `openclaw tui`) forward mid-run prompts and
 let the Gateway apply the queue mode. Esc/`/stop` uses a session-scoped abort
 so lost local handles cannot leave a still-queued prompt running.

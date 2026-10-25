@@ -74,6 +74,7 @@ function scenario(): ControlUiMockGatewayScenario {
       "desktop.observe",
       "environments.list",
       "environments.status",
+      "sessions.companion.state",
       "sessions.diff",
       "terminal.open",
     ],

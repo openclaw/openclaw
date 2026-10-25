@@ -11,6 +11,7 @@ import {
   blockReplyOpts,
   buildLoginParams,
   dispatchLoginCommand,
+  loginResult as successfulLogin,
   runModelsAuthLoginFlowMock,
   setupLoginCommandTests,
 } from "./commands-login.harness-test-support.js";
@@ -33,16 +34,6 @@ const { getRuntimeConfigWriteApplication } =
 const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
 
 const currentModel = "other/current";
-
-function successfulLogin(profileId = "openai:owner", authRefresh = "refreshed") {
-  const provider = profileId.split(":")[0];
-  return {
-    providerId: provider,
-    methodId: provider === "openrouter" ? "oauth" : "device-code",
-    authRefresh,
-    profiles: [{ profileId, provider, mode: provider === "openrouter" ? "api_key" : "oauth" }],
-  };
-}
 
 async function readConfig(path: string): Promise<OpenClawConfig> {
   return JSON.parse(await fs.readFile(path, "utf8"));

@@ -12,7 +12,6 @@ beforeEach(() => {
   vi.spyOn(queuedFileWriter, "getQueuedFileWriter").mockImplementation(() => ({
     filePath: "memory",
     write: (line) => capturedLines.push(line),
-    flush: async () => undefined,
   }));
   vi.stubEnv("OPENCLAW_ANTHROPIC_PAYLOAD_LOG", "1");
   vi.stubEnv("OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE", undefined);

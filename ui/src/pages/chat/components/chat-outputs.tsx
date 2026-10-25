@@ -337,6 +337,7 @@ export function ChatOutputsMobile(props: ChatOutputsProps) {
               }
             >
               <PanelEmptyState
+                presentation="mobile"
                 icon={<Icon name="fileText" />}
                 heading={t("outputs.emptyTitle")}
                 description={t("outputs.emptyDescription")}

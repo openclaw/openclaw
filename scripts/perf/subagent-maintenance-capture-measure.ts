@@ -128,7 +128,7 @@ const [
   fixture,
   database,
   agentRuns,
-  { loadConfig },
+  { captureRuntimeConfigAsyncReader },
   { resolvePhysicalSessionStorePath },
   { buildActiveSubagentRuntimeContext },
   { buildControlledSubagentRunsReadContext },
@@ -145,7 +145,7 @@ const [
   import("../../src/agents/subagents/registry/subagent-control-scope.js"),
 ]);
 await import("../../src/agents/subagents/registry/subagent-registry-maintenance.js");
-const cfg = loadConfig();
+const cfg = await captureRuntimeConfigAsyncReader()();
 
 const runId = (index: number) => `capture-run-${index}`;
 const childKey = (index: number) => `agent:main:subagent:capture-${index}`;

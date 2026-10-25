@@ -484,10 +484,17 @@ export function captureModelsJsonContents(agentDir: string): string | null {
 /** Record discovery scope before config projection or auth-owner publication can replace it. */
 export function preparedModelInventoryKey(input: PreparedModelRuntimeInput): string {
   const { models, auth, env } = input.config;
-  const plugins = normalizePluginsConfig(input.config.plugins);
-  for (const entry of Object.values(plugins.entries)) {
-    entry.config ??= {};
-  }
+  const normalized = normalizePluginsConfig(input.config.plugins);
+  // Normalized policy is shared and frozen; key absent plugin config as empty without mutating it.
+  const plugins = {
+    ...normalized,
+    entries: Object.fromEntries(
+      Object.entries(normalized.entries).map(([id, entry]) => [
+        id,
+        entry.config === undefined || entry.config === null ? { ...entry, config: {} } : entry,
+      ]),
+    ),
+  };
   return fingerprintPreparedRuntimeFacts({
     ...input,
     config: { models, auth, env, plugins },

@@ -1,6 +1,7 @@
 import type {
   AssistantMessage,
   Model,
+  ModelRequestHeaders,
   ProviderResponse,
   StreamOptions,
   Usage,
@@ -107,36 +108,6 @@ export class IncompleteToolCallError extends Error {
 
 const MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE = "malformed_tool_call_arguments";
 
-function createMalformedToolCallArgumentsError(
-  value: unknown,
-  errorMessage: string,
-  repairAttempted: boolean,
-): Error {
-  const text = typeof value === "string" ? value : undefined;
-  /**
-   * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
-   * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
-   * `projectProviderError` surfaces them on the terminal assistant message.
-   */
-  const diagnostics: {
-    code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
-    argumentChars: number;
-    argumentHash: string;
-    repairAttempted: boolean;
-  } = {
-    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
-    argumentChars: text?.length ?? 0,
-    argumentHash: text === undefined ? "" : shortHash(text),
-    repairAttempted,
-  };
-  const error = new Error(errorMessage, { cause: diagnostics });
-  Object.assign(error, {
-    errorCode: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
-    errorBody: JSON.stringify(diagnostics),
-  });
-  return error;
-}
-
 /**
  * Repair a complete-but-invalid terminal argument buffer. Anthropic fine-grained tool
  * streaming skips server-side JSON validation, so a finished tool_use block can carry raw
@@ -173,7 +144,29 @@ export function parseTerminalToolCallArguments(
       return repaired;
     }
   }
-  throw createMalformedToolCallArgumentsError(value, errorMessage, repairStringLiterals);
+  const text = typeof value === "string" ? value : undefined;
+  /**
+   * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
+   * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
+   * `projectProviderError` surfaces them on the terminal assistant message.
+   */
+  const diagnostics: {
+    code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
+    argumentChars: number;
+    argumentHash: string;
+    repairAttempted: boolean;
+  } = {
+    code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    argumentChars: text?.length ?? 0,
+    argumentHash: text === undefined ? "" : shortHash(text),
+    repairAttempted: repairStringLiterals,
+  };
+  const error = new Error(errorMessage, { cause: diagnostics });
+  Object.assign(error, {
+    errorCode: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
+    errorBody: JSON.stringify(diagnostics),
+  });
+  throw error;
 }
 
 /** Validate a complete sibling set before mutating any call into executable state. */
@@ -193,9 +186,9 @@ export function finalizeTerminalToolCallArguments<T extends { arguments: Record<
 }
 
 export function mergeTransportHeaders(
-  ...headerSources: Array<Record<string, string> | undefined>
-): Record<string, string> | undefined {
-  const merged: Record<string, string> = {};
+  ...headerSources: Array<ModelRequestHeaders | undefined>
+): ModelRequestHeaders | undefined {
+  const merged: ModelRequestHeaders = {};
   const namesByLowercase = new Map<string, string>();
   for (const headers of headerSources) {
     for (const [name, value] of Object.entries(headers ?? {})) {

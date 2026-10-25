@@ -2,7 +2,7 @@
 import { hash } from "node:crypto";
 import { isProxy } from "node:util/types";
 import { projectDiagnosticValue, type DiagnosticProjectionPolicy } from "@openclaw/ai/diagnostics";
-import { createDiagnosticRecord } from "@openclaw/ai/internal/shared";
+import { createDiagnosticArray, createDiagnosticRecord } from "@openclaw/ai/internal/shared";
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
@@ -202,9 +202,11 @@ function limitTrajectoryPayloadValue(
   }
   seen.add(value);
   if (Array.isArray(value)) {
-    const limited = value
-      .slice(0, TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS)
-      .map((item) => limitTrajectoryPayloadValue(item, depth + 1, seen));
+    const limited = createDiagnosticArray();
+    const count = Math.min(value.length, TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS);
+    for (let index = 0; index < count; index += 1) {
+      limited.push(limitTrajectoryPayloadValue(value[index], depth + 1, seen));
+    }
     if (value.length > TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS) {
       limited.push(
         truncatedTrajectoryValue("trajectory-array-size-limit", {

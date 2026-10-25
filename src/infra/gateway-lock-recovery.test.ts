@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
+import * as processIdentity from "../shared/pid-alive.js";
+import {
+  GATEWAY_OWNER_HEARTBEAT_STALE_MS,
+  readGatewayLockProcessNamespace,
+} from "./gateway-lock-payload.js";
 import { inspectGatewayLockRecovery, recoverGatewayLock } from "./gateway-lock-recovery.js";
 import { resolveGatewayLockPaths } from "./gateway-lock.js";
 import { defaultPayload } from "./gateway-state-owner-record.js";
@@ -30,9 +34,9 @@ function fixture() {
       identity: "d14120e1-94fd-498b-92b7-e323f75da593",
     },
   };
-  fs.mkdirSync(path.dirname(paths.ownerLockPath), { recursive: true });
   const lockPaths = [paths.ownerLockPath, paths.stateLockPath, paths.configLockPath];
   for (const pathname of lockPaths) {
+    fs.mkdirSync(path.dirname(pathname), { recursive: true });
     fs.writeFileSync(pathname, JSON.stringify(payload));
   }
   return { env, paths, databasePath, payload, lockPaths };
@@ -53,6 +57,34 @@ describe("explicit Gateway lock recovery", () => {
     ).resolves.toMatchObject({ recovered: true, removed: 3 });
     expect(lockPaths.map((pathname) => fs.existsSync(pathname))).toEqual([false, false, false]);
   });
+
+  it.each(["dead", "live", "unknown"] as const)(
+    "handles a %s legacy Windows owner during confirmed recovery",
+    async (status) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const { env, payload, lockPaths } = fixture();
+      vi.spyOn(processIdentity, "isPidAlive").mockReturnValue(status === "live");
+      vi.spyOn(processIdentity, "isPidDefinitelyDead").mockReturnValue(status === "dead");
+      vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(null);
+      for (const pathname of lockPaths) {
+        fs.writeFileSync(
+          pathname,
+          JSON.stringify({ ...payload, pid: 2_147_483_647, processNamespace: undefined }),
+        );
+        const expired = new Date(Date.now() - GATEWAY_OWNER_HEARTBEAT_STALE_MS - 1000);
+        fs.utimesSync(pathname, expired, expired);
+      }
+      const inspection = await inspectGatewayLockRecovery({ env });
+      const recovery = recoverGatewayLock({ confirmation: inspection.confirmation });
+      if (status === "dead") {
+        await expect(recovery).resolves.toMatchObject({ recovered: true, removed: 3 });
+        expect(lockPaths.every((pathname) => !fs.existsSync(pathname))).toBe(true);
+      } else {
+        await expect(recovery).rejects.toThrow("stop it before recovering");
+        expect(lockPaths.every((pathname) => fs.existsSync(pathname))).toBe(true);
+      }
+    },
+  );
 
   it.each(["replacement", "heartbeat", "payload"])(
     "refuses an owner %s after inspection",

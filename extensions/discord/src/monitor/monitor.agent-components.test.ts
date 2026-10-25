@@ -74,11 +74,7 @@ describe("agent components", () => {
       }),
     );
 
-  const createDmButtonInteraction = (interactionId = "interaction-1") => {
-    const interaction = createDmInteraction({ interactionId });
-    if (!(interaction instanceof BaseComponentInteraction)) {
-      throw new Error("expected a Discord button interaction");
-    }
+  function mockInteractionReplies(interaction: BaseComponentInteraction) {
     const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
     const reply = vi.spyOn(interaction, "reply").mockResolvedValue(undefined);
     return {
@@ -86,6 +82,14 @@ describe("agent components", () => {
       defer,
       reply,
     };
+  }
+
+  const createDmButtonInteraction = (interactionId = "interaction-1") => {
+    const interaction = createDmInteraction({ interactionId });
+    if (!(interaction instanceof BaseComponentInteraction)) {
+      throw new Error("expected a Discord button interaction");
+    }
+    return mockInteractionReplies(interaction);
   };
 
   const createDmSelectInteraction = (interactionId = "interaction-1") => {
@@ -99,13 +103,7 @@ describe("agent components", () => {
     if (!(interaction instanceof BaseComponentInteraction)) {
       throw new Error("expected a Discord string select interaction");
     }
-    const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
-    const reply = vi.spyOn(interaction, "reply").mockResolvedValue(undefined);
-    return {
-      interaction,
-      defer,
-      reply,
-    };
+    return mockInteractionReplies(interaction);
   };
 
   const firstReplyContent = (reply: ReturnType<typeof vi.fn>): string => {
@@ -148,13 +146,7 @@ describe("agent components", () => {
     if (!(interaction instanceof BaseComponentInteraction)) {
       throw new Error("expected a Discord button interaction");
     }
-    const defer = vi.spyOn(interaction, "defer").mockResolvedValue(undefined);
-    const reply = vi.spyOn(interaction, "reply").mockResolvedValue(undefined);
-    return {
-      interaction,
-      defer,
-      reply,
-    };
+    return mockInteractionReplies(interaction);
   };
 
   async function expectSuccessfulDmButtonInteraction(params: {

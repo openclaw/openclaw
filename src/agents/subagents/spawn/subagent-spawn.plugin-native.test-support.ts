@@ -36,6 +36,7 @@ import {
 } from "./subagent-spawn.plugin-native-rewrite.test-support.js";
 import { registerNativePluginProfileCases } from "./subagent-spawn.plugin-profiles.test-support.js";
 import {
+  createSpawnTranscriptTarget,
   createSpawnOperatorSource,
   recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
@@ -388,14 +389,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
       let childRunId: string | undefined;
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "The actual finalized input" },
-        target: {
-          agentId: "main",
-          sessionKey: parentSessionKey,
-          sessionId: entry.sessionId,
-          sessionEntry: entry,
-          storePath: bound.storePath,
-          config: bound.cfg,
-        },
+        target: createSpawnTranscriptTarget(bound, entry),
         assertOriginalInputCommit: () => {
           expect(adopted).toBe(true);
         },

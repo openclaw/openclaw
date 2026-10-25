@@ -135,13 +135,30 @@ export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: st
   );
 }
 
-/** Reconcile failed admission and terminal residue before a new input adds recovery custody. */
+/** A killed row may release fences only after the store owner proves there is no live work. */
+export function isKilledMainSessionRecoveryFenceOnly(entry: SessionEntry): boolean {
+  const state = entry.mainRestartRecovery;
+  return Boolean(
+    entry.status === "killed" &&
+    entry.restartRecoveryRuns?.length &&
+    !entry.pendingFinalDelivery &&
+    !entry.restartRecoveryDeliveryRunId &&
+    !entry.restartRecoveryHarnessCompletion &&
+    !state?.reservation &&
+    !state?.foregroundClaims &&
+    !state?.tombstone,
+  );
+}
+
+/** Select reconciliation before new input adds custody; the store owner checks run liveness. */
 export function isMainSessionRecoveryReconciliationCandidate(entry: SessionEntry): boolean {
+  const killedFenceOnly = isKilledMainSessionRecoveryFenceOnly(entry);
   return (
     (entry.status === undefined ||
       entry.status === "failed" ||
+      killedFenceOnly ||
       isMainRestartRecoveryTerminalOnly(entry)) &&
-    entry.abortedLastRun !== true &&
+    (entry.abortedLastRun !== true || killedFenceOnly) &&
     hasMainSessionRecoveryClaim(entry) &&
     !isRetryableUnadoptedChatClaim(entry) &&
     !entry.mainRestartRecovery?.tombstone

@@ -1,6 +1,7 @@
 // Discord tests cover gateway metadata plugin behavior.
 import { createServer, type Server } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback as listenLoopbackServer } from "../../../test-support/hanging-loopback-server.js";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import {
   fetchDiscordGatewayInfoWithTimeout,
@@ -27,21 +28,6 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
   captureHttpExchangeAsync: captureHost.capture,
 }));
-
-async function listenLoopbackServer(server: Server): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
-}
 
 async function closeServer(server: Server): Promise<void> {
   await new Promise<void>((resolve) => {

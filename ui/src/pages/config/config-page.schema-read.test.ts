@@ -6,6 +6,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { ApplicationContext } from "../../app/context.ts";
 import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -60,17 +61,20 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
     }
     return Promise.resolve({});
   });
-  const { gateway } = createApplicationGateway({
-    client: createTestGatewayClient(request),
-    phase: "connected",
-    offlineStable: false,
-    hello: gatewayHelloForMethods(["config.schema", "config.set", "config.apply", "config.patch"]),
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      hello: gatewayHelloForMethods([
+        "config.schema",
+        "config.set",
+        "config.apply",
+        "config.patch",
+      ]),
+      assistantAgentId: "main",
+      sessionKey: "main",
+    }),
+  );
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   // SAFETY: the mount helper fills unrelated page capabilities; these Gateway and Config owners are real.
   const context = { gateway, runtimeConfig } as ApplicationContext;

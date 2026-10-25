@@ -4,6 +4,7 @@ import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { type ConnectOverCDPTransport, chromium } from "playwright-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
 import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
@@ -208,14 +209,8 @@ describe("pw-session Playwright CDP transport", () => {
         });
       });
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test server has no TCP port");
-    }
-    const cdpUrl = `ws://127.0.0.1:${address.port}/start`;
+    const port = await listenOnLoopback(server);
+    const cdpUrl = `ws://127.0.0.1:${port}/start`;
     getChromeWebSocketEndpointSpy.mockResolvedValue({
       url: cdpUrl,
       lookup: pinnedLoopbackLookup(),

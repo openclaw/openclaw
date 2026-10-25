@@ -14,8 +14,12 @@ import {
   createDeliveryAttachmentBatch,
   reloadChatDocumentStorage,
 } from "./chat-delivery-attachments.test-support.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { admitHostQueueItems } from "./chat-outbox-recovery.test-support.ts";
+import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
+import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
@@ -68,6 +72,130 @@ function deliveredAttachmentUrls(message: unknown): unknown[] {
   );
 }
 
+it.each(["visible", "inactive"])(
+  "pins attachment bytes before ACK retires the %s outbox",
+  async (view) => {
+    const { attachments, dataUrls } = createDeliveryAttachmentBatch();
+    const sessionKey = "agent:main:ack-attachments";
+    const started = createDeferred<string>();
+    const acknowledgment = createDeferred<unknown>();
+    const source = makeChatHost({
+      sessionKey,
+      chatMessage: "Keep the accepted attachments",
+      chatAttachments: attachments.map((attachment, index) => ({
+        ...attachment,
+        previewUrl: `blob:ack-preview-${index}`,
+      })),
+      requestHandlers: {
+        "chat.send": (params: unknown) => {
+          started.resolve(String(requireRecord(params, "attachment ACK").idempotencyKey));
+          return acknowledgment.promise;
+        },
+      },
+    });
+    source.chatMessagesBySession = new Map();
+    const stop = chatOutboxOwner(source).subscribe(source);
+    const sending = handleSendChat(source);
+    try {
+      const runId = await started.promise;
+      expect(listStoredChatOutboxes(source)).toHaveLength(1);
+      if (view === "inactive") {
+        cacheChatSessionSnapshot(
+          source.chatMessagesBySession,
+          source,
+          { sessionKey },
+          {
+            messages: [],
+            sessionId: "ack-attachment-session",
+            pagination: { hasMore: false, completeSnapshot: true },
+          },
+        );
+        source.sessionKey = "agent:main:other";
+      }
+      acknowledgment.resolve({ runId, status: "started" });
+      await sending;
+      expect(listStoredChatOutboxes(source)).toEqual([]);
+      const messages =
+        view === "visible"
+          ? source.chatMessages
+          : readChatMessagesFromCache(source.chatMessagesBySession, source, { sessionKey });
+      expect(messages.map(extractText)).toContain("Keep the accepted attachments");
+      expect(deliveredAttachmentUrls(messages[0])).toEqual(dataUrls);
+      reloadChatDocumentStorage(attachments);
+      expect(deliveredAttachmentUrls(messages[0])).toEqual(dataUrls);
+    } finally {
+      acknowledgment.resolve({ status: "started" });
+      await sending;
+      stop();
+    }
+  },
+);
+
+it.each(
+  ["durable", "memory"].flatMap((storageMode) =>
+    [false, true].map((committed) => ({ storageMode, committed })),
+  ),
+)(
+  "reconciles $storageMode duplicate ACK display only with a committed input receipt ($committed)",
+  async ({ storageMode, committed }) => {
+    const sessionKey = "agent:main:replayed";
+    const sessionId = "replayed-session";
+    const runId = "replayed-input";
+    const prompt = "Already submitted input";
+    const reply = {
+      role: "assistant",
+      content: "Latest visible reply",
+      __openclaw: { id: "latest", seq: 605 },
+    };
+    const queued = {
+      id: "replayed-outbox",
+      text: prompt,
+      createdAt: 1,
+      sessionKey,
+      sessionId,
+      sendRunId: runId,
+      sendAttempts: 1,
+      sendState: "waiting-reconnect" as const,
+    };
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      chatMessages: [reply],
+      chatHistoryPagination: { hasMore: true, nextOffset: 80, totalMessages: 605 },
+      chatQueue: storageMode === "durable" ? [queued] : [],
+      requestHandlers: {
+        "chat.send": { runId, status: "ok", ...(committed ? { messageSeq: 489 } : {}) },
+        "chat.history": {
+          sessionId,
+          messages: [reply],
+          hasMore: true,
+          nextOffset: 80,
+          totalMessages: 605,
+          sessionInfo: { key: sessionKey, sessionId, hasActiveRun: false, status: "done" },
+        },
+      },
+    });
+    if (storageMode === "durable") {
+      admitHostQueueItems(host);
+    } else {
+      keepVolatileQueuedMessage(host, sessionKey, queued, undefined, { retryable: true });
+    }
+    const stop = chatOutboxOwner(host).subscribe(host);
+    try {
+      await resumeStoredChatOutboxes(host);
+      await loadChatHistory(host);
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(host.chatMessages.map(extractText).filter((text) => text === prompt)).toHaveLength(
+        committed ? 0 : 1,
+      );
+      expect(host.chatMessages.map(extractText)).toContain("Latest visible reply");
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    } finally {
+      stop();
+    }
+  },
+);
+
 describe("chat attachment terminal retirement", () => {
   it.each([
     "live",
@@ -77,7 +205,7 @@ describe("chat attachment terminal retirement", () => {
     "new-run",
     "consumed-before-read",
     "consumed-after-read",
-  ])("pins terminal attachment turns to durable data across split panes (%s)", async (handoff) => {
+  ])("pins lost-ACK attachment turns to durable data across split panes (%s)", async (handoff) => {
     const consumesDuringHydration = handoff.startsWith("consumed-");
     const { attachments, dataUrls } = createDeliveryAttachmentBatch();
     const sessionKey = "agent:main:visible";
@@ -97,10 +225,9 @@ describe("chat attachment terminal retirement", () => {
           : holdHistory
             ? history.promise
             : idleChatHistory(sessionKey),
-      "chat.send": (params: unknown) => ({
-        runId: requireRecord(params, "terminal attachment send").idempotencyKey,
-        status: "started",
-      }),
+      "chat.send": () => {
+        throw new Error("Gateway disconnected before acknowledgment");
+      },
     });
     const presentedAttachments =
       handoff === "live"
@@ -128,7 +255,10 @@ describe("chat attachment terminal retirement", () => {
         "Blob-backed terminal send",
       );
       expect(item.attachmentPayload).toBeDefined();
-      expect(item.attachments?.map(getChatAttachmentDataUrl)).toEqual([null, null]);
+      expect(item.attachments?.map((attachment) => attachment.dataUrl)).toEqual([
+        undefined,
+        undefined,
+      ]);
       if (handoff !== "live") {
         stopSource();
         reloadChatDocumentStorage(attachments);
@@ -269,7 +399,15 @@ describe("chat attachment terminal retirement", () => {
           expect(result.status).toBe("ready");
         }
         consumedRunId = item.sendRunId;
-        await resumeStoredChatOutboxes(visible);
+        applyChatPendingInputs(
+          visible,
+          { items: [], total: 0 },
+          {
+            receipts: [
+              { runId: item.sendRunId!, state: "consumed", consumedByEventId: "attachment-user" },
+            ],
+          },
+        );
         expect(listStoredChatOutboxes(visible)).toStrictEqual([]);
       }
       hydration.resolve();
@@ -316,7 +454,7 @@ describe("chat attachment terminal retirement", () => {
 
       consumedRunId = item.sendRunId;
       history.resolve(consumedHistory());
-      await resumeStoredChatOutboxes(visible);
+      await loadChatHistory(visible);
 
       expect(listStoredChatOutboxes(visible)).toStrictEqual([]);
       expect(cleanup).toHaveBeenCalledWith([item.attachmentPayload]);

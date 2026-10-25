@@ -12,12 +12,6 @@ const loadMessageRuntime = createLazyRuntimeModule(() => import("../channels/mes
 /** Default operator-visible transcript echo format for preflight audio transcription. */
 export const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
 
-function formatEchoTranscript(transcript: string, format: string): string {
-  // Function replacer keeps `$` sequences in the transcript literal instead of
-  // being parsed as String.prototype.replace substitution patterns.
-  return format.replace("{transcript}", () => transcript);
-}
-
 /** Sends a best-effort transcript echo back to the originating deliverable chat. */
 export async function sendTranscriptEcho(params: {
   ctx: MsgContext;
@@ -48,7 +42,12 @@ export async function sendTranscriptEcho(params: {
     return;
   }
 
-  const text = formatEchoTranscript(transcript, params.format ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT);
+  // Function replacer keeps `$` sequences in the transcript literal instead of
+  // being parsed as String.prototype.replace substitution patterns.
+  const text = (params.format ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT).replace(
+    "{transcript}",
+    () => transcript,
+  );
 
   try {
     const { sendDurableMessageBatchCore } = await loadMessageRuntime();

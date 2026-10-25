@@ -27,6 +27,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { createOpenShellBackendSandboxConfig } from "./src/openshell.test-support.js";
+import { createWorkerFixture } from "./src/worker.test-support.js";
 
 function readBackend() {
   return {
@@ -118,18 +119,7 @@ describe("OpenShell plugin registration lifecycle", () => {
 
   it("routes only the bound agent using the current File Transfer binding", async () => {
     const registry = registerInRegistry({
-      worker: {
-        agentWorkspace: { agentId: "main", remoteRoot: "/agent/canonical" },
-        model: {
-          provider: "openai",
-          id: "worker-model",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          credentialEnv: "OPENAI_API_KEY",
-          contextWindow: 8192,
-          maxTokens: 1024,
-        },
-      },
+      worker: createWorkerFixture({ agentId: "main", remoteRoot: "/agent/canonical" }),
     });
     const hooks = createHookRunner(registry, { catchErrors: false });
     const prompt = (agentId = "main") =>

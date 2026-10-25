@@ -14,6 +14,10 @@ and plugin inventory remain unchanged. If either changes or migrations remain
 unresolved, Doctor scans again without repeating preflight's detection notices
 or warnings.
 
+When an agent schema needs an upgrade, Doctor defers legacy session-entry
+inspection until its stopped-writer schema repair finishes. This applies to
+PostgreSQL as well as SQLite.
+
 Legacy text imports require valid UTF-8. If a source contains malformed bytes,
 Doctor warns and skips that source instead of storing replacement characters.
 Independent migrations continue. The original bytes remain in the source or its
@@ -487,7 +491,15 @@ migration documentation; migrated files or archives may remain in their new
 locations. Undeclared third-party resources remain unknown: ask the plugin
 maintainer to declare them before relying on recovery coverage.
 
-Standalone Doctor keeps its existing best-effort pre-repair capture behavior.
+Standalone Doctor keeps its best-effort pre-repair capture boundary. It reuses
+its newest sealed standalone copy only when the retained payloads and the complete
+current config, database, and declared plugin-resource inventory match exactly.
+Changed or unverifiable sources take a fresh copy; an incomplete comparison never
+counts as verified equality. Healthy schema bookkeeping and plugin repair planning
+leave unchanged state untouched, so consecutive healthy repair runs can reuse one
+copy. `--full-integrity-check` still takes a fresh capture.
+This does not turn repair discovery into a read-only pass: a Doctor invocation can
+still take a copy even when it ultimately reports no repairs.
 Candidate validation uses disposable rehearsal state and defers plugins whose
 declared migration data is outside that rehearsal; it does not create a manual
 recovery copy for those disposable checks.

@@ -4,6 +4,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createQueuedAssistantStream } from "../test-helpers/assistant-event-stream.test-support.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
@@ -23,7 +24,7 @@ const hoistedStreamMocks = vi.hoisted(() => ({
 }));
 export const streamMocks = hoistedStreamMocks;
 
-export const testModel: Model = makeProviderModelFixture({
+export const testModel = makeProviderModelFixture({
   id: "test-model",
   name: "Test Model",
   api: "openai-responses",
@@ -64,16 +65,13 @@ export function createAssistant(
 }
 
 export function createAssistantResultStream(message: AssistantMessage) {
-  const stream = createAssistantMessageEventStream();
-  queueMicrotask(() => {
+  return createQueuedAssistantStream((push) => {
     if (message.stopReason === "error" || message.stopReason === "aborted") {
-      stream.push({ type: "error", reason: message.stopReason, error: message });
+      push({ type: "error", reason: message.stopReason, error: message });
     } else {
-      stream.push({ type: "done", reason: message.stopReason, message });
+      push({ type: "done", reason: message.stopReason, message });
     }
-    stream.end();
   });
-  return stream;
 }
 
 export function holdAssistantResponse(text: string | (() => AssistantMessage)) {

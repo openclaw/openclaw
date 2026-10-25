@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it as baseIt, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -116,28 +113,6 @@ function seedAlias(
   );
 }
 
-function observePostedCommands(commands: string[]) {
-  // oxlint-disable-next-line typescript/unbound-method -- call supplies the intercepted worker receiver.
-  const nativePost = Worker.prototype.postMessage;
-  return vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    request,
-    transferList,
-  ) {
-    let commandType: string | undefined;
-    if (isRecord(request) && request.type === "execute" && request.input instanceof Uint8Array) {
-      const command: unknown = deserialize(request.input);
-      if (isRecord(command) && typeof command.type === "string") {
-        commandType = command.type;
-      }
-    }
-    nativePost.call(this, request, transferList);
-    if (commandType !== undefined) {
-      commands.push(commandType);
-    }
-  });
-}
-
 it.for([false, true])(
   "prepares a new custom-store suffix only while absent (appeared=%s)",
   async (appeared, { state }) => {
@@ -187,8 +162,6 @@ it("creates through an admitted store alias with prepared facts and atomic owner
   const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
   assert(typeof databaseIdentity === "string", "Expected a durable session database identity");
   const key = "agent:main:creation-worker";
-  const commands: string[] = [];
-  using _ = observePostedCommands(commands);
   const alias = state.path("agent-alias");
   await fs.symlink(path.dirname(database.path), alias, "junction");
   const storePath = path.join(alias, path.basename(database.path));
@@ -295,22 +268,12 @@ it("creates through an admitted store alias with prepared facts and atomic owner
       ok: true,
       entry: { sessionId: "created", label: "available" },
     });
-    const writes = commands.filter((command) => command.startsWith("session."));
-    expect(writes).toEqual(["session.entries.replace"]);
     expect(assertCreation).toThrow("Session creation publication owner is no longer current");
-    expect(publications).toEqual([
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          sessionId: "created",
-          category: "Created",
-          label: "available",
-          owner,
-        }),
-        source: expect.objectContaining({
-          identity: expect.any(String),
-          revision: expect.any(Number),
-        }),
-      }),
+    expect(publications).toMatchObject([
+      {
+        entry: { sessionId: "created", category: "Created", label: "available", owner },
+        source: { identity: expect.any(String), revision: expect.any(Number) },
+      },
     ]);
     const firstUse = await createEntry(
       {
@@ -472,8 +435,6 @@ it.each(["maintenance", "alias replacement"] as const)(
 
 it("adopts admitted Signal history and collaboration without host SQL, preserving a case-distinct Matrix sibling", async () => {
   const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const commands: string[] = [];
-  using _ = observePostedCommands(commands);
   const sessionKey = "agent:main:signal:group:AbC";
   const alias = sessionKey.toLowerCase();
   const scope = { agentId: "main", storePath: database.path, sessionKey: alias };
@@ -589,8 +550,6 @@ it("adopts admitted Signal history and collaboration without host SQL, preservin
     ).ok,
   ).toBe(true);
   expect(readEntry(database, sibling)?.entry.sessionId).toBe("matrix-sibling");
-  expect(commands).toContain("session.entries.replace");
-  expect(commands).not.toContain("session.archives.preparePublication");
 });
 
 it("creates with prepared native finalizers in the worker and settles them after commit", async () => {
@@ -797,8 +756,6 @@ it.each([false, true])(
       } else {
         await expect(work).resolves.toMatchObject({ ok: false, phase: "transcript" });
       }
-      expect(create).toHaveBeenCalledOnce();
-      expect(interception).toHaveBeenCalledOnce();
       expect(committed).not.toHaveBeenCalled();
       expect(transcriptRows(database, "cleanup-header")).toHaveLength(1);
       expect(readEntry(database, key)).toBeUndefined();

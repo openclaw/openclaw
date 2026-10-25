@@ -6,6 +6,7 @@ import { clearRuntimeAuthProfileStoreSnapshotCore } from "../../agents/auth-prof
 import * as authStore from "../../agents/auth-profiles/store.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { buildModelAliasIndex } from "../../agents/model-selection-shared.js";
+import { createFixtureRouteModels } from "../../agents/test-helpers/model-fallback-config-fixture.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -96,15 +97,7 @@ describe("applyResetModelOverride", () => {
     const fixture = createResetFixture({ thinkingLevel: "high" });
     fixture.cfg = {
       agents: { defaults: { modelPolicy: policy } },
-      models: {
-        providers: {
-          "fixture-route": {
-            api: "openai-responses",
-            baseUrl: "https://fixture.invalid/v1",
-            models: [],
-          },
-        },
-      },
+      models: createFixtureRouteModels(),
     };
     fixture.sessionCtx.BodyStripped = "fixture-route/reasoner summarize";
     const initial = structuredClone(fixture.sessionEntry);
@@ -135,15 +128,7 @@ describe("applyResetModelOverride", () => {
           models: { "fixture-route/reasoner": { alias: "quick" } },
         },
       },
-      models: {
-        providers: {
-          "fixture-route": {
-            api: "openai-responses",
-            baseUrl: "https://fixture.invalid/v1",
-            models: [],
-          },
-        },
-      },
+      models: createFixtureRouteModels(),
     };
     await applyResetModelOverride({
       ...resetModelParams(fixture),

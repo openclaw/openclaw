@@ -14,6 +14,11 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
+import { RED_H264_VIDEO_BASE64 as KIMI_K3_LIVE_RED_VIDEO_BASE64 } from "../test-support/native-video-fixture.test-support.js";
 import plugin from "./index.js";
 import { buildMoonshotProvider, MOONSHOT_CN_BASE_URL } from "./provider-catalog.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
@@ -28,24 +33,6 @@ const describeModelLive =
 const KIMI_LIVE_SEARCH_TIMEOUT_SECONDS = 60;
 const itInternationalVideoLive = isLiveTestEnabled() && MOONSHOT_API_KEY.length > 0 ? it : it.skip;
 const itChinaVideoLive = isLiveTestEnabled() && MOONSHOT_CN_API_KEY.length > 0 ? it : it.skip;
-// Two 64x64 solid-red H.264 frames keep regional native-video proof deterministic.
-const KIMI_K3_LIVE_RED_VIDEO_BASE64 = [
-  "AAAAJGZ0eXBpc29tAAACAGlzb21pc282aXNvMmF2YzFtcDQxAAAC5m1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAAA+gAAAAA",
-  "AAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-  "AAAAAAAAAAIAAAHodHJhawAAAFx0a2hkAAAAAwAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAA",
-  "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAABAAAAAQAAAAAABhG1kaWEAAAAgbWRoZAAAAAAAAAAAAAAAAAAAQAAAAAAA",
-  "VcQAAAAAAC1oZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAVmlkZW9IYW5kbGVyAAAAAS9taW5mAAAAFHZtaGQAAAABAAAA",
-  "AAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAADvc3RibAAAAKNzdHNkAAAAAAAAAAEAAACTYXZj",
-  "MQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAABAAEAASAAAAEgAAAAAAAAAARVMYXZjNjIuMjguMTAyIGxpYngyNjQAAAAAAAAA",
-  "AAAAABj//wAAAC1hdmNDAULACv/hABZnQsAK2hCbARAAAAMAEAAAAwAo8SJqAQAEaM4PyAAAABBwYXNwAAAAAQAAAAEAAAAQ",
-  "c3R0cwAAAAAAAAAAAAAAEHN0c2MAAAAAAAAAAAAAABRzdHN6AAAAAAAAAAAAAAAAAAAAEHN0Y28AAAAAAAAAAAAAAChtdmV4",
-  "AAAAIHRyZXgAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGly",
-  "YXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYyLjEyLjEwMgAAAHhtb29mAAAAEG1m",
-  "aGQAAAAAAAAAAQAAAGB0cmFmAAAAJHRmaGQAAAA5AAAAAQAAAAAAAAMKAABAAAAAACMBAQAAAAAAFHRmZHQBAAAAAAAAAAAA",
-  "AAAAAAAgdHJ1bgAAAgUAAAACAAAAgAIAAAAAAAAjAAAACgAAADVtZGF0AAAAH2WIhDoRigACGPHAAED2OAAIeUnJyddddddd",
-  "dddddeAAAAAGQZogF6CMAAAAQ21mcmEAAAArdGZyYQEAAAAAAAABAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAMKAQEBAAAAEG1m",
-  "cm8AAAAAAAAAQw==",
-].join("");
 
 function isTransientKimiSearchError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -331,11 +318,7 @@ describeModelLive("moonshot K2.6 replay live", () => {
     const tool = createNoopTool();
     const replayContext: Context = {
       messages: [
-        {
-          role: "user",
-          content: "Call the noop tool.",
-          timestamp: Date.now(),
-        },
+        makeUserMessage("Call the noop tool.", Date.now()),
         {
           role: "assistant",
           api: "openai-responses",
@@ -345,19 +328,8 @@ describeModelLive("moonshot K2.6 replay live", () => {
           content: [{ type: "toolCall", id: "call_cross_model", name: "noop", arguments: {} }],
           timestamp: Date.now(),
         } as AssistantMessage,
-        {
-          role: "toolResult",
-          toolCallId: "call_cross_model",
-          toolName: "noop",
-          content: [{ type: "text", text: "ok" }],
-          isError: false,
-          timestamp: Date.now(),
-        },
-        {
-          role: "user",
-          content: "The tool returned ok. Reply with exactly: ok",
-          timestamp: Date.now(),
-        },
+        makeTextToolResult("call_cross_model", "noop", "ok", false, Date.now()),
+        makeUserMessage("The tool returned ok. Reply with exactly: ok", Date.now()),
       ],
       tools: [tool],
     };
@@ -413,11 +385,10 @@ describeModelLive("moonshot K2.7 Code live", () => {
     }
 
     const tool = createNoopTool();
-    const firstUser = {
-      role: "user" as const,
-      content: "Call the noop tool with {}. Do not answer directly.",
-      timestamp: Date.now(),
-    };
+    const firstUser = makeUserMessage(
+      "Call the noop tool with {}. Do not answer directly.",
+      Date.now(),
+    );
 
     const runScenario = async (model: Model<"openai-completions">) => {
       let firstPayload: Record<string, unknown> | undefined;
@@ -455,19 +426,8 @@ describeModelLive("moonshot K2.7 Code live", () => {
         messages: [
           firstUser,
           first,
-          {
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now(),
-          },
-          {
-            role: "user",
-            content: "Reply with exactly: ok",
-            timestamp: Date.now(),
-          },
+          makeTextToolResult(toolCall.id, toolCall.name, "ok", false, Date.now()),
+          makeUserMessage("Reply with exactly: ok", Date.now()),
         ],
         tools: [tool],
       };
@@ -533,11 +493,7 @@ describeModelLive("moonshot K3 live", () => {
           model,
           {
             messages: [
-              {
-                role: "user",
-                content: "Call the noop tool with {}. Do not answer directly.",
-                timestamp: Date.now(),
-              },
+              makeUserMessage("Call the noop tool with {}. Do not answer directly.", Date.now()),
             ],
             tools: [createNoopTool()],
           },

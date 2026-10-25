@@ -3,9 +3,11 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { workspaceQuiescenceArgv } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
+import { workspaceQuiescenceArguments } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
@@ -19,6 +21,22 @@ import {
 } from "./node-worker-process-identity.js";
 
 const DEFAULT_CONTROL_TIMEOUT_MS = 120_000;
+
+function workspaceQuiescenceWorkerArgv(
+  root: string,
+  operation: NodeWorkerWorkspaceQuiescenceInput,
+): string[] {
+  const entrypoint =
+    operation.action === "acquire"
+      ? runtimeProcessEntrypoints.workspaceQuiescenceAcquire
+      : operation.action === "renew"
+        ? runtimeProcessEntrypoints.workspaceQuiescenceRenew
+        : runtimeProcessEntrypoints.workspaceQuiescenceRelease;
+  return [
+    ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(entrypoint)),
+    ...workspaceQuiescenceArguments(root, operation, "shared-host", "owned"),
+  ];
+}
 
 type LeaseContext = {
   input: NodeWorkerWorkspaceExecInput;
@@ -218,15 +236,11 @@ export class NodeWorkerWorkspaceQuiescence {
       // An idle helper must not hold a Windows directory lock on its released workspace.
       child =
         idle?.child ??
-        spawn(
-          process.execPath,
-          workspaceQuiescenceArgv(context.workspaceDir, operation, "shared-host", "owned").slice(1),
-          {
-            cwd: path.dirname(process.execPath),
-            env: context.env,
-            stdio: ["ignore", "pipe", "pipe", "ipc"],
-          },
-        );
+        spawn(process.execPath, workspaceQuiescenceWorkerArgv(context.workspaceDir, operation), {
+          cwd: path.dirname(process.execPath),
+          env: context.env,
+          stdio: ["ignore", "pipe", "pipe", "ipc"],
+        });
     } catch (error) {
       releaseWorkspace();
       throw error;
@@ -390,12 +404,7 @@ export class NodeWorkerWorkspaceQuiescence {
         mode: "child",
         runId,
         scopeKey,
-        argv: [
-          process.execPath,
-          ...workspaceQuiescenceArgv(context.workspaceDir, operation, "shared-host", "owned").slice(
-            1,
-          ),
-        ],
+        argv: [process.execPath, ...workspaceQuiescenceWorkerArgv(context.workspaceDir, operation)],
         cwd: context.workspaceDir,
         env: context.env,
         exactEnv: true,

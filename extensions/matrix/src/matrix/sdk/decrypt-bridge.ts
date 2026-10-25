@@ -6,17 +6,17 @@ import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { LogService, noop } from "./logger.js";
 
 type MatrixDecryptIfNeededClient = {
-  decryptEventIfNeeded?: (
+  decryptEventIfNeeded: (
     event: MatrixEvent,
     opts?: {
       isRetry?: boolean;
     },
   ) => Promise<void>;
-  getCrypto?: () => unknown;
+  getCrypto: () => unknown;
 };
 
 type MatrixDecryptRetryEvent = MatrixEvent & {
-  attemptDecryption?: (
+  attemptDecryption: (
     crypto: unknown,
     opts?: {
       isRetry?: boolean;
@@ -351,25 +351,16 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     state.inFlight = true;
     state.timer = null;
     const retryEvent = state.event as MatrixDecryptRetryEvent;
-    const retryCrypto = this.deps.client.getCrypto?.();
-    const canAttemptDecryption =
-      retryCrypto !== undefined &&
-      retryCrypto !== null &&
-      typeof retryEvent.attemptDecryption === "function";
-    const canDecrypt =
-      canAttemptDecryption || typeof this.deps.client.decryptEventIfNeeded === "function";
-    if (!canDecrypt) {
-      this.clearDecryptRetry(retryKey);
-      return;
-    }
+    const retryCrypto = this.deps.client.getCrypto();
+    const canAttemptDecryption = retryCrypto !== undefined && retryCrypto !== null;
 
     try {
       if (canAttemptDecryption) {
-        await retryEvent.attemptDecryption?.(retryCrypto, {
+        await retryEvent.attemptDecryption(retryCrypto, {
           isRetry: true,
         });
       } else {
-        await this.deps.client.decryptEventIfNeeded?.(state.event, {
+        await this.deps.client.decryptEventIfNeeded(state.event, {
           isRetry: true,
         });
       }

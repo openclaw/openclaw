@@ -7,6 +7,7 @@ import {
 } from "../../../plugins/config-state.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import {
   collectStalePluginConfigWarnings,
   maybeRepairStalePluginConfig,
@@ -26,18 +27,12 @@ vi.mock("../../../plugins/installed-plugin-index-records.js", async (importOrigi
 }));
 
 function manifest(id: string): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
     rootDir: `/plugins/${id}`,
     source: `/plugins/${id}`,
     manifestPath: `/plugins/${id}/openclaw.plugin.json`,
-  };
+  });
 }
 
 function enabledEntries(...ids: string[]) {

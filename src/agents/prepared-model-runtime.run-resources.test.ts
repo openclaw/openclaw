@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
@@ -370,12 +371,11 @@ it("process close waits for admitted registration disposal and rejects new RUN a
       try {
         await expect.poll(() => original().database.isOpen && !closed).toBe(true);
         await expect(acquire().then(() => undefined)).rejects.toThrow("process lifetime closed");
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           disposalStarted.promise,
-          closing.then(() => {
-            throw new Error("Process close finished before registration disposal");
-          }),
-        ]);
+          closing,
+          "Process close finished before registration disposal",
+        );
         expect(readAnswer(original())).toBe(42);
         expect(closed).toBe(false);
         expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
@@ -472,12 +472,11 @@ it.each(["hold", "reject"] as const)(
         const pending = acquire({ abortSignal: abort.signal });
         void pending.catch(() => undefined);
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             catalogStarted.promise,
-            pending.then(() => {
-              throw new Error("Catalog hook was not entered");
-            }),
-          ]);
+            pending,
+            "Catalog hook was not entered",
+          );
           expect(readAnswer(original())).toBe(42);
           expect(original().instance.retainedWorkCount).toBeGreaterThan(0);
           if (catalog === "hold") {
@@ -526,12 +525,11 @@ it("joins registered plugin disposal after cache retirement during catalog acqui
       let closed = false;
       let closing: Promise<unknown> | undefined;
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           catalogStarted.promise,
-          pending.then(() => {
-            throw new Error("Catalog acquisition bypassed the registered provider");
-          }),
-        ]);
+          pending,
+          "Catalog acquisition bypassed the registered provider",
+        );
         const cache = getPluginCache();
         resetPluginCache();
         expect(getPluginCacheRetirementSignal(cache).aborted).toBe(true);
@@ -548,12 +546,11 @@ it("joins registered plugin disposal after cache retirement during catalog acqui
         expect(closed).toBe(false);
         expectRetained(original());
         finishCatalog.resolve();
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           disposalStarted.promise,
-          closing.then(() => {
-            throw new Error("Retirement bypassed the registered plugin disposer");
-          }),
-        ]);
+          closing,
+          "Retirement bypassed the registered plugin disposer",
+        );
         await nextTurn();
         await metadataRetired.promise;
         expect(closed).toBe(false);

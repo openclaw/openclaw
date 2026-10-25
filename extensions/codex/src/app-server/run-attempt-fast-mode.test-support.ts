@@ -1,5 +1,6 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { expect, it, vi } from "vitest";
+import { createModelFixture } from "./model-fixture.test-support.js";
 import {
   createParams,
   createResumeHarness,
@@ -9,6 +10,16 @@ import {
 } from "./run-attempt-test-harness.js";
 import type { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { createCodexTestOAuthProfile } from "./test-support.js";
+
+function fastModeModel(supported: boolean, id = "catalog-alias") {
+  return {
+    ...createModelFixture(id),
+    model: "gpt-5.4-codex",
+    displayName: "Test model",
+    description: "Test model",
+    serviceTiers: supported ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }] : [],
+  };
+}
 
 type FastModeFixtures = {
   createRunPaths: () => { sessionFile: string; workspaceDir: string };
@@ -209,21 +220,7 @@ export function registerCodexFastModeTests({
         }
         if (method === "model/list") {
           return {
-            data: [
-              {
-                id: "catalog-alias",
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
-                serviceTiers: supported
-                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
-                  : [],
-              },
-            ],
+            data: [fastModeModel(supported)],
             nextCursor: null,
           };
         }
@@ -304,21 +301,7 @@ export function registerCodexFastModeTests({
       const harness = createResumeHarness("thread-existing", async (method) => {
         if (method === "model/list") {
           return {
-            data: [
-              {
-                id: "catalog-alias",
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
-                serviceTiers: catalogSupported
-                  ? [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }]
-                  : [],
-              },
-            ],
+            data: [fastModeModel(catalogSupported)],
           };
         }
         return undefined;
@@ -363,19 +346,7 @@ export function registerCodexFastModeTests({
     const harness = createResumeHarness("thread-existing", async (method) =>
       method === "model/list"
         ? {
-            data: [
-              {
-                id: "gpt-5.4-codex",
-                model: "gpt-5.4-codex",
-                displayName: "Test model",
-                description: "Test model",
-                hidden: false,
-                isDefault: false,
-                supportedReasoningEfforts: [],
-                defaultReasoningEffort: "medium",
-                serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
-              },
-            ],
+            data: [fastModeModel(true, "gpt-5.4-codex")],
             nextCursor: null,
           }
         : undefined,

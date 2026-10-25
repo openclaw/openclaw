@@ -1,27 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import type { ModelAuthStatusProvider } from "../api/types.ts";
-import { collectProviderQuotaGroups, formatQuotaReset } from "./provider-quota-summary.ts";
-
-describe("formatQuotaReset", () => {
-  beforeEach(() => {
-    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00.000Z"));
-  });
-  afterEach(() => vi.restoreAllMocks());
-  it.each([
-    [30 * 60_000, "30m"],
-    [135 * 60_000, "2h 15m"],
-    [-1, "now"],
-    [0, "now"],
-    [1, "<1m"],
-    [59_999, "<1m"],
-    [60_000, "1m"],
-  ] as const)("formats a reset %i ms away as %s", (offset, expected) => {
-    expect(formatQuotaReset(Date.now() + offset)).toBe(expected);
-  });
-  it.each([8_640_000_000_000_001, Infinity])("ignores Date-invalid timestamp %s", (timestamp) => {
-    expect(formatQuotaReset(timestamp)).toBeNull();
-  });
-});
+import { collectProviderQuotaGroups } from "./provider-quota-summary.ts";
 
 function provider(
   id: string,

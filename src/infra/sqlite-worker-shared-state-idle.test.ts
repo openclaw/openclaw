@@ -5,6 +5,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -75,17 +76,9 @@ const openCleanup = (context: OpenClawStateWorkerContext) =>
   );
 
 function pause() {
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
-  releases.push(resume.resolve);
-  return {
-    entered: entered.promise,
-    resume: resume.resolve,
-    wait: async () => {
-      entered.resolve();
-      await resume.promise;
-    },
-  };
+  const { entered, release: resume, wait } = createEnteredGate();
+  releases.push(resume);
+  return { entered, resume, wait };
 }
 
 async function maintenancePair(prefix: string) {

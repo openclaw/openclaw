@@ -491,6 +491,48 @@ describe("sessions_send directed policy at the tool boundary", () => {
     expect(watch).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])(
+    "keeps a durable parent's explicit watch ceiling (bound=%s)",
+    async (bound) => {
+      const config = configFor({ send: ["worker"], visibility: "tree" });
+      setRuntimeConfigSnapshot(config);
+      const invoke = callGateway.getMockImplementation()!;
+      callGateway.mockImplementation(
+        async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+          if (request.method === "sessions.describe") {
+            return {
+              session: {
+                key: nativeChildKey,
+                agentId: "worker",
+                sessionId: "native-child-session",
+                spawnedBy: requesterKey,
+                childOwnerSessionKeys: [requesterKey],
+              },
+            };
+          }
+          return invoke(request);
+        },
+      );
+      const watch = vi
+        .spyOn(sessionStateEvents, "registerSessionStateWatch")
+        .mockResolvedValue(true);
+      const result = await createSessionsSendTool({
+        config,
+        agentSessionKey: requesterKey,
+        callGateway,
+        idempotencyKey: runId,
+        ...(bound ? { expectedTargetSessionId: "native-child-session" } : {}),
+      }).execute("parent-bound-watch", {
+        sessionKey: nativeChildKey,
+        message: "Continue this exact child",
+        timeoutSeconds: 1,
+        watch: true,
+      });
+      expect(result.details).toMatchObject({ status: "ok", reply: replyText, watched: !bound });
+      expect(watch).toHaveBeenCalledTimes(bound ? 0 : 1);
+    },
+  );
+
   it("reports a raw-target watch refusal without misreporting an accepted send", async () => {
     const result = await send(configFor({ send: ["worker"], visibility: "all" }), {
       label: "raw-worker",

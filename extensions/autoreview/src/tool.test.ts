@@ -2,11 +2,16 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { assert, expect, it, vi } from "vitest";
 import { createAutoReviewTool } from "./tool.js";
 
-type Host = Parameters<typeof createAutoReviewTool>[0];
-type Command = Host["runtime"]["system"]["runCommandWithTimeout"];
+// mock-isolation: Exercise tool admission without starting host child processes.
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
+  runCommandWithTimeout: vi.fn(),
+}));
+
+type Command = typeof runCommandWithTimeout;
 type CommandOptions = Exclude<Parameters<Command>[1], number>;
 function json(data: unknown, code = 0, stderr = "") {
   return { code, stdout: JSON.stringify(data), stderr };
@@ -70,28 +75,31 @@ function fixture(
     | undefined;
   let cwd: string | undefined;
   let helperArgv: readonly string[] | undefined;
-  const command = vi.fn<Command>(async (argv, options) => {
-    assert(typeof options !== "number", "expected process options");
-    expect(argv.slice(0, 2)).toEqual([process.execPath, "/host/openclaw/openclaw.mjs"]);
-    expect(argv).not.toContain("--config");
-    expect(argv).not.toContain("--isolated");
-    expect(options.baseEnv).toBeUndefined();
-    expect(options.input).toBe(prompt);
-    expect(options).toMatchObject({ killProcessTree: true, killGraceMs: 5_000 });
-    cwd = options.cwd;
-    expect(await fs.readdir(cwd!)).toEqual([]);
-    return {
-      stdout: "complete",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-      cleanup: "normal",
-      noOutputTimedOut: false,
-      ...overrides.result,
-    };
-  });
+  const command = vi
+    .mocked(runCommandWithTimeout)
+    .mockReset()
+    .mockImplementation(async (argv, options) => {
+      assert(typeof options !== "number", "expected process options");
+      expect(argv.slice(0, 2)).toEqual([process.execPath, "/host/openclaw/openclaw.mjs"]);
+      expect(argv).not.toContain("--config");
+      expect(argv).not.toContain("--isolated");
+      expect(options.baseEnv).toBeUndefined();
+      expect(options.input).toBe(prompt);
+      expect(options).toMatchObject({ killProcessTree: true, killGraceMs: 5_000 });
+      cwd = options.cwd;
+      expect(await fs.readdir(cwd!)).toEqual([]);
+      return {
+        stdout: "complete",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+        cleanup: "normal",
+        noOutputTimedOut: false,
+        ...overrides.result,
+      };
+    });
   const admitted = vi.fn<(selection: { model: string | null; explicit: boolean }) => void>();
   const context: OpenClawPluginToolContext<2> = {
     assertInvocationCurrent() {},
@@ -138,10 +146,8 @@ function fixture(
       },
     },
   };
-  const host: Host = { runtime: { system: { runCommandWithTimeout: command } } };
-  const tool = createAutoReviewTool(host, context)!;
+  const tool = createAutoReviewTool(context)!;
   return {
-    host,
     context,
     command,
     admitted,
@@ -266,13 +272,13 @@ it("preserves helper diagnostics without a report", async () => {
 });
 
 it.each(["installation", "authority"])("requires protected %s", (requirement) => {
-  const { host, context } = fixture();
+  const { context } = fixture();
   if (requirement === "installation") {
     context.sandbox!.installedSkillRoots = {};
   } else {
     context.modelExecution = undefined;
   }
-  expect(createAutoReviewTool(host, context)).toBeNull();
+  expect(createAutoReviewTool(context)).toBeNull();
 });
 
 it.each([null, 900.25])("retains timeout %s across passes", async (timeoutSeconds) => {

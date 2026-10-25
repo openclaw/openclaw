@@ -2,7 +2,11 @@
 import { AsyncResource } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
@@ -56,6 +60,16 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+function createSlackChannelCtx(fields: Partial<MsgContext>) {
+  return buildTestCtx({
+    Provider: "slack",
+    Surface: "slack",
+    OriginatingChannel: "slack",
+    OriginatingTo: "channel:C123",
+    ...fields,
+  });
+}
 
 beforeAll(dispatchHarness.globalBeforeAll0);
 
@@ -403,11 +417,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "slack" });
     const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "channel:C123",
+    const ctx = createSlackChannelCtx({
       ChatType: "group",
       SessionKey: "agent:main:slack:channel:C123",
       MessageSid: "slack-message-1",
@@ -598,13 +608,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => payload(),
@@ -758,11 +762,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
+      ctx: createSlackChannelCtx({
         SessionKey: "agent:main:slack:channel:C123",
         MessageSid: "slack-message-2",
       }),
@@ -791,13 +791,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => ({ text: "Hidden Slack reply" }),
@@ -907,14 +901,8 @@ describe("dispatchReplyFromConfig", () => {
   it("holds a Slack bypass lease until an abort-insensitive resolver settles", async () => {
     const { activeOperation, createCtx, sessionId, sessionKey } =
       await createActiveSlackThread("U3");
-    let releaseResolver: () => void = () => {};
-    const resolverGate = new Promise<void>((resolve) => {
-      releaseResolver = resolve;
-    });
-    let signalResolverEntered: () => void = () => {};
-    const resolverEntered = new Promise<void>((resolve) => {
-      signalResolverEntered = resolve;
-    });
+    const { promise: resolverGate, resolve: releaseResolver } = createDeferred();
+    const { promise: resolverEntered, resolve: signalResolverEntered } = createDeferred();
     let signalResolverAborted: () => void = () => {};
     const resolverAborted = new Promise<void>((resolve) => {
       signalResolverAborted = resolve;
@@ -1265,14 +1253,8 @@ describe("dispatchReplyFromConfig", () => {
       status: "failed",
     };
 
-    let releaseFirstTurn: () => void = () => {};
-    const firstResolverGate = new Promise<void>((release) => {
-      releaseFirstTurn = release;
-    });
-    let signalFirstResolverEntered: () => void = () => {};
-    const firstTurnEntered = new Promise<void>((resolve) => {
-      signalFirstResolverEntered = resolve;
-    });
+    const { promise: firstResolverGate, resolve: releaseFirstTurn } = createDeferred();
+    const { promise: firstTurnEntered, resolve: signalFirstResolverEntered } = createDeferred();
     const firstReplyResolver = vi.fn(async () => {
       signalFirstResolverEntered();
       await firstResolverGate;

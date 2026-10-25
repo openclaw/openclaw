@@ -222,6 +222,9 @@ use the self-scoped `record_result` action to record a meaningful outcome withou
 sending a message. `no_change` suppresses automatic delivery; execution errors
 remain failures. See [Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results).
 
+Scheduled checks can finish silently in a saved internal session too. A completed
+check that returns `NO_REPLY` does not need an extra final-answer model request.
+
 <a id="manual-wake-on-demand" />
 <a id="immediate-session-events" />
 

@@ -838,7 +838,7 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(updateSignal.aborted).toBe(true);
   });
 
-  it("loads update discovery only after the post-ready barrier", async () => {
+  it("starts update checks after the post-ready barrier without eager install discovery", async () => {
     const events: string[] = [];
     const postReadyWork = createDeferred();
     const started = createDeferred();
@@ -880,8 +880,8 @@ describe("startGatewayPostAttachRuntime", () => {
       postReadyWork.resolve();
       await started.promise;
       expect(updateCheck.start).toHaveBeenCalledTimes(1);
-      expect(updateCheck.initialize).toHaveBeenCalledTimes(1);
-      expect(events).toEqual(["sidecars", "returned", "install-identity", "update-check"]);
+      expect(updateCheck.initialize).not.toHaveBeenCalled();
+      expect(events).toEqual(["sidecars", "returned", "update-check"]);
     } finally {
       postReadyWork.resolve();
       await result.stopGatewayUpdateCheck();

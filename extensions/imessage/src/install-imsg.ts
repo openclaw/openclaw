@@ -7,12 +7,6 @@ import { resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { IMESSAGE_INSTALL_COMMAND } from "./setup-core.js";
 
-type IMessageInstallResult = {
-  ok: boolean;
-  cliPath?: string;
-  error?: string;
-};
-
 const IMESSAGE_BREW_FORMULA = "steipete/tap/imsg";
 
 async function resolveBrewManagedIMessageCliPath(
@@ -83,7 +77,11 @@ async function resolveBrewIMessageCliPath(brewExe: string): Promise<string | nul
 export async function installIMessageCli(
   runtime: RuntimeEnv,
   opts?: { upgrade?: boolean; cliPath?: string },
-): Promise<IMessageInstallResult> {
+): Promise<{
+  ok: boolean;
+  cliPath?: string;
+  error?: string;
+}> {
   if (process.platform !== "darwin") {
     return {
       ok: false,
@@ -106,27 +104,21 @@ export async function installIMessageCli(
       runtime.log("Keeping the detected imsg binary because Homebrew does not manage it.");
       return { ok: true };
     }
-    const update = await runPluginCommandWithTimeout({
-      argv: [brewExe, "update"],
-      timeoutMs: 5 * 60_000,
+  }
+  const commands = opts?.upgrade
+    ? [["update"], ["upgrade", "imsg"]]
+    : [["install", "steipete/tap/imsg"]];
+  for (const command of commands) {
+    const result = await runPluginCommandWithTimeout({
+      argv: [brewExe, ...command],
+      timeoutMs: (command[0] === "update" ? 5 : 15) * 60_000,
     });
-    if (update.code !== 0) {
+    if (result.code !== 0) {
       return {
         ok: false,
-        error: `brew update failed (exit ${update.code}): ${truncateUtf16Safe(update.stderr.trim(), 200)}`,
+        error: `brew ${command.join(" ")} failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
       };
     }
-  }
-  const command = opts?.upgrade ? ["upgrade", "imsg"] : ["install", "steipete/tap/imsg"];
-  const result = await runPluginCommandWithTimeout({
-    argv: [brewExe, ...command],
-    timeoutMs: 15 * 60_000,
-  });
-  if (result.code !== 0) {
-    return {
-      ok: false,
-      error: `brew ${command.join(" ")} failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
-    };
   }
 
   const cliPath = await resolveBrewIMessageCliPath(brewExe);

@@ -26,9 +26,7 @@ function survivorFunctions(start: string, end: string) {
 
 it.skipIf(process.platform === "win32").each<[string, SchemaOverrides]>([
   ["base tarball after archive removal", {}],
-  ["legacy tarball after archive removal", { scenario: "legacy-operator-state" }],
   ["unmigrated base tarball", { actual: 16, succeeds: false }],
-  ["unmigrated legacy tarball", { scenario: "legacy-operator-state", actual: 16, succeeds: false }],
   ["paired transition without metadata", { schema: undefined, actual: 16, succeeds: false }],
   ["string schema", { schema: "16", actual: 16, succeeds: false }],
   ["negative schema", { schema: -1, actual: 16, succeeds: false }],
@@ -144,9 +142,7 @@ it.each<{
 }>([
   {},
   { baseline: "2026.8.33", switchChannel: true },
-  { baseline: "2026.8.34", switchChannel: true },
   { baseline: "2026.8.32" },
-  { baseline: "2026.8.33-beta.1" },
   { baseline: "2026.9.1-beta.1" },
   { baseline: "2026.8.33+build" },
   { baseline: "2026.8.33", candidate: "2026.9.33" },

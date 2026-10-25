@@ -23,6 +23,7 @@ import type {
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { createTurn } from "./followup-delivery.test-helpers.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 const { state, runTurn } = await setupExecutionSuite();
 
 function primaryRun() {
@@ -78,69 +79,88 @@ it.each([
   }
 });
 
-it("preserves one core missing-answer notice through queued message-tool-only delivery", async () => {
-  const followupRun = createFollowupRun();
-  followupRun.originatingChannel = "whatsapp";
-  followupRun.originatingTo = "user";
-  followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-  followupRun.run.terminalReplyExpectation = "required";
-  const notice = setReplyPayloadMetadata(
-    {
-      text: "No answer was returned. Ask again if you still need one.",
-      isError: true,
-      isStatusNotice: true,
-    },
-    { assistantTranscriptOwned: true },
-  );
-  state.runEmbeddedAgentMock.mockResolvedValueOnce({
-    payloads: [notice],
-    meta: {
-      error: {
-        kind: "incomplete_turn",
-        message: "No answer was returned. Ask again if you still need one.",
+it.each(["missing-answer", "blocked-tool"])(
+  "preserves one %s notice through queued delivery",
+  async (kind) => {
+    const followupRun = createFollowupRun();
+    followupRun.originatingChannel = "whatsapp";
+    followupRun.originatingTo = "user";
+    if (kind === "missing-answer") {
+      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    }
+    followupRun.run.terminalReplyExpectation = "required";
+    const notice =
+      kind === "missing-answer"
+        ? setReplyPayloadMetadata(
+            {
+              text: "No answer was returned. Ask again if you still need one.",
+              isError: true,
+              isStatusNotice: true,
+            },
+            { assistantTranscriptOwned: true },
+          )
+        : { text: "⚠️ Bash blocked", isError: true };
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [notice],
+      meta: {
+        error: {
+          kind: "incomplete_turn",
+          message: notice.text,
+        },
       },
-    },
-  });
-  const params = createMinimalRunAgentTurnParams({ followupRun });
-  const execute = await getRawExecuteAgentTurnForTest();
-  const execution = await execute(params);
-  assert(execution.outcome.kind === "settled");
-  expect(execution.outcome.status).toBe("failed");
-  expect(execution.outcome.result.payloads).toEqual([]);
-  expect(execution.outcome.terminalFailurePayload).toBe(notice);
+    });
+    const params = createMinimalRunAgentTurnParams({ followupRun });
+    const execute = await getRawExecuteAgentTurnForTest();
+    const execution = await execute(params);
+    assert(execution.outcome.kind === "settled");
+    expect(execution.outcome.status).toBe("failed");
+    expect(execution.outcome.result.payloads).toEqual(kind === "missing-answer" ? [] : [notice]);
+    if (kind === "missing-answer") {
+      expect(execution.outcome.terminalFailurePayload).toBe(notice);
+    }
 
-  const accounting = await accountAgentTurn({
-    activeSessionEntry: undefined,
-    activeSessionStore: undefined,
-    blockReplyPipeline: null,
-    cfg: followupRun.run.config,
-    defaultModel: followupRun.run.model,
-    followupRun,
-
-    pendingToolTasks: params.pendingToolTasks,
-    preflightCompactionApplied: false,
-    resolvedVerboseLevel: "off",
-    execution: execution.outcome,
-    runId: execution.runId,
-    runStartedAt: 0,
-    sessionCtx: params.sessionCtx,
-    sessionKey: undefined,
-    storePath: undefined,
-    shouldInjectGroupIntro: false,
-  });
-  const turn = createTurn({ runId: execution.runId, queued: followupRun });
-  const decision = await resolveFollowupDeliveryDecision({ turn, execution, accounting });
-  assert(decision.kind === "deliver");
-  expect(decision.payloads).toHaveLength(1);
-  expect(decision.payloads[0]).toMatchObject({
-    text: "No answer was returned. Ask again if you still need one.",
-    isError: true,
-    isStatusNotice: true,
-  });
-  expect(
-    getReplyPayloadMetadata(expectDefined(decision.payloads[0], "missing-answer notice")),
-  ).toMatchObject({ assistantTranscriptOwned: true, deliverDespiteSourceReplySuppression: true });
-});
+    const accounting = await accountAgentTurn({
+      activeSessionEntry: undefined,
+      activeSessionStore: undefined,
+      blockReplyPipeline: null,
+      cfg: followupRun.run.config,
+      defaultModel: followupRun.run.model,
+      followupRun,
+      pendingToolTasks: params.pendingToolTasks,
+      preflightCompactionApplied: false,
+      resolvedVerboseLevel: "off",
+      execution: execution.outcome,
+      runId: execution.runId,
+      runStartedAt: 0,
+      sessionCtx: params.sessionCtx,
+      sessionKey: undefined,
+      storePath: undefined,
+      shouldInjectGroupIntro: false,
+    });
+    const turn = createTurn({ runId: execution.runId, queued: followupRun });
+    const decision = await resolveFollowupDeliveryDecision({ turn, execution, accounting });
+    assert(decision.kind === "deliver");
+    expect(decision.payloads).toHaveLength(1);
+    expect(decision.payloads[0]).toMatchObject(notice);
+    if (kind === "missing-answer") {
+      expect(
+        getReplyPayloadMetadata(expectDefined(decision.payloads[0], "missing-answer notice")),
+      ).toMatchObject({
+        assistantTranscriptOwned: true,
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
+    const deliver = vi.fn(async () => {});
+    const dispatcher = createReplyDispatcher({ deliver });
+    dispatcher.sendFinalReply(expectDefined(decision.payloads[0], "terminal notice"));
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: notice.text, isError: true }),
+      { kind: "final" },
+    );
+  },
+);
 
 it("forwards media-only tool results without typing text", async () => {
   const onToolResult = vi.fn();

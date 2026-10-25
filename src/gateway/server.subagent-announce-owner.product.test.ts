@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, expect, it } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readProviderBody, writeToolCall } from "./gateway-provider-fixture.test-support.js";
+import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import {
   createSubagentModelConfig,
   findSubagentRecords,
@@ -32,7 +33,7 @@ async function startModelServer() {
   const reply = (response: ServerResponse, text: string, id: string) =>
     writeOpenAiResponsesText(response, { text, messageId: id, responseId: `${id}_response` });
   async function handleRequest(request: IncomingMessage, response: ServerResponse) {
-    const body = await readProviderBody(request);
+    const body = await readRequestText(request);
     requests.push(body);
     // Hold the peer turn at the provider so requester activity overlaps deterministically.
     if (body.includes(opsPrompt)) {

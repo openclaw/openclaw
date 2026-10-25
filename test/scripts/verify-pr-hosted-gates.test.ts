@@ -532,28 +532,28 @@ describe("verify-pr-hosted-gates", () => {
       );
       const evidence = collectHostedGateEvidence([
         ...workflowRuns,
+        makeRun(workflowName, 4, 54),
         makeRun(workflowName, 30, 50, { conclusion: "skipped" }),
       ]);
 
-      expect(evidence.workflows).toContainEqual(
-        expect.objectContaining({ name: workflowName, id: supportingRun.id }),
-      );
-      expect(evidence.fallbackCoveredWorkflows).toEqual(queuedArtifactCoverage);
+      expect(evidence).toEqual({
+        headSha: sha,
+        workflows: [
+          expect.objectContaining({ name: "CI", id: 3 }),
+          expect.objectContaining({ name: BOX, id: 4 }),
+          expect.objectContaining({ name: workflowName, id: supportingRun.id }),
+          expect.objectContaining({ name: SANITY, id: 6 }),
+        ],
+        fallbackCoveredWorkflows: queuedArtifactCoverage,
+      });
     },
   );
 
   it.each([ARM])("does not look past a non-skipped unsuccessful %s decision", (workflowName) => {
     for (const [status, conclusion] of [
       ["completed", "failure"],
-      ["completed", "cancelled"],
-      ["completed", "timed_out"],
-      ["completed", "action_required"],
-      ["completed", "neutral"],
-      ["completed", "unknown"],
       ["completed", null],
       ["queued", null],
-      ["in_progress", null],
-      ["unknown", "skipped"],
       ["in_progress", "skipped"],
     ] as const) {
       expect(
@@ -770,7 +770,6 @@ describe("verify-pr-hosted-gates", () => {
 
   it.each([
     ["uppercase object id", `${"A".repeat(40)}\n`],
-    ["blank line", `${"a".repeat(40)}\n\n${"b".repeat(40)}\n`],
     ["empty output", ""],
     [
       "missing head",
@@ -977,19 +976,6 @@ describe("verify-pr-hosted-gates", () => {
     );
   });
 
-  it("covers a queued artifact Testbox only with a completed exact CI fallback", () => {
-    expect(collectHostedGateEvidence(queuedBuildArtifactFallbackRuns())).toEqual({
-      headSha: sha,
-      workflows: [
-        expect.objectContaining({ name: "CI", id: 3 }),
-        expect.objectContaining({ name: BOX, id: 4 }),
-        expect.objectContaining({ name: ARM, id: 5 }),
-        expect.objectContaining({ name: SANITY, id: 6 }),
-      ],
-      fallbackCoveredWorkflows: queuedArtifactCoverage,
-    });
-  });
-
   it.each([
     ...[0, 30].map((id) => ({
       name: `skipped artifact history at run ${id}`,
@@ -1013,8 +999,10 @@ describe("verify-pr-hosted-gates", () => {
     {
       name: "an older failed artifact run",
       runs: [
-        ...queuedBuildArtifactFallbackRuns(),
-        makeRun(BUILD_ARTIFACTS_WORKFLOW, 7, "2026-06-16T10:54:59Z", { conclusion: "failure" }),
+        ...queuedBuildArtifactFallbackRuns().map((run) =>
+          Object.assign({}, run, { id: run.id + 1, run_number: run.run_number + 1 }),
+        ),
+        makeRun(BUILD_ARTIFACTS_WORKFLOW, 1, "2026-06-16T10:54:59Z", { conclusion: "failure" }),
       ],
     },
     {

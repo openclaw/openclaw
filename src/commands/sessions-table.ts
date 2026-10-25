@@ -66,18 +66,14 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>) {
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
-function truncateSessionKey(key: string): string {
-  const graphemes = splitGraphemes(key);
-  if (graphemes.length <= 26) {
-    return key;
-  }
-  // Keep both the stable prefix and suffix; the tail often contains direct
-  // recipient or runtime identifiers that distinguish otherwise similar keys.
-  return `${graphemes.slice(0, 16).join("")}...${graphemes.slice(-6).join("")}`;
-}
-
 export function formatSessionKeyCell(key: string, rich: boolean): string {
-  const label = truncateSessionKey(sanitizeTerminalText(key));
+  let label = sanitizeTerminalText(key);
+  const graphemes = splitGraphemes(label);
+  if (graphemes.length > 26) {
+    // Keep both the stable prefix and suffix; the tail often contains direct
+    // recipient or runtime identifiers that distinguish otherwise similar keys.
+    label = `${graphemes.slice(0, 16).join("")}...${graphemes.slice(-6).join("")}`;
+  }
   return rich ? theme.accent(label) : label;
 }
 

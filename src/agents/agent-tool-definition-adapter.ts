@@ -62,14 +62,6 @@ export function getToolDefinitionSource(definition: ToolDefinition): AnyAgentToo
   return toolDefinitionSources.get(definition);
 }
 
-type ClientToolCallRecorder =
-  | ((toolName: string, params: Record<string, unknown>) => void)
-  | {
-      reserve?: (toolCallId: string, toolName: string) => void;
-      complete: (toolCallId: string, toolName: string, params: Record<string, unknown>) => void;
-      discard?: (toolCallId: string, toolName: string) => void;
-    };
-
 function describeToolExecutionError(err: unknown): {
   message: string;
   operatorHint?: string;
@@ -384,7 +376,13 @@ function coerceParamsRecord(
 
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
-  onClientToolCall?: ClientToolCallRecorder,
+  onClientToolCall?:
+    | ((toolName: string, params: Record<string, unknown>) => void)
+    | {
+        reserve?: (toolCallId: string, toolName: string) => void;
+        complete: (toolCallId: string, toolName: string, params: Record<string, unknown>) => void;
+        discard?: (toolCallId: string, toolName: string) => void;
+      },
   hookContext?: HookContext,
 ): ToolDefinition[] {
   const recorder = typeof onClientToolCall === "object" ? onClientToolCall : undefined;

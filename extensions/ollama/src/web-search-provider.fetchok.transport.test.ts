@@ -1,6 +1,7 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 
 const loopback = vi.hoisted(() => ({
   baseUrl: "",
@@ -75,13 +76,9 @@ const { createOllamaWebSearchProvider } = await import("../web-search-provider.j
 function createSearchTool(apiKey?: string) {
   const tool = createOllamaWebSearchProvider().createTool({
     config: apiKey
-      ? {
-          models: {
-            providers: {
-              ollama: { baseUrl: "https://ollama.com", api: "ollama", models: [], apiKey },
-            },
-          },
-        }
+      ? createModelProviderConfig({
+          ollama: { baseUrl: "https://ollama.com", api: "ollama", models: [], apiKey },
+        })
       : {},
   });
   if (!tool) {

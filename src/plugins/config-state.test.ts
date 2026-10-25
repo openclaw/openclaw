@@ -5,6 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -82,6 +83,17 @@ describe("normalizePluginsConfig", () => {
       "unpublished-edit",
     ]);
   });
+
+  it("shares frozen policy only for deeply frozen plugin configs", () => {
+    const frozen = freezeJsonSnapshot({ entries: { "voice-call": { enabled: true } } });
+    const shared = normalizePluginsConfig(frozen);
+    expect(normalizePluginsConfig(frozen)).toBe(shared);
+    expect(Object.isFrozen(shared.entries["voice-call"])).toBe(true);
+    // Mutable sources can change in place, so every read normalizes again.
+    const mutable = { entries: { "voice-call": { enabled: true } } };
+    expect(normalizePluginsConfig(mutable)).not.toBe(normalizePluginsConfig(mutable));
+  });
+
   it("keeps targeted authored plugin state identical across JSON persistence", () => {
     const normalized = normalizePluginTargetConfig(
       { plugins: { entries: { CODEX: { enabled: true, config: { appServer: {} } } } } },

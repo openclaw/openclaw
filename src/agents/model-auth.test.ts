@@ -272,7 +272,7 @@ function expectAuthFields(
   }
 }
 
-function expectSecret(value: string | undefined, expected: string) {
+function expectSecret(value: string | null | undefined, expected: string) {
   expect(looksLikeSecretSentinel(value ?? "")).toBe(true);
   expect(resolveSecretSentinel(value ?? "")).toBe(expected);
 }

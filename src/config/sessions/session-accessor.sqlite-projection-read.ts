@@ -244,22 +244,24 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
 
 const messageRangeReaders = createSqliteQueryCache((db: EngineConnection) => {
   const database = { db };
+  const rangeRows = (
+    parameter: Parameters<Parameters<typeof prepareSqliteQuerySync<MessageRangeParameters>>[1]>[0],
+  ) =>
+    selectMessageRows(
+      database,
+      parameter((params) => params.sessionId),
+      {
+        start: parameter((params) => params.start),
+        endExclusive: parameter((params) => params.endExclusive),
+      },
+    );
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
       MessageRangeParameters,
       { event_seq: number; message_position: number; serialized_bytes: number }
     >(database.db, (parameter) =>
       selectMessageMetadata(
-        selectMessageRows(
-          database,
-          parameter((params) => params.sessionId),
-          {
-            start: parameter((params) => params.start),
-            endExclusive: parameter((params) => params.endExclusive),
-          },
-        )
-          .clearOrderBy()
-          .orderBy("active.message_position", direction),
+        rangeRows(parameter).clearOrderBy().orderBy("active.message_position", direction),
       ),
     );
   return {
@@ -267,16 +269,7 @@ const messageRangeReaders = createSqliteQueryCache((db: EngineConnection) => {
       MessageRangeParameters,
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
-      selectMessagePayload(
-        selectMessageRows(
-          database,
-          parameter((params) => params.sessionId),
-          {
-            start: parameter((params) => params.start),
-            endExclusive: parameter((params) => params.endExclusive),
-          },
-        ),
-      )
+      selectMessagePayload(rangeRows(parameter))
         .clearOrderBy()
         .orderBy("active.message_position", "desc")
         .limit(1),
@@ -284,18 +277,7 @@ const messageRangeReaders = createSqliteQueryCache((db: EngineConnection) => {
     messages: prepareSqliteQueryIterator<
       MessageRangeParameters,
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
-    >(database.db, (parameter) =>
-      selectMessagePayload(
-        selectMessageRows(
-          database,
-          parameter((params) => params.sessionId),
-          {
-            start: parameter((params) => params.start),
-            endExclusive: parameter((params) => params.endExclusive),
-          },
-        ),
-      ),
-    ),
+    >(database.db, (parameter) => selectMessagePayload(rangeRows(parameter))),
     metadata: metadata("asc"),
     metadataDescending: metadata("desc"),
   };

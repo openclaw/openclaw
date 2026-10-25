@@ -81,7 +81,7 @@ function finishModelResponse(response: ServerResponse, content: string): void {
         id: "private-memory-fixture",
         object: "chat.completion.chunk",
         created: 1,
-        model: "test-model",
+        model: "owner-model",
         ...chunk,
       })}\n\n`,
     );
@@ -112,7 +112,8 @@ it.each(["completed", "interrupted"] as const)(
       const stopDiagnostics = onInternalDiagnosticEvent((event) => {
         if (
           event.type === "model.call.started" &&
-          event.model === "test-model" &&
+          event.model === "owner-model" &&
+          event.sessionId !== scope.sessionId &&
           event.contextTokenBudget !== undefined
         ) {
           runtimeBudgets.push(event.contextTokenBudget);
@@ -214,10 +215,7 @@ it.each(["completed", "interrupted"] as const)(
               api: "openai-completions",
               apiKey: "synthetic-fixture-key",
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
-              models: [
-                model("owner-model", "Owner fixture", 128_000),
-                model("test-model", "Fixture", 1_000_000),
-              ],
+              models: [model("owner-model", "Owner fixture", 128_000)],
             },
           },
         },
@@ -285,7 +283,6 @@ it.each(["completed", "interrupted"] as const)(
           prompt: "Checkpoint durable notes. Reply NO_REPLY.",
           systemPrompt: "Write durable notes only.",
           relativePath: "memory/checkpoint.md",
-          model: "test-provider/test-model",
         }));
         admission = await beginSessionEffect({
           scope: scope.storePath,

@@ -31,6 +31,7 @@ import {
   getExpansionStateVersion,
   subscribeExpansionState,
 } from "../chat-thread.ts";
+import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
@@ -185,6 +186,12 @@ export function ChatThread(input: {
   });
   return (
     <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
+      <Show when={input.props.fetchLinkFavicon} keyed>
+        {(fetcher) => {
+          onSettled(() => retainLinkFaviconCache(fetcher));
+          return null;
+        }}
+      </Show>
       <div
         ref={[
           elementRef((element: HTMLDivElement) => {

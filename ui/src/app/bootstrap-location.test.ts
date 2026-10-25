@@ -8,6 +8,7 @@ import { createApplicationGateway } from "../test-helpers/application-context-fi
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import {
+  isResolvedDefaultLanding,
   resolveInitialApplicationLocation,
   subscribeForegroundChatBootstrap,
 } from "./bootstrap-location.ts";
@@ -96,6 +97,27 @@ it("hydrates the roster when a literal route commits before its Gateway connects
     agentSelection.dispose();
     agents.dispose();
   }
+});
+
+describe("isResolvedDefaultLanding", () => {
+  it("reads the browser location only after startup resolves the landing", async () => {
+    const restored = makeLocation("/chat/main/~key/welcome");
+    let current = makeLocation("/chat");
+    let resolve!: (location: typeof restored) => void;
+    const resolved = new Promise<typeof restored>((settle) => {
+      resolve = settle;
+    });
+    const landing = isResolvedDefaultLanding(resolved, { location: () => current }, "");
+    // The guest opens another session while startup is still resolving the landing.
+    current = makeLocation("/chat/main/~key/other");
+    resolve(restored);
+    await expect(landing).resolves.toBe(false);
+
+    current = restored;
+    await expect(
+      isResolvedDefaultLanding(Promise.resolve(restored), { location: () => current }, ""),
+    ).resolves.toBe(true);
+  });
 });
 
 describe("resolveInitialApplicationLocation", () => {

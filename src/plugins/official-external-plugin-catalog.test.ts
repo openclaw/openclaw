@@ -21,6 +21,22 @@ import {
 const sha256 = "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9";
 
 describe("official external plugin catalog", () => {
+  it("routes Abliteration and either credential variable to its official package", () => {
+    const entry = findPackage("@openclaw/abliteration-provider");
+    expect(entry).toBeDefined();
+    expect(findEntry("abliteration")).toBe(entry);
+    expect(resolveInstall(entry!)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/abliteration-provider",
+      npmSpec: "@openclaw/abliteration-provider",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.10.6",
+    });
+    expect(providerOwners({ providerIds: new Set(["abliteration"]) })).toEqual(["abliteration"]);
+    for (const name of ["ABLITERATION_API_KEY", "ABLIT_KEY"]) {
+      expect(providerEnvOwners({ [name]: "synthetic-key" })).toEqual(["abliteration"]);
+    }
+  });
+
   it("keeps Fish Audio's legacy id migration-only across npm and ClawHub routes", () => {
     const entry = findPackage("@openclaw/fish-audio-speech");
     expect(entry).toBeDefined();

@@ -480,6 +480,31 @@ must not be summed. Unfinished spans stop at the startup boundary; later model
 and tool latency does not extend them. Structured `chat.send.detail.*` phase
 events use the same durations when diagnostics are enabled.
 
+`detail.attempt.setup.*` checkpoints separate initialization, workspace preparation,
+and finalization. Within `workspace`, `policy` and `policy_finalize` cover session
+policy admission and revalidation; `baseline_wait` records only the time setup
+blocks on the concurrently captured Git baseline. `mkdir`, `sandbox`, and `roots`
+cover directory creation, sandbox preparation, and permission-root resolution.
+The `sandbox.*` checkpoints further separate session selection, state-owner
+admission, workspace selection, GitHub identity, pruning, workspace/skills layout,
+mounts, registry reads, backend provisioning, browser setup, and finalization.
+`sandbox.layout.*` separates workspace creation, skill imports, remote connections,
+eligibility, and synchronization. These are fixed labels and monotonic elapsed
+times, including failed preparation. Read siblings as consecutive phases and
+parents as inclusive totals; do not add a parent to its children. Prompt-media
+warnings beginning `Native image:` concern image-file access, not container-image
+validation, and occur outside attempt setup.
+
+`detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
+owner's recorded phase durations, including `templatePrepare`, `templateApply`,
+`checkout`, `runtimeQuiesce`, `runtimeResume`, and `unattributed`. Runtime quiescence
+and resume include pausing and unpausing sandbox writers around synchronization.
+The top-level `worktree` interval can describe an
+earlier managed checkout; it is not the sandbox work inside `attempt.setup`.
+Use the matching `detail.worktree.sandbox` total when comparing setup with its
+nested worktree preparation. Recorded worktree summaries appear when their owner
+finishes; a preparation spanning acknowledgement is reported at completion.
+
 ### Embedded attempt preparation
 
 The `model-dispatch` prep summary extends `stream-ready` through history

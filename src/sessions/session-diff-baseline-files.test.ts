@@ -201,26 +201,37 @@ it("keeps the per-file and aggregate byte caps while rejecting hardlinks", async
   await expect(fs.readFile(outside, "utf8")).resolves.toBe("outside bytes\n");
 });
 
-it("ignores pre-session edits to branch-added files in the uncommitted view", async () => {
-  const root = repository();
-  await fs.writeFile(path.join(root, "base.txt"), "base\n");
-  git(root, "add", ".");
-  git(root, "commit", "-qm", "base");
-  git(root, "checkout", "-qb", "feature");
-  await fs.writeFile(path.join(root, "feature.txt"), "added on branch\n");
-  git(root, "add", ".");
-  git(root, "commit", "-qm", "feature");
-  await fs.appendFile(path.join(root, "feature.txt"), "pre-session edit\n");
-  const captured = await collectCheckoutDiffBaseline({ cwd: root });
-  const baseline = captured && { ...captured, sessionId: "s1" };
-  const sessionPaths = async () =>
-    (
-      await collectCheckoutDiff({ cwd: root, scope: "uncommitted", baseline, sessionId: "s1" })
-    ).files.map((file) => file.path);
+it.each([undefined, "HEAD"])(
+  "ignores pre-session tracked and untracked edits with review base %s",
+  async (baseCommit) => {
+    const root = repository();
+    await fs.writeFile(path.join(root, "base.txt"), "base\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "base");
+    git(root, "checkout", "-qb", "feature");
+    await fs.writeFile(path.join(root, "feature.txt"), "added on branch\n");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "feature");
+    await fs.appendFile(path.join(root, "feature.txt"), "pre-session edit\n");
+    await fs.writeFile(path.join(root, "draft.txt"), "pre-session draft\n");
+    const captured = await collectCheckoutDiffBaseline({ cwd: root });
+    const baseline = captured && { ...captured, sessionId: "s1" };
+    const sessionPaths = async () =>
+      (
+        await collectCheckoutDiff({
+          cwd: root,
+          scope: "uncommitted",
+          baseline,
+          sessionId: "s1",
+          baseCommit,
+        })
+      ).files.map((file) => file.path);
 
-  await expect(sessionPaths()).resolves.toEqual([]);
+    await expect(sessionPaths()).resolves.toEqual([]);
 
-  await fs.appendFile(path.join(root, "feature.txt"), "session edit\n");
+    await fs.appendFile(path.join(root, "feature.txt"), "session edit\n");
+    await fs.appendFile(path.join(root, "draft.txt"), "session draft\n");
 
-  await expect(sessionPaths()).resolves.toEqual(["feature.txt"]);
-});
+    await expect(sessionPaths()).resolves.toEqual(["draft.txt", "feature.txt"]);
+  },
+);

@@ -304,7 +304,7 @@ it.each([true, false])("refreshes only owned skill fields (first turn: %s)", asy
         skillsSnapshot,
         sessionEntry: {
           sessionId: entry.sessionId,
-          updatedAt: expect.any(Number),
+          updatedAt: 2,
           systemSent: true,
           skillsSnapshot,
           modelOverride: "sonnet-4.6",

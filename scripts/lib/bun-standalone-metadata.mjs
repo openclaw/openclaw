@@ -238,6 +238,7 @@ export function createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, pa
       return { filename, rootDir: canonicalRoot };
     } catch { return; }
   };
+  globalThis.__openclawStandaloneIsEmbeddedModule = (filename) => get(imageFiles, filename) !== undefined;
   globalThis.__openclawStandaloneImageStat = stat;
   globalThis.__openclawStandaloneImageLstat = (filename) => stat(filename, true);
   globalThis.__openclawStandaloneImageExists = (filename) => {

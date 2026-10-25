@@ -14,7 +14,6 @@ import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js
 import { finalizeGroupThreadToolReply } from "../auto-reply/group-thread-context.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { projectModelContextMessages } from "../shared/model-context-message.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import {
   projectAgentEndEvent,
@@ -28,7 +27,11 @@ import {
   type InputGateDecision,
   isHookDecision,
 } from "./hook-decision-types.js";
-import { cloneHookIsolationValue, HookIsolationError } from "./hook-isolation.js";
+import {
+  cloneHookIsolationValue,
+  clonePromptHookEvent,
+  HookIsolationError,
+} from "./hook-isolation.js";
 import { createPluginSystemContextLimiter, mergeAgentTurnPrepare } from "./hook-prompt-context.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
@@ -605,10 +608,7 @@ export function createHookRunner(
       (hookName === "before_prompt_build" || hookName === "agent_turn_prepare") &&
       "messages" in event &&
       Array.isArray(event.messages)
-        ? cloneHookIsolationValue(hookName, {
-            ...event,
-            messages: projectModelContextMessages(event.messages),
-          })
+        ? clonePromptHookEvent(hookName, { ...event, messages: event.messages })
         : event;
 
     logger?.debug?.(`[hooks] running ${hookName} (${selectedHooks.length} handlers, sequential)`);

@@ -37,15 +37,12 @@ type FeishuCredentialResolutionMode = "inspect" | "strict";
 type FeishuResolvedSecretRef = NonNullable<ReturnType<typeof coerceSecretRef>>;
 
 export class FeishuSecretRefUnavailableError extends Error {
-  path: string;
-
   constructor(path: string, ref: FeishuResolvedSecretRef) {
     super(
       `${path}: unresolved SecretRef "${ref.source}:${ref.provider}:${ref.id}". ` +
         "Resolve this command against an active gateway runtime snapshot before reading it.",
     );
     this.name = "FeishuSecretRefUnavailableError";
-    this.path = path;
   }
 }
 
@@ -193,7 +190,7 @@ function buildResolvedFeishuAccount(params: {
   baseMode: FeishuCredentialResolutionMode;
   eventSecretMode: FeishuCredentialResolutionMode;
 }): ResolvedFeishuAccount {
-  const explicitAccountKey = params.accountId?.trim() ? params.accountId.trim() : undefined;
+  const explicitAccountKey = normalizeString(params.accountId);
   const accountId =
     explicitAccountKey !== undefined
       ? normalizeAccountId(explicitAccountKey)

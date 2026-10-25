@@ -31,6 +31,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -363,19 +364,8 @@ async function createFixture(stateDir: string, agentDir: string) {
       const person = (profileId: string): GatewayClient => ({
         connId: "synthetic-cron-person",
         invalidated: false,
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-          role: "operator",
-          scopes: ["operator.admin", "operator.write"],
-        },
-        authenticatedUserProfile: {
-          profileId,
-          displayName: "Synthetic Person",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        connect: gatewayConnect(["operator.admin", "operator.write"]),
+        authenticatedUserProfile: gatewayProfile(profileId, "Synthetic Person"),
       });
       return { profileId: authProfileId, owner: person(owner.id), other: person(other.id) };
     },

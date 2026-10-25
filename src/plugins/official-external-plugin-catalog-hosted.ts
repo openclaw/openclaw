@@ -22,7 +22,6 @@ import type {
   OfficialExternalPluginCatalogFeedVerification,
   OfficialExternalPluginCatalogProfileConfig,
   OfficialExternalPluginCatalogFeed,
-  HostedOfficialExternalPluginCatalogSnapshot,
   HostedOfficialExternalPluginCatalogSnapshotStore,
   HostedOfficialExternalPluginCatalogTrustState,
   HostedOfficialExternalPluginCatalogLoadResult,
@@ -229,58 +228,6 @@ function readOfficialExternalPluginCatalogInvalidTimestampSequence(
   return isOfficialExternalPluginCatalogFeed(normalized) ? normalized.sequence : undefined;
 }
 
-async function loadHostedCatalogSnapshotResult(params: {
-  snapshot: HostedOfficialExternalPluginCatalogSnapshot;
-  error: unknown;
-  expectedSha256?: string;
-  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
-  requireManifestInstallSourceRef?: boolean;
-  expectedFeedId?: string;
-  verification?: OfficialExternalPluginCatalogFeedVerification;
-  now: Date;
-}): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
-  const checksum = `sha256:${sha256Hex(params.snapshot.body)}`;
-  if (checksum !== params.snapshot.metadata.checksum) {
-    throw new Error("hosted catalog snapshot checksum mismatch");
-  }
-  if (params.expectedSha256 && params.expectedSha256 !== checksum) {
-    throw new Error("hosted catalog snapshot checksum did not match expected checksum");
-  }
-  const parsed = await parseHostedCatalogFeedBody({
-    body: params.snapshot.body,
-    expectedFeedId: params.expectedFeedId,
-    verification: params.verification,
-    verifiedAt: params.snapshot.trust?.verifiedAt ?? params.snapshot.savedAt,
-    allowLegacyBetaEnvelope: true,
-    now: params.now,
-    allowExpired: true,
-    allowMissingExpiry: true,
-  });
-  const entries = dedupeOfficialExternalPluginCatalogEntries(
-    filterOfficialExternalPluginCatalogEntriesBySourceRefs(
-      parseOfficialExternalPluginCatalogEntries(parsed.feed),
-      {
-        catalogConfig: params.catalogConfig,
-        requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
-      },
-    ),
-  );
-  const visibleEntries = parsed.expired
-    ? entries.map((entry) => removeOfficialExternalPluginCatalogInstallAuthority(entry))
-    : entries;
-  return {
-    source: "hosted-snapshot",
-    entries: visibleEntries,
-    feed: parsed.expired ? { ...parsed.feed, entries: visibleEntries } : parsed.feed,
-    metadata: params.snapshot.metadata,
-    snapshot: params.snapshot,
-    ...(parsed.trust ? { trust: parsed.trust } : {}),
-    error: parsed.expired
-      ? `${formatErrorMessage(params.error)}; ${parsed.feed.expiresAt ? `hosted catalog signed feed expired at ${parsed.feed.expiresAt}` : "hosted catalog signed feed has no expiresAt"}`
-      : formatErrorMessage(params.error),
-  };
-}
-
 function removeOfficialExternalPluginCatalogInstallAuthority(
   entry: OfficialExternalPluginCatalogEntry,
 ): OfficialExternalPluginCatalogEntry {
@@ -312,7 +259,46 @@ async function snapshotOrBundledFallbackResult(params: {
   try {
     const snapshot = await params.snapshotStore.read(params.url);
     if (snapshot) {
-      return await loadHostedCatalogSnapshotResult({ ...params, snapshot });
+      const checksum = `sha256:${sha256Hex(snapshot.body)}`;
+      if (checksum !== snapshot.metadata.checksum) {
+        throw new Error("hosted catalog snapshot checksum mismatch");
+      }
+      if (params.expectedSha256 && params.expectedSha256 !== checksum) {
+        throw new Error("hosted catalog snapshot checksum did not match expected checksum");
+      }
+      const parsed = await parseHostedCatalogFeedBody({
+        body: snapshot.body,
+        expectedFeedId: params.expectedFeedId,
+        verification: params.verification,
+        verifiedAt: snapshot.trust?.verifiedAt ?? snapshot.savedAt,
+        allowLegacyBetaEnvelope: true,
+        now: params.now,
+        allowExpired: true,
+        allowMissingExpiry: true,
+      });
+      const entries = dedupeOfficialExternalPluginCatalogEntries(
+        filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+          parseOfficialExternalPluginCatalogEntries(parsed.feed),
+          {
+            catalogConfig: params.catalogConfig,
+            requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
+          },
+        ),
+      );
+      const visibleEntries = parsed.expired
+        ? entries.map((entry) => removeOfficialExternalPluginCatalogInstallAuthority(entry))
+        : entries;
+      return {
+        source: "hosted-snapshot",
+        entries: visibleEntries,
+        feed: parsed.expired ? { ...parsed.feed, entries: visibleEntries } : parsed.feed,
+        metadata: snapshot.metadata,
+        snapshot,
+        ...(parsed.trust ? { trust: parsed.trust } : {}),
+        error: parsed.expired
+          ? `${formatErrorMessage(params.error)}; ${parsed.feed.expiresAt ? `hosted catalog signed feed expired at ${parsed.feed.expiresAt}` : "hosted catalog signed feed has no expiresAt"}`
+          : formatErrorMessage(params.error),
+      };
     }
   } catch (snapshotErr) {
     error = `${formatErrorMessage(params.error)}; snapshot fallback failed: ${formatErrorMessage(snapshotErr)}`;

@@ -263,8 +263,15 @@ export function withInProcessGatewayRead<T>(
 
 /** Local session input retains its operation's authorization and commit fences. */
 export async function runWithInProcessGatewaySessionMutation<T>(
-  params: { sessionKey: string; agentId?: string },
-  run: (assertCurrent: () => void) => Promise<T> | T,
+  params: {
+    sessionKey: string;
+    agentId?: string;
+    resolveGatewayContext?: DispatchGatewayMethodInProcessOptions["resolveGatewayContext"];
+  },
+  run: (
+    assertCurrent: () => void,
+    context: ResolvedInProcessGatewayDispatch["context"],
+  ) => Promise<T> | T,
 ): Promise<T> {
   const method = "sessions.send";
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
@@ -272,7 +279,13 @@ export async function runWithInProcessGatewaySessionMutation<T>(
   return await withInProcessGatewayDispatch(
     method,
     requestParams,
-    { forceSyntheticClient: true, syntheticScopeMode: "minimum" },
+    {
+      forceSyntheticClient: true,
+      syntheticScopeMode: "minimum",
+      ...(params.resolveGatewayContext
+        ? { resolveGatewayContext: params.resolveGatewayContext }
+        : {}),
+    },
     async (resolved) => {
       const [{ authorizeGatewayRequestPreDispatch }, { createRequestGatewayMethodRegistry }] =
         await Promise.all([
@@ -312,7 +325,7 @@ export async function runWithInProcessGatewaySessionMutation<T>(
           authorization.sessionAccessAuthority?.assertCurrent();
         };
         assertCurrent();
-        return await run(assertCurrent);
+        return await run(assertCurrent, resolved.context);
       } finally {
         authorization.sessionMutationAuthorization?.release?.();
         authorization.sessionAccessAuthority?.release();

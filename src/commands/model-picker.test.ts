@@ -13,6 +13,7 @@ import {
 } from "../flows/model-picker.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "../wizard/prompts.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
 const modelCatalogRouteVariants = vi.hoisted(() => ({
@@ -166,15 +167,7 @@ function agentConfig(
 }
 
 function configuredTextModel(id: string, name: string) {
-  return {
-    id,
-    name,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
+  return createTestModelDefinition(id, { name, contextWindow: 128_000, maxTokens: 8192 });
 }
 
 function nvidiaConfig(models: ReturnType<typeof configuredTextModel>[]): OpenClawConfig {

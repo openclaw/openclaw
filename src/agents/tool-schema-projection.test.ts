@@ -5,7 +5,6 @@ import {
   filterRuntimeCompatibleTools,
   projectRuntimeToolInputSchema,
 } from "./tool-schema-projection.js";
-import type { AnyAgentTool } from "./tools/common.js";
 
 const objectSchema = (properties: Record<string, unknown>) => ({ type: "object", properties });
 const rejected = (toolName: string, violation: string) => ({
@@ -130,18 +129,6 @@ describe("runtime tool input schema projection", () => {
     expect(filterRuntimeCompatibleTools([unreadable, healthy])).toEqual({
       ...rejected("fuzzplugin_unreadable", "fuzzplugin_unreadable.parameters is unreadable"),
       tools: [healthy],
-    });
-  });
-
-  it("keeps missing parameter schemas for provider-specific normalization", () => {
-    const parameterFree = {
-      name: "fuzzplugin_parameter_free",
-      parameters: undefined,
-    } as unknown as Pick<AnyAgentTool, "name" | "parameters">;
-
-    expect(filterProviderNormalizableTools([parameterFree])).toEqual({
-      tools: [parameterFree],
-      diagnostics: [],
     });
   });
 

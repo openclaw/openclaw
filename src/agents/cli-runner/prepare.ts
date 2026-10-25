@@ -167,6 +167,13 @@ import {
   type RunCliAgentParams,
 } from "./types.js";
 
+const CALLER_SURFACE_TOOL_NAMES = new Set([
+  "screen",
+  "show_widget",
+  "suggest_task",
+  "dismiss_task",
+]);
+
 type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
   isolatedCompletionEnforced?: true;
   secretInput?: CliSecretInput;
@@ -1273,23 +1280,15 @@ async function prepareCliRunContextWithinReadFence(
       preparedBackendCleanup,
     );
     cleanupPreparedResources = preparedCleanup;
-    const preparedBackendClearEnv = [
-      ...(preparedBackend.backend.clearEnv ?? []),
-      ...(preparedExecution?.clearEnv ?? []),
-    ];
     const { liveSession: _liveSession, ...processPerTurnBackend } = preparedBackend.backend;
     const preparedBackendFinal = {
       ...preparedBackend,
-      backend: {
-        ...(isSideQuestion
-          ? { ...processPerTurnBackend, sessionMode: "none" as const }
-          : params.disableCliLiveSession
-            ? processPerTurnBackend
-            : preparedBackend.backend),
-        ...(preparedBackendClearEnv.length > 0
-          ? { clearEnv: uniqueStrings(preparedBackendClearEnv) }
-          : {}),
-      },
+      backend: isSideQuestion
+        ? { ...processPerTurnBackend, sessionMode: "none" as const }
+        : params.disableCliLiveSession
+          ? processPerTurnBackend
+          : preparedBackend.backend,
+      ...(preparedExecution?.clearEnv ? { resetEnv: preparedExecution.clearEnv } : {}),
       ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),
       ...(preparedBackendBeforeExecution
         ? { beforeExecution: preparedBackendBeforeExecution }
@@ -1304,8 +1303,16 @@ async function prepareCliRunContextWithinReadFence(
       backendId: backendResolved.id,
       execute: preparedExecution?.execute,
     });
+    // These tools follow the turn's client (Control UI caps, gateway task delivery), so
+    // subagent-completion and channel turns drop them. Their flips still change the system
+    // prompt, which restarts a warm process, and a resumed CLI lists the current tools; only
+    // the native session and its context must survive.
+    const sessionPromptToolNames = promptTools
+      .map((tool) => tool.name)
+      .filter((name) => !CALLER_SURFACE_TOOL_NAMES.has(name))
+      .toSorted();
     const promptToolNamesHash = bundleMcpEnabled
-      ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
+      ? hashCliSessionText(JSON.stringify(sessionPromptToolNames))
       : undefined;
     // `sessionMode: none` may still use a live transport in-process, but neither a
     // returned nor previously stored id is authority for cross-process continuity.

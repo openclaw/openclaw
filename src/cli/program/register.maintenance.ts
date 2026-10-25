@@ -42,7 +42,7 @@ export function registerMaintenanceCommands(
     .addHelpText("after", () => formatDocsHelp("/cli/doctor"))
     .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", true)
     .option("--yes", "Accept defaults without prompting", false)
-    .option("--repair", "Apply recommended repairs without prompting", false)
+    .option("--repair", "Apply recommended repairs", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
     .option(
       "--force",
@@ -212,7 +212,10 @@ export function registerMaintenanceCommands(
         if (opts.clientCredentials === true) {
           const { prepareStartupClientCredentials } =
             await import("../../commands/startup-client-credentials.js");
-          await prepareStartupClientCredentials({ env: process.env, runtime: defaultRuntime });
+          await prepareStartupClientCredentials({
+            env: process.env,
+            runtime: defaultRuntime,
+          });
           if (opts.json === true) {
             defaultRuntime.writeJson({ ok: true });
           }

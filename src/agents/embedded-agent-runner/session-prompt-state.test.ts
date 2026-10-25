@@ -15,6 +15,19 @@ import {
 
 const sessionIds = new Set<string>();
 
+function checkpointWriter(entries: SessionEntry[]) {
+  return (customType: string, data: unknown) => {
+    entries.push({
+      type: "custom",
+      customType,
+      data: structuredClone(data),
+      id: `marker-${entries.length}`,
+      parentId: null,
+      timestamp: "2026-10-01T00:00:00Z",
+    });
+  };
+}
+
 function prepare(sessionId: string, projectKey: string | null): readonly string[] {
   sessionIds.add(sessionId);
   return prepareEmbeddedSessionActiveProjectKeys(sessionId, projectKey);
@@ -99,16 +112,7 @@ describe("system prompt series", () => {
     return result;
   }
   async function persist(entries: SessionEntry[]) {
-    await persistSessionSystemPrompt(lease.state, (customType, data) => {
-      entries.push({
-        type: "custom",
-        customType,
-        data: structuredClone(data),
-        id: `marker-${entries.length}`,
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-      });
-    });
+    await persistSessionSystemPrompt(lease.state, checkpointWriter(entries));
   }
 
   it("pins stable bytes and emits only changed, added, and removed sections", () => {
@@ -477,16 +481,7 @@ describe("session tool surface", () => {
       systemPrompt: "Base.",
       entries,
     }).commit();
-    await persistSessionSystemPrompt(lease.state, (customType, data) => {
-      entries.push({
-        type: "custom",
-        customType,
-        data: structuredClone(data),
-        id: `marker-${entries.length}`,
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-      });
-    });
+    await persistSessionSystemPrompt(lease.state, checkpointWriter(entries));
   }
 
   it("keeps every pinned definition on a turn that builds fewer tools and refuses the missing ones", async () => {
@@ -539,16 +534,7 @@ describe("session tool surface", () => {
       systemPrompt: "Base.\n\n## Skills\nrefreshed",
       entries,
     }).commit();
-    await persistSessionSystemPrompt(lease.state, (customType, data) => {
-      entries.push({
-        type: "custom",
-        customType,
-        data: structuredClone(data),
-        id: `marker-${entries.length}`,
-        parentId: null,
-        timestamp: "2026-10-01T00:00:00Z",
-      });
-    });
+    await persistSessionSystemPrompt(lease.state, checkpointWriter(entries));
     clearEmbeddedSessionPromptStates(["tool-surface"]);
     lease[Symbol.dispose]();
     lease = retainEmbeddedSessionPromptState("tool-surface");

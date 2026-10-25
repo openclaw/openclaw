@@ -6,6 +6,7 @@ import {
   formatUpdateStateInspectionError,
   UPDATE_STATE_INSPECTION_PROGRESS_PREFIX,
 } from "./update-candidate-state.diagnostics.js";
+import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { createUpdateErrorFact, normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 
 vi.mock("node:fs", async (importOriginal) => ({
@@ -165,6 +166,55 @@ it("streams valid snapshot progress separately from the diagnostic stderr budget
   );
   expect(progress).toHaveBeenCalledTimes(200);
   expect(diagnostics.stderr()).toContain("copiedPages");
+});
+
+it("preserves measured capture capacity through a wrapped worker refusal", () => {
+  const cause = new UpdateCaptureSpaceError(`Backup refused near ${privateRoot}`, {
+    requiredBytes: 83886080,
+    availableBytes: 12345,
+  });
+  const failure = workerFailure(
+    new Error("Capture failed", { cause }),
+    "ExperimentalWarning: SQLite\n",
+  );
+  expect(findUpdateCaptureSpaceError(failure)?.capacity).toEqual({
+    requiredBytes: 83886080,
+    availableBytes: 12345,
+  });
+});
+
+it.each(["output-limit", "signal, signal SIGTERM"])(
+  "does not replace %s with an earlier capacity diagnostic",
+  (termination) => {
+    const diagnostics = inspection();
+    diagnostics.onOutputChunk(
+      Buffer.from(
+        formatUpdateStateInspectionError(
+          new UpdateCaptureSpaceError("No space", {
+            requiredBytes: 100,
+            availableBytes: 1,
+          }),
+        ),
+      ),
+      "stderr",
+    );
+    expect(
+      findUpdateCaptureSpaceError(diagnostics.failure(diagnostics.stderr(), termination)),
+    ).toBeUndefined();
+  },
+);
+
+it.each([
+  "not-json",
+  '{"requiredBytes":100,"availableBytes":-1}',
+  '{"requiredBytes":100,"availableBytes":100}',
+  '{"requiredBytes":"100","availableBytes":1}',
+])("does not classify malformed or sufficient capture capacity: %s", (payload) => {
+  const diagnostics = inspection();
+  diagnostics.onOutputChunk(Buffer.from(`Update capture space: ${payload}\n`), "stderr");
+  expect(
+    findUpdateCaptureSpaceError(diagnostics.failure(diagnostics.stderr(), "exit")),
+  ).toBeUndefined();
 });
 
 it("does not promote private worker prose", () => {

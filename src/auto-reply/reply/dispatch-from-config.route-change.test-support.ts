@@ -27,6 +27,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import * as runtimeLoaders from "./dispatch-from-config.runtime-loaders.js";
+import { createReplyAgentDefaults } from "./get-reply-config.test-support.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
@@ -124,12 +125,7 @@ export async function createHookHarness(params: {
           { workspace: testState.path(`${id}-workspace`) },
         ]),
       ),
-      defaults: {
-        workspace: testState.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
+      defaults: createReplyAgentDefaults(testState.workspaceDir),
     },
     plugins: {
       enabled: true,

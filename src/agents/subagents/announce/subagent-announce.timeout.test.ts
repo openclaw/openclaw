@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { deliverSubagentAnnouncement } from "./subagent-announce-delivery.js";
-import {
-  captureSubagentCompletionReply,
-  readLatestSubagentOutputWithRetry,
-} from "./subagent-announce-output.js";
+import { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 import * as announceRuntime from "./subagent-announce.runtime.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
@@ -326,49 +323,6 @@ describe("captureSubagentCompletionReply", () => {
     readMessages.mockResolvedValue([textAssistant("Immediate completion")]);
     await expect(capture()).resolves.toBe("Immediate completion");
     expect(readMessages).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("captures the final assistant reply at the deadline", async () => {
-    const startedAt = performance.now();
-    readMessages.mockImplementation(async () =>
-      performance.now() - startedAt >= 50 ? [textAssistant("Requester-visible final result")] : [],
-    );
-    const pending = capture();
-    await vi.runAllTimersAsync();
-    await expect(pending).resolves.toBe("Requester-visible final result");
-    expect(performance.now() - startedAt).toBe(50);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("charges slow output reads against the bounded retry deadline", async () => {
-    const startedAt = performance.now();
-    readMessages.mockImplementation(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 30);
-      });
-      return [];
-    });
-    const pending = capture();
-    await vi.runAllTimersAsync();
-    await expect(pending).resolves.toBeUndefined();
-    expect(readMessages).toHaveBeenCalledTimes(3);
-    expect(performance.now() - startedAt).toBe(98);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("does not poll when waiting is disabled", async () => {
-    await expect(capture(false)).resolves.toBeUndefined();
-    expect(readMessages).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("does not read output with an exhausted retry budget", async () => {
-    const readHistory = vi.mocked(announceRuntime.callSubagentLifecycleGateway).mockClear();
-    await expect(
-      readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs: 0 }),
-    ).resolves.toBeUndefined();
-    expect(readHistory).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
 });

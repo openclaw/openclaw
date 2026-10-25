@@ -129,7 +129,14 @@
   background: var(--bg);
 }
 
-.usage-toolbar {
+.usage-toolbar,
+.daily-chart-header,
+.sessions-card-header,
+.sessions-card-meta,
+.timeseries-header-row,
+.context-breakdown-header,
+.session-detail-header,
+.session-logs-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -168,7 +175,8 @@
   height: 26px;
 }
 
-.usage-view-options {
+.usage-view-options,
+.usage-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -207,13 +215,6 @@
 
 .usage-skeleton-block--tall {
   min-height: 128px;
-}
-
-.usage-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
 }
 
 .usage-date-range,
@@ -696,7 +697,8 @@
 .session-summary-meta,
 .usage-list-sub,
 .usage-error-sub,
-.cost-window-range-label {
+.cost-window-range-label,
+.usage-section-meta {
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -1038,20 +1040,6 @@
   background: var(--card);
 }
 
-.daily-chart-header,
-.sessions-card-header,
-.sessions-card-meta,
-.timeseries-header-row,
-.context-breakdown-header,
-.session-detail-header,
-.session-logs-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .usage-mosaic-total,
 .session-detail-title {
   color: var(--text-strong);
@@ -1206,12 +1194,6 @@
 .usage-trend-section .cost-breakdown {
   padding-top: 16px;
   border-top: 1px solid var(--border);
-}
-
-.usage-section-meta {
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 .usage-summary-strip--windows {
@@ -1459,13 +1441,15 @@
   color: var(--muted);
 }
 
-.daily-chart-tip i {
+.daily-chart-tip i,
+.daily-chart-legend__key {
   width: 8px;
   height: 8px;
   border-radius: 2px;
 }
 
-.daily-chart-tip b {
+.daily-chart-tip b,
+.daily-chart-legend b {
   color: var(--text);
   font-family: var(--mono);
   font-weight: 500;
@@ -2023,16 +2007,4 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-.daily-chart-legend b {
-  color: var(--text);
-  font-family: var(--mono);
-  font-weight: 500;
-}
-
-.daily-chart-legend__key {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
 }

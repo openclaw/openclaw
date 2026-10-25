@@ -65,16 +65,14 @@ type ApprovalPayload =
   | PluginApprovalRequestPayload
   | SystemAgentApprovalRequestPayload;
 
-type GatewayAuxHandlerLogger = {
-  warn?: (message: string) => void;
-  error?: (message: string) => void;
-  debug?: (message: string) => void;
-};
-
 export function createGatewayAuxHandlers(
   params: GatewaySecretsReloaderParams & {
     scheduler: GatewayScheduler;
-    log: GatewayAuxHandlerLogger;
+    log: {
+      warn?: (message: string) => void;
+      error?: (message: string) => void;
+      debug?: (message: string) => void;
+    };
     onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
     onAgentRunAuthorityClosed?: (
       authority: AgentRunDelegatedAuthority,

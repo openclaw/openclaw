@@ -331,7 +331,7 @@ const jsoncOps: WalkOps<JsoncValue> = {
         : { keySub: key === lookupKey ? quoteSeg(e.key) : key, child: e.value };
     }
     if (node.kind === "array") {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }
@@ -453,7 +453,7 @@ const yamlOps: WalkOps<Node> = {
         : { keySub: key === lookupKey ? quoteSeg(lookupKey) : key, child: pair.value as Node };
     }
     if (isSeq(node)) {
-      const idx = parseArrayIndexSegment(key, node.items.length);
+      const idx = parseArrayIndexSegment(unquoteSeg(key), node.items.length);
       if (idx === null) {
         return null;
       }

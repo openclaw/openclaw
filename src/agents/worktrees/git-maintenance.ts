@@ -3,6 +3,7 @@ import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { enqueueGitRefMutation, requireGitCommandOutput } from "../../infra/git-exec.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -23,6 +24,8 @@ const log = createSubsystemLogger("agents/worktrees");
 const operation: GitProcessOperation = "worktree.maintenance";
 const WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS = 30 * 60 * 1000;
 const PACK_BATCH_BYTES = 512 * 1024 * 1024;
+// Index size bounds object metadata even when many tiny blobs compress well.
+const PACK_BATCH_INDEX_BYTES = 32 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
 const PACK_BATCH_TIMEOUT_MS = 5 * 60 * 1000;
 const TEMP_PACK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -187,7 +190,7 @@ async function maintainWorktreePacks(
     return;
   }
   const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
-  // Fetch must not replace the MIDX between batch publication and expiry.
+  // Serialize pack publication and retirement with managed fetches.
   await enqueueGitRefMutation(
     repoRoot,
     commonDir,
@@ -263,6 +266,12 @@ async function consolidatePacks(
   names: string[],
   options: NonNullable<Parameters<typeof requireGit>[2]>,
 ) {
+  // MIDX is optional lookup metadata. Invalidate both entry points, including
+  // stale indexes, without enumerating every object to rebuild the whole repo.
+  for (const name of ["multi-pack-index", "multi-pack-index.d/multi-pack-index-chain"]) {
+    options.beforeRun?.();
+    await fs.rm(path.join(directory, name), { force: true });
+  }
   const present = new Set(names);
   const packs = [];
   for (const name of names) {
@@ -279,24 +288,45 @@ async function consolidatePacks(
     }
     options.beforeRun?.();
     const stat = await fs.stat(path.join(directory, name));
-    packs.push({ name, size: stat.size, promisor: present.has(`${stem}.promisor`) });
+    const index = await fs.stat(path.join(directory, `${stem}.idx`));
+    packs.push({
+      name,
+      size: stat.size,
+      indexBytes: index.size,
+      promisor: present.has(`${stem}.promisor`),
+    });
   }
   packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
   let objectFormat: string | undefined;
   for (const promisor of [true, false]) {
     const candidates = packs.filter((pack) => pack.promisor === promisor);
-    const selected = [];
+    const batch = [];
     let bytes = 0;
+    let indexBytes = 0;
     for (const pack of candidates) {
-      if (bytes + pack.size > PACK_BATCH_BYTES || selected.length >= PACK_BATCH_COUNT) {
+      if (pack.indexBytes > PACK_BATCH_INDEX_BYTES) {
+        continue;
+      }
+      if (
+        bytes + pack.size > PACK_BATCH_BYTES ||
+        indexBytes + pack.indexBytes > PACK_BATCH_INDEX_BYTES ||
+        batch.length >= PACK_BATCH_COUNT
+      ) {
         break;
       }
-      selected.push(pack.name);
+      batch.push(pack);
       bytes += pack.size;
+      indexBytes += pack.indexBytes;
     }
-    if (selected.length < 2) {
+    // Leave a dominant pack alone until the smaller inputs together reach its
+    // size; bounded batches can still make progress below a fixed pack count.
+    while (batch.length > 1 && bytes < 2 * batch.at(-1)!.size) {
+      bytes -= batch.pop()!.size;
+    }
+    if (batch.length < 2) {
       continue;
     }
+    const selected = batch.map((pack) => pack.name);
     // Validate only the packs this pass may retire, without walking refs or
     // missing partial-clone objects. The streaming writer does not check source CRCs.
     objectFormat ??= await requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);
@@ -325,49 +355,42 @@ async function consolidatePacks(
         },
       );
     }
-    let preferred = selected.at(-1)!;
-    // The rewrite threshold applies to the inventory, not the byte-limited batch.
-    if (candidates.length >= 16) {
-      // A static Git alias streams between native children without buffering packs in the Gateway.
-      // index-pack publishes the promisor marker before the index; geometric repack cannot do this on older Git.
-      const alias =
-        "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
-        (promisor ? " --promisor" : "");
-      const result = await requireGit(
-        repoRoot,
-        ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
-        {
-          ...options,
-          timeoutMs: PACK_BATCH_TIMEOUT_MS,
-          input: `${selected.join("\n")}\n`,
-        },
-      );
-      const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
-      if (!hash) {
-        throw new Error("Git pack consolidation returned an invalid pack identity");
-      }
-      preferred = `pack-${hash}.pack`;
-    }
-    // Expire only this homogeneous batch: a full MIDX could retire an unrelated promisor pack.
-    // Expiry rebuilds the full index after deleting packs, so do it only once per group.
-    await requireGit(
+    // index-pack publishes the promisor marker and verified index before returning
+    // the hash. Plain --stdin-packs copies every object, including unreachable ones.
+    const alias =
+      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
+      (promisor ? " --promisor" : "");
+    const result = await requireGit(
       repoRoot,
-      ["multi-pack-index", "write", "--stdin-packs", `--preferred-pack=${preferred}`],
+      ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
       {
         ...options,
-        input: `${[...new Set([...selected, preferred])].map((name) => name.replace(/\.pack$/, ".idx")).join("\n")}\n`,
+        timeoutMs: PACK_BATCH_TIMEOUT_MS,
+        input: `${selected.join("\n")}\n`,
       },
     );
-    await requireGit(repoRoot, ["multi-pack-index", "expire"], options);
+    const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
+    if (!hash) {
+      throw new Error("Git pack consolidation returned an invalid pack identity");
+    }
+    for (const name of selected) {
+      const stem = path.join(directory, name.slice(0, -5));
+      // The union can already be one of the inputs. Never retire the output or
+      // a pack another Git writer has since pinned or marked as cruft.
+      if (
+        name === `pack-${hash}.pack` ||
+        (await lstatIfExists(`${stem}.keep`)) ||
+        (await lstatIfExists(`${stem}.mtimes`))
+      ) {
+        continue;
+      }
+      for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+        options.beforeRun?.();
+        await fs.rm(`${stem}.${extension}`, { force: true });
+      }
+    }
   }
   const remainingNames = await fs.readdir(directory);
-  const remaining = remainingNames.filter((name) => /^pack-[a-f0-9]+\.idx$/.test(name));
-  if (remaining.length > 0) {
-    await requireGit(repoRoot, ["multi-pack-index", "write", "--stdin-packs"], {
-      ...options,
-      input: `${remaining.join("\n")}\n`,
-    });
-  }
   return remainingNames.filter((name) => name.endsWith(".pack")).length;
 }
 

@@ -7,6 +7,7 @@ import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./fs-paths
 import { createRemoteShellSandboxFsBridge } from "./remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
 import {
+  ensureReadOnlyWorkspaceSkillMountSources,
   resolveWorkspaceMounts,
   resolveSandboxMountSelection,
   type ReadOnlyWorkspaceSkillMount,
@@ -87,6 +88,33 @@ async function expectWriteRejected(
 }
 
 describe("resolveWorkspaceMounts", () => {
+  it.skipIf(process.platform === "win32").each(["symlink", "file"] as const)(
+    "does not materialize skill sources through a %s parent",
+    async (kind) => {
+      const workspaceDir = makeTempWorkspace();
+      const outsideDir = makeTempWorkspace();
+      const parent = path.join(workspaceDir, ".agents");
+      if (kind === "symlink") {
+        fs.symlinkSync(outsideDir, parent, "dir");
+      } else {
+        fs.writeFileSync(parent, "existing user file");
+      }
+      await ensureReadOnlyWorkspaceSkillMountSources({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        workdir: "/workspace",
+        workspaceAccess: "rw",
+      });
+      expect(fs.existsSync(path.join(outsideDir, "skills"))).toBe(false);
+      expect(workspaceMounts(workspaceDir)).not.toContain(
+        `${path.join(workspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
+      );
+      if (kind === "file") {
+        expect(fs.readFileSync(parent, "utf8")).toBe("existing user file");
+      }
+    },
+  );
+
   it.each([
     { access: "rw" as const, expected: "/tmp/workspace:/workspace:z" },
     { access: "ro" as const, expected: "/tmp/workspace:/workspace:ro,z" },

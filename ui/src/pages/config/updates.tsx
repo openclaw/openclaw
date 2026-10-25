@@ -23,6 +23,7 @@ import {
 } from "../../app/update-schedule-projection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
+  RetryAction,
   SettingsPage,
   SettingsRow,
   SettingsSection,
@@ -371,16 +372,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
                   fallback={(error, reset) => (
                     <span class="updates-status-check-failed">
                       <SettingsStatus kind="warn" label={formatUiError(error())} dot={false} />
-                      <button
-                        class="btn btn--sm"
+                      <RetryAction
                         type="button"
-                        onClick={() => {
+                        onRetry={() => {
                           reset();
                           void props.onCheckStatus();
                         }}
-                      >
-                        {t("common.retry")}
-                      </button>
+                      />
                     </span>
                   )}
                 >
@@ -526,16 +524,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
         fallback={(error, reset) => (
           <div class="callout danger" role="alert">
             {formatUiError(error())}
-            <button
-              class="btn btn--sm"
+            <RetryAction
               type="button"
-              onClick={() => {
+              onRetry={() => {
                 reset();
                 void updateNow();
               }}
-            >
-              {t("common.retry")}
-            </button>
+            />
           </div>
         )}
       >

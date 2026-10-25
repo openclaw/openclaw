@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { runGroupGatingTestMessage as runGroupGating } from "./monitor/group-gating.test-harness.js";
-import { buildInboundLine } from "./monitor/message-line.js";
 
 let sessionDir: string | undefined;
 let sessionStorePath: string;
@@ -116,8 +115,6 @@ function createMessage(
 
 const createGroupMessage = (overrides: TestMessageOverrides = {}) =>
   createMessage("group", overrides);
-const createDirectMessage = (overrides: TestMessageOverrides = {}) =>
-  createMessage("direct", overrides);
 
 function createReplyToBot(overrides: TestMessageOverrides) {
   return createGroupMessage({
@@ -354,45 +351,5 @@ describe("applyGroupGating", () => {
     expect(verboseLogs).toContain(
       'Dropping message from unregistered WhatsApp group 123@g.us. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.',
     );
-  });
-});
-
-describe("buildInboundLine", () => {
-  it("prefixes group messages with sender", () => {
-    const line = buildInboundLine({
-      msg: createGroupMessage({
-        body: "ping",
-        timestamp: 1700000000000,
-        senderJid: "111@s.whatsapp.net",
-        senderE164: "+15550001111",
-        senderName: "Bob",
-      }),
-    });
-
-    expect(line).toContain("Bob (+15550001111):");
-    expect(line).toContain("ping");
-  });
-
-  it("includes reply-to context blocks when replyToBody is present", () => {
-    const line = buildInboundLine({
-      msg: createDirectMessage({
-        body: "hello",
-        replyToId: "q1",
-        replyToBody: "original",
-        replyToSender: "+1999",
-      }),
-      envelope: { includeTimestamp: false },
-    });
-
-    expect(line).toContain("[Replying to +1999 id:q1]");
-    expect(line).toContain("original");
-    expect(line).toContain("[/Replying]");
-  });
-  it("uses unknown sender label when reply sender is absent", () => {
-    const line = buildInboundLine({
-      msg: createDirectMessage({ body: "ping", replyToBody: "original" }),
-      envelope: { includeTimestamp: false },
-    });
-    expect(line).toContain("[Replying to unknown sender]\noriginal\n[/Replying]");
   });
 });

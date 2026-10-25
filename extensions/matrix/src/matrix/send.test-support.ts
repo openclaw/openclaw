@@ -78,7 +78,6 @@ export function makeEncryptedMediaClient() {
   // SAFETY: The fixture replaces only the crypto methods used by these media-send tests.
   const client = result.client as { crypto?: object };
   client.crypto = {
-    isRoomEncrypted: vi.fn().mockResolvedValue(true),
     encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
   };
   vi.spyOn(result.client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");

@@ -549,6 +549,39 @@ it("publishes padding changes when either viewport box stays the same size", asy
   expect(distance()).toBe(0);
 });
 
+it("keeps a shrinking end target smooth during a native scroll", async () => {
+  const { host, thread, extent, distance } = await mountEndFollowFixture(800);
+  await expect.poll(() => thread.scrollTop).toBe(800);
+  const nativeScrollTo = thread.scrollTo.bind(thread);
+  const writes: Array<{ behavior?: ScrollBehavior; jump: number }> = [];
+  function observeScroll(options?: ScrollToOptions): void;
+  function observeScroll(x: number, y: number): void;
+  function observeScroll(options: ScrollToOptions | number | undefined, y?: number): void {
+    const before = thread.scrollTop;
+    if (typeof options === "number") {
+      nativeScrollTo(options, y ?? 0);
+    } else {
+      nativeScrollTo(options);
+    }
+    writes.push({
+      behavior: typeof options === "number" ? undefined : options?.behavior,
+      jump: thread.scrollTop - before,
+    });
+  }
+  thread.scrollTo = observeScroll;
+  try {
+    host.transcript.scrollToEnd({ behavior: "smooth" });
+    host.lastRowHeight -= 17;
+    host.requestRender();
+    await expect.poll(() => extent.offsetHeight).toBe(1283);
+    await expect.poll(distance).toBe(0);
+    expect(writes.filter((write) => write.behavior === "smooth").length).toBeGreaterThan(1);
+    expect(writes.every((write) => Math.abs(write.jump) <= 1)).toBe(true);
+  } finally {
+    thread.scrollTo = nativeScrollTo;
+  }
+});
+
 it("holds the canceled viewport after a smooth journey's automatic final approach", async () => {
   const { host, thread, extent, distance } = await mountEndFollowFixture(0);
   const earlier = host.querySelector<HTMLElement>('[data-virtual-row-key="earlier"]')!;

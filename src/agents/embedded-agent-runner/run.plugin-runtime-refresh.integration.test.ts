@@ -14,10 +14,12 @@ import {
   mockedBuildEmbeddedRunPayloads as buildPayloads,
   mockedRunEmbeddedAttempt as attempt,
   createOverflowRunParams,
-  resetSharedRunIntegrationHarnessMocks,
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
@@ -134,11 +136,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  resetSharedRunIntegrationHarnessMocks();
-  const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-  state = await createOpenClawTestState({ label: "plugin-runtime-refresh" });
-  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-  setRuntimeConfigSnapshot({});
+  state = await createFreshRunIntegrationState("plugin-runtime-refresh");
 });
 
 afterEach(async () => {

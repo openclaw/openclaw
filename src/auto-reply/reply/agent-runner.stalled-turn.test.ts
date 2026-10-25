@@ -42,7 +42,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createReplyParams } from "./test-helpers.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
 
@@ -151,38 +151,30 @@ async function createStalledRun(
   const operation = admitted.operation;
   operation.setPhase("running");
   const runState: ReplyOperationRunState = {};
-  const run = runReplyAgent({
-    commandBody: "what is good at the hotel restaurant?",
-    followupRun,
-    queueKey,
-    sessionKey: queueKey,
-    storePath: transcriptTarget.storePath,
-    sessionEntry,
-    sessionStore: { [queueKey]: sessionEntry },
-    resolvedQueue: settings,
-    shouldSteer: false,
-    shouldFollowup: false,
-    isActive: false,
-    replyOperation: operation,
-    opts: {
-      [REPLY_OPERATION_RUN_STATE]: runState,
-    },
-    typing: createMockTypingController(),
-    sessionCtx: {
-      Provider: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "12345",
-      ChatType: "direct",
-      MessageSid: "msg-stalled",
-    } as unknown as TemplateContext,
-    defaultModel: "anthropic/claude",
-    resolvedVerboseLevel: "off",
-    isNewSession: false,
-    blockStreamingEnabled: false,
-    resolvedBlockStreamingBreak: "message_end",
-    shouldInjectGroupIntro: false,
-    typingMode: "instant",
-  });
+  const run = runReplyAgent(
+    createReplyParams(followupRun, {
+      commandBody: "what is good at the hotel restaurant?",
+      queueKey,
+      sessionKey: queueKey,
+      storePath: transcriptTarget.storePath,
+      sessionEntry,
+      sessionStore: { [queueKey]: sessionEntry },
+      resolvedQueue: settings,
+      replyOperation: operation,
+      opts: {
+        [REPLY_OPERATION_RUN_STATE]: runState,
+      },
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "12345",
+        ChatType: "direct",
+        MessageSid: "msg-stalled",
+      } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude",
+      typingMode: "instant",
+    }),
+  );
   return { operation, run, runState, recorder, transcriptTarget };
 }
 

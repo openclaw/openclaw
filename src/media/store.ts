@@ -265,6 +265,7 @@ export async function writePlaybackTranscodeCache(params: {
     const filePath = await openMediaStore(params.maxBytes).write(relativePath, params.buffer, {
       maxBytes: params.maxBytes,
       tempPrefix: params.tempPrefix,
+      durable: false,
     });
     await prunePlaybackTranscodeCacheToSize();
     return filePath;

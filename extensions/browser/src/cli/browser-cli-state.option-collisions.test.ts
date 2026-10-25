@@ -1,18 +1,14 @@
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { mockBrowserGateway } from "./browser-cli.test-support.js";
 
 const gatewayMock = mockBrowserGateway();
 const {
   createBrowserProgram: createBrowserProgramShared,
   getBrowserCliRuntime,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } = await import("./browser-cli.test-support.js");
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
-vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+mockBrowserCliRuntime();
 
 const { registerBrowserStateCommands } = await import("./browser-cli-state.js");
 

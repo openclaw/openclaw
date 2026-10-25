@@ -740,6 +740,15 @@ describe("resident session projection", () => {
     ]);
     expect(select).toHaveBeenCalledTimes(1);
 
+    for (const limit of [0, 5, 10, 0, 5, 10]) {
+      const summary = await readStatusSessionStores(cfg, [{ id: "main" }], limit, { projection });
+      expect(summary.count).toBe(1);
+      expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(
+        limit ? ["agent:main:first"] : [],
+      );
+    }
+    expect(select).toHaveBeenCalledTimes(3);
+
     job.schedule = { kind: "every", everyMs: 120_000, anchorMs: 1 };
     await saveProactiveJobsForTest(cronPath, [job]);
     now.mockReturnValue(2_000);
@@ -749,7 +758,7 @@ describe("resident session projection", () => {
         sessions: { count: 1, recent: [{ key: "agent:main:first", age: 1_900 }] },
       },
     ]);
-    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledTimes(3);
 
     writeSession("main", "agent:main:second", 200);
     await settleProjection(projection);
@@ -761,9 +770,9 @@ describe("resident session projection", () => {
     expect(current[0]?.sessions).toMatchObject(
       sessionSummary(2, ["agent:main:second", 200], ["agent:main:first", 100]),
     );
-    expect(select).toHaveBeenCalledTimes(3);
+    expect(select).toHaveBeenCalledTimes(5);
     await readHealth(cfg, projection);
-    expect(select).toHaveBeenCalledTimes(3);
+    expect(select).toHaveBeenCalledTimes(5);
   });
 
   test("projects receipt-owned jobs for the whole fleet without re-walking the roster per agent", async ({

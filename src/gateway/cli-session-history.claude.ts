@@ -12,7 +12,7 @@ import {
   stripCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
-import { stripCliSessionDriftNote } from "../agents/cli-session.js";
+import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { resolveClaudeCliProjectsDir } from "../agents/command/claude-cli-project-dir.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { sanitizeTranscriptMessage } from "../agents/transcript-sanitize.js";
@@ -29,7 +29,7 @@ import {
 } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { stripCliPromptDecorations } from "./cli-session-history.prompt-text.js";
-import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
+import { attachOpenClawTranscriptMeta } from "./session-transcript-entry-message.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
 

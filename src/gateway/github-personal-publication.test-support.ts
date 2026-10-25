@@ -25,6 +25,7 @@ import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.
 import { handleGatewayRequest } from "./server-methods.js";
 import { preparePersonalGitHubSessionActionV2 } from "./server-methods/github-personal-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const mocks = githubPublicationTestMocks();
@@ -186,19 +187,12 @@ export async function createPersonalPublicationFixture() {
   });
   const client: GatewayClient = {
     connId: `direct-human-${generation}`,
-    authenticatedUserProfile: {
-      profileId: owner,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-    connect: {
-      role: "operator",
-      scopes: ["operator.write", "operator.read"],
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", mode: "test", platform: "test", version: "1" },
-    },
+    authenticatedUserProfile: gatewayProfile(owner),
+    connect: gatewayConnect(["operator.write", "operator.read"], {
+      id: "test",
+      mode: "test",
+      version: "1",
+    }),
   };
   const runtime = { live: true, verifiedAccount: account, client };
   const config: OpenClawConfig = {};

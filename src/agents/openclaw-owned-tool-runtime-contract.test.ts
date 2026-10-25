@@ -8,7 +8,7 @@ import {
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
-import { createBaseToolHandlerState } from "./agent-tool-handler-state.test-helpers.js";
+import { createToolHandlerMocks } from "./agent-tool-handler-state.test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
@@ -36,17 +36,7 @@ const session = {
 
 function createToolHandlerCtx(runId: string): ToolHandlerContext {
   // Minimal embedded-agent tool handler context used to drive start/end events.
-  return {
-    params: { ...session, runId },
-    state: createBaseToolHandlerState(),
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
-    flushBlockReplyBuffer: vi.fn(),
-    shouldEmitToolResult: () => false,
-    shouldEmitToolOutput: () => false,
-    emitToolSummary: vi.fn(),
-    emitToolOutput: vi.fn(),
-    trimMessagingToolSent: vi.fn(),
-  };
+  return { params: { ...session, runId }, ...createToolHandlerMocks() };
 }
 
 async function startContract(

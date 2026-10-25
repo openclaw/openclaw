@@ -94,7 +94,6 @@ it.each([
         subagentSessions: [child],
         subagentSessionsHydrated: true,
         subagentSessionsRead: true,
-        swarm: undefined,
       });
       const view = mountSolid(
         () => renderChatComposerNotices({ sessionKey: routeKey, messages: [], ...roster }),

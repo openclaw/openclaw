@@ -457,7 +457,12 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         reasonCode,
         latencyMs,
         persona: persona?.id,
-        personaBinding: resolvePersonaBinding(persona, provider),
+        personaBinding:
+          resolvePersonaProviderConfig(persona, provider) != null
+            ? "applied"
+            : persona
+              ? "missing"
+              : "none",
         error: errorMsg,
       });
       if (provider === primaryProvider) {
@@ -491,15 +496,4 @@ function resolveTtsResultDetail(
     }
   }
   return undefined;
-}
-
-function resolvePersonaBinding(
-  persona: ResolvedTtsPersona | undefined,
-  provider: string,
-): "applied" | "missing" | "none" {
-  return resolvePersonaProviderConfig(persona, provider) != null
-    ? "applied"
-    : persona
-      ? "missing"
-      : "none";
 }

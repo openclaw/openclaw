@@ -43,7 +43,7 @@ import {
 import { requestChatSend } from "./chat-send-request.ts";
 import {
   OFFLINE_QUEUE_STORAGE_ERROR,
-  requiresChatInputConsumption,
+  retireDeliveredQueuedUserTurn,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import {
@@ -97,7 +97,9 @@ async function sendQueuedChatMessage(
     return "failed";
   }
   let expectedLeafEntryId = resolveQueuedChatLeaf(host, queued, options);
-  const history = waitForQueuedChatHistory(host, queued, queuedSessionKey, options);
+  const history = queued.sendAttempts
+    ? undefined
+    : waitForQueuedChatHistory(host, queued, queuedSessionKey, options);
   if (history) {
     const ready = await history;
     if (!retryOwnerIsCurrent()) {
@@ -225,6 +227,12 @@ async function sendQueuedChatMessage(
         sendState: "sending",
         sendRequestStartedAtMs: requestStartedAtMs,
         sessionKey,
+        // A reconnect must not replay an old attempt into a replacement session.
+        sessionId:
+          item.sessionId ??
+          (visibleSessionMatches(host, sessionKey, prepared.agentId)
+            ? (host.currentSessionId ?? undefined)
+            : undefined),
         agentId: prepared.agentId,
       }));
       if (!sendingItem) {
@@ -252,7 +260,7 @@ async function sendQueuedChatMessage(
             runId,
             ...(steerTargetRunId ? { steerTargetRunId } : {}),
           },
-          steerTargetRunId ? "complete" : undefined,
+          "complete",
         );
       if (isVisible()) {
         host.chatSendingScopeKey = storedChatOutboxScopeKey(scope);
@@ -283,7 +291,9 @@ async function sendQueuedChatMessage(
         }
         const deliveryLeafEntryId = prepared.intent
           ? prepared.expectedLeafEntryId
-          : expectedLeafEntryId;
+          : expectedLeafEntryId === undefined && sendingItem.sessionId
+            ? null
+            : expectedLeafEntryId;
         if (prepared.queueMode === "steer" && isVisible() && host.chatRunId) {
           const steerTargetRunId = host.chatRunId;
           const projectedMessage = buildSubmittedUserMessage(steerTargetRunId);
@@ -318,7 +328,7 @@ async function sendQueuedChatMessage(
           runId,
           sessionKey,
           agentId: prepared.agentId,
-          ...(prepared.sessionId ? { sessionId: prepared.sessionId } : {}),
+          ...(sendingItem.sessionId ? { sessionId: sendingItem.sessionId } : {}),
           ...(prepared.intent ? { intent: prepared.intent, sessionId: prepared.sessionId } : {}),
           ...(prepared.queueMode ? { queueMode: prepared.queueMode } : {}),
           ...(prepared.queueMode !== "steer" && deliveryLeafEntryId !== undefined
@@ -375,36 +385,53 @@ async function sendQueuedChatMessage(
           });
           return "failed";
         }
-        const retireOnAck =
-          storageMode === "memory" ||
-          ack.messageSeq !== undefined ||
-          (ack.status === "ok" && !requiresChatInputConsumption(prepared));
-        let retirementFailed = false;
-        if (retireOnAck) {
-          chatOutboxOwner(host).remove(host, id);
-          retirementFailed = storageMode === "durable" && readQueuedMessageById(host, id) !== null;
+        // Publish accepted run activity before retiring its queued progress across an await.
+        // Steering keeps the active run; only an explicit interrupt replaces it here.
+        if (
+          isNonTerminalAgentRunStatus(ack.status) &&
+          isVisible() &&
+          (!host.chatRunId || prepared.queueMode === "interrupt")
+        ) {
+          adoptStartedChatRun(host, ack.runId, startedAt);
         }
+        // Durable delivery hands complete display bytes to the existing shared owner.
+        // Memory-only admission has no stored row and retains its local projection.
+        const inputConsumed = ack.status === "ok" && ack.messageSeq !== undefined;
+        const projectedMessage =
+          storageMode === "memory" && !inputConsumed ? buildSubmittedUserMessage() : null;
+        if (storageMode === "durable" || inputConsumed) {
+          const retirement = await retireDeliveredQueuedUserTurn(host, runId, scope, {
+            inputConsumed,
+          });
+          if (retirement === "stale" || !requestConnectionIsCurrent()) {
+            return "pending";
+          }
+          // A peer may have retired durable custody while this pane still displays its local row.
+          chatOutboxOwner(host).syncHost(host);
+        }
+        if (storageMode === "memory") {
+          chatOutboxOwner(host).remove(host, id);
+        }
+        const retirementFailed =
+          storageMode === "durable" && readQueuedMessageById(host, id) !== null;
         if (isVisible()) {
-          if (retireOnAck) {
-            const projectionScope = readChatSessionProjectionScope(host, {
-              sessionKey,
-              agentId: prepared.agentId,
-            });
-            const projectedMessage = buildSubmittedUserMessage();
-            if (projectedMessage) {
-              reduceChatSessionProjection(
-                host,
-                { type: "sendPending", runId, message: projectedMessage },
-                { scope: projectionScope },
-              );
-            }
-            if (ack.runId !== runId) {
-              reduceChatSessionProjection(
-                host,
-                { type: "sendAcknowledged", previousRunId: runId, runId: ack.runId },
-                { scope: projectionScope },
-              );
-            }
+          const projectionScope = readChatSessionProjectionScope(host, {
+            sessionKey,
+            agentId: prepared.agentId,
+          });
+          if (projectedMessage) {
+            reduceChatSessionProjection(
+              host,
+              { type: "sendPending", runId, message: projectedMessage },
+              { scope: projectionScope },
+            );
+          }
+          if (ack.runId !== runId) {
+            reduceChatSessionProjection(
+              host,
+              { type: "sendAcknowledged", previousRunId: runId, runId: ack.runId },
+              { scope: projectionScope },
+            );
           }
           if (ack.status === "ok") {
             // A replayed input receipt does not complete another run in this session.
@@ -424,12 +451,6 @@ async function sendQueuedChatMessage(
               flushStoredChatOutbox(host, chatOutboxDrainDependencies),
             );
           } else if (isNonTerminalAgentRunStatus(ack.status)) {
-            // Accepted steering/queued custody identifies the input, not a replacement
-            // for the active model run. Only an explicit interrupt may replace it here;
-            // otherwise live execution events own adoption when the queued turn starts.
-            if (!host.chatRunId || prepared.queueMode === "interrupt") {
-              adoptStartedChatRun(host, ack.runId, startedAt);
-            }
             // Hydrate approved custody during setup without changing ordinary send
             // reconciliation or steering, whose ACK does not identify a new input.
             const setupHeld =
@@ -464,7 +485,7 @@ async function sendQueuedChatMessage(
           );
           return "pending";
         }
-        return retireOnAck ? "sent" : "pending";
+        return "sent";
       } catch (err) {
         if (!requestConnectionIsCurrent()) {
           return "pending";
@@ -473,7 +494,7 @@ async function sendQueuedChatMessage(
           steerSubmission.pending = false;
         }
         if (prepared.queueMode === "steer" && isVisible()) {
-          // The retained outbox row owns Retry and uncertain-delivery feedback.
+          // The retained outbox row owns pending and rejected-delivery feedback.
           reduceChatSessionProjection(
             host,
             { type: "sendFailed", runId },

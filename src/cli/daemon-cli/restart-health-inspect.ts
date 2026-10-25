@@ -36,6 +36,7 @@ export async function inspectGatewayRestart(params: {
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   timeoutMs?: number;
   /** Bound Gateway requests separately from native service/listener inspection. */
   probeTimeoutMs?: number;
@@ -83,6 +84,7 @@ export async function inspectGatewayRestart(params: {
   const loadReachability = () =>
     read("gateway-health", () =>
       confirmGatewayReachable({
+        assertCurrent: params.assertCurrent,
         port: params.port,
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
@@ -208,6 +210,7 @@ export async function inspectGatewayRestart(params: {
     gatewayBuildId,
     probeError,
     authenticationError,
+    protocolMismatch,
     staleConnection,
     activatedPluginErrors,
     unavailablePlugins,
@@ -226,6 +229,7 @@ export async function inspectGatewayRestart(params: {
     ...(startupPhase ? { startupPhase } : {}),
     ...(probeError ? { probeError } : {}),
     ...(authenticationError ? { authenticationError } : {}),
+    ...(protocolMismatch ? { protocolMismatch } : {}),
     ...(staleConnection ? { staleConnection } : {}),
     ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
     ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),

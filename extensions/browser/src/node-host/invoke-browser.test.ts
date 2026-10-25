@@ -356,7 +356,7 @@ describe("runBrowserProxyCommand", () => {
 
   it("serializes plural action downloads without reading nested page paths", async () => {
     await withTempDir("openclaw-browser-proxy-action-", async (tempDir) => {
-      const firstPath = nodePath.join(tempDir, "first.txt");
+      const firstPath = nodePath.join(tempDir, " first.txt ");
       const secondPath = nodePath.join(tempDir, "second.txt");
       const nestedPagePath = nodePath.join(tempDir, "page-controlled.txt");
       const result = {

@@ -220,23 +220,91 @@ it.each(["exact", "fallback"] as const)(
 
 it.each([
   { action: "send" as const },
+  { action: "status" as const },
   { action: "history" as const, displayAction: "search" as const },
-])("does not grant durable-row ownership to $action tools", async ({ action, displayAction }) => {
-  const parentKey = "agent:main:subagent:parent";
-  const targetSessionKey = "agent:main:subagent:old-child";
-  const gateway = vi.fn(async (_request: { method?: string }) => ({}));
+])(
+  "requires canonical relationship evidence for $action tools",
+  async ({ action, displayAction }) => {
+    const parentKey = "agent:main:subagent:parent";
+    const targetSessionKey = "agent:main:subagent:old-child";
+    let canonical = false;
+    const gateway = vi.fn(async (request: { method?: string }) =>
+      request.method === "sessions.describe"
+        ? {
+            session: {
+              key: targetSessionKey,
+              agentId: "main",
+              sessionId: "retained-child",
+              parentSessionKey: parentKey,
+              ...(canonical ? { childOwnerSessionKeys: [parentKey] } : {}),
+            },
+          }
+        : {},
+    );
 
-  const access = await resolveAccess({
-    action,
-    displayAction,
-    requesterSessionKey: parentKey,
-    targetSessionKey,
-    callGateway: gateway as never,
-  });
+    const access = await resolveAccess({
+      action,
+      displayAction,
+      requesterSessionKey: parentKey,
+      targetSessionKey,
+      callGateway: gateway as never,
+    });
 
-  expect(access).toMatchObject({ allowed: false, reasonCode: "tree_visibility_restricted" });
-  expect(gateway.mock.calls.map(([request]) => request.method)).toEqual(["sessions.resolve"]);
-});
+    expect(access).toMatchObject({ allowed: false, reasonCode: "tree_visibility_restricted" });
+    expect(gateway.mock.calls.map(([request]) => request.method)).toEqual([
+      "sessions.describe",
+      "sessions.resolve",
+    ]);
+    canonical = true;
+    expect(
+      await resolveAccess({
+        action,
+        displayAction,
+        requesterSessionKey: parentKey,
+        targetSessionKey,
+        callGateway: gateway as never,
+      }),
+    ).toEqual({ allowed: true, expectedSessionId: "retained-child", basis: "parent-lineage" });
+  },
+);
+
+it.each(["tree", "all"] as const)(
+  "keeps temporary controller rights separate from %s peer visibility",
+  async (visibility) => {
+    const parentKey = "agent:main:dashboard:parent";
+    const controllerKey = "agent:main:dashboard:controller";
+    const targetSessionKey = "agent:worker:subagent:child";
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, worker: {} } },
+      tools: { sessions: { visibility }, agentToAgent: { enabled: true } },
+    };
+    const gateway = vi.fn(async () => ({
+      session: {
+        key: targetSessionKey,
+        agentId: "worker",
+        sessionId: "child",
+        parentSessionKey: parentKey,
+        spawnedBy: controllerKey,
+        childOwnerSessionKeys: [controllerKey, parentKey],
+      },
+    }));
+    const access = await resolveAccess({
+      action: "send",
+      requesterSessionKey: controllerKey,
+      targetSessionKey,
+      targetAgentId: "worker",
+      visibility,
+      readConfig: () => cfg,
+      a2aPolicy: createAgentToAgentPolicy(cfg),
+      callGateway: gateway as never,
+    });
+    expect(access).toEqual(
+      visibility === "tree"
+        ? { allowed: true, expectedSessionId: "child", basis: "live-controller" }
+        : { allowed: true, assertCurrent: expect.any(Function) },
+    );
+  },
+);
 
 it("persists unknown ownership evidence with an opaque target through the local writer", async () => {
   const now = Date.now();

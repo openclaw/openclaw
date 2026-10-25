@@ -72,7 +72,7 @@ afterEach(async () => {
   }
 });
 
-function createMonitor(
+function createPausedMonitor(
   dispatch: Parameters<typeof createDiscordIngressMonitor>[0]["dispatch"],
   ingressQueue = queue,
 ) {
@@ -84,6 +84,10 @@ function createMonitor(
     dispatch,
   });
   monitors.add(monitor);
+  return monitor;
+}
+function createMonitor(...args: Parameters<typeof createPausedMonitor>) {
+  const monitor = createPausedMonitor(...args);
   monitor.start();
   return monitor;
 }
@@ -115,14 +119,7 @@ describe("Discord durable ingress", () => {
       ]),
     );
     const dispatch = vi.fn();
-    const monitor = createDiscordIngressMonitor({
-      accountId: "default",
-      client: {} as never,
-      runtime: { error: vi.fn(), log: vi.fn() },
-      queue,
-      dispatch,
-    });
-    monitors.add(monitor);
+    const monitor = createPausedMonitor(dispatch);
     const admission = monitor.accept(raw);
     let follower: Promise<void> | undefined;
     try {
@@ -172,14 +169,7 @@ describe("Discord durable ingress", () => {
         },
       ]),
     );
-    const monitor = createDiscordIngressMonitor({
-      accountId: "default",
-      client: {} as never,
-      runtime: { error: vi.fn(), log: vi.fn() },
-      queue,
-      dispatch: vi.fn(),
-    });
-    monitors.add(monitor);
+    const monitor = createPausedMonitor(vi.fn());
     await expect(monitor.accept(createRawMessage("denied"))).rejects.toThrow(
       "Channel ingress transform failed",
     );
@@ -198,14 +188,7 @@ describe("Discord durable ingress", () => {
           },
         ]),
       );
-      const monitor = createDiscordIngressMonitor({
-        accountId: "default",
-        client: {} as never,
-        runtime: { error: vi.fn(), log: vi.fn() },
-        queue,
-        dispatch: vi.fn(),
-      });
-      monitors.add(monitor);
+      const monitor = createPausedMonitor(vi.fn());
       await expect(monitor.accept(raw)).rejects.toThrow("changed event identity or lane");
       expect(await queue.listPending()).toEqual([]);
     },

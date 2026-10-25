@@ -30,6 +30,7 @@ export type ColdLoadProbeInput = {
   ownerProbes?: boolean;
   sidebarCounters?: boolean;
   latencyMs: number;
+  downloadKbps?: number;
   methodLatencyMs?: Record<string, number>;
   sidebarQueryLatencyMs?: Record<string, number>;
   omitHelloSelfPresence?: boolean;

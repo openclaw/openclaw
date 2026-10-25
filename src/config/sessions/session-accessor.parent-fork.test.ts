@@ -22,6 +22,7 @@ import { resolveSqliteStoreScope, toDatabaseOptions } from "./session-accessor.s
 import { withTranscriptWriteSequence } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as storeTargetRuntime from "./session-store-target-runtime.js";
+import { messageEvent as createMessageEvent } from "./transcript-message.test-support.js";
 
 const forkableClaudeCliBackend = {
   id: "claude-cli",
@@ -455,12 +456,7 @@ it.each(["executor", "discovery"] as const)(
     await replaceSessionEntry(parentScope, { sessionId: "typed-parent", updatedAt: 1 });
     await replaceTranscriptEvents(parentTranscriptScope, [
       { type: "session", version: 3, id: "typed-parent", timestamp: "2026-09-15T00:00:00Z" },
-      {
-        type: "message",
-        id: "assistant",
-        parentId: null,
-        message: { role: "assistant", content: "parent context" },
-      },
+      createMessageEvent("assistant", null, { role: "assistant", content: "parent context" }),
     ]);
     const parentEntry = loadSessionEntry(parentScope);
     const parentEvents = await loadTranscriptEvents(parentTranscriptScope);

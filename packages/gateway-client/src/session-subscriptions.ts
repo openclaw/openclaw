@@ -1,3 +1,4 @@
+import type { ErrorShape, SessionsMessagesSubscribeParams } from "@openclaw/gateway-protocol";
 import { normalizeAgentIdStrict } from "@openclaw/normalization-core/agent-id";
 import { generateUUID } from "@openclaw/normalization-core/uuid";
 import type { GatewayProtocolRequestOptions } from "./protocol-request.js";
@@ -17,17 +18,25 @@ export type GatewaySessionMessageSubscription = {
   mode?: "narration";
   includeApprovals?: true;
   approvalReplay?: unknown;
+  /** One-shot snapshot owned by the acquisition that requested it. */
+  initialHistory?: GatewaySessionInitialHistoryResult;
 };
+
+export type GatewaySessionInitialHistoryResult =
+  | { ok: true; payload: unknown }
+  | { ok: false; error: ErrorShape };
 
 export type GatewaySessionMessageSubscriptionOptions = {
   agentId?: string | null;
   mode?: "narration";
   includeApprovals?: boolean;
+  initialHistory?: SessionsMessagesSubscribeParams["initialHistory"];
 };
 
 type SessionMessageSubscriptionResponse = {
   key: string;
   approvalReplay?: unknown;
+  initialHistory?: GatewaySessionInitialHistoryResult;
 };
 
 type SessionMessageSubscriptionEntry = {
@@ -158,7 +167,12 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     }
     try {
       if (created) {
-        entry.ready = this.#requestSubscribe(entry, includeApprovals);
+        entry.ready = this.#requestSubscribe(
+          entry,
+          includeApprovals,
+          undefined,
+          options.initialHistory,
+        );
         if (includeApprovals) {
           entry.ready = this.#trackApprovalRequest(entry, entry.ready);
         }
@@ -166,6 +180,12 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         void entry.ready.catch(() => undefined);
       }
       const result = await this.#acquireCapability(entry, includeApprovals);
+      if (created && result.initialHistory) {
+        // The observer outlives this snapshot; later acquisitions must read current history.
+        const { initialHistory: _initialHistory, ...subscriptionResult } = result;
+        entry.ready = Promise.resolve(subscriptionResult);
+        entry.plainFallback = null;
+      }
       if (!narration && entry.mode === "narration") {
         await this.#requestSubscribe(entry, false, "full");
       }
@@ -176,6 +196,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       const subscription: GatewaySessionMessageSubscription = {
         key: result.key,
         agentId,
+        ...(created && result.initialHistory ? { initialHistory: result.initialHistory } : {}),
         ...(narration ? { mode: "narration" as const } : {}),
         ...(includeApprovals
           ? {
@@ -350,8 +371,9 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     entry: SessionMessageSubscriptionEntry,
     includeApprovals: boolean,
     mode?: "full" | "narration",
+    initialHistory?: GatewaySessionMessageSubscriptionOptions["initialHistory"],
   ): Promise<SessionMessageSubscriptionResponse> {
-    const send = () => this.#sendSubscribe(entry, includeApprovals, mode);
+    const send = () => this.#sendSubscribe(entry, includeApprovals, mode, initialHistory);
     // Approval replay and stream-mode changes replace the same wire observer.
     // Serializing them prevents a slow narration replay from undoing a full upgrade.
     const request = entry.wireRequest ? entry.wireRequest.then(send, send) : send();
@@ -366,10 +388,14 @@ export class GatewaySessionMessageSubscriptionCoordinator {
 
   #requestMessages(
     entry: SessionMessageSubscriptionEntry,
-    subscription?: { mode?: "narration"; includeApprovals: boolean },
+    subscription?: {
+      mode?: "narration";
+      includeApprovals: boolean;
+      initialHistory?: GatewaySessionMessageSubscriptionOptions["initialHistory"];
+    },
   ) {
     const agentId = entry.key === "global" ? (entry.ownerAgentId ?? entry.agentId) : entry.agentId;
-    return this.#client.request(
+    return this.#client.request<SessionMessageSubscriptionResponse & { agentId?: string | null }>(
       subscription ? "sessions.messages.subscribe" : "sessions.messages.unsubscribe",
       {
         subscriptionId: entry.subscriptionId,
@@ -377,6 +403,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         ...(agentId ? { agentId } : {}),
         ...(subscription?.mode ? { mode: subscription.mode } : {}),
         ...(subscription?.includeApprovals ? { includeApprovals: true } : {}),
+        ...(subscription?.initialHistory ? { initialHistory: subscription.initialHistory } : {}),
       },
       { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
     );
@@ -386,6 +413,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     entry: SessionMessageSubscriptionEntry,
     requestedApprovals: boolean,
     requestedMode?: "full" | "narration",
+    initialHistory?: GatewaySessionMessageSubscriptionOptions["initialHistory"],
   ): Promise<SessionMessageSubscriptionResponse> {
     if (this.#retired) {
       throw new Error("Session message subscription belongs to a replaced Gateway connection");
@@ -404,8 +432,8 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         ? "narration"
         : undefined;
     // A lost acknowledgment can leave stale observation until a fresh subscribe or reconnect.
-    const result = await this.#requestMessages(entry, { mode, includeApprovals });
-    const response = result && typeof result === "object" ? result : null;
+    const result = await this.#requestMessages(entry, { mode, includeApprovals, initialHistory });
+    const response = result ?? null;
     const responseKey = response && "key" in response ? response.key : undefined;
     entry.key =
       typeof responseKey === "string" && responseKey.trim() ? responseKey.trim() : entry.key;
@@ -423,6 +451,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       ...(response && "approvalReplay" in response
         ? { approvalReplay: response.approvalReplay }
         : {}),
+      ...(response?.initialHistory ? { initialHistory: response.initialHistory } : {}),
     };
   }
 

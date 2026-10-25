@@ -71,7 +71,7 @@ function resolvePreparedChildEnv(
         })
       : undefined;
   try {
-    return resolveCliChildEnv(preparedBackend).env;
+    return resolveCliChildEnv(preparedBackend, params).env;
   } finally {
     restoreSkillEnv?.();
   }

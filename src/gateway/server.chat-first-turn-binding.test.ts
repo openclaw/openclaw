@@ -2,6 +2,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -18,11 +19,7 @@ import {
 } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  closeProvider,
-  listenProvider,
-  readProviderBody,
-} from "./gateway-provider-fixture.test-support.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import * as subscriptions from "./server-runtime-subscriptions.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
@@ -51,7 +48,7 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
   const observeSubscriptions = vi.spyOn(subscriptions, "startGatewayEventSubscriptions");
   const providerServer = createServer((request, response) => {
     void (async () => {
-      requestBodies.push(await readProviderBody(request));
+      requestBodies.push(await readRequestText(request));
       if (requestBodies.length > 1) {
         writeOpenAiResponsesText(response, {
           text: "The same conversation resumed.",
@@ -287,7 +284,12 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     }),
   );
   expect(requestBodies).toHaveLength(1);
-  for (const nextRunId of ["resume-after-stop", "stale-terminal-generation", "continue-again"]) {
+  for (const nextRunId of [
+    "resume-after-stop",
+    "stale-terminal-generation",
+    "killed-unfinished-fence",
+    "continue-again",
+  ]) {
     if (nextRunId === "stale-terminal-generation") {
       // Older interrupted runs can leave terminal fences on an otherwise stopped row.
       await patchSessionEntryCore(transcriptScope, (entry) => ({
@@ -301,6 +303,21 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
           ...(entry.restartRecoveryTerminalRunIds ?? []),
           "stopped-old-run",
         ],
+      }));
+    }
+    if (nextRunId === "killed-unfinished-fence") {
+      await patchSessionEntryCore(transcriptScope, () => ({
+        status: "killed",
+        abortedLastRun: false,
+        mainRestartRecovery: undefined,
+        pendingFinalDelivery: undefined,
+        restartRecoveryDeliveryRunId: undefined,
+        restartRecoveryHarnessCompletion: undefined,
+        restartRecoveryRuns: [{ runId: "killed-old-run", lifecycleGeneration: "dead-generation" }],
+        restartRecoveryTerminalRunIds: Array.from(
+          { length: 8 },
+          (_, index) => `other-run-${index}`,
+        ),
       }));
     }
     const currentHistory = await gateway.client.request<{
@@ -321,7 +338,7 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
       status: "ok",
     });
   }
-  expect(requestBodies).toHaveLength(4);
+  expect(requestBodies).toHaveLength(5);
   expect(await loadTranscriptEvents(transcriptScope)).toEqual(expect.arrayContaining(events));
   expect(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toMatchObject({ sessionId });
 });

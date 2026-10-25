@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
@@ -208,11 +209,12 @@ export function createSessionRowMaterializer(owner: {
       withAgentRosterFactsBatch(cfg, () => {
         for (const id of ids) {
           const current = owner.rows.get(id);
-          const databaseFacts = facts.get(id);
+          let databaseFacts = facts.get(id);
           const row =
             current &&
             owner.acquireEntry(
-              databaseFacts
+              databaseFacts &&
+                (current.hasBoard !== databaseFacts.hasBoard || current.unresolvedDatabaseFacts)
                 ? {
                     ...current,
                     hasBoard: databaseFacts.hasBoard,
@@ -221,6 +223,10 @@ export function createSessionRowMaterializer(owner: {
                 : current,
               databaseFacts?.entry,
             );
+          // Equal rereads keep the canonical entry; retained facets share that identity.
+          if (row?.storedEntry && databaseFacts && databaseFacts.entry !== row.storedEntry) {
+            databaseFacts = { ...databaseFacts, entry: row.storedEntry };
+          }
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
             row.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
@@ -250,6 +256,7 @@ export function createSessionRowMaterializer(owner: {
 export function readResidentSessionRow(
   params: {
     row: records.Row & { entry: NonNullable<records.Row["entry"]> };
+    membership?: readonly string[];
     cfg: records.Inputs["cfg"];
     modelCatalog: records.Inputs["modelCatalog"];
     configuredAgentIds: ReadonlySet<string>;
@@ -309,19 +316,32 @@ export function readResidentSessionRow(
     childLinks: prepared ? undefined : params.links,
   });
   inputs.subagentRunInputs = params.subagentInputs;
-  const materialized = materializeSessionRow(inputs);
+  const members = params.membership;
+  const membership =
+    members &&
+    (row.membership.size !== members.length || members.some((id) => !row.membership.has(id)))
+      ? new Set(members)
+      : row.membership;
+  const next = materializeSessionRow(inputs);
+  const materialized =
+    membership === row.membership &&
+    row.materialized?.source.entry === row.entry &&
+    row.materialized.source.cfg === cfg &&
+    isDeepStrictEqual(row.materialized, next)
+      ? row.materialized
+      : next;
   // Row preparation may populate the metadata used by automatic utility policy.
   let activitySummaryEnabled: boolean | undefined;
-  if (activitySummaryEnabledByAgent && row.entry.sessionId && !row.entry.initializationPending) {
-    activitySummaryEnabled = activitySummaryEnabledByAgent.get(row.agentId);
+  if (row.entry.sessionId && !row.entry.initializationPending) {
+    activitySummaryEnabled = activitySummaryEnabledByAgent?.get(row.agentId);
     if (activitySummaryEnabled === undefined) {
       activitySummaryEnabled = Boolean(
         resolveUtilityModelRefForAgent({ cfg, agentId: row.agentId }),
       );
-      activitySummaryEnabledByAgent.set(row.agentId, activitySummaryEnabled);
+      activitySummaryEnabledByAgent?.set(row.agentId, activitySummaryEnabled);
     }
   }
-  const facts = readSessionRowFacts({
+  const factsInput = {
     cfg,
     target: row,
     entry: row.entry,
@@ -330,15 +350,18 @@ export function readResidentSessionRow(
     placementFactsReader: params.placementFactsReader,
     activitySummaryEnabled,
     databaseFacts,
-  });
+  };
+  const facts = row.facts?.matches(factsInput) ? row.facts : readSessionRowFacts(factsInput);
   row.privateSource?.assertCurrent();
   return {
     materialized,
     preparedAcpMeta: materialized.source.thinkingProjection.acpMeta ?? null,
-    fallbackModel: presentation.activeModel,
+    fallbackModel: isDeepStrictEqual(row.fallbackModel, presentation.activeModel)
+      ? row.fallbackModel
+      : presentation.activeModel,
     facts,
     hasBoard: facts.hasBoard,
-    membership: row.membership,
+    membership,
   };
 }
 
@@ -607,12 +630,23 @@ export function lookupSessionRow(
     : undefined;
   let key = query.key;
   do {
-    const candidates = owner.byKey.get(`key:${key}`);
-    if (candidates) {
+    const candidates = owner.byKey.get(records.logicalSessionRowIdentity(agentId, key));
+    if (candidates?.size === 1) {
+      const row = owner.rows.get(candidates.values().next().value!);
+      if (
+        row &&
+        (paths
+          ? paths.includes(row.storeTarget.storePath)
+          : owner.stores.has(row.storeTarget.storePath))
+      ) {
+        return row;
+      }
+    } else if (candidates) {
+      // Physical duplicates (including sentinels) retain the topology's store precedence.
       for (const storePath of paths ?? owner.stores.keys()) {
         for (const id of candidates) {
           const row = owner.rows.get(id);
-          if (row?.agentId === agentId && row.storeTarget.storePath === storePath) {
+          if (row?.storeTarget.storePath === storePath) {
             return row;
           }
         }

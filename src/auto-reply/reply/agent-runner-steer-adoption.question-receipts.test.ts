@@ -25,10 +25,7 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import {
-  createReplyParams,
-  createSteerParams,
-} from "./agent-runner-steer-adoption.test-support.js";
+import { createSteerParams } from "./agent-runner-steer-adoption.test-support.js";
 import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
@@ -40,7 +37,7 @@ import {
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
-import { createMockTypingController } from "./test-helpers.js";
+import { createMockTypingController, createReplyParams } from "./test-helpers.js";
 
 const text = "candidate committed answer";
 type QueueOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
@@ -232,6 +229,7 @@ it.each(
           entrypoint === "reply"
             ? runReplyAgent(
                 createReplyParams(run, {
+                  transcriptCommandBody: run.prompt,
                   opts: {
                     [REPLY_OPERATION_RUN_STATE]: state,
                     turnAdoptionLifecycle: run.turnAdoptionLifecycle,

@@ -1,6 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  markManagedWorktreePreparation,
+  timeWorktreePreparationPhase,
+  withWorktreePreparationTiming,
+} from "../../agents/worktrees/preparation-timing.js";
+import {
   areDiagnosticsEnabledForProcess,
   onTrustedInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
@@ -153,4 +158,30 @@ test("span observer failures preserve synchronous and asynchronous results and e
   expect(observeTimeline(observer, () => measureSpanSync("sync", () => 42))).toBe(42);
   const rejectOperation = () => measureSpan("async", () => Promise.reject(failure));
   await expect(observeTimeline(() => observer, rejectOperation)).rejects.toBe(failure);
+});
+
+test("slow startup consumes the sandbox owner's nested timing facts", async () => {
+  const { info, diagnostics } = createDiagnostics();
+  diagnostics.acknowledge();
+  await observeTimeline(diagnostics.observeSpan, () =>
+    measureSpan(
+      "agent.prepare",
+      () =>
+        withWorktreePreparationTiming("sandbox", async () => {
+          markManagedWorktreePreparation();
+          await timeWorktreePreparationPhase("templatePrepare", async () => {
+            at(50_000);
+          });
+          await timeWorktreePreparationPhase("containerStart", async () => {
+            at(75_000);
+          });
+        }),
+      { attributes: { stage: "attempt.setup" } },
+    ),
+  );
+  diagnostics.finish();
+  expectLog(
+    info,
+    "slow chat send 75000ms stage=startup ack=0ms detail.attempt.setup=75000ms detail.worktree.sandbox=75000ms detail.worktree.sandbox.containerStart=25000ms detail.worktree.sandbox.templatePrepare=50000ms detail.worktree.sandbox.unattributed=0ms",
+  );
 });

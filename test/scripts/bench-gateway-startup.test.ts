@@ -22,6 +22,30 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+it("runs startup benchmark help through a symlinked script directory", async ({ signal }) => {
+  const root = tempDirs.make("openclaw-bench-symlink-");
+  const scripts = path.join(root, "scripts");
+  fs.symlinkSync(
+    path.resolve("scripts"),
+    scripts,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const result = await runNodeScript(
+    [
+      "--import",
+      path.resolve("scripts/tsx.mjs"),
+      path.join(scripts, "bench-gateway-startup.ts"),
+      "--help",
+    ],
+    { ...process.env },
+    undefined,
+    { cwd: process.cwd(), signal, maxBuffer: 64 * 1024 },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain("--case <id>");
+});
+
 const parseOptions = (args: string) => testing.parseOptions(args.split(" "));
 
 function resolveBenchCase(id: string) {
@@ -764,7 +788,7 @@ server.listen(port, "127.0.0.1", () => {
       const bundledPluginFixture: OpenClawConfig = withBundledFixture
         ? {
             plugins: {
-              allow: ["fixture-required", "fixture-defaults"],
+              allow: ["fixture-required", "fixture-defaults", "memory-core"],
               entries: {
                 "fixture-required": {
                   config: { token: "synthetic-only", scheduler: { enabled: false } },
@@ -806,6 +830,7 @@ server.listen(port, "127.0.0.1", () => {
       expect(config.channels).toEqual(bundledPluginFixture.channels);
       expect(config.tools).toEqual(bundledPluginFixture.tools);
       expect(config.plugins?.entries?.browser).toEqual({ enabled: false });
+      expect(config.plugins?.entries?.["memory-core"]).toEqual({ enabled: withBundledFixture });
       expect(
         testing.parseOptions(["--case", "teamBoot"]).cases[0]?.bundledPluginFixture,
       ).toBeUndefined();

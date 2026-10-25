@@ -33,9 +33,17 @@ function expectInsertion(match: ReturnType<typeof resolve>, container: string) {
 }
 
 describe("resolveOcPath", () => {
-  it("returns root for file-only path", () => {
-    const md = parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n");
-    expect(resolve(md, "oc://X.md")?.kind).toBe("root");
+  it.each([
+    ["Markdown", () => parseMd("---\nname: github\n---\n\n## Boundaries\n\n- enabled: true\n")],
+    ["JSONC", () => parseJsonc('{ "enabled": true }')],
+    ["JSONL", () => parseJsonl('{"enabled":true}\n')],
+    ["YAML", () => parseYaml("enabled: true\n")],
+  ])("preserves file-root identity and unresolved results for %s", (_kind, parse) => {
+    const ast = parse();
+    const root = resolve(ast, "oc://X");
+    expect(root).toMatchObject({ kind: "root", line: 1 });
+    expect(root?.kind === "root" && root.ast).toBe(ast);
+    expect(resolve(ast, "oc://X/missing")).toBeNull();
   });
 
   it("keeps a wrapped prose item addressable when a later line contains a colon", () => {

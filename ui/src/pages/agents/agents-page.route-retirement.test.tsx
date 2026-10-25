@@ -8,6 +8,7 @@ import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { RouterOutlet } from "../../app/router-outlet.tsx";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -301,13 +302,7 @@ it("leaves Agents through RouterOutlet while its admitted default write settles 
       return { models: [] };
     }
     if (method === "config.get") {
-      return {
-        config: persisted,
-        raw: JSON.stringify(persisted),
-        hash: revision,
-        valid: true,
-        issues: [],
-      };
+      return configSnapshot(persisted, revision, JSON.stringify(persisted));
     }
     if (method === "config.set") {
       // SAFETY: This is the config.set transport boundary; its public contract requires raw JSON.

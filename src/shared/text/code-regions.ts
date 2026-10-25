@@ -74,26 +74,8 @@ export function findCodeOwnership(
   text: string,
   options?: Parameters<typeof parseMarkdownOwnership>[1],
 ) {
-  const {
-    regions,
-    retainStart,
-    completedParagraphs,
-    paragraphs,
-    definitions,
-    textSpans,
-    unsettledDefinitionStarts,
-    unresolvedImageCodeStart,
-  } = parseMarkdownOwnership(text, options);
-  return {
-    regions,
-    retainStart,
-    ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
-    completedParagraphs,
-    definitions,
-    textSpans,
-    unsettledDefinitionStarts,
-    ...(paragraphs ? { paragraphs } : {}),
-  };
+  const { codeSpans: _codeSpans, ...ownership } = parseMarkdownOwnership(text, options);
+  return ownership;
 }
 
 /** Reuse a parsed prefix only when an append cannot change Markdown ownership. */

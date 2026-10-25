@@ -61,6 +61,8 @@ const CollectorCompletionSchema = Type.Object(
     reason: Type.Optional(Type.Literal("yielded_without_result")),
     sessionKey: Type.String(),
     label: Type.Optional(Type.String()),
+    groupId: Type.Optional(Type.String()),
+    runtimeMs: Type.Optional(Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
     usage: Type.Optional(
       Type.Object(
         { inputTokens: Type.Number(), outputTokens: Type.Number() },
@@ -185,6 +187,12 @@ function completionResult(
   if (!completion) {
     return undefined;
   }
+  const elapsed =
+    (entry.execution.endedAt ?? Number.NaN) - (entry.execution.startedAt ?? Number.NaN);
+  const runtimeMs =
+    Number.isFinite(elapsed) && elapsed >= 0 && elapsed <= Number.MAX_SAFE_INTEGER
+      ? elapsed
+      : undefined;
   return {
     runId: entry.swarmRunId ?? entry.runId,
     status: completion.status,
@@ -197,6 +205,8 @@ function completionResult(
     ...(completion.reason ? { reason: completion.reason } : {}),
     sessionKey: entry.childSessionKey,
     ...(entry.label ? { label: entry.label } : {}),
+    ...(entry.groupId ? { groupId: entry.groupId } : {}),
+    ...(runtimeMs !== undefined ? { runtimeMs } : {}),
     ...(completion.usage ? { usage: completion.usage } : {}),
   };
 }

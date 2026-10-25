@@ -21,6 +21,10 @@ import {
 } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
+  PluginRuntimeCloseCompletedError,
+  PluginRuntimeCloseRetainedError,
+} from "./runtime-close-error.js";
+import {
   disposePluginRegistryInstances,
   getActivePluginRegistry,
   resetPluginRuntimeStateForTest,
@@ -61,6 +65,20 @@ function disposalError(fixture: InspectionFixture, cause = false) {
 }
 
 describe("owned plugin inspections", () => {
+  it.each([false, true])("preserves frozen disposal errors (retained: %s)", async (retained) => {
+    const failure = retained
+      ? new PluginRuntimeCloseRetainedError(new Error("Unfinished disposal"))
+      : new Error("Completed disposal failed");
+    Object.freeze(failure);
+    const resources = new PluginRegistryInspectionResources(async () => {
+      throw failure;
+    });
+    const outcome = await resources.release().catch((error: unknown) => error);
+    expect(outcome).toBeInstanceOf(AggregateError);
+    expect(outcome instanceof PluginRuntimeCloseCompletedError).toBe(!retained);
+    expect(outcome).toMatchObject({ errors: [failure] });
+  });
+
   it.each([false, true])(
     "keeps borrowed sources through final native cleanup (failure: %s)",
     async (fails) => {

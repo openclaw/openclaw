@@ -290,9 +290,6 @@ export class DefaultResourceLoader implements ResourceLoader {
         const stats = statSync(resolved);
         let filePaths: string[];
         if (stats.isDirectory()) {
-          if (!existsSync(resolved)) {
-            continue;
-          }
           failureMessage = "failed to read theme directory";
           const { entries, failedDirs } = walkDirectorySync(resolved, {
             maxDepth: 1,

@@ -1,10 +1,10 @@
 // Starting Browser control under trusted-proxy auth must not write Gateway auth config.
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { getFreePort } from "../browser/test-port.js";
 import { makeRequest } from "./browser-request.test-support.js";
 
 // mock-isolation: these tests start Browser control, not a Chrome process.
@@ -32,18 +32,6 @@ let root = "";
 let configPath = "";
 let gatewayPort = 0;
 
-async function freePort(): Promise<number> {
-  const server = net.createServer();
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as net.AddressInfo;
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-  return port;
-}
-
 function writeTrustedProxyConfig() {
   const config = {
     gateway: {
@@ -69,7 +57,7 @@ beforeEach(async () => {
   configPath = path.join(root, "config", "openclaw.json");
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   // Browser control derives its port from the Gateway port (+2); keep both free.
-  gatewayPort = (await freePort()) - 2;
+  gatewayPort = (await getFreePort()) - 2;
   writeTrustedProxyConfig();
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);

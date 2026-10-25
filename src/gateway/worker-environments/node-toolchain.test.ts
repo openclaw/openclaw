@@ -8,11 +8,17 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { snapshotNodeWorkerEnv } from "../../node-host/node-worker-environment.js";
 import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH, NODE_TOOLCHAIN_INSTALL_SH } from "./node-toolchain.js";
+import { REPOSITORY_NODE_REQUIREMENT_SOURCE } from "./repository-node-requirement.generated.js";
 import { resolveRepositoryNodeRequirement } from "./repository-node-requirement.js";
 import { PREPARE_REPOSITORY_NODE_JS } from "./repository-node-toolchain.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const requireModule = createRequire(import.meta.url);
+const resolveBuiltNodeRequirement: typeof resolveRepositoryNodeRequirement = runInNewContext(
+  REPOSITORY_NODE_REQUIREMENT_SOURCE,
+  {},
+  { contextCodeGeneration: { strings: false, wasm: false } },
+);
 const downloadScript =
   '#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\ncp "$(dirname "$0")/../release.tgz" "$2"\n';
 const write = (file: string, text: string, mode = 0o755) => {
@@ -201,4 +207,5 @@ it.each([
   [{ "package.json": '{"engines":{"node":22}}' }, undefined],
 ])("resolves checkout declarations", (files, expected) => {
   expect(resolveRepositoryNodeRequirement(files)).toBe(expected);
+  expect(resolveBuiltNodeRequirement(files)).toBe(expected);
 });

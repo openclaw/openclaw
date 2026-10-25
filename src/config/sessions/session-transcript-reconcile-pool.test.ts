@@ -2,14 +2,11 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import type { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
-import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
@@ -29,6 +26,10 @@ import {
   getSessionTranscriptReconcileWorkerPoolSnapshot as poolSnapshot,
   runSessionTranscriptReconcileOperation as runOperation,
 } from "./session-transcript-reconcile-pool.js";
+import {
+  observeCanonicalWriterLeases,
+  readAgentDatabaseLeaseIds,
+} from "./session-transcript-reconcile.fixtures.test-support.js";
 import {
   isSessionTranscriptIndexReconcileRunning as isReconciling,
   reconcileSessionTranscriptIndexes as reconcile,
@@ -211,32 +212,6 @@ it("closes a queued admission without dispatching it after shutdown", async () =
     await cleanup(stateDir);
   }
 });
-
-function readAgentDatabaseLeaseIds(pathname: string, env: NodeJS.ProcessEnv): string[] {
-  return openOpenClawStateDatabase({ env })
-    .db.prepare(
-      "SELECT lease_id FROM agent_database_leases WHERE owner_pid = ? AND path = ? ORDER BY lease_id",
-    )
-    .all(process.pid, pathname)
-    .map((row) => String(row.lease_id));
-}
-
-function observeCanonicalWriterLeases() {
-  const leases = new Map<string, string>();
-  const spy = probe.admission(admission, (request, grant, admit) => {
-    const facts = request.facts;
-    if (
-      request.stage === "open" &&
-      isRecord(facts) &&
-      typeof facts.databasePath === "string" &&
-      typeof facts.leaseId === "string"
-    ) {
-      leases.set(facts.databasePath, facts.leaseId);
-    }
-    admit(request, grant);
-  });
-  return { leases, [Symbol.dispose]: () => spy.mockRestore() };
-}
 
 it("reconciles a dirty projection while the parent retains serving Gateway ownership", async () => {
   const { stateDir, env, options } = fixture("parent-owner");

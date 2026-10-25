@@ -5,6 +5,11 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEventSubscriberRegistry } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -145,7 +150,38 @@ describe("chat.startup short references", () => {
       const context = createDirectChatContext();
       await initializeSessionReadContext(context);
       const call = (shortId: string) => startup(context, null, shortId, 80);
-      expect(await call("12345678")).toHaveBeenCalledWith(
+      const phases: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>[] = [];
+      const stop = onTrustedInternalDiagnosticEvent(
+        (event) => {
+          if (event.type === "diagnostic.phase.completed") {
+            phases.push(event);
+          }
+        },
+        { include: ["diagnostic.phase.completed"] },
+      );
+      let response;
+      try {
+        response = await call("12345678");
+        await waitForDiagnosticEventsDrained();
+      } finally {
+        stop();
+      }
+      expect(phases.map(({ name }) => name)).toEqual(
+        expect.arrayContaining([
+          "chat.startup.session_entry",
+          "chat.startup.pending_inputs",
+          "chat.startup.history_page",
+          "chat.startup.startup_projection",
+          "chat.startup.projection_final",
+          "chat.startup.session_info",
+        ]),
+      );
+      expect(phases.every(({ durationMs }) => durationMs !== undefined && durationMs >= 0)).toBe(
+        true,
+      );
+      expect(phases.every(({ details }) => details === undefined)).toBe(true);
+      expect(JSON.stringify(phases)).not.toContain(key);
+      expect(response).toHaveBeenCalledWith(
         true,
         expect.objectContaining({
           sessionKey: key,

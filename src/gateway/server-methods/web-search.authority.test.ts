@@ -1,12 +1,14 @@
+import "./web-search-runtime.test-support.js";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry, WebSearchProviderPlugin } from "../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+const { preparedWebSearchCatalog: preparedCatalog, webSearchRuntimeMocks: runtimeMocks } =
+  await import("./web-search-runtime.test-support.js");
 
 const mocks = vi.hoisted(() => ({
-  prepare: vi.fn(),
   assertProfile: vi.fn(),
   providers: [] as PluginWebSearchProviderEntry[],
   beforeImport: vi.fn<() => Promise<void>>(),
@@ -18,7 +20,10 @@ vi.mock("./users-profile-access.js", () => ({
     assertCurrent: mocks.assertProfile,
   }),
 }));
-vi.mock("./web-search-status.js", () => ({ prepareWebSearchStatus: mocks.prepare }));
+// mock-isolation: Expose the real provider facade as status input without setup discovery.
+vi.mock("../../flows/search-setup.js", () => ({
+  listSearchProviderOptions: () => mocks.providers,
+}));
 vi.mock("../../plugins/plugin-registry-contributions.js", () => ({
   resolveManifestContractOwnerPluginId: () => "parallel",
 }));
@@ -51,10 +56,8 @@ beforeEach(() => {
     tools: { web: { search: { provider: "parallel", cacheTtlMinutes: 0 } } },
     plugins: { entries: { parallel: { config: { webSearch: { apiKey: "synthetic" } } } } },
   };
-  mocks.prepare.mockImplementation(async () => ({
-    config,
-    status: { route: { kind: "managed", provider: "parallel", testable: true } },
-  }));
+  runtimeMocks.catalog.mockImplementation(async () => preparedCatalog());
+  runtimeMocks.runtime.mockReturnValue({ id: "openclaw" });
 });
 
 afterEach(() => vi.unstubAllGlobals());
