@@ -88,11 +88,12 @@ export function appendTranscriptEventInTransaction(
   options: TranscriptAppendOptions = {},
   cursor: TranscriptAppendCursor = {},
 ): string | false {
-  const priorAssistant = !cursor.initialized
-    ? "unchanged"
-    : cursor.rowTranscript
-      ? cursor.rowTranscript.lastAssistantMessage
-      : "unknown";
+  const priorAssistant =
+    options.independentMessageProjection || !cursor.initialized
+      ? "unchanged"
+      : cursor.rowTranscript
+        ? cursor.rowTranscript.lastAssistantMessage
+        : "unknown";
   const persistedEvent =
     options.eventJson === undefined ? canonicalizeTranscriptEventMedia(event) : event;
   return withSqliteDatabaseWriteScope(
@@ -103,7 +104,7 @@ export function appendTranscriptEventInTransaction(
       const actor = readSessionActorTransactionState(database, scope);
       const initial =
         !cursor.initialized && !actor
-          ? readTranscriptAppendStateInTransaction(database, scope)
+          ? (cursor.initialState ?? readTranscriptAppendStateInTransaction(database, scope))
           : undefined;
       const window = initial?.roots[0];
       const isCompaction = isRecord(persistedEvent) && persistedEvent.type === "compaction";
@@ -157,6 +158,7 @@ export function appendTranscriptEventInTransaction(
           );
         }
         cursor.initialized = true;
+        cursor.initialState = undefined;
       }
       if (windowExists) {
         cursor.windowUpdatedAt = createdAt;

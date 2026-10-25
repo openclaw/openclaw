@@ -111,13 +111,28 @@ describe("selected transcript turn cold restoration", () => {
     return { ...fixture, append, cold, descriptor, replaceRevision, prepareMessage };
   }
 
-  it.each(["turn", "locked worker with owner fence", "locked SDK released-sync"])(
+  it.each(["turn", "plain turn", "locked worker with owner fence", "locked SDK released-sync"])(
     "restores raw-key history and appends through its selected identity (%s)",
     async (mode) => {
       const fixture = await createFixture();
       if (mode === "turn") {
         await expect(fixture.append()).resolves.toMatchObject({ messages: [{ appended: true }] });
         expect(fixture.prepareMessage).toHaveBeenCalledOnce();
+      } else if (mode === "plain turn") {
+        await expect(
+          persistSessionTranscriptTurn(
+            { ...fixture.scope, sessionKey: "agent:main:global" },
+            {
+              expectedSessionId: historicalId,
+              expectedLifecycleRevision: "selected",
+              messages: [
+                { message: { role: "user", content: "Resume selected history" } },
+                { message: { role: "assistant", content: "Restored history" } },
+              ],
+              updateMode: "none",
+            },
+          ),
+        ).resolves.toMatchObject({ messages: [{ appended: true }, { appended: true }] });
       } else {
         const message = { role: "user", content: "Resume selected history" };
         const prepare = vi.fn((value: typeof message) => value);
