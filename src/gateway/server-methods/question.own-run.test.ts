@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntrySync,
@@ -43,22 +43,14 @@ import {
   manager,
   requestParams,
   secretRequestParams,
+  secretRequestQuestion,
 } from "./question.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 installQuestionTestHooks();
 
 const answers = { answers: { destination: ["Library"] } };
-const answered = { status: "answered", answers };
 const sessionScope = { agentId: "main", sessionKey: requestParams.sessionKey };
-
-function expectHidden(response: Awaited<ReturnType<typeof callQuestionRpc>>) {
-  expect(response).toMatchObject([false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]);
-}
-
-function expectAnswered(response: Awaited<ReturnType<typeof callQuestionRpc>>) {
-  expect(response).toEqual([true, answered, undefined]);
-}
 
 function questionPeer(
   profile: ReturnType<typeof ensureProfileForEmail>,
@@ -196,7 +188,12 @@ async function createOwnRunFixture() {
       },
     );
     try {
-      await awaitGateBeforeSettlement(attached.promise, result, "question waiter was not admitted");
+      await Promise.race([
+        attached.promise,
+        result.then((response) => {
+          throw new Error("question waiter was not admitted: " + JSON.stringify(response[2]));
+        }),
+      ]);
     } finally {
       observer.mockRestore();
     }
@@ -295,7 +292,11 @@ describe("own-run question admission", () => {
               { question: { id, status: "pending" } },
               undefined,
             ]);
-            expectAnswered(await f.call("question.resolve", { id, answers }));
+            expect(await f.call("question.resolve", { id, answers })).toEqual([
+              true,
+              { status: "answered", answers },
+              undefined,
+            ]);
             await manager.drain();
             expect(getActiveGatewayRootWorkCount()).toBe(0);
           } finally {
@@ -308,6 +309,61 @@ describe("own-run question admission", () => {
       }
     },
   );
+
+  it("recovers an ordinary question after reconnect and retains an accepted answer after run close", async () => {
+    await withOwnRunQuestion(async (f) => {
+      const id = await f.request();
+      expect(f.browser.socket.send).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(f.browser.socket.send.mock.calls[0]![0]))).toMatchObject({
+        event: "question.requested",
+        payload: { id },
+      });
+      f.clients.delete(f.browser.client);
+      const reconnected = questionPeer(f.profile, "reconnected-browser");
+      f.clients.add(reconnected.client);
+      expect((await f.call("question.list", {}, reconnected.client))[1]).toMatchObject({
+        questions: [{ id }],
+      });
+      expect((await f.call("question.get", { id }, reconnected.client))[1]).toMatchObject({
+        question: { id, status: "pending" },
+      });
+      const waiting = await f.beginWait(id, reconnected.client);
+      broadcast.mockImplementation((event, payload, opts) => {
+        f.broadcaster.broadcast(event, payload, opts);
+        if (event === "question.resolved") {
+          releaseAgentRunDelegatedAuthority(f.authority);
+          f.source.release();
+        }
+      });
+      const accepted = { status: "answered", answers };
+      expect((await f.call("question.resolve", { id, answers }, reconnected.client))[1]).toEqual(
+        accepted,
+      );
+      expect((await waiting.result)[1]).toEqual(accepted);
+      expect((await f.call("question.waitAnswer", { id }, reconnected.client))[1]).toEqual(
+        accepted,
+      );
+      expect((await f.call("question.get", { id }, reconnected.client))[1]).toMatchObject({
+        question: { id, ...accepted },
+      });
+      await manager.drain();
+      expect(reconnected.socket.send).toHaveBeenCalledOnce();
+      expect(JSON.parse(String(reconnected.socket.send.mock.calls[0]![0]))).toMatchObject({
+        event: "question.resolved",
+        payload: { id, ...accepted },
+      });
+      for (const [method, scope] of [
+        ["exec.approval.resolve", "operator.approvals"],
+        ["secrets.store.set", "operator.admin"],
+      ] as const) {
+        expect(await f.call(method, {}, reconnected.client)).toMatchObject([
+          false,
+          undefined,
+          { code: "FORBIDDEN", message: "missing scope: " + scope },
+        ]);
+      }
+    });
+  });
 
   it("conceals questions from foreign viewers and members with session read and write scopes", async () => {
     await withOwnRunQuestion(async (f) => {
@@ -334,43 +390,74 @@ describe("own-run question admission", () => {
       }
       const id = await f.request();
       const binding = manager.observe(id)!.sessionAccess!;
-      const retainedReads = [
-        vi.spyOn(binding, "assertSourceCurrent"),
-        vi.spyOn(binding, "assertCurrent"),
-        vi.spyOn(projectionLane.pool, "run"),
-      ];
+      let retainedReads = 0;
+      const assertSourceCurrent = binding.assertSourceCurrent;
+      vi.spyOn(binding, "assertSourceCurrent").mockImplementation(() => {
+        retainedReads += 1;
+        assertSourceCurrent();
+      });
+      const assertCurrent = binding.assertCurrent;
+      vi.spyOn(binding, "assertCurrent").mockImplementation((read) => {
+        retainedReads += 1;
+        assertCurrent(read);
+      });
+      const run = projectionLane.pool.run.bind(projectionLane.pool);
+      vi.spyOn(projectionLane.pool, "run").mockImplementation((...args) => {
+        retainedReads += 1;
+        return run(...args);
+      });
       const requestedEvent = broadcast.mock.calls[0];
       if (!requestedEvent || requestedEvent[0] !== "question.requested") {
         throw new Error("expected the registered question event");
       }
       f.clients.delete(f.browser.client);
+      retainedReads = 0;
       f.broadcaster.broadcast(...requestedEvent);
+      expect(
+        retainedReads,
+        "foreign recipients must not probe the retained session's filesystem identity",
+      ).toBe(0);
       f.clients.add(f.browser.client);
       const unrelated = claimAgentRunDelegatedAuthority({
         instanceId: "unrelated-run",
         runId: "unrelated-run",
       });
+      retainedReads = 0;
       releaseAgentRunDelegatedAuthority(unrelated);
+      expect(retainedReads, "closing an unrelated run must not probe the question's session").toBe(
+        0,
+      );
+      retainedReads = 0;
       manager.cancelClosedAuthorities({ instanceId: "older-instance", runId: requestParams.runId });
+      expect(retainedReads, "reused run IDs must retain their exact operational instance").toBe(0);
       manager.cancelClosedAuthorities({ runId: "unrelated-worker-run" });
+      expect(retainedReads, "an unrelated worker run must not probe the question's session").toBe(
+        0,
+      );
       for (const peer of peers) {
+        retainedReads = 0;
         expect((await f.call("question.list", {}, peer.client))[1]).toEqual({ questions: [] });
+        expect(retainedReads, "a foreign question list must not inspect the retained session").toBe(
+          0,
+        );
         for (const method of ["question.get", "question.waitAnswer", "question.resolve"]) {
-          expectHidden(
+          retainedReads = 0;
+          expect(
             await f.call(
               method,
               { id, ...(method === "question.resolve" ? { answers } : {}) },
               peer.client,
             ),
-          );
+          ).toMatchObject([false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]);
+          expect(retainedReads, "foreign keyed reads must not probe the retained session").toBe(0);
         }
         expect(peer.socket.send).not.toHaveBeenCalled();
       }
-      // None of the foreign reads, deliveries or unrelated run closures may probe this session.
-      for (const read of retainedReads) {
-        expect(read).not.toHaveBeenCalled();
-      }
-      expectAnswered(await f.call("question.resolve", { id, answers }));
+      expect(await f.call("question.resolve", { id, answers })).toEqual([
+        true,
+        { status: "answered", answers },
+        undefined,
+      ]);
       for (const peer of peers) {
         expect(peer.socket.send).not.toHaveBeenCalled();
       }
@@ -379,18 +466,8 @@ describe("own-run question admission", () => {
     });
   });
 
-  it("rejects forged admission and conceals unbound questions", async () => {
+  it("rejects forged admission and keeps unbound, sessionless, and secret records privileged", async () => {
     await withOwnRunQuestion(async (f) => {
-      for (const [method, scope] of [
-        ["exec.approval.resolve", "operator.approvals"],
-        ["secrets.store.set", "operator.admin"],
-      ] as const) {
-        expect(await f.call(method, {}, f.browser.client)).toMatchObject([
-          false,
-          undefined,
-          { code: "FORBIDDEN", message: "missing scope: " + scope },
-        ]);
-      }
       const unboundRuntime: GatewayClient = {
         ...f.runtime,
         internal: { agentRuntimeIdentity: f.runtime.internal?.agentRuntimeIdentity },
@@ -408,24 +485,32 @@ describe("own-run question admission", () => {
         expect((await f.call("question.request", params, client))[0]).toBe(false);
       }
       expect(manager.list()).toEqual([]);
-      // Missing session access is one branch; real privileged ordinary/secret flows
-      // are covered by question.session-access's narrow-reader concealment cases.
-      const record = manager.request({
-        id: "sessionless-question",
-        questions: requestParams.questions,
-        timeoutMs: 100,
-      });
+      const protectedRecords = [
+        manager.request({ ...requestParams, id: "administrative-question" }),
+        manager.request({
+          id: "sessionless-question",
+          questions: requestParams.questions,
+          timeoutMs: 100,
+        }),
+        manager.request({
+          ...requestParams,
+          id: "secret-question",
+          questions: [secretRequestQuestion],
+        }),
+      ];
       expect((await f.call("question.list", {}))[1]).toEqual({ questions: [] });
-      f.broadcaster.broadcast("question.requested", record);
-      for (const method of ["question.get", "question.waitAnswer", "question.resolve"]) {
-        expectHidden(
-          await f.call(method, {
-            id: record.id,
-            ...(method === "question.resolve" ? { cancel: true } : {}),
-          }),
-        );
+      for (const record of protectedRecords) {
+        f.broadcaster.broadcast("question.requested", record);
+        for (const method of ["question.get", "question.waitAnswer", "question.resolve"]) {
+          expect(
+            await f.call(method, {
+              id: record.id,
+              ...(method === "question.resolve" ? { cancel: true } : {}),
+            }),
+          ).toMatchObject([false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]);
+        }
+        expect(manager.get(record.id)?.status).toBe("pending");
       }
-      expect(manager.get(record.id)?.status).toBe("pending");
       expect(f.browser.socket.send).not.toHaveBeenCalled();
     });
   });
@@ -512,7 +597,11 @@ describe("own-run question admission", () => {
             expect(recipient.client.invalidated).not.toBe(true);
             expect(observation.record.status).toBe("pending");
             release.resolve();
-            expectHidden(await request);
+            expect(await request).toMatchObject([
+              false,
+              undefined,
+              { details: { reason: "QUESTION_NOT_FOUND" } },
+            ]);
             expect(observation.record.status).toBe("cancelled");
             expect(await waiting).toEqual({ status: "cancelled" });
             await manager.drain();
@@ -538,16 +627,20 @@ describe("own-run question admission", () => {
         const observation = manager.observe(id)!;
         const waiting = manager.waitAnswer(id);
         replaceSessionEntrySync(sessionScope, { ...f.entry, [field]: "replacement", updatedAt: 2 });
-        expectHidden(await f.call("question.get", { id }));
+        expect(await f.call("question.get", { id })).toMatchObject([
+          false,
+          undefined,
+          { details: { reason: "QUESTION_NOT_FOUND" } },
+        ]);
         // The first worker-confirmed denial retires the original entry without another get().
         expect(observation.record.status).toBe("cancelled");
         expect(await waiting).toEqual({ status: "cancelled" });
         await manager.drain();
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         for (const method of ["question.waitAnswer", "question.resolve"]) {
-          expectHidden(
+          expect(
             await f.call(method, { id, ...(method === "question.resolve" ? { answers } : {}) }),
-          );
+          ).toMatchObject([false, undefined, { details: { reason: "QUESTION_NOT_FOUND" } }]);
         }
         expect((await f.call("question.list", {}))[1]).toEqual({ questions: [] });
         expect(manager.get(id)?.status).toBe("cancelled");

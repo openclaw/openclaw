@@ -1,6 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { withinTest } from "../../../test/helpers/promise.js";
+import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -22,21 +28,29 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import {
+  createReplyOperation,
+  markReplyOperationExecutionStarted,
+} from "../../sessions/session-controller.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { observeSessionRowBackfill } from "../session-row-backfill.test-support.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import * as rowInputs from "../session-utils-row.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import {
   captureRpcTargetForTest,
   createActiveRpcSourceForTest,
 } from "./rpc-source-fixtures.test-support.js";
 import {
+  identifiedClient,
   initializeSessionReadContext,
+  listSessions,
   requestContext,
   seedSessions,
+  seedSessionsWithActivityTimes,
 } from "./sessions-read-cache.test-support.js";
 import { addReadSubagent, sessionReader } from "./sessions-read-fixture.test-support.js";
 
@@ -44,17 +58,20 @@ function sourceRegistrar(
   config: OpenClawConfig,
   storePathFor = (agentId: string) => resolvePhysicalSessionStorePath({ agentId }, config),
 ) {
-  return async (runId: string, sessionKey: string, sessionId: string, agentId = "main") => {
+  return async (
+    runId: string,
+    sessionKey: string,
+    sessionId: string,
+    agentId = "main",
+    options: Parameters<typeof createActiveRpcSourceForTest>[0] = {},
+  ) => {
     const storeScope = storePathFor(agentId);
-    const source = await createActiveRpcSourceForTest(
-      {},
-      {
-        agentId,
-        sessionKey,
-        sessionId,
-        storeScope,
-      },
-    );
+    const source = await createActiveRpcSourceForTest(options, {
+      agentId,
+      sessionKey,
+      sessionId,
+      storeScope,
+    });
     rpcSourceTesting.set(runId, source);
     return source;
   };
@@ -104,20 +121,6 @@ function publishActiveModel(
   );
 }
 
-function readFixture(config: OpenClawConfig) {
-  setRuntimeConfigSnapshot(config);
-  const context = requestContext(config);
-  return {
-    context,
-    ...sessionReader(config, "viewer@example.test", context),
-    activate: sourceRegistrar(config),
-  };
-}
-
-function activeRow(key: string, extra: object) {
-  return { key, hasActiveRun: true, ...extra };
-}
-
 afterEach(async () => {
   vi.restoreAllMocks();
   await resetSubagentRegistryForTests({ persist: false });
@@ -129,7 +132,10 @@ it("selects current work before pagination and represents an isolated cron run o
     const config: OpenClawConfig = {
       agents: { entries: { main: {}, work: {} } },
     };
-    const { list, activate } = readFixture(config);
+    setRuntimeConfigSnapshot(config);
+    const activate = sourceRegistrar(config);
+    const context = requestContext(config);
+    const { list } = sessionReader(config, "viewer@example.test", context);
     const childKey = "agent:main:subagent:child";
     const cronKey = "agent:main:cron:daily";
     const runKey = `${cronKey}:run:cron-session`;
@@ -141,6 +147,9 @@ it("selects current work before pagination and represents an isolated cron run o
       ["main", cronKey, "cron-session", 10],
       ["main", runKey, "cron-session", 10],
       ["main", "agent:main:parent", "parent-session", 100],
+      ["main", "agent:main:hidden", "hidden-session", 101],
+      ["main", "agent:main:settled", "settled-session", 102],
+      ["main", "agent:main:stale-status", "stale-session", 103],
     ] as const) {
       const scope = { agentId, sessionKey };
       const entry = await upsertSessionEntryCore(scope, {
@@ -150,7 +159,13 @@ it("selects current work before pagination and represents an isolated cron run o
       });
       await replaceSessionEntry(scope, { ...entry!, updatedAt: recent + updatedAt });
     }
-    await activate("local-run", "agent:main:local", "local-session");
+    for (const [name, sessionId, options] of [
+      ["local", "local-session", {}],
+      ["hidden", "hidden-session", { controlUiVisible: false }],
+      ["settled", "settled-session", { projectSessionActive: false }],
+    ] as const) {
+      await activate(`${name}-run`, `agent:main:${name}`, sessionId, "main", options);
+    }
     registerAgentRunContext("remote-run", {
       agentId: "work",
       sessionKey: "agent:work:remote",
@@ -175,22 +190,34 @@ it("selects current work before pagination and represents an isolated cron run o
     const releaseWait = registerAgentRunCapacityWait("child-run", getAgentRunLifecycleGeneration());
     try {
       expect(childClaim).toBeDefined();
+      const normal = await list({ limit: 2 });
+      expect(normal.sessions.map((row) => row.key)).toEqual([
+        "agent:main:stale-status",
+        "agent:main:settled",
+      ]);
+      const unchanged = await list({ activeOnly: false, limit: 2 });
+      expect(unchanged.sessions.map((row) => row.key)).toEqual(
+        normal.sessions.map((row) => row.key),
+      );
+
       const request = { activeOnly: true, limit: 2 };
       const first = await list(request);
       expect(first).toMatchObject({ count: 2, totalCount: 4, nextOffset: 2 });
       expect(first.sessions).toMatchObject([
-        activeRow("agent:main:local", {
+        {
+          key: "agent:main:local",
+          hasActiveRun: true,
           status: "running",
           activeRunIds: ["local-run"],
-        }),
-        activeRow("agent:work:remote", { status: "running" }),
+        },
+        { key: "agent:work:remote", hasActiveRun: true, status: "running" },
       ]);
       expect(first.sessions[1]).not.toHaveProperty("activeRunIds");
       const second = await list({ ...request, offset: 2 });
       expect(second).toMatchObject({ count: 2, totalCount: 4, nextOffset: null });
       expect(second.sessions).toMatchObject([
-        activeRow(childKey, { status: "queued" }),
-        activeRow(cronKey, { status: "running" }),
+        { key: childKey, hasActiveRun: true, status: "queued" },
+        { key: cronKey, hasActiveRun: true, status: "running" },
       ]);
     } finally {
       releaseWait?.();
@@ -202,8 +229,72 @@ it("selects current work before pagination and represents an isolated cron run o
   });
 });
 
+it.each(["global", "unknown"] as const)(
+  "keeps %s activity with its agent when physical stores share a session ID",
+  async (sessionKey) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: {}, ops: {} } },
+        session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
+      };
+      setRuntimeConfigSnapshot(config);
+      const sessionId = `restored-${sessionKey}`;
+      const runId = `ops-${sessionKey}-run`;
+      for (const agentId of ["main", "ops"]) {
+        await upsertSessionEntryCore(
+          { agentId, sessionKey, storePath: state.statePath(`${agentId}.sqlite`) },
+          { sessionId, updatedAt: 1, visibility: "shared" },
+        );
+      }
+      const context = requestContext(config);
+      const { list } = sessionReader(config, "viewer@example.test", context);
+      const request = { activeOnly: true, includeGlobal: true, includeUnknown: true, limit: 100 };
+      const activeOwners = async () => (await list(request)).sessions.map((row) => row.agentId);
+      const handle: EmbeddedAgentQueueHandle = {
+        runId,
+        abort: () => undefined,
+        isAborted: () => false,
+        isCompacting: () => false,
+        isStreaming: () => true,
+        queueMessage: async () => undefined,
+      };
+      let reply: ReturnType<typeof createReplyOperation> | undefined;
+      registerAgentRunContext(runId, {
+        agentId: "ops",
+        sessionId,
+        sessionKey,
+        projectSessionActive: true,
+      });
+      try {
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "ops");
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        clearAgentRunContext(runId);
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+
+        reply = createReplyOperation({
+          agentId: "ops",
+          sessionId,
+          sessionKey,
+          resetTriggered: false,
+        });
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        markReplyOperationExecutionStarted(reply);
+        await expect(activeOwners()).resolves.toEqual(["ops"]);
+        reply.complete();
+        await expect(activeOwners()).resolves.toEqual([]);
+      } finally {
+        reply?.complete();
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        clearAgentRunContext(runId);
+      }
+    });
+  },
+);
+
 it.for(["global", "unknown"] as const)(
-  "keeps active %s physical owners distinct despite colliding session IDs",
+  "keeps active %s owners and their physical transcript, board, and sharing rows distinct",
   async (sentinel, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const now = Date.now();
@@ -212,12 +303,14 @@ it.for(["global", "unknown"] as const)(
         session: { scope: "global", store: state.statePath("{agentId}.sqlite") },
         agents: { entries: Object.fromEntries(agents.map((id) => [id, {}])) },
       };
-      const { context, list } = readFixture(config);
+      setRuntimeConfigSnapshot(config);
+      const context = requestContext(config);
+      const { list } = sessionReader(config, "viewer@example.test", context);
       const storePathFor = (agentId: string) => state.statePath(`${agentId}.sqlite`);
       const boardFace = "chat" as const;
       const activate = sourceRegistrar(config, storePathFor);
-      const sessionId = `shared-${sentinel}`;
       for (const [index, agentId] of agents.entries()) {
+        const sessionId = `${sentinel}-${agentId}`;
         const storePath = storePathFor(agentId);
         openOpenClawAgentDatabase({ agentId, path: storePath });
         const scope = { agentId, storePath, sessionKey: sentinel };
@@ -308,25 +401,44 @@ it.for(["global", "unknown"] as const)(
       };
       await list(request);
       await withinTest(backfilled, signal);
+      for (const agentId of ["ops", "research"]) {
+        expect(
+          getSessionRowProjection(context)?.snapshot(
+            { agentId, key: sentinel, storePath: storePathFor(agentId) },
+            { includeLastMessage: true },
+          ).row?.lastMessagePreview,
+        ).toBe(`${agentId} progress`);
+      }
       const active = await list(request);
       expect(active).toMatchObject({ count: 3, totalCount: 3, nextOffset: null });
       expect(active.sessions).toMatchObject([
-        ...["ops", "research"].map((agentId) =>
-          activeRow(sentinel, {
-            agentId,
-            kind: sentinel,
-            boardFace,
-            derivedTitle: `${agentId === "ops" ? "Ops" : "Research"} task`,
-            lastMessagePreview: `${agentId} progress`,
-          }),
-        ),
-        activeRow(literalKey, {
+        {
+          key: sentinel,
+          agentId: "ops",
+          kind: sentinel,
+          boardFace,
+          hasActiveRun: true,
+          derivedTitle: "Ops task",
+          lastMessagePreview: "ops progress",
+        },
+        {
+          key: sentinel,
+          agentId: "research",
+          kind: sentinel,
+          boardFace,
+          hasActiveRun: true,
+          derivedTitle: "Research task",
+          lastMessagePreview: "research progress",
+        },
+        {
+          key: literalKey,
           agentId: "ops",
           kind: "direct",
           sessionId: literalSessionId,
-        }),
+          hasActiveRun: true,
+        },
       ]);
-      expect(JSON.stringify(active)).not.toContain("private");
+      expect(JSON.stringify(active)).not.toContain(`${sentinel}-private`);
       for (const row of active.sessions.filter((candidate) => candidate.key === sentinel)) {
         const wireJson = JSON.stringify(row);
         const wireRow: unknown = JSON.parse(wireJson);
@@ -362,19 +474,45 @@ it.for(["global", "unknown"] as const)(
         );
       }
 
-      await changeDuringReadiness(context, async () => {
+      const readiness = await changeDuringReadiness(context, async () => {
         await upsertSessionEntryCore(
           { agentId: "ops", storePath: storePathFor("ops"), sessionKey: sentinel },
           { visibility: "draft" },
         );
       });
       const restricted = await list(request);
+      expect(readiness).toHaveBeenCalled();
       expect(restricted.sessions.map((row) => [row.key, row.agentId])).toEqual([
         [sentinel, "research"],
         [literalKey, "ops"],
       ]);
       expect(restricted).toMatchObject({ count: 2, totalCount: 2 });
       clearAgentRunContext("sentinel-child-run");
+    });
+  },
+);
+
+it.each([{ activeMinutes: 1 }, { activeOnly: true }])(
+  "reuses resident rows across concurrent filtered requests: %j",
+  async (filter: SessionsListParams) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { clock, config } = await seedSessionsWithActivityTimes();
+      const context = requestContext(config);
+      await sourceRegistrar(config)("active-run", "agent:main:active", "main-active");
+      const { list } = sessionReader(config, "owner@example.com", context);
+      clock.mockReturnValue(60_400);
+      const request = { ...filter, agentId: "main", limit: 100 };
+
+      await initializeSessionReadContext(context);
+      await list(request);
+      const reads = vi.spyOn(rowInputs, "readSessionRowInputs");
+      const results = await Promise.all(Array.from({ length: 8 }, () => list(request)));
+
+      expect(results[0]?.sessions.map((session) => session.key)).toEqual(["agent:main:active"]);
+      for (const result of results) {
+        expect(result).toEqual(results[0]);
+      }
+      expect(reads).not.toHaveBeenCalled();
     });
   },
 );
@@ -406,7 +544,7 @@ it.each(["settled", "replaced"] as const)(
         );
         activeSources.set(agentId, source);
       }
-      await changeDuringReadiness(context, async () => {
+      const readiness = await changeDuringReadiness(context, async () => {
         expectDefined(activeSources.get("main"), "main source").release();
         rpcSourceTesting.delete("run-main");
 
@@ -420,6 +558,7 @@ it.each(["settled", "replaced"] as const)(
       });
       const request = { activeOnly: true, limit: 1 };
       const result = await list(request);
+      expect(readiness).toHaveBeenCalled();
       expect(result.sessions).toMatchObject([
         transition === "replaced"
           ? { key: "agent:main:active", sessionId: "replacement-session", hasActiveRun: true }
@@ -439,11 +578,11 @@ it.each([false, true])(
   async (known) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = await seedSessions();
-      const { context, list } = readFixture(config);
+      const context = requestContext(config);
       const sessionKey = "agent:main:active";
       const sessionId = "main-active";
       const runId = "new-model-run";
-      await changeDuringReadiness(context, async () => {
+      const readiness = await changeDuringReadiness(context, async () => {
         await startModelRun(runId, sessionKey, sessionId);
         if (known) {
           publishActiveModel(
@@ -455,7 +594,12 @@ it.each([false, true])(
           );
         }
       });
-      const result = await list({ agentId: "main", activeOnly: true, limit: 100 });
+      const result = await listSessions({
+        client: identifiedClient("viewer@example.com"),
+        context,
+        request: { agentId: "main", activeOnly: true, limit: 100 },
+      });
+      expect(readiness).toHaveBeenCalled();
       const row = result.sessions.find((session) => session.key === sessionKey);
       expect(row).toMatchObject({ hasActiveRun: true });
       expect(row?.activeModelProvider).toBe(known ? "current-provider" : undefined);
@@ -484,7 +628,8 @@ it.each(
           },
         },
       };
-      const { context, list } = readFixture(config);
+      setRuntimeConfigSnapshot(config);
+      const context = requestContext(config);
       const sessionKey = "agent:main:active";
       const sessionId = "main-active";
       const runId = "settling-model-run";
@@ -507,7 +652,7 @@ it.each(
       await startModelRun(runId, sessionKey, sessionId);
       publishActiveModel(runId, sessionKey, sessionId, "attempt-provider", "attempt-model");
 
-      await changeDuringReadiness(context, async () => {
+      const readiness = await changeDuringReadiness(context, async () => {
         rpcSourceTesting.get(runId)?.input.claim?.operation?.complete();
         rpcSourceTesting.delete(runId);
 
@@ -528,7 +673,12 @@ it.each(
         });
       });
 
-      const result = await list({ agentId: "main", limit: 100 });
+      const result = await listSessions({
+        client: identifiedClient("viewer@example.com"),
+        context,
+        request: { agentId: "main", limit: 100 },
+      });
+      expect(readiness).toHaveBeenCalled();
       expect(result.sessions.find((session) => session.key === sessionKey)).toMatchObject({
         hasActiveRun: false,
         activeModelProvider: "fallback-provider",

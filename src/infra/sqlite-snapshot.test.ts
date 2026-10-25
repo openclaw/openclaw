@@ -6,6 +6,7 @@ import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import {
   exclusiveCopyPublication,
   useSnapshotFixture,
@@ -70,6 +71,16 @@ function corruptIndex(database: import("node:sqlite").DatabaseSync, column: stri
     PRAGMA writable_schema = OFF;`);
   const version = Number(database.prepare("PRAGMA schema_version").get()?.schema_version);
   database.exec(`PRAGMA schema_version = ${version + 1};`);
+}
+
+function createUnsafeIndexDrift(): void {
+  using database = new sqlite.DatabaseSync(sourcePath);
+  database.exec(`
+      CREATE TABLE records (id INTEGER PRIMARY KEY, indexed_value TEXT NOT NULL, alternate_value TEXT NOT NULL);
+      CREATE INDEX records_value ON records(indexed_value);
+      INSERT INTO records (indexed_value, alternate_value) VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
+  `);
+  corruptIndex(database, "alternate_value");
 }
 
 function createHotRollbackJournal(sqlitePath: string): void {
@@ -191,6 +202,64 @@ function onPublishedDirectoryOpen(
 }
 
 describe("createVerifiedSqliteSnapshot", () => {
+  it.runIf(process.platform === "win32")(
+    "creates private staging directories exclusively under races",
+    async () => {
+      const directoryPath = path.join(tempDir, "private");
+      const results = await Promise.allSettled([
+        createPrivateSqliteDirectory(directoryPath),
+        createPrivateSqliteDirectory(directoryPath),
+      ]);
+
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.find((result) => result.status === "rejected");
+      expect(rejected).toBeDefined();
+      expect((rejected as PromiseRejectedResult).reason).toMatchObject({ code: "already-exists" });
+      await expect(fs.lstat(directoryPath)).resolves.toMatchObject({});
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "snapshots when private staging exceeds MAX_PATH",
+    async () => {
+      let targetDirectory = tempDir;
+      while (targetDirectory.length < 205) {
+        targetDirectory = path.join(targetDirectory, `segment-${"x".repeat(24)}`);
+      }
+      await fs.mkdir(targetDirectory, { recursive: true });
+      const longTargetPath = path.join(targetDirectory, "snapshot.sqlite");
+      const longestStagingPath = path.join(
+        targetDirectory,
+        `.sqlite-publish-${"0".repeat(36)}-${"0".repeat(36)}`,
+        "database.sqlite",
+      );
+      expect(longTargetPath.length).toBeLessThan(260);
+      expect(longestStagingPath.length).toBeGreaterThan(260);
+      execSource("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
+
+      await expectSnapshotSuccess({ sourcePath, targetPath: longTargetPath });
+      expect(query("SELECT value FROM records", longTargetPath)).toEqual([{ value: "ok" }]);
+    },
+  );
+
+  it.each([undefined, true])(
+    "preserves implicit row IDs only when requested (%s), including committed WAL data",
+    async (preserveRowIds) => {
+      using source = new sqlite.DatabaseSync(sourcePath);
+      source.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'online turn')",
+      );
+      await createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds });
+      expect(query("SELECT rowid,value FROM records")).toEqual([
+        { rowid: preserveRowIds ? 71 : 1, value: "online turn" },
+      ]);
+      expect(query("PRAGMA journal_mode")).toEqual([{ journal_mode: "delete" }]);
+      expect(query("PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+      await expect(fs.access(`${targetPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it("captures committed WAL state and removes deleted page contents", async () => {
     const deletedValue = `deleted-secret-${"x".repeat(256)}`;
     using source = new sqlite.DatabaseSync(sourcePath);
@@ -198,17 +267,17 @@ describe("createVerifiedSqliteSnapshot", () => {
         PRAGMA journal_mode = WAL;
         PRAGMA wal_autocheckpoint = 0;
         PRAGMA secure_delete = OFF;
-        CREATE TABLE records (value TEXT NOT NULL);
+        CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
         PRAGMA wal_checkpoint(TRUNCATE);
       `);
-    source.prepare("INSERT INTO records (rowid, value) VALUES (71, ?)").run("survivor");
+    source.prepare("INSERT INTO records (value) VALUES (?)").run("survivor");
     source.prepare("INSERT INTO records (value) VALUES (?)").run(deletedValue);
     source.prepare("DELETE FROM records WHERE value = ?").run(deletedValue);
 
     const published = await expectSnapshotSuccess();
     expect(published.includes(deletedValue)).toBe(false);
 
-    expect(query("SELECT rowid, value FROM records")).toEqual([{ rowid: 1, value: "survivor" }]);
+    expect(query("SELECT value FROM records")).toEqual([{ value: "survivor" }]);
     expect(query("PRAGMA journal_mode;")).toEqual([{ journal_mode: "delete" }]);
     await expect(fs.access(`${targetPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
@@ -302,6 +371,12 @@ describe("createVerifiedSqliteSnapshot", () => {
     expect(query("SELECT value FROM records ORDER BY rowid")).toEqual([{ value: "before" }]);
   });
 
+  it("rejects unsafe index drift", async () => {
+    createUnsafeIndexDrift();
+
+    await expectSnapshotFailureWithoutTarget(/integrity_check failed|malformed database schema/iu);
+  });
+
   it.each(["index", "foreign-key", "caller"] as const)(
     "rejects a transformed snapshot that fails %s validation",
     async (failure) => {
@@ -367,6 +442,11 @@ describe("createVerifiedSqliteSnapshot", () => {
       expect(query("SELECT value FROM records")).toEqual([{ value: "preserved" }]);
     },
   );
+
+  it("rejects an existing target without modifying it", async () => {
+    await fs.writeFile(targetPath, "keep");
+    await expectPreservedTarget(/target already exists/u, {}, "keep");
+  });
 
   it.runIf(process.platform !== "win32")("preserves a dangling target link", async () => {
     await fs.symlink("missing.sqlite", targetPath);

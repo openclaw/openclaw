@@ -44,9 +44,11 @@ type Fixture = {
   stateDir: string;
 };
 
+// The provider records every model request and holds requests that contain a held text.
 const requests: string[] = [];
 const holds = new Map<string, ReturnType<typeof createDeferred<void>>>();
 
+/** Returns the prompt the model answers in one provider request. */
 function activePrompt(body: string): string {
   const request = JSON.parse(body) as { input?: Array<{ role?: string; content?: unknown }> };
   const prompts = (request.input ?? [])
@@ -63,12 +65,14 @@ function activePrompt(body: string): string {
   return prompts.findLast((prompt) => prompt.trim()) ?? "";
 }
 
+/** Model turns of one session, identified by its seeded text, that executed the resend. */
 function resendTurns(sessionText: string): string[] {
   return requests.filter(
     (body) => body.includes(sessionText) && activePrompt(body).includes(RESEND_MARKER),
   );
 }
 
+/** Model turns whose own prompt contains `text`. */
 function promptTurns(text: string): string[] {
   return requests.filter((body) => activePrompt(body).includes(text));
 }
@@ -102,22 +106,6 @@ function sendChat(
     idempotencyKey: runId,
     queueMode,
   });
-}
-
-function expectStarted(request: ReturnType<typeof sendChat>, runId: string, extra = {}) {
-  return expect(request).resolves.toMatchObject({ runId, status: "started", ...extra });
-}
-
-function expectDone(fixture: Fixture, sessionKey: string) {
-  return vi.waitFor(() => expect(readEntry(fixture, sessionKey)?.status).toBe("done"), {
-    timeout: 30_000,
-  });
-}
-
-async function expectNoRecovery(fixture: Fixture, sessionKey: string, owed: string) {
-  expect(readEntry(fixture, sessionKey)?.mainRestartRecovery).toBeUndefined();
-  await expectRecovery(fixture);
-  expect(resendTurns(owed)).toHaveLength(0);
 }
 
 /** Seeds a main session exactly as a Gateway restart leaves an interrupted turn. */
@@ -160,6 +148,7 @@ async function seedInterruptedSession(
   clearSessionStoreCacheForTest();
 }
 
+/** Runs the startup scan the Gateway schedules after boot. */
 function runStartupRecovery(fixture: Fixture) {
   return recoverRestartAbortedMainSessions({
     cfg: fixture.cfg,
@@ -263,6 +252,7 @@ async function waitForPreparedResend(fixture: Fixture, sessionKey: string, previ
   });
 }
 
+/** Waits until a chat turn has reached the model once and released its controller source. */
 async function waitForChatTurn(runId: string, text: string) {
   await vi.waitFor(
     () => {
@@ -291,14 +281,21 @@ async function unavailableDelegatedTurnLeavesConversationUsable(fixture: Fixture
   await expectRecovery(fixture, 0, 1);
   expect(promptTurns(delegated)).toHaveLength(0);
   const interrupted = readEntry(fixture, sessionKey);
-  expect(interrupted).toMatchObject({ sessionId, status: "interrupted", abortedLastRun: false });
+  expect(interrupted).toMatchObject({
+    sessionId,
+    status: "interrupted",
+    abortedLastRun: false,
+  });
   expect(interrupted?.mainRestartRecovery).toBeUndefined();
   expect(interrupted?.restartRecoveryTerminalRunIds).toContain(interruptedRunId);
   await expectRecovery(fixture, 0, 0);
 
   const user = "Delegated case: fresh authenticated request.";
   const runId = "boundary-delegated-new";
-  await expectStarted(sendChat(fixture, sessionKey, sessionId, user, runId), runId);
+  await expect(sendChat(fixture, sessionKey, sessionId, user, runId)).resolves.toMatchObject({
+    runId,
+    status: "started",
+  });
   await waitForChatTurn(runId, user);
   expect(readEntry(fixture, sessionKey)).toMatchObject({
     sessionId,
@@ -310,8 +307,12 @@ async function unavailableDelegatedTurnLeavesConversationUsable(fixture: Fixture
 
 async function owedResendRunsBeforeFirstChatSend(fixture: Fixture) {
   const { sessionKey, sessionId, owed, user, runId } = await seedCase(fixture, "first-send");
-  await expectStarted(sendChat(fixture, sessionKey, sessionId, user, runId), runId);
+  await expect(sendChat(fixture, sessionKey, sessionId, user, runId)).resolves.toMatchObject({
+    runId,
+    status: "started",
+  });
   await waitForChatTurn(runId, user);
+  // The startup scan that follows finds nothing left to resend.
   await expectRecovery(fixture);
   const turns = requests.filter((body) => body.includes(owed));
   expect(turns.map((body) => activePrompt(body).includes(RESEND_MARKER))).toEqual([true, false]);
@@ -334,8 +335,9 @@ async function owedResendRunsBeforeChatSendDuringItsAdmission(fixture: Fixture) 
   } finally {
     await releaseAdmission();
   }
-  await expectStarted(send!, runId);
+  await expect(send).resolves.toMatchObject({ runId, status: "started" });
   await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
+  // The message waits behind the resend input and runs once that turn settles.
   await waitForChatTurn(runId, user);
   expect(resendTurns(owed)).toHaveLength(1);
   expect(requests.indexOf(resendTurns(owed)[0]!)).toBeLessThan(
@@ -379,7 +381,9 @@ async function sameIdRetryJoinsPreparedResend(fixture: Fixture) {
     await releaseAdmission();
   }
   await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
-  await expectDone(fixture, sessionKey);
+  await vi.waitFor(() => expect(readEntry(fixture, sessionKey)?.status).toBe("done"), {
+    timeout: 30_000,
+  });
   expect(resendTurns(owed)).toHaveLength(1);
 }
 
@@ -408,21 +412,31 @@ async function stopCancelsWaitingResend(fixture: Fixture) {
     stopReason: "rpc",
     providerStarted: false,
   });
+  // The lifecycle observation records RPC cancellation without attributing a timeout phase.
   expect(cancelled).not.toHaveProperty("timeoutPhase");
   // The cancelled resend is recorded as a stopped run: not owed again and not charged.
   const stopped = readEntry(fixture, sessionKey);
   expect(stopped?.status).toBe("killed");
+  expect(stopped?.mainRestartRecovery).toBeUndefined();
   expect(stopped?.restartRecoveryTerminalRunIds).toContain(runId);
-  await expectNoRecovery(fixture, sessionKey, owed);
+  await expectRecovery(fixture);
+  expect(resendTurns(owed)).toHaveLength(0);
 }
 
 async function interruptWinsOverOwedResend(fixture: Fixture) {
   const { sessionKey, sessionId, owed, user, runId } = await seedCase(fixture, "interrupt-owed");
-  await expectStarted(sendChat(fixture, sessionKey, sessionId, user, runId, "interrupt"), runId);
+  await expect(
+    sendChat(fixture, sessionKey, sessionId, user, runId, "interrupt"),
+  ).resolves.toMatchObject({ runId, status: "started" });
+  // The interrupt wins: the user's message runs and the owed resend is dropped, not replayed.
   await waitForChatTurn(runId, user);
-  await expectDone(fixture, sessionKey);
+  await vi.waitFor(() => expect(readEntry(fixture, sessionKey)?.status).toBe("done"), {
+    timeout: 30_000,
+  });
   expect(readEntry(fixture, sessionKey)?.abortedLastRun).toBe(false);
-  await expectNoRecovery(fixture, sessionKey, owed);
+  expect(readEntry(fixture, sessionKey)?.mainRestartRecovery).toBeUndefined();
+  await expectRecovery(fixture);
+  expect(resendTurns(owed)).toHaveLength(0);
 }
 
 async function interruptCancelsWaitingResend(fixture: Fixture, signal: AbortSignal) {
@@ -467,11 +481,14 @@ async function interruptCancelsWaitingResend(fixture: Fixture, signal: AbortSign
     held.mockRestore();
     releaseLane();
   }
+  // The dispatcher reports the stopped resend as settled, not as a failed attempt.
   await expect(recovery).resolves.toMatchObject({ started: 0, settled: 1, failed: 0 });
   await waitForChatTurn(runId, user);
   const settled = readEntry(fixture, sessionKey);
+  expect(settled?.mainRestartRecovery).toBeUndefined();
   expect(settled?.restartRecoveryTerminalRunIds).toContain(resendRunId);
-  await expectNoRecovery(fixture, sessionKey, owed);
+  await expectRecovery(fixture);
+  expect(resendTurns(owed)).toHaveLength(0);
 }
 
 async function interruptSurvivesInterruptedTurnCleanup(fixture: Fixture) {
@@ -510,9 +527,10 @@ async function interruptSurvivesInterruptedTurnCleanup(fixture: Fixture) {
       return admitted;
     });
   try {
-    await expectStarted(sendChat(fixture, sessionKey, sessionId, user, runId, "interrupt"), runId, {
-      interruptedActiveRun: true,
-    });
+    await expect(
+      sendChat(fixture, sessionKey, sessionId, user, runId, "interrupt"),
+    ).resolves.toMatchObject({ runId, status: "started", interruptedActiveRun: true });
+    expect(admissionGate).toHaveBeenCalledOnce();
   } finally {
     admissionGate.mockRestore();
     release();
@@ -521,6 +539,8 @@ async function interruptSurvivesInterruptedTurnCleanup(fixture: Fixture) {
   await waitForChatTurn(runId, user);
   expect(readEntry(fixture, sessionKey)?.mainRestartRecovery).toBeUndefined();
   await expectRecovery(fixture);
+  // The user's message ran exactly once and the interrupted resend is not replayed.
+  expect(promptTurns(user)).toHaveLength(1);
   expect(resendTurns(owed)).toHaveLength(1);
 }
 
@@ -536,7 +556,9 @@ async function steerQueuesBehindRestartSafeResend(fixture: Fixture) {
   const recovery = runStartupRecovery(fixture);
   await vi.waitFor(() => expect(resendTurns(owed)).toHaveLength(1), { timeout: 30_000 });
   expect(activePrompt(resendTurns(owed)[0] ?? "")).toContain("narrowed to replay-safe tools");
-  await expectStarted(sendChat(fixture, sessionKey, sessionId, user, runId, "steer"), runId);
+  await expect(
+    sendChat(fixture, sessionKey, sessionId, user, runId, "steer"),
+  ).resolves.toMatchObject({ runId, status: "started" });
   release();
   await expect(recovery).resolves.toMatchObject({ started: 1, failed: 0 });
   await waitForChatTurn(runId, user);

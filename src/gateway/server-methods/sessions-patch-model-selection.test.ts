@@ -7,7 +7,11 @@ import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveModelFallbackOptions } from "../../auto-reply/reply/agent-runner-run-params.js";
 import { handleDirectiveOnly } from "../../auto-reply/reply/directive-handling.impl.js";
 import { parseInlineSessionDirectives } from "../../auto-reply/reply/directive-handling.parse.js";
-import { enqueueFollowupRun, type FollowupRun } from "../../auto-reply/reply/queue.js";
+import {
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+  type FollowupRun,
+} from "../../auto-reply/reply/queue.js";
 import {
   clearFollowupQueue,
   getExistingFollowupQueue,
@@ -248,6 +252,67 @@ function enqueue(
   return queued;
 }
 
+it("keeps admitted A on X, starts queued B on Y, and applies a later Z only to waiting C", () =>
+  withState(async (state) => {
+    await seedSession();
+    const entered = [0, 1, 2].map(() => createDeferredCore<AdmittedFollowupTurn>());
+    const release = [0, 1, 2].map(() => createDeferredCore());
+    const finished = createDeferredCore();
+    let index = 0;
+    enqueue(state, "A");
+    const b = enqueue(state, "B");
+    const c = enqueue(state, "C");
+    // Observe errors even if an earlier assertion transfers control to cleanup.
+    void finished.promise.catch(() => {});
+    for (const gate of entered) {
+      void gate.promise.catch(() => {});
+    }
+    scheduleFollowupDrain(sessionKey, async (queued) => {
+      const current = index++;
+      let turn: AdmittedFollowupTurn | undefined;
+      try {
+        turn = await admitQueued(state, queued);
+        expectDefined(entered[current], "turn gate").resolve(turn);
+        await expectDefined(release[current], "turn gate").promise;
+      } catch (error) {
+        expectDefined(entered[current], "turn gate").reject(error);
+        finished.reject(error);
+      } finally {
+        turn?.operation.complete();
+        if (current === 2) {
+          finished.resolve();
+        }
+      }
+    });
+    try {
+      const a = await expectDefined(entered[0], "turn gate").promise;
+      expect(a.queued.run).toMatchObject(selectionX);
+      expect((await patchSession({ thinkingLevel: "high" }))[0]).toBe(true);
+      expect([a.queued.run, b.run, c.run]).toMatchObject([selectionX, highX, highX]);
+      expect((await patchSession({ model: "fixture/y", thinkingLevel: "high" }))[0]).toBe(true);
+      expect([a.queued.run, b.run, c.run]).toMatchObject([selectionX, selectionY, selectionY]);
+
+      expectDefined(release[0], "turn gate").resolve();
+      const admittedB = await expectDefined(entered[1], "turn gate").promise;
+      expect(admittedB.queued).toMatchObject({ prompt: "B", run: selectionY });
+      expect((await patchSession({ model: "fixture/z", thinkingLevel: "off" }))[0]).toBe(true);
+      expect([a.queued.run, admittedB.queued.run, c.run]).toMatchObject([
+        selectionX,
+        selectionY,
+        selectionZ,
+      ]);
+
+      expectDefined(release[1], "turn gate").resolve();
+      const admittedC = await expectDefined(entered[2], "turn gate").promise;
+      expect(admittedC.queued).toMatchObject({ prompt: "C", run: selectionZ });
+    } finally {
+      for (const gate of release) {
+        gate.resolve();
+      }
+      await finished.promise;
+    }
+  }));
+
 it.each([
   [{ thinkingLevel: "off" }, "off", "x"],
   [{ thinkingLevel: null }, "medium", "x"],
@@ -272,6 +337,7 @@ it.each([
       { model, thinkLevel: "low", thinkLevelOverride: "low" },
       { model, thinkLevel: "medium", thinkLevelOverride: "default" },
     ]);
+    expect(getExistingFollowupQueue(sessionKey)?.lastRun?.thinkLevel).toBe(expected);
   }),
 );
 
