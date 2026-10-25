@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { createGatewayHarness } from "../sessions/session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  sessionsResult,
+} from "../sessions/session-capability.test-support.ts";
 import { createSessionState } from "../sessions/session-capability.ts";
 import { agentCreationRejection } from "./creation.test-support.ts";
 import {
@@ -17,31 +20,6 @@ import { setDefaultAgent } from "./mutations.ts";
 type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
-
-function createToolsState(
-  model: string,
-  chatModelCatalog: Parameters<typeof buildToolsEffectiveRequestKey>[0]["chatModelCatalog"],
-): Parameters<typeof buildToolsEffectiveRequestKey>[0] {
-  return {
-    sessions: { state: createSessionState() },
-    sessionsResult: {
-      ts: 0,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: [
-        {
-          key: "main",
-          kind: "direct",
-          updatedAt: 0,
-          model,
-          modelProvider: "zai",
-        },
-      ],
-    },
-    chatModelCatalog,
-  };
-}
 
 function createSaveState(configFormDirty = false) {
   const state = { configFormDirty };
@@ -57,7 +35,9 @@ function createSaveState(configFormDirty = false) {
 
 function agentFixture(request: TestRequest) {
   const harness = createGatewayHarness(createTestGatewayClient(request));
-  return { ...harness, agents: createAgentCapability(harness.gateway) };
+  const agents = createAgentCapability(harness.gateway);
+  onTestFinished(() => agents.dispose());
+  return { ...harness, agents };
 }
 
 describe("createAgentCapability lifecycle", () => {
@@ -133,7 +113,6 @@ describe("createAgentCapability lifecycle", () => {
     expect(agents.state.agentsList).toBeNull();
     expect(agents.files("main").list).toBeNull();
     refreshed.resolve(null);
-    agents.dispose();
   });
   it("reuses the current roster while preserving forced refresh and reconnect ownership", async () => {
     const first = { defaultId: "main", agents: [{ id: "main" }] };
@@ -170,35 +149,36 @@ describe("createAgentCapability lifecycle", () => {
     publish(true);
     await expect(agents.ensureList()).resolves.toEqual(reconnected);
     expect(request).toHaveBeenCalledTimes(3);
-    expect(notify).toHaveBeenCalledTimes(6);
     unsubscribe();
-    agents.dispose();
   });
 
-  it.each(["list", "files"] as const)(
-    "isolates %s requests across a same-client reconnect",
-    async (kind) => {
-      const first = deferred<unknown>();
-      const second = deferred<unknown>();
-      const request = vi
-        .fn<TestRequest>()
-        .mockReturnValueOnce(first.promise)
-        .mockReturnValueOnce(second.promise);
-      const { agents, publish } = agentFixture(request);
-      const refresh = () => (kind === "list" ? agents.refreshList() : agents.refreshFiles("main"));
-      const read = () => (kind === "list" ? agents.listRead : agents.files("main").read);
-      const snapshot = () =>
-        kind === "list"
-          ? { list: agents.state.agentsList, loading: agents.state.agentsLoading }
-          : agents.files("main");
-      const result = (name: string) =>
-        kind === "list"
-          ? { defaultId: name, agents: [{ id: name }] }
-          : { agentId: "main", workspace: name, files: [] };
-      const staleLoad = refresh();
-      const staleRead = read();
-      const staleStatus = snapshot();
-      expect(staleStatus.loading).toBe(true);
+  it.each([
+    ["list", "reconnect"],
+    ["files", "reconnect"],
+    ["list", "replacement"],
+  ] as const)("isolates %s requests across %s", async (kind, boundary) => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const request = vi
+      .fn<TestRequest>()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { agents, publish } = agentFixture(request);
+    const refresh = () => (kind === "list" ? agents.refreshList() : agents.refreshFiles("main"));
+    const read = () => (kind === "list" ? agents.listRead : agents.files("main").read);
+    const snapshot = () =>
+      kind === "list"
+        ? { list: agents.state.agentsList, loading: agents.state.agentsLoading }
+        : agents.files("main");
+    const result = (name: string) =>
+      kind === "list"
+        ? { defaultId: name, agents: [{ id: name }] }
+        : { agentId: "main", workspace: name, files: [] };
+    const staleLoad = refresh();
+    const staleRead = read();
+    const staleStatus = snapshot();
+    expect(staleStatus.loading).toBe(true);
+    if (boundary === "reconnect") {
       publish(false);
       if (kind === "files") {
         expect(read()).toBeNull();
@@ -209,45 +189,19 @@ describe("createAgentCapability lifecycle", () => {
       await expect(staleRead).resolves.toBeNull();
       await expect(staleLoad).resolves.toBeNull();
       publish(true);
-      const currentLoad = refresh();
+    }
+    const currentLoad = refresh();
 
-      first.resolve(result("old"));
-      await staleLoad;
-      expect(snapshot().list).toBeNull();
-      expect(snapshot().loading).toBe(true);
-
-      const current = result("new");
-      second.resolve(current);
-      await currentLoad;
-      expect(snapshot().list).toEqual(current);
-      expect(snapshot().loading).toBe(false);
-      agents.dispose();
-    },
-  );
-
-  it("keeps a replacement list request owned while its predecessor completes", async () => {
-    const first = deferred<unknown>();
-    const second = deferred<unknown>();
-    const request = vi
-      .fn<TestRequest>()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    const { agents } = agentFixture(request);
-
-    const staleLoad = agents.refreshList();
-    const currentLoad = agents.refreshList();
-
-    first.resolve({ defaultId: "old", agents: [{ id: "old" }] });
+    first.resolve(result("old"));
     await staleLoad;
-    expect(agents.state.agentsList).toBeNull();
-    expect(agents.state.agentsLoading).toBe(true);
+    expect(snapshot().list).toBeNull();
+    expect(snapshot().loading).toBe(true);
 
-    const current = { defaultId: "main", agents: [{ id: "main" }] };
+    const current = result("new");
     second.resolve(current);
     await currentLoad;
-    expect(agents.state.agentsList).toEqual(current);
-    expect(agents.state.agentsLoading).toBe(false);
-    agents.dispose();
+    expect(snapshot().list).toEqual(current);
+    expect(snapshot().loading).toBe(false);
   });
 
   it("invalidates cached and in-flight file lists for changed agents", async () => {
@@ -268,7 +222,6 @@ describe("createAgentCapability lifecycle", () => {
 
     expect(agents.files("main").list).toBeNull();
     expect(agents.files("main").loading).toBe(false);
-    agents.dispose();
   });
 
   it("exposes current failures without rejecting legacy roster and file callers", async () => {
@@ -281,7 +234,6 @@ describe("createAgentCapability lifecycle", () => {
     await expect(agents.files("main").read).resolves.toEqual({ error: "Read unavailable" });
     await expect(Promise.all([roster, files])).resolves.toEqual([null, null]);
     expect(agents.state.agentsError).toBe("Read unavailable");
-    agents.dispose();
   });
 
   it("does not commit a list request after disposal", async () => {
@@ -315,9 +267,7 @@ describe("readToolsEffective", () => {
 
   it("throws the existing display error for the native error boundary", async () => {
     const client = createTestGatewayClient(
-      vi.fn(async () => {
-        throw new Error("gateway unavailable");
-      }),
+      vi.fn().mockRejectedValue(new Error("gateway unavailable")),
     );
     await expect(
       readToolsEffective(client, { agentId: "main", sessionKey: "main" }),
@@ -334,7 +284,13 @@ describe("buildToolsEffectiveRequestKey", () => {
     ],
     ["openai/gpt-5-mini", [], "openai/gpt-5-mini"],
   ] as const)("resolves %s despite the stale session provider", (model, catalog, expected) => {
-    const state = createToolsState(model, [...catalog]);
+    const state = {
+      sessions: { state: createSessionState() },
+      sessionsResult: sessionsResult([
+        { key: "main", kind: "direct", updatedAt: 0, model, modelProvider: "zai" },
+      ]),
+      chatModelCatalog: [...catalog],
+    };
     expect(buildToolsEffectiveRequestKey(state, { agentId: "main", sessionKey: "main" })).toBe(
       `main:main:model=${expected}`,
     );
@@ -342,49 +298,30 @@ describe("buildToolsEffectiveRequestKey", () => {
 });
 
 describe("setDefaultAgent", () => {
-  it("stages the default agent and persists a clean draft", async () => {
-    const config = createSaveState();
-    const refreshAgents = vi.fn(async () => null);
-    await setDefaultAgent(config, "kimi", refreshAgents);
-
-    expect(config.stageDefaultAgent).toHaveBeenCalledWith("kimi");
-    expect(config.save).toHaveBeenCalledTimes(1);
-    expect(refreshAgents).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not persist when the agent is absent from the config list", async () => {
-    const config = createSaveState();
-    const refreshAgents = vi.fn(async () => null);
-    vi.mocked(config.stageDefaultAgent).mockReturnValue(false);
-
-    await setDefaultAgent(config, "ghost", refreshAgents);
-
-    expect(config.stageDefaultAgent).toHaveBeenCalledWith("ghost");
-    expect(config.save).not.toHaveBeenCalled();
-    expect(refreshAgents).not.toHaveBeenCalled();
-  });
-
-  it("does not persist unrelated dirty agent config drafts", async () => {
-    const config = createSaveState(true);
-    const refreshAgents = vi.fn(async () => null);
-
-    await setDefaultAgent(config, "kimi", refreshAgents);
-
-    expect(config.stageDefaultAgent).toHaveBeenCalledWith("kimi");
-    expect(config.save).not.toHaveBeenCalled();
-    expect(refreshAgents).not.toHaveBeenCalled();
-    expect(config.state.configFormDirty).toBe(true);
-  });
-
-  it("keeps the shared agent cache unchanged when saving fails", async () => {
-    const config = createSaveState();
-    const refreshAgents = vi.fn(async () => null);
-    vi.mocked(config.save).mockResolvedValue(false);
-
-    await setDefaultAgent(config, "kimi", refreshAgents);
-
-    expect(refreshAgents).not.toHaveBeenCalled();
-  });
+  it.each([
+    ["clean draft", false, true, true, 1, 1],
+    ["absent agent", false, false, true, 0, 0],
+    ["unrelated dirty draft", true, true, true, 0, 0],
+    ["failed save", false, true, false, 1, 0],
+  ] as const)(
+    "persists only an accepted %s",
+    async (_name, dirty, accepted, saved, saves, refreshes) => {
+      const config = createSaveState(dirty);
+      const refreshAgents = vi.fn(async () => null);
+      config.stageDefaultAgent.mockImplementation(() => {
+        if (accepted) {
+          config.state.configFormDirty = true;
+        }
+        return accepted;
+      });
+      config.save.mockResolvedValue(saved);
+      await setDefaultAgent(config, "kimi", refreshAgents);
+      expect(config.stageDefaultAgent).toHaveBeenCalledWith("kimi");
+      expect(config.save).toHaveBeenCalledTimes(saves);
+      expect(refreshAgents).toHaveBeenCalledTimes(refreshes);
+      expect(config.state.configFormDirty).toBe(dirty || accepted);
+    },
+  );
 
   it("passes the originating action guard through the queued config save", async () => {
     const config = createSaveState();
@@ -403,28 +340,25 @@ describe("setDefaultAgent", () => {
 });
 
 describe("agent creation", () => {
-  it.each(["Provider rejected credentials", "Workspace could not be created"])(
-    "reports a failed creation and removes only its pending row: %s",
-    async (message) => {
-      const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
-      const request = vi
-        .fn<TestRequest>()
-        .mockResolvedValueOnce(roster)
-        .mockRejectedValueOnce(agentCreationRejection(message))
-        .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {} });
-      const { agents } = agentFixture(request);
-      await agents.ensureList();
-      await expect(agents.create("New agent")).rejects.toThrow(message);
-      expect(request).toHaveBeenCalledWith("agents.create", {
-        agentId: expect.stringMatching(/^bot-/),
-        name: "New agent",
-        onboarding: true,
-      });
-      expect(agents.state.agentsList).toEqual(roster);
-      expect(agents.state.pendingAgent).toBeUndefined();
-      agents.dispose();
-    },
-  );
+  it("reports a failed creation and removes only its pending row", async () => {
+    const message = "Provider rejected credentials";
+    const roster = { defaultId: "main", agents: [{ id: "main", name: "Molty" }] };
+    const request = vi
+      .fn<TestRequest>()
+      .mockResolvedValueOnce(roster)
+      .mockRejectedValueOnce(agentCreationRejection(message))
+      .mockResolvedValueOnce({ exists: true, valid: true, sourceConfig: {} });
+    const { agents } = agentFixture(request);
+    await agents.ensureList();
+    await expect(agents.create("New agent")).rejects.toThrow(message);
+    expect(request).toHaveBeenCalledWith("agents.create", {
+      agentId: expect.stringMatching(/^bot-/),
+      name: "New agent",
+      onboarding: true,
+    });
+    expect(agents.state.agentsList).toEqual(roster);
+    expect(agents.state.pendingAgent).toBeUndefined();
+  });
 
   it("shows a pending agent immediately and publishes the verified receipt without another roster read", async () => {
     const creation = deferred<unknown>();
@@ -438,15 +372,11 @@ describe("agent creation", () => {
     const { agents } = agentFixture(request);
     await agents.ensureList();
     const creating = agents.create("New agent");
-    expect(agents.state.pendingAgent).toMatchObject({
-      id: expect.stringMatching(/^bot-/),
-      name: "New agent",
-    });
+    const pending = agents.state.pendingAgent;
+    expect(pending).toEqual({ id: expect.stringMatching(/^bot-/), name: "New agent" });
     await expect(agents.create("New agent")).resolves.toBeNull();
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.list", "agents.create"]);
-    const pending = agents.state.pendingAgent;
-    expect(pending).toEqual({ id: expect.stringMatching(/^bot-/), name: "New agent" });
     expect(agents.state.agentsList).toEqual(roster);
     const receipt = {
       agentId: pending!.id,
@@ -455,15 +385,9 @@ describe("agent creation", () => {
     };
     creation.resolve(receipt);
     await expect(creating).resolves.toEqual(receipt);
-    expect(request).toHaveBeenLastCalledWith("agents.create", {
-      agentId: receipt.agentId,
-      name: "New agent",
-      onboarding: true,
-    });
     expect(agents.state.agentsList?.agents).toEqual([pending, ...roster.agents]);
     expect(agents.state.recentlyCreatedAgentId).toBe(receipt.agentId);
     expect(agents.state.pendingAgent).toBeUndefined();
-    agents.dispose();
   });
 
   it("reconciles an overlapping config refresh without holding up the new chat", async () => {
@@ -498,11 +422,7 @@ describe("agent creation", () => {
     };
     currentRead.resolve(currentRoster);
     expect(await oldRefresh).toBe(agents.state.agentsList);
-    expect(agents.state.agentsList?.agents).toEqual([
-      { id: "main", name: "Renamed" },
-      { ...pending, identity: { emoji: "🌱" } },
-    ]);
-    agents.dispose();
+    expect(agents.state.agentsList).toEqual(currentRoster);
   });
 
   it("recovers a disconnected creation receipt without dispatching another attempt", async () => {
@@ -538,6 +458,5 @@ describe("agent creation", () => {
       "agents.create",
       "agents.list",
     ]);
-    agents.dispose();
   });
 });

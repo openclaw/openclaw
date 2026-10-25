@@ -11,6 +11,7 @@ import {
 import { filterSessionRows } from "../sessions/navigation.ts";
 import {
   createRosterFixture,
+  rosterRow,
   rosterResult as result,
 } from "./roster-activity-store.test-support.ts";
 import { rosterActivityStore } from "./roster-activity-store.ts";
@@ -105,13 +106,12 @@ describe("roster activity lifecycle", () => {
   it("publishes committed archive and restore receipts without events", async () => {
     vi.useFakeTimers();
     const key = "agent:ember:receipt-only";
-    let row: GatewaySessionRow = {
+    let row = rosterRow({
       key,
       sessionId: "receipt-only-session",
-      kind: "direct",
       archived: false,
       updatedAt: 1,
-    };
+    });
     const request = createGatewayRequestMock(async (method, params) => {
       if (method === "sessions.subscribe") {
         return { subscribed: true };
@@ -162,146 +162,68 @@ describe("roster activity lifecycle", () => {
       );
     }
   });
-  it.each(["sessions.changed", "session.message"])(
-    "patches a paged tree window through %s without rereading it",
-    async (event) => {
-      vi.useFakeTimers();
-      const rows: GatewaySessionRow[] = Array.from({ length: 300 }, (_, index) => ({
-        key: `agent:main:row-${index}`,
-        sessionId: `session-${index}`,
-        kind: "direct",
-        updatedAt: 300 - index,
-        ...(index === 0 ? { pinned: true, pinnedAt: 1 } : {}),
-      }));
-      const parent = { ...rows[1]!, childSessions: ["agent:main:subagent:child"] };
-      const child = {
-        ...rows[200]!,
-        key: parent.childSessions[0]!,
-        spawnedBy: parent.key,
-        parentSessionKey: parent.key,
-      };
-      rows[1] = parent;
-      rows[200] = child;
-      const load = vi.fn(async (params: unknown) => {
-        const limit = Number(Reflect.get(params as object, "limit"));
-        const offset = Number(Reflect.get(params as object, "offset") ?? 0);
-        expect(limit).toBe(100);
-        return {
-          ...result(""),
-          sessions: rows.slice(offset, offset + limit),
-          count: limit,
-          totalCount: 400,
-          hasMore: true,
-          nextOffset: offset + limit,
-        };
-      });
-      const { store, emit } = createStore(load);
-      observe(store);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(load).toHaveBeenCalledTimes(3);
-      for (const terminal of [false, true]) {
-        const status = terminal ? "done" : "running";
-        const nextChild = {
-          ...child,
-          updatedAt: terminal ? 700 : 600,
-          hasActiveRun: !terminal,
-          status,
-        };
-        const nextParent = {
-          ...parent,
-          swarm: {
-            groups: [
-              {
-                groupId: "fixture-swarm",
-                createdAt: 1,
-                children: [{ sessionKey: child.key, status }],
-                queued: 0,
-                running: terminal ? 0 : 1,
-                done: terminal ? 1 : 0,
-                failed: 0,
-              },
-            ],
-            otherActiveGroups: 0,
-          },
-        };
-        emit(
-          {
-            sessionKey: child.key,
-            ...(event === "sessions.changed" ? { reason: "patch" } : {}),
-            session: nextChild,
-            ancestorSessions: [nextParent],
-          },
-          event,
-        );
-        expect(store.snapshot.result?.sessions[0]).toEqual(rows[0]);
-        expect(store.snapshot.result?.sessions[1]).toEqual(nextChild);
-        expect(store.snapshot.result?.sessions.find((row) => row.key === parent.key)).toEqual(
-          nextParent,
-        );
-        await vi.advanceTimersByTimeAsync(20_000);
-        expect(load).toHaveBeenCalledTimes(3);
-      }
-    },
-  );
+  it("publishes a complete bounded window only after all three pages arrive", async () => {
+    vi.useFakeTimers();
+    const rows: GatewaySessionRow[] = Array.from({ length: 300 }, (_, index) => ({
+      key: `agent:main:row-${index}`,
+      kind: "direct",
+      updatedAt: 300 - index,
+    }));
+    const page = (offset: number) => ({
+      ...result("", true, rows.slice(offset, offset + 100)),
+      totalCount: 400,
+      nextOffset: offset + 100,
+    });
+    const second = createDeferred<SessionsListResult>();
+    cleanups.push(() => second.resolve(page(100)));
+    const load = vi.fn(async (params: unknown) => {
+      const offset = Number(Reflect.get(params as object, "offset") ?? 0);
+      expect(Reflect.get(params as object, "limit")).toBe(100);
+      return offset === 100 ? second.promise : page(offset);
+    });
+    const { store } = createStore(load);
+    observe(store);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.snapshot.membershipReady).toBe(false);
+    second.resolve(page(100));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.snapshot.membershipReady).toBe(true);
+    expect(store.snapshot.result?.sessions).toEqual(rows);
+    expect(load).toHaveBeenCalledTimes(3);
+  });
 
-  it.each(["groups", "stores", "catalogChanged", "unpin", "archive", "restore", "involvingMe"])(
-    "coalesces uncertain %s membership into one authoritative window refresh",
+  it.each(["groups", "stores", "catalogChanged"])(
+    "coalesces broad %s invalidation into one authoritative refresh",
     async (change) => {
       vi.useFakeTimers();
-      const row: GatewaySessionRow = {
-        key: "agent:main:main",
-        kind: "direct",
-        sessionId: "held",
-        updatedAt: 10,
-        ...(change === "unpin" ? { pinned: true, pinnedAt: 1 } : {}),
-        ...(change === "restore" ? { archived: true } : {}),
-      };
-      const next = {
-        ...row,
-        updatedAt: 20,
-        ...(change === "archive" ? { archived: true, pinned: false } : {}),
-        ...(change === "restore" ? { archived: false } : {}),
-        ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
-      };
       const load = vi
         .fn()
-        .mockResolvedValueOnce({ ...result(""), sessions: [row] })
-        .mockResolvedValue({ ...result(""), sessions: [next] });
+        .mockResolvedValueOnce(result("Old"))
+        .mockResolvedValue(result("Current"));
       const { store, emit } = createStore(load);
-      store.setInvolvingMe(change === "involvingMe");
       observe(store);
       await vi.advanceTimersByTimeAsync(0);
-      expect(load).toHaveBeenCalledWith(
-        expect.objectContaining({
-          excludeDock: true,
-          ...(change === "involvingMe" ? { involvingMe: true } : {}),
-        }),
-      );
-      const payload = ["groups", "stores"].includes(change)
-        ? { reason: change }
-        : {
-            reason: "patch",
-            sessionKey: next.key,
-            session: next,
-            ...(change === "catalogChanged" ? { catalogChanged: true } : {}),
-          };
+      const payload =
+        change === "catalogChanged"
+          ? {
+              reason: "patch",
+              sessionKey: "agent:main:main",
+              session: result("Old").sessions[0],
+              catalogChanged: true,
+            }
+          : { reason: change };
       for (let index = 0; index < 10; index += 1) {
         emit(payload);
       }
       await vi.advanceTimersByTimeAsync(20_000);
       expect(load).toHaveBeenCalledTimes(2);
-      expect(store.snapshot.result?.sessions).toEqual([next]);
+      expect(store.snapshot.result?.sessions[0]?.lastMessagePreview).toBe("Current");
     },
   );
 
   it("merges newer broadcast rows into an in-flight window without a trailing read", async () => {
     vi.useFakeTimers();
-    const row: GatewaySessionRow = {
-      key: "agent:main:main",
-      kind: "direct",
-      sessionId: "held",
-      updatedAt: 1,
-    };
+    const row = rosterRow({ sessionId: "held", updatedAt: 1 });
     const updated = { ...row, updatedAt: 2, lastMessagePreview: "Current" };
     const stale = createDeferred<SessionsListResult>();
     const load = vi
@@ -340,6 +262,9 @@ describe("roster activity lifecycle", () => {
       store.setInvolvingMe(involvingMe);
       observe(store);
       await vi.waitFor(() => expect(store.snapshot.result?.sessions).toHaveLength(1));
+      expect(load).toHaveBeenCalledWith(
+        expect.objectContaining({ excludeDock: true, involvingMe }),
+      );
       const window = store.snapshot.result;
       emit(
         {

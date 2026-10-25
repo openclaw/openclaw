@@ -33,29 +33,12 @@ it("keeps known unavailable choices visible but disabled", () => {
 });
 
 it("lets an explicit empty agent alias disable the inherited alias", () => {
-  const model = "openai/gpt-5.6-luna";
-  const catalog = [
-    {
-      id: "gpt-5.6-luna",
-      name: "GPT 5.6 Luna",
-      provider: "openai",
-      alias: "gateway-alias",
-      tags: ["default", "configured"],
-    },
-  ];
-  const config = {
-    agents: {
-      defaults: { models: { [model]: { alias: "global-luna" } } },
-      entries: { worker: { models: { [model]: { alias: "" } } } },
-    },
-  };
+  const catalog = [{ id: "model-a", name: "Model A", provider: "custom", alias: "gateway" }];
+  const config = aliases({ [lower]: "global" }, { [lower]: "" });
 
-  expect(buildModelOptions(config, null, catalog, "worker")).toContainEqual({
-    value: model,
-    label: "GPT 5.6 Luna",
-    provider: "openai",
-    tags: ["default", "configured"],
-  });
+  expect(
+    buildModelOptions(config, null, catalog, "worker").find(({ value }) => value === lower)?.label,
+  ).toBe("Model A");
 });
 
 it("keeps case-distinct catalog identities, configured aliases, and current values", () => {
@@ -79,13 +62,7 @@ it("keeps case-distinct catalog identities, configured aliases, and current valu
 });
 const [lower, upper, other] = ["custom/model-a", "custom/Model-A", "other/model-a"];
 it.each([
-  [
-    "disabled inherited alias",
-    "fast",
-    aliases({ [lower]: "fast" }, { [lower]: "" }),
-    ["fast"],
-    [lower],
-  ],
+  ["disabled alias", "fast", aliases({ [lower]: "fast" }, { [lower]: "" }), ["fast"], [lower]],
   [
     "null metadata",
     "fast",
@@ -94,7 +71,7 @@ it.each([
     [lower],
   ],
   [
-    "configured-provider precedence",
+    "provider precedence",
     lower,
     {
       ...aliases({ [other]: lower, [lower]: "original" }),
@@ -218,12 +195,8 @@ it("uses configured defaults when agent-specific overrides are absent", () => {
 });
 
 it("prefers per-agent configured identity over runtime global identity in agent panels", () => {
-  const agent = {
-    id: "fs-daying",
-    name: "File-system agent",
-    identity: { name: "大颖", emoji: "⚙️" },
-  };
-  const identity = { agentId: "fs-daying", name: "AI大管家", avatar: "M", emoji: "🤖" };
+  const agent = { id: "worker", name: "Roster", identity: { name: "大颖", emoji: "⚙️" } };
+  const identity = { agentId: "worker", name: "Runtime", avatar: "M", emoji: "🤖" };
   const context = buildAgentContext(agent, null, null, "main", identity);
 
   expect(context).toMatchObject({ identityName: "大颖", identityAvatar: "⚙️" });
