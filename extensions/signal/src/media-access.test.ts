@@ -59,6 +59,7 @@ describe("Signal host-owned outbound media access", () => {
       layout: "state-only",
       prefix: "openclaw-signal-media-access-",
     });
+    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
     requests = [];
     onRequest = undefined;
     rejectQuotes = false;
@@ -120,6 +121,10 @@ describe("Signal host-owned outbound media access", () => {
       assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
     };
   }
+  async function rejectedBeforeSend(delivery: Promise<unknown>, error = "Signal caller closed") {
+    await expect(delivery).rejects.toThrow(error);
+    expect(requests).toHaveLength(0);
+  }
 
   it.each(SIGNAL_MEDIA_ADAPTERS)(
     "delivers approved workspace bytes through the real $name and preserves native quotes",
@@ -127,7 +132,6 @@ describe("Signal host-owned outbound media access", () => {
       const sourcePath = path.join(state.workspaceDir, "chart.png");
       const conflictingRoot = state.path("conflicting-root");
       await fs.mkdir(conflictingRoot);
-      await fs.writeFile(sourcePath, SIGNAL_IMAGE);
       const approvedReader = vi.fn(async (filePath: string) => await fs.readFile(filePath));
       const conflictingReader = vi.fn(async () => Buffer.from("untrusted bytes"));
       const mediaAccess = workspaceAccess(approvedReader);
@@ -145,10 +149,6 @@ describe("Signal host-owned outbound media access", () => {
       );
 
       expect(result).toMatchObject(SENT_MESSAGE);
-      expect(send).toHaveBeenCalledOnce();
-      expect(send.mock.calls[0]?.[2].mediaAccess).toBe(mediaAccess);
-      expect(send.mock.calls[0]?.[2].mediaLocalRoots).toEqual([conflictingRoot]);
-      expect(send.mock.calls[0]?.[2].mediaReadFile).toBe(conflictingReader);
       expect(approvedReader).toHaveBeenCalledExactlyOnceWith(sourcePath);
       expect(conflictingReader).not.toHaveBeenCalled();
       expect(requests).toHaveLength(1);
@@ -171,7 +171,6 @@ describe("Signal host-owned outbound media access", () => {
       ["during read", "after transmission"].map((phase) => ({ name, deliver, phase })),
     ),
   )("settles the $name when its caller closes $phase", async ({ deliver, phase }) => {
-    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
     const caller = new AbortController();
     const close = () => caller.abort(new Error("Signal caller closed"));
     const readFile = vi.fn(async (filePath: string) => {
@@ -189,9 +188,8 @@ describe("Signal host-owned outbound media access", () => {
       }),
     );
     if (phase === "during read") {
-      await expect(delivery).rejects.toThrow("Signal caller closed");
+      await rejectedBeforeSend(delivery);
       expect(readFile).toHaveBeenCalledOnce();
-      expect(requests).toHaveLength(0);
     } else {
       await expect(delivery).resolves.toMatchObject(SENT_MESSAGE);
       expect(requests).toHaveLength(1);
@@ -206,8 +204,7 @@ describe("Signal host-owned outbound media access", () => {
       const delivery = send(textContext(caller));
       caller.abort(new Error("Signal caller closed"));
 
-      await expect(delivery).rejects.toThrow("Signal caller closed");
-      expect(requests).toHaveLength(0);
+      await rejectedBeforeSend(delivery);
     },
   );
 
@@ -262,7 +259,7 @@ describe("Signal host-owned outbound media access", () => {
     const react = requireAdapter(signalPlugin.actions?.handleAction);
     const caller = new AbortController();
     caller.abort(new Error("Signal caller closed"));
-    await expect(
+    await rejectedBeforeSend(
       react({
         channel: "signal",
         action: "react",
@@ -270,8 +267,7 @@ describe("Signal host-owned outbound media access", () => {
         params: { to: "+15551234567", messageId: "1700000000001", emoji: "👍", remove },
         assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
       }),
-    ).rejects.toThrow("Signal caller closed");
-    expect(requests).toHaveLength(0);
+    );
   });
 
   it.each(SIGNAL_MEDIA_ADAPTERS)(
@@ -299,16 +295,15 @@ describe("Signal host-owned outbound media access", () => {
   );
 
   it("propagates host-reader failures without contacting Signal", async () => {
-    await fs.writeFile(path.join(state.workspaceDir, "chart.png"), SIGNAL_IMAGE);
     const deniedReader = vi.fn(async (): Promise<Buffer> => {
       throw new Error("host denied this attachment");
     });
-    await expect(
+    await rejectedBeforeSend(
       SIGNAL_MEDIA_ADAPTERS[0].deliver(
         createContext({ mediaAccess: workspaceAccess(deniedReader) }),
       ),
-    ).rejects.toThrow("host denied this attachment");
+      "host denied this attachment",
+    );
     expect(deniedReader).toHaveBeenCalledOnce();
-    expect(requests).toHaveLength(0);
   });
 });

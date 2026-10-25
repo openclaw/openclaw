@@ -73,6 +73,12 @@ async function start(dispatch: SignalIngressDispatch, target = queue) {
   monitors.add(monitor);
   return monitor;
 }
+async function receive(monitor: Monitor, ...events: SignalSseEvent[]) {
+  for (const event of events) {
+    await monitor.receive(event);
+  }
+  await monitor.waitForIdle();
+}
 
 describe("Signal durable ingress", () => {
   it("propagates durable append failure before dispatch scheduling", async () => {
@@ -91,8 +97,7 @@ describe("Signal durable ingress", () => {
   it("recovers an uncompleted append with a fresh drain and dispatches exactly once", async () => {
     const event = signalEvent();
     const interrupted = await start(defer);
-    await interrupted.receive(event);
-    await interrupted.waitForIdle();
+    await receive(interrupted, event);
     expect(await queue.listClaims()).toHaveLength(1);
     await interrupted.stop();
     monitors.delete(interrupted);
@@ -112,27 +117,20 @@ describe("Signal durable ingress", () => {
       return defer(_event, lifecycle);
     });
     const started = await start(dispatch);
-    await started.receive(event);
-    await started.waitForIdle();
+    await receive(started, event);
     expect(await queue.listClaims()).toHaveLength(1);
-    await started.receive(event);
-    await started.waitForIdle();
+    await receive(started, event);
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(adopt).toBeDefined();
     await adopt?.();
-    await started.receive(event);
-    await started.waitForIdle();
+    await receive(started, event);
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
   it("dead-letters malformed persisted payloads without retry", async () => {
     await queue.enqueue(
       "malformed-event",
-      {
-        version: 1,
-        receivedAt: 1,
-        event: { event: "receive", data: "{" },
-      },
+      { version: 1, receivedAt: 1, event: { event: "receive", data: "{" } },
       { receivedAt: 1, laneKey: "direct:number:+15550001111" },
     );
     const dispatch = vi.fn();
@@ -160,12 +158,9 @@ describe("Signal durable ingress", () => {
       return undefined;
     });
     const started = await start(dispatch);
-    await started.receive(first);
-    await started.receive(second);
-    await started.waitForIdle();
+    await receive(started, first, second);
     expect(await queue.listPending()).toHaveLength(1);
-    await started.receive(second);
-    await started.waitForIdle();
+    await receive(started, second);
     expect(await queue.listPending()).toHaveLength(1);
     await adoptFirst?.();
     await started.waitForIdle();
@@ -179,9 +174,7 @@ describe("Signal durable ingress", () => {
     const direct = signalEvent({ senderUuid: "123e4567-e89b-12d3-a456-426614174000" });
     const group = signalEvent({ groupId: "group-123", timestamp: 1_700_000_000_002 });
     const started = await start(defer);
-    await started.receive(direct);
-    await started.receive(group);
-    await started.waitForIdle();
+    await receive(started, direct, group);
     expect(
       (await queue.listClaims()).map(({ laneKey, payload }) => [laneKey, payload.event]),
     ).toEqual(
@@ -198,8 +191,7 @@ describe("Signal durable ingress", () => {
   ])("does not journal %s envelopes", async (_label, payload) => {
     const dispatch = vi.fn();
     const started = await start(dispatch);
-    await started.receive({ event: "receive", data: JSON.stringify(payload) });
-    await started.waitForIdle();
+    await receive(started, { event: "receive", data: JSON.stringify(payload) });
     await expect(queue.listPending({ limit: "all" })).resolves.toHaveLength(0);
     await expect(queue.listClaims()).resolves.toHaveLength(0);
     expect(dispatch).not.toHaveBeenCalled();

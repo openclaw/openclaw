@@ -111,35 +111,29 @@ describe("signalRpcRequest", () => {
 
   it("rejects malformed UTF-8 bytes before JSON parsing", async () => {
     const baseUrl = await reply(
-      Buffer.concat([
-        Buffer.from('{"jsonrpc":"2.0","result":{"version":"'),
-        Buffer.from([0xff]),
-        Buffer.from('"},"id":"test-id"}'),
-      ]),
+      Buffer.from('{"jsonrpc":"2.0","result":{"version":"\xff"},"id":"test-id"}', "latin1"),
     );
     await expect(rpc(baseUrl)).rejects.toBeInstanceOf(TypeError);
   });
 
   it.each([
-    {
-      body: "not-json",
-      status: 502,
-      error: {
+    [
+      "not-json",
+      502,
+      {
         message: "Signal RPC returned malformed JSON (status 502)",
         cause: expect.any(SyntaxError),
       },
-    },
-    {
-      body: '{"jsonrpc":"2.0","id":"test-id"}',
-      status: 200,
-      error: { message: "Signal RPC returned invalid response envelope (status 200)" },
-    },
-    {
-      body: "x".repeat(1_048_577),
-      status: 200,
-      error: { message: "Signal HTTP response exceeded size limit" },
-    },
-  ])("rejects invalid RPC responses: $error.message", async ({ body, status, error }) => {
+    ],
+    [
+      '{"jsonrpc":"2.0","id":"test-id"}',
+      200,
+      {
+        message: "Signal RPC returned invalid response envelope (status 200)",
+      },
+    ],
+    ["x".repeat(1_048_577), 200, { message: "Signal HTTP response exceeded size limit" }],
+  ] as const)("rejects invalid RPC response %#", async (body, status, error) => {
     const result = rpc(await reply(body, status));
     await expect(result).rejects.toBeInstanceOf(Error);
     await expect(result).rejects.toMatchObject(error);
@@ -153,9 +147,7 @@ describe("signalRpcRequest", () => {
   it("uses an absolute deadline for slow-drip RPC responses", async () => {
     const baseUrl = await withSignalServer((_req, res) => {
       res.writeHead(200, { "Content-Type": "application/json" });
-      const interval = setInterval(() => {
-        res.write(" ");
-      }, 5);
+      const interval = setInterval(() => res.write(" "), 5);
       res.on("close", () => clearInterval(interval));
     });
 
@@ -186,8 +178,7 @@ describe("streamSignalEvents", () => {
       res.end('id: 42\nevent: message\ndata: {"group":true}\n\n');
     });
 
-    await streamSignalEvents({
-      baseUrl: `${serverUrl}/signal`,
+    await stream(`${serverUrl}/signal`, {
       account: "+15555550123",
       onEvent: (event) => events.push(event),
       onStreamOpen,
@@ -241,14 +232,7 @@ describe("streamSignalEvents", () => {
   });
 
   it("rejects oversized SSE events split across smaller data lines", async () => {
-    const baseUrl = await withSignalServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "text/event-stream" });
-      const line = `data: ${"x".repeat(4096)}\n`;
-      for (let index = 0; index < 260; index += 1) {
-        res.write(line);
-      }
-      res.end();
-    });
+    const baseUrl = await sse(`data: ${"x".repeat(4096)}\n`.repeat(260));
 
     await expect(stream(baseUrl)).rejects.toThrow("Signal SSE event data exceeded size limit");
   });

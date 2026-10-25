@@ -340,9 +340,7 @@ describe("container REST real server", () => {
   it("rejects malformed UTF-8 before JSON parsing", async () => {
     const baseUrl = await startServer((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        Buffer.concat([Buffer.from('{"versions":["'), Buffer.from([0xff]), Buffer.from('"]}')]),
-      );
+      res.end(Buffer.from('{"versions":["\xff"]}', "latin1"));
     });
     await expect(containerRpcRequest("version", undefined, { baseUrl })).rejects.toBeInstanceOf(
       TypeError,
