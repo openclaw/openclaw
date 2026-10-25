@@ -12,8 +12,10 @@ import {
   createProjectionResourceProbe,
   type ProjectionResourceSnapshot,
 } from "./control-ui-projection-resource-probe.ts";
+import { createSdkAvatarFixture, type SdkAvatarFamily } from "./control-ui-sdk-avatar-fixture.ts";
 
-export type ProjectionFamily = "agent-rows" | "outbox" | "board-pins";
+type CoreProjectionFamily = "agent-rows" | "outbox" | "board-pins";
+export type ProjectionFamily = CoreProjectionFamily | SdkAvatarFamily;
 export type ProjectionFixtureFacts = {
   family: ProjectionFamily;
   instrumented: boolean;
@@ -33,7 +35,7 @@ const settle = () =>
   new Promise<void>((resolve) =>
     requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
   );
-const selector = (family: ProjectionFamily) =>
+const selector = (family: CoreProjectionFamily) =>
   ({
     "agent-rows": "openclaw-agent-row-chip",
     outbox: '[data-attention-kind="outbox"]',
@@ -48,8 +50,11 @@ function mockGateway(): ControlUiMockGateway {
   return value as ControlUiMockGateway;
 }
 
-let active: ReturnType<typeof createFixture> | undefined;
-function createFixture(family: ProjectionFamily, instrumented: boolean) {
+let active:
+  | ReturnType<typeof createFixture>
+  | ReturnType<typeof createSdkAvatarFixture>
+  | undefined;
+function createFixture(family: CoreProjectionFamily, instrumented: boolean) {
   const groups: Group[] = [];
   const probe = instrumented ? createProjectionResourceProbe() : undefined;
   const facts: ProjectionFixtureFacts = { family, instrumented, mounted: [], checkpoints: [] };
@@ -271,7 +276,10 @@ function createFixture(family: ProjectionFamily, instrumented: boolean) {
 window.openclawProjectionFixture = {
   async setup(family, instrumented) {
     active?.dispose();
-    active = createFixture(family, instrumented);
+    active =
+      family === "sdk-avatars" || family === "sdk-avatar-identities"
+        ? createSdkAvatarFixture(family, instrumented)
+        : createFixture(family, instrumented);
     return active.setup();
   },
   run: () => {
