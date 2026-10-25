@@ -220,7 +220,7 @@ async function runSubagentAnnounceFlowBound(
       if (!settled && isSessionRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
         // Keep delete cleanup retryable until the active child can be removed.
-        if (outcome?.status !== "timeout" || params.cleanup === "delete") {
+        if (outcome.status !== "timeout" || params.cleanup === "delete") {
           return "retryable";
         }
       }
@@ -603,7 +603,7 @@ async function runSubagentAnnounceFlowBound(
     if (hasSqliteWorkerOutcomeUnknown(err)) {
       throw err;
     }
-    defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
+    defaultRuntime.error(`Subagent announce failed: ${String(err)}`);
     if (!deliveryResultReported) {
       await reportDeliveryResult(
         err instanceof SourceOwnerChangedError
