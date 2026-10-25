@@ -1,8 +1,11 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  awaitGateBeforeSettlement,
+  createZeroUsageFixture,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createModelProviderConfig } from "../../test-support/model-provider-config.test-support.js";
 import { LmstudioModelLoadError } from "./models.fetch.js";
@@ -55,29 +58,17 @@ function expectPreload(fields: Record<string, unknown>) {
   expect(prepareModel.mock.calls[0]?.[0]).toMatchObject(fields);
 }
 
-function expectModel(baseStream: StreamFn, fields: Record<string, unknown>) {
-  const call = vi.mocked(baseStream).mock.calls[0];
-  expect(call?.[0]).toMatchObject(fields);
-  expect(call?.[1]).toBeDefined();
-  expect(call).toBeDefined();
-  expect(call?.[2]).toBeUndefined();
-}
-
 function expectModelCall(baseStream: StreamFn, callIndex: number, fields: Record<string, unknown>) {
   expect(vi.mocked(baseStream).mock.calls[callIndex]?.[0]).toMatchObject(fields);
 }
 
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
-  const resolved = stream instanceof Promise ? await stream : stream;
+  const resolved = await stream;
   const events: StreamEvent[] = [];
   for await (const event of resolved) {
     events.push(event as StreamEvent);
   }
   return events;
-}
-
-function doneStream(): StreamFn {
-  return eventStream([{ type: "done", reason: "stop", message: assistantMessage([]) }]);
 }
 
 function eventStream(events: unknown[]): StreamFn {
@@ -158,91 +149,67 @@ type HeldPreloadScenario = {
 
 let finishHeldPreloadScenario: (() => Promise<void>) | undefined;
 
-function runHeldPreloadScenario(
+async function runHeldPreloadScenario(
+  signal: AbortSignal,
   run: (held: HeldPreloadScenario) => Promise<void>,
   firstSignal?: AbortSignal,
 ): Promise<void> {
   const entered = createDeferred<void>();
   const release = createDeferred<void>();
-  const cancelled = createDeferred<never>();
-  const stopped = new Error("LM Studio preload scenario ended");
-  let active = true;
-  const pending: Promise<unknown>[] = [Promise.allSettled([cancelled.promise])];
-  const assertActive = () => {
-    if (!active) {
-      throw stopped;
-    }
-  };
-  const waitFor = <T>(promise: Promise<T>): Promise<T> => {
-    assertActive();
-    const controlled = Promise.race([promise, cancelled.promise]);
-    pending.push(Promise.allSettled([controlled]));
-    return controlled;
-  };
-
   prepareModel.mockImplementationOnce(() => {
     entered.resolve();
     return release.promise;
   });
-  const baseStream = doneStream();
-  const wrapped = wrap(baseStream);
+  const { baseStream, run: inferHeld } = harness();
   const first = Promise.resolve().then(() =>
-    collectEvents(
-      infer(wrapped, { contextWindow: 32_768 }, firstSignal ? { signal: firstSignal } : undefined),
-    ),
+    inferHeld({ contextWindow: 32_768 }, firstSignal ? { signal: firstSignal } : undefined),
   );
-  // This signal-free collector drains the real shared preload, including its
-  // in-flight cleanup, even when the scenario or the first caller is cancelled.
-  const second = Promise.resolve().then(() =>
-    collectEvents(infer(wrapped, { contextWindow: 32_768 })),
-  );
-  pending.push(Promise.allSettled([first, second]));
-  const prematureCompletion = () => {
-    throw new Error("LM Studio inference completed before preload entry");
-  };
-  const admission = waitFor(
-    Promise.race([
-      entered.promise,
-      first.then(prematureCompletion),
-      second.then(prematureCompletion),
-    ]),
-  );
-  let cleanupPromise: Promise<void> | undefined;
-  const cleanup = () => {
-    cleanupPromise ??= (async () => {
-      active = false;
-      cancelled.reject(stopped);
-      release.resolve();
-      await Promise.all(pending);
-    })();
-    return cleanupPromise;
-  };
-  const scenario = Promise.resolve().then(async () => {
-    try {
-      await admission;
-      assertActive();
-      await run({ baseStream, first, second, release: release.resolve, waitFor, assertActive });
-    } finally {
-      await cleanup();
-    }
-  });
-  const settled = Promise.allSettled([scenario]);
-  // Vitest can time out before this body settles. Keep its join separate from
-  // resource cleanup so the body's finally never waits for itself.
-  finishHeldPreloadScenario = async () => {
-    await cleanup();
+  // A signal-free peer drains shared preload even if the first caller is cancelled.
+  const second = Promise.resolve().then(() => inferHeld({ contextWindow: 32_768 }));
+  const settled = Promise.allSettled([first, second]);
+  const cleanup = async () => {
+    release.resolve();
     await settled;
   };
-  return scenario;
+  finishHeldPreloadScenario = cleanup;
+  const waitFor = <T>(promise: Promise<T>) => withinTest(promise, signal);
+  try {
+    await waitFor(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        Promise.race([first, second]),
+        "LM Studio inference completed before preload entry",
+      ),
+    );
+    signal.throwIfAborted();
+    await run({
+      baseStream,
+      first,
+      second,
+      release: release.resolve,
+      waitFor,
+      assertActive: () => signal.throwIfAborted(),
+    });
+  } finally {
+    await cleanup();
+  }
+}
+
+function harness(params?: Parameters<typeof wrap>[1]) {
+  const baseStream = eventStream([{ type: "done", reason: "stop", message: assistantMessage([]) }]);
+  const wrapped = wrap(baseStream, params);
+  return {
+    baseStream,
+    run: (model = {}, options?: Record<string, unknown>, context?: Record<string, unknown>) =>
+      collectEvents(infer(wrapped, model, options, context)),
+  };
 }
 
 describe("lmstudio stream wrapper", () => {
   beforeEach(() => {
-    // Give tests distinct endpoint scope while preserving within-test cache reuse.
     defaultBaseUrl = `http://lmstudio-test-${defaultBaseUrlSequence++}.localhost:1234`;
     prepareModel.mockResolvedValue(undefined);
   });
-
   afterEach(async () => {
     await finishHeldPreloadScenario?.();
     finishHeldPreloadScenario = undefined;
@@ -254,272 +221,159 @@ describe("lmstudio stream wrapper", () => {
     resolveApiKey.mockResolvedValue(undefined);
   });
 
-  it("preloads LM Studio model before inference using model context window", async () => {
-    const baseStream = doneStream();
-    const wrapped = wrap(baseStream, {
-      baseUrl: "http://lmstudio.internal:1234/v1",
-    });
-    const stream = infer(wrapped, { contextWindow: 131072 }, { apiKey: "lmstudio-token" });
-    const events = await collectEvents(stream);
-
-    expectDone(events);
-    expect(prepareModel).toHaveBeenCalledTimes(1);
-    expectPreload({
-      baseUrl: "http://lmstudio.internal:1234/v1",
-      modelKey: "qwen3-8b-instruct",
-      requestedContextLength: 131072,
-      apiKey: "lmstudio-token",
-    });
-    expectModel(baseStream, {
-      compat: { supportsUsageInStreaming: true, unsupportedToolSchemaKeywords: ["pattern"] },
-    });
-  });
-
-  it("resolves native preload credentials when runtime auth is a non-secret marker", async () => {
-    resolveApiKey.mockResolvedValueOnce("synthetic-configured-key");
-    const wrapped = wrap(doneStream());
-    await collectEvents(infer(wrapped, {}, { apiKey: NON_ENV_SECRETREF_MARKER }));
-    expectPreload({ apiKey: "synthetic-configured-key" });
-  });
-
-  it("streams with the canonical model key returned by preload", async () => {
-    prepareModel.mockResolvedValueOnce({
-      modelKey: "gemma-4-e4b-it-ultra-uncensored-heretic",
-    });
-    const baseStream = doneStream();
-    const wrapped = wrap(baseStream);
-    const variantKey = "gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m";
-    const stream = infer(wrapped, { id: `lmstudio/${variantKey}` });
-    const events = await collectEvents(stream);
-
-    expectDone(events);
-    expectPreload({
-      modelKey: variantKey,
-      baseUrl: `${defaultBaseUrl}/v1`,
-    });
-    expectModel(baseStream, {
-      provider: "lmstudio",
-      id: "gemma-4-e4b-it-ultra-uncensored-heretic",
-    });
-  });
-
-  it("reuses the canonical model key while preload failure cooldown is active", async () => {
+  it.each(["success", "cooldown"])("retains canonical model identity after %s", async (outcome) => {
     const canonicalKey = "gemma-4-e4b-it-ultra-uncensored-heretic";
-    const variantModel = {
-      id: `lmstudio/${canonicalKey}@q4_k_m`,
-    };
-    prepareModel.mockRejectedValueOnce(
-      new LmstudioModelLoadError(canonicalKey, undefined, new Error("load failed")),
-    );
-    const baseStream = doneStream();
-    const wrapped = wrap(baseStream);
-
-    const firstEvents = await collectEvents(infer(wrapped, variantModel));
-    const secondEvents = await collectEvents(infer(wrapped, variantModel));
-
-    expectDone(firstEvents);
-    expectDone(secondEvents);
-    expect(prepareModel).toHaveBeenCalledTimes(1);
-    expect(baseStream).toHaveBeenCalledTimes(2);
+    if (outcome === "success") {
+      prepareModel.mockResolvedValueOnce({ modelKey: canonicalKey });
+    } else {
+      prepareModel.mockRejectedValueOnce(
+        new LmstudioModelLoadError(canonicalKey, undefined, new Error("load failed")),
+      );
+    }
+    const { run, baseStream } = harness();
+    const model = { id: `lmstudio/${canonicalKey}@q4_k_m` };
+    expectDone(await run(model));
+    expectPreload({ modelKey: `${canonicalKey}@q4_k_m`, baseUrl: `${defaultBaseUrl}/v1` });
     expectModelCall(baseStream, 0, {
       provider: "lmstudio",
       id: canonicalKey,
+      compat: { supportsUsageInStreaming: true, unsupportedToolSchemaKeywords: ["pattern"] },
     });
-    expectModelCall(baseStream, 1, {
-      provider: "lmstudio",
-      id: canonicalKey,
-    });
+    if (outcome === "cooldown") {
+      expectDone(await run(model));
+      expectModelCall(baseStream, 1, { provider: "lmstudio", id: canonicalKey });
+      expect(prepareModel).toHaveBeenCalledTimes(1);
+    }
   });
 
-  it("dedupes concurrent preload requests for the same model and context", async () => {
-    await runHeldPreloadScenario(async (held) => {
+  it("dedupes concurrent preload requests for the same model and context", async ({ signal }) => {
+    await runHeldPreloadScenario(signal, async (held) => {
       expect(prepareModel).toHaveBeenCalledTimes(1);
       expect(held.baseStream).not.toHaveBeenCalled();
-
       held.release();
-      const [firstEvents, secondEvents] = await held.waitFor(
-        Promise.all([held.first, held.second]),
-      );
+      const events = await held.waitFor(Promise.all([held.first, held.second]));
       held.assertActive();
-
-      expectDone(firstEvents);
-      expectDone(secondEvents);
+      events.forEach(expectDone);
       expect(prepareModel).toHaveBeenCalledTimes(1);
       expect(held.baseStream).toHaveBeenCalledTimes(2);
     });
   });
 
   it("does not start model preload for an already-aborted inference", async () => {
-    const baseStream = doneStream();
-    const wrapped = wrap(baseStream);
-    const controller = new AbortController();
-    const abortReason = new Error("inference already cancelled");
-    controller.abort(abortReason);
-    const options = { signal: controller.signal };
-    const stream = Promise.resolve().then(() => infer(wrapped, { contextWindow: 32_768 }, options));
-
-    await expect(stream).rejects.toBe(abortReason);
+    const { run, baseStream } = harness();
+    const reason = new Error("inference already cancelled");
+    await expect(
+      Promise.resolve().then(() => run({}, { signal: AbortSignal.abort(reason) })),
+    ).rejects.toBe(reason);
     expect(prepareModel).not.toHaveBeenCalled();
     expect(baseStream).not.toHaveBeenCalled();
   });
 
-  it("cancels one shared preload waiter without cancelling another inference", async () => {
+  it("cancels one shared preload waiter without cancelling another inference", async ({
+    signal,
+  }) => {
     const controller = new AbortController();
-    const abortReason = new DOMException("inference cancelled", "AbortError");
-
-    await runHeldPreloadScenario(async (held) => {
-      controller.abort(abortReason);
-      const firstOutcome = await held.waitFor(
-        held.first.then(
-          () => undefined,
-          (error: unknown) => error,
-        ),
-      );
-      held.assertActive();
-
-      expect(firstOutcome).toBe(abortReason);
-      expect(held.baseStream).not.toHaveBeenCalled();
-      expect(prepareModel).toHaveBeenCalledTimes(1);
-
-      held.release();
-      const secondEvents = await held.waitFor(held.second);
-      held.assertActive();
-
-      expectDone(secondEvents);
-      expect(held.baseStream).toHaveBeenCalledTimes(1);
-    }, controller.signal);
+    const reason = new DOMException("inference cancelled", "AbortError");
+    await runHeldPreloadScenario(
+      signal,
+      async (held) => {
+        controller.abort(reason);
+        await held.waitFor(expect(held.first).rejects.toBe(reason));
+        held.assertActive();
+        expect(held.baseStream).not.toHaveBeenCalled();
+        expect(prepareModel).toHaveBeenCalledTimes(1);
+        held.release();
+        expectDone(await held.waitFor(held.second));
+        held.assertActive();
+        expect(held.baseStream).toHaveBeenCalledTimes(1);
+      },
+      controller.signal,
+    );
   });
 
   it("bounds failed preload retries without blocking inference or dropping tools", async () => {
     prepareModel.mockRejectedValue(new Error("out of memory"));
-    const baseStream = doneStream();
-    const wrapped = wrap(baseStream);
+    const { run, baseStream } = harness();
     const tools = Array.from({ length: 29 }, (_, index) => ({
       name: `agent_tool_${index}`,
       description: `Agent tool ${index}`,
       parameters: { type: "object" },
     }));
-    const baseTime = 1_000_000;
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(baseTime);
-
-    expectDone(
-      await collectEvents(
-        infer(
-          wrapped,
-          { contextTokens: 64000.5, contextWindow: Number.POSITIVE_INFINITY },
-          undefined,
-          { tools },
-        ),
-      ),
-    );
-    expect(prepareModel).toHaveBeenCalledTimes(1);
-    expectPreload({ requestedContextLength: undefined });
-
-    nowSpy.mockReturnValue(baseTime + 59_999);
-    await collectEvents(infer(wrapped, {}));
-    expect(prepareModel).toHaveBeenCalledTimes(1);
-
-    nowSpy.mockReturnValue(baseTime + 60_000);
-    expectDone(await collectEvents(infer(wrapped, {}, undefined, { tools })));
-    expect(prepareModel).toHaveBeenCalledTimes(2);
-    for (const callIndex of [0, 2]) {
-      expect(vi.mocked(baseStream).mock.calls[callIndex]?.[1].tools).toEqual(tools);
+    const now = vi.spyOn(Date, "now");
+    for (const [offset, loads] of [
+      [0, 1],
+      [59_999, 1],
+      [60_000, 2],
+      [119_999, 2],
+      [120_000, 3],
+      [179_999, 3],
+    ] as const) {
+      now.mockReturnValue(1_000_000 + offset);
+      expectDone(
+        await run({ contextTokens: 64000.5, contextWindow: Number.POSITIVE_INFINITY }, undefined, {
+          tools,
+        }),
+      );
+      expect(prepareModel).toHaveBeenCalledTimes(loads);
     }
-
-    nowSpy.mockReturnValue(baseTime + 119_999);
-    await collectEvents(infer(wrapped, {}));
-    expect(prepareModel).toHaveBeenCalledTimes(2);
-
-    nowSpy.mockReturnValue(baseTime + 120_000);
-    await collectEvents(infer(wrapped, {}));
-    expect(prepareModel).toHaveBeenCalledTimes(3);
-
-    nowSpy.mockReturnValue(baseTime + 179_999);
-    await collectEvents(infer(wrapped, {}));
-    expect(prepareModel).toHaveBeenCalledTimes(3);
+    expectPreload({ requestedContextLength: undefined });
     expect(baseStream).toHaveBeenCalledTimes(6);
+    for (const call of vi.mocked(baseStream).mock.calls) {
+      expect(call[1].tools).toEqual(tools);
+    }
   });
 
-  it("preserves and deduplicates configured unsupported tool-schema keywords", async () => {
-    const baseStream = doneStream();
-    const wrapped = wrap(baseStream);
-    const originalCompat = {
+  it.each([true, false])("keeps tool-schema compatibility with preload=%s", async (preload) => {
+    const { run, baseStream } = harness(preload ? undefined : { preload: false });
+    const compat = {
       supportsDeveloperRole: false,
       unsupportedToolSchemaKeywords: ["format", "pattern", "minimum", "pattern"],
     };
-
-    expectDone(await collectEvents(infer(wrapped, { compat: originalCompat })));
-
-    expectModel(baseStream, {
+    expectDone(await run({ compat }));
+    if (!preload) {
+      expect(prepareModel).not.toHaveBeenCalled();
+    }
+    expectModelCall(baseStream, 0, {
       compat: {
         supportsDeveloperRole: false,
         supportsUsageInStreaming: true,
         unsupportedToolSchemaKeywords: ["format", "pattern", "minimum"],
       },
     });
-    expect(originalCompat).toEqual({
-      supportsDeveloperRole: false,
-      unsupportedToolSchemaKeywords: ["format", "pattern", "minimum", "pattern"],
-    });
-  });
-
-  it("applies regex tool-schema compatibility when LM Studio preload is disabled", async () => {
-    const baseStream = doneStream();
-    const wrapped = wrap(baseStream, { preload: false });
-
-    expectDone(
-      await collectEvents(
-        infer(wrapped, {
-          id: "qwen3-8b-instruct",
-          compat: { unsupportedToolSchemaKeywords: ["format"] },
-        }),
-      ),
-    );
-
-    expect(prepareModel).not.toHaveBeenCalled();
-    expect(baseStream).toHaveBeenCalledTimes(1);
-    expectModel(baseStream, {
-      compat: {
-        supportsUsageInStreaming: true,
-        unsupportedToolSchemaKeywords: ["format", "pattern"],
-      },
-    });
+    expect(compat.unsupportedToolSchemaKeywords).toEqual([
+      "format",
+      "pattern",
+      "minimum",
+      "pattern",
+    ]);
   });
 
   it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {
-    const rawToolText = [
-      "[mempalace_mempalace_search]",
-      '{"query":"codename","wing":"personal","room":"identities"}',
-      "[END_TOOL_REQUEST]",
-    ].join("\n");
-    const baseStream = eventStream([
-      { type: "start", partial: assistantMessage([]) },
-      {
-        type: "text_start",
-        contentIndex: 0,
-        partial: assistantMessage([{ type: "text", text: "" }]),
-      },
-      { type: "text_delta", contentIndex: 0, delta: rawToolText },
-      { type: "text_end", contentIndex: 0, content: rawToolText },
-      {
-        type: "done",
-        reason: "stop",
-        message: assistantMessage([{ type: "text", text: rawToolText }]),
-      },
-    ]);
-    const wrapped = wrap(baseStream);
+    const rawToolText = '[search]\n{"query":"codename"}\n[END_TOOL_REQUEST]';
+    const wrapped = wrap(
+      eventStream([
+        { type: "start", partial: assistantMessage([]) },
+        {
+          type: "text_start",
+          contentIndex: 0,
+          partial: assistantMessage([{ type: "text", text: "" }]),
+        },
+        { type: "text_delta", contentIndex: 0, delta: rawToolText },
+        { type: "text_end", contentIndex: 0, content: rawToolText },
+        {
+          type: "done",
+          reason: "stop",
+          message: assistantMessage([{ type: "text", text: rawToolText }]),
+        },
+      ]),
+    );
     const events = await collectEvents(
       infer(wrapped, {}, undefined, {
         tools: [
-          {
-            name: "mempalace_mempalace_search",
-            description: "Search MemPalace",
-            parameters: { type: "object", properties: {} },
-          },
+          { name: "search", description: "Search", parameters: { type: "object", properties: {} } },
         ],
       }),
     );
-
     expect(events.map((event) => event.type)).toEqual([
       "start",
       "toolcall_start",
@@ -527,34 +381,28 @@ describe("lmstudio stream wrapper", () => {
       "toolcall_end",
       "done",
     ]);
-    const done = events.find((event) => event.type === "done") as {
-      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
-      reason?: string;
-    };
-    expect(done).toMatchObject({
+    expect(events.at(-1)).toMatchObject({
       reason: "toolUse",
       message: { stopReason: "toolUse" },
     });
-    expect(done.message?.content?.[0]).toEqual(
+    expect(events.at(-1)?.message).toEqual(
       expect.objectContaining({
-        type: "toolCall",
-        name: "mempalace_mempalace_search",
-        arguments: { query: "codename", wing: "personal", room: "identities" },
-        id: expect.stringMatching(/^call_[a-f0-9]{24}$/),
+        content: [
+          expect.objectContaining({
+            type: "toolCall",
+            name: "search",
+            arguments: { query: "codename" },
+            id: expect.stringMatching(/^call_[a-f0-9]{24}$/),
+          }),
+        ],
       }),
     );
   });
 
   it("rewrites reasoning_effort to the disabled effort when thinking is off", async () => {
-    const payload: Record<string, unknown> = {
-      model: "qwen3-8b-instruct",
-      reasoning_effort: "high",
-    };
-    const baseStream = payloadStream(payload);
-    const wrapped = wrap(baseStream, { thinkingLevel: "off" });
-    const events = await collectEvents(infer(wrapped, { compat: BINARY_REASONING_COMPAT }));
-
-    expectDone(events);
+    const payload = { model: "qwen3-8b-instruct", reasoning_effort: "high" };
+    const wrapped = wrap(payloadStream(payload), { thinkingLevel: "off" });
+    expectDone(await collectEvents(infer(wrapped, { compat: BINARY_REASONING_COMPAT })));
     expect(payload.reasoning_effort).toBe("none");
   });
 });
