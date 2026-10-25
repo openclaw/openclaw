@@ -11,6 +11,7 @@ import { resolveCronSourceDeliveryPlan } from "../../cron/isolated-agent/source-
 import * as cronInference from "../../cron/run-inference.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import type { CronAgentExecutionPhaseUpdate } from "../../cron/types.js";
+import { resolveMessageActionTurnAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
   consumeCronNextCheckProposal,
@@ -214,6 +215,40 @@ describe("ordinary session event execution", () => {
         includeReasoning: true,
       },
     });
+  });
+
+  it("binds the scheduled message capability to the runtime policy session", async () => {
+    const runId = "scheduled-policy-session";
+    const policySessionKey = "agent:main:irc:default:direct:alice";
+    const automation = createScheduledAutomation();
+    automation.deliveryAttemptFence = { beforeAttempt: async () => {}, assertCurrent: vi.fn() };
+    const followupRun = createFollowupRun();
+    followupRun.run.scheduledAutomation = automation;
+    const redeemAs: Record<string, ReturnType<typeof resolveMessageActionTurnAuthorization>> = {};
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (run) => {
+      // Another peer's policy key and the shared execution key must not redeem this turn's grant.
+      for (const sessionKey of [policySessionKey, "agent:main:irc:default:direct:bob", "main"]) {
+        redeemAs[sessionKey] = resolveMessageActionTurnAuthorization({
+          token: run.messageActionTurnCapability,
+          agentId: "main",
+          runId,
+          sessionKey,
+          sessionId: "session",
+        });
+      }
+      return { payloads: [{ text: "done" }], meta: {} };
+    });
+    const { replyOperation } = createMockReplyOperation();
+
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun, replyOperation, opts: { runId } }),
+      runtimePolicySessionKey: policySessionKey,
+    });
+
+    expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+    expect(redeemAs[policySessionKey]?.deliveryAttempt).toBeDefined();
+    expect(redeemAs["agent:main:irc:default:direct:bob"]).toBeUndefined();
+    expect(redeemAs.main).toBeUndefined();
   });
 
   it.each(["embedded", "cli"] as const)(
