@@ -206,6 +206,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
         await withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
           refreshPreparedModelRuntimeSnapshots(cfg, {
             agentIds: new Set([agentId]),
+            startup: "background",
             catalogMode: "static",
             allowGatewaySubagentBinding: true,
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),

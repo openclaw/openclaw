@@ -510,9 +510,10 @@ export function refreshPreparedModelRuntimeSnapshots(
   const isPublicationCurrent = () =>
     requestEpoch === refreshRequestEpoch && options.isPublicationCurrent?.() !== false;
   const startup =
-    options.startup === true && options.catalogMode === "static" && replacement
+    options.startup && options.catalogMode === "static" && replacement
       ? new PreparedModelRuntimeStartup({
           replacement,
+          background: options.startup === "background",
           owners: () => owners.values(),
           isCurrent: () => pendingModelRuntimeReplacement === replacement && isPublicationCurrent(),
           timeoutMs: modelRuntimeBuildTimeoutMs,
