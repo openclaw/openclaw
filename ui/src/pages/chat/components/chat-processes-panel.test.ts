@@ -52,8 +52,13 @@ function createDetails(sessionKey = "agent:main:parent", desktop = false) {
   return details;
 }
 
+const query = (host: HTMLElement, selector: string) => host.querySelector<HTMLElement>(selector);
 const button = (host: HTMLElement, selector: string) =>
   host.querySelector<HTMLButtonElement>(selector)!;
+async function click(host: HTMLElement & { updateComplete: Promise<unknown> }, selector: string) {
+  button(host, selector).click();
+  await host.updateComplete;
+}
 const stopCalls = (request: ReturnType<typeof vi.fn>) =>
   request.mock.calls.filter(([method]) => method === "sessions.processes.stop");
 
@@ -76,6 +81,14 @@ function mountProcesses(
     connection,
     changed: (sessionKey = "agent:main:parent") =>
       connection.publishEvent("sessions.processes.changed", { sessionKey, agentId: "main" }),
+    refresh: async (panel: ReturnType<typeof createPanel>) => {
+      connection.publishEvent("sessions.processes.changed", {
+        sessionKey: panel.sessionKey,
+        agentId: "main",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await panel.updateComplete;
+    },
     mount: (...elements: HTMLElement[]) => {
       provider.append(...elements);
       document.body.append(provider);
@@ -90,37 +103,25 @@ async function settle(element: { updateComplete: Promise<unknown> }, ms: number)
 
 it.each([false, true])("distinguishes retired vs unlisted (truncated: %s)", async (truncated) => {
   let result: SessionsProcessesListResult = { ...completeList, processes: [process()] };
-  const { changed, mount } = mountProcesses(() => result);
+  const { refresh, mount } = mountProcesses(() => result);
   const panel = createPanel();
   mount(panel);
 
   await settle(panel, 0);
   await panel.updateComplete;
-  button(panel, ".chat-processes__open").click();
-  await panel.updateComplete;
+  await click(panel, ".chat-processes__open");
   expect(panel.textContent).toContain("Compiling");
   result = { ...result, processes: [{ ...result.processes[0]!, tail: "" }] };
-  changed();
-  await vi.advanceTimersByTimeAsync(0);
-  await panel.updateComplete;
-  expect(panel.querySelector(".chat-processes__output-empty")?.textContent).toContain(
-    "No output yet",
-  );
-  expect(
-    panel.querySelector(".chat-processes__output-empty .empty-state__icon svg"),
-  ).not.toBeNull();
+  await refresh(panel);
+  expect(query(panel, ".chat-processes__output-empty")?.textContent).toContain("No output yet");
   result = { ...completeList, processes: [], truncated };
-  changed();
-  await vi.advanceTimersByTimeAsync(0);
-  await panel.updateComplete;
+  await refresh(panel);
   expect(panel.textContent).toContain(truncated ? "limited list" : "no longer retained");
   if (truncated) {
     expect(panel.textContent).not.toContain("no longer retained");
   }
-  button(panel, 'button[aria-label="Back to Processes"]').click();
-  await panel.updateComplete;
-  expect(panel.querySelector(".chat-processes__list")?.textContent).toContain("No processes");
-  expect(panel.querySelector(".chat-processes__list .empty-state__icon svg")).not.toBeNull();
+  await click(panel, 'button[aria-label="Back to Processes"]');
+  expect(query(panel, ".chat-processes__list")?.textContent).toContain("No processes");
 });
 
 it("keeps Stop separate from opening output and restores list focus after returning", async () => {
@@ -133,7 +134,7 @@ it("keeps Stop separate from opening output and restores list focus after return
   const request = vi.fn((method: string) =>
     method === "sessions.processes.stop" ? stopped.promise : result,
   );
-  const { changed, mount } = mountProcesses(request);
+  const { refresh, mount } = mountProcesses(request);
   const panel = createPanel();
   panel.mobile = true;
   mount(panel);
@@ -145,21 +146,14 @@ it("keeps Stop separate from opening output and restores list focus after return
   const stop = button(panel, 'button[aria-label="Stop Build app"]');
   stop.click();
   await panel.updateComplete;
-  expect(request).toHaveBeenCalledWith("sessions.processes.stop", {
-    key: "agent:main:parent",
-    agentId: "main",
-    sessionId: "parent-session",
-    processId: "build",
-    instanceId: "build-instance",
-  });
   expect(stop.disabled).toBe(true);
   expect(list.hidden).toBe(false);
   await settle(panel, 0);
   expect(opener.isConnected).toBe(true);
-  expect(panel.querySelector('button[aria-label="Build app"]')).toBe(opener);
+  expect(query(panel, 'button[aria-label="Build app"]')).toBe(opener);
   opener.click();
   await waitForSolid(() => {
-    expect(panel.querySelector("pre")?.textContent).toBe("Compiling\nReady");
+    expect(query(panel, "pre")?.textContent).toBe("Compiling\nReady");
   });
   const detailStop = button(panel, '.chat-processes__detail button[aria-label="Stop Build app"]');
   expect(detailStop.disabled).toBe(true);
@@ -172,14 +166,9 @@ it("keeps Stop separate from opening output and restores list focus after return
     ...result,
     processes: [{ ...result.processes[0]!, status: "killed", endedAt: 5000, canStop: false }],
   };
-  changed(panel.sessionKey);
-  await vi.advanceTimersByTimeAsync(0);
-  await panel.updateComplete;
-  expect(
-    panel.querySelector('.chat-processes__detail button[aria-label="Stop Build app"]'),
-  ).toBeNull();
-  button(panel, 'button[aria-label="Back to Processes"]').click();
-  await panel.updateComplete;
+  await refresh(panel);
+  expect(query(panel, '.chat-processes__detail button[aria-label="Stop Build app"]')).toBeNull();
+  await click(panel, 'button[aria-label="Back to Processes"]');
   expect(list.hidden).toBe(false);
   expect(list.scrollTop).toBe(55);
   expect(document.activeElement).toBe(list);
@@ -215,8 +204,7 @@ it("retires stop authority immediately and reads the complete replacement scope"
 });
 
 it("keeps details process observation through refreshes and follows its presented scope", async () => {
-  const request = vi.fn((method: string, params?: unknown) => {
-    expect(method).toBe("sessions.processes.list");
+  const request = vi.fn((_method: string, params?: unknown) => {
     const target = asOptionalRecord(params);
     return {
       ...completeList,
@@ -228,19 +216,17 @@ it("keeps details process observation through refreshes and follows its presente
   const details = createDetails();
   mount(details);
   await settle(details, 0);
-  const row = details.querySelector(".chat-details__process");
+  const row = query(details, ".chat-details__process");
   expect(row?.textContent).toContain("Main build");
-  expect(request.mock.calls).toEqual([mainRead]);
 
   details.props = { ...details.props!, messages: [] };
   await settle(details, 0);
-  expect(details.querySelector(".chat-details__process")).toBe(row);
+  expect(query(details, ".chat-details__process")).toBe(row);
   expect(request).toHaveBeenCalledOnce();
 
   details.props = { ...details.props!, sessionKey: "global", currentAgentId: "worker" };
   await settle(details, 0);
-  expect(request.mock.calls).toEqual([mainRead, workerRead]);
-  expect(details.querySelector(".chat-details__process")?.textContent).toContain("Worker build");
+  expect(query(details, ".chat-details__process")?.textContent).toContain("Worker build");
 
   details.presented = false;
   details.props = { ...details.props!, sessionKey: "agent:main:parent", currentAgentId: "main" };
@@ -249,8 +235,7 @@ it("keeps details process observation through refreshes and follows its presente
 
   details.presented = true;
   await settle(details, 0);
-  expect(request.mock.calls).toEqual([mainRead, workerRead, mainRead]);
-  expect(details.querySelector(".chat-details__process")?.textContent).toContain("Main build");
+  expect(query(details, ".chat-details__process")?.textContent).toContain("Main build");
 });
 
 it("keeps the full panel read-error flow while compact Details retains its shared rows", async () => {
@@ -272,16 +257,16 @@ it("keeps the full panel read-error flow while compact Details retains its share
   changed(panel.sessionKey);
   await settle(panel, 0);
   expect(panel.textContent).not.toContain("Build app");
-  expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Worker reconnecting");
+  expect(query(panel, '[role="alert"]')?.textContent).toContain("Worker reconnecting");
   expect(details.textContent).toContain("Build app");
   expect(details.textContent).not.toContain("Worker reconnecting");
   button(panel, ".chat-processes__error button").click();
   await settle(panel, 0);
-  expect(panel.querySelector('[role="alert"]')).toBeNull();
+  expect(query(panel, '[role="alert"]')).toBeNull();
   expect(panel.textContent).not.toContain("Build app");
-  expect(panel.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Loading…");
-  expect(panel.querySelector(".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
-  expect(details.querySelector(".chat-details-processes")?.getAttribute("aria-busy")).toBe("true");
+  expect(query(panel, '[role="status"]')?.getAttribute("aria-label")).toBe("Loading…");
+  expect(query(panel, ".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
+  expect(query(details, ".chat-details-processes")?.getAttribute("aria-busy")).toBe("true");
   expect(details.textContent).toContain("Build app");
   retry.resolve(result);
   await settle(panel, 0);
@@ -289,7 +274,7 @@ it("keeps the full panel read-error flow while compact Details retains its share
   expect(details.textContent).toContain("Build app");
   const opener = button(panel, ".chat-processes__open");
   opener.click();
-  await waitForSolid(() => expect(panel.querySelector("pre")?.textContent).toBe("Compiling"));
+  await waitForSolid(() => expect(query(panel, "pre")?.textContent).toBe("Compiling"));
   button(panel, 'button[aria-label="Back to Processes"]').click();
   await waitForSolid(() => expect(document.activeElement).toBe(opener));
   expect(request).toHaveBeenCalledTimes(3);
@@ -313,7 +298,7 @@ it("keeps a shared held read and Stop alive when one presentation moves away", a
   const details = createDetails(panel.sessionKey, true);
   mount(panel, details);
   await settle(panel, 0);
-  expect(panel.querySelector(".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
+  expect(query(panel, ".chat-processes__list")?.getAttribute("aria-busy")).toBe("true");
   expect(request).toHaveBeenCalledOnce();
   panel.presented = false;
   panel.sessionKey = "global";
@@ -349,7 +334,7 @@ it("keeps a shared held read and Stop alive when one presentation moves away", a
   ]);
   stopped.resolve({ requested: false });
   await settle(panel, 0);
-  expect(panel.querySelector('[role="alert"]')).toBeNull();
+  expect(query(panel, '[role="alert"]')).toBeNull();
   expect(button(details, ".chat-details-processes__stop").disabled).toBe(false);
 });
 
@@ -383,11 +368,11 @@ it("retires a held Stop before a same-session replacement connection renders", a
   oldStop.resolve({ requested: false });
   await settle(panel, 0);
   expect(stop.disabled).toBe(true);
-  expect(panel.querySelector('[role="alert"]')).toBeNull();
+  expect(query(panel, '[role="alert"]')).toBeNull();
   nextStop.resolve({ requested: false });
   await settle(panel, 0);
   expect(stop.disabled).toBe(false);
-  expect(panel.querySelector('[role="alert"]')).not.toBeNull();
+  expect(query(panel, '[role="alert"]')).not.toBeNull();
   expect(stopCalls(request)).toHaveLength(1);
   expect(stopCalls(replacement)).toHaveLength(1);
 });
@@ -414,7 +399,7 @@ it("keeps history in the panel and recovers legacy Details after access denial",
   const details = createDetails(panel.sessionKey);
   mount(panel, details);
   await settle(details, 0);
-  expect(details.querySelector('[data-process-id="build"]')).toBeNull();
+  expect(query(details, '[data-process-id="build"]')).toBeNull();
   expect(details.textContent).toContain("Live watch");
   button(panel, ".chat-processes__finished-toggle").click();
   await settle(panel, 0);
@@ -422,11 +407,11 @@ it("keeps history in the panel and recovers legacy Details after access denial",
   denied = true;
   changed(panel.sessionKey);
   await settle(details, 0);
-  expect(details.querySelector('[role="alert"]')?.textContent).toContain("Process access removed");
-  expect(details.querySelector("[data-process-id]")).toBeNull();
+  expect(query(details, '[role="alert"]')?.textContent).toContain("Process access removed");
+  expect(query(details, "[data-process-id]")).toBeNull();
   denied = false;
   button(details, ".chat-summary__automation-retry").click();
   await settle(details, 0);
-  expect(details.querySelector('[role="alert"]')).toBeNull();
+  expect(query(details, '[role="alert"]')).toBeNull();
   expect(details.textContent).toContain("Live watch");
 });

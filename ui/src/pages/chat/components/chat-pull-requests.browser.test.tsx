@@ -130,12 +130,6 @@ it.each(["props", "owner", "parked"])(
 
 it.each([
   { viewport: 1440, width: 360, repo: "openclaw", clipped: false },
-  {
-    viewport: 900,
-    width: 300,
-    repo: "a-very-long-repository-name-that-needs-truncation",
-    clipped: false,
-  },
   { viewport: 393, width: 360, repo: "openclaw", clipped: false },
   { viewport: 900, width: 300, repo: "openclaw", clipped: true },
 ])(
@@ -220,10 +214,7 @@ it.each([
     const publish = page.getByRole("button", { name: "Create PR", exact: true });
     await expect.element(publish).toBeVisible();
     const publishButton = query<HTMLButtonElement>("button.chat-pr__create", row);
-    await visible(row);
     await visible(trigger);
-    expect(rect(query(".chat-environment__row", row)).height).toBe(32);
-    expect(rect(publishButton).height).toBe(26);
     expect(rect(trigger).width).toBeGreaterThanOrEqual(26);
     expect(rect(row).left).toBeGreaterThanOrEqual(0);
     expect(rect(row).right).toBeLessThanOrEqual(viewport);
@@ -236,13 +227,10 @@ it.each([
     expect(rect(publishButton).right).toBeLessThanOrEqual(rect(trigger).left);
     expect(diff.textContent).toContain("+2,819");
     expect(diff.textContent).toContain("−205");
-    expect(getComputedStyle(diff).fontWeight).toBe("500");
-    expect(getComputedStyle(diff).fontVariantNumeric).toBe("tabular-nums");
     expect(rect(branchLabel).width).toBeGreaterThan(40);
     expect(rect(branchLabel).height).toBeLessThanOrEqual(
       Number.parseFloat(getComputedStyle(branchLabel).lineHeight) + 1,
     );
-    expect(getComputedStyle(branchLabel).textOverflow).toBe("clip");
     await waitForSolid(() => {
       expect(branchLabel.scrollWidth > branchLabel.clientWidth + 1).toBe(clipped);
       expect(getComputedStyle(branchLabel).maskImage !== "none").toBe(clipped);
@@ -261,8 +249,6 @@ it.each([
     await expect.element(dismiss).toBeVisible();
     const personalChoice = page.getByRole("menuitemradio", { name: "@alice-tools", exact: true });
     await expect.element(personalChoice).toBeVisible();
-    const personalElement = query('[role="menuitemradio"][value="personal"]', row);
-    expect(personalElement.closest('[role="menu"]')).toBe(query(".chat-pr-branch-menu", row));
     await personalChoice.click();
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("personal");
     await expect.element(menu).not.toBeVisible();

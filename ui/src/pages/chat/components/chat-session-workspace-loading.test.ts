@@ -237,23 +237,16 @@ describe("workspace catalog demand", () => {
     const release = retainSessionWorkspaceArtifacts(state, "assistant");
     await loadSessionWorkspaceArtifacts(state, false, "assistant");
     await loadSessionWorkspaceArtifacts(state);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "artifacts.list", {
-      sessionKey: state.sessionKey,
-      agentId: "main",
-      messageRole: "assistant",
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "artifacts.list", {
-      sessionKey: state.sessionKey,
-      agentId: "main",
-    });
-    expect(getSessionWorkspace(state).assistantArtifacts?.items.map((item) => item.id)).toEqual([
-      "delivered",
+    expect(request.mock.calls.map(([, params]) => params)).toEqual([
+      { sessionKey: state.sessionKey, agentId: "main", messageRole: "assistant" },
+      { sessionKey: state.sessionKey, agentId: "main" },
     ]);
-    expect(getSessionWorkspace(state).artifacts?.items.map((item) => item.id)).toEqual([
-      "upload",
-      "delivered",
-    ]);
+    const workspace = getSessionWorkspace(state);
+    expect(
+      [workspace.assistantArtifacts, workspace.artifacts].map((list) =>
+        list?.items.map((item) => item.id),
+      ),
+    ).toEqual([["delivered"], ["upload", "delivered"]]);
     expect(listFiles).not.toHaveBeenCalled();
     request.mockRejectedValueOnce(new Error("refresh unavailable"));
     refreshSessionWorkspaceState(state, false);
@@ -375,35 +368,41 @@ describe("workspace catalog demand", () => {
   });
 });
 
-it("keeps project, external and artifact homonyms distinct while search ignores activity", () => {
+it("keeps unresolved, project, external and artifact homonyms distinct", () => {
   const listing = catalogListing(
     [
-      workspaceFile("report.md", "read", { workspacePath: "docs/report.md" }),
+      workspaceFile("docs/report.md", "modified", { missing: true }),
+      workspaceFile("../docs/report.md", "read", { workspacePath: "docs/report.md" }),
       workspaceFile("/outside/report.md", "modified", { workspacePath: "/outside/report.md" }),
     ],
     {
       artifacts: [artifact("opaque-id", "report.md")],
-      browser: { path: "", entries: [{ path: "docs", name: "docs", kind: "directory" }] },
+      browser: {
+        path: "docs",
+        entries: [{ path: "docs/report.md", name: "report.md", kind: "file" }],
+      },
     },
   );
   const catalog = projectWorkspaceCatalog(listing);
-  expect(catalog.session.map((file) => file.artifactId ?? file.path)).toEqual([
+  expect(catalog.session).toMatchObject([
+    { key: "file:docs/report.md", path: "docs/report.md", origin: "session", activity: "modified" },
+    { path: "/outside/report.md" },
+    { artifactId: "opaque-id" },
+  ]);
+  expect(catalog.session.map((entry) => entry.artifactId ?? entry.path)).toEqual([
+    "docs/report.md",
     "/outside/report.md",
     "opaque-id",
   ]);
-  expect(
-    workspaceCatalogChildren(catalog, "read")
-      .get("")
-      ?.map((file) => file.name),
-  ).toEqual(["docs"]);
-  expect(
-    workspaceCatalogChildren(catalog, "read")
-      .get("docs")
-      ?.map((file) => file.name),
-  ).toEqual(["report.md"]);
+  expect(catalog.project.get("docs/report.md")?.activity).toBe("read");
+  expect(catalog.session[0]?.key).not.toBe(catalog.project.get("docs/report.md")?.key);
+  expect([...workspaceCatalogChildren(catalog, "changed").values()].flat()).toEqual([]);
+  const children = workspaceCatalogChildren(catalog, "read");
+  expect(children.get("")?.map((entry) => entry.name)).toEqual(["docs"]);
+  expect(children.get("docs")?.map((entry) => entry.name)).toEqual(["report.md"]);
   const results = workspaceCatalogSearch(listing, "report");
-  expect(results).toHaveLength(3);
-  expect(new Set(results.map((file) => file.key)).size).toBe(3);
+  expect(results).toHaveLength(4);
+  expect(new Set(results.map((entry) => entry.key)).size).toBe(4);
   expect(workspaceCatalogSearch(listing, "opaque-id")).toEqual([]);
   expect(workspaceCatalogSearch(listing, "")).toEqual([]);
 });
@@ -439,31 +438,6 @@ it.each([false, true])(
     ]);
   },
 );
-
-it("keeps unresolved session paths separate from authoritative project paths", () => {
-  const listing = catalogListing(
-    [
-      workspaceFile("docs/report.md", "modified", { missing: true }),
-      workspaceFile("../docs/report.md", "read", { workspacePath: "docs/report.md" }),
-    ],
-    {
-      browser: {
-        path: "docs",
-        entries: [{ path: "docs/report.md", name: "report.md", kind: "file" }],
-      },
-    },
-  );
-  const catalog = projectWorkspaceCatalog(listing);
-  expect(catalog.session).toMatchObject([
-    { key: "file:docs/report.md", path: "docs/report.md", origin: "session", activity: "modified" },
-  ]);
-  expect(catalog.project.get("docs/report.md")?.activity).toBe("read");
-  expect(catalog.session[0]?.key).not.toBe(catalog.project.get("docs/report.md")?.key);
-  expect([...workspaceCatalogChildren(catalog, "changed").values()].flat()).toEqual([]);
-  const results = workspaceCatalogSearch(listing, "report");
-  expect(results).toHaveLength(2);
-  expect(new Set(results.map((file) => file.key)).size).toBe(2);
-});
 
 it("offers folder filters only for project files inside that path boundary", () => {
   const catalog = projectWorkspaceCatalog(
