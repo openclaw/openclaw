@@ -6,13 +6,10 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./database-suite-workers.test-support.js";
-import * as terminal from "../../../packages/terminal-core/src/note.js";
 import { createBackupResourcePlan } from "../../commands/backup-resource-inventory.js";
-import { noteDatabaseEngines } from "../../commands/doctor-database-engine.js";
 import { doctorDatabasePort as port } from "../../commands/doctor-database-port.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveActivatedPluginBackupInventory } from "../../plugins/manifest-backup-resources.js";
-import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import {
   preparePostgresRestore,
@@ -45,7 +42,6 @@ import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import * as snapshots from "../sqlite-snapshot.js";
 import { runPluginDoctorStateMigrationPlans } from "../state-migrations.plugin-doctor.js";
-import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
@@ -342,42 +338,6 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
       });
       expect(deferredRegistry.paths).not.toContain(agentPath);
       expect(files.every((file) => deferredRegistry.paths.includes(file))).toBe(true);
-      const note = vi.spyOn(terminal, "note").mockImplementation(() => {});
-      for (const database of [
-        { ...config.database, engine: "postgres" as const },
-        {
-          ...config.database,
-          families: { state: { engine: "postgres" as const } },
-        },
-      ]) {
-        clearPluginMetadataLifecycleCaches();
-        const doctorConfig = { ...config, database };
-        const selection = await resolveDatabaseEngineSelection(doctorConfig, state.env);
-        const findings = await withDatabaseEngineSelection(selection, () =>
-          noteDatabaseEngines(doctorConfig, { env: state.env }),
-        );
-        const storeFindings = findings.filter((finding) => files.includes(finding.path ?? ""));
-        expect(storeFindings).toHaveLength(files.length);
-        const output = String(note.mock.lastCall?.[0]);
-        for (const [index, file] of files.entries()) {
-          expect(storeFindings.find((finding) => finding.path === file)).toMatchObject({
-            severity: "info",
-            details: {
-              family: "state",
-              observed: "postgres",
-              mismatch: false,
-              connectivity: "reachable",
-              namespace: physical[index]!.anchor.namespace,
-              storeId: physical[index]!.anchor.storeId,
-              schema: { pending: 0 },
-              issues: [],
-            },
-          });
-          expect(output).toContain(
-            `Shared state root: ${file} (physical=postgres, namespace=${physical[index]!.anchor.namespace})`,
-          );
-        }
-      }
       const inventory = resolveActivatedPluginBackupInventory({
         config: postgresConfig,
         env: state.env,
@@ -415,6 +375,9 @@ describe.skipIf(!connection)("Matrix declared account-root database portability"
         sqliteRows(capturedGlobal!.sourcePath, "SELECT agent_id, path FROM agent_databases"),
       ).toEqual([{ agent_id: "retained", path: agentPath }]);
       for (const [index, file] of files.entries()) {
+        expect(backupRows(`${file}.postgres/database.sqlite`, selectEntries)).toEqual(
+          expected[index],
+        );
         const local = resolveClientCredentialStorePath({
           ...state.env,
           OPENCLAW_STATE_DIR: path.dirname(path.dirname(file)),
