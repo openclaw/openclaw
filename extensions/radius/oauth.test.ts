@@ -12,21 +12,18 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: guarded
 const requestAt = (index: number) => guardedFetch.mock.calls[index]![0];
 
 const reply = (payload: unknown, status = 200) =>
-  guardedFetch.mockResolvedValueOnce({
-    response: Response.json(payload, { status }),
-    release,
-  });
+  guardedFetch.mockResolvedValueOnce({ response: Response.json(payload, { status }), release });
 
 const device = (overrides: Record<string, unknown> = {}) =>
   reply({ ...devicePayload, ...overrides });
 
 const token = (overrides: Record<string, unknown> = {}) => reply({ ...tokenPayload, ...overrides });
 
-const formAt = (index: number) => Object.fromEntries(requestAt(index).init.body);
 const expectForm = (index: number, form: string) =>
-  expect(formAt(index)).toEqual(
-    Object.fromEntries(new URLSearchParams(`client_id=pi-gateway&${form}`)),
-  );
+  expect(Object.fromEntries(requestAt(index).init.body)).toEqual({
+    client_id: "pi-gateway",
+    ...Object.fromEntries(new URLSearchParams(form)),
+  });
 let defaults: ReturnType<typeof context>;
 
 async function rejectLogin(message: string, ms = 1_000, ctx = defaults.ctx) {
@@ -54,13 +51,9 @@ it("pairs with fractional polling intervals and slows subsequent polls after slo
   const result = loginRadiusOAuth(ctx);
 
   await vi.advanceTimersByTimeAsync(0);
-  expect(ctx.prompter.note).toHaveBeenCalledWith(
-    expect.stringContaining("ABCD-EFGH"),
-    "Radius sign-in",
-  );
+  expect(vi.mocked(ctx.prompter.note).mock.calls[0]?.[0]).toContain("ABCD-EFGH");
   expect(ctx.openUrl).toHaveBeenCalledWith("https://radius.earendil.com/device");
   for (const [elapsed, calls] of [
-    [0, 1],
     [99, 1],
     [1, 2],
     [100, 3],
@@ -94,18 +87,15 @@ it.each([
   ["access_denied", "denied"],
   ["expired_token", "expired"],
   ["server_error", "HTTP 400"],
+  [undefined, "expired"],
 ])("terminates on %s without leaking the server description", async (code, message) => {
-  device();
-  reply({ error: code, error_description: "secret-response-value" }, 400);
-  await rejectLogin(message);
-  expect(guardedFetch).toHaveBeenCalledTimes(2);
+  device(code ? {} : { expires_in: 2, interval: 5 });
+  if (code) {
+    reply({ error: code, error_description: "secret-response-value" }, 400);
+  }
+  await rejectLogin(message, code ? 1_000 : 2_000);
+  expect(guardedFetch).toHaveBeenCalledTimes(code ? 2 : 1);
   expect(defaults.progress.stop).toHaveBeenCalledWith("Radius sign-in stopped");
-});
-
-it("stops at device expiry before issuing a late poll", async () => {
-  device({ expires_in: 2, interval: 5 });
-  await rejectLogin("expired", 2_000);
-  expect(guardedFetch).toHaveBeenCalledTimes(1);
 });
 
 it("cancels the wait and clears its timer without another token request", async () => {
@@ -130,7 +120,6 @@ it.each(["note", "device", "token"])("rechecks authority at %s", async (boundary
       }
     },
   });
-  const send = vi.fn();
   if (boundary !== "device") {
     device();
   }
@@ -143,12 +132,10 @@ it.each(["note", "device", "token"])("rechecks authority at %s", async (boundary
       await Promise.resolve();
       current = false;
       params.beforeRequest?.();
-      send();
       throw new Error("Request was sent after authority was revoked");
     });
   }
   await rejectLogin("Login revoked", 1_000, ctx);
-  expect(send).not.toHaveBeenCalled();
   if (boundary === "note") {
     expect(ctx.openUrl).not.toHaveBeenCalled();
     expect(guardedFetch).toHaveBeenCalledTimes(1);

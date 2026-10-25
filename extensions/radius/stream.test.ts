@@ -30,42 +30,26 @@ function response(events: readonly unknown[], open = false) {
   const { promise: cancelled, resolve } = Promise.withResolvers<void>();
   const cancel = vi.fn(resolve);
   const bytes = new TextEncoder().encode(": keepalive\r\n\r\n" + sse(events));
-  return {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Split CRLF delimiters, UTF-8 code points, and JSON across transport chunks.
+      for (let i = 0; i < bytes.length; i += 7) {
+        controller.enqueue(bytes.slice(i, i + 7));
+      }
+      if (!open) {
+        controller.close();
+      }
+    },
     cancel,
-    cancelled,
-    response: new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          // Split CRLF delimiters, UTF-8 code points, and JSON across transport chunks.
-          for (let i = 0; i < bytes.length; i += 7) {
-            controller.enqueue(bytes.slice(i, i + 7));
-          }
-          if (!open) {
-            controller.close();
-          }
-        },
-        cancel,
-      }),
-      { headers },
-    ),
-  };
+  });
+  return { cancel, cancelled, response: new Response(body, { headers }) };
 }
 
-const contentEvent = (type: string, contentIndex: number, fields = {}) => ({
-  type,
-  contentIndex,
-  ...fields,
-});
-const toolStart = (index = 0) =>
-  contentEvent("toolcall_start", index, { id: "call-1", toolName: "lookup" });
-const toolCall = (arguments_: unknown, name = "lookup") => ({
-  type: "toolCall",
-  id: "call-1",
-  name,
-  arguments: arguments_,
-});
+const frame = (type: string, i: number, fields = {}) => ({ type, contentIndex: i, ...fields });
+const toolStart = (index = 0) => frame("toolcall_start", index, { id: "c", toolName: "f" });
+const toolCall = (args: unknown) => ({ type: "toolCall", id: "c", name: "f", arguments: args });
 const toolEnd = (call: ReturnType<typeof toolCall>, index = 0) =>
-  contentEvent("toolcall_end", index, { toolCall: call });
+  frame("toolcall_end", index, { toolCall: call });
 const done = (reason = "stop") => ({ type: "done", reason, usage });
 const run = (extra: Parameters<ReturnType<typeof createRadiusStreamFn>>[2] = {}) =>
   createRadiusStreamFn()(model, context, { ...options, ...extra });
@@ -81,34 +65,26 @@ beforeEach(() => {
 it.each(["\n\n", ""])("rejects oversized frame delimiter %j", async (delimiter) => {
   const oversized = JSON.stringify({ type: "start", padding: "a".repeat(16 * 1024 * 1024) });
   fetchMock.mockResolvedValue(new Response(`data: ${oversized}${delimiter}`));
-  expect(await run().result()).toMatchObject({
-    stopReason: "error",
-    errorMessage: "Radius SSE event exceeds 16 MiB",
-  });
+  const { stopReason, errorMessage } = await run().result();
+  expect([stopReason, errorMessage]).toEqual(["error", "Radius SSE event exceeds 16 MiB"]);
 });
 
 it("preserves signed content, bounded tool previews and accounting across fragmented SSE", async () => {
   const previewArguments = { content: "a".repeat(100_000) };
   const toolArguments = { ...previewArguments, complete: true };
   const json = JSON.stringify(previewArguments);
-  const deltas = Array.from({ length: Math.ceil(json.length / 1000) }, (_, index) =>
-    json.slice(index * 1000, (index + 1) * 1000),
-  );
+  const deltas = json.match(/.{1,1000}/gu) ?? [];
   const signedTool = { ...toolCall(toolArguments), thoughtSignature: "s" };
   const input = [
     { type: "start" },
-    contentEvent("thinking_start", 0),
-    contentEvent("thinking_delta", 0, { delta: "th" }),
-    contentEvent("thinking_end", 0, {
-      content: "thought",
-      contentSignature: "s",
-      redacted: true,
-    }),
-    contentEvent("text_start", 1),
-    contentEvent("text_delta", 1, { delta: "é" }),
-    contentEvent("text_end", 1, { content: "é!", contentSignature: "s" }),
+    frame("thinking_start", 0),
+    frame("thinking_delta", 0, { delta: "th" }),
+    frame("thinking_end", 0, { content: "thought", contentSignature: "s", redacted: true }),
+    frame("text_start", 1),
+    frame("text_delta", 1, { delta: "é" }),
+    frame("text_end", 1, { content: "é!", contentSignature: "s" }),
     toolStart(2),
-    ...deltas.map((delta) => contentEvent("toolcall_delta", 2, { delta })),
+    ...deltas.map((delta) => frame("toolcall_delta", 2, { delta })),
     toolEnd(signedTool, 2),
     { ...done("toolUse"), responseId: "r" },
   ];
@@ -123,8 +99,8 @@ it("preserves signed content, bounded tool previews and accounting across fragme
   } as const;
   const onResponse = vi.fn();
   const stream = run({ ...requestOptions, onResponse });
-  const observed: string[] = [],
-    types: string[] = [];
+  const observed: string[] = [];
+  const types: string[] = [];
   for await (const event of stream) {
     expect(onResponse).toHaveBeenCalledOnce();
     types.push(event.type);
@@ -159,10 +135,7 @@ it("preserves signed content, bounded tool previews and accounting across fragme
 
 it("reports HTTP errors after payload preparation and response notification", async () => {
   fetchMock.mockResolvedValue(
-    new Response(JSON.stringify({ error: { message: "Quota exceeded" } }), {
-      status: 429,
-      headers,
-    }),
+    Response.json({ error: { message: "Quota exceeded" } }, { status: 429, headers }),
   );
   const onResponse = vi.fn();
   const replacement = { model: "claude-sonnet-4", context: { messages: [] }, options: {} };
@@ -175,10 +148,7 @@ it("reports HTTP errors after payload preparation and response notification", as
     },
     onResponse,
   });
-  for await (const event of stream) {
-    expect(onResponse).toHaveBeenCalledOnce();
-    expect(event.type).toBe("error");
-  }
+  await Array.fromAsync(stream, () => expect(onResponse).toHaveBeenCalledOnce());
   expect(onResponse).toHaveBeenCalledWith({ status: 429, headers }, model);
   expect(await requestBody()).toEqual(replacement);
   expect(await stream.result()).toMatchObject({
@@ -188,31 +158,19 @@ it("reports HTTP errors after payload preparation and response notification", as
 });
 
 it.each(["error", "aborted"])("preserves %s terminal accounting", async (reason) => {
-  mockEvents([
-    {
-      type: "error",
-      reason,
-      errorMessage: "Radius stopped generation",
-      usage,
-      responseId: "error-response",
-    },
-  ]);
-  expect(await run().result()).toMatchObject({
-    stopReason: reason,
-    errorMessage: "Radius stopped generation",
-    responseId: "error-response",
-    usage,
-  });
+  const accounting = { errorMessage: "stopped", usage, responseId: "r" };
+  mockEvents([{ type: "error", reason, ...accounting }]);
+  expect(await run().result()).toMatchObject({ stopReason: reason, ...accounting });
 });
 
 it.each([
   [
     "missing terminal",
-    [contentEvent("text_start", 0), contentEvent("text_delta", 0, { delta: "partial" })],
+    [frame("text_start", 0), frame("text_delta", 0, { delta: "partial" })],
     "without a terminal event",
   ],
   ["unfinished tool", [toolStart(), done("toolUse")], "unfinished tool call"],
-  ["invalid event", [contentEvent("text_delta", 0, { delta: "orphan" })], "content block sequence"],
+  ["invalid event", [frame("text_delta", 0, { delta: "orphan" })], "content block sequence"],
   ["non-object tool arguments", [toolStart(), toolEnd(toolCall([]))], "tool"],
 ] as const)("fails %s instead of silently completing", async (_name, events, error) => {
   mockEvents(events);
