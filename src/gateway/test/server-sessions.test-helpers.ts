@@ -1,6 +1,3 @@
-/**
- * HTTP server session fixtures shared by gateway session tests.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
@@ -46,72 +43,45 @@ export async function getSessionsHandlers() {
 type TestTranscriptMessage = Record<string, unknown> & {
   role: string;
 };
+type TranscriptScope = {
+  agentId?: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+};
 type RetireSessionMcpRuntimeParams = Parameters<
   (typeof import("../../agents/agent-bundle-mcp-tools.js"))["retireSessionMcpRuntime"]
 >[0];
 
-export async function seedSessionTranscript(params: {
-  agentId?: string;
-  messages: readonly TestTranscriptMessage[];
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<void> {
+export async function seedSessionTranscript({
+  messages,
+  ...scope
+}: TranscriptScope & { messages: readonly TestTranscriptMessage[] }): Promise<void> {
   const { persistSessionTranscriptTurn } = await getSessionAccessorModule();
-  await persistSessionTranscriptTurn(
-    {
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    {
-      cwd: "/tmp",
-      updateMode: "none",
-      messages: params.messages.map((message, index) => ({
-        message: {
-          timestamp: index + 1,
-          ...message,
-        },
-        now: Date.parse(`2026-06-19T12:00:${String(index + 1).padStart(2, "0")}.000Z`),
-      })),
-    },
-  );
-}
-
-export async function seedLinearSessionTranscript(params: {
-  agentId?: string;
-  contents: readonly string[];
-  role?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<void> {
-  await seedSessionTranscript({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    messages: params.contents.map((content) => ({
-      role: params.role ?? "user",
-      content,
+  await persistSessionTranscriptTurn(scope, {
+    cwd: "/tmp",
+    updateMode: "none",
+    messages: messages.map((message, index) => ({
+      message: { timestamp: index + 1, ...message },
+      now: Date.parse(`2026-06-19T12:00:${String(index + 1).padStart(2, "0")}.000Z`),
     })),
   });
 }
 
-export async function loadSeededTranscriptEvents(params: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<unknown[]> {
-  const { loadTranscriptEvents } = await getSessionAccessorModule();
-  return await loadTranscriptEvents({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
+export async function seedLinearSessionTranscript({
+  contents,
+  role,
+  ...scope
+}: TranscriptScope & { contents: readonly string[]; role?: string }): Promise<void> {
+  await seedSessionTranscript({
+    ...scope,
+    messages: contents.map((content) => ({ role: role ?? "user", content })),
   });
+}
+
+export async function loadSeededTranscriptEvents(scope: TranscriptScope): Promise<unknown[]> {
+  const { loadTranscriptEvents } = await getSessionAccessorModule();
+  return await loadTranscriptEvents(scope);
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
@@ -190,10 +160,8 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   retireSessionMcpRuntime: vi.fn(async (_params: RetireSessionMcpRuntimeParams) => true),
 }));
 
-vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
-  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
-    "../../auto-reply/reply/queue/cleanup.js",
-  );
+vi.mock("../../auto-reply/reply/queue/cleanup.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../auto-reply/reply/queue/cleanup.js")>();
   return {
     ...actual,
     clearSessionQueues: sessionCleanupMocks.clearSessionQueues.mockImplementation(
@@ -202,54 +170,37 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
   };
 });
 
-vi.mock("../../auto-reply/reply/session-reset-cleanup.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../auto-reply/reply/session-reset-cleanup.js")
-  >("../../auto-reply/reply/session-reset-cleanup.js");
-  return {
-    ...actual,
-    stopSessionResetSubagents: sessionCleanupMocks.stopSessionResetSubagents,
-  };
-});
+vi.mock("../../auto-reply/reply/session-reset-cleanup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/reply/session-reset-cleanup.js")>()),
+  stopSessionResetSubagents: sessionCleanupMocks.stopSessionResetSubagents,
+}));
 
-vi.mock("../../hooks/internal-hooks.js", async () => {
-  const actual = await vi.importActual<typeof import("../../hooks/internal-hooks.js")>(
-    "../../hooks/internal-hooks.js",
-  );
-  return {
-    ...actual,
-    hasInternalHookListeners: sessionHookMocks.hasInternalHookListeners,
-    triggerInternalHook: sessionHookMocks.triggerInternalHook,
-  };
-});
+vi.mock("../../hooks/internal-hooks.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../hooks/internal-hooks.js")>()),
+  ...sessionHookMocks,
+}));
 
-vi.mock("../../plugins/hook-runner-global.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/hook-runner-global.js")>(
-    "../../plugins/hook-runner-global.js",
-  );
-  return {
-    ...actual,
-    getGlobalHookRunner: vi.fn(
-      () =>
-        sessionLifecycleHookState.runner ?? {
-          hasHooks: (hookName: string) =>
-            (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
-            (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
-            (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
-            (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
-          runBeforeReset: beforeResetHookMocks.runBeforeReset,
-          runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
-          runSessionStart: sessionLifecycleHookMocks.runSessionStart,
-          runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
-        },
-    ),
-  };
-});
+vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/hook-runner-global.js")>()),
+  getGlobalHookRunner: vi.fn(
+    () =>
+      sessionLifecycleHookState.runner ?? {
+        hasHooks: (hookName: string) =>
+          (hookName === "subagent_ended" && subagentLifecycleHookState.hasSubagentEndedHook) ||
+          (hookName === "before_reset" && beforeResetHookState.hasBeforeResetHook) ||
+          (hookName === "session_end" && sessionLifecycleHookState.hasSessionEndHook) ||
+          (hookName === "session_start" && sessionLifecycleHookState.hasSessionStartHook),
+        runBeforeReset: beforeResetHookMocks.runBeforeReset,
+        runSessionEnd: sessionLifecycleHookMocks.runSessionEnd,
+        runSessionStart: sessionLifecycleHookMocks.runSessionStart,
+        runSubagentEnded: subagentLifecycleHookMocks.runSubagentEnded,
+      },
+  ),
+}));
 
-vi.mock("../../infra/outbound/session-binding-service.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../infra/outbound/session-binding-service.js")
-  >("../../infra/outbound/session-binding-service.js");
+vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../infra/outbound/session-binding-service.js")>();
   return {
     ...actual,
     getSessionBindingService: () => ({
@@ -260,22 +211,17 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
   };
 });
 
-vi.mock("../../acp/runtime/registry.js", async () => {
-  const actual = await vi.importActual<typeof import("../../acp/runtime/registry.js")>(
-    "../../acp/runtime/registry.js",
-  );
-  return {
-    ...actual,
-    getAcpRuntimeBackend: acpRuntimeMocks.getAcpRuntimeBackend,
-    requireAcpRuntimeBackend: (backendId?: string) => {
-      const backend = acpRuntimeMocks.requireAcpRuntimeBackend(backendId);
-      if (!backend) {
-        throw new Error("missing mocked ACP backend");
-      }
-      return backend;
-    },
-  };
-});
+vi.mock("../../acp/runtime/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../acp/runtime/registry.js")>()),
+  getAcpRuntimeBackend: acpRuntimeMocks.getAcpRuntimeBackend,
+  requireAcpRuntimeBackend: (backendId?: string) => {
+    const backend = acpRuntimeMocks.requireAcpRuntimeBackend(backendId);
+    if (!backend) {
+      throw new Error("missing mocked ACP backend");
+    }
+    return backend;
+  },
+}));
 
 vi.mock("../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => acpManagerMocks,
@@ -288,9 +234,7 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
 
 vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
   ...(await importOriginal()),
-  disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
-  disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
-  retireSessionMcpRuntime: bundleMcpRuntimeMocks.retireSessionMcpRuntime,
+  ...bundleMcpRuntimeMocks,
 }));
 
 export function setupGatewaySessionsHandlerTestHarness(setup?: GatewaySessionsSuiteSetup) {
@@ -409,39 +353,31 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
 
     const mainStorePath = storeTemplate.replace("{agentId}", "main");
     const workStorePath = storeTemplate.replace("{agentId}", "work");
+    const stores = Object.entries({ main: mainStorePath, work: workStorePath });
     await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
     await fs.mkdir(path.dirname(workStorePath), { recursive: true });
-    await gatewayTestHelpers.writeSessionStore({
-      agentId: "main",
-      entries: {
-        global: sessionStoreEntry("sess-main-global"),
-      },
-      storePath: mainStorePath,
-    });
-    await gatewayTestHelpers.writeSessionStore({
-      agentId: "work",
-      entries: {
-        global: sessionStoreEntry("sess-work-global", {
-          authProfileOverride: "github-copilot:work",
-        }),
-      },
-      storePath: workStorePath,
-    });
+    for (const [agentId, storePath] of stores) {
+      await gatewayTestHelpers.writeSessionStore({
+        agentId,
+        entries: {
+          global: sessionStoreEntry(
+            `sess-${agentId}-global`,
+            agentId === "work" ? { authProfileOverride: "github-copilot:work" } : {},
+          ),
+        },
+        storePath,
+      });
+    }
     if (withTranscripts) {
-      await seedLinearSessionTranscript({
-        agentId: "main",
-        contents: ["main one", "main two"],
-        sessionId: "sess-main-global",
-        sessionKey: "global",
-        storePath: mainStorePath,
-      });
-      await seedLinearSessionTranscript({
-        agentId: "work",
-        contents: ["work one", "work two"],
-        sessionId: "sess-work-global",
-        sessionKey: "global",
-        storePath: workStorePath,
-      });
+      for (const [agentId, storePath] of stores) {
+        await seedLinearSessionTranscript({
+          agentId,
+          contents: [`${agentId} one`, `${agentId} two`],
+          sessionId: `sess-${agentId}-global`,
+          sessionKey: "global",
+          storePath,
+        });
+      }
     }
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
@@ -498,9 +434,7 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const { dir, storePath } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
     await gatewayTestHelpers.writeSessionStore({
-      entries: {
-        main: sessionStoreEntry("sess-main"),
-      },
+      entries: { main: sessionStoreEntry("sess-main") },
     });
     return { dir, storePath };
   }
@@ -545,16 +479,6 @@ export function expectActiveRunCleanup(
       agentId: requesterAgentId,
     }),
   );
-  expectSessionQueueCleanup(expectedQueueKeys, requesterSessionKey, requesterAgentId);
-  expect(embeddedRunMock.abortCalls).toEqual([]);
-  expect(embeddedRunMock.waitCalls).toEqual([]);
-}
-
-function expectSessionQueueCleanup(
-  expectedQueueKeys: string[],
-  requesterSessionKey: string,
-  requesterAgentId: string,
-) {
   expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledTimes(1);
   expect(sessionCleanupMocks.clearSessionQueues).toHaveBeenCalledWith(
     expect.arrayContaining(expectedQueueKeys),
@@ -566,6 +490,8 @@ function expectSessionQueueCleanup(
     undefined,
     expect.any(Function),
   );
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
 }
 
 export function expectNoSessionQueueCleanup() {
@@ -574,6 +500,11 @@ export function expectNoSessionQueueCleanup() {
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
 type SessionsHandlerOptions = Parameters<SessionsHandlers[keyof SessionsHandlers]>[0];
+type SessionResponse<TPayload> = {
+  ok: boolean;
+  payload?: TPayload;
+  error?: { code?: string; message?: string; details?: unknown };
+};
 
 const defaultDirectContext = {};
 const directContexts = new Map<object, GatewayRequestContext>();
@@ -590,20 +521,10 @@ export async function directSessionReq<TPayload = unknown>(
     hasCurrentClientAuthority?: SessionsHandlerOptions["hasCurrentClientAuthority"];
     coercePayload?: (payload: unknown) => TPayload;
   },
-): Promise<{
-  ok: boolean;
-  payload?: TPayload;
-  error?: { code?: string; message?: string; details?: unknown };
-}> {
+): Promise<SessionResponse<TPayload>> {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  let result:
-    | {
-        ok: boolean;
-        payload?: TPayload;
-        error?: { code?: string; message?: string; details?: unknown };
-      }
-    | undefined;
+  let result: SessionResponse<TPayload> | undefined;
   const handler = sessionsHandlers[method];
   if (!handler) {
     throw new Error(`missing sessions handler for ${method}`);
