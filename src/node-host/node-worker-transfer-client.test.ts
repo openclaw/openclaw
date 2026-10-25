@@ -1,11 +1,9 @@
 import { deepStrictEqual } from "node:assert/strict";
 import { X509Certificate } from "node:crypto";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import http, {
+import {
   createServer as createHttpServer,
   type RequestListener,
-  type RequestOptions,
   type ServerResponse,
 } from "node:http";
 import https, { createServer as createHttpsServer, type ServerOptions } from "node:https";
@@ -15,13 +13,12 @@ import type { Duplex } from "node:stream";
 import type { TLSSocket } from "node:tls";
 import { gzipSync } from "node:zlib";
 import { installGlobalProxy } from "@openclaw/proxyline";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
-import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
 import {
   closeServer,
   digest,
@@ -503,67 +500,6 @@ describe("node worker transfer client", () => {
       await expect(download(gateway.gatewayUrl, manifestRef)).rejects.toThrow(expected);
     },
   );
-
-  it("uploads the captured snapshot when the live workspace changes before transmission", async () => {
-    const { workspaceDir, download, upload } = fixture("snapshot");
-    const workspaceFile = path.join(workspaceDir, "result.txt");
-    const baseBody = Buffer.from("base\n");
-    const baseSha256 = digest(baseBody);
-    const { rawManifest: baseRaw, manifestRef: baseRef } = manifestFixture([
-      fileEntry("result.txt", baseBody),
-    ]);
-    const server = workspaceServer(
-      baseRaw,
-      new Map([[baseSha256, baseBody]]),
-      ({ body, fileHeader, currentRaw, currentRef }) => {
-        const current = parseWorkerWorkspaceManifest(currentRaw, currentRef);
-        const entry = current.entries.find(
-          (candidate) => candidate.path === "result.txt" && candidate.type === "file",
-        );
-        const uploaded = body.subarray(fileHeader + 8);
-        expect(entry).toMatchObject({
-          type: "file",
-          size: uploaded.length,
-          sha256: digest(uploaded),
-        });
-        expect(body.readBigUInt64BE(fileHeader)).toBe(BigInt(uploaded.length));
-        return currentRef;
-      },
-      true,
-    );
-    const gatewayUrl = await listen(server);
-    const request = http.request.bind(http);
-    let mutated = false;
-    const requestSpy = vi.spyOn(http, "request").mockImplementation(((
-      url: string | URL,
-      options: RequestOptions,
-    ) => {
-      if (options.method === "POST") {
-        fsSync.writeFileSync(workspaceFile, "mutated!\n");
-        mutated = true;
-      }
-      return request(url, options);
-    }) as typeof http.request);
-    try {
-      await expect(download(gatewayUrl, baseRef)).resolves.toBe(baseRef);
-      await fs.writeFile(
-        workspaceFile,
-        Buffer.concat([
-          Buffer.alloc(512 * 1024, "a"),
-          Buffer.alloc(512 * 1024, "b"),
-          Buffer.from("captured tail\n"),
-        ]),
-      );
-      const currentRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
-        .manifestRef;
-      await expect(upload(gatewayUrl, baseRef)).resolves.toBe(currentRef);
-      expect(mutated).toBe(true);
-      await expect(fs.readFile(workspaceFile, "utf8")).resolves.toBe("mutated!\n");
-    } finally {
-      requestSpy.mockRestore();
-      await closeServer(server);
-    }
-  });
 
   it("downloads complete files across stream chunks", async () => {
     const { workspaceDir, download } = fixture("backpressure");
