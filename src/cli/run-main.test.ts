@@ -1,11 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveManifestCommandAliasOwnerInRegistry,
-  resolveManifestToolOwnerInRegistry,
-  type PluginManifestCommandAliasRegistry,
-} from "../plugins/manifest-command-aliases.js";
+import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
 import { rewriteUpdateFlagArgv } from "./argv.js";
@@ -176,15 +172,6 @@ describe("root startup policy", () => {
   });
 });
 
-function commandResolvers(registry: PluginManifestCommandAliasRegistry) {
-  return {
-    resolveCommandAliasOwner: ({ command }: { command: string | undefined }) =>
-      resolveManifestCommandAliasOwnerInRegistry({ command, registry }),
-    resolveToolOwner: ({ toolName }: { toolName: string | undefined }) =>
-      resolveManifestToolOwnerInRegistry({ toolName, registry }),
-  };
-}
-
 describe("plugin command policy", () => {
   it("reports a disabled root without an alias record", () => {
     expect(
@@ -207,7 +194,13 @@ describe("plugin command policy", () => {
     },
   ])("accepts enabled parent ownership for $command", ({ command, plugin, config }) => {
     expect(
-      resolveMissingPluginCommandMessage(command, config, commandResolvers({ plugins: [plugin] })),
+      resolveMissingPluginCommandMessage(command, config, {
+        resolveCommandAliasOwner: ({ command: name }) =>
+          resolveManifestCommandAliasOwnerInRegistry({
+            command: name,
+            registry: { plugins: [plugin] },
+          }),
+      }),
     ).toBeNull();
   });
 });
