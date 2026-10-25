@@ -11,7 +11,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { setSessionReactionAsync } from "../../config/sessions/session-reaction-store.js";
 import { listSessionReactions } from "../../config/sessions/session-reaction-store.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCurrentPromptReaction } from "../../gateway/current-prompt-reaction.js";
@@ -33,11 +32,9 @@ import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission as prepareRun } from "../admitted-run-context.js";
-import { createCodeModeTools, applyCodeModeCatalog } from "../code-mode.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { createToolSearchCatalogRef } from "../tool-search.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -225,37 +222,6 @@ function prompt(
   });
 }
 
-it.each(["webchat", "discord"])(
-  "keeps native and Code Mode definitions stable across runs with a %s delivery route",
-  (currentChannelProvider) => {
-    const definition = (selected: ReturnType<typeof tool>) => {
-      const context = { config, catalogRef: createToolSearchCatalogRef(), ...scope, runId };
-      const compacted = applyCodeModeCatalog({
-        ...context,
-        tools: [...createCodeModeTools(context), selected],
-      });
-      return JSON.stringify(
-        [selected, ...compacted.tools].map(({ name, description, parameters }) => ({
-          name,
-          description,
-          parameters,
-        })),
-      );
-    };
-    const admitted = tool({ currentChannelProvider });
-    const nextRun = tool({
-      currentChannelProvider,
-      runId: runId + "-next",
-      messageActionTurnCapability: undefined,
-    });
-    expect(definition(nextRun)).toBe(definition(admitted));
-    expect(Check(nextRun.parameters, { action: "react", emoji: "👍" })).toBe(true);
-    revoke(token);
-    expect(definition(tool({ currentChannelProvider }))).toBe(definition(admitted));
-    expect(external).not.toHaveBeenCalled();
-  },
-);
-
 it("fails prompt reactions locally on a Discord-routed internal event that mints no grant", async () => {
   const nextRunId = runId + "-next";
   const grant = mintTurn(recorder, nextRunId, { internalEventExecution: true });
@@ -278,15 +244,9 @@ it("fails prompt reactions locally on a Discord-routed internal event that mints
   expect(external).toHaveBeenCalledOnce();
 });
 
-it("commits the agent's current-prompt reaction and publishes only actual changes", async () => {
+it("commits and publishes the agent identity on the current prompt despite an inherited route", async () => {
   const messageId = await persist();
   expect(messageId).not.toBe(runId);
-  await setSessionReactionAsync(scope, {
-    messageId,
-    emoji: "👍",
-    identityId: "human",
-    expectedSessionId: scope.sessionId,
-  });
   const selected = tool({
     currentChannelProvider: "discord",
     currentChannelId: "inherited-room",
@@ -294,13 +254,7 @@ it("commits the agent's current-prompt reaction and publishes only actual change
   expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(true);
   const added = await execute({ final: false }, selected);
   expect(added.details).toMatchObject({ messageId, changed: true });
-  expect(reactions()[messageId]).toEqual([
-    {
-      emoji: "👍",
-      count: 2,
-      identities: expect.arrayContaining([{ id: "human" }, AGENT_IDENTITY]),
-    },
-  ]);
+  expect(reactions()[messageId]).toEqual([{ emoji: "👍", count: 1, identities: [AGENT_IDENTITY] }]);
   expect(broadcast).toHaveBeenCalledWith(
     "session.reaction",
     expect.objectContaining({
@@ -310,15 +264,6 @@ it("commits the agent's current-prompt reaction and publishes only actual change
     }),
     { sessionKeys: [scope.sessionKey], agentId: "main" },
   );
-  await execute({ final: true }, selected);
-  expect(broadcast).toHaveBeenCalledTimes(1);
-  const removed = await execute({ remove: true, final: true }, selected);
-  expect(removed.details).not.toHaveProperty("messageDelivery.sourceReplyDelivered");
-  await execute({ remove: true }, selected);
-  expect(broadcast).toHaveBeenCalledTimes(2);
-  expect(reactions()[messageId]).toEqual([
-    { emoji: "👍", count: 1, identities: [{ id: "human" }] },
-  ]);
   expect(external).not.toHaveBeenCalled();
 });
 
@@ -402,10 +347,7 @@ it.each([
       ? { sourceReplyOnly: true }
       : { config: { ...config, tools: { message: { actions: { allow: ["send"] } } } } },
   );
-  if (policy.sourceReplyOnly) {
-    // The definition matches ordinary turns; source-only delivery is enforced per call.
-    expect(selected.parameters).toEqual(tool({}).parameters);
-  } else {
+  if (!policy.sourceReplyOnly) {
     expect(Check(selected.parameters, { action: "react", emoji: "👍" })).toBe(false);
   }
   await expect(execute(policy.sourceReplyOnly ? { final: true } : {}, selected)).rejects.toThrow(

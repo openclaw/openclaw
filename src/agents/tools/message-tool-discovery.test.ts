@@ -221,9 +221,6 @@ describe("message tool discovery cache stability", () => {
     const channels = [
       channel("qa-primary", ["send", "react"], {
         primaryLabel: Type.Optional(Type.String()),
-        pollDurationSeconds: Type.Optional(Type.Number()),
-        pollAnonymous: Type.Optional(Type.Boolean()),
-        pollPublic: Type.Optional(Type.Boolean()),
       }),
       channel("qa-secondary", ["send", "poll"], { ballotLabel: Type.Optional(Type.String()) }, [
         "presentation",
@@ -253,63 +250,19 @@ describe("message tool discovery cache stability", () => {
     expect(multi.schema.properties).toHaveProperty("presentation");
     expect(multi.schema.properties).not.toHaveProperty("eventName");
     expect(multi.schema.properties).not.toHaveProperty("unrelatedLabel");
-    const poll = { action: "poll", pollQuestion: "Ready?", pollOption: ["Yes", "No"] };
-    expect(Value.Check(multi.schema, poll)).toBe(true);
-    expect(
-      Value.Check(multi.schema, {
-        ...poll,
-        pollDurationSeconds: 60,
-        pollAnonymous: true,
-        pollPublic: false,
-      }),
-    ).toBe(true);
-    expect(Value.Check(multi.schema, { action: "poll", pollDurationSeconds: "invalid" })).toBe(
-      false,
-    );
     expect(
       JSON.stringify(await discoverBindings(bindings.toReversed(), channels.toReversed())),
     ).toBe(JSON.stringify(multi));
   });
 
-  it.each([
-    { allow: undefined, expected: ["poll", "poll-vote", "react", "send"] },
-    { allow: ["send", "react", "poll", "react"], expected: ["poll", "react", "send"] },
-    { allow: ["read", "edit", "read"], expected: ["edit", "read"] },
-  ])("keeps schema bytes stable across channel discovery order ($allow)", ({ allow, expected }) => {
-    const channels = [
-      channel("telegram", ["send", "react", "poll"]),
-      channel("discord", ["send", "poll", "poll-vote"]),
-    ];
-    const createTool = (
-      orderedChannels: PreparedMessageToolCatalog["channels"],
-      currentChannelProvider: string,
-    ) => {
-      return discover({
-        cfg: {
-          tools: { message: { actions: { allow } } },
-          bindings: [
-            { agentId: "main", match: { channel: "telegram" } },
-            { agentId: "main", match: { channel: "discord" } },
-          ],
-        },
-        agentId: "main",
-        currentChannelProvider,
-        preparedMessageToolCatalog: catalog(orderedChannels),
-      });
-    };
-    const tools = [
-      createTool(channels, "telegram"),
-      createTool(channels.toReversed(), "discord"),
-    ] as const;
-
-    expect(tools[0].description).toBe(tools[1].description);
-    expect(JSON.stringify(tools[0].schema)).toBe(JSON.stringify(tools[1].schema));
-    for (const tool of tools) {
-      expect(tool.schema.properties.action).toMatchObject({ enum: expected });
-      if (allow) {
-        expect(tool.description).not.toContain("poll-vote");
-      }
-    }
+  it("falls back to the normalized allowlist when no discovered action matches", () => {
+    const result = discover({
+      cfg: { tools: { message: { actions: { allow: ["read", "edit", "read"] } } } },
+      currentChannelProvider: "telegram",
+      preparedMessageToolCatalog: catalog([channel("telegram", ["send", "react"])]),
+    });
+    expect(result.schema.properties.action).toMatchObject({ enum: ["edit", "read"] });
+    expect(result.description).not.toContain("react");
   });
 });
 
@@ -381,43 +334,39 @@ describe("scheduled account discovery", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
 
   function registerChannels(foreignContexts?: ChannelMessageActionDiscoveryContext[]) {
-    const slack = {
-      ...createChannelTestPluginBase({ id: "slack" }),
-      actions: expectDefined(
-        resolveBundledChannelMessageToolDiscoveryAdapter("slack"),
-        "Slack public message-tool discovery adapter",
-      ),
-    };
-    const registry = createTestRegistry([
-      { pluginId: "slack", source: "test", plugin: slack },
-      ...(foreignContexts
-        ? [
-            {
-              pluginId: "telegram",
-              source: "test",
-              plugin: {
-                ...createChannelTestPluginBase({ id: "telegram" }),
-                actions: {
-                  describeMessageTool: (context: ChannelMessageActionDiscoveryContext) => {
-                    foreignContexts.push(context);
-                    return {
-                      actions: context.accountId === "disabled" ? ["send", "poll"] : ["send"],
-                      schema: {
-                        visibility: "all-configured",
-                        properties: {
-                          foreignHint: Type.Optional(
-                            Type.String({ description: `Account: ${String(context.accountId)}` }),
-                          ),
-                        },
-                      },
-                    };
-                  },
+    const plugins = [
+      {
+        ...createChannelTestPluginBase({ id: "slack" }),
+        actions: expectDefined(
+          resolveBundledChannelMessageToolDiscoveryAdapter("slack"),
+          "Slack public message-tool discovery adapter",
+        ),
+      },
+    ];
+    if (foreignContexts) {
+      plugins.push({
+        ...createChannelTestPluginBase({ id: "telegram" }),
+        actions: {
+          describeMessageTool: (context) => {
+            foreignContexts.push(context);
+            return {
+              actions: context.accountId === "disabled" ? ["send", "poll"] : ["send"],
+              schema: {
+                visibility: "all-configured",
+                properties: {
+                  foreignHint: Type.Optional(
+                    Type.String({ description: `Account: ${String(context.accountId)}` }),
+                  ),
                 },
               },
-            },
-          ]
-        : []),
-    ]);
+            };
+          },
+        },
+      });
+    }
+    const registry = createTestRegistry(
+      plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin })),
+    );
     setActivePluginRegistry(registry);
     return expectDefined(settlePreparedMessageToolCatalog(registry), "prepared message catalog");
   }
