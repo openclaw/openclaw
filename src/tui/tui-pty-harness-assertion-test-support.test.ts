@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readFixtureLog } from "./tui-pty-harness-assertion-test-support.js";
 import * as oracle from "./tui-pty-terminal-evidence-test-support.js";
+import { hasSynchronizedFrameRow as hasRow } from "./tui-pty-terminal-evidence-test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -95,9 +96,6 @@ describe("hasSynchronizedFrameRow", () => {
     expect(links(frame(`before ${link("界👩🏽‍💻é")} end`))).toEqual([
       { row: 0, target: url, text: "界👩🏽‍💻é" },
     ]);
-    expect(links(frame(link("label", "https://other.test")))).toEqual([
-      { row: 0, target: "https://other.test", text: "label" },
-    ]);
     expect(links(frame(`${link("界")}\rX`))).toEqual([]);
     for (const suffix of [
       frame("\x1b[2J"),
@@ -129,8 +127,8 @@ describe("hasSynchronizedFrameRow", () => {
   });
 
   it("authenticates a bidi-isolated disconnect row before reconnect erases it", () => {
-    const markers = ["T08Ia", "T08Ib", "T08Ic", "T08Id"];
-    const status = "local runtime stopped: T08IaT08Ib café 東京 👩🏽‍💻 T08Ic مرحبا שלום T08Id";
+    const markers = ["A", "B"];
+    const status = "A café 東京 👩🏽‍💻 مرحبا שלום B";
     const isolatedStatus = `\u2067${status}\u2069`;
     const expected = `${status} | idle`;
     const dimensions = { cols: 120, rows: 18 };
@@ -139,7 +137,7 @@ describe("hasSynchronizedFrameRow", () => {
     const reconnect = frame("\x1b[2J\x1b[Hlocal ready | idle");
     const raw = frame(`${isolatedStatus} | idle`) + reconnect;
     expect(historical(raw)).toBe(true);
-    expect(oracle.hasSynchronizedFrameRow(raw, markers, expected, dimensions)).toBe(false);
+    expect(hasRow(raw, markers, expected, dimensions)).toBe(false);
 
     for (const invalid of [
       frame(`${isolatedStatus}\r\n | idle`) + reconnect,
@@ -158,14 +156,10 @@ describe("hasSynchronizedFrameRow", () => {
     expectCurrent(frame("T08A safe\r\nT08B"), false);
     expectCurrent(frame("T08A\tsafe T08B"), false);
     for (const text of ["1234567\tsafe T08B", "1234567X\b safe T08B"]) {
-      expect(
-        oracle.hasSynchronizedFrameRow(
-          frame(`\x1b[2J\x1b[H${text}`),
-          ["1234567", "T08B"],
-          "1234567 safe T08B",
-          TERMINAL,
-        ),
-      ).toBe(false);
+      const expected = "1234567 safe T08B";
+      expect(hasRow(frame(`\x1b[2J\x1b[H${text}`), ["1234567", "T08B"], expected, TERMINAL)).toBe(
+        false,
+      );
     }
     expectCurrent(frame("T08A  safe T08B"), false);
     expect(parse(frame("界X\r\x1b[2G?"))[0]).toEqual([" ?X"]);

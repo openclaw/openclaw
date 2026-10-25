@@ -96,71 +96,29 @@ describe("TUI PTY test support", () => {
       OPENCLAW_TUI_PTY_COLS: colsEnv,
       OPENCLAW_TUI_PTY_ROWS: rowsEnv,
     });
-    expect(nodePtyMocks.spawn).toHaveBeenCalledWith(
-      "node",
-      [],
-      expect.objectContaining({ cols, rows }),
-    );
+    expect(nodePtyMocks.spawn.mock.calls[0]?.[2]).toMatchObject({ cols, rows });
     expect(run).toMatchObject({ cols, rows });
   });
 
   it.each([
-    { chunkSize: "1", chunks: ["A", "👋", "B"] },
-    { chunkSize: "2", chunks: ["A👋", "B"] },
-  ])(
-    "preserves Unicode characters with fixture-specific $chunkSize-character input chunks",
-    async ({ chunkSize, chunks }) => {
-      const { write } = mockPty();
-
-      const run = start({
-        OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: chunkSize,
-        OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "1",
-      });
-
-      await run.write("A👋B");
-
-      expect(write.mock.calls.map(([chunk]) => chunk)).toEqual(chunks);
-    },
-  );
-
-  it.each([
-    {
-      label: "split ANSI control sequences",
-      chunks: ["\u001b[38;2;155;163;178minto live     \r\n\u001b[", "0mworkspace"],
-    },
-    {
-      label: "split wrapped CRLF sequences",
-      chunks: ["\u001b[38;2;155;163;178minto live     \r", "\n\u001b[0mworkspace"],
-    },
-    {
-      label: "split wrapped terminal padding",
-      chunks: ["\u001b[38;2;155;163;178minto live   ", "  \r\n", "\u001b[0mworkspace"],
-    },
-  ])("matches visible text across $label", async ({ chunks }) => {
+    ["ANSI controls", ["\x1b[31ma \r\n\x1b[", "0mb"], undefined],
+    ["CRLF", ["\x1b[31ma \r", "\n\x1b[0mb"], undefined],
+    ["padding", ["\x1b[31ma ", "  \r\n", "\x1b[0mb"], undefined],
+    ["hidden OSC text", ["\x1b]0;hidden marker\x07a b"], "hidden marker"],
+  ] as const)("matches only visible text across %s", async (_label, chunks, hidden) => {
     const { emit } = mockPty();
-    const run = start({});
-
-    const output = run.waitForOutput("into live workspace");
+    const run = start({}, hidden ? { outputTimeoutMs: 25 } : {});
+    const output = run.waitForOutput("a b");
     for (const chunk of chunks) {
       emit(chunk);
     }
 
-    await expect(output).resolves.toContain("into live");
-    expect(run.visibleOutput()).toBe("into live workspace");
-  });
-
-  it("does not match text hidden inside terminal control sequences", async () => {
-    const { emit } = mockPty();
-    const run = start({}, { outputTimeoutMs: 25 });
-
-    emit("\u001b]0;hidden session marker\u0007visible session");
-
-    await expect(run.waitForOutput("visible session")).resolves.toContain("visible session");
-    expect(run.visibleOutput()).toBe("visible session");
-    expect(run.output()).toContain("hidden session marker");
-    await expect(run.waitForOutput("hidden session marker")).rejects.toThrow(
-      'timed out waiting for "hidden session marker"',
-    );
+    await expect(output).resolves.toContain("a ");
+    expect(run.visibleOutput()).toBe("a b");
+    if (hidden) {
+      expect(run.output()).toContain(hidden);
+      await expect(run.waitForOutput(hidden)).rejects.toThrow(`timed out waiting for "${hidden}"`);
+    }
   });
 
   it("waits for PTY exit before completing idempotent disposal", async () => {

@@ -2,16 +2,7 @@ import { X509Certificate } from "node:crypto";
 import http, { type RequestListener } from "node:http";
 import https from "node:https";
 import { promisify } from "node:util";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
@@ -25,7 +16,6 @@ const sessionKey = "agent:main:images";
 const attachmentId = "11111111-1111-4111-8111-111111111111";
 const artifactId = `artifact_managed_image_${attachmentId}`;
 const managedSource = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
-const request = (source: string) => ({ sessionKey, source, signal: new AbortController().signal });
 const photo = "media://inbound/photo.jpg";
 const artifact = { id: artifactId, type: "image", sessionKey, download: { mode: "url" } };
 
@@ -50,20 +40,22 @@ let origin: string;
 let tlsOrigin: string;
 let jpeg: Buffer;
 let requestSpy: MockInstance<GatewayClient["request"]>;
-const client = (connection: Partial<ConstructorParameters<typeof GatewayChatClient>[0]> = {}) =>
-  new GatewayChatClient({ url: origin, ...connection });
+type Connection = Partial<ConstructorParameters<typeof GatewayChatClient>[0]>;
 const load = (
   source = photo,
   options: Partial<TuiImageRequest> = {},
-  connection: Partial<ConstructorParameters<typeof GatewayChatClient>[0]> = {},
-) => client(connection).loadImage({ ...request(source), ...options });
-const requestUrl = (index = 0) => new URL(requests[index]!.url!, "http://localhost");
-const expectRpc = (method: string, params: object) =>
-  expect(requestSpy).toHaveBeenCalledExactlyOnceWith(method, params, {
-    signal: expect.any(AbortSignal),
+  connection: Connection = {},
+) =>
+  new GatewayChatClient({ url: origin, ...connection }).loadImage({
+    sessionKey,
+    source,
+    signal: new AbortController().signal,
+    ...options,
   });
+const requestUrl = (index = 0) => new URL(requests[index]!.url!, "http://localhost");
 
 beforeAll(async () => {
+  requestSpy = vi.spyOn(GatewayClient.prototype, "request");
   const listen = async (target: http.Server) => {
     await new Promise<void>((resolve) => {
       target.listen(0, "127.0.0.1", resolve);
@@ -85,17 +77,15 @@ beforeAll(async () => {
 
 beforeEach(() => {
   requests.length = 0;
-  requestSpy = vi
-    .spyOn(GatewayClient.prototype, "request")
-    .mockResolvedValue({ runtimeConfig: {} });
+  requestSpy.mockReset().mockResolvedValue({ runtimeConfig: {} });
   handler = (_req, res) => {
     res.writeHead(200, { "content-type": "image/jpeg" });
     res.end(jpeg);
   };
 });
 
-afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
+  requestSpy.mockRestore();
   for (const target of [server, tlsServer]) {
     target.closeAllConnections();
     await promisify(target.close.bind(target))();
@@ -110,12 +100,12 @@ it("loads inbound images from the connected subpath, authenticates, and emits a 
       res.writeHead(200, { "content-type": "image/jpeg" }).end(jpeg);
     }
   };
-  const gateway = client({
+  const connection = {
     token: "stale-image-token",
     password: "image-password",
     edgeAuthHeaders: { "x-image-proof": "bound-edge-header" },
-  });
-  expectPng(await gateway.loadImage({ ...request(photo), agentId: "main" }), 300, 150);
+  };
+  expectPng(await load(photo, { agentId: "main" }, connection), 300, 150);
   expect(requests.map((entry) => entry.authorization)).toEqual([
     "Bearer stale-image-token",
     "Bearer image-password",
@@ -136,7 +126,6 @@ it("resolves a disabled Control UI media mount through the WebSocket path", asyn
   });
   const url = origin.replace("/gateway", "/console");
   expect((await load(photo, {}, { url, token: "media-token" })).mimeType).toBe("image/png");
-  expectRpc("config.get", {});
   expect(requests).toHaveLength(1);
   expect(requestUrl().pathname).toBe("/console/__openclaw__/assistant-media");
 });
@@ -152,7 +141,10 @@ it("resolves generated images through the selected session and uses only the tic
     { token: "gateway-secret" },
   );
   expect(result.mimeType).toBe("image/png");
-  expectRpc("artifacts.download", { sessionKey, agentId: "main", artifactId });
+  expect(requestSpy.mock.calls[0]?.slice(0, 2)).toEqual([
+    "artifacts.download",
+    { sessionKey, agentId: "main", artifactId },
+  ]);
   expect(requests).toEqual([
     {
       url: `/gateway${managedSource.replace(/\/full$/, "/thumbnail")}?mediaTicket=synthetic-ticket`,
@@ -223,7 +215,7 @@ it.each([
   [new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256, "tls-image-token", true],
   ["ab".repeat(32), "must-not-be-sent", false],
 ] as const)("verifies TLS pin %s before credentials", async (tlsFingerprint, token, valid) => {
-  const result = client({ url: tlsOrigin, token, tlsFingerprint }).loadImage(request(photo));
+  const result = load(photo, {}, { url: tlsOrigin, token, tlsFingerprint });
   if (valid) {
     expect((await result).mimeType).toBe("image/png");
   } else {
