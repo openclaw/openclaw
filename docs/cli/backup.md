@@ -724,6 +724,9 @@ files; recoverable audit sources receive sanitized backup replacements. Their
 imported or rewritten. Sanitized `.migrated` companions and retained SQLite audit
 history remain included in the backup.
 
+An invalid audit recovery journal blocks backup creation. Preserve the raw archive
+and recovery sidecars, restore the journal from a trusted copy, then retry the backup.
+
 During archive creation, OpenClaw excludes known live-mutation paths before `tar` reads them. This avoids races between a file's recorded size and concurrent writes. The filter applies these state-relative rules under each backed-up state directory:
 
 | State-relative scope                          | Skipped entries                                       |

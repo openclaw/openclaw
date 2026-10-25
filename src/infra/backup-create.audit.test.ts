@@ -19,6 +19,7 @@ import {
 import { createBackupArchive } from "./backup-create.js";
 import { listArchiveEntries, listArchiveEntryDetails } from "./backup-create.test-support.js";
 import * as snapshots from "./backup-sqlite-snapshot.js";
+import { formatErrorMessage } from "./errors.js";
 import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migrations.audit-logs.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
@@ -97,6 +98,46 @@ function expectNoArchivedCheckpoints(databasePath: string) {
     expect(database.prepare(checkpointCountSql).get()).toEqual({ count: 0 });
   });
 }
+
+it.for(["syntax", "schema"] as const)(
+  "explains an invalid recovery journal (%s) while preserving recovery evidence",
+  async (shape, { state }) => {
+    const rawRelativePath = "logs/config-audit.jsonl.migrated.raw";
+    const restoreRelativePath = `${rawRelativePath}.doctor-scrub-restore`;
+    const progressRelativePath = `${rawRelativePath}.doctor-scrub-progress`;
+    const journalCanary = "jrn-7f3c";
+    const journal =
+      shape === "syntax"
+        ? journalCanary
+        : JSON.stringify({ schemaVersion: 0, rawBase64: journalCanary });
+    const preservedFiles = {
+      [rawRelativePath]: `${JSON.stringify(auditRecord("safe", "preserved-record"))}\n`,
+      [restoreRelativePath]: journal,
+      [progressRelativePath]: "preserved-progress\n",
+    };
+    for (const [relativePath, contents] of Object.entries(preservedFiles)) {
+      await state.writeText(relativePath, contents);
+    }
+    const outputPath = state.path("backup.tar.gz");
+
+    const failure: unknown = await createBackupArchive({
+      output: outputPath,
+      includeWorkspace: false,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const message = formatErrorMessage(failure);
+    expect(message).toContain(await fs.realpath(state.statePath(restoreRelativePath)));
+    expect(message).toContain("Preserve the archive and recovery sidecars");
+    expect(message).toContain("trusted copy");
+    expect(message).toContain("retry backup");
+    expect(message).not.toContain(journalCanary);
+    await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    for (const [relativePath, contents] of Object.entries(preservedFiles)) {
+      await expect(fs.readFile(state.statePath(relativePath), "utf8")).resolves.toBe(contents);
+    }
+  },
+);
 
 it("replaces legacy audit raw archives with sanitized restorable snapshots", async ({ state }) => {
   const marker = "audit-value-7f3c";
