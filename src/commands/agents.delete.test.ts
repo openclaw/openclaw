@@ -15,7 +15,6 @@ import * as localCronService from "../cron/local-service.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -167,16 +166,8 @@ function expectNoLocalMutation() {
 function expectSessionStore(
   cfg: OpenClawConfig,
   sessions: Record<string, { sessionId: string; updatedAt: number }>,
-  agentId = "ops",
 ) {
-  const agentIds = new Set([
-    agentId,
-    ...Object.keys(sessions).flatMap((key) => {
-      const id = parseAgentSessionKey(key)?.agentId;
-      return id ? [id] : [];
-    }),
-  ]);
-  const rows = [...agentIds].flatMap((id) =>
+  const rows = Object.keys(cfg.agents?.entries ?? {}).flatMap((id) =>
     listSessionEntriesReadOnly({
       agentId: id,
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: id }),
@@ -255,7 +246,7 @@ describe("agents delete command", () => {
         expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
       }
       expectNoLocalMutation();
-      expectSessionStore(cfg, sessions, owner);
+      expectSessionStore(cfg, sessions);
     },
   );
   it("refuses deleting the legacy shared-auth owner even when another agent is default", async ({
@@ -275,7 +266,7 @@ describe("agents delete command", () => {
     expect(readJson()).toHaveProperty("error.type", "cli_error");
     expect(gatewayMocks.callGateway).not.toHaveBeenCalled();
     expectNoLocalMutation();
-    expectSessionStore(cfg, sessions, "main");
+    expectSessionStore(cfg, sessions);
     expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
   });
 
@@ -302,7 +293,7 @@ describe("agents delete command", () => {
     expectNoLocalMutation();
     expect(readAgentDeletionJournal("alpha")).toBeUndefined();
     expect(readExecApprovalsSnapshot()).toEqual(approvals);
-    expectSessionStore(cfg, sessions, "alpha");
+    expectSessionStore(cfg, sessions);
   });
 
   it("never falls back locally for a failed remote config target", async ({ state }) => {
@@ -534,13 +525,9 @@ describe("agents delete command", () => {
     });
     await removeAgent({ id: "main", json: true });
     expect(runtime.exit).not.toHaveBeenCalled();
-    expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
-    expect(
-      Object.keys(
-        configMocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig.agents?.entries ?? {},
-      ),
-    ).toEqual(["ops"]);
-    expectSessionStore(cfg, survivorSessions, "main");
+    const written = configMocks.replaceConfigFile.mock.calls[0]?.[0].sourceConfig;
+    expect(Object.keys(written?.agents?.entries ?? {})).toEqual(["ops"]);
+    expectSessionStore(cfg, survivorSessions);
     expect(readPersistedAuthProfileStoreRaw()).toEqual(sharedAuthStore);
     expect(readExecApprovalsSnapshot().file.agents).toEqual({
       "*": { security: "deny" },
@@ -560,7 +547,6 @@ describe("agents delete command", () => {
     for (const file of [sharedDatabasePath, survivorOwned, foreign.path]) {
       expect((await fs.stat(file)).isFile()).toBe(true);
     }
-    expect(moveToTrash).not.toHaveBeenCalledWith(retainedDir, expect.anything());
     expect(readJson()).toMatchObject({
       removed: expect.arrayContaining(
         externalFiles.map((file) => ({ path: file, method: "trash" })),

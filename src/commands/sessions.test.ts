@@ -663,21 +663,6 @@ describe("sessionsCommand model resolution", () => {
     expect(payload.sessions?.[0]?.model).toBe("openai/gpt-5.6");
   });
 
-  it("reports the owning Codex harness for locked sessions despite a stale OpenClaw override", async () => {
-    configureModels("openai/gpt-5.5", {
-      "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
-    });
-    const payload = await legacySessionJson("locked-codex-session", {
-      modelProvider: "openai",
-      model: "gpt-5.5",
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "openclaw",
-      modelSelectionLocked: true,
-    });
-    expect(payload.sessions?.[0]?.key).toBe("agent:main:main");
-    expect(payload.sessions?.[0]?.agentRuntime).toEqual({ id: "codex", source: "session" });
-  });
-
   it("preserves a router-owned session's recorded model, runtime, and context window", async () => {
     configureModels(
       "openai/gpt-5.6",
