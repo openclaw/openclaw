@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  createCronRunDiagnosticsFromMissingWebSearchProvider as missingWebSearchProvider,
-  createCronRunDiagnosticsFromAgentResult as diagnosticsFromResult,
-  createCronRunDiagnosticsFromError as diagnosticsFromError,
-  mergeCronRunDiagnostics as mergeDiagnostics,
-  normalizeCronRunDiagnostics as normalizeDiagnostics,
-  summarizeCronRunDiagnostics as summarizeDiagnostics,
+  createCronRunDiagnosticsFromMissingWebSearchProvider as webSearchWarningFor,
+  createCronRunDiagnosticsFromAgentResult as extract,
+  createCronRunDiagnosticsFromError as fromError,
+  mergeCronRunDiagnostics as merge,
+  normalizeCronRunDiagnostics as normalize,
+  summarizeCronRunDiagnostics as summarize,
 } from "./run-diagnostics.js";
 import type { CronRunDiagnostic } from "./types.js";
 
@@ -30,17 +30,13 @@ function terminalResult(extra: Record<string, unknown> = {}) {
   };
 }
 
-function expectDiagnostic(
-  result: unknown,
-  message: string,
-  overrides: Partial<CronRunDiagnostic> = {},
-) {
-  expect(result).toEqual({ summary: message, entries: [entry(message, overrides)] });
+function diagnostic(message: string, overrides: Partial<CronRunDiagnostic> = {}) {
+  return { summary: message, entries: [entry(message, overrides)] };
 }
 
 describe("cron run diagnostics", () => {
   it("normalizes and bounds diagnostic entries", () => {
-    const diagnostics = normalizeDiagnostics({
+    const diagnostics = normalize({
       summary: "x".repeat(2_100),
       entries: Array.from({ length: 12 }, (_, i) => ({
         ts: i,
@@ -63,66 +59,56 @@ describe("cron run diagnostics", () => {
   });
 
   it("returns undefined for empty diagnostics", () => {
-    expect(normalizeDiagnostics({ entries: [] })).toBeUndefined();
-    expect(normalizeDiagnostics({ entries: [{ source: "exec" }] })).toBeUndefined();
-    expect(summarizeDiagnostics(undefined)).toBeUndefined();
+    expect(normalize({ entries: [] })).toBeUndefined();
+    expect(normalize({ entries: [{ source: "exec" }] })).toBeUndefined();
+    expect(summarize(undefined)).toBeUndefined();
   });
 
   it("bounds fallback summaries at valid UTF-16 boundaries", () => {
-    expect(
-      summarizeDiagnostics({
-        entries: [entry(`${"s".repeat(1_998)}😀tail`, { ts: 1, source: "exec" })],
-      }),
-    ).toBe(`${"s".repeat(1_998)}…`);
+    expect(summarize({ entries: [entry(`${"s".repeat(1_998)}😀tail`)] })).toBe(
+      `${"s".repeat(1_998)}…`,
+    );
   });
 
   it("creates diagnostics from errors and prefers the latest error summary", () => {
-    const merged = mergeDiagnostics(
-      diagnosticsFromError("cron-preflight", "first failure", { nowMs: () => 100 }),
-      diagnosticsFromError("delivery", new Error("delivery failed"), { nowMs: () => 200 }),
+    const merged = merge(
+      fromError("cron-preflight", "first failure", { nowMs: () => 100 }),
+      fromError("delivery", new Error("delivery failed"), { nowMs: () => 200 }),
     );
     expect(merged).toMatchObject({
       summary: "delivery failed",
       entries: [{ message: "first failure" }, { message: "delivery failed" }],
     });
-    expect(summarizeDiagnostics(merged)).toBe("delivery failed");
+    expect(summarize(merged)).toBe("delivery failed");
   });
 
-  it("warns when cron toolsAllow requests web_search without a provider", () => {
-    expectDiagnostic(
-      missingWebSearchProvider({
-        toolsAllow: ["web_*"],
-        hasWebSearchProvider: false,
-        nowMs: () => 900,
-      }),
-      webSearchWarning,
-      { ts: 900, source: "cron-preflight", severity: "warn", toolName: "web_search" },
+  it.each(["web_*", "*"])("warns only for explicit web search policy %s", (tool) => {
+    expect(
+      webSearchWarningFor({ toolsAllow: [tool], hasWebSearchProvider: false, ...fixedClock }),
+    ).toEqual(
+      tool === "*"
+        ? undefined
+        : diagnostic(webSearchWarning, {
+            source: "cron-preflight",
+            severity: "warn",
+            toolName: "web_search",
+          }),
     );
   });
 
-  it("does not warn for an unrestricted tools policy", () => {
-    expect(
-      missingWebSearchProvider({ toolsAllow: ["*"], hasWebSearchProvider: false }),
-    ).toBeUndefined();
-  });
-
   it("extracts fatal agent result payloads and meta errors", () => {
-    const diagnostics = diagnosticsFromResult(
+    const diagnostics = extract(
       {
         payloads: [
           { text: "normal" },
           { text: "tool stderr", isError: true, toolName: "shell" },
           {
             toolName: "exec",
-            details: {
-              status: "completed",
-              exitCode: 2,
-              aggregated: "stdout\nstderr failure",
-            },
+            details: { status: "completed", exitCode: 2, aggregated: "stdout\nstderr failure" },
           },
         ],
         meta: {
-          error: { kind: "retry_limit", message: "retry limit exceeded" },
+          error: { message: "retry limit exceeded" },
           failureSignal: { message: "SYSTEM_RUN_DENIED" },
         },
       },
@@ -141,18 +127,16 @@ describe("cron run diagnostics", () => {
   });
 
   it("does not duplicate a recorded exec error or report unrelated tools", () => {
-    const diagnostics = diagnosticsFromResult(
+    const diagnostics = extract(
       {
         payloads: [{ text: "exec parameter invalid", isError: true, toolName: "exec" }],
-        meta: {
-          toolSummary: { unresolvedError: { toolName: "exec" } },
-        },
+        meta: { toolSummary: { unresolvedError: { toolName: "exec" } } },
       },
       { ...fixedClock, finalStatus: "ok" },
     );
     expect(diagnostics?.entries).toHaveLength(1);
     expect(
-      diagnosticsFromResult({
+      extract({
         meta: { toolSummary: { unresolvedError: { toolName: "read" } } },
       }),
     ).toBeUndefined();
@@ -161,19 +145,17 @@ describe("cron run diagnostics", () => {
   it.each(["ok", undefined] as const)(
     "sanitizes terminal metadata with final status %s",
     (finalStatus) => {
-      expectDiagnostic(
-        diagnosticsFromResult(
-          terminalResult({ message: "private-path /home/operator/.config/token" }),
-          { ...fixedClock, finalStatus },
-        ),
-        terminalMessage,
-        { severity: finalStatus === "ok" ? "warn" : "error" },
-      );
+      expect(
+        extract(terminalResult({ message: "private-path /home/operator/.config/token" }), {
+          ...fixedClock,
+          finalStatus,
+        }),
+      ).toEqual(diagnostic(terminalMessage, { severity: finalStatus === "ok" ? "warn" : "error" }));
     },
   );
 
   it("keeps failed exec output tails valid at UTF-16 boundaries", () => {
-    const diagnostics = diagnosticsFromResult(
+    const diagnostics = extract(
       execResult({ status: "completed", exitCode: 2, aggregated: `x😀${"y".repeat(1_999)}` }),
       fixedClock,
     );
@@ -183,37 +165,32 @@ describe("cron run diagnostics", () => {
   });
 
   it("does not capture harmless successful exec output", () => {
-    const result = execResult({
-      status: "completed",
-      exitCode: 0,
-      aggregated: "progress written to stderr",
-    });
+    const result = execResult({ status: "completed", exitCode: 0, aggregated: "stderr" });
 
-    expect(diagnosticsFromResult(result)).toBeUndefined();
-    expect(diagnosticsFromResult(result, { finalStatus: "error" })).toBeUndefined();
+    expect(extract(result)).toBeUndefined();
+    expect(extract(result, { finalStatus: "error" })).toBeUndefined();
   });
 
   it("downgrades recovered tool errors for successful runs", () => {
-    const diagnostics = diagnosticsFromResult(
+    const message = "tool failed";
+    const diagnostics = extract(
       execResult(
         { status: "failed", exitCode: 1, aggregated: "jq syntax error" },
-        { text: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed", isError: true },
+        { text: message, isError: true },
       ),
-      { finalStatus: "ok", nowMs: () => 800 },
+      { ...fixedClock, finalStatus: "ok" },
     );
 
     expect(diagnostics?.entries).toEqual([
-      entry("jq syntax error", { ts: 800, source: "exec", severity: "warn", exitCode: 1 }),
-      entry("⚠️ 🛠️ jq -s '{total:length}' (agent) failed", { ts: 800, severity: "warn" }),
+      entry("jq syntax error", { source: "exec", severity: "warn", exitCode: 1 }),
+      entry(message, { severity: "warn" }),
     ]);
-    expect(diagnostics?.summary).toBe("⚠️ 🛠️ jq -s '{total:length}' (agent) failed");
+    expect(diagnostics?.summary).toBe(message);
   });
 
   it("captures silent failed exec details with a fallback message", () => {
-    expectDiagnostic(
-      diagnosticsFromResult(execResult({ status: "completed", exitCode: 2 }), { nowMs: () => 500 }),
-      "exec failed with exit code 2",
-      { ts: 500, source: "exec", severity: "warn", exitCode: 2 },
+    expect(extract(execResult({ status: "completed", exitCode: 2 }), fixedClock)).toEqual(
+      diagnostic("exec failed with exit code 2", { source: "exec", severity: "warn", exitCode: 2 }),
     );
   });
 });

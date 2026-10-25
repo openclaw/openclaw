@@ -1,5 +1,5 @@
 import { getAiTransportHost } from "@openclaw/ai";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
@@ -43,12 +43,21 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("stored cron session model selections through the real embedded runner", () => {
-  async function runWithFailingPinnedModel(
-    modelOverrideSource: SessionEntry["modelOverrideSource"],
-    payload?: { model?: string; fallbacks?: string[] },
-  ) {
-    return await withOpenClawTestState({ label: "cron-session-model" }, async (state) => {
+type ModelCase = [
+  string,
+  SessionEntry["modelOverrideSource"],
+  { model?: string; fallbacks?: string[] } | undefined,
+  string[],
+];
+it.each<ModelCase>([
+  ["user pin", "user", undefined, []],
+  ["legacy pin", undefined, undefined, []],
+  ["explicit fallbacks", "user", { fallbacks: ["jobfallback/model-c"] }, ["jobfallback/model-c"]],
+  ["its own model", "user", { model: "pinned/model-x" }, ["fallback/model-b"]],
+])(
+  "honors stored cron session fallback policy for %s",
+  async (_name, modelOverrideSource, payload, expected) => {
+    await withOpenClawTestState({ label: "cron-session-model" }, async (state) => {
       installPrivateUpdateHandoffStore(state.root);
       const requests: string[] = [];
       const providerFetch: typeof fetch = async (input, init) => {
@@ -148,28 +157,11 @@ describe("stored cron session model selections through the real embedded runner"
         sessionKey: "cron:session-model",
         lane: "cron",
       });
-      return { result, requests };
+      expect(requests).toEqual(["pinned/model-x", ...expected]);
+      expect(result.status, result.error).toBe(expected.length ? "ok" : "error");
+      if (!expected.length) {
+        expect(result.error).toContain("invalid_api_key");
+      }
     });
-  }
-
-  it.each<
-    [
-      string,
-      SessionEntry["modelOverrideSource"],
-      { model?: string; fallbacks?: string[] } | undefined,
-      string[],
-    ]
-  >([
-    ["user pin", "user", undefined, []],
-    ["legacy pin", undefined, undefined, []],
-    ["explicit fallbacks", "user", { fallbacks: ["jobfallback/model-c"] }, ["jobfallback/model-c"]],
-    ["its own model", "user", { model: "pinned/model-x" }, ["fallback/model-b"]],
-  ])("honors fallback policy for %s", async (_name, source, payload, expected) => {
-    const { result, requests } = await runWithFailingPinnedModel(source, payload);
-    expect(requests).toEqual(["pinned/model-x", ...expected]);
-    expect(result.status, result.error).toBe(expected.length ? "ok" : "error");
-    if (!expected.length) {
-      expect(result.error).toContain("invalid_api_key");
-    }
-  });
-});
+  },
+);

@@ -91,24 +91,19 @@ function bindToRun(raw: MemoryProviderHandle, audience: MemoryAudience) {
 
 // Resolve both runtimes from the same admitted occurrence.
 async function runOccurrence(job: CronStoredJob) {
+  const owner = { cfg: {}, agentId: "main" };
+  const identity = { agentId: "main", sessionKey: RUN_KEY };
   const runRow = { sessionId: RUN_SESSION, updatedAt: 1 };
   fakeSessionOwner.rows.set(RUN_KEY, runRow);
-  const occurrence = await admitScheduledOccurrence({
-    cfg: {},
-    job,
-    agentId: "main",
-    trigger: "cron",
-  });
+  const occurrence = await admitScheduledOccurrence({ ...owner, job, trigger: "cron" });
   const admission = prepareCronRunAdmission({
-    cfg: {},
-    agentId: "main",
+    ...owner,
     runId: "run-1",
     sessionKey: RUN_KEY,
     jobId: job.id,
     deliveryAttemptFence: null,
     scheduledExecution: occurrence.mint({
-      cfg: {},
-      agentId: "main",
+      ...owner,
       runId: "run-1",
       runSessionKey: RUN_KEY,
       operatorAuthorityRestored: false,
@@ -118,14 +113,13 @@ async function runOccurrence(job: CronStoredJob) {
   const run = { config: {}, senderIsOwner: undefined, admittedRunContext: admitted };
   const embedded = await resolveEmbeddedAttemptMemoryAudience({
     run,
-    agentId: "main",
-    sessionKey: RUN_KEY,
+    ...identity,
     sessionId: runRow.sessionId,
     admission: { entry: runRow, storePath: STORE_PATH },
   });
   const cli = await resolveCliMcpMemoryAudience(
     { ...run, sessionId: runRow.sessionId, sessionEntry: runRow, storePath: STORE_PATH },
-    { agentId: "main", sessionKey: RUN_KEY },
+    identity,
   );
   return {
     audiences: [embedded.memoryAudience, cli.memoryAudience],

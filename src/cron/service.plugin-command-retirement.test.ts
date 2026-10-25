@@ -155,31 +155,24 @@ describe("private command schedules under the live scheduler", () => {
     expect(peekSystemEventEntries(queueKey).map(({ text }) => text)).toEqual(["Parent notice"]);
   });
 
-  it("retires on the first refusal from a replaced plugin instance, without auto-disable", async () => {
+  it.each([true, false])("retires permanent refusals only (%s)", async (permanent) => {
     const refused = {
       status: "error" as const,
-      error:
-        "Scheduled plugin command's original plugin instance was replaced; the schedule ended.",
-      errorClassification: { kind: "permanent" as const },
-      executionStarted: false,
+      error: "refused",
+      ...(permanent
+        ? { errorClassification: { kind: "permanent" as const }, executionStarted: false }
+        : {}),
     };
-    const result = await runSchedule({}, 8, {}, refused);
-    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    expect(result.stored).toMatchObject({ enabled: false, state: { pluginCommandRuns: 1 } });
-    expect(result.stored?.state.nextRunAtMs).toBeUndefined();
-    expect(result.stored?.state.autoDisabled).toBeUndefined();
-    expect(result.history).toEqual([{ status: "error", error: refused.error }]);
-  });
-
-  it("keeps waking after a refusal that is not permanent", async () => {
-    const result = await runSchedule(
-      {},
-      3,
-      {},
-      { status: "error", error: "Scheduled plugin command source changed or expired." },
-    );
-    expect(result.runIsolatedAgentJob).toHaveBeenCalledTimes(3);
-    expect(result.stored).toMatchObject({ enabled: true, state: { pluginCommandRuns: 3 } });
-    expect(result.stored?.state.nextRunAtMs).toBeGreaterThan(nowMs);
+    const { stored, history, runIsolatedAgentJob: runJob } = await runSchedule({}, 3, {}, refused);
+    const runs = permanent ? 1 : 3;
+    expect(runJob).toHaveBeenCalledTimes(runs);
+    expect(stored).toMatchObject({ enabled: !permanent, state: { pluginCommandRuns: runs } });
+    if (permanent) {
+      expect(stored?.state.nextRunAtMs).toBeUndefined();
+      expect(stored?.state.autoDisabled).toBeUndefined();
+      expect(history).toEqual([{ status: "error", error: "refused" }]);
+    } else {
+      expect(stored?.state.nextRunAtMs).toBeGreaterThan(nowMs);
+    }
   });
 });

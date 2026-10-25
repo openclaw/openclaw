@@ -96,7 +96,6 @@ async function withFamilyStore(
       });
     } finally {
       cron.stop();
-      await closeOpenClawStateDatabaseAsync();
     }
   });
 }
