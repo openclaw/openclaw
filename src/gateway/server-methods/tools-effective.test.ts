@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
@@ -530,7 +529,7 @@ describe("tools.effective handler", () => {
     },
   );
 
-  it("preserves MCP inventory ownership and fallback without loading registry metadata", async () => {
+  it("preserves MCP identities, ownership and fallback without loading registry metadata", async () => {
     const registrySnapshot = captureActivePluginRegistrySnapshot();
     onTestFinished(() => restoreActivePluginRegistrySnapshot(registrySnapshot));
     const registry = createEmptyPluginRegistry();
@@ -562,7 +561,7 @@ describe("tools.effective handler", () => {
       };
     });
     const tool = {
-      ...createStubTool("fixture_lookup"),
+      ...createStubTool("collision__alpha-"),
       label: "Lookup",
       displaySummary: "Search the fixture.",
     };
@@ -570,11 +569,10 @@ describe("tools.effective handler", () => {
       pluginId: "fixture-plugin",
       optional: false,
       mcp: {
-        serverName: "fixture",
-        safeServerName: "fixture",
-        toolName: "lookup",
+        serverName: "collision",
+        safeServerName: "collision",
+        toolName: "alpha!",
         operation: "tool",
-        deniedBySession: true,
       },
     });
     mockMcpConfigSummary();
@@ -582,12 +580,13 @@ describe("tools.effective handler", () => {
     runtimeMocks.buildBundleMcpToolsFromCatalog.mockReturnValueOnce([
       tool,
       { ...createStubTool("other_lookup"), label: "Lookup", description: "Another lookup." },
-      {
-        ...createStubTool("invalid"),
-        label: "Invalid",
-        description: "Invalid schema",
-        parameters: Type.Array(Type.String()),
-      },
+      makeMcpTool(undefined, {
+        name: "collision__alpha--2",
+        label: "Lookup",
+        toolName: "alpha?",
+        serverName: "collision",
+        deniedBySession: true,
+      }),
     ]);
 
     const respond = await invokeTools();
@@ -596,51 +595,27 @@ describe("tools.effective handler", () => {
     expectPayloadGroupIds(respond, ["core", "mcp"]);
     const payload = payloadOf(respond);
     expect(payload.groups[1]?.tools[0]).toEqual({
-      id: "fixture_lookup",
+      id: "collision__alpha-",
       label: "Lookup (bundle-mcp)",
       description: "Search the fixture.",
       rawDescription: "Search the fixture.",
       source: "mcp",
       pluginId: "bundle-mcp",
-      mcpServer: "fixture",
-      mcpToolName: "lookup",
-      deniedBySession: true,
+      mcpServer: "collision",
+      mcpToolName: "alpha!",
     });
     expect(payload.groups[1]?.tools[1]?.label).toBe("Lookup (bundle-mcp)");
-    expect(payload.notices?.[0]?.message).toContain('Tool "invalid" from plugin "bundle-mcp"');
+    expect(payload.groups[1]?.tools[2]).toMatchObject({
+      id: "collision__alpha--2",
+      mcpServer: "collision",
+      mcpToolName: "alpha?",
+      deniedBySession: true,
+    });
     expect(normalizeTools).toHaveBeenCalledWith(
       expect.objectContaining({ allowRuntimePluginLoad: false }),
     );
     expect(acquisitions).toBe(2);
     expect(mcpProjections).toBe(1);
-  });
-
-  it("preserves raw MCP identities and session denials across sanitized collisions", async () => {
-    const enabled = makeMcpTool(undefined, {
-      name: "collision__alpha-",
-      label: "Alpha bang",
-      toolName: "alpha!",
-      serverName: "collision",
-      deniedBySession: false,
-    });
-    const denied = makeMcpTool(undefined, {
-      name: "collision__alpha--2",
-      label: "Alpha question",
-      toolName: "alpha?",
-      serverName: "collision",
-      deniedBySession: true,
-    });
-    mockMcpTools([enabled, denied], { serverNames: ["collision"] });
-    const payload = payloadOf(await invokeTools());
-    expect(payload?.groups?.[1]?.tools).toMatchObject([
-      { id: "collision__alpha-", mcpServer: "collision", mcpToolName: "alpha!" },
-      {
-        id: "collision__alpha--2",
-        mcpServer: "collision",
-        mcpToolName: "alpha?",
-        deniedBySession: true,
-      },
-    ]);
   });
 
   it("quarantines warm MCP tools with schemas the runtime cannot project", async () => {
@@ -649,6 +624,9 @@ describe("tools.effective handler", () => {
     const respond = await invokeTools();
 
     expectPayloadGroupIds(respond, ["core"], "unsupported-tool-schema:reproProbe__probe_tool");
+    expect(payloadOf(respond).notices?.[0]?.message).toContain(
+      'Tool "reproProbe__probe_tool" from plugin "bundle-mcp"',
+    );
   });
 
   it.each(["empty", "mixed"])(
