@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 import { createEffect, createRoot, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { createSessionOwnerMenuHarness } from "../../test-helpers/session-owner-menu.ts";
 import { ValueSignal } from "../board/provider-signals.ts";
+import { projectAgentRowContext } from "./agent-row-context.ts";
 import { createSharedOwnerProjection } from "./shared-owner-projection.ts";
 
 const disposals: Array<() => void> = [];
@@ -97,4 +99,64 @@ it("shares the fixed projection across independent consumers, owners, and read c
   expect(reconnected.values).toEqual([3]);
   expect(shared(first.owner)).toBe(firstProjection);
   expect(first.subscriptions).toHaveBeenCalledTimes(3);
+});
+
+it("shares an application's agent-row observation until its last independent reader leaves", () => {
+  const first = createSessionOwnerMenuHarness();
+  const second = createSessionOwnerMenuHarness();
+  const trackOwner = (owner: { subscribe(notify: () => void): () => void }) => {
+    const subscribe = owner.subscribe.bind(owner);
+    const release = vi.fn();
+    const subscription = vi.spyOn(owner, "subscribe").mockImplementation((notify) => {
+      const stop = subscribe(notify);
+      return () => {
+        release();
+        stop();
+      };
+    });
+    return { subscription, release };
+  };
+  const firstOwners = [
+    first.context.agents,
+    first.context.agentIdentity,
+    first.context.gateway,
+  ].map(trackOwner);
+  const secondOwners = [
+    second.context.agents,
+    second.context.agentIdentity,
+    second.context.gateway,
+  ].map(trackOwner);
+  const firstProjection = projectAgentRowContext(first.context);
+  expect(projectAgentRowContext(first.context)).toBe(firstProjection);
+  expect(projectAgentRowContext(undefined).read()).toBeUndefined();
+  expect(firstProjection.read()).toBe(first.context);
+  expect(firstOwners.every(({ subscription }) => subscription.mock.calls.length === 0)).toBe(true);
+
+  const readFirst = () => firstProjection.read()?.gateway.snapshot.phase;
+  const left = observe(readFirst);
+  const right = observe(readFirst);
+  const otherApplication = observe(
+    () => projectAgentRowContext(second.context).read()?.gateway.snapshot.phase,
+  );
+  expect(firstOwners.map(({ subscription }) => subscription.mock.calls.length)).toEqual([1, 1, 1]);
+  expect(secondOwners.map(({ subscription }) => subscription.mock.calls.length)).toEqual([1, 1, 1]);
+  first.publish({ phase: "reconnecting" });
+  expect(firstProjection.read()?.gateway.snapshot.phase).toBe("reconnecting");
+  flush();
+  expect(left.values).toEqual(["connected", "reconnecting"]);
+  expect(right.values).toEqual(left.values);
+  expect(otherApplication.values).toEqual(["connected"]);
+
+  left.dispose();
+  flush();
+  expect(firstOwners.map(({ release }) => release.mock.calls.length)).toEqual([0, 0, 0]);
+  right.dispose();
+  flush();
+  expect(firstOwners.map(({ release }) => release.mock.calls.length)).toEqual([1, 1, 1]);
+  expect(secondOwners.map(({ release }) => release.mock.calls.length)).toEqual([0, 0, 0]);
+  otherApplication.dispose();
+  flush();
+  expect(secondOwners.map(({ release }) => release.mock.calls.length)).toEqual([1, 1, 1]);
+  observe(readFirst);
+  expect(firstOwners.map(({ subscription }) => subscription.mock.calls.length)).toEqual([2, 2, 2]);
 });
