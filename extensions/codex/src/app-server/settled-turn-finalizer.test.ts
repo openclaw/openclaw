@@ -81,16 +81,17 @@ function createAttempt(
 }
 
 function createSettledAttempt(
-  selection: ConstructorParameters<typeof CodexSettledTurnContext>[1] = {
-    model: "gpt-5.6-luna",
-    authProfileId: "openai:captured",
-  },
+  selection: Partial<ConstructorParameters<typeof CodexSettledTurnContext>[1]> = {},
 ): EmbeddedRunAttemptResult {
   return {
     terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [],
-    settledTurnFinalizationContext: new CodexSettledTurnContext([], selection),
+    settledTurnFinalizationContext: new CodexSettledTurnContext([], {
+      model: "gpt-5.6-luna",
+      authProfileId: "openai:captured",
+      ...selection,
+    }),
     assistantTexts: [],
     toolMetas: [{ toolName: "message", replaySafe: false }],
     lastAssistant: undefined,
@@ -129,14 +130,6 @@ function promptEcho(text: string) {
   };
 }
 
-function managedHookItems(text: string) {
-  return [
-    { id: "draft", type: "agentMessage", text: "An earlier draft." },
-    managedHookPrompt,
-    { id: "answer", type: "agentMessage", text },
-  ];
-}
-
 function finalize(
   attempt = createAttempt(),
   settledAttempt = createSettledAttempt(),
@@ -161,29 +154,25 @@ function mirrorReceipt(assistant: EmbeddedRunAttemptResult["messagesSnapshot"][n
   };
 }
 
+type MirrorParams = {
+  messages: EmbeddedRunAttemptResult["messagesSnapshot"];
+  assertCurrent?: () => void;
+};
+
 beforeEach(() => {
   vi.spyOn(authBridge, "resolveCodexAppServerPreparedAuthHandoff");
   mocks.runBounded.mockReset().mockResolvedValue(boundedResult());
-  mocks.mirror.mockReset();
-  mocks.mirror.mockImplementation(
-    async (params: {
-      messages: EmbeddedRunAttemptResult["messagesSnapshot"];
-      assertCurrent?: () => void;
-    }) => {
-      params.assertCurrent?.();
-      const assistant = params.messages[0]!;
-      const receipt = mirrorReceipt(assistant);
-      Object.assign(receipt.messagesPresent[0]!, {
-        idempotencyKey: "codex-settled-finalizer:run-1:assistant",
-      });
-      return receipt;
-    },
-  );
+  mocks.mirror.mockReset().mockImplementation(async (params: MirrorParams) => {
+    params.assertCurrent?.();
+    const receipt = mirrorReceipt(params.messages[0]!);
+    Object.assign(receipt.messagesPresent[0]!, {
+      idempotencyKey: "codex-settled-finalizer:run-1:assistant",
+    });
+    return receipt;
+  });
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 it("binds tool-result failure status into mirror attestations", () => {
   const toolResult = {
@@ -203,11 +192,7 @@ it.each([true, undefined] as const)(
   async (privateCompletion) => {
     const attempt = createAttempt();
     attempt.privateCompletion = privateCompletion;
-    const settledAttempt = createSettledAttempt({
-      model: "gpt-5.6-luna",
-      modelProvider: "openai",
-      authProfileId: "openai:captured",
-    });
+    const settledAttempt = createSettledAttempt({ modelProvider: "openai" });
     const options: Parameters<typeof runCodexSettledTurnFinalization>[1] = {
       pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:19400" } },
     };
@@ -263,7 +248,6 @@ it.each(["agent", "user"] as const)(
       attempt.runtimePlan!.auth.forwardedAuthProfileId = "openai:captured";
     }
     const settledAttempt = createSettledAttempt({
-      model: "gpt-5.6-luna",
       authProfileId: ordinaryNativeHome ? undefined : "openai:captured",
     });
     const options: Parameters<typeof runCodexSettledTurnFinalization>[1] = {
@@ -308,10 +292,9 @@ it.each(["agent", "user"] as const)(
 );
 
 it("rejects a missing native provider instead of using outer attribution", async () => {
-  const modelProvider = null;
   mocks.runBounded.mockResolvedValue({
     ...boundedResult(),
-    nativeSelection: { model: "synthetic-summary-model", modelProvider },
+    nativeSelection: { model: "synthetic-summary-model", modelProvider: null },
   });
   await expect(finalize()).rejects.toThrow("did not report its native model provider");
   expect(mocks.mirror).not.toHaveBeenCalled();
@@ -324,7 +307,11 @@ it.each([" NO_REPLY\n", " "])(
       ...boundedResult(),
       text,
       managedHooksEnabled: true,
-      items: managedHookItems(text),
+      items: [
+        { id: "draft", type: "agentMessage", text: "An earlier draft." },
+        managedHookPrompt,
+        { id: "answer", type: "agentMessage", text },
+      ],
     });
     const result = await finalize();
     expect(result.assistant).toMatchObject({
@@ -426,14 +413,11 @@ it.each(["before auth", "after auth", "after inference", "at mirror write", "aft
 );
 
 it("rejects a stale idempotency hit instead of delivering an unpersisted answer", async () => {
-  mocks.mirror.mockImplementation(
-    async (params: { messages: EmbeddedRunAttemptResult["messagesSnapshot"] }) => {
-      const staleAssistant = {
-        ...params.messages[0]!,
-        content: [{ type: "text", text: "An older final answer." }],
-      } as (typeof params.messages)[number];
-      return mirrorReceipt(staleAssistant);
-    },
+  mocks.mirror.mockImplementation(async (params: MirrorParams) =>
+    mirrorReceipt({
+      ...params.messages[0]!,
+      content: [{ type: "text", text: "An older final answer." }],
+    } as (typeof params.messages)[number]),
   );
 
   await expect(finalize()).rejects.toThrow("transcript attestation mismatch");

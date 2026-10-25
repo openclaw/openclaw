@@ -272,7 +272,7 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
         },
       });
       const { projector, events } = await createProjection(
-        { ...params, sessionTarget, verboseLevel: "full", onToolResult },
+        { ...params, verboseLevel: "full", onToolResult },
         { prepareNativeMcpAppResultDetails },
       );
       const item = {
@@ -303,9 +303,12 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
         await notification;
         await projector.closeProjection();
         const transcript = await readSessionTranscriptEvents(sessionTarget);
+        const mirroredPreview = expect.objectContaining({ role: "toolResult", details });
+        const snapshot = events.result().messagesSnapshot;
         if (closed) {
           expect(onToolResult).not.toHaveBeenCalled();
           expect(transcript).toEqual(transcriptBeforeRelease);
+          expect(snapshot).not.toContainEqual(mirroredPreview);
         } else {
           expect(onToolResult).toHaveBeenCalledWith({
             text: expect.stringContaining("Delayed preview result."),
@@ -315,12 +318,6 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
               message: expect.objectContaining({ role: "toolResult", details }),
             }),
           );
-        }
-        const mirroredPreview = expect.objectContaining({ role: "toolResult", details });
-        const snapshot = events.result().messagesSnapshot;
-        if (closed) {
-          expect(snapshot).not.toContainEqual(mirroredPreview);
-        } else {
           expect(snapshot).toContainEqual(mirroredPreview);
         }
       } finally {
