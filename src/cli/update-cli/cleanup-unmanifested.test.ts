@@ -10,7 +10,6 @@ import {
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "../../commands/doctor-session-sqlite-retirement.js";
 import { selectUnmanifestedRecovery } from "../../commands/update-cleanup-unmanifested.js";
-import { createMissingConfigRecoveryManifest } from "../../commands/update-recovery-manifest.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { resolveUpdateCaptureRoot } from "../../infra/update-capture-paths.js";
@@ -84,15 +83,31 @@ function orphan(f: Fixture) {
   fs.writeFileSync(path.join(directory, "payload", "original"), "capture payload");
   fs.writeFileSync(
     path.join(directory, "manifest.json"),
-    JSON.stringify(
-      createMissingConfigRecoveryManifest({
-        runId,
-        installRoot: f.home,
-        stateDir: f.stateDir,
-        configPath: f.env.OPENCLAW_CONFIG_PATH,
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    ),
+    JSON.stringify({
+      schemaVersion: 2,
+      kind: "update-recovery",
+      generation: { kind: "baseline" },
+      databases: [],
+      runId,
+      installRoot: f.home,
+      stateDir: f.stateDir,
+      configPath: f.env.OPENCLAW_CONFIG_PATH,
+      configPaths: [f.env.OPENCLAW_CONFIG_PATH],
+      creator: { host: "fixture", pid: 1, startIdentity: "1" },
+      drivers: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      roots: [f.env.OPENCLAW_CONFIG_PATH],
+      excludedRoots: [],
+      protectedPaths: [f.env.OPENCLAW_CONFIG_PATH],
+      entries: [
+        {
+          kind: "missing",
+          sourcePath: f.env.OPENCLAW_CONFIG_PATH,
+          sqlite: false,
+          directory: false,
+        },
+      ],
+    }),
   );
   return directory;
 }
@@ -104,28 +119,6 @@ function preview(f: Fixture, paths: string[]) {
 }
 function report(): RecoveryCleanupReport {
   return vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)![0] as RecoveryCleanupReport;
-}
-const read = (file: string) => fs.readFileSync(file, "utf8");
-const cleanup = (f: Fixture, opts: Parameters<typeof updateCleanupCommand>[0]) =>
-  withEnvAsync(f.env, () => updateCleanupCommand(opts));
-const retire = (
-  f: Fixture,
-  opts: Partial<Parameters<typeof retireSessionSqliteRecovery>[0]> = {},
-) =>
-  retireSessionSqliteRecovery({
-    env: f.env,
-    preview: preview(f, [f.original]),
-    includeUnmanifested: [f.original],
-    readConfig: async () => ({}),
-    confirm: async () => true,
-    ...opts,
-  });
-async function refuses(f: Fixture, selected = f.original, yes = true) {
-  await expect(cleanup(f, { yes, json: true, includeUnmanifested: [selected] })).rejects.toEqual(
-    new ExitError(1),
-  );
-  expect(report().status).toBe(yes ? "blocked" : "refused");
-  expect(read(f.other)).toBe("other retained original");
 }
 function pendingRecovery(f: Fixture, manifestPath: string) {
   const options = { env: f.env };
@@ -142,18 +135,27 @@ function pendingRecovery(f: Fixture, manifestPath: string) {
 it("keeps unmanifested originals and orphan captures protected by default, even with --yes", async () => {
   const f = fixture();
   const capture = orphan(f);
-  await cleanup(f, { yes: true, json: true });
-  for (const [file, reason] of [
-    [f.original, "unmanifested-recovery-original"],
-    [capture, "orphan-update-capture"],
-  ]) {
-    expect(report().artifacts.find((item) => item.path === file)).toMatchObject({
-      outcome: "protected",
-      reason,
-    });
-  }
-  expect(read(f.original)).toBe("retained original");
-  expect(read(path.join(capture, "payload", "original"))).toBe("capture payload");
+  await withEnvAsync(f.env, async () => {
+    await updateCleanupCommand({ yes: true, json: true });
+    expect(report().artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: f.original,
+          outcome: "protected",
+          reason: "unmanifested-recovery-original",
+        }),
+        expect.objectContaining({
+          path: capture,
+          outcome: "protected",
+          reason: "orphan-update-capture",
+        }),
+      ]),
+    );
+    expect(fs.readFileSync(f.original, "utf8")).toBe("retained original");
+    expect(fs.readFileSync(path.join(capture, "payload", "original"), "utf8")).toBe(
+      "capture payload",
+    );
+  });
 });
 
 it("parses repeated exact paths, previews consequence and bytes, then removes only the selected originals", async () => {
@@ -188,22 +190,31 @@ it("parses repeated exact paths, previews consequence and bytes, then removes on
     );
     expect(fs.existsSync(f.original)).toBe(false);
     expect(fs.existsSync(capture)).toBe(false);
-    expect(read(f.other)).toBe("other retained original");
+    expect(fs.readFileSync(f.other, "utf8")).toBe("other retained original");
   });
 });
 
 it("requires deletion consent independently of explicit selection and renders per-path consequences", async () => {
   const f = fixture();
-  const modified = new Date("2026-01-01T00:00:00.000Z");
-  fs.utimesSync(f.original, modified, modified);
-  using clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-01-02T00:00:00.000Z"));
-  await cleanup(f, { dryRun: true, includeUnmanifested: [f.original] });
-  const output = vi.mocked(defaultRuntime.log).mock.calls.flat().join("\n");
-  expect(output).toContain("modified 1d ago");
-  expect(output).toContain("pre-repair history, branches, and metadata may be unrecoverable");
-  clock.mockRestore();
-  await refuses(f, f.original, false);
-  expect(read(f.original)).toBe("retained original");
+  fs.utimesSync(
+    f.original,
+    new Date("2026-01-01T00:00:00.000Z"),
+    new Date("2026-01-01T00:00:00.000Z"),
+  );
+  await withEnvAsync(f.env, async () => {
+    using clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-01-02T00:00:00.000Z"));
+    await updateCleanupCommand({ dryRun: true, includeUnmanifested: [f.original] });
+    expect(vi.mocked(defaultRuntime.log).mock.calls.flat().join("\n")).toContain("modified 1d ago");
+    expect(vi.mocked(defaultRuntime.log).mock.calls.flat().join("\n")).toContain(
+      "pre-repair history, branches, and metadata may be unrecoverable",
+    );
+    clock.mockRestore();
+    await expect(
+      updateCleanupCommand({ json: true, includeUnmanifested: [f.original] }),
+    ).rejects.toEqual(new ExitError(1));
+    expect(report().status).toBe("refused");
+    expect(fs.readFileSync(f.original, "utf8")).toBe("retained original");
+  });
 });
 
 it.each([
@@ -242,10 +253,16 @@ it.each([
     fs.symlinkSync(path.dirname(selected), alias);
     selected = path.join(alias, path.basename(selected));
   }
-  await refuses(f, selected);
-  if (kind !== "live-database") {
-    expect(fs.existsSync(selected)).toBe(true);
-  }
+  await withEnvAsync(f.env, async () => {
+    await expect(
+      updateCleanupCommand({ yes: true, json: true, includeUnmanifested: [selected] }),
+    ).rejects.toEqual(new ExitError(1));
+    expect(report().status).toBe("blocked");
+    if (kind !== "live-database") {
+      expect(fs.existsSync(selected)).toBe(true);
+    }
+    expect(fs.readFileSync(f.other, "utf8")).toBe("other retained original");
+  });
 });
 
 it.each(["symlink", "hardlink", "wal"])(
@@ -263,7 +280,7 @@ it.each(["symlink", "hardlink", "wal"])(
     }
     expect(() => preview(f, [capture])).toThrow(/sidecar|hardlink|nonregular/);
     expect(fs.existsSync(unsafe)).toBe(true);
-    expect(read(f.other)).toBe("other retained original");
+    expect(fs.readFileSync(f.other, "utf8")).toBe("other retained original");
   },
 );
 
@@ -292,8 +309,13 @@ it.each(["replacement", "same-size-edit", "pending-reference", "new-sidecar"])(
   "rechecks explicit originals after confirmation: %s",
   async (change) => {
     const f = fixture();
+    const initial = preview(f, [f.original]);
     await expect(
-      retire(f, {
+      retireSessionSqliteRecovery({
+        env: f.env,
+        preview: initial,
+        includeUnmanifested: [f.original],
+        readConfig: async () => ({}),
         confirm: async () => {
           if (change === "replacement") {
             fs.renameSync(f.original, path.join(f.home, "saved"));
@@ -310,7 +332,7 @@ it.each(["replacement", "same-size-edit", "pending-reference", "new-sidecar"])(
       }),
     ).rejects.toThrow(/changed|pending|sidecar/);
     expect(fs.existsSync(f.original)).toBe(true);
-    expect(read(f.other)).toBe("other retained original");
+    expect(fs.readFileSync(f.other, "utf8")).toBe("other retained original");
   },
 );
 
@@ -319,8 +341,12 @@ it.each(["file replacement", "configured live store"])(
   async (change) => {
     const f = fixture();
     let cfg: OpenClawConfig = {};
-    const result = await retire(f, {
+    const result = await retireSessionSqliteRecovery({
+      env: f.env,
+      preview: preview(f, [f.original]),
+      includeUnmanifested: [f.original],
       readConfig: async () => cfg,
+      confirm: async () => true,
       onProgress: ({ phase }) => {
         if (phase === "removing-unmanifested") {
           if (change === "file replacement") {
@@ -333,7 +359,7 @@ it.each(["file replacement", "configured live store"])(
     });
     expect(result.status).toBe("blocked");
     expect(result.artifacts.find((item) => item.path === f.original)?.outcome).toBe("failed");
-    expect(read(f.original)).toBe(
+    expect(fs.readFileSync(f.original, "utf8")).toBe(
       change === "file replacement" ? "modified original" : "retained original",
     );
   },
@@ -344,8 +370,16 @@ it("refuses explicit cleanup while another Gateway owns the selected state", asy
   const lock = await acquireGatewayLock({ env: f.env, allowInTests: true });
   expect(lock).not.toBeNull();
   try {
-    await expect(retire(f)).rejects.toThrow(/lock|Gateway/i);
-    expect(read(f.original)).toBe("retained original");
+    await expect(
+      retireSessionSqliteRecovery({
+        env: f.env,
+        preview: preview(f, [f.original]),
+        includeUnmanifested: [f.original],
+        readConfig: async () => ({}),
+        confirm: async () => true,
+      }),
+    ).rejects.toThrow(/lock|Gateway/i);
+    expect(fs.readFileSync(f.original, "utf8")).toBe("retained original");
   } finally {
     await lock?.release();
   }
@@ -361,7 +395,7 @@ it("retains a configured live store even when its name is classified as a recove
   expect(() =>
     selectUnmanifestedRecovery({ inventory, paths: [f.original], cfg, env: f.env }),
   ).toThrow(/Active database path/);
-  expect(read(f.original)).toBe("retained original");
+  expect(fs.readFileSync(f.original, "utf8")).toBe("retained original");
 });
 
 it("refuses explicit retirement if stored recovery references cannot be decoded", () => {
@@ -372,7 +406,7 @@ it("refuses explicit retirement if stored recovery references cannot be decoded"
     .run("unreadable", "update.recovery." + runId);
   closeOpenClawStateDatabaseForTest();
   expect(() => preview(f, [f.original])).toThrow();
-  expect(read(f.original)).toBe("retained original");
+  expect(fs.readFileSync(f.original, "utf8")).toBe("retained original");
 });
 
 it.each(["selection", "removal"] as const)(
@@ -396,7 +430,12 @@ it.each(["selection", "removal"] as const)(
         return true;
       });
     }
-    await refuses(f);
-    expect(read(f.original)).toBe("retained original");
+    await withEnvAsync(f.env, async () => {
+      await expect(
+        updateCleanupCommand({ yes: true, json: true, includeUnmanifested: [f.original] }),
+      ).rejects.toEqual(new ExitError(1));
+      expect(report().status).toBe("blocked");
+      expect(fs.readFileSync(f.original, "utf8")).toBe("retained original");
+    });
   },
 );
