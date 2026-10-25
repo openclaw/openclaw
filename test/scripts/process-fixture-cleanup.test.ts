@@ -76,8 +76,8 @@ async function runFixture(owner: (typeof fixtures)[number]["owner"]) {
     vi,
   }));
   // Keep Bun's real Node prerequisite outside the synthetic filesystem and process faults.
-  vi.doMock("../../src/test-utils/node-process.js", () => ({
-    ...nodeProcess,
+  vi.doMock("../../src/test-utils/node-process.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof nodeProcess>()),
     resolveTestNodeExecPath: () => testNodeExecPath,
   }));
   await (owner === "setup"
