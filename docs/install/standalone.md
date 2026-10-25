@@ -129,6 +129,11 @@ and compiles their original TypeScript. Both modes preserve named entry contract
 shared chunks remain reachable imports. The completed `pnpm build` is required
 for generated files, runtime resources, and source-to-emitted module URL metadata.
 Rerun it when the builder reports missing or stale metadata.
+After source discovery, source AOT relinks the emitted graph from its declared
+entries so exports used only by removed imports do not fail module URL validation.
+This packaging pass preserves the original TypeScript inputs for native compilation.
+Emitted-JavaScript builds keep the first bundle and its resource ownership; they
+may retain unused outputs from eliminated dynamic imports.
 Source AOT also requires the repository-supported Node executable on `PATH` for
 syntax analysis of TypeScript forms that the packaging parser cannot read.
 This analysis preserves source offsets; native compilation receives the original

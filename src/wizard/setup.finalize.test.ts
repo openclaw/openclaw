@@ -11,6 +11,7 @@ import * as programArgs from "../daemon/program-args.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import {
   createFinalizeArgs,
   createLaterPrompter,
@@ -259,14 +260,6 @@ function finalize(flow: FinalizeArgs["flow"], overrides: FinalizeArgsOverrides =
   return finalizeSetupWizard(createFinalizeArgs(flow, overrides));
 }
 
-function requireMockArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
@@ -316,7 +309,7 @@ describe("finalizeSetupWizard", () => {
       );
     });
 
-    const probeParams = requireMockArg(probeGatewayReachable) as {
+    const probeParams = mockCall(probeGatewayReachable)[0] as {
       url?: string;
       password?: string;
     };
@@ -834,7 +827,7 @@ describe("finalizeSetupWizard", () => {
         const managedStartup = action !== "reused";
         const startupTiming = resolveGatewayStartupTiming(platform);
         expect(waitForGatewayReachable).toHaveBeenCalledOnce();
-        const timing = requireMockArg(waitForGatewayReachable) as {
+        const timing = mockCall(waitForGatewayReachable)[0] as {
           deadlineMs?: number;
           probeTimeoutMs?: number;
         };
@@ -1238,7 +1231,7 @@ describe("finalizeSetupWizard", () => {
         );
       }
       expect(selectRuntime).toHaveBeenCalledTimes(flow === "advanced" ? 2 : 1);
-      expect(requireMockArg(buildGatewayInstallPlan)).toMatchObject({
+      expect(mockCall(buildGatewayInstallPlan)[0]).toMatchObject({
         runtime: choice,
         runtimePath: choice === "bun" ? recordedPath : undefined,
         pinnedRuntimePath: undefined,
@@ -1424,13 +1417,13 @@ describe("finalizeSetupWizard", () => {
       },
     });
 
-    expect(requireMockArg(healthCommand)).toMatchObject({
+    expect(mockCall(healthCommand)[0]).toMatchObject({
       json: false,
       timeoutMs: 10_000,
       token: "session-token",
       config: { gateway: { auth: { mode: "token", token: "session-token" } } },
     });
-    expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
+    expect(mockCall(healthCommand)[1]).toBeTypeOf("object");
   });
 
   it("ends with a health-failure outro when the health check exits after a reachable probe", async () => {
@@ -1600,19 +1593,19 @@ describe("finalizeSetupWizard", () => {
       prompter,
     });
 
-    expect(requireMockArg(probeGatewayReachable)).toMatchObject({
+    expect(mockCall(probeGatewayReachable)[0]).toMatchObject({
       url: "ws://127.0.0.1:18789",
       token: undefined,
       password: "session-password",
     });
-    expect(requireMockArg(healthCommand)).toMatchObject({
+    expect(mockCall(healthCommand)[0]).toMatchObject({
       json: false,
       timeoutMs: 10_000,
       token: undefined,
       password: "session-password",
       config: { gateway: { auth: { mode: "password" } } },
     });
-    expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
+    expect(mockCall(healthCommand)[1]).toBeTypeOf("object");
   });
 
   it("shows actionable gateway guidance instead of a hard error in no-daemon onboarding", async () => {

@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
 import type { SessionsUsageResult } from "../../../src/shared/usage-types.js";
 import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -73,15 +74,11 @@ suite.define(() => {
           await page.clock.setFixedTime(new Date(instant));
           const gateway = await installMockGateway(page, {
             methodResponses: {
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  { id: "main", name: "OpenClaw" },
-                  { id: "research", name: "Research" },
-                ],
-              },
+              "agents.list": agentRoster(
+                { main: "OpenClaw", research: "Research" },
+                "main",
+                "per-sender",
+              ),
               "sessions.usage": {
                 cases: [
                   ...calendars.map(({ date, mode }) => ({

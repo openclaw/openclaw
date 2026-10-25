@@ -146,12 +146,16 @@ it does not maintain a separate schema definition. They omit transaction wrapper
 the owning connection supplies the namespace and transaction. The `agent.postgres.sql` artifact follows the same runtime-only convention.
 
 Explicit PostgreSQL index keys use native ordering for canonical NOT NULL and
-primary-key columns. Nullable columns and expression keys retain SQLite's
+primary-key columns, and for direct keys proven non-null by the index's own
+`IS NOT NULL` predicate. Other nullable columns and expression keys retain SQLite's
 `ASC NULLS FIRST` / `DESC NULLS LAST` placement. This lets default PostgreSQL
 `ORDER BY` use non-null indexes without changing observable nullable ordering.
 State schema 32, agent schema 34, Workboard schema 4, Logbook schema 2, and
-Team Reports schema 2 rebuild only changed explicit indexes through versioned
-schema admission under its existing advisory lock. Absent first-use fragments
+Team Reports schema 2 introduced schema-nullability ordering. State schema 33,
+agent schema 35, and Logbook schema 3 extend it to predicate-proven keys,
+including equality-only indexes. Each migration rebuilds only changed indexes
+through versioned schema admission under its existing advisory lock. Queries
+that exclude null keys retain PostgreSQL's default ordering. Absent first-use fragments
 stay absent. SQLite advances version metadata without changing canonical DDL.
 Historical admission and backup descriptors retain the preceding index definitions;
 rollback restores the verified pre-upgrade backup. Update and Doctor retain their
@@ -251,6 +255,7 @@ SQL/concurrency conformance or a choice of per-agent PostgreSQL topology.
 
 `pnpm check:database-dialect-ratchet` keeps mechanical, design, and engine-maintenance counts shrink-only against the Git base by scanning only differing production `.ts`/`.mts`/`.sql` files under `src/`, `extensions/`, and `packages/` (excluding tests and fixtures); `--staged` reads the index, `--full-tree` reports totals, and the `sqliteStringSet` owner subset is reported within mechanical debt.
 SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-maintenance constructs, and consumers call them.
+The inventory also classifies a few file-scoped constructs with no PostgreSQL SQL equivalent as owned engine maintenance; other constructs in those files stay counted. Knowledge's `extensions/knowledge/src/retrieval.ts` owns `fts5`, `temp-schema`, and `rowid` for its keyword index, a rebuildable cache in each Knowledge store's own `state.sqlite` that never opens the selected Gateway engine.
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 

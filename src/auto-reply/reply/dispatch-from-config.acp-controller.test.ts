@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpRuntimeEvent } from "../../plugin-sdk/acp-runtime.js";
@@ -20,7 +20,7 @@ import {
   sessionStoreMocks,
   setDiscordTestRegistry,
 } from "./dispatch-from-config.shared.test-harness.js";
-import { createAcpRuntime } from "./dispatch-from-config.test-support.js";
+import { createAcpRuntime, createDispatchGate } from "./dispatch-from-config.test-support.js";
 import { prepareReplySourceInput } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -42,18 +42,16 @@ const cfg = {
 
 function createGatedRuntime() {
   const started: string[] = [];
-  const entered = new Map<string, ReturnType<typeof createDeferred<void>>>();
-  const released = new Map<string, ReturnType<typeof createDeferred<void>>>();
-  const gate = (map: typeof entered, text: string) => {
-    const deferred = map.get(text) ?? createDeferred();
-    map.set(text, deferred);
-    return deferred;
+  const turns = new Map<string, ReturnType<typeof createDispatchGate<void>>>();
+  const gate = (text: string) => {
+    const turn = turns.get(text) ?? createDispatchGate();
+    turns.set(text, turn);
+    return turn;
   };
   const runtime = createAcpRuntime([]);
   runtime.runTurn.mockImplementation(async function* (input) {
     started.push(input.text);
-    gate(entered, input.text).resolve();
-    await gate(released, input.text).promise;
+    await gate(input.text).wait();
     yield { type: "done" } as AcpRuntimeEvent;
   });
   return {
@@ -61,11 +59,11 @@ function createGatedRuntime() {
     started,
     entered: (text: string, work: Promise<unknown>) =>
       awaitGateBeforeSettlement(
-        gate(entered, text).promise,
+        gate(text).started,
         work,
         `ACP work settled before runtime entry: ${text}`,
       ),
-    release: (text: string) => gate(released, text).resolve(),
+    release: (text: string) => gate(text).resolve(),
   };
 }
 
@@ -75,14 +73,7 @@ function mockAcpSession(sessionKey: string) {
   acpMocks.readAcpSessionEntry.mockImplementation((params: { sessionKey: string }) =>
     params.sessionKey === sessionKey
       ? completeAcpSessionFixture(
-          {
-            entry,
-            acp: {
-              agent: "codex",
-              runtimeSessionName: "runtime:controller",
-              lastActivityAt: Date.now(),
-            },
-          },
+          { entry, acp: { agent: "codex" } },
           { sessionKey, storePath: mockSessionStorePath },
         )
       : null,
@@ -92,7 +83,7 @@ function mockAcpSession(sessionKey: string) {
 async function dispatchTo(
   sessionKey: string,
   body: string,
-  options: { onSourceReserved?: (input: SessionControllerInput) => void } = {},
+  onSourceReserved?: (input: SessionControllerInput) => void,
 ) {
   const ctx = buildTestCtx({
     Provider: "discord",
@@ -105,7 +96,7 @@ async function dispatchTo(
   });
   const source = await prepareReplySourceInput(ctx, cfg, {});
   if (source.input) {
-    options.onSourceReserved?.(source.input);
+    onSourceReserved?.(source.input);
   }
   return dispatchReplyFromConfig({
     ctx,
@@ -135,7 +126,9 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();
     mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
-    acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
+    for (const mock of [...Object.values(hooks), ...Object.values(acpMocks)]) {
+      mock.mockReset();
+    }
     manager = new AcpSessionManager({
       ...acpManagerDeps,
       prepareSessionControlRead: async (params) => {
@@ -161,16 +154,10 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
     acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(manager);
     replyDispatchEntries = [];
     hooks.hasHooks.mockReset().mockImplementation((name?: string) => name === "reply_dispatch");
-    hooks.runBeforeDispatch.mockReset().mockResolvedValue(undefined);
     hooks.runReplyDispatch.mockReset().mockImplementation(async (event: unknown, ctx: unknown) => {
       replyDispatchEntries.push(String((event as { sessionKey?: string }).sessionKey));
       return (await tryDispatchAcpReplyHook(event as never, ctx as never)) ?? undefined;
     });
-    for (const hook of [hooks.runInboundClaim, hooks.runInboundClaimForPlugin]) {
-      hook.mockReset().mockResolvedValue(undefined);
-    }
-    hooks.runInboundClaimForPluginOutcome.mockReset().mockResolvedValue({ status: "no_handler" });
-    hooks.runMessageReceived.mockReset();
     internalHookMocks.createInternalHookEvent
       .mockReset()
       .mockImplementation(createInternalHookEventPayload);
@@ -192,10 +179,6 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
       load.mockReset().mockImplementation(readSessionEntry);
     }
     store.resolveSessionStorePathCore.mockReset().mockReturnValue(mockSessionStorePath);
-    acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
-    acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
-    acpMocks.upsertAcpSessionMeta.mockReset().mockResolvedValue(null);
-    acpMocks.requireAcpRuntimeBackend.mockReset();
     sessionBindingMocks.listBySession.mockReset().mockReturnValue([]);
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
   });
@@ -234,10 +217,8 @@ describe("dispatchReplyFromConfig ACP controller turns", () => {
         await gated.entered(first, firstTurn);
         sessionBindingMocks.resolveByConversation.mockReturnValue(null);
         let input: SessionControllerInput | undefined;
-        pending = dispatchTo(acpKey, second, {
-          onSourceReserved: (reserved) => {
-            input = reserved;
-          },
+        pending = dispatchTo(acpKey, second, (reserved) => {
+          input = reserved;
         });
         if (first === "agent") {
           await vi.waitFor(() => expect(input?.phase).toBe("waiting"), { timeout: 10_000 });

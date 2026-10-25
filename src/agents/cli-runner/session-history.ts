@@ -609,9 +609,12 @@ export async function loadCliSessionPromptContext(
     params.rawTranscriptReseedReason === "auth-epoch" ||
     params.rawTranscriptReseedReason === "auth-unknown";
   if (contentBlocked) {
-    cliBackendLog.warn(
-      `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
-    );
+    // Raw history only ever reseeds a fresh CLI session; a resumed one keeps its own context.
+    if (!params.nativeSessionId) {
+      cliBackendLog.warn(
+        `cli session history refused across auth boundary: reason=${params.rawTranscriptReseedReason}`,
+      );
+    }
     if (!assertActive) {
       return {
         reseedMessages: [],

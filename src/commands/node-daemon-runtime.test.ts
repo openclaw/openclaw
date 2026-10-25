@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nodeProbeOutput } from "../cli/daemon-cli/install.test-helpers.js";
 import type { GatewayServiceInstallArgs } from "../daemon/service-types.js";
 import type * as DeviceAuthStoreModule from "../infra/device-auth-store.js";
 import type * as DeviceIdentityModule from "../infra/device-identity-async.js";
@@ -144,14 +145,7 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
   it.each([false, true])(
     "persists ambient auth only when explicitly selected for a paired node (explicit=%s)",
     async (explicit) => {
-      runExec.mockResolvedValue({
-        stdout: JSON.stringify({
-          nodeVersion: "26.12.1",
-          sqliteVersion: "3.53.4",
-          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        }),
-        stderr: "",
-      });
+      runExec.mockResolvedValue(nodeProbeOutput("26.12.1"));
       loadNodeHostConfig.mockResolvedValue({
         version: 1,
         nodeId: "paired-node",

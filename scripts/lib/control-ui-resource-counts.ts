@@ -32,6 +32,9 @@ export type ControlUiResourceCounts = {
   };
   listeners: { window: number; document: number; mediaQuery: number; fontFaceSet: number };
   listenerCallbacks: { window: number; document: number; mediaQuery: number; fontFaceSet: number };
+  /** Same counted EventTarget registrations, grouped by event type and capture phase. */
+  listenerTypes: Record<keyof ControlUiResourceCounts["listeners"], Record<string, number>>;
+  listenerCallbackTypes: Record<keyof ControlUiResourceCounts["listeners"], Record<string, number>>;
   mediaQueries: number;
 };
 
@@ -80,6 +83,8 @@ export function installControlUiResourceCounts() {
     },
     listeners: { window: 0, document: 0, mediaQuery: 0, fontFaceSet: 0 },
     listenerCallbacks: { window: 0, document: 0, mediaQuery: 0, fontFaceSet: 0 },
+    listenerTypes: { window: {}, document: {}, mediaQuery: {}, fontFaceSet: {} },
+    listenerCallbackTypes: { window: {}, document: {}, mediaQuery: {}, fontFaceSet: {} },
     mediaQueries: 0,
   };
   Object.defineProperty(window, "openclawResourceCounts", {
@@ -340,6 +345,9 @@ export function installControlUiResourceCounts() {
       if (existing) {
         return add(type, existing.wrapped, options);
       }
+      const key = `${type}:${capture ? "capture" : "bubble"}`;
+      const activeTypes = counts.listenerTypes[kind];
+      const callbackTypes = counts.listenerCallbackTypes[kind];
       const signal = typeof options === "object" ? options.signal : undefined;
       const once = typeof options === "object" && options.once;
       const entry: Registration = {
@@ -348,6 +356,7 @@ export function installControlUiResourceCounts() {
         capture,
         wrapped(event) {
           counts.listenerCallbacks[kind]++;
+          callbackTypes[key] = (callbackTypes[key] ?? 0) + 1;
           if (once) {
             entry.remove();
           }
@@ -362,6 +371,7 @@ export function installControlUiResourceCounts() {
           if (index >= 0) {
             entries.splice(index, 1);
             counts.listeners[kind]--;
+            activeTypes[key] = (activeTypes[key] ?? 0) - 1;
             signal?.removeEventListener("abort", entry.remove);
           }
         },
@@ -369,6 +379,7 @@ export function installControlUiResourceCounts() {
       add(type, entry.wrapped, options);
       entries.push(entry);
       counts.listeners[kind]++;
+      activeTypes[key] = (activeTypes[key] ?? 0) + 1;
       signal?.addEventListener("abort", entry.remove, { once: true });
     };
     target.removeEventListener = (type, listener, options) => {

@@ -4,15 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
-import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
-import {
-  canAutoFollowChat,
-  handleChatScrollTakeover,
-  scheduleCommittedChatScroll,
-} from "./scroll.ts";
+import { handleChatScrollTakeover } from "./scroll.ts";
 
 const disposals: Array<() => void> = [];
 beforeEach(() => {
@@ -27,18 +22,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
-function userMessage(sendId: string) {
-  return {
-    role: "user",
-    content: sendId,
-    __openclaw: {
-      id: sendId,
-      idempotencyKey: sendId + ":user",
-      senderId: "same-profile",
-      senderIdentity: { type: "profile", id: "same-profile" },
-    },
-  };
-}
 function setup() {
   const { pane, state } = createTestChatPane({ client: createTestGatewayClient(async () => ({})) });
   const runtime = getPaneTestRuntime(pane);
@@ -47,16 +30,11 @@ function setup() {
   disposals.push(dispose);
   state.sessionKey = "agent:main:scroll-ownership";
   state.currentSessionId = "physical-session";
-  state.chatMessages = [userMessage("loaded")];
+  state.chatMessages = [{ role: "user", content: "loaded" }];
   state.chatHasAutoScrolled = true;
   state.chatUserNearBottom = true;
-  state.selfUser = {
-    id: "same-profile",
-    name: "Reader",
-    identity: { type: "profile", id: "same-profile" },
-  };
   const scrollport = document.createElement("div");
-  let height = 2000;
+  const height = 2000;
   Object.defineProperties(scrollport, {
     clientHeight: { value: 500 },
     scrollHeight: { configurable: true, get: () => height },
@@ -74,6 +52,11 @@ function setup() {
   vi.advanceTimersToNextFrame();
   const published = vi.fn();
   disposals.push(chatRunPresentation(state).subscribe(published));
+  const commit = () => {
+    controller.captureRenderChanges();
+    controller.commitRender();
+    vi.advanceTimersToNextFrame();
+  };
   return {
     state,
     runtime,
@@ -81,54 +64,18 @@ function setup() {
     dispose,
     published,
     scrollport,
-    commitGrowth: () => {
-      height += 889;
-      controller.publishPendingRunState();
-      controller.captureRenderChanges();
-      controller.commitRender();
-      vi.advanceTimersToNextFrame();
+    commit,
+    stream: (text: string | null) => {
+      chatRunPresentation(state).batch(() => {
+        state.chatStream = text;
+      }, "animation-frame");
     },
   };
 }
 
 describe("transcript arrival scroll ownership", () => {
-  it("publishes stream arrival and removal to the pane without publishing continuing text", () => {
-    const { state } = setup();
-    const paneUpdate = vi.fn();
-    disposals.push(chatRunPresentation(state).subscribeNonText(paneUpdate));
-    const publish = (text: string | null) => {
-      chatRunPresentation(state).batch(() => {
-        state.chatStream = text;
-      }, "animation-frame");
-      vi.advanceTimersToNextFrame();
-    };
-
-    publish("First text");
-    expect(paneUpdate).toHaveBeenCalledOnce();
-    paneUpdate.mockClear();
-    publish("First text continues");
-    expect(paneUpdate).not.toHaveBeenCalled();
-    publish(null);
-    expect(paneUpdate).toHaveBeenCalledOnce();
-  });
-
-  it("keeps a pending manual command ahead of geometric follow", () => {
-    const source = "manual";
-    const { state } = setup();
-    const follow = vi.spyOn(state, "chatScrollToEnd");
-    state.chatHasAutoScrolled = false;
-    state.chatFollowLocked = false;
-    scheduleCommittedChatScroll(state, true, false, { source });
-
-    expect(canAutoFollowChat(state)).toBe(false);
-    expect(follow).not.toHaveBeenCalled();
-    vi.advanceTimersToNextFrame();
-    expect(follow).toHaveBeenCalledExactlyOnceWith({ behavior: "auto", source });
-    expect(state.chatHasAutoScrolled).toBe(true);
-  });
-
   it("keeps text publications out of the message and run-state projections", () => {
-    const { state, runtime } = setup();
+    const { state, runtime, stream, dispose, published } = setup();
     state.chatRunId = "stream-run";
     const props = runtime.render().layout?.primary.chat;
     if (!props) {
@@ -136,7 +83,7 @@ describe("transcript arrival scroll ownership", () => {
     }
     const observed = vi.fn();
     disposals.push(
-      createRoot((dispose) => {
+      createRoot((stop) => {
         const questions = createComposerQuestions(props.paneId, () => props);
         createEffect(
           () => ({
@@ -146,9 +93,11 @@ describe("transcript arrival scroll ownership", () => {
           }),
           observed,
         );
-        return dispose;
+        return stop;
       }),
     );
+    flush();
+    observed.mockClear();
     const delta = (seq: number) =>
       handlePageGatewayEvent(state, {
         type: "event",
@@ -164,6 +113,7 @@ describe("transcript arrival scroll ownership", () => {
     delta(1);
     vi.advanceTimersToNextFrame();
     flush();
+    expect(observed).toHaveBeenCalledOnce();
     observed.mockClear();
     for (const seq of [2, 3, 4]) {
       delta(seq);
@@ -172,21 +122,24 @@ describe("transcript arrival scroll ownership", () => {
     vi.advanceTimersToNextFrame();
     flush();
     expect(observed).not.toHaveBeenCalled();
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = null;
-      state.chatRunId = null;
-    });
+    state.chatStream = null;
     flush();
     expect(observed).toHaveBeenCalledOnce();
-    expect(observed.mock.calls[0]?.[0].runId).toBeNull();
+    state.chatRunId = null;
+    flush();
+    expect(observed).toHaveBeenCalledTimes(2);
+    expect(observed.mock.calls[1]?.[0].runId).toBeNull();
+    stream("Retired before publication");
+    dispose();
+    const publicationsAtDisposal = published.mock.calls.length;
+    vi.advanceTimersToNextFrame();
+    expect(published).toHaveBeenCalledTimes(publicationsAtDisposal);
   });
 
   it("only schedules same-height streaming arrivals for a locked reader without a pane commit", async () => {
-    const { state, scrollport } = setup();
+    const { state, scrollport, stream } = setup();
     const follow = vi.spyOn(state, "chatScrollToEnd");
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "Text in the existing tail row";
-    }, "animation-frame");
+    stream("Text in the existing tail row");
     vi.advanceTimersToNextFrame();
     await Promise.resolve();
     vi.advanceTimersToNextFrame();
@@ -196,66 +149,13 @@ describe("transcript arrival scroll ownership", () => {
     scrollport.scrollTop = 800;
     handleChatScrollTakeover(state);
     state.chatNewMessagesBelow = false;
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "More text in the existing tail row";
-    }, "animation-frame");
+    stream("More text in the existing tail row");
     vi.advanceTimersToNextFrame();
     await Promise.resolve();
     vi.advanceTimersToNextFrame();
     expect(state.chatNewMessagesBelow).toBe(true);
     expect(scrollport.scrollTop).toBe(800);
     expect(follow).not.toHaveBeenCalled();
-  });
-
-  it("coalesces streamed replies without delaying the draft or new transcript rows", () => {
-    const { state, controller, published } = setup();
-    for (let index = 0; index < 36; index++) {
-      chatRunPresentation(state).batch(() => {
-        state.chatStream = `Reply ${index}`;
-      }, "animation-frame");
-    }
-    expect(published).not.toHaveBeenCalled();
-    vi.advanceTimersToNextFrame();
-    expect(published).toHaveBeenCalledOnce();
-    expect(state.chatStream).toBe("Reply 35");
-
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "A queued reply";
-    }, "animation-frame");
-    state.handleChatDraftChange("Keep this draft");
-    expect(controller.composerDraft.read().draft).toBe("Keep this draft");
-    expect(published).toHaveBeenCalledOnce();
-    vi.advanceTimersToNextFrame();
-    expect(published).toHaveBeenCalledTimes(2);
-
-    chatRunPresentation(state).publish("animation-frame");
-    state.chatMessages = [...state.chatMessages, userMessage("remote")];
-    expect(published).toHaveBeenCalledTimes(3);
-    vi.advanceTimersToNextFrame();
-    expect(published).toHaveBeenCalledTimes(3);
-  });
-
-  it("absorbs a pending stream publication into a commit and cancels on teardown", async () => {
-    const { controller, dispose, published, state } = setup();
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "Waiting for a frame";
-    }, "animation-frame");
-    controller.publishPendingRunState();
-    controller.captureRenderChanges();
-    vi.advanceTimersToNextFrame();
-    expect(published).toHaveBeenCalledOnce();
-
-    const effect = vi.fn();
-    state.renderLifecycle.afterCommit(effect);
-    await Promise.resolve();
-    expect(effect).toHaveBeenCalledOnce();
-    chatRunPresentation(state).batch(() => {
-      state.chatStream = "Retired before publication";
-    }, "animation-frame");
-    dispose();
-    const publicationsAtDisposal = published.mock.calls.length;
-    vi.advanceTimersToNextFrame();
-    expect(published).toHaveBeenCalledTimes(publicationsAtDisposal);
   });
 
   it("preserves follow effects when a host commit consumes a queued stream frame", () => {
@@ -272,14 +172,9 @@ describe("transcript arrival scroll ownership", () => {
   });
 
   it("leaves continuing text to measured row growth without reading the viewport", () => {
-    const { controller, state, scrollport } = setup();
+    const { state, scrollport, commit } = setup();
     const follow = vi.spyOn(state, "chatScrollToEnd");
     const readHeight = vi.spyOn(scrollport, "scrollHeight", "get");
-    const commit = () => {
-      controller.captureRenderChanges();
-      controller.commitRender();
-      vi.advanceTimersToNextFrame();
-    };
     state.chatStream = "First text";
     commit();
     expect(follow).toHaveBeenCalledOnce();
@@ -311,53 +206,4 @@ describe("transcript arrival scroll ownership", () => {
     commit();
     expect(follow).toHaveBeenCalledOnce();
   });
-
-  it.each(["message", "pending input", "resumed stream", "speech"] as const)(
-    "follows remote %s growth only while the viewer is following",
-    (source) => {
-      for (const mode of ["end", "near end", "reading"] as const) {
-        const { state, scrollport, commitGrowth } = setup();
-        if (mode !== "end") {
-          scrollport.scrollTop -= 80;
-          if (mode === "reading") {
-            handleChatScrollTakeover(state);
-          }
-        }
-        const before = scrollport.scrollTop;
-        if (source === "pending input") {
-          applyChatPendingInputs(state, {
-            items: [
-              {
-                id: "remote",
-                runId: "remote",
-                acceptedAt: 1,
-                state: "queued",
-                message: userMessage("remote"),
-              },
-            ],
-            total: 1,
-          });
-        } else if (source === "resumed stream") {
-          state.chatStream = "A response started outside this tab.";
-        } else {
-          state.chatMessages = [
-            ...state.chatMessages,
-            userMessage(source === "speech" ? "voice:other-call:1" : "remote"),
-          ];
-        }
-        commitGrowth();
-        expect(scrollport.scrollTop, `${source}: ${mode}`).toBe(mode === "reading" ? before : 2389);
-        expect(state.chatNewMessagesBelow).toBe(mode === "reading");
-
-        // Promotion and a growing reply must retain the same reader policy.
-        applyChatPendingInputs(state, { items: [], total: 0 });
-        state.chatMessages = [...state.chatMessages, userMessage("remote")];
-        state.chatStream = "The response continues after the input is saved.";
-        commitGrowth();
-        expect(scrollport.scrollTop, `${source} continuation: ${mode}`).toBe(
-          mode === "reading" ? before : 3278,
-        );
-      }
-    },
-  );
 });

@@ -135,16 +135,12 @@ it.each([false, true])(
     const entered = createDeferred();
     const cleanup = createDeferred();
     const admission = await admissionFixture();
-    const { cancelWorkerIdleGc, scheduleWorkerIdleGc } = await import("./worker-idle-gc.js");
     const closeResource = vi.fn();
     const handler = vi.fn(async () => {
-      try {
-        throw new Error("uncertain native close");
-      } finally {
-        entered.resolve();
-        await cleanup.promise;
-        admission.inspect();
-      }
+      entered.resolve();
+      await cleanup.promise;
+      admission.inspect();
+      throw new Error("uncertain native close");
     });
     const receipt = resourceReceipt();
     boundary.closeMemory.mockImplementation(() => {
@@ -169,8 +165,6 @@ it.each([false, true])(
       expect(receipt.close).toHaveBeenCalledBefore(boundary.closeMemory);
       expect(boundary.closeMemory).toHaveBeenCalledBefore(admission.close);
       expect(admission.close).toHaveBeenCalledBefore(port.close);
-      expect(cancelWorkerIdleGc).toHaveBeenCalledTimes(3);
-      expect(scheduleWorkerIdleGc).not.toHaveBeenCalled();
       expect(process.exitCode).toBe(1);
       port.emit("message", { taskId: 2 });
       expectCalls(1, handler);

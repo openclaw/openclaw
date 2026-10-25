@@ -1,3 +1,4 @@
+import "../styles/exec-approval-card.css";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { For, Show, createMemo, onSettled } from "solid-js";

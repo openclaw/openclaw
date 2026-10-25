@@ -49,14 +49,6 @@ const NO_INLINE_DIRECTIVES = {
 // neighborhood; authored spacing elsewhere (for example `<pre>` columns) stays.
 const REMOVED_DIRECTIVE_MARKER_SEED = "\uE000";
 
-function createRemovedDirectiveMarker(parts: readonly string[]): string {
-  let marker = REMOVED_DIRECTIVE_MARKER_SEED;
-  while (parts.some((part) => part.includes(marker))) {
-    marker += REMOVED_DIRECTIVE_MARKER_SEED;
-  }
-  return marker;
-}
-
 export function replaceOutsideCodeRegions(
   text: string,
   regex: RegExp,
@@ -511,7 +503,10 @@ export function parseInlineDirectiveParts(
     hasReplyTag: false,
     sawCurrent: false,
   }));
-  const marker = createRemovedDirectiveMarker(parts);
+  let marker = REMOVED_DIRECTIVE_MARKER_SEED;
+  while (parts.some((part) => part.includes(marker))) {
+    marker += REMOVED_DIRECTIVE_MARKER_SEED;
+  }
   const audioText = replaceOutsideCodeRegionParts(
     parts,
     AUDIO_TAG_RE,

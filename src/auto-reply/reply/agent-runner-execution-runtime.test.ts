@@ -5,7 +5,7 @@ import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support
 import {
   createRunResult,
   createFollowupRun,
-  initialFallbackAttemptOptions,
+  runFallbackCandidate,
   requireRecord,
   requireMockCall,
   expectMockCallArgFields,
@@ -27,12 +27,9 @@ const cliBackend = () => ({
 });
 
 function selectFallback(provider: string, model: string) {
-  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-    result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-    provider,
-    model,
-    attempts: [],
-  }));
+  state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+    runFallbackCandidate(params, provider, model),
+  );
 }
 
 function opaqueCliTurn(chatType: "group" | "direct", currentChatType?: string) {

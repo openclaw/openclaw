@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 273752,
-  "reason": "PR #183553 keeps the inline-view contract in the shared boot group, avoiding Chat evaluation on New Session. Original interleaved measurements reduced local script CPU median 8.29% and unused boot JavaScript 55.95%. Against the exact merged main parent db38cc106695, same-host builds measure startup 274248 to 273752 B gzip (-496 B), with seven startup JS requests, one CSS request, and unchanged CSS. Record the measured integrated head.",
+  "startupJsGzipBytes": 270371,
+  "reason": "Settings demand loading previously reduced remote readiness by 20.77% and scripting by 49.68%, deferring 1702960 reply bytes. Integrated with main ba9f1eacbd0: same-host startup 270216 to 270371 B gzip (+155 B), five JS and one CSS request; Chat +225 B, New Session +50 B. Ratchet to the measured integrated head.",
   "updatedAt": "2026-10-25"
 }

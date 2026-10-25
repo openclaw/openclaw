@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backupRestoreCommand } from "./backup-restore.js";
+import { encodeTarEntry as encodeEntry } from "./backup-tar.test-support.js";
 import { verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -25,28 +25,6 @@ function manifest(): string {
     paths: { stateDir: "/home/operator/.openclaw" },
     assets: [{ kind: "state", sourcePath: "/home/operator/.openclaw", archivePath: ASSET_ROOT }],
   });
-}
-
-function encodeEntry(params: {
-  path: string;
-  type?: "File" | "Directory" | "Link";
-  linkpath?: string;
-  contents?: string;
-}): Buffer {
-  const contents = Buffer.from(params.contents ?? "");
-  const header = new tar.Header({
-    path: params.path,
-    ...(params.linkpath ? { linkpath: params.linkpath } : {}),
-    type: params.type ?? "File",
-    size: contents.length,
-    mode: 0o600,
-    uid: 0,
-    gid: 0,
-    mtime: new Date(0),
-  });
-  const block = Buffer.alloc(512);
-  header.encode(block);
-  return Buffer.concat([block, contents, Buffer.alloc((512 - (contents.length % 512)) % 512)]);
 }
 
 async function writeArchive(entries: Parameters<typeof encodeEntry>[0][]): Promise<string> {

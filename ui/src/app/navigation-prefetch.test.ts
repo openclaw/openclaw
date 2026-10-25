@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationRouter } from "../app-routes.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { connectNavigationPrefetch } from "./navigation-prefetch.ts";
 
 const cleanups: Array<() => void> = [];
@@ -69,17 +70,11 @@ function setup() {
       },
     },
     gateway: {
-      snapshot: {
+      snapshot: createApplicationGatewaySnapshot({
         phase: "connected",
-        client: null,
-        hello: null,
         assistantAgentId: "main",
         sessionKey: "main",
-        lastError: null,
-        lastErrorCode: null,
-        offlineStable: false,
-        canvasPluginSurfaceUrl: null,
-      },
+      }),
       subscribe: () => () => {},
     },
     outlet: () => outlet,
