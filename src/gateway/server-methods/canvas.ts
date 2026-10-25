@@ -22,6 +22,7 @@ import { isGatewaySubordinateWorkAdmissionClosed } from "../../process/gateway-w
 import { matchesTranscriptEvent } from "../../sessions/transcript-visible-record.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { buildBoardWidgetSandboxPath } from "../board-sandbox.js";
+import { resolveControlUiBootstrapPresentation } from "../control-ui-bootstrap-presentation.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { readSessionMessagesPageWithStatsAsync } from "../session-transcript-readers.js";
@@ -172,6 +173,7 @@ async function respondWithCanvasHtml(
     invocation.signal?.throwIfAborted();
     invocation.sessionMutationCommitGuard?.();
     assertReadCurrent?.();
+    const config = context.getRuntimeConfig();
     if (
       !resolveContext ||
       resolveContext() !== context ||
@@ -180,10 +182,11 @@ async function respondWithCanvasHtml(
       client?.invalidated === true ||
       (client?.connId && context.isConnectionActive?.(client.connId) === false) ||
       isGatewaySubordinateWorkAdmissionClosed() ||
-      !isCoreCanvasHostEnabled(context.getRuntimeConfig())
+      !isCoreCanvasHostEnabled(config)
     ) {
       throw new Error(unavailableMessage);
     }
+    return config;
   };
   try {
     assertActive();
@@ -191,19 +194,19 @@ async function respondWithCanvasHtml(
       readHtml(),
       context.getMcpAppSandboxPort?.() ?? context.ensureSandboxHostPort?.(),
     ]);
-    // The bytes and listener must still belong to the admitted caller and Gateway.
-    assertActive();
+    // Revalidate caller and host, then use the post-await policy snapshot for this reply.
+    const config = assertActive();
     if (sandboxPort === undefined) {
       throw new Error(unavailableMessage);
     }
     const ingress = client?.remoteControlUiIngress;
-    const configuredOrigin =
-      ingress?.sandboxOrigin ?? context.getRuntimeConfig().mcp?.apps?.sandboxOrigin;
+    const configuredOrigin = ingress?.sandboxOrigin ?? config.mcp?.apps?.sandboxOrigin;
     const result: CanvasDocumentViewResult = {
       html,
       sandboxUrl: ingress ? new URL(sandboxUrl, ingress.sandboxOrigin).href : sandboxUrl,
       sandboxPort,
       ...(configuredOrigin ? { sandboxOrigin: new URL(configuredOrigin).origin } : {}),
+      embedSandbox: resolveControlUiBootstrapPresentation(config).embedSandbox,
     };
     respond(true, result);
   } catch (error) {

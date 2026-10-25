@@ -547,6 +547,26 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
   through the existing cron run-now path or an active plugin's validated action
   verb — `operator.write`
 
+Both Canvas document replies include optional `embedSandbox` metadata with the
+effective `gateway.controlUi.embedSandbox` ceiling (`strict`, `scripts`, or
+`trusted`, default `scripts`), resolved from the active runtime config when the
+reply is produced. This is not a capability grant: clients apply the stricter
+of this ceiling, their own content policy, and the preview's policy without
+relaxing sandbox origin or CSP isolation. Missing or unrecognized values require
+a strict fallback, not an inferred default or a broader credential.
+The web Control UI continues to read this ceiling from its authenticated
+bootstrap; independent clients can use the Canvas reply without a separate HTTP
+credential path.
+
+The field's presence identifies support; the RPC advertisement or protocol
+version alone does not. Older Gateways can still return document bytes without
+it. Each fresh view or preview reads the current active policy. Clients should
+invalidate retained policy on reconnect and available `config.changed` notices,
+but that notice describes a persisted write, not confirmation of runtime
+application. It is limited to `operator.read` (including admin), can be dropped
+for slow clients, and is not a policy-revocation signal for session-only readers.
+Already-rendered frames are not automatically revoked by this metadata.
+
 Events (in `EVENT_SCOPE_GUARDS`, read scope):
 
 - `board.changed { sessionKey, revision, widget? }` — persisted state changed.
