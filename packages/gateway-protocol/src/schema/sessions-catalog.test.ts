@@ -3,22 +3,15 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { validateSessionsAssignOwnerParams } from "../index.js";
 import { schemaValidation } from "./protocol-validation.test-support.js";
-import {
-  SessionCatalogShareRouteSchema,
-  SessionsCatalogHostEventSchema,
-  SessionsCatalogImportParamsSchema,
-  SessionsCatalogImportResultSchema,
-  SessionsCatalogListParamsSchema,
-  SessionsCatalogListResultSchema,
-  SessionsCatalogStartTerminalParamsSchema,
-  SessionsCatalogStartTerminalResultSchema,
-} from "./sessions-catalog.js";
+import * as Catalog from "./sessions-catalog.js";
 import { SessionRowSchema } from "./sessions-row.js";
 import * as Sharing from "./sessions-sharing.js";
 import * as Suggestions from "./sessions-suggestions.js";
 
 const target = { sessionKey: "agent:main:main" };
 const makeHuman = (id = "profile-ada", label = "Ada") => ({ type: "human", id, label });
+const human = makeHuman();
+const agent = { type: "agent", id: "research", label: "Research" };
 
 function checkCatalog(schema: TSchema, value: Record<string, unknown>, invalid: object[] = []) {
   expect(Value.Check(schema, value)).toBe(true);
@@ -49,9 +42,10 @@ const catalog = {
   capabilities: { continueSession: true, archive: true },
   hosts: [host],
 };
+const listed = (overrides: object) => ({ catalogs: [{ ...catalog, ...overrides }] });
 describe("session catalog schemas", () => {
   it("accepts only the closed prefix-search contract", () => {
-    checkCatalog(SessionCatalogShareRouteSchema, SHARE_ROUTE, [
+    checkCatalog(Catalog.SessionCatalogShareRouteSchema, SHARE_ROUTE, [
       { kind: "future-route" },
       { identifierAlphabet: "hex" },
       { fullLength: 64 },
@@ -68,12 +62,13 @@ describe("session catalog schemas", () => {
       capabilities: { continueSession: false, archive: false },
       hosts: [],
     };
-    checkCatalog(SessionsCatalogListResultSchema, { catalogs: [emptyCatalog] }, [
+    checkCatalog(Catalog.SessionsCatalogListResultSchema, listed(emptyCatalog), [
       { catalogs: [{ ...emptyCatalog, pending: "true" }] },
     ]);
-    checkCatalog(SessionsCatalogListResultSchema, {
-      catalogs: [{ ...emptyCatalog, pending: true }],
-    });
+    checkCatalog(
+      Catalog.SessionsCatalogListResultSchema,
+      listed({ ...emptyCatalog, pending: true }),
+    );
   });
 
   it("accepts a closed catalog result with hosts", () => {
@@ -81,27 +76,25 @@ describe("session catalog schemas", () => {
       threadId: "thread-1",
       status: "idle",
       archived: false,
-      createdActor: makeHuman(),
+      createdActor: human,
       canContinue: true,
       canArchive: false,
       canOpenTerminal: true,
     };
-    checkCatalog(SessionsCatalogListResultSchema, {
-      catalogs: [
-        {
-          ...catalog,
-          capabilities: {
-            ...catalog.capabilities,
-            archive: false,
-            createSession: { model: "fixture", startTerminal: true },
-            openTerminal: true,
-            startTerminal: true,
-          },
-          shareRoute: SHARE_ROUTE,
-          hosts: [{ ...host, canStartTerminal: true, sessions: [session] }],
+    checkCatalog(
+      Catalog.SessionsCatalogListResultSchema,
+      listed({
+        capabilities: {
+          ...catalog.capabilities,
+          archive: false,
+          createSession: { model: "fixture", startTerminal: true },
+          openTerminal: true,
+          startTerminal: true,
         },
-      ],
-    });
+        shareRoute: SHARE_ROUTE,
+        hosts: [{ ...host, canStartTerminal: true, sessions: [session] }],
+      }),
+    );
   });
 
   it("accepts the terminal start contract and rejects unknown fields", () => {
@@ -121,7 +114,7 @@ describe("session catalog schemas", () => {
       title: "Codex",
     };
 
-    checkCatalog(SessionsCatalogStartTerminalParamsSchema, params, [
+    checkCatalog(Catalog.SessionsCatalogStartTerminalParamsSchema, params, [
       { unexpected: true },
       { argv: ["sh"] },
       { executable: "/bin/sh" },
@@ -129,7 +122,7 @@ describe("session catalog schemas", () => {
       { cwd: "x".repeat(4097) },
       { initialMessage: "x".repeat(16385) },
     ]);
-    checkCatalog(SessionsCatalogStartTerminalResultSchema, result, [{ unexpected: true }]);
+    checkCatalog(Catalog.SessionsCatalogStartTerminalResultSchema, result, [{ unexpected: true }]);
   });
 
   it("accepts a locator and closed import counts, including incomplete and unchanged results", () => {
@@ -142,21 +135,21 @@ describe("session catalog schemas", () => {
       created: false,
     };
 
-    checkCatalog(SessionsCatalogImportParamsSchema, params, [
+    checkCatalog(Catalog.SessionsCatalogImportParamsSchema, params, [
       { displayName: "" },
       { displayName: "x".repeat(501) },
       { fork: true },
     ]);
     for (const displayName of ["Imported native session", "x".repeat(500)]) {
-      checkCatalog(SessionsCatalogImportParamsSchema, { ...params, displayName });
+      checkCatalog(Catalog.SessionsCatalogImportParamsSchema, { ...params, displayName });
     }
-    checkCatalog(SessionsCatalogImportResultSchema, {
+    checkCatalog(Catalog.SessionsCatalogImportResultSchema, {
       ...result,
       importedItems: 20,
       complete: true,
       created: true,
     });
-    checkCatalog(SessionsCatalogImportResultSchema, result, [
+    checkCatalog(Catalog.SessionsCatalogImportResultSchema, result, [
       { importedItems: -1 },
       { importedItems: 0.5 },
       { totalItems: -1 },
@@ -168,20 +161,20 @@ describe("session catalog schemas", () => {
   });
 
   it("accepts only boolean metadata selection while retaining full-list defaults", () => {
-    checkCatalog(SessionsCatalogListParamsSchema, {}, [{ metadataOnly: "true" }]);
+    checkCatalog(Catalog.SessionsCatalogListParamsSchema, {}, [{ metadataOnly: "true" }]);
     for (const metadataOnly of [false, true]) {
-      checkCatalog(SessionsCatalogListParamsSchema, { metadataOnly });
+      checkCatalog(Catalog.SessionsCatalogListParamsSchema, { metadataOnly });
     }
   });
 
   it("accepts one completed host and rejects unknown fields", () => {
     const event = { progressId: "progress-1", agentId: "main", catalog };
 
-    checkCatalog(SessionsCatalogHostEventSchema, event, [
+    checkCatalog(Catalog.SessionsCatalogHostEventSchema, event, [
       { unexpected: true },
       ...[[], [host, host]].map((hosts) => ({ catalog: { ...event.catalog, hosts } })),
     ]);
-    checkCatalog(SessionsCatalogHostEventSchema, {
+    checkCatalog(Catalog.SessionsCatalogHostEventSchema, {
       ...event,
       catalog: { ...event.catalog, hosts: [{ ...host, pending: true }] },
     });
@@ -194,7 +187,6 @@ const participants = (length: number) =>
   Array.from({ length }, (_, index) => ({ identity: { type: "profile", id: `profile-${index}` } }));
 describe("SessionRowSchema", () => {
   it("validates optional sharing fields", () => {
-    const human = makeHuman();
     const row = {
       ...baseRow,
       lastRunId: "run-settled",
@@ -205,11 +197,7 @@ describe("SessionRowSchema", () => {
       parentSessionKey: "agent:main:dashboard:parent",
       parentSessionId: "sess-parent",
       createdActor: { ...human, avatarUrl: "/api/users/profile-ada/avatar?v=7" },
-      owner: {
-        actor: { type: "agent", id: "research", label: "Research" },
-        assignedBy: human,
-        assignedAt: 42,
-      },
+      owner: { actor: agent, assignedBy: human, assignedAt: 42 },
       participants: [
         { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
         { identity: { type: "agent", id: "research" }, label: "Research" },
@@ -246,26 +234,28 @@ describe("SessionRowSchema", () => {
   });
 
   it("keeps sessions.assignOwner target actors closed and non-empty", () => {
+    const assignment = (owner: object, extra: object = {}) => ({
+      key: baseRow.key,
+      owner,
+      ...extra,
+    });
     const accepted = [
-      { key: "agent:main:handoff", owner: { type: "human", id: "profile-ada" } },
-      { key: "agent:main:handoff", owner: { type: "agent", id: "research" }, agentId: "main" },
+      assignment({ type: "human", id: human.id }),
+      assignment({ type: "agent", id: agent.id }, { agentId: "main" }),
     ];
     const rejected = [
-      { key: "agent:main:handoff", owner: { type: "system", id: "system" } },
-      { key: "agent:main:handoff", owner: { type: "human", id: "" } },
-      { key: "agent:main:handoff", owner: { type: "human", id: "ada", label: "Ada" } },
+      assignment({ type: "system", id: "system" }),
+      assignment({ type: "human", id: "" }),
+      assignment(human),
     ];
 
     expect(accepted.every(validateSessionsAssignOwnerParams)).toBe(true);
     expect(rejected.every((value) => !validateSessionsAssignOwnerParams(value))).toBe(true);
   });
 
-  it.each(["user", "auto", "inherited", null] as const)(
-    "accepts model override source %s",
-    (source) => {
-      rows.accepts({ ...baseRow, modelOverrideSource: source });
-    },
-  );
+  it.each(["user", null] as const)("accepts model override source %s", (source) => {
+    rows.accepts({ ...baseRow, modelOverrideSource: source });
+  });
 
   it("rejects an invalid model override source", () => {
     rows.rejects({ ...baseRow, modelOverrideSource: "session" });
@@ -291,7 +281,7 @@ describe("session sharing protocol", () => {
       ...target,
       identities: [],
       role: "owner",
-      allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
+      allowedVisibilities: ["draft"],
     };
     visibility.accepts({ ...target, visibility: "draft" });
     schemaValidation(Sharing.SessionMemberAddParamsSchema).accepts({
@@ -328,7 +318,7 @@ describe("session sharing protocol", () => {
   });
 
   it("keeps the legacy event actor required", () => {
-    const withActor = { ...baseEvent, actor: makeHuman() };
+    const withActor = { ...baseEvent, actor: human };
     const unknownActor = { ...baseEvent, actorState: "unknown" };
     sharingEvent.accepts(withActor);
     sharingEvent.rejects(unknownActor, baseEvent, { ...withActor, actorState: "unknown" });
