@@ -319,12 +319,14 @@ the total size. The detector stays off for larger models and models whose size i
 unknown. There is no separate setting.
 
 The first check starts around 16,000 characters, with increasing intervals and a
-bounded recent tail. A single repeated line, repeated windows, or a repeated period
-must dominate the tail; a line-novelty check also protects varied output. Repeated
-boilerplate lines in distinct multi-line records are not added together to trigger
-the line check. This heuristic can miss loops and can stop legitimate output with
-sufficiently dominant repetition. Output limits still bound requests that the
-detector misses.
+bounded recent tail. Detection covers dominant repeated lines, windows, and periods,
+plus irregular prose mixtures where repeated lines dominate both content and distinct
+complete lines. Checkpoint fragments do not count as additional distinct lines.
+Boilerplate in distinct multi-line records and consistently shaped structured rows
+is not aggregated for the mixture check. Consistently delimited output is excluded
+even when it resembles prose, so comma-delimited loops can be missed. This heuristic
+can also stop legitimate output with sufficiently dominant repetition. Output limits
+still bound requests that the detector misses.
 
 When it triggers, OpenClaw stops the model request and reports a repetition
 failure. The affected unfinished block is replaced with

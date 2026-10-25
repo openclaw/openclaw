@@ -6,16 +6,151 @@ const TAIL_CHARS = 64_000;
 const WINDOW_CHARS = 60;
 const MIN_REPEATS = 5;
 
-function isRepetitionDominated(text: string): boolean {
+const RECORD_SHAPE_FRACTION = 0.8;
+
+function parseDelimitedRecords(
+  text: string,
+  delimiter: string,
+  startsMidLine: boolean,
+  initiallyInQuotes = false,
+): { counts: Map<number, number>; total: number } {
+  const counts = new Map<number, number>();
+  let total = 0;
+  let fieldCount = 1;
+  let fieldText = "";
+  let hasContent = false;
+  let valid = true;
+  let inQuotes = initiallyInQuotes;
+  let closedQuote = false;
+  let recordIndex = 0;
+  const finish = (countRecord: boolean) => {
+    if (hasContent && countRecord && (!startsMidLine || recordIndex > 0)) {
+      total++;
+      if (valid && fieldCount >= 2) {
+        counts.set(fieldCount, (counts.get(fieldCount) ?? 0) + 1);
+      }
+    }
+    fieldCount = 1;
+    fieldText = "";
+    hasContent = false;
+    valid = true;
+    closedQuote = false;
+    recordIndex++;
+  };
+  for (let index = 0; index < text.length; index++) {
+    const char = text.charAt(index);
+    if (inQuotes) {
+      hasContent = true;
+      if (char === '"') {
+        if (text[index + 1] === '"') {
+          index++;
+        } else {
+          inQuotes = false;
+          closedQuote = true;
+        }
+      }
+      continue;
+    }
+    if (char === "\r" || char === "\n") {
+      finish(true);
+      continue;
+    }
+    hasContent = true;
+    if (closedQuote) {
+      if (char === delimiter) {
+        fieldCount++;
+        fieldText = "";
+        closedQuote = false;
+        continue;
+      }
+      if (/\s/.test(char)) {
+        continue;
+      }
+      valid = false;
+    }
+    if (char === delimiter) {
+      fieldCount++;
+      fieldText = "";
+    } else if (char === '"' && fieldText.trim() === "") {
+      inQuotes = true;
+      fieldText = "";
+    } else {
+      fieldText += char;
+    }
+  }
+  finish(false);
+  return { counts, total };
+}
+
+function hasConsistentRecordShape(text: string, startsMidLine: boolean): boolean {
+  // Delimited text can be categorical data or prose; do not truncate either possibility.
+  for (const delimiter of [",", "\t", "|"]) {
+    for (const initiallyInQuotes of startsMidLine ? [false, true] : [false]) {
+      const { counts, total } = parseDelimitedRecords(
+        text,
+        delimiter,
+        startsMidLine,
+        initiallyInQuotes,
+      );
+      for (const count of counts.values()) {
+        if (count >= MIN_REPEATS && count >= total * RECORD_SHAPE_FRACTION) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+function isNumericListLine(line: string): boolean {
+  const content = line.endsWith(",") ? line.slice(0, -1) : line;
+  return content
+    .split(",")
+    .every((field) => /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:e[+-]?\d+)?$/i.test(field.trim()));
+}
+
+function isStructuredLine(line: string): boolean {
+  return (
+    line === "---" ||
+    line.startsWith("<") ||
+    line.startsWith('"') ||
+    line.startsWith("'") ||
+    line.startsWith("{") ||
+    line.startsWith("}") ||
+    line.startsWith("[") ||
+    line.startsWith("]") ||
+    line.startsWith("- ") ||
+    line.endsWith("{") ||
+    line.endsWith("}") ||
+    line.endsWith(";") ||
+    line.includes("=>") ||
+    line.includes("=") ||
+    isNumericListLine(line) ||
+    /^(?:true|false|null),?$/.test(line) ||
+    /^(?:["'][^"']+["']|[A-Za-z_][\w-]*)\s*:/.test(line)
+  );
+}
+
+function isRepetitionDominated(text: string, startsMidLine: boolean): boolean {
+  const lines = text.split(/\r\n|[\r\n]/);
   const counts = new Map<string, number>();
+  const completeCounts = new Map<string, number>();
   let lineCount = 0;
-  let lineTotalChars = 0;
-  for (const line of text.split(/\r\n|[\r\n]/)) {
+  let completeLineCount = 0;
+  let structuredLineCount = 0;
+  for (const [index, line] of lines.entries()) {
     const normalized = line.trim();
-    if (normalized) {
-      counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
-      lineCount++;
-      lineTotalChars += normalized.length;
+    if (!normalized) {
+      continue;
+    }
+    counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
+    lineCount++;
+    if (index >= (startsMidLine ? 1 : 0) && index < lines.length - 1) {
+      completeCounts.set(normalized, (completeCounts.get(normalized) ?? 0) + 1);
+      completeLineCount++;
+      if (isStructuredLine(normalized)) {
+        structuredLineCount++;
+      }
     }
   }
   // Similar prefixes in distinct records are not a loop, even when their windows repeat.
@@ -24,29 +159,31 @@ function isRepetitionDominated(text: string): boolean {
   }
   const dominantChars = text.length / 2;
   let repeatedLineChars = 0;
-  let mixtureRepeatedChars = 0;
-  let repeatedDistinctLines = 0;
   for (const [line, count] of counts) {
     if (count >= MIN_REPEATS) {
       repeatedLineChars = Math.max(repeatedLineChars, line.length * count);
-      mixtureRepeatedChars += line.length * count;
-      repeatedDistinctLines++;
     }
   }
   if (repeatedLineChars >= dominantChars) {
     return true;
   }
-  // An irregular loop cycles several short lines in varying order, so no single
-  // line, window, or exact period covers half the tail; collectively the
-  // repeated lines cover nearly all non-newline content, and essentially every
-  // distinct line is part of the cycle (#182834). Structured records share
-  // template lines, but their distinct one-off content lines keep the distinct
-  // share well below this bound, so markup-heavy output and categorical rows
-  // with headers stay delivered. Line chars, not raw length, form the coverage
-  // denominator so CRLF-heavy short-line loops are not under-counted.
+  let mixtureRepeatedChars = 0;
+  let repeatedDistinctLines = 0;
+  for (const [line, count] of completeCounts) {
+    if (count >= MIN_REPEATS) {
+      mixtureRepeatedChars += line.length * count;
+      repeatedDistinctLines++;
+    }
+  }
+  // Aggregate only plain prose: structured records and valid categorical CSV keep
+  // their existing protection. Boundary fragments affect only the novelty share;
+  // every received character remains in the coverage denominator (#182834).
   if (
-    mixtureRepeatedChars >= lineTotalChars * MIXTURE_DOMINANT_FRACTION &&
-    repeatedDistinctLines >= counts.size * MIXTURE_DISTINCT_FRACTION
+    completeCounts.size > 0 &&
+    structuredLineCount * 2 < completeLineCount &&
+    !hasConsistentRecordShape(text, startsMidLine) &&
+    mixtureRepeatedChars >= text.length * MIXTURE_DOMINANT_FRACTION &&
+    repeatedDistinctLines >= completeCounts.size * MIXTURE_DISTINCT_FRACTION
   ) {
     return true;
   }
@@ -120,7 +257,7 @@ export class RepetitionWatch {
         const tail = this.parts.join("").slice(-TAIL_CHARS);
         this.parts = [tail];
         this.nextCheck += Math.min(this.chars, TAIL_CHARS);
-        if (isRepetitionDominated(tail)) {
+        if (isRepetitionDominated(tail, this.chars > tail.length)) {
           this.stopped = true;
           return true;
         }
