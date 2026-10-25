@@ -11,6 +11,7 @@ import type {
   WorkerInferenceTerminalFrame,
   WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import * as transcriptBudget from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
@@ -223,6 +224,44 @@ it("splits semantic batches at the gateway frame byte ceiling", async () => {
     { seq: 1, baseLeafId: null, messages: [messages[0]] },
     { seq: 2, baseLeafId: "leaf-1", messages: [messages[1]] },
   ]);
+});
+
+it("builds each bounded transcript batch once and hands it to RPC without another copy", async () => {
+  const { client, ...harness } = transcriptHarness();
+  const withinBudget = transcriptBudget.isWorkerTranscriptFrameWithinBudget;
+  const batches = new Set<WorkerTranscriptMessage[]>();
+  const budget = vi
+    .spyOn(transcriptBudget, "isWorkerTranscriptFrameWithinBudget")
+    .mockImplementation((frame) => {
+      batches.add(frame.params.messages);
+      return withinBudget(frame);
+    });
+  onTestFinished(() => budget.mockRestore());
+  const messages = Array.from({ length: 129 }, (_, index) => userMessage(String(index)));
+  let reads = 0;
+  const input = new Proxy(messages, {
+    get(target, key, receiver) {
+      if (typeof key === "string" && /^\d+$/.test(key)) {
+        reads += 1;
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  });
+  harness.commit.mockImplementation(async (_kind, request) =>
+    successResponse({ entryIds: [`entry-${request.seq}`], newLeafId: `leaf-${request.seq}` }),
+  );
+
+  await client.commit(input);
+
+  const requests = harness.commit.mock.calls.map(([, request]) => request);
+  expect(requests.map((request) => request.messages.length)).toEqual([64, 64, 1]);
+  expect(requests.flatMap((request) => request.messages)).toEqual(messages);
+  expect(reads).toBe(messages.length);
+  expect(batches.size).toBe(3);
+  for (const request of requests) {
+    expect(batches.has(request.messages)).toBe(true);
+    expect(request.messages).not.toBe(messages);
+  }
 });
 
 it("does not send retired previews after connection readiness returns", async () => {
