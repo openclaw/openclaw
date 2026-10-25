@@ -1,10 +1,11 @@
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { readSubagentRunAnnounceResultUsing } from "../../agents/subagents/announce/subagent-announce-result.js";
 import { readSessionMessageByIdAsync } from "../../gateway/session-transcript-readers.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
-import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
@@ -14,6 +15,7 @@ import {
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.js";
 import { findSessionTranscriptArchiveEventReadOnly } from "./session-accessor.sqlite-history.js";
+import { historyActivity } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
@@ -39,7 +41,7 @@ function assistant(id: string, runId: string, message: Record<string, unknown> =
 }
 
 function transcriptScope(state: OpenClawTestState, sessionId: string, incognito = false) {
-  const scope = {
+  return {
     agentId: "main",
     env: state.env,
     sessionId,
@@ -50,7 +52,6 @@ function transcriptScope(state: OpenClawTestState, sessionId: string, incognito 
       ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
       : path.join(state.stateDir, "transcript.sqlite"),
   };
-  return scope;
 }
 
 const canvasDetails = (id: string) => ({
@@ -71,11 +72,7 @@ it("keeps incognito matching and raw reads in their memory owner without creatin
       await expect(
         findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
       ).resolves.toBeUndefined();
-      await expect(
-        listDirectoryTreeStrict(state.stateDir).then((inventory) =>
-          inventory.map((walkEntry) => walkEntry.relativePath),
-        ),
-      ).resolves.toEqual([]);
+      expect(await listDirectoryTreeStrict(state.stateDir)).toEqual([]);
     };
     await expectMatch(scope, { kind: "latest" });
     const answer = assistant("private-final", "private-run", {
@@ -126,30 +123,23 @@ it("recovers the exact complete child answer without preventing host event progr
       })),
     });
     const read = async (runId: string) => {
-      const child = {
+      const child = createSubagentRunRecord({
         runId,
-        childSessionKey: sessionKey,
-        requesterSessionKey: "agent:main:requester",
-        requesterDisplayKey: "main",
-        task: "Read the matching transcript result",
-        cleanup: "keep" as const,
         createdAt: 1,
+        childSessionKey: sessionKey,
         execution: {
-          status: "terminal" as const,
-          outcome: { status: "ok" as const },
+          status: "terminal",
+          outcome: { status: "ok" },
           transcriptTarget: target,
         },
         completion: {
           required: true,
-          terminalReply: { disposition: "visible" as const, text: "bounded evidence" },
+          terminalReply: { disposition: "visible", text: "bounded evidence" },
         },
-      };
+      });
       let hostEventObserved = false;
-      const hostEvent = new Promise<void>((resolve) => {
-        setImmediate(() => {
-          hostEventObserved = true;
-          resolve();
-        });
+      const hostEvent = yieldToEventLoop().then(() => {
+        hostEventObserved = true;
       });
       try {
         const prepared = await readSubagentRunAnnounceResultUsing(child, {
@@ -174,9 +164,7 @@ it("recovers the exact complete child answer without preventing host event progr
     expect(latest.prepared.text).toBe("newest unrelated answer");
     const hostSql = observeHostDataSql();
     const old = await read("completed-run").finally(() => hostSql.restore());
-    for (const call of hostSql.calls) {
-      expect(call).not.toHaveBeenCalled();
-    }
+    expect(hostSql.queries).toEqual([]);
     expect(old).toMatchObject({ prepared: { text: fullAnswer }, hostProgressBeforeResult: true });
     expect(old.prepared.isCurrent()).toBe(true);
   }));
@@ -225,18 +213,14 @@ it("keeps match filters and active anchors authoritative across worker payload e
         ...encodedAssistant(
           "nested-widget",
           "widget-run",
-          createNestedToolActivity({
+          historyActivity({
             runId: "widget-run",
             scopeId: "widget-scope",
             afterEntryId: "widget",
             startOrder: 0,
             toolCallId: "nested-call",
             toolName: "show_widget",
-            input: {},
             result: { content: [], details: canvasDetails("cv_nested") },
-            isError: false,
-            startedAt: 1,
-            timestamp: 2,
           }),
         ),
         parentId: "widget",
