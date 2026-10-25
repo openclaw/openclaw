@@ -721,7 +721,11 @@ http.createServer((request, response) => {`,
           }),
         }),
       );
-      expect(gateway.cliCommand).toBeUndefined();
+      expect(gateway.cliCommand).toEqual({
+        executablePath: params.command.executablePath,
+        argsPrefix: [...(params.command.argsPrefix ?? [])],
+        cwd: gateway.tempRoot,
+      });
       pids();
       const denied = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
         if (target === gateway.tempRoot) {
