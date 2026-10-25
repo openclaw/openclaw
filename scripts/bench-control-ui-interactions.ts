@@ -17,10 +17,10 @@ import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
-  startBuiltControlUiE2eServer,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import { createControlUiSandboxFixtureServer } from "../ui/src/test-helpers/control-ui-sandbox-fixture-server.ts";
 import { createTeamScaleSidebarListOwner } from "../ui/src/test-helpers/control-ui-sidebar-list-fixture.ts";
+import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
 import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-cold-load-trace.ts";
 import {
   createInteractionFixture,
@@ -277,7 +277,7 @@ const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
   indexSha256: string;
-  server: Awaited<ReturnType<typeof startBuiltControlUiE2eServer>>;
+  server: Awaited<ReturnType<typeof startControlUiBenchGatewayServer>>;
 }> = [];
 let processWakeupReader: string | undefined;
 let processWakeupSetupError: string | undefined;
@@ -416,7 +416,7 @@ try {
       directory: resolved,
       build,
       indexSha256: createHash("sha256").update(html).digest("hex"),
-      server: await startBuiltControlUiE2eServer(resolved),
+      server: await startControlUiBenchGatewayServer(resolved),
     });
   }
   await writeFile(
