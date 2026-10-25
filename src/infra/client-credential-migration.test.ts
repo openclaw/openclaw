@@ -221,26 +221,6 @@ describe("local client credential extraction", () => {
     expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
   });
 
-  it("preserves an existing local identity when canonical shared state first opens", () => {
-    const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("client-fresh-bootstrap-") };
-    const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(17), 19);
-    runClientCredentialOperation(env, { kind: "identity.create", identity });
-    {
-      using local = openMigrationCredentials(env);
-      expect(readClientCredentialReceipt(local.database)).toMatchObject({
-        phase: "complete",
-        receipt: { source: null, sharedFile: null },
-      });
-    }
-    try {
-      const shared = openOpenClawStateDatabase({ env });
-      expectRetired(shared.db);
-      expect(readIdentity(env)).toEqual({ kind: "identity", identity });
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
-
   it("preserves local identity when the first PostgreSQL connection fails", async () => {
     const root = dirs.make("client-postgres-unavailable-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
@@ -291,8 +271,16 @@ describe("local client credential extraction", () => {
       const sharedPath = path.join(root, "state", "openclaw.sqlite");
       const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(17), 19);
       runClientCredentialOperation(env, { kind: "identity.create", identity });
+      {
+        using local = openMigrationCredentials(env);
+        expect(readClientCredentialReceipt(local.database)).toMatchObject({
+          phase: "complete",
+          receipt: { source: null, sharedFile: null },
+        });
+      }
       try {
-        openOpenClawStateDatabase({ env });
+        expectRetired(openOpenClawStateDatabase({ env }).db);
+        expect(readIdentity(env)).toEqual({ kind: "identity", identity });
         await closeOpenClawStateDatabaseAsync();
         {
           using local = openMigrationCredentials(env);
@@ -457,20 +445,14 @@ describe("local client credential extraction", () => {
 
   it("retains shared credentials and socket material when token scope validation fails", async () => {
     await using f = await fixture();
+    const policy = row(f.source, "SELECT raw_json FROM exec_approvals_config");
     f.source.prepare("UPDATE device_auth_tokens SET scopes_json='{}'").run();
     expect(() => f.migrate()).toThrow("invalid token record");
     expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
     expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
       token: "token-original",
     });
-    expect(f.source.prepare("SELECT raw_json FROM exec_approvals_config").get()).toEqual({
-      raw_json: JSON.stringify({
-        version: 1,
-        socket: { path: "/socket", token: "socket-token", future: "keep" },
-        defaults: { security: "deny" },
-        agents: {},
-      }),
-    });
+    expect(row(f.source, "SELECT raw_json FROM exec_approvals_config")).toEqual(policy);
   });
 
   it.each([false, true])(
