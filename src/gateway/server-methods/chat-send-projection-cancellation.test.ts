@@ -9,6 +9,11 @@ import {
   replaceSessionEntry,
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
+import {
+  holdReconcileAck,
+  markRebuild,
+  rebuildState,
+} from "../../config/sessions/session-transcript-reconcile.fixtures.test-support.js";
 import * as reconcile from "../../config/sessions/session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
@@ -75,12 +80,9 @@ it.each(["reply-observation", "commentary-media"] as const)(
         agentId: scope.agentId,
         path: resolveSessionTranscriptDatabasePath(scope),
       };
-      const markRebuilding = () =>
-        openOpenClawAgentDatabase(databaseOptions)
-          .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
-          .run();
+      const database = () => openOpenClawAgentDatabase(databaseOptions).db;
       if (scenario === "commentary-media") {
-        markRebuilding();
+        markRebuild(database());
         await reconcile.reconcileSessionTranscriptIndexes(databaseOptions);
       }
       const enteredWait = createDeferred();
@@ -92,31 +94,7 @@ it.each(["reply-observation", "commentary-media"] as const)(
           enteredWait.resolve();
           return result;
         });
-      const projectionPaused = createDeferred();
-      let holdProjection = true;
-      let resumeProjection = () => {};
-      observer.onTask = ({ input, port, observeMessage }) => {
-        if (input.mode !== "disk" || input.path !== databaseOptions.path) {
-          return;
-        }
-        let claiming = false;
-        observeMessage((message) => {
-          claiming = message.type === "plan-start" && message.plan.sessionId === scope.sessionId;
-        });
-        const post = port.postMessage.bind(port);
-        port.postMessage = (message, transferList) => {
-          const postOptions = Array.isArray(transferList)
-            ? { transfer: transferList }
-            : transferList;
-          if (claiming && holdProjection) {
-            claiming = false;
-            resumeProjection = () => post(message, postOptions);
-            projectionPaused.resolve();
-            return;
-          }
-          post(message, postOptions);
-        };
-      };
+      const projection = holdReconcileAck(observer, "plan-start", scope.sessionId);
       const mediaUrl = "https://example.test/retained-attachment.png";
       const message = attachSessionTranscriptRunId(
         {
@@ -148,7 +126,7 @@ it.each(["reply-observation", "commentary-media"] as const)(
               expect(
                 appendTranscriptMessageSync(scope, { eventId: "answer", message }),
               ).toMatchObject({ ok: true });
-              markRebuilding();
+              markRebuild(database());
               reconcile.startSessionTranscriptIndexReconcile(databaseOptions);
               if (scenario === "reply-observation") {
                 return await observeReplyDelivery(dispatch.resolveReplyDelivery, 0, warn);
@@ -166,7 +144,7 @@ it.each(["reply-observation", "commentary-media"] as const)(
         });
       try {
         await enteredWait.promise;
-        await projectionPaused.promise;
+        await projection.paused;
         expect(settled).toBe(false);
         controller.abort(new Error("Operator stopped this run"));
         await vi.waitFor(() => expect(settled).toBe(true), { timeout: 500 });
@@ -178,19 +156,12 @@ it.each(["reply-observation", "commentary-media"] as const)(
         controller.abort(new Error("Projection cancellation fixture cleanup"));
         waiting.mockRestore();
         observer.onTask = undefined;
-        holdProjection = false;
-        resumeProjection();
+        projection.release();
         await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);
         await operation;
         await lifecycle.dispose();
       }
-      expect(
-        openOpenClawAgentDatabase(databaseOptions)
-          .db.prepare(
-            "SELECT needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
-          )
-          .get(scope.sessionId),
-      ).toMatchObject({ needs_rebuild: 0 });
+      expect(rebuildState(database(), scope.sessionId)).toMatchObject({ needs_rebuild: 0 });
       expect(loadTranscriptEventsSync(scope)).toContainEqual(
         expect.objectContaining({ id: "answer", message }),
       );

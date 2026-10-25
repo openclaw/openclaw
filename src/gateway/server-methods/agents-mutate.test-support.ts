@@ -6,10 +6,13 @@ import type {
   AgentDeletionJournalCleanupPath,
   AgentDeletionJournalEntry,
 } from "../../state/agent-deletion-journal.js";
-import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
+import {
+  expectNoCalls as expectUncalled,
+  expectObjectFields as expectRecordFields,
+} from "../../test-utils/mock-call-assertions.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions } from "./types.js";
 
-export { expectRecordFields };
+export { expectRecordFields, expectUncalled };
 
 export async function callAgentHandler(
   handler: GatewayRequestHandler,
@@ -120,12 +123,6 @@ export function deletionJournal(
     cleanupPaths: [],
     ...overrides,
   };
-}
-
-export function expectUncalled(...callbacks: unknown[]) {
-  for (const callback of callbacks) {
-    expect(callback).not.toHaveBeenCalled();
-  }
 }
 
 export function makeFileStat(
