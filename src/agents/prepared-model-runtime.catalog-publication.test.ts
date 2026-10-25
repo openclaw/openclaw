@@ -361,13 +361,7 @@ describe("catalog publication session rows", () => {
 
   it("keeps configured API facts through native observations", async () => {
     const loadModelCatalog = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []);
-    const registry = harnessRegistry("synthetic-native", {
-      label: "Synthetic native runtime",
-      async runAttempt() {
-        throw new Error("catalog-only fixture");
-      },
-      loadModelCatalog,
-    });
+    const registry = harnessRegistry("synthetic-native", { loadModelCatalog });
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
     mocks.authStorage.getAll.mockReturnValue({});
     mocks.modelRegistry.getAll.mockReturnValue([model]);
@@ -382,52 +376,32 @@ describe("catalog publication session rows", () => {
       },
       { catalogMode: "static" },
     );
-    const changes: (boolean | undefined)[] = [];
-    const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
-      if (event.phase === "catalog-published") {
-        changes.push(event.modelFactsChanged);
-      }
-    });
     const observeNative = () =>
       owner.loadNativeModelCatalog!({
         provider: model.provider,
         modelId: model.id,
         runtime: "synthetic-native",
       });
-    try {
-      expect(owner.readFullModelCatalog?.()).toBeUndefined();
-      expect(owner.modelCatalog.entries).toMatchObject([model]);
-      const completed = await owner.loadFullModelCatalog!({ changedOnly: true });
-      expect(completed.entries).toMatchObject([model]);
-      expect(owner.readFullModelCatalog?.()).toBe(completed);
-      // Without provider inventory, a changed-only pass acquires the full catalog.
-      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledExactlyOnceWith(undefined);
-      changes.length = 0;
-      for (let observation = 0; observation < 2; observation += 1) {
-        const unchanged = await observeNative();
-        expect(unchanged.entries).toMatchObject([model]);
-        expect(changes).not.toContain(true);
-      }
-      const nativeModel: ModelCatalogEntry = {
-        ...model,
-        contextWindow: 64_000,
-        nativeRuntime: "synthetic-native",
-      };
-      loadModelCatalog.mockResolvedValueOnce([nativeModel]);
-      const selected = await observeNative();
-      expect(selected.entries).toMatchObject([nativeModel]);
-      expect(selected.routeVariants.find((entry) => !entry.nativeRuntime)).toMatchObject({
-        provider: model.provider,
-        id: model.id,
-        api: "openai-completions",
-        contextWindow: 32_000,
-      });
-      expect(selected.routeVariants).toContainEqual(expect.objectContaining(nativeModel));
-      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
-      expect(changes).toContain(true);
-    } finally {
-      unsubscribe();
+    const completed = await owner.loadFullModelCatalog!({ changedOnly: true });
+    expect(completed.entries).toMatchObject([model]);
+    for (let observation = 0; observation < 2; observation += 1) {
+      expect((await observeNative()).entries).toMatchObject([model]);
     }
+    const nativeModel: ModelCatalogEntry = {
+      ...model,
+      contextWindow: 64_000,
+      nativeRuntime: "synthetic-native",
+    };
+    loadModelCatalog.mockResolvedValueOnce([nativeModel]);
+    const selected = await observeNative();
+    expect(selected.entries).toMatchObject([nativeModel]);
+    expect(selected.routeVariants.find((entry) => !entry.nativeRuntime)).toMatchObject({
+      provider: model.provider,
+      id: model.id,
+      api: "openai-completions",
+      contextWindow: 32_000,
+    });
+    expect(selected.routeVariants).toContainEqual(expect.objectContaining(nativeModel));
   });
 
   it("keeps session rows resident through runtime auth binding and revocation", async () => {

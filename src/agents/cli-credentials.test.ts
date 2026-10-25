@@ -11,13 +11,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   execSync: execSyncMock,
 }));
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
-let readCodexCliActiveApiKey: typeof import("./cli-credentials.js").readCodexCliActiveApiKey;
-let hasCodexCliAuthFile: typeof import("./cli-credentials.js").hasCodexCliAuthFile;
-let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
-let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
-let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
-let resolveNativeCliLoginOwner: typeof import("./cli-credentials.js").resolveNativeCliLoginOwner;
-let readAttestedNativeCliLoginOwner: typeof import("./cli-credentials.js").readAttestedNativeCliLoginOwner;
+let credentials: typeof import("./cli-credentials.js");
 
 function createJwtWithExp(expSeconds: number): string {
   // Signature verification is out of scope; expiration extraction only needs a
@@ -33,13 +27,7 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 
 describe("cli credentials", () => {
   let tempHome: string;
-  let homes: string[];
   const expSeconds = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
-  function createHome() {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-"));
-    homes.push(home);
-    return home;
-  }
   function writeJson(filePath: string, value: unknown) {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
     fs.writeFileSync(filePath, JSON.stringify(value), "utf8");
@@ -49,28 +37,21 @@ describe("cli credentials", () => {
       tokens: { access_token: createJwtWithExp(expiry), refresh_token: refresh, ...fields },
     };
   }
-  function readCodex(options: Parameters<typeof readCodexCliCredentialsCached>[0] = {}) {
-    return readCodexCliCredentialsCached({
+  function readCodex(
+    options: Parameters<typeof credentials.readCodexCliCredentialsCached>[0] = {},
+  ) {
+    return credentials.readCodexCliCredentialsCached({
       execSync: execSyncMock,
       ...options,
     });
   }
   beforeAll(async () => {
-    ({
-      readCodexCliActiveApiKey,
-      hasCodexCliAuthFile,
-      readCodexCliCredentialsCached,
-      readGeminiCliCredentialsCached,
-      readMiniMaxCliCredentialsCached,
-      resolveNativeCliLoginOwner,
-      readAttestedNativeCliLoginOwner,
-    } = await import("./cli-credentials.js"));
+    credentials = await import("./cli-credentials.js");
   });
 
   beforeEach(() => {
     vi.useFakeTimers();
-    homes = [];
-    tempHome = createHome();
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-"));
     vi.stubEnv("CODEX_HOME", tempHome);
     execSyncMock.mockImplementation(() => {
       throw Object.assign(new Error("Keychain item not found"), { status: 44 });
@@ -78,38 +59,33 @@ describe("cli credentials", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
     execSyncMock.mockReset();
     delete process.env.CODEX_HOME;
     vi.unstubAllEnvs();
-    for (const home of homes) {
-      fs.rmSync(home, { recursive: true, force: true });
-    }
+    fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
   it.each(["ENOENT", "ENOTDIR", "EACCES", "EPERM"])(
     "distinguishes missing Codex login state from inspection failure: %s",
     (code) => {
       const failure = Object.assign(new Error(`synthetic ${code}`), { code });
-      const stat = vi.spyOn(fs, "statSync").mockImplementation(() => {
+      vi.spyOn(fs, "statSync").mockImplementation(() => {
         throw failure;
       });
-      try {
-        if (code === "ENOENT" || code === "ENOTDIR") {
-          expect(hasCodexCliAuthFile("/fixture/codex")).toBe(false);
-        } else {
-          expect(() => hasCodexCliAuthFile("/fixture/codex")).toThrow(failure);
-        }
-      } finally {
-        stat.mockRestore();
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        expect(credentials.hasCodexCliAuthFile("/fixture/codex")).toBe(false);
+      } else {
+        expect(() => credentials.hasCodexCliAuthFile("/fixture/codex")).toThrow(failure);
       }
     },
   );
 
   it("keeps external CLI credential files anchored to the OS home", () => {
-    const osHome = createHome();
-    const openClawHome = createHome();
+    const osHome = path.join(tempHome, "os");
+    const openClawHome = path.join(tempHome, "openclaw");
     const expires = Date.parse("2036-04-25T12:00:00Z");
     const codexExpiry = Math.floor(expires / 1000);
     vi.stubEnv("HOME", osHome);
@@ -135,11 +111,11 @@ describe("cli credentials", () => {
       refresh: "codex-refresh",
       provider: "openai",
     });
-    expectFields(readMiniMaxCliCredentialsCached({ ttlMs: 0 }), {
+    expectFields(credentials.readMiniMaxCliCredentialsCached({ ttlMs: 0 }), {
       access: "minimax-access",
       refresh: "minimax-refresh",
     });
-    expectFields(readGeminiCliCredentialsCached({ ttlMs: 0 }), {
+    expectFields(credentials.readGeminiCliCredentialsCached({ ttlMs: 0 }), {
       access: "gemini-access",
       refresh: "gemini-refresh",
     });
@@ -169,22 +145,22 @@ describe("cli credentials", () => {
     });
   });
 
-  it("rejects Codex keychain fallback expiry when the process clock is invalid", () => {
-    const accountHash = "cli|";
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      execSyncMock.mockImplementation((command: unknown) => {
-        const cmd = String(command);
-        expect(cmd).toContain("Codex Auth");
-        expect(cmd).toContain(accountHash);
-        return JSON.stringify(codexRecord("keychain-refresh", 8_700_000_000_000));
-      });
-
-      expect(readCodex({ platform: "darwin" })).toBeNull();
-    } finally {
-      dateNowSpy.mockRestore();
-    }
-  });
+  it.each(["darwin", "linux"] as const)(
+    "rejects Codex fallback expiry with invalid source and process clocks on %s",
+    (platform) => {
+      const record = codexRecord("refresh", 8_700_000_000_000);
+      if (platform === "darwin") {
+        execSyncMock.mockReturnValue(JSON.stringify(record));
+      } else {
+        writeJson(path.join(tempHome, "auth.json"), record);
+        vi.spyOn(fs, "statSync").mockImplementation(() => {
+          throw new Error("stat unavailable");
+        });
+      }
+      vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+      expect(readCodex({ platform })).toBeNull();
+    },
+  );
 
   it("falls back to Codex auth.json when keychain is unavailable", () => {
     writeJson(
@@ -212,7 +188,7 @@ describe("cli credentials", () => {
     });
     execSyncMock.mockReturnValue("Logged in using ChatGPT");
 
-    expect(readCodexCliActiveApiKey({ codexHome: tempHome })).toBeNull();
+    expect(credentials.readCodexCliActiveApiKey({ codexHome: tempHome })).toBeNull();
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
@@ -228,7 +204,7 @@ describe("cli credentials", () => {
         : JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "stale-keychain-api-key" }),
     );
 
-    expect(readCodexCliActiveApiKey({ codexHome: tempHome })).toEqual({
+    expect(credentials.readCodexCliActiveApiKey({ codexHome: tempHome })).toEqual({
       type: "api_key",
       provider: "openai",
       key: "active-file-api-key",
@@ -244,72 +220,38 @@ describe("cli credentials", () => {
     expect(readCodex({ platform: "linux" })).toBeNull();
   });
 
-  it("rejects Codex auth.json fallback expiry when stat and process clock are invalid", () => {
-    writeJson(path.join(tempHome, "auth.json"), codexRecord("file-refresh", 8_700_000_000_000));
-    const statSyncSpy = vi.spyOn(fs, "statSync").mockImplementation(() => {
-      throw new Error("stat unavailable");
-    });
-    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      expect(readCodex({ platform: "linux" })).toBeNull();
-    } finally {
-      dateNowSpy.mockRestore();
-      statSyncSpy.mockRestore();
-    }
-  });
-
-  it("does not let no-keychain Codex cache misses poison keychain reads", () => {
-    const withoutKeychain = readCodex({
-      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
-      allowKeychainPrompt: false,
-      platform: "darwin",
-    });
-    expect(withoutKeychain).toBeNull();
-
-    execSyncMock.mockReturnValue(JSON.stringify(codexRecord("keychain-refresh")));
-    const withKeychain = readCodex({
-      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
-      allowKeychainPrompt: true,
-      platform: "darwin",
-    });
-
-    expectFields(withKeychain, {
-      access: createJwtWithExp(expSeconds),
-      refresh: "keychain-refresh",
-      provider: "openai",
-    });
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps no-prompt Codex reads on auth.json after a keychain read", () => {
-    const keychainExpiry = expSeconds;
-    const fileExpiry = Math.floor(Date.parse("2026-03-25T12:34:56Z") / 1000);
-    writeJson(path.join(tempHome, "auth.json"), codexRecord("file-refresh", fileExpiry));
-    execSyncMock.mockReturnValue(JSON.stringify(codexRecord("keychain-refresh", keychainExpiry)));
-
-    const withKeychain = readCodex({
-      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
-      allowKeychainPrompt: true,
-      platform: "darwin",
-    });
-    const withoutPrompt = readCodex({
-      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
-      allowKeychainPrompt: false,
-      platform: "darwin",
-    });
-
-    expectFields(withKeychain, {
-      refresh: "keychain-refresh",
-      expires: keychainExpiry * 1000,
-      provider: "openai",
-    });
-    expectFields(withoutPrompt, {
-      refresh: "file-refresh",
-      expires: fileExpiry * 1000,
-      provider: "openai",
-    });
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
-  });
+  it.each([false, true])(
+    "isolates Codex prompt-intent caches with file present: %s",
+    (withFile) => {
+      const fileExpiry = Math.floor(Date.parse("2026-03-25T12:34:56Z") / 1000);
+      const read = (allowKeychainPrompt: boolean) =>
+        readCodex({
+          ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+          platform: "darwin",
+          allowKeychainPrompt,
+        });
+      if (withFile) {
+        writeJson(path.join(tempHome, "auth.json"), codexRecord("file-refresh", fileExpiry));
+      } else {
+        expect(read(false)).toBeNull();
+      }
+      execSyncMock.mockReturnValue(JSON.stringify(codexRecord("keychain-refresh")));
+      expectFields(read(true), {
+        access: createJwtWithExp(expSeconds),
+        refresh: "keychain-refresh",
+        expires: expSeconds * 1000,
+        provider: "openai",
+      });
+      if (withFile) {
+        expectFields(read(false), {
+          refresh: "file-refresh",
+          expires: fileExpiry * 1000,
+          provider: "openai",
+        });
+      }
+      expect(execSyncMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("invalidates cached Codex credentials when auth.json changes within the TTL window", () => {
     const authPath = path.join(tempHome, "auth.json");
@@ -356,7 +298,7 @@ describe("cli credentials", () => {
       expiry_date: Date.parse("2026-04-25T12:00:00Z"),
     });
 
-    const creds = readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
+    const creds = credentials.readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
 
     expectFields(creds, {
       type: "oauth",
@@ -380,13 +322,17 @@ describe("cli credentials", () => {
     const fetchFn = vi.fn(async () => Response.json({ account: { uuid: "uuid-a" } }));
     vi.stubGlobal("fetch", fetchFn);
     for (const backendId of ["google-gemini-cli", "codex-cli"]) {
-      expect(await resolveNativeCliLoginOwner(backendId, process.env)).toEqual({});
-      expect(readAttestedNativeCliLoginOwner(backendId, process.env)).toBeUndefined();
+      expect(await credentials.resolveNativeCliLoginOwner(backendId, process.env)).toEqual({});
+      expect(credentials.readAttestedNativeCliLoginOwner(backendId, process.env)).toBeUndefined();
     }
     expect(fetchFn).not.toHaveBeenCalled();
     // The Claude backend attests the same login, and only then answers the local check.
-    expect(readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBeUndefined();
-    expect((await resolveNativeCliLoginOwner("claude-cli", process.env)).owner).toBe("uuid:uuid-a");
-    expect(readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBe("uuid:uuid-a");
+    expect(credentials.readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBeUndefined();
+    expect((await credentials.resolveNativeCliLoginOwner("claude-cli", process.env)).owner).toBe(
+      "uuid:uuid-a",
+    );
+    expect(credentials.readAttestedNativeCliLoginOwner("claude-cli", process.env)).toBe(
+      "uuid:uuid-a",
+    );
   });
 });
