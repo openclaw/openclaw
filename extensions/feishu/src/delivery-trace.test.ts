@@ -471,7 +471,7 @@ describe("feishu delivery trace goldens", () => {
         scenario: { name: "feishu-pre-tool-text", steps: [{ kind: "final" }] },
         setup: (recorder) => {
           setupFeishuTrace(recorder, "final-only");
-          const created = createTraceDispatcher();
+          const created = createTraceDispatcher(undefined, { log: () => {}, error: () => {} });
           return async () => {
             await created.dispatcherOptions.onReplyStart?.();
             created.replyOptions.onAssistantMessageStart?.();
