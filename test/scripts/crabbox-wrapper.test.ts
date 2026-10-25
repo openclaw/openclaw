@@ -4530,7 +4530,7 @@ process.on("exit", () => {
       git(origin, ["commit", "-qm", "remove old content"]);
       git(origin, ["commit", "--allow-empty", "-qm", "advance history"]);
       const unchanged = Buffer.concat(
-        Array.from({ length: 4097 }, (_, index) =>
+        Array.from({ length: 24576 }, (_, index) =>
           createHash("sha256").update(`unchanged-${index}`).digest(),
         ),
       );
