@@ -18,6 +18,7 @@ import {
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import type { QaProviderMode } from "./providers/index.js";
+import { makeQaSuiteTestLaunch } from "./suite-test-helpers.js";
 
 const providerIdentityCases: {
   name: string;
@@ -587,14 +588,7 @@ describe("evidence summary", () => {
   });
 });
 
-const unknownIdentity: QaEvidenceIdentity = {
-  source: { ref: null, integrity: null },
-  runtime: { id: null, version: null },
-  package: null,
-  protocol: null,
-  accountRef: null,
-  proofClass: null,
-};
+const unknownIdentity: QaEvidenceIdentity = makeQaSuiteTestLaunch();
 
 function occurrenceFixture(instanceId = "scheduled-first") {
   const anchor: QaEvidenceOccurrence = {

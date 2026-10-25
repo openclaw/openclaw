@@ -1,6 +1,7 @@
 // Windows schtasks exec tests cover scheduled task command execution.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { execScheduledTaskEnabledChange, execSchtasks } from "./schtasks-exec.js";
 import { isRegisteredScheduledTask } from "./schtasks-runtime.js";
 
@@ -26,14 +27,9 @@ describe("execScheduledTaskEnabledChange", () => {
   ] as const)(
     "preserves only a confirmed native HRESULT from $termination: $stdout",
     async ({ stdout, termination, hresult }) => {
-      runCommandWithTimeout.mockResolvedValue({
-        stdout,
-        stderr: "",
-        code: 1,
-        signal: null,
-        killed: termination !== "exit",
-        termination,
-      });
+      runCommandWithTimeout.mockResolvedValue(
+        createCommandResult({ stdout, code: 1, killed: termination !== "exit", termination }),
+      );
 
       const result = await execScheduledTaskEnabledChange("OpenClaw Gateway", false);
 
@@ -50,16 +46,9 @@ describe("execScheduledTaskEnabledChange", () => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("execSchtasks", () => {
-  it("runs schtasks with bounded timeouts", async () => {
+  it("runs schtasks with a bounded timeout", async () => {
     vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
-    runCommandWithTimeout.mockResolvedValue({
-      stdout: "ok",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    runCommandWithTimeout.mockResolvedValue(createCommandResult({ stdout: "ok" }));
 
     await expect(execSchtasks(["/Query"])).resolves.toEqual({
       stdout: "ok",
@@ -69,7 +58,6 @@ describe("execSchtasks", () => {
     expect(runCommandWithTimeout).toHaveBeenCalledWith(["schtasks", "/Query"], {
       baseEnv: expect.any(Object),
       timeoutMs: 15_000,
-      noOutputTimeoutMs: 30_000,
     });
     expect(runCommandWithTimeout.mock.calls[0]?.[1].baseEnv).not.toHaveProperty(
       "BOUNDARY_PARENT_ONLY",
@@ -79,24 +67,15 @@ describe("execSchtasks", () => {
   it.each([
     { termination: "timeout", detail: "schtasks /Change /DISABLE timed out after 15000ms" },
     {
-      termination: "no-output-timeout",
-      detail: "schtasks /Change /DISABLE produced no output for 30000ms",
-    },
-    {
       termination: "signal",
       detail: "schtasks /Change /DISABLE terminated before confirmed completion",
     },
   ] as const)(
     "maps $termination into a non-zero lifecycle result",
     async ({ termination, detail }) => {
-      runCommandWithTimeout.mockResolvedValue({
-        stdout: "",
-        stderr: "",
-        code: null,
-        signal: "SIGTERM",
-        killed: true,
-        termination,
-      });
+      runCommandWithTimeout.mockResolvedValue(
+        createCommandResult({ code: null, signal: "SIGTERM", killed: true, termination }),
+      );
 
       await expect(
         execSchtasks(["/Change", "/TN", "OpenClaw Gateway", "/DISABLE"]),
@@ -114,7 +93,7 @@ describe("execSchtasks", () => {
     await expect(isRegisteredScheduledTask({})).resolves.toBe(false);
     expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
       ["schtasks", "/Query", "/TN", "OpenClaw Gateway"],
-      expect.objectContaining({ timeoutMs: 15_000, noOutputTimeoutMs: 30_000 }),
+      expect.objectContaining({ timeoutMs: 15_000 }),
     );
   });
 

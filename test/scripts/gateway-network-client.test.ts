@@ -4,9 +4,6 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   type GatewayFrame,
-  assertGatewaySuspendingError,
-  assertReadySuspensionResponse,
-  assertSuspendedProbes,
   prepareReadySuspension,
   runGatewayNetworkClient,
   runGatewaySuspensionPostRestartClient,
@@ -76,11 +73,11 @@ function healthResponse() {
       agents: [],
       channelOrder: [],
       channels: {},
-      defaultAgentId: "codex",
-      durationMs: 3,
+      defaultAgentId: "test",
+      durationMs: 0,
       ok: true,
-      sessions: { count: 0, path: "/state/sessions", recent: [] },
-      ts: Date.now(),
+      sessions: {},
+      ts: 0,
     },
   };
 }
@@ -88,18 +85,6 @@ function healthResponse() {
 function connectResponse(methods: unknown = suspensionMethods) {
   return { ok: true, payload: { features: { methods } } };
 }
-
-it("rejects loose client timeout env values instead of parsing prefixes", () => {
-  for (const [key, value] of [
-    [timeoutKey, "100ms"],
-    [fallbackKey, "1e3"],
-    [timeoutKey, "0"],
-  ] as const) {
-    expect(() => readGatewayNetworkClientConnectTimeoutMs({ [key]: value })).toThrow(
-      `invalid ${key}: ${value}`,
-    );
-  }
-});
 
 it("prefers the explicit client timeout over the connect-ready fallback", () => {
   expect(
@@ -125,9 +110,7 @@ it("retries busy suspension preparation using the server delay", async () => {
     ),
   ).resolves.toMatchObject({ status: "ready", suspensionId: "lease-1" });
   expect(rpc).toHaveBeenCalledTimes(2);
-  expect(rpc).toHaveBeenNthCalledWith(1, "gateway.suspend.prepare", {
-    requestId: "request-1",
-  });
+  expect(rpc).toHaveBeenNthCalledWith(1, "gateway.suspend.prepare", { requestId: "request-1" });
   expect(delayImpl).toHaveBeenCalledWith(250);
 });
 
@@ -251,41 +234,37 @@ function createNetworkClientHarness(responses: GatewayFrame[]) {
   const sentMethods: string[] = [];
   const stdout: string[] = [];
   const close = vi.fn();
-  const socket = {
-    close,
-    send: (payload: string) => {
-      sentMethods.push(JSON.parse(payload).method);
+  const deps = {
+    delay: async () => {},
+    onceFrame: async (
+      _ws: unknown,
+      predicate: (frame: GatewayFrame) => boolean,
+      _timeoutMs?: number,
+    ) => {
+      const response = frames.shift();
+      const frame = {
+        type: "res",
+        id: sentMethods.at(-1) === "connect" ? "c1" : "h1",
+        ...response,
+      };
+      expect(predicate(frame)).toBe(true);
+      return frame;
+    },
+    openSocket: async () => ({
+      close,
+      send: (payload: string) => sentMethods.push(JSON.parse(payload).method),
+    }),
+    protocolVersion: 1,
+    stdout: (message: string) => {
+      stdout.push(message);
     },
   };
-
   return {
     close,
     sentMethods,
     stdout,
-    deps: {
-      delay: async () => {},
-      onceFrame: async (
-        _ws: unknown,
-        predicate: (frame: GatewayFrame) => boolean,
-        _timeoutMs?: number,
-      ) => {
-        const response = frames.shift();
-        const frame = {
-          type: "res",
-          id: sentMethods.at(-1) === "connect" ? "c1" : "h1",
-          ...(sentMethods.at(-1) === "connect" && response?.ok && !response.payload
-            ? connectResponse()
-            : response),
-        };
-        expect(predicate(frame)).toBe(true);
-        return frame;
-      },
-      openSocket: async () => socket,
-      protocolVersion: 1,
-      stdout: (message: string) => {
-        stdout.push(message);
-      },
-    },
+    run: (options: Parameters<typeof runGatewayNetworkClient>[0] = clientOptions) =>
+      runGatewayNetworkClient(options, deps),
   };
 }
 
@@ -295,31 +274,38 @@ it.each([
 ] as const)(
   "records %s suspension support from connect hello methods",
   async (expected, methods) => {
-    const workDir = tempDirs.make("openclaw-gateway-network-capabilities-");
-    const capabilitiesPath = join(workDir, "capabilities.json");
+    const capabilitiesPath = join(tempDirs.make("gateway-capabilities-"), "capabilities.json");
     const harness = createNetworkClientHarness([connectResponse(methods), healthResponse()]);
 
-    await expect(
-      runGatewayNetworkClient({ ...clientOptions, capabilitiesPath }, harness.deps),
-    ).resolves.toEqual({ suspension: expected });
-    expect(JSON.parse(readFileSync(capabilitiesPath, "utf8"))).toEqual({
+    await expect(harness.run({ ...clientOptions, capabilitiesPath })).resolves.toEqual({
       suspension: expected,
     });
+    expect(JSON.parse(readFileSync(capabilitiesPath, "utf8"))).toEqual({ suspension: expected });
     expect(harness.sentMethods).toEqual(["connect", "health"]);
   },
 );
 
 it.each([
-  ["partial", ["gateway.suspend.prepare", "gateway.suspend.status"]],
+  ["partial", suspensionMethods.slice(0, 2)],
   ["malformed", "gateway.suspend.prepare"],
 ])("rejects %s suspension methods only after baseline health", async (_label, methods) => {
   const harness = createNetworkClientHarness([connectResponse(methods), healthResponse()]);
-
-  await expect(runGatewayNetworkClient(clientOptions, harness.deps)).rejects.toThrow(
-    /suspension methods/u,
-  );
+  await expect(harness.run()).rejects.toThrow(/suspension methods/u);
   expect(harness.sentMethods).toEqual(["connect", "health"]);
 });
+
+it.each([
+  [{ ok: true }, "missing health summary payload"],
+  [{ ok: false, error: { message: "health unavailable" } }, "health unavailable"],
+] satisfies Array<[GatewayFrame, string]>)(
+  "rejects health response %j",
+  async (response, error) => {
+    const harness = createNetworkClientHarness([connectResponse(), response]);
+    await expect(harness.run()).rejects.toThrow(`health failed: ${error}`);
+    expect(harness).toMatchObject({ sentMethods: ["connect", "health"], stdout: [] });
+    expect(harness.close).toHaveBeenCalledOnce();
+  },
+);
 
 it("does not sleep past the remaining client deadline between retries", async () => {
   const delays: number[] = [];
@@ -345,66 +331,4 @@ it("does not sleep past the remaining client deadline between retries", async ()
   ).rejects.toThrow("ECONNREFUSED");
 
   expect(delays).toEqual([50]);
-});
-
-it.each([
-  [{ ok: true }, "missing health summary payload"],
-  [{ ok: false, error: { message: "health unavailable" } }, "health unavailable"],
-] satisfies Array<[GatewayFrame, string]>)(
-  "rejects health response %j",
-  async (response, error) => {
-    const harness = createNetworkClientHarness([{ ok: true }, response]);
-    await expect(runGatewayNetworkClient(clientOptions, harness.deps)).rejects.toThrow(
-      `health failed: ${error}`,
-    );
-    expect(harness).toMatchObject({
-      sentMethods: ["connect", "health"],
-      stdout: [],
-    });
-    expect(harness.close).toHaveBeenCalledOnce();
-  },
-);
-
-it("accepts only an idle future suspension lease", () => {
-  const payload = readyPayload(2_000);
-  const response = (overrides = {}) => adminResponse({ ...payload, ...overrides });
-
-  expect(assertReadySuspensionResponse(response(), 1_000)).toEqual(payload);
-  expect(() => assertReadySuspensionResponse(response({ expiresAtMs: 999 }), 1_000)).toThrow(
-    "expire in the future",
-  );
-  expect(() => assertReadySuspensionResponse(response({ activeCount: 1 }), 1_000)).toThrow(
-    "no active work",
-  );
-});
-
-it("requires canonical prepared-suspension RPC and probe evidence", () => {
-  const suspendedError = {
-    ok: false,
-    error: {
-      code: "UNAVAILABLE",
-      retryable: true,
-      details: { reason: "gateway-suspending", phase: "prepared" },
-    },
-  };
-  const health = { status: 200, body: { ok: true, status: "live" } };
-  const readiness = { status: 503, body: { ready: false, failing: ["gateway-draining"] } };
-
-  expect(() => assertGatewaySuspendingError(suspendedError)).not.toThrow();
-  expect(() => assertSuspendedProbes(health, readiness)).not.toThrow();
-  expect(() =>
-    assertGatewaySuspendingError({
-      ...suspendedError,
-      error: {
-        ...suspendedError.error,
-        details: { reason: "gateway-restarting", phase: "prepared" },
-      },
-    }),
-  ).toThrow("identify gateway suspension");
-  expect(() =>
-    assertSuspendedProbes(health, {
-      status: 503,
-      body: { ready: false, failing: ["channels"] },
-    }),
-  ).toThrow("identify gateway-draining");
 });

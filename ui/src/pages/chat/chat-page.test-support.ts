@@ -5,6 +5,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
@@ -71,17 +72,13 @@ export function setViewerPresenceContext(page: HTMLElementTagNameMap["openclaw-c
   };
   const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   (navigation.context as unknown as { gateway: ApplicationContext["gateway"] }).gateway = {
-    snapshot: {
+    snapshot: createApplicationGatewaySnapshot({
       client,
       phase: "connected",
-      offlineStable: false,
       hello,
-      canvasPluginSurfaceUrl: null,
       assistantAgentId: "main",
       sessionKey: "agent:main:main",
-      lastError: null,
-      lastErrorCode: null,
-    },
+    }),
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
     connectionRevision: 0,
     eventLog: [],

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
+import * as utilityCompletion from "../../agents/utility-completion.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
@@ -79,6 +80,8 @@ it.for(["ready", "late", "abandoned"] as const)(
     const result = createDeferred<Awaited<ReturnType<typeof defaultCompleteModel>>>();
     const published = createDeferred();
     const scheduler = createTestGatewayScheduler();
+    using auth = vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth");
+    auth.mockResolvedValue(true);
     const prepare = vi.spyOn(observerModel, "defaultPrepareModel").mockResolvedValue({
       config: cfg,
       authProfileId: undefined,

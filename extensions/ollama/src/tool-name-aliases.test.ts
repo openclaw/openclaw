@@ -10,6 +10,7 @@ import {
   createEmptyTransportUsage,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterEach, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../test-support/message-fixtures.test-support.js";
 import { createConfiguredOllamaCompatStreamWrapper } from "./stream-compat.js";
 import { createOllamaStreamFn } from "./stream.runtime.js";
 
@@ -53,14 +54,7 @@ function context(names: string[], replayName = "ls"): Context {
     messages: [
       { role: "user", content: "Use ls; keep this user text unchanged.", timestamp: 0 },
       assistant(replayName),
-      {
-        role: "toolResult",
-        toolCallId: "previous",
-        toolName: replayName,
-        content: [{ type: "text", text: "literal ls output" }],
-        isError: false,
-        timestamp: 0,
-      },
+      makeTextToolResult("previous", replayName, "literal ls output", false, 0),
     ],
   };
 }

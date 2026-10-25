@@ -8,6 +8,7 @@ import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -659,17 +660,13 @@ it.for([
               openai: {
                 baseUrl: "https://api.openai.com/v1",
                 models: [
-                  {
-                    id: "gpt-5.6-sol",
+                  modelDefinition("gpt-5.6-sol", {
                     name: "GPT-5.6",
                     api: "openai-responses",
                     agentRuntime: { id: "openclaw" },
-                    reasoning: true,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                     contextWindow: 128000,
                     maxTokens: 4096,
-                  },
+                  }),
                 ],
               },
             },
@@ -947,12 +944,12 @@ it("admits an unsealed fleet including reserved system agents while skipping an 
     );
     expect(publishedGenerations).toEqual(openedGenerations);
     expect(warnings).toHaveBeenCalledWith(
-      "Skipped openclaw-agent.sqlite: database is not a configured target; run openclaw doctor to inspect retained data.",
+      `Skipped ${leftover} (agent unowned): database is not a configured target; run openclaw doctor to inspect retained data.`,
     );
     for (const [index, pathname] of stalePaths.entries()) {
       expect(fs.readFileSync(pathname)).toEqual(staleBytes[index]);
       expect(warnings).toHaveBeenCalledWith(
-        `Skipped ${path.basename(pathname)}: database is not a configured target; run openclaw doctor to inspect retained data.`,
+        `Skipped ${pathname} (agent ${agentIds[index]}): database is not a configured target; run openclaw doctor to inspect retained data.`,
       );
     }
     for (const agentId of agentIds) {

@@ -25,7 +25,7 @@ import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   consumePaneSessionHandoff,
-  focusChatComposerFromPrintableKeydown,
+  focusChatComposerFromKeydown,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import {
@@ -409,7 +409,7 @@ describe("chat pane retained presentation lifecycle", () => {
     const focus = vi.spyOn(textarea, "focus");
     const target = activePane.appendChild(document.createElement("main"));
     target.addEventListener("keydown", (event) =>
-      focusChatComposerFromPrintableKeydown(activePane, event, textarea),
+      focusChatComposerFromKeydown(activePane, event, textarea),
     );
     const retainedPane = app.appendChild(document.createElement("div"));
     retainedPane.setAttribute("inert", "");

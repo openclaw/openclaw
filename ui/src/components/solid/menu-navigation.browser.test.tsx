@@ -49,8 +49,12 @@ describe("Solid menu navigation", () => {
   it("materializes lazy content at first keyboard admission and retains it when reopened", async () => {
     let itemReads = 0;
     let childrenReads = 0;
+    const [placement, setPlacement] = createSignal<"bottom-start" | "top-end">("bottom-start");
     const view = mountMenu({
       lazy: true,
+      get placement() {
+        return placement();
+      },
       get items() {
         itemReads += 1;
         return [{ id: "ready", label: "Ready" }];
@@ -62,18 +66,31 @@ describe("Solid menu navigation", () => {
     });
     expect(itemReads).toBe(0);
     expect(childrenReads).toBe(0);
+    const button = trigger();
+    const panel = surface();
+    expect(button.style.getPropertyValue("anchor-name")).toBe("");
+    expect(panel.style.getPropertyValue("position-anchor")).toBe("");
+    setPlacement("top-end");
+    flush();
     trigger().focus();
     await userEvent.keyboard("{ArrowDown}");
     await phase(surface(), "open");
     const ready = item("Ready");
     expect(document.activeElement).toBe(ready);
     expect(childrenReads).toBe(1);
+    const anchorName = button.style.getPropertyValue("anchor-name");
+    expect(anchorName).toMatch(/^--oc-overlay-/);
+    expect(panel.style.getPropertyValue("position-anchor")).toBe(anchorName);
+    expect(panel.dataset.placement).toBe("top-end");
     await userEvent.keyboard("{Escape}");
     await phase(surface(), "hidden");
     expect(view.handle.open()).toBe(true);
     await phase(surface(), "open");
     expect(item("Ready")).toBe(ready);
     expect(childrenReads).toBe(1);
+    expect(button.style.getPropertyValue("anchor-name")).toBe(anchorName);
+    view.unmount();
+    expect(button.style.getPropertyValue("anchor-name")).toBe("");
   });
 
   it.each([false, true])("refuses lazy admission without active effects (veto %s)", (veto) => {

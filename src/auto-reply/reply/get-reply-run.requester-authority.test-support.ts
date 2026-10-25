@@ -25,6 +25,7 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
+import { bindRequesterProfile } from "../requester-profile.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import {
@@ -52,6 +53,23 @@ export function registerPendingRequesterAuthorityCases({
     inbound?: Partial<Parameters<typeof runPreparedReply>[0]["ctx"]>,
   ) => Pick<Parameters<typeof runPreparedReply>[0], "ctx" | "sessionCtx">;
 }): void {
+  it("retains a linked nonadmin requester as the causal origin of delegated work", async () => {
+    const params = turn("Please inspect this", {
+      ...createProviderSurface("x"),
+      SenderId: "10",
+      AccountId: "default",
+    });
+    bindRequesterProfile(params.ctx, {
+      id: "linked-human",
+      displayName: "Ada",
+      isCurrent: () => true,
+    });
+    await runPrepared(params);
+    const run = requireRunReplyAgentCall().followupRun;
+    expect(run.operatorAuthority).toBeUndefined();
+    expect(run.run.requesterOrigin).toMatchObject({ delegatedCreatorProfileId: "linked-human" });
+  });
+
   it("persists admitted external-contact sender attribution on direct turns", async () => {
     await runPrepared({
       ...turn(

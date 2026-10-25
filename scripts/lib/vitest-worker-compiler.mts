@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
 import { resolveBuildInfo } from "../write-build-info.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
@@ -168,6 +169,15 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ] satisfies NonNullable<Parameters<typeof build>[0]>["plugins"];
   };
   const commonPlugins = createInputPlugins("");
+  const sourceHostWorkerEntries = new Set(
+    [
+      runtimeProcessEntrypoints.doctorDatabaseEngineInspection,
+      runtimeProcessEntrypoints.databaseBackup,
+      runtimeProcessEntrypoints.databasePortCommand,
+    ].map((workerEntry) =>
+      path.normalize(fs.realpathSync(path.join(root, workerEntry.sourceModulePath))),
+    ),
+  );
   const fixtureModuleBoundaries = new Map([
     [path.join(root, "src/daemon/service.ts"), "triage-maintenance/service.js"],
     [
@@ -206,6 +216,22 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     },
     logLevel: "warn",
     plugins: [
+      {
+        name: "openclaw:source-host-worker-loader",
+        banner(chunk) {
+          if (
+            !chunk.facadeModuleId ||
+            !sourceHostWorkerEntries.has(path.normalize(chunk.facadeModuleId))
+          ) {
+            return "";
+          }
+          // These private workers inspect source-host plugins. Their native SDK
+          // imports need the same TypeScript loader as the source worker entry.
+          const loader = require.resolve("tsx/esm");
+          recordInput(loader);
+          return `import ${JSON.stringify(pathToFileURL(loader).href)};`;
+        },
+      },
       {
         name: "openclaw:message-command-boundary",
         resolveId: {
@@ -290,6 +316,18 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             return null;
           }
           // Native snapshot fixtures patch this same package instance before loading the worker.
+          const dependency = createRequire(importer).resolve(id);
+          recordInput(dependency);
+          return { id: pathToFileURL(dependency).href, external: "absolute" };
+        },
+      },
+      {
+        name: "openclaw:lancedb-package-boundary",
+        resolveId(id, importer) {
+          if (id !== "@lancedb/lancedb" || !importer) {
+            return null;
+          }
+          // Keep native package loading in the plugin's installed dependency scope.
           const dependency = createRequire(importer).resolve(id);
           recordInput(dependency);
           return { id: pathToFileURL(dependency).href, external: "absolute" };

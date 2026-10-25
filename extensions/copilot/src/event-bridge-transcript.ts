@@ -6,7 +6,7 @@ import {
   asNonArrayRecord,
   readNonEmptyStringPreservingWhitespace as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildCopilotAssistantUsage, type CopilotUsageSnapshot } from "./usage-bridge.js";
+import { normalizeCopilotUsage, type CopilotUsageSnapshot } from "./usage-bridge.js";
 
 export type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 export type AssistantUsageSnapshot = CopilotUsageSnapshot;
@@ -72,18 +72,30 @@ export function buildAssistantMessage(params: {
       type: "toolCall",
     });
   }
+  const api = params.modelRef.api ?? "openai-responses";
+  const model = event?.data.model ?? params.modelRef.id;
+  const provider = params.modelRef.provider;
+  const stopReason = toolRequests.length > 0 ? "toolUse" : "stop";
+  const timestamp = params.now();
+  const fallbackOutputTokens = event?.data.outputTokens;
+  const usage = params.usage ?? normalizeCopilotUsage({ outputTokens: fallbackOutputTokens });
+
   return {
-    api: params.modelRef.api ?? "openai-responses",
+    api,
     content,
-    model: event?.data.model ?? params.modelRef.id,
-    provider: params.modelRef.provider,
+    model,
+    provider,
     role: "assistant",
-    stopReason: toolRequests.length > 0 ? "toolUse" : "stop",
-    timestamp: params.now(),
-    usage: buildCopilotAssistantUsage({
-      fallbackOutputTokens: event?.data.outputTokens,
-      usage: params.usage,
-    }),
+    stopReason,
+    timestamp,
+    usage: {
+      cacheRead: usage?.cacheRead ?? 0,
+      cacheWrite: usage?.cacheWrite ?? 0,
+      cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0, total: 0 },
+      input: usage?.input ?? 0,
+      output: usage?.output ?? 0,
+      totalTokens: usage?.total ?? 0,
+    },
   };
 }
 

@@ -31,7 +31,6 @@ import {
   assertSessionControllerOperation,
   getAttachedBackend,
   getSessionControllerEntryForOperation,
-  getSessionControllerOperation,
   markReplyOperationExecutionStarted,
   readSessionControllerOperationState,
   resolveReplyRunForCurrentSessionId,
@@ -401,10 +400,9 @@ export function prepareEmbeddedAgentRunCompletionClaim(
   revokeCompletionClaim(sessionId, undefined, target);
   EMBEDDED_RUN_COMPLETION_CLAIMS.add(claim);
   const consume = (allowUnregistered: boolean): boolean => {
-    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.has(claim)) {
+    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim)) {
       return false;
     }
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim);
     if (!claim.promoted) {
       claim.settleRegistration(undefined);
     }
@@ -470,20 +468,6 @@ export function prepareEmbeddedAgentRunCompletionClaim(
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
   return Boolean(getActiveNativeAttempt(sessionId));
-}
-
-/** @internal Exposed for unit tests only. */
-export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  // Logical aliases outlive turns; native lookup follows the exact registration key.
-  const operation = getSessionControllerOperation(normalizedSessionKey);
-  const registration = operation && getControllerEmbeddedAttachment(operation);
-  return registration?.sessionKey?.trim() === normalizedSessionKey
-    ? registration.sessionId
-    : undefined;
 }
 
 export type ActiveEmbeddedRunOwner = {

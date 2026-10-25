@@ -11,6 +11,10 @@ import {
 import { createSyntheticPluginRuntimeClient } from "../gateway/server-plugin-runtime-client.js";
 import { createGatewayRequestContext } from "../gateway/server-request-context.js";
 import { makeContextParams } from "../gateway/server-request-context.test-support.js";
+import {
+  createSqliteReadOnlyWorkerScope,
+  readOnlyWorkerScope,
+} from "../infra/sqlite-readonly-worker-context.js";
 import { createAuthRateLimiter } from "../plugin-sdk/webhook-ingress.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -19,6 +23,10 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
+import {
+  getBoundLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "./legacy-sdk-resource-host.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -75,6 +83,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
   }> = [];
   const observe = async () => {
     await Promise.resolve();
+    expect(readOnlyWorkerScope.getStore()?.active).toBe(true);
     observations.push({
       liveInstance:
         pluginInstanceInvocation.getStore()?.instance === instance && instance.hasActiveCall,
@@ -112,10 +121,14 @@ it("owns service callbacks after startup and reload callers finish", async () =>
         });
         resolvePluginServiceScheduler().schedule({ id: "startup", delayMs: 1, run: observe });
       },
+      stop() {
+        expect(readOnlyWorkerScope.getStore()?.active).toBe(true);
+      },
     },
   });
   const runFromRequest = async <T>(run: () => T | Promise<T>): Promise<T> => {
     const caller = new AbortController();
+    const readers = createSqliteReadOnlyWorkerScope();
     const facts = new CallerFacts();
     const cache = Object.assign(createPluginCache(), { facts });
     const metadataSnapshot = Object.assign(createEmptyPluginMetadataSnapshot(), { facts });
@@ -140,7 +153,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
                     signal: caller.signal,
                     isWebchatConnect: () => false,
                   },
-                  run,
+                  () => readers.run(run),
                 ),
             ),
           ),
@@ -150,6 +163,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
       caller.abort(new Error("Caller completed"));
       await callerInstance.dispose();
       await retirePluginCache(cache);
+      await readers.close();
     }
   };
   const services = await runFromRequest(() =>
@@ -214,6 +228,8 @@ it("keeps standalone scheduled services free of an unbound Gateway resolver", as
   const registry = createEmptyPluginRegistry();
   const clock = createGatewaySchedulerClock();
   const gatewayScheduler = createTestGatewayScheduler(clock.clock);
+  const resourceHost = new LegacyPluginSdkResourceHost();
+  resourceHost.bindScheduler(gatewayScheduler);
   let opened = false;
   registry.services.push({
     id: "standalone",
@@ -228,6 +244,7 @@ it("keeps standalone scheduled services free of an unbound Gateway resolver", as
           id: "legacy-resource",
           delayMs: 1,
           run: () => {
+            expect(getBoundLegacyPluginSdkResourceHost()).toBe(resourceHost);
             const limiter = createAuthRateLimiter();
             limiter.dispose();
             opened = true;
@@ -236,13 +253,18 @@ it("keeps standalone scheduled services free of an unbound Gateway resolver", as
       },
     },
   });
-  const services = await startPluginServices({ registry, config: {}, scheduler: gatewayScheduler });
+  const readers = createSqliteReadOnlyWorkerScope();
+  const services = await resourceHost.run(() =>
+    readers.run(() => startPluginServices({ registry, config: {}, scheduler: gatewayScheduler })),
+  );
+  await readers.close();
   try {
     await clock.advanceBy(1);
     expect(opened).toBe(true);
   } finally {
     await services.stop();
     await gatewayScheduler.stop();
+    await resourceHost.close();
   }
 });
 

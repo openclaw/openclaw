@@ -1,3 +1,4 @@
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
@@ -30,6 +31,7 @@ import {
 } from "../agent-runtime-id.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../harness-runtimes.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
+import { resolveProviderEndpoint } from "../provider-attribution.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
 export type AgentHarnessPluginSelection = {
@@ -203,6 +205,22 @@ function resolveSelectedProviderOwnerPluginIds(params: {
       providerOwnerPluginIds = normalizeUniqueStringEntries(
         resolveOwningPluginIdsForProviderRef({ ...params, provider: apiOwnerHint }) ?? [],
       );
+    }
+  }
+  if (providerOwnerPluginIds.length === 0) {
+    const baseUrl = findNormalizedProviderValue(
+      params.config?.models?.providers,
+      params.provider,
+    )?.baseUrl;
+    if (baseUrl) {
+      providerOwnerPluginIds = resolveManifestActivationPluginIds({
+        ...params,
+        trigger: {
+          kind: "provider",
+          provider: resolveProviderEndpoint(baseUrl, params.metadataSnapshot?.owners).endpointClass,
+        },
+        manifestRecords: params.metadataSnapshot?.plugins,
+      });
     }
   }
   if (providerOwnerPluginIds.length === 0) {

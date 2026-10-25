@@ -98,27 +98,6 @@ function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
 }
 
-function dispatchNodeAgentCommand(
-  ctx: NodeEventContext,
-  nodeId: string,
-  input: NodeAgentCommandInput,
-  isConnectionCurrent?: () => boolean | Promise<boolean>,
-  onAdmissionRejected?: () => void | Promise<void>,
-): Promise<void> {
-  // The node RPC can finish before the agent starts its own session admission.
-  // Reserve a root now so suspension cannot acknowledge and then strand the turn,
-  // but recheck the admitted connection before agent work actually starts.
-  return runWithGatewayIndependentRootWorkContinuation(async () => {
-    if (isConnectionCurrent && !(await isConnectionCurrent())) {
-      await onAdmissionRejected?.();
-      return;
-    }
-    await agentCommandFromIngress(input, defaultRuntime, ctx.deps);
-  }, "node-events:agent-turn").catch((err: unknown) => {
-    ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
-  });
-}
-
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
   const eventId =
     normalizeOptionalString(obj.eventId) ??
@@ -701,32 +680,41 @@ async function handlePreparedNodeEvent(
       }
 
       source?.assertCurrent();
-      const agentWork = dispatchNodeAgentCommand(
-        ctx,
-        nodeId,
-        {
-          runId: sessionId,
-          message,
-          images,
-          imageOrder,
-          ...(transcriptMedia.length > 0 ||
-          persistedTranscriptMedia.omission === "inline-image-save-failed"
-            ? { transcriptMessage, ...(transcriptMedia.length > 0 ? { transcriptMedia } : {}) }
-            : {}),
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: link?.thinking ?? undefined,
-          deliver,
-          to: deliveryTo,
-          channel: deliveryChannel,
-          timeout:
-            typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
-          messageChannel: "node",
-          allowModelOverride: false,
-        },
-        opts?.isConnectionCurrent,
-        () => cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx),
-      );
+      const nodeAgentInput: NodeAgentCommandInput = {
+        runId: sessionId,
+        message,
+        images,
+        imageOrder,
+        ...(transcriptMedia.length > 0 ||
+        persistedTranscriptMedia.omission === "inline-image-save-failed"
+          ? { transcriptMessage, ...(transcriptMedia.length > 0 ? { transcriptMedia } : {}) }
+          : {}),
+        sessionId,
+        sessionKey: canonicalKey,
+        thinking: link?.thinking ?? undefined,
+        deliver,
+        to: deliveryTo,
+        channel: deliveryChannel,
+        timeout:
+          typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
+        messageChannel: "node",
+        allowModelOverride: false,
+      };
+      const nodeAdmissionConnectionCurrent = opts?.isConnectionCurrent;
+      const onNodeAdmissionRejected = () =>
+        cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx);
+      // The node RPC can finish before the agent starts its own session admission.
+      // Reserve a root now so suspension cannot acknowledge and then strand the turn,
+      // but recheck the admitted connection before agent work actually starts.
+      const agentWork = runWithGatewayIndependentRootWorkContinuation(async () => {
+        if (nodeAdmissionConnectionCurrent && !(await nodeAdmissionConnectionCurrent())) {
+          await onNodeAdmissionRejected();
+          return;
+        }
+        await agentCommandFromIngress(nodeAgentInput, defaultRuntime, ctx.deps);
+      }, "node-events:agent-turn").catch((err: unknown) => {
+        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+      });
       source?.pending.push(agentWork);
       return undefined;
     }

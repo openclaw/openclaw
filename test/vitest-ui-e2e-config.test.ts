@@ -32,12 +32,11 @@ const qaLabFiles = [
   "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
-const serialGatewayFiles =
-  `approval-lookup chat-steer-deferred-custody deepseek-search desktop-resize
-  peer-followup-restart plugin-inline-view`
-    .split(/\s+/u)
-    .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
-    .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
+const serialGatewayFiles = `chat-daybreak chat-steer-deferred-custody deepseek-search desktop-resize
+  peer-followup-restart plugin-inline-view quiet-automations`
+  .split(/\s+/u)
+  .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
+  .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
   background-work.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
   chat-agent-avatar.real-gateway chat-composer-websearch-kill-switch.real-gateway

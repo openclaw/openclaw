@@ -24,6 +24,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 ## Provider docs
 
+- [Abliteration](/providers/abliteration)
 - [Alibaba Model Studio](/providers/alibaba)
 - [Amazon Bedrock](/providers/bedrock)
 - [Amazon Bedrock Mantle](/providers/bedrock-mantle)
@@ -53,6 +54,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Kie AI](/providers/kie)
 - [Kilocode](/providers/kilocode)
 - [Levanto Sage (typed decisions, not chat)](/providers/levanto)
+- [Liquid Inference](/providers/liquid-inference)
 - [LiteLLM (unified gateway)](/providers/litellm)
 - [llama.cpp (managed or existing server)](/plugins/llama-cpp)
 - [llmman (local + hybrid local/hosted models)](/providers/llmman)

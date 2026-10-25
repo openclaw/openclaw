@@ -1,9 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { agentListHandler } from "./agents-list.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { callAgentHandler } from "./agents-mutate.test-support.js";
+import { agentsHandlers } from "./agents.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const roster = vi.hoisted(() => ({
@@ -38,19 +40,8 @@ function roleConfig(agents: GatewayOperatorRoleDefinition["agents"]): OpenClawCo
 
 function readerClient(system = false): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "test", version: "test", platform: "test", mode: "test" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: "reader-profile",
-      displayName: "Reader",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    connect: gatewayConnect(["operator.read"], { id: "test", mode: "test" }),
+    authenticatedUserProfile: gatewayProfile("reader-profile", "Reader"),
     preparedSessionProfile: {
       profileId: "reader-profile",
       aliases: new Set(["reader-profile"]),
@@ -65,9 +56,10 @@ async function listAgents(
   expected: string[],
   client = readerClient(),
   catalog: GatewayRequestContext["readPreparedGatewayModelCatalog"] = async () => ({ entries: [] }),
+  batchCatalog?: GatewayRequestContext["readPreparedGatewayModelCatalogBatch"],
 ) {
   const respond = await callAgentHandler(
-    agentListHandler,
+    expectDefined(agentsHandlers["agents.list"], "agents.list handler"),
     "agents.list",
     {},
     {
@@ -75,6 +67,7 @@ async function listAgents(
       context: {
         getRuntimeConfig: cfg,
         readPreparedGatewayModelCatalog: catalog,
+        readPreparedGatewayModelCatalogBatch: batchCatalog,
       } as GatewayRequestContext,
     },
   );
@@ -95,6 +88,44 @@ test.each([
   "agents.list scopes discovery for agents=$agents system=$system",
   async ({ agents, system, expected }) => {
     await listAgents(() => roleConfig(agents), expected, readerClient(system));
+  },
+);
+
+test.each(["single", "batch"] as const)(
+  "agents.list returns an empty roster without waiting for the %s catalog reader",
+  async (mode) => {
+    const entered = createDeferred();
+    const released = createDeferred();
+    const waitForCatalog = async () => {
+      entered.resolve();
+      await released.promise;
+    };
+    const response = listAgents(
+      () => roleConfig([]),
+      [],
+      readerClient(),
+      async () => {
+        await waitForCatalog();
+        return { entries: [] };
+      },
+      mode === "batch"
+        ? async () => {
+            await waitForCatalog();
+            return [];
+          }
+        : undefined,
+    );
+    try {
+      expect(
+        await Promise.race([
+          response.then(() => "responded"),
+          entered.promise.then(() => "waiting for catalog"),
+        ]),
+      ).toBe("responded");
+    } finally {
+      released.resolve();
+      await response;
+    }
   },
 );
 

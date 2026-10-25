@@ -1,4 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import type { Accessor } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
@@ -12,7 +13,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { isProviderVoiceTranscript } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import { readAsyncQuestions } from "./chat-async-question.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { hasUserFileAttachments } from "./chat-message-attachments.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import {
@@ -36,17 +37,21 @@ function messageVideoSlots(
   );
 }
 
-function imageMessageIdentity(message: unknown, sessionKey: string | undefined) {
+function messageMediaIdentity(message: unknown, sessionKey: string | undefined) {
   const identity = readSessionMessageIdentity(message);
   if (identity?.role !== "user" || identity.isImported) {
     return { localSubmission: false };
   }
+  const messageSendId = identity.sendId ?? undefined;
   if (!identity.id || isPendingSendMessage(message)) {
-    return { localSubmission: Boolean(identity.sendId) };
+    return { localSubmission: Boolean(messageSendId), messageSendId };
   }
   return identity.id.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
-    ? {}
-    : { canonicalMessageKey: JSON.stringify([sessionKey, identity.id, identity.sequence]) };
+    ? { messageSendId }
+    : {
+        canonicalMessageKey: JSON.stringify([sessionKey, identity.id, identity.sequence]),
+        messageSendId,
+      };
 }
 
 export type MessageMediaOptions = Pick<
@@ -58,6 +63,7 @@ export type MessageMediaOptions = Pick<
   | "resourceBasePath"
   | "assistantAttachmentAuthToken"
   | "mediaOwner"
+  | "mediaReadAllowed"
   | "onRequestOpenImage"
   | "onOpenImage"
   | "resolveArtifactDownload"
@@ -113,11 +119,12 @@ export function createMessageMediaOptions(
     messageId,
     agentId: opts.agentId,
     policyKey: opts.mediaPolicyKey,
-    ...(images.length ? imageMessageIdentity(message, opts.sessionKey) : {}),
+    ...messageMediaIdentity(message, opts.sessionKey),
     connectionEpoch: opts.connectionEpoch,
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
     mediaOwner: opts.mediaOwner,
+    mediaReadAllowed: opts.mediaReadAllowed,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
     resolveArtifactDownload: opts.resolveArtifactDownload,
@@ -345,3 +352,10 @@ export function prepareGroupedMessage(
 }
 
 export type GroupedMessagePresentation = ReturnType<typeof prepareGroupedMessage>;
+
+export type MessageContentProps = {
+  state: Accessor<GroupedMessagePresentation>;
+  messageKey: string;
+  options: GroupedMessageOptions;
+  onOpenSidebar?: (content: SidebarContent) => void;
+};

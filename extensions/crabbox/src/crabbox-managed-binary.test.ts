@@ -11,6 +11,7 @@ import * as network from "openclaw/plugin-sdk/ssrf-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { ensureManagedCrabboxBinary } from "../cli-runtime-api.js";
 import {
   CRABBOX_MIN_VERSION,
@@ -27,14 +28,7 @@ afterEach(() => {
 });
 
 function versionResult(version: string): SpawnResult {
-  return {
-    stdout: `crabbox version ${version}`,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  };
+  return commandResult({ stdout: `crabbox version ${version}` });
 }
 const runCommand: CrabboxCommandRunner = async ([binary]) =>
   versionResult(await fs.readFile(binary!, "utf8"));
@@ -194,9 +188,9 @@ describe("managed Crabbox", () => {
   });
 
   it("upgrades an old candidate, preserves its distribution, and reuses it offline", async () => {
-    const test = await fixture("0.72.0");
+    const test = await fixture("0.79.1");
     await expect(test.ensure()).resolves.toEqual(test.installed);
-    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.72.0");
+    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.79.1");
     await test.expectFiles({
       "companion-helper": "keep me",
       "crabbox-runtime/manifest.json": '{"runtime":"fixture"}',
@@ -207,11 +201,11 @@ describe("managed Crabbox", () => {
         expect((await fs.stat(path.join(test.directory, name))).mode & 0o111).toBe(0o111);
       }
     }
-    await fs.writeFile(test.binary, "0.78.0");
+    await fs.writeFile(test.binary, "0.79.3");
     test.fetch.mockRejectedValue(new Error("offline"));
     await expect(test.ensure()).resolves.toEqual({
       ...test.installed,
-      version: "0.78.0",
+      version: "0.79.3",
     });
     expect(test.fetch).toHaveBeenCalledTimes(2);
     expect(await test.entries()).toEqual([path.basename(test.directory)]);
@@ -615,10 +609,13 @@ describe("Crabbox version admission", () => {
 
   it.each([
     ["0.72.0", "outdated"],
-    ["0.77.0", "supported"],
-    ["0.77.0-rc.1", "outdated"],
-    ["0.77.0+build.1", "supported"],
-    ["0.78.0", "supported"],
+    ["0.77.0", "outdated"],
+    ["0.78.1", "outdated"],
+    ["0.79.1", "outdated"],
+    ["0.79.2", "supported"],
+    ["0.79.2-rc.1", "outdated"],
+    ["0.79.2+build.1", "supported"],
+    ["0.79.3", "supported"],
     ["0.9007199254740993.0", "indeterminate"],
   ])("classifies %s as %s", async (version, status) => {
     await expect(

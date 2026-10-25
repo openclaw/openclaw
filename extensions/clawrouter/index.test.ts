@@ -1,5 +1,4 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -232,7 +231,7 @@ describe("ClawRouter plugin", () => {
     ] as const) {
       const { calls, dispatch } = createStreamCapture(provider, agentId);
       dispatch(streamModel(), { sessionId });
-      captured.push(calls[0]?.headers ?? {});
+      captured.push(omitNullRequestHeaders(calls[0]?.headers) ?? {});
     }
 
     expect(captured).toHaveLength(2);
@@ -364,11 +363,8 @@ describe("ClawRouter plugin", () => {
       .mockResolvedValueOnce({ apiKey: "catalog-key-a" })
       .mockResolvedValueOnce({ apiKey: "catalog-key-b" })
       .mockResolvedValue({ apiKey: "catalog-key-a" });
-    let finishFirst: ((response: Response) => void) | undefined;
-    const firstResponse = new Promise<Response>((resolve) => {
-      finishFirst = resolve;
-    });
-    const firstStarted = createDeferred<void>();
+    const { promise: firstResponse, resolve: finishFirst } = Promise.withResolvers<Response>();
+    const firstStarted = Promise.withResolvers<void>();
     const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
       if (new Headers(init.headers).get("Authorization") === "Bearer catalog-key-a") {
         firstStarted.resolve();
@@ -446,3 +442,4 @@ describe("ClawRouter plugin", () => {
     });
   });
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

@@ -29,7 +29,7 @@ import {
   readChatInputRunIds,
 } from "./chat-pending-inputs.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import {
@@ -156,11 +156,11 @@ describe("server-owned pending input pagination", () => {
       chatQueue: [
         {
           id: "browser-input",
-          text: "Unconfirmed browser input",
+          text: "Pending browser input",
           createdAt: 99,
           sendRunId: "browser-input",
           sendAttempts: 1,
-          sendState: "unconfirmed",
+          sendState: "waiting-reconnect",
         },
       ],
       requestHandlers: {
@@ -493,6 +493,7 @@ describe("server-owned pending input pagination", () => {
       ).toBe(true);
       applyChatPendingInputs(host, page);
       await loadChatPendingInputs(host, 2);
+      expect(host.chatQueue.some((item) => item.id === "retained-source")).toBe(false);
 
       for (let index = 0; index < 3; index++) {
         applyChatPendingInputs(host, latestPage);
@@ -524,7 +525,7 @@ describe("server-owned pending input pagination", () => {
       expect(getChatPendingInputs(host)?.page).toEqual(latestPage);
       expect(getChatPendingInputs(host)?.before).toBeUndefined();
       expect(getChatPendingInputs(host)?.loading).toBe(false);
-      expect(host.chatQueue.some((item) => item.id === "retained-source")).toBe(true);
+      expect(host.chatQueue.some((item) => item.id === "retained-source")).toBe(false);
       expect(olderReads).toBe(2);
     },
   );

@@ -124,17 +124,6 @@ export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
   );
 }
 
-export async function captureNativePluginUiProof(
-  owner: { readonly artifactDir: string },
-  page: Page,
-  name: string,
-  options: { fullPage?: boolean } = {},
-): Promise<void> {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-    await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
-  }
-}
-
 export type NativePluginWindow = Window & {
   nativeWorkspaceLitTrace?: { errors: unknown[] };
   nativePluginProof?: { release?: () => void };

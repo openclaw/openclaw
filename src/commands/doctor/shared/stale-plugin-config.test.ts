@@ -7,6 +7,7 @@ import {
 } from "../../../plugins/config-state.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import {
   collectStalePluginConfigWarnings,
   maybeRepairStalePluginConfig,
@@ -26,18 +27,12 @@ vi.mock("../../../plugins/installed-plugin-index-records.js", async (importOrigi
 }));
 
 function manifest(id: string): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
     rootDir: `/plugins/${id}`,
     source: `/plugins/${id}`,
     manifestPath: `/plugins/${id}/openclaw.plugin.json`,
-  };
+  });
 }
 
 function enabledEntries(...ids: string[]) {
@@ -234,24 +229,6 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
-  it("resets stale plugin slots without changing valid slot sentinels", () => {
-    const cfg: OpenClawConfig = {
-      plugins: { slots: { memory: "acpx", contextEngine: "missing-engine" } },
-    };
-
-    const hits = scanStalePluginConfig(cfg);
-    expect(hits).toEqual([
-      hit("acpx", "slot", "memory"),
-      hit("missing-engine", "slot", "contextEngine"),
-    ]);
-
-    const result = maybeRepairStalePluginConfig(cfg);
-    expect(result.changes).toEqual([
-      "- plugins.slots: reset 2 stale plugin slots (memory: acpx -> memory-core, contextEngine: missing-engine -> legacy)",
-    ]);
-    expect(result.config.plugins?.slots).toBeUndefined();
-  });
-
   it("retains canonical policy for an installed mixed-case manifest owner", () => {
     vi.mocked(manifestRegistry.loadPluginManifestRegistryCore).mockReturnValue({
       plugins: [manifest("MiXeD-owner")],
@@ -318,11 +295,18 @@ describe("doctor stale plugin config helpers", () => {
         contextEngineIdsByPlugin: { "missing-owner": ["canonical-engine"] },
       },
     });
-    const result = maybeRepairStalePluginConfig({
-      plugins: { slots: { contextEngine: "canonical-engine" } },
-    });
+    const cfg: OpenClawConfig = {
+      plugins: { slots: { memory: "acpx", contextEngine: "canonical-engine" } },
+    };
+    expect(scanStalePluginConfig(cfg)).toEqual([
+      hit("acpx", "slot", "memory"),
+      hit("canonical-engine", "slot", "contextEngine"),
+    ]);
+    const result = maybeRepairStalePluginConfig(cfg);
     expect(result.config.plugins?.slots).toBeUndefined();
-    expect(result.changes).toHaveLength(1);
+    expect(result.changes).toEqual([
+      "- plugins.slots: reset 2 stale plugin slots (memory: acpx -> memory-core, contextEngine: canonical-engine -> legacy)",
+    ]);
   });
 
   it("does not preserve codex outside policy surfaces", () => {

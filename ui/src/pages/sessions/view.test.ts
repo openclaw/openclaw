@@ -634,6 +634,7 @@ describe("sessions view", () => {
     await renderSettled(initial, { expandedSessionKey: "agent:main:main" });
 
     const selects = queryAll<HTMLSelectElement>("tbody select");
+    const stats = [...queryAll(".session-detail-stat")];
     const [, fast, verbose, reasoning] = selects;
     expect([fast?.value, verbose?.value, reasoning?.value]).toEqual(["on", "full", "custom-mode"]);
     expect(optionValues(verbose)).toEqual(["", "off", "on", "full"]);
@@ -647,6 +648,7 @@ describe("sessions view", () => {
       { expandedSessionKey: "agent:main:main" },
     );
     const refreshed = queryAll("tbody select");
+    expect([...queryAll(".session-detail-stat")]).toEqual(stats);
     for (const [index, select] of [...selects].entries()) {
       expect(refreshed[index]).toBe(select);
     }

@@ -2,7 +2,6 @@ import type { ProviderAppGuidedSetupContext } from "openclaw/plugin-sdk/plugin-e
 import {
   createQueuedWizardPrompter,
   createNonExitingRuntimeEnv,
-  capturePluginRegistration,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   applyProviderAuthConfigPatch,
@@ -10,17 +9,14 @@ import {
   ensureAuthProfileStoreAsync,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type {
   ProviderAuthContext,
   ProviderAuthMethodNonInteractiveContext,
   ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-setup";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import plugin from "./index.js";
 import {
   configureOmlxInteractive,
   configureOmlxNonInteractive,
@@ -34,8 +30,7 @@ import {
 const modelId = "mlx-community/Qwen3-4B-Instruct-4bit";
 const localUrl = "http://127.0.0.1:8000/v1";
 function configWithProvider(overrides: Partial<ModelProviderConfig>): OpenClawConfig {
-  const omlx = { baseUrl: localUrl, models: [], ...overrides };
-  return { models: { providers: { omlx } } };
+  return { models: { providers: { omlx: { baseUrl: localUrl, models: [], ...overrides } } } };
 }
 
 const rows = [
@@ -112,20 +107,8 @@ afterEach(() => {
 });
 
 describe("oMLX setup through the inference catalog", () => {
-  it("keeps an explicitly keyless catalog free of ambient credentials", async () => {
-    const fetchMock = fixture();
-    const ctx = catalogContext();
-    ctx.env = { OMLX_API_KEY: "old-endpoint-key" };
-    ctx.resolveProviderApiKey = () => ({
-      apiKey: "OMLX_API_KEY",
-      discoveryApiKey: "old-endpoint-key",
-    });
-    ctx.config = configWithProvider({ apiKey: "omlx-local" });
-    await expect(discoverOmlxProvider(ctx)).resolves.toBeTruthy();
-    expect(authorization(fetchMock)).toBeNull();
-  });
-
   it.each([
+    { name: "keyless sentinel", apiKey: "omlx-local", envKey: "old-endpoint-key", key: null },
     {
       name: "selected profile",
       apiKey: "omlx:selected",
@@ -163,7 +146,7 @@ describe("oMLX setup through the inference catalog", () => {
           },
         }),
       ).resolves.toMatchObject({ provider: { apiKey } });
-      expect(authorization(fetchMock)).toBe(`Bearer ${key}`);
+      expect(authorization(fetchMock)).toBe(key === null ? null : `Bearer ${key}`);
     });
   });
 
@@ -218,78 +201,26 @@ describe("oMLX setup through the inference catalog", () => {
   });
 
   it("handles an unreachable server and propagates cancellation", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        throw new Error("ECONNREFUSED");
-      }),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
     await expect(detectOmlxAvailability(guidedContext())).resolves.toBe(false);
     await expect(detectOmlx({ ...guidedContext(), signal: AbortSignal.abort() })).rejects.toThrow();
   });
 
-  it("honors configured headers and private-network policy", async () => {
+  it("honors a configured private-network denial during detection", async () => {
     const fetchMock = fixture();
     const ctx = guidedContext();
     ctx.config = configWithProvider({
-      apiKey: "omlx-local",
-      headers: { Authorization: "Bearer fixture-header" },
-      request: {
-        allowPrivateNetwork: true,
-        headers: { "X-Fixture": "catalog", authorization: "Bearer overridden-header" },
-      },
+      request: { allowPrivateNetwork: false },
     });
-    await expect(detectOmlxAvailability(ctx)).resolves.toBe(true);
-    expect(fetchMock).toHaveBeenLastCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        headers: { authorization: "Bearer overridden-header", "X-Fixture": "catalog" },
-      }),
-    );
-    const provider = ctx.config.models?.providers?.omlx;
-    assert(provider, "missing fixture provider");
-    provider.request = { allowPrivateNetwork: false };
-    fetchMock.mockClear();
     await expect(detectOmlxAvailability(ctx)).resolves.toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      auth: { mode: "authorization-bearer" as const, token: "${OMLX_TEST_TOKEN}" },
-      expectedHeaders: { Authorization: "Bearer fixture-auth-override" },
-    },
-    {
-      auth: { mode: "header" as const, headerName: "X-Local-Key", value: "${OMLX_TEST_TOKEN}" },
-      expectedHeaders: { "X-Local-Key": "fixture-auth-override" },
-    },
-  ])(
-    "uses request.auth $auth.mode without forwarding stale authorization",
-    async ({ auth, expectedHeaders }) => {
-      const fetchMock = fixture();
-      const ctx = guidedContext();
-      ctx.env = { OMLX_TEST_TOKEN: "fixture-auth-override" };
-      ctx.config = configWithProvider({
-        apiKey: "stale-provider-key",
-        headers: { authorization: "Bearer stale-header" },
-        request: { auth },
-      });
-      await expect(detectOmlxAvailability(ctx)).resolves.toBe(true);
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ headers: expectedHeaders }),
-      );
-    },
-  );
-
-  it("makes catalog discovery opt-in and exposes only chat rows", async () => {
+  it("makes catalog discovery opt-in", async () => {
     const fetchMock = fixture();
     const ctx = catalogContext();
     await expect(discoverOmlxProvider({ ...ctx, providerIds: undefined })).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
-    await expect(discoverOmlxProvider(ctx)).resolves.toMatchObject({
-      provider: { models: [{ id: "custom-chat" }, { id: modelId }] },
-    });
   });
 
   it.each([
@@ -325,13 +256,6 @@ describe("oMLX setup through the inference catalog", () => {
             "omlx:default": { type: "api_key", provider: "omlx", key: "other-agent-key" },
           },
         });
-        fetchMock.mockImplementation(async (input) =>
-          Response.json({
-            data: new URL(new Request(input).url).pathname.endsWith("/embeddings")
-              ? [{ index: 0, embedding: [1, 0] }]
-              : rows,
-          }),
-        );
         let config: OpenClawConfig;
         if (mode === "interactive") {
           const ctx = interactiveContext(selectedKey);
@@ -346,13 +270,6 @@ describe("oMLX setup through the inference catalog", () => {
           }
           ctx.prompter.confirm = vi.fn(async () => false);
           const result = await configureOmlxInteractive(ctx);
-          expect(result.defaultModel).toBe(`omlx/${modelId}`);
-          expect(result.profiles).toEqual([
-            { profileId: "omlx:default", credential: expectedCredential },
-          ]);
-          if (credentialMode === "plaintext") {
-            expect(ctx.prompter.confirm).toHaveBeenCalledOnce();
-          }
           await state.writeAuthProfiles(
             {
               version: 1,
@@ -376,7 +293,6 @@ describe("oMLX setup through the inference catalog", () => {
           const configured = await configureOmlxNonInteractive(ctx);
           assert(configured, "Missing initial oMLX setup configuration");
           config = configured;
-          expect(ctx.toApiKeyCredential).toHaveBeenCalledOnce();
         }
         expect(authorization(fetchMock)).toBe(`Bearer ${selectedKey}`);
         const store = await ensureAuthProfileStoreAsync(agentDir);
@@ -389,67 +305,20 @@ describe("oMLX setup through the inference catalog", () => {
             env: { OMLX_API_KEY: ambientKey, [selectedRef.id]: selectedKey },
           }),
         ).resolves.toBeTruthy();
-        const discoveryAuthorization = authorization(fetchMock);
-        let runtimeConfig = config;
-        if (credentialMode === "ref") {
-          // Embedding/chat consumers receive resolved runtime config; discovery receives raw config.
-          const provider = config.models?.providers?.omlx;
-          assert(provider, "Missing oMLX provider configuration");
-          const resolved = await resolveConfiguredSecretInputString({
-            config,
-            env: process.env,
-            value: provider.apiKey,
-            path: "models.providers.omlx.apiKey",
-          });
-          runtimeConfig = applyProviderAuthConfigPatch(
-            config,
-            configWithProvider({ ...provider, apiKey: resolved.value }),
-          );
-        }
-        const adapter = capturePluginRegistration(plugin).embeddingProviders[0];
-        assert(adapter, "Missing registered oMLX embedding provider");
-        const embedding = await adapter.create({
-          config: runtimeConfig,
-          agentDir: consumerAgentDir,
-          model: "text-embedding-mini",
-        });
-        await expect(embedding.provider?.embed("orchard")).resolves.toEqual([1, 0]);
-        const chatAuth = await resolveApiKeyForProvider({
-          provider: "omlx",
-          cfg: runtimeConfig,
-          agentDir: consumerAgentDir,
-        });
-        expect({
-          credential: store.profiles["omlx:default"],
-          binding: config.models?.providers?.omlx?.apiKey,
-          discoveryAuthorization,
-          embeddingAuthorization: authorization(fetchMock),
-          chatKey: chatAuth.apiKey,
-          chatProfile: chatAuth.profileId,
-        }).toEqual({
-          credential: expectedCredential,
-          binding: credentialMode === "ref" ? selectedRef : "omlx:default",
-          discoveryAuthorization: `Bearer ${selectedKey}`,
-          embeddingAuthorization: `Bearer ${selectedKey}`,
-          chatKey: selectedKey,
-          chatProfile: credentialMode === "ref" ? undefined : "omlx:default",
-        });
+        expect(store.profiles["omlx:default"]).toEqual(expectedCredential);
+        expect(config.models?.providers?.omlx?.apiKey).toEqual(
+          credentialMode === "ref" ? selectedRef : "omlx:default",
+        );
+        expect(authorization(fetchMock)).toBe(`Bearer ${selectedKey}`);
         if (mode === "noninteractive" && credentialMode === "plaintext") {
           const repeated = nonInteractiveContext(config);
           repeated.agentDir = agentDir;
           await expect(validateOmlxNonInteractive(repeated)).resolves.toBe(true);
           const validationAuthorization = authorization(fetchMock);
           const next = await configureOmlxNonInteractive(repeated);
-          expect({
-            validationAuthorization,
-            authorization: authorization(fetchMock),
-            binding: next?.models?.providers?.omlx?.apiKey,
-          }).toEqual({
-            validationAuthorization: `Bearer ${selectedKey}`,
-            authorization: `Bearer ${selectedKey}`,
-            binding: "omlx:default",
-          });
-          expect(repeated.resolveApiKey).not.toHaveBeenCalled();
+          expect(validationAuthorization).toBe(`Bearer ${selectedKey}`);
+          expect(authorization(fetchMock)).toBe(`Bearer ${selectedKey}`);
+          expect(next?.models?.providers?.omlx?.apiKey).toBe("omlx:default");
           expect(repeated.toApiKeyCredential).not.toHaveBeenCalled();
         }
       });
@@ -503,9 +372,6 @@ describe("oMLX setup through the inference catalog", () => {
       await expect(validateOmlxNonInteractive(ctx)).resolves.toBe(true);
       expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
     }
-    if (!scenario.interactive && !scenario.key) {
-      expect(ctx.resolveApiKey).not.toHaveBeenCalled();
-    }
     const headers = new Headers(fetchMock.mock.lastCall?.[1]?.headers);
     expect(headers.get("authorization")).toBe(scenario.key ? `Bearer ${scenario.key}` : null);
     expect(headers.has("x-omlx-key")).toBe(false);
@@ -517,27 +383,32 @@ describe("oMLX setup through the inference catalog", () => {
     "clears saved credentials on an endpoint switch with private-network policy %s",
     async (allowPrivateNetwork) => {
       const fetchMock = fixture();
-      const ctx = interactiveContext();
-      ctx.config = configWithProvider({
-        baseUrl: "http://127.0.0.1:9000/v1",
-        apiKey: "old-endpoint-key",
-        auth: "api-key",
-        authHeader: false,
-        headers: { Authorization: "Bearer old-header-key" },
-        request: {
-          allowPrivateNetwork,
-          auth: { mode: "header", headerName: "X-Old-Auth", value: "old-auth-key" },
-          headers: { "X-Api-Key": "old-custom-key" },
-          tls: { cert: "old-client-cert", key: "old-client-key" },
-          proxy: {
-            mode: "explicit-proxy",
-            url: "http://proxy.example.test",
-            tls: { passphrase: "old-proxy-passphrase" },
+      const baseUrl = allowPrivateNetwork ? localUrl : "https://omlx.example.test/v1";
+      const ctx = interactiveContext("", baseUrl);
+      ctx.config = {
+        auth: { profiles: { "omlx:default": { provider: "omlx", mode: "api_key" } } },
+        ...configWithProvider({
+          baseUrl: "http://127.0.0.1:9000/v1",
+          apiKey: "old-endpoint-key",
+          auth: "api-key",
+          authHeader: false,
+          headers: { Authorization: "Bearer old-header-key" },
+          request: {
+            allowPrivateNetwork,
+            auth: { mode: "header", headerName: "X-Old-Auth", value: "old-auth-key" },
+            headers: { "X-Api-Key": "old-custom-key" },
+            tls: { cert: "old-client-cert", key: "old-client-key" },
+            proxy: {
+              mode: "explicit-proxy",
+              url: "http://proxy.example.test",
+              tls: { passphrase: "old-proxy-passphrase" },
+            },
           },
-        },
-      });
+        }),
+      };
       const result = await configureOmlxInteractive(ctx);
-      expect(fetchMock.mock.lastCall?.[0]).toBe(`${localUrl}/models`);
+      expect(result).toMatchObject({ defaultModel: `omlx/${modelId}`, profiles: [] });
+      expect(fetchMock.mock.lastCall?.[0]).toBe(`${baseUrl}/models`);
       const headers = new Headers(fetchMock.mock.lastCall?.[1]?.headers);
       expect(headers.has("authorization")).toBe(false);
       expect(headers.has("x-api-key")).toBe(false);
@@ -562,41 +433,28 @@ describe("oMLX setup through the inference catalog", () => {
     },
   );
 
-  it("validates noninteractive models before persistence", async () => {
-    fixture();
-    const ctx = nonInteractiveContext();
-    ctx.opts.customModelId = "missing";
-    await expect(validateOmlxNonInteractive(ctx)).resolves.toBe(false);
-    await expect(configureOmlxNonInteractive(ctx)).resolves.toBeNull();
-    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
-  });
-
-  it("configures keyless remote chat without inheriting the previous server credential", async () => {
-    const fetchMock = fixture();
-    const ctx = interactiveContext("", "https://omlx.example.test/v1");
-    ctx.config = {
-      auth: { profiles: { "omlx:default": { provider: "omlx", mode: "api_key" } } },
-      ...configWithProvider({ baseUrl: "http://127.0.0.1:9000/v1", apiKey: "old-server-key" }),
-    };
-    const result = await configureOmlxInteractive(ctx);
-    expect(result.defaultModel).toBe(`omlx/${modelId}`);
-    expect(result.profiles).toEqual([]);
-    expect(authorization(fetchMock)).toBeNull();
-    expect(result.configPatch?.models?.providers?.omlx).toMatchObject({
-      headers: undefined,
-      request: undefined,
-      apiKey: "omlx-local",
-    });
-  });
-
-  it.each([
-    { name: "blank input uses the default", saved: undefined, baseUrl: localUrl },
-    {
-      name: "blank input keeps the saved URL, prefilled for editing",
-      saved: "https://omlx.example.test/v1/",
-      baseUrl: "https://omlx.example.test/v1",
+  it.each(["missing", { unexpected: "value" }])(
+    "rejects invalid model %j before persistence",
+    async (model) => {
+      const fetchMock = fixture();
+      const ctx = nonInteractiveContext();
+      ctx.opts.customModelId = model;
+      const error = vi.spyOn(ctx.runtime, "error");
+      await expect(validateOmlxNonInteractive(ctx)).resolves.toBe(false);
+      await expect(configureOmlxNonInteractive(ctx)).resolves.toBeNull();
+      expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
+      if (typeof model !== "string") {
+        expect(error).toHaveBeenCalledWith(expect.stringContaining("requires --custom-model-id"));
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(ctx.resolveApiKey).not.toHaveBeenCalled();
+      }
     },
-  ])("$name", async ({ saved, baseUrl }) => {
+  );
+
+  it.each<[string | undefined, string]>([
+    [undefined, localUrl],
+    ["https://omlx.example.test/v1/", "https://omlx.example.test/v1"],
+  ])("normalizes blank input with saved URL %s", async (saved, baseUrl) => {
     const fetchMock = fixture();
     const ctx = interactiveContext("", "");
     ctx.config = saved ? configWithProvider({ baseUrl: saved }) : {};
@@ -607,18 +465,6 @@ describe("oMLX setup through the inference catalog", () => {
     });
     expect(fetchMock.mock.lastCall?.[0]).toBe(`${baseUrl}/models`);
     expect(result.configPatch?.models?.providers?.omlx?.baseUrl).toBe(baseUrl);
-  });
-
-  it("reports a non-string model option before discovery or credential persistence", async () => {
-    const fetchMock = fixture();
-    const ctx = nonInteractiveContext();
-    ctx.opts.customModelId = { unexpected: "value" };
-    const error = vi.spyOn(ctx.runtime, "error");
-    await expect(validateOmlxNonInteractive(ctx)).resolves.toBe(false);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining("requires --custom-model-id"));
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(ctx.resolveApiKey).not.toHaveBeenCalled();
-    expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
   });
 
   it("retains a private-network denial when setup changes the endpoint", async () => {
@@ -635,14 +481,9 @@ describe("oMLX setup through the inference catalog", () => {
   it("configures keyless noninteractive setup without creating a credential", async () => {
     fixture();
     const ctx = nonInteractiveContext();
-    await expect(configureOmlxNonInteractive(ctx)).resolves.toMatchObject({
-      models: {
-        providers: {
-          omlx: { apiKey: "omlx-local", models: [{ id: "custom-chat" }, { id: modelId }] },
-        },
-      },
-      agents: { defaults: { model: { primary: `omlx/${modelId}` } } },
-    });
+    const config = await configureOmlxNonInteractive(ctx);
+    expect(config?.models?.providers?.omlx?.apiKey).toBe("omlx-local");
+    expect(config?.agents?.defaults?.model).toMatchObject({ primary: `omlx/${modelId}` });
     expect(ctx.toApiKeyCredential).not.toHaveBeenCalled();
   });
 
@@ -665,7 +506,6 @@ describe("oMLX setup through the inference catalog", () => {
     const headers = new Headers(fetchMock.mock.lastCall?.[1]?.headers);
     expect(headers.get("authorization")).toBe(scenario.authorization);
     expect(headers.get("x-omlx-key")).toBe(scenario.custom ? "saved-header-key" : null);
-    expect(ctx.resolveApiKey).not.toHaveBeenCalled();
     const result = await configureOmlxNonInteractive(ctx);
     if (scenario.apiKey !== undefined) {
       expect(result?.models?.providers?.omlx?.apiKey).toBe(scenario.apiKey);

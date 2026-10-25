@@ -339,7 +339,7 @@ describe("interrupted chat input recovery", () => {
       await expect(resumeChatInput(fixture.context, target, options)).rejects.toThrow(/changed/);
     }));
 
-  it("captures pending user input authority for child sessions without changing main-turn recovery", () =>
+  it("captures admitted and pending operator input authority for native child sessions", () =>
     withInput(async ({ fixture }) => {
       const captured = expectDefined(
         await captureGatewayOperatorRunAuthority({
@@ -352,14 +352,39 @@ describe("interrupted chat input recovery", () => {
       try {
         const params = {
           authority: captured.authority,
-          entry: { ...fixture.entry, spawnedBy: "agent:main:parent", spawnDepth: 1 },
+          entry: {
+            ...fixture.entry,
+            spawnedBy: "agent:other:group:parent",
+            spawnDepth: 1,
+            subagentRole: "leaf" as const,
+            completionOwnerSessionKey: "agent:other:group:parent",
+          },
           ...fixture.target,
+          sessionKey: "agent:main:subagent:later-operator-turn",
         };
-        expect(createRestartRecoveryOperatorSource(params)).toBeUndefined();
-        expect(createOperatorInputRecoverySource(params)).toMatchObject({
+        expect(createRestartRecoveryOperatorSource(params)).toEqual(
+          createOperatorInputRecoverySource(params),
+        );
+        const source = expectDefined(createOperatorInputRecoverySource(params), "recovery source");
+        expect(source).toMatchObject({
           sessionId: fixture.target.sessionId,
           sourceRunId: fixture.target.sourceRunId,
         });
+        expect(source.snapshot.authPolicy).toBe(captured.authority.recoverySnapshot?.authPolicy);
+        expect(Reflect.set(source.snapshot.authPolicy, "role", "changed")).toBe(false);
+        expect(captured.authority.recoverySnapshot?.authPolicy.role).toBe("operator");
+        for (const sourceTool of ["cron_execution", "progress_card_refresh"]) {
+          expect(
+            createRestartRecoveryOperatorSource({
+              ...params,
+              inputProvenance: { kind: "internal_system", sourceTool },
+              requesterOrigin: {
+                sessionKey: params.sessionKey,
+                operatorProfileId: captured.authority.profileId,
+              },
+            }),
+          ).toBeUndefined();
+        }
       } finally {
         captured.release();
       }

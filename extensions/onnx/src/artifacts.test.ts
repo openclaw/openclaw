@@ -1,3 +1,4 @@
+import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -148,6 +149,59 @@ it.each([
     await install(data);
   }
   await expect(verify()).rejects.toThrow(code);
+});
+
+it.skipIf(process.platform === "win32").each([
+  { name: "local-export manifest", filename: "model.json", symlink: false },
+  { name: "symlinked model artifact", filename: "model.onnx", symlink: true },
+])("rejects a FIFO $name without waiting for a writer", async ({ filename, symlink }) => {
+  await fs.mkdir(destination, { recursive: true });
+  const input = path.join(destination, filename);
+  const fifo = symlink ? path.join(root, "artifact.fifo") : input;
+  execFileSync("mkfifo", [fifo]);
+  if (symlink) {
+    await fs.symlink(fifo, input);
+  }
+  let neededWriter = false;
+  let writer: ReturnType<typeof spawn> | undefined;
+  let writerExited = Promise.resolve();
+  // Rescue a regressed blocking open with EOF, so it fails instead of hanging the worker.
+  const rescue = setTimeout(() => {
+    neededWriter = true;
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        "const fs = require('node:fs'); fs.open(process.argv[1], 'w', (error, fd) => { if (error) throw error; fs.closeSync(fd); });",
+        fifo,
+      ],
+      { stdio: "ignore" },
+    );
+    writer = child;
+    writerExited = new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", () => resolve());
+    });
+  }, 1000);
+  try {
+    const operation =
+      filename === "model.json"
+        ? resolveModelFiles(root, {
+            ...model,
+            source: { ...model.source, kind: "local-export" },
+          })
+        : verify();
+    await expect(operation).rejects.toThrow("model-integrity");
+    expect(neededWriter, "the regular-file refusal must not need an EOF writer").toBe(false);
+    expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+    if (symlink) {
+      expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
+    }
+  } finally {
+    clearTimeout(rescue);
+    writer?.kill("SIGKILL");
+    await writerExited;
+  }
 });
 
 it.each(["grows", "shrinks", "close fails"])("rejects when the artifact %s", async (change) => {

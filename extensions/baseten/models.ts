@@ -15,7 +15,17 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const BASETEN_MANIFEST_CATALOG = manifest.modelCatalog.providers.baseten;
+const declaredCatalog = manifest.modelCatalog.providers.baseten;
+export const BASETEN_DECISION_MODEL_IDS = new Set(
+  declaredCatalog.models
+    .filter((model) => model.inference?.chat === false)
+    .map((model) => model.id),
+);
+// Decision-only rows have no conversational token budget or chat transport.
+const BASETEN_MANIFEST_CATALOG = {
+  ...declaredCatalog,
+  models: declaredCatalog.models.filter((model) => model.inference?.chat !== false),
+};
 const BASETEN_MODEL_COMPAT = new Map(
   buildManifestModelProviderConfig({
     providerId: "baseten",
@@ -85,7 +95,7 @@ function projectLiveModel(
     return undefined;
   }
   const id = normalizeOptionalString(row.id);
-  if (!id) {
+  if (!id || id.startsWith("decision-models/")) {
     return undefined;
   }
 
@@ -166,7 +176,11 @@ export function projectBasetenLiveModels(rows: readonly unknown[]): ModelDefinit
 /** Resolves a forward-compatible Baseten model id not yet in the bundled catalog. */
 export function resolveBasetenDynamicModel(modelId: string) {
   const id = modelId.trim();
-  if (!id || BASETEN_MODEL_CATALOG.some((model) => model.id === id)) {
+  if (
+    !id ||
+    id.startsWith("decision-models/") ||
+    BASETEN_MODEL_CATALOG.some((model) => model.id === id)
+  ) {
     return undefined;
   }
   return {

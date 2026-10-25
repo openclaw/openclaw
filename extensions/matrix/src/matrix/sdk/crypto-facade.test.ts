@@ -60,7 +60,6 @@ function createFacadeHarness(params?: {
     recoveryKeyStore: {
       getRecoveryKeySummary: vi.fn(async () => params?.recoveryKeySummary ?? null),
     } as unknown as MatrixRecoveryKeyStore,
-    isRoomEncrypted: async () => false,
     downloadContent: async () => Buffer.alloc(0),
   });
 }

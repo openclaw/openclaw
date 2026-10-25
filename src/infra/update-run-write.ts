@@ -289,15 +289,7 @@ export function recordUpdateRunDiagnostics(
   options: UpdateRunLedgerOptions = {},
 ): UpdateRunRecord | undefined {
   try {
-    if (
-      typeof diagnostics !== "function" &&
-      !(
-        diagnostics.failure ||
-        diagnostics.recovery ||
-        diagnostics.rollbackOutcome ||
-        diagnostics.verification
-      )
-    ) {
+    if (typeof diagnostics !== "function" && !hasUpdateRunDiagnostics(diagnostics)) {
       return undefined;
     }
     return mutateRun(runId, (record) => applyUpdateRunDiagnostics(record, diagnostics), options);
@@ -353,4 +345,13 @@ export function applyFinishUpdateRun(record: UpdateRunRecord, result: FinishUpda
       }
     }
   }
+}
+
+export function hasUpdateRunDiagnostics(diagnostics: UpdateRunDiagnostics): boolean {
+  return Boolean(
+    diagnostics.failure ||
+    diagnostics.recovery ||
+    diagnostics.rollbackOutcome ||
+    diagnostics.verification,
+  );
 }

@@ -3,12 +3,12 @@ import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
-import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type {
-  buildGatewayCronService,
+  GatewayCronServiceContract,
   GatewayCronExitWatcherHandoff,
   GatewayCronState,
-} from "./server-cron.js";
+} from "./server-cron-contract.js";
+import type { buildGatewayCronService } from "./server-cron.js";
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(
@@ -176,6 +176,9 @@ export function createLazyGatewayCronState(
 
   return {
     cron,
+    get readHeartbeatSummary() {
+      return loaded?.readHeartbeatSummary;
+    },
     deferHookWake: async (opts) => {
       const generation = lifecycleGeneration;
       const commitGuard = () => {

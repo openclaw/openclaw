@@ -23,6 +23,7 @@ import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import {
   collectPostgresBridgeCounters,
   countPostgresBridges,
+  countPostgresPoolSelfRoots,
   readPostgresBridgeCounters,
   type PostgresBridgeCounter,
 } from "./worker-postgres-bridge-census.js";
@@ -77,6 +78,7 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
       | ((samples: GcSample[], thread: string, workerSlot?: number) => void)
       | undefined,
     postgresBridgeCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
+    postgresPoolSelfRootCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
     postgresBridgeObservers: new Set<() => void>(),
     revision: 0,
     nextPoolId: 0,
@@ -136,7 +138,13 @@ export function getTrackedPostgresBridgeCounters(): PostgresBridgeCounter[] {
   return collectPostgresBridgeCounters(
     trackedWorkers.postgresBridgeCount,
     trackedWorkers.workers.values(),
+    trackedWorkers.postgresPoolSelfRootCount,
   );
+}
+
+/** Count once per thread, including a pool restarted after explicit cleanup. */
+export function recordPostgresPoolSelfRoot(): boolean {
+  return Atomics.compareExchange(trackedWorkers.postgresPoolSelfRootCount, 0, 0, 1) === 0;
 }
 
 export function observeTrackedPostgresBridgeCounters(observer: () => void): () => void {
@@ -164,8 +172,12 @@ function receivePostgresBridgeCounters(source: WorkerSource, value: unknown): vo
   publishPostgresBridgeCounters();
 }
 
-function getTrackedPostgresBridgeCount(): number {
-  return countPostgresBridges(getTrackedPostgresBridgeCounters());
+function getTrackedPostgresPoolCounts() {
+  const counters = getTrackedPostgresBridgeCounters();
+  return {
+    postgresBridgeCount: countPostgresBridges(counters),
+    postgresPoolSelfRootCount: countPostgresPoolSelfRoots(counters),
+  };
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
@@ -225,7 +237,7 @@ export function getTrackedWorkerPoolSnapshot() {
   }
   return {
     workerCount: trackedWorkers.workers.size,
-    postgresBridgeCount: getTrackedPostgresBridgeCount(),
+    ...getTrackedPostgresPoolCounts(),
     workerPoolCount: pools.size,
     workerPools: [...pools.values()]
       .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
@@ -369,21 +381,25 @@ function trackWorker(worker: WorkerCpuHandle): void {
     };
   }
   let pending = false;
+  // Reuse reactions instead of allocating an async frame for every sample.
+  const finishCpuUsage = (usage: NodeJS.CpuUsage | undefined) => {
+    pending = false;
+    return usage;
+  };
+  const failCpuUsage = () => finishCpuUsage(undefined);
   const source: WorkerSource = {
     script: "other",
-    async cpuUsage() {
+    cpuUsage() {
       // Worker.cpuUsage cannot cancel an interrupt blocked in native work. Keep
       // at most one outstanding request even across sampler resets/restarts.
       if (pending) {
-        return undefined;
+        return Promise.resolve(undefined);
       }
       pending = true;
       try {
-        return await worker.cpuUsage();
+        return worker.cpuUsage().then(finishCpuUsage, failCpuUsage);
       } catch {
-        return undefined;
-      } finally {
-        pending = false;
+        return Promise.resolve(failCpuUsage());
       }
     },
   };
@@ -647,7 +663,7 @@ export function getTrackedWorkerLifecycleSnapshot() {
   pruneExitedWorkers();
   return {
     workerCount: trackedWorkers.workers.size,
-    postgresBridgeCount: getTrackedPostgresBridgeCount(),
+    ...getTrackedPostgresPoolCounts(),
     workerLifecycle: [...trackedWorkers.lifecycle].map(([script, counts]) => ({
       script,
       started: counts.started,

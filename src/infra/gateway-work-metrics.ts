@@ -26,10 +26,21 @@ type SessionRowSelectionMetric = {
 
 const rowSelections = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionRowSelectionMetrics"),
-  () => ({
-    counters: new Map<string, Map<SessionRowSelectionKind, SessionRowSelectionMetric>>(),
-    resets: 0,
-  }),
+  () => {
+    const sampledFirstDifferences: Record<string, number> = {};
+    return {
+      counters: new Map<string, Map<SessionRowSelectionKind, SessionRowSelectionMetric>>(),
+      resets: 0,
+      materialization: {
+        created: 0,
+        reused: 0,
+        rebuilt: 0,
+        skipped: 0,
+        deepComparisons: 0,
+        sampledFirstDifferences,
+      },
+    };
+  },
 );
 
 /** Keep caller attribution bounded and free of session, agent, or request identities. */
@@ -78,12 +89,32 @@ export function recordSessionRowSelectionReset(): void {
   rowSelections.resets++;
 }
 
+/** Sample one in 64 rebuilds; diagnostic snapshots log field names, never row values. */
+export function recordSessionRowMaterialization(
+  outcome: "created" | "reused" | "rebuilt" | "skipped",
+  deepCompared: boolean,
+): boolean {
+  const counters = rowSelections.materialization;
+  counters[outcome]++;
+  counters.deepComparisons += Number(deepCompared);
+  return outcome === "rebuilt" && (counters.rebuilt - 1) % 64 === 0;
+}
+
+export function recordSessionRowMaterializationDifference(field: string): void {
+  const differences = rowSelections.materialization.sampledFirstDifferences;
+  differences[field] = (differences[field] ?? 0) + 1;
+}
+
 export function getSessionRowSelectionMetrics() {
   return {
     selections: [...rowSelections.counters.values()].flatMap((kinds) =>
       [...kinds.values()].map((counter) => Object.assign({}, counter)),
     ),
     resets: rowSelections.resets,
+    materialization: {
+      ...rowSelections.materialization,
+      sampledFirstDifferences: { ...rowSelections.materialization.sampledFirstDifferences },
+    },
   };
 }
 

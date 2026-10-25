@@ -29,7 +29,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-switch-roster.e2e.test.ts",
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
-  "ui/src/e2e/approval-lookup.real-gateway.e2e.test.ts",
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
   "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
   "ui/src/e2e/browser-auth-recovery.e2e.test.ts",
@@ -38,9 +37,10 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-code-block-fences.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-export-attribution.e2e.test.ts",
+  "ui/src/e2e/chat-daybreak.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-html-publication.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-json-tree.e2e.test.ts",
+  "ui/src/e2e/chat-loading-geometry.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
@@ -53,7 +53,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
-  "ui/src/e2e/child-session-load-errors.e2e.test.ts",
   "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
   "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
@@ -82,6 +81,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
   "ui/src/e2e/presentation-primitives.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
+  "ui/src/e2e/quiet-automations.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
   "ui/src/e2e/session-management.promotion.e2e.test.ts",
@@ -94,7 +94,9 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
   "ui/src/pages/agents-home/claws-catalog.e2e.test.ts",
   "ui/src/pages/claws/creator-review.e2e.test.ts",
+  "ui/src/pages/plugins/plugins-base-path.e2e.test.ts",
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
+  "ui/src/pages/workboard/workboard-selection-focus.e2e.test.ts",
 ].map((file) => resolveUiTypeScriptPath(file));
 
 export const uiE2eRuntimeBudgetTestFile = resolveUiTypeScriptPath(
@@ -126,6 +128,7 @@ export function createUiE2eVitestConfig(
 ) {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
+  const maxWorkers = Math.min(2, baseTest.maxWorkers);
   const baseSequence = (baseTest as { sequence?: object }).sequence;
   const realGatewayExclude =
     env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY === "1" ? uiE2eRealGatewayTestFiles : [];
@@ -151,8 +154,8 @@ export function createUiE2eVitestConfig(
     expect: { poll: { interval: 100, timeout: 15_000 } },
     globalSetup: [chromiumSetup],
     isolate: true,
-    // Inherit root concurrency so Vitest's --maxWorkers override still applies.
-    maxWorkers: undefined,
+    // Pin the root cap explicitly; native CLI overrides still apply to every project.
+    maxWorkers,
     pool: "forks",
     runner: undefined,
     setupFiles: [],
@@ -178,7 +181,7 @@ export function createUiE2eVitestConfig(
       // Keep the root inventory visible to config discovery. Vitest runs only
       // the inline projects when `projects` is present.
       include,
-      maxWorkers: Math.min(2, baseTest.maxWorkers),
+      maxWorkers,
       // ui-e2e-projects-contract-v1: frozen-target preflight may select these projects.
       // Each project already composes the complete shared config and must not inherit it again.
       projects: [

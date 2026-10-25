@@ -4,31 +4,28 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { withinTest } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { applyClawAddPlanStateless } from "../claws/add-stateless.js";
 import { buildGatewayClawAddPlan } from "../claws/gateway-add-plan.js";
 import { bindClawPluginInstallConsent } from "../claws/gateway-plugin-consent.js";
 import { projectClawPluginCapabilityReviews } from "../claws/plugin-capability-review.js";
 import { readClawManifestFile } from "../claws/reader.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { clearConfigCache } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import { createClawHubArchiveFactory } from "../plugins/clawhub.test-support.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { setTestEnvValue } from "../test-utils/env.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createTestGate } from "./server-close.lifecycle.test-support.js";
 import { startGatewayServer } from "./server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
-import {
-  configureManualGatewayBackgroundEnv,
-  MANUAL_GATEWAY_ENV_KEYS,
-} from "./test-helpers.manual-gateway-env.js";
+import { configureManualGatewayBackgroundEnv } from "./test-helpers.manual-gateway-env.js";
 
 const clawhub = vi.hoisted(() => ({
   detail: vi.fn(),
@@ -53,7 +50,6 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: clawhub.officialCatalog,
 }));
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
 const createClawHubArchive = createClawHubArchiveFactory(afterEach);
 const packageName = "@openclaw/lobster";
 const version = "1.0.0";
@@ -62,43 +58,56 @@ it("lets the installed plugin request review and gates its effect on Allow once 
   signal,
 }) => {
   const gate = createTestGate(signal);
-  const home = dirs.make("openclaw-claw-plugin-approval-");
-  const stateDir = path.join(home, ".openclaw");
-  const configPath = path.join(stateDir, "openclaw.json");
-  const clawDir = path.join(home, "claw");
-  const markerPath = path.join(home, "approved.log");
-  await fs.mkdir(stateDir, { recursive: true });
-  await fs.mkdir(clawDir);
-  const config: OpenClawConfig = {
-    gateway: { mode: "local", controlUi: { experimental: { claws: true } } },
-    agents: { entries: {} },
-  };
-  await fs.writeFile(configPath, JSON.stringify(config));
-  const manifestPath = path.join(clawDir, "claw.json");
-  await fs.writeFile(
-    manifestPath,
-    JSON.stringify({
-      schemaVersion: 1,
-      agent: { id: "approval-claw", name: "Approval Claw" },
-      packages: [{ kind: "plugin", source: "clawhub", ref: packageName, version }],
-    }),
-  );
+  const state = await createOpenClawTestState({
+    label: "claw-plugin-approval",
+    env: {
+      ...KERNEL_TEST_ENV,
+      OPENCLAW_CLAWHUB_URL: undefined,
+      CLAWHUB_URL: undefined,
+      OPENCLAW_GATEWAY_URL: undefined,
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_GATEWAY_PASSWORD: undefined,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+    },
+  });
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  let caller: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+  let reviewer: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+  try {
+    const { home } = state;
+    const clawDir = path.join(home, "claw");
+    const markerPath = path.join(home, "approved.log");
+    await fs.mkdir(clawDir);
+    const config: OpenClawConfig = {
+      gateway: { mode: "local", controlUi: { experimental: { claws: true } } },
+      agents: { entries: {} },
+    };
+    await state.writeConfig(config);
+    const manifestPath = path.join(clawDir, "claw.json");
+    await fs.writeFile(
+      manifestPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "approval-claw", name: "Approval Claw" },
+        packages: [{ kind: "plugin", source: "clawhub", ref: packageName, version }],
+      }),
+    );
 
-  // Synthetic package uses the official catalog identity but no Lobster runtime dependency.
-  const archive = await createClawHubArchive({
-    "package.json": JSON.stringify({
-      name: packageName,
-      version,
-      type: "commonjs",
-      main: "index.cjs",
-      openclaw: { extensions: ["./index.cjs"] },
-    }),
-    "openclaw.plugin.json": JSON.stringify({
-      id: "lobster",
-      contracts: { tools: ["approval_probe"] },
-      configSchema: { type: "object" },
-    }),
-    "index.cjs": `module.exports = { id: "lobster", register(api) {
+    // Synthetic package uses the official catalog identity but no Lobster runtime dependency.
+    const archive = await createClawHubArchive({
+      "package.json": JSON.stringify({
+        name: packageName,
+        version,
+        type: "commonjs",
+        main: "index.cjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "openclaw.plugin.json": JSON.stringify({
+        id: "lobster",
+        contracts: { tools: ["approval_probe"] },
+        configSchema: { type: "object" },
+      }),
+      "index.cjs": `module.exports = { id: "lobster", register(api) {
         api.registerTool((ctx) => ({
           name: "approval_probe",
           description: "Write one marker only after operator approval",
@@ -126,48 +135,24 @@ it("lets the installed plugin request review and gates its effect on Allow once 
           },
         }), { name: "approval_probe" });
       } };`,
-  });
-  clawhub.detail.mockResolvedValue({
-    package: {
-      name: packageName,
-      displayName: "Lobster",
-      family: "code-plugin",
-      channel: "official",
-      isOfficial: true,
-      runtimeId: "lobster",
-      latestVersion: version,
-    },
-  });
-  clawhub.artifact.mockResolvedValue({ version: { version, sha256hash: archive.integrity } });
-  clawhub.security.mockResolvedValue(
-    clawHubSecurityResponse(packageName, version, { moderationState: "approved" }),
-  );
-  clawhub.download.mockResolvedValue({ ...archive, cleanup: async () => {} });
+    });
+    clawhub.detail.mockResolvedValue({
+      package: {
+        name: packageName,
+        displayName: "Lobster",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        runtimeId: "lobster",
+        latestVersion: version,
+      },
+    });
+    clawhub.artifact.mockResolvedValue({ version: { version, sha256hash: archive.integrity } });
+    clawhub.security.mockResolvedValue(
+      clawHubSecurityResponse(packageName, version, { moderationState: "approved" }),
+    );
+    clawhub.download.mockResolvedValue({ ...archive, cleanup: async () => {} });
 
-  const env: Record<string, string | undefined> = {
-    HOME: home,
-    OPENCLAW_HOME: home,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_CLAWHUB_URL: undefined,
-    CLAWHUB_URL: undefined,
-    OPENCLAW_GATEWAY_URL: undefined,
-    OPENCLAW_GATEWAY_TOKEN: undefined,
-    OPENCLAW_GATEWAY_PASSWORD: undefined,
-    OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-  };
-  const envSnapshot = captureEnv([...MANUAL_GATEWAY_ENV_KEYS, ...Object.keys(env)]);
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
-  let caller: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-  let reviewer: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-  try {
-    for (const [key, value] of Object.entries(env)) {
-      if (value === undefined) {
-        deleteTestEnvValue(key);
-      } else {
-        setTestEnvValue(key, value);
-      }
-    }
     configureManualGatewayBackgroundEnv(home);
 
     const source = await readClawManifestFile(manifestPath);
@@ -260,23 +245,17 @@ it("lets the installed plugin request review and gates its effect on Allow once 
       trust: { reason: "trusted-official" },
     });
   } finally {
-    try {
-      for (const client of [caller, reviewer]) {
+    await runQaGatewayFixture(
+      async () => {},
+      ...[caller, reviewer].map((client) => async () => {
         if (client) {
-          await disconnectGatewayClient(client).catch(() => undefined);
+          await disconnectGatewayClient(client);
         }
-      }
-      await server?.close();
-    } finally {
-      try {
-        await closeStateDatabaseForTest();
-      } finally {
-        envSnapshot.restore();
-        clearRuntimeConfigSnapshot();
-        clearConfigCache();
-        clearSessionStoreCacheForTest();
-        vi.clearAllMocks();
-      }
-    }
+      }),
+      async () => server?.close(),
+      () => state.cleanup(),
+      () => clearConfigCache(),
+      () => vi.clearAllMocks(),
+    );
   }
 });

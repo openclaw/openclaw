@@ -1,7 +1,7 @@
 // Verifies bundled manifest contract resolution honors explicit plugin scopes.
 import { describe, expect, it, vi } from "vitest";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   loadManifestContractSnapshot: vi.fn(),
@@ -11,22 +11,16 @@ vi.mock("./manifest-contract-eligibility.js", () => ({
   loadManifestContractSnapshot: mocks.loadManifestContractSnapshot,
 }));
 
-const bundledContractPlugin = {
+const bundledContractPlugin = createPluginManifestRecordFixture({
   id: "document-extract",
   enabledByDefault: true,
-  channels: [],
-  providers: [],
-  cliBackends: [],
-  skills: [],
-  hooks: [],
-  origin: "bundled",
-  rootDir: "/tmp/document-extract",
   source: "bundled",
+  rootDir: "/tmp/document-extract",
   manifestPath: "/tmp/document-extract/openclaw.plugin.json",
   contracts: {
     documentExtractors: ["pdf"],
   },
-} satisfies PluginManifestRecord;
+});
 
 describe("resolveEnabledBundledManifestContractPlugins", () => {
   it("treats an explicit empty plugin scope as matching no contract owners", () => {

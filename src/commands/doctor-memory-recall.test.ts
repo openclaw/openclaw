@@ -1,78 +1,69 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+import { createDoctorPrompterFixture as createPrompter } from "../flows/doctor-health-context.test-support.js";
 
-const note = vi.hoisted(() => vi.fn());
-const listAgentIds = vi.hoisted(() => vi.fn<(cfg: OpenClawConfig) => string[]>());
-const resolveAgentDir = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, agentId: string) => `/tmp/${agentId}`),
-);
-const resolveAgentWorkspaceDir = vi.hoisted(() =>
-  vi.fn((_cfg: OpenClawConfig, agentId: string) => `/tmp/${agentId}/workspace`),
-);
-const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
-const resolveActiveMemoryBackendConfig = vi.hoisted(() =>
-  vi.fn<() => { backend: "builtin" } | { backend: "provider-runtime"; providerId: string }>(() => ({
-    backend: "builtin",
-  })),
-);
-const auditDreamingArtifacts = vi.hoisted(() => vi.fn());
-const auditShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
-const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
-const repairShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
-const maybeRepairWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
-
+const { note, agentIds, memory, artifacts, workspace } = vi.hoisted(() => ({
+  note: vi.fn(),
+  agentIds: vi.fn<(cfg: OpenClawConfig) => string[]>(),
+  memory: {
+    getActiveMemorySearchManagerCore: vi.fn(),
+    resolveActiveMemoryBackendConfig:
+      vi.fn<() => { backend: "builtin" } | { backend: "provider-runtime"; providerId: string }>(),
+  },
+  artifacts: {
+    auditDreamingArtifacts: vi.fn(),
+    auditShortTermPromotionArtifacts: vi.fn(),
+    repairDreamingArtifacts: vi.fn(),
+    repairShortTermPromotionArtifacts: vi.fn(),
+  },
+  workspace: { maybeRepairWorkspaceMemoryHealth: vi.fn(async () => undefined) },
+}));
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
+// mock-isolation: Keep agent discovery and directories inside the synthetic fixture.
 vi.mock("../agents/agent-scope.js", () => ({
-  listAgentIds,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
+  listAgentIds: agentIds,
+  resolveAgentDir: (_cfg: OpenClawConfig, id: string) => `/tmp/${id}`,
+  resolveAgentWorkspaceDir: (_cfg: OpenClawConfig, id: string) => `/tmp/${id}/workspace`,
 }));
-vi.mock("../plugins/memory-runtime.js", () => ({
-  getActiveMemorySearchManagerCore,
-  resolveActiveMemoryBackendConfig,
-}));
-vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
-  auditDreamingArtifacts,
-  auditShortTermPromotionArtifacts,
-  repairDreamingArtifacts,
-  repairShortTermPromotionArtifacts,
-}));
-vi.mock("./doctor-workspace.js", () => ({ maybeRepairWorkspaceMemoryHealth }));
-
+// mock-isolation: Exercise Doctor backend selection without starting a real memory runtime.
+vi.mock("../plugins/memory-runtime.js", () => memory);
+// mock-isolation: Supply artifact health results without reading or repairing real memory files.
+vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => artifacts);
+// mock-isolation: Observe repair delegation without mutating a real workspace.
+vi.mock("./doctor-workspace.js", () => workspace);
 import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-recall.js";
 
 const warning = (message: string) => ({ message, fixable: true });
-const shortTermAudit = (issues: ReturnType<typeof warning>[] = []) => ({
+const audit = (issues: ReturnType<typeof warning>[] = []) => ({
   storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
   issues,
 });
-
-function resetMemoryRecallMocks() {
-  resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
-  auditShortTermPromotionArtifacts.mockReset().mockResolvedValue(shortTermAudit());
-  auditDreamingArtifacts.mockReset().mockResolvedValue({ issues: [] });
-  repairDreamingArtifacts.mockReset().mockResolvedValue({ changed: false });
-  repairShortTermPromotionArtifacts.mockReset().mockResolvedValue({ changed: false });
-  maybeRepairWorkspaceMemoryHealth.mockClear();
-}
-
-function expectFirstNoteContains(...values: string[]) {
-  const message = String(note.mock.calls[0]?.[0] ?? "");
+const closes = new Map<string, ReturnType<typeof vi.fn>>();
+function expectNotes(...values: string[]) {
+  const output = note.mock.calls.map(([message]) => String(message)).join("\n");
   for (const value of values) {
-    expect(message).toContain(value);
+    expect(output).toContain(value);
   }
 }
-
-const cfg: OpenClawConfig = {};
-const closes = new Map<string, ReturnType<typeof vi.fn>>();
-
 beforeEach(() => {
-  note.mockClear();
-  listAgentIds.mockReturnValue(["agent-default"]);
-  resetMemoryRecallMocks();
+  for (const mock of [
+    note,
+    agentIds,
+    ...Object.values(memory),
+    ...Object.values(artifacts),
+    workspace.maybeRepairWorkspaceMemoryHealth,
+  ]) {
+    mock.mockReset();
+  }
   closes.clear();
-  getActiveMemorySearchManagerCore.mockReset().mockImplementation(async ({ agentId }) => {
+  agentIds.mockReturnValue(["agent-default"]);
+  memory.resolveActiveMemoryBackendConfig.mockReturnValue({ backend: "builtin" });
+  artifacts.auditShortTermPromotionArtifacts.mockResolvedValue(audit());
+  artifacts.auditDreamingArtifacts.mockResolvedValue({ issues: [] });
+  artifacts.repairDreamingArtifacts.mockResolvedValue({ changed: false });
+  artifacts.repairShortTermPromotionArtifacts.mockResolvedValue({ changed: false });
+  workspace.maybeRepairWorkspaceMemoryHealth.mockResolvedValue(undefined);
+  memory.getActiveMemorySearchManagerCore.mockImplementation(async ({ agentId }) => {
     const close = vi.fn(async () => {});
     closes.set(agentId, close);
     return {
@@ -84,127 +75,83 @@ beforeEach(() => {
   });
 });
 
-function createPrompter(): DoctorPrompter {
-  return {
-    confirm: vi.fn(async () => true),
-    confirmAutoFix: vi.fn(async () => true),
-    confirmAggressiveAutoFix: vi.fn(async () => true),
-    confirmRuntimeRepair: vi.fn(async () => true),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair: true,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair: true,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
-  };
-}
+it.each(["provider-runtime", "builtin"] as const)("reports %s recall health", async (backend) => {
+  if (backend === "provider-runtime") {
+    memory.resolveActiveMemoryBackendConfig.mockReturnValue({ backend, providerId: "records" });
+  }
+  artifacts.auditShortTermPromotionArtifacts.mockResolvedValueOnce(
+    audit([
+      warning("Short-term recall store contains 1 invalid entry."),
+      warning("Short-term promotion lock appears stale."),
+    ]),
+  );
+  await noteMemoryRecallHealth({});
+  expectNotes("Dreaming:");
+  if (backend === "provider-runtime") {
+    expect(artifacts.auditShortTermPromotionArtifacts).not.toHaveBeenCalled();
+    expect(memory.getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
+  } else {
+    expectNotes("Memory recall artifacts need attention:", "doctor --fix", "memory status --fix");
+  }
+});
 
-it.each(["provider-runtime", "builtin"] as const)(
-  "reports %s recall health with appropriate guidance",
-  async (backend) => {
-    if (backend === "provider-runtime") {
-      resolveActiveMemoryBackendConfig.mockReturnValue({ backend, providerId: "records" });
+it.each(["dreaming", "recall"] as const)(
+  "repairs %s artifacts with isolated agent paths",
+  async (kind) => {
+    const dreaming = kind === "dreaming";
+    const agentId = dreaming ? "agent-default" : "secondary";
+    agentIds.mockReturnValue(dreaming ? [agentId] : ["agent-default", agentId]);
+    if (dreaming) {
+      artifacts.auditDreamingArtifacts.mockResolvedValueOnce({
+        issues: [warning("Self-ingested narrative content.")],
+      });
+      artifacts.repairDreamingArtifacts.mockResolvedValueOnce({
+        changed: true,
+        archiveDir: "/tmp/dreaming-archive",
+        archivedSessionCorpus: true,
+        archivedSessionIngestion: true,
+        warnings: [],
+      });
+    } else {
+      artifacts.auditShortTermPromotionArtifacts.mockImplementation(async ({ workspaceDir }) =>
+        audit(workspaceDir.includes("secondary") ? [warning("Secondary recall is invalid.")] : []),
+      );
+      artifacts.repairShortTermPromotionArtifacts.mockResolvedValue({
+        changed: true,
+        removedInvalidEntries: 1,
+        rewroteStore: true,
+        removedStaleLock: true,
+      });
     }
-    auditShortTermPromotionArtifacts.mockResolvedValueOnce(
-      shortTermAudit([
-        warning("Short-term recall store contains 1 invalid entry."),
-        warning("Short-term promotion lock appears stale."),
-      ]),
-    );
-
-    await noteMemoryRecallHealth(cfg);
-
-    if (backend === "provider-runtime") {
-      expectFirstNoteContains("Dreaming:");
-      expect(note).toHaveBeenCalledOnce();
-      expect(auditShortTermPromotionArtifacts).not.toHaveBeenCalled();
-      expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
-      return;
+    const prompter = createPrompter(true, true);
+    await maybeRepairMemoryRecallHealth({ cfg: {}, prompter });
+    expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
+    const repair = dreaming
+      ? artifacts.repairDreamingArtifacts
+      : artifacts.repairShortTermPromotionArtifacts;
+    expect(repair).toHaveBeenCalledExactlyOnceWith({ workspaceDir: `/tmp/${agentId}/workspace` });
+    for (const close of closes.values()) {
+      expect(close).toHaveBeenCalledOnce();
     }
-    expect(auditShortTermPromotionArtifacts).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/agent-default/workspace",
-    });
-    expect(note).toHaveBeenCalledTimes(2);
-    expectFirstNoteContains(
-      "Memory recall artifacts need attention:",
-      "doctor --fix",
-      "memory status --fix",
-    );
-    expect(String(note.mock.calls[1]?.[0] ?? "")).toContain("Dreaming:");
+    if (dreaming) {
+      expect(workspace.maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({
+        prompter,
+        scope: { agentId, workspaceDir: `/tmp/${agentId}/workspace`, labelAgent: false },
+      });
+      expectNotes(
+        "Dreaming artifacts repaired:",
+        "archived session corpus",
+        "archived session-ingestion state",
+      );
+    } else {
+      expect(memory.getActiveMemorySearchManagerCore).toHaveBeenCalledTimes(2);
+      expect([...closes.keys()]).toEqual(["agent-default", "secondary"]);
+      expectNotes(
+        'Agent "secondary":',
+        "Memory recall artifacts repaired:",
+        "rewrote recall store",
+        "removed stale promotion lock",
+      );
+    }
   },
 );
-
-it("runs dreaming artifact repair during doctor --fix", async () => {
-  auditDreamingArtifacts.mockResolvedValueOnce({
-    issues: [
-      warning(
-        "Dreaming session corpus appears to contain self-ingested narrative content (3 suspicious lines).",
-      ),
-    ],
-  });
-  repairDreamingArtifacts.mockResolvedValueOnce({
-    changed: true,
-    archiveDir: "/tmp/agent-default/workspace/.openclaw-repair/dreaming/2026-04-11T21-35-00-000Z",
-    archivedSessionCorpus: true,
-    archivedSessionIngestion: true,
-    warnings: [],
-  });
-  const prompter = createPrompter();
-
-  await maybeRepairMemoryRecallHealth({ cfg, prompter });
-
-  expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({
-    prompter,
-    scope: {
-      agentId: "agent-default",
-      workspaceDir: "/tmp/agent-default/workspace",
-      labelAgent: false,
-    },
-  });
-  expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
-  expect(repairDreamingArtifacts).toHaveBeenCalledWith({
-    workspaceDir: "/tmp/agent-default/workspace",
-  });
-  const message = String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
-  expect(message).toContain("Dreaming artifacts repaired:");
-  expect(message).toContain("archived session corpus");
-  expect(message).toContain("archived session-ingestion state");
-});
-
-it("audits and repairs each agent with isolated managers and paths", async () => {
-  listAgentIds.mockReturnValue(["agent-default", "secondary"]);
-  auditShortTermPromotionArtifacts.mockImplementation(async ({ workspaceDir }) =>
-    shortTermAudit(
-      workspaceDir.includes("secondary") ? [warning("Secondary recall is invalid.")] : [],
-    ),
-  );
-  repairShortTermPromotionArtifacts.mockResolvedValue({
-    changed: true,
-    removedInvalidEntries: 1,
-    rewroteStore: true,
-    removedStaleLock: true,
-  });
-  const prompter = createPrompter();
-
-  await maybeRepairMemoryRecallHealth({ cfg, prompter });
-
-  expect(getActiveMemorySearchManagerCore).toHaveBeenCalledTimes(2);
-  expect(closes.get("agent-default")).toHaveBeenCalledOnce();
-  expect(closes.get("secondary")).toHaveBeenCalledOnce();
-  expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
-  expect(repairShortTermPromotionArtifacts).toHaveBeenCalledTimes(1);
-  expect(repairShortTermPromotionArtifacts).toHaveBeenCalledWith({
-    workspaceDir: "/tmp/secondary/workspace",
-  });
-  expect(note).toHaveBeenCalledOnce();
-  expectFirstNoteContains(
-    'Agent "secondary":',
-    "Memory recall artifacts repaired:",
-    "rewrote recall store",
-    "removed stale promotion lock",
-  );
-});

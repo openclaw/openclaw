@@ -15,10 +15,12 @@ import {
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
+import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
 import "../debug/debug-overlay-content.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { stubResizeObserver } from "../../test-helpers/resize-observer.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DebugOverlayElement } from "../debug/debug-overlay-state.ts";
@@ -284,14 +286,7 @@ it("shares six status reads per minute with a tray mounted between page polls", 
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query === "(prefers-reduced-motion: reduce)",
   }));
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  stubResizeObserver();
   const setVisibility = mockVisibility();
   const request = vi.fn().mockResolvedValue(gatewaySystemInfo);
   const current = source(makeClient(request));
@@ -732,19 +727,7 @@ it.each(["response", "error", "response before rebinding"] as const)(
 
 it.each([
   ["transient", new Error("temporarily unavailable"), true],
-  [
-    "missing read scope",
-    new GatewayRequestError({
-      code: "FORBIDDEN",
-      message: "permission denied",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.read",
-        requiredScopes: ["operator.read"],
-      },
-    }),
-    false,
-  ],
+  ["missing read scope", missingReadScopeErrorFixture(), false],
 ] as const)("preserves the polling policy after a %s error", async (_kind, error, retry) => {
   vi.useFakeTimers();
   const request = vi

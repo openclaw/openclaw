@@ -33,7 +33,7 @@ import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
-import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
+import { focusChatComposerFromKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
@@ -382,7 +382,7 @@ function renderPageContent(host: PageHost) {
         document,
         "keydown",
         (event) =>
-          focusChatComposerFromPrintableKeydown(
+          focusChatComposerFromKeydown(
             host,
             event,
             owner.submission.composerTextarea.getTextarea(),

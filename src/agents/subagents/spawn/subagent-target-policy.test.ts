@@ -91,7 +91,7 @@ describe("subagent target policy", () => {
     [
       "requester-only default with other agents configured",
       { configuredAgentIds: both },
-      `Only the requester agent is allowed as a target; no other agentId is configured. ${omitMain}`,
+      `Only the requester agent is allowed as a target. ${omitMain}`,
     ],
     [
       "an explicit allowlist",

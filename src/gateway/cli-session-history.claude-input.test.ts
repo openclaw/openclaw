@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { expect, it } from "vitest";
-import { buildCliSessionDriftNote } from "../agents/cli-session.js";
+import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { applySessionHints } from "../auto-reply/reply/body.js";
 import { buildInterSessionPromptContext } from "../sessions/input-provenance.js";

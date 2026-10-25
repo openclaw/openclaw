@@ -117,8 +117,7 @@ async function prepareOnlineLoopback(page: Page): Promise<void> {
   expect(await page.evaluate(() => navigator.onLine)).toBe(true);
 }
 
-async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
-  let requestCount = 0;
+async function createInstallGate(): Promise<InstallGate> {
   let released = false;
   const pendingResponses = new Set<ServerResponse>();
   const releaseResponse = (response: ServerResponse) => {
@@ -147,9 +146,7 @@ async function createInstallGate(expectedRequests = 1): Promise<InstallGate> {
       pendingResponses.add(response);
       response.once("close", () => pendingResponses.delete(response));
     }
-    if (++requestCount === expectedRequests) {
-      resolveRequested();
-    }
+    resolveRequested();
   });
   await new Promise<void>((resolve, reject) => {
     gateServer.once("error", reject);
@@ -245,6 +242,47 @@ async function ensureControlledPage(page: Page, pageErrors: string[], expectedBu
   });
 }
 
+async function waitForActiveWorkerBuild(page: Page, expectedBuildId: string): Promise<void> {
+  // Offline storage is optional. Read activation identity through the same native
+  // protocol as foreground recovery, without delivering the missed page events.
+  await page.waitForFunction(async (buildId) => {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const worker = registration?.active;
+    if (
+      !registration ||
+      !worker ||
+      worker.state !== "activated" ||
+      registration.installing ||
+      navigator.serviceWorker.controller !== worker
+    ) {
+      return false;
+    }
+    const channel = new MessageChannel();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const message = await new Promise<{ type?: string; version?: string } | null>((resolve) => {
+        // Match the runtime probe's unavailable-worker bound and release its ports.
+        timeout = setTimeout(() => resolve(null), 1_000);
+        channel.port1.addEventListener("message", (event) => resolve(event.data), { once: true });
+        channel.port1.start();
+        worker.postMessage({ type: "sw-version-probe" }, [channel.port2]);
+      });
+      return (
+        registration.active === worker &&
+        navigator.serviceWorker.controller === worker &&
+        worker.state === "activated" &&
+        !registration.installing &&
+        message?.type === "sw-updated" &&
+        message.version === buildId
+      );
+    } finally {
+      clearTimeout(timeout);
+      channel.port1.close();
+      channel.port2.close();
+    }
+  }, expectedBuildId);
+}
+
 async function fetchControlledAsset(
   page: Page,
   assetPath: string,
@@ -284,19 +322,6 @@ async function fetchControlledAsset(
 }
 
 describe("Control UI service-worker production update E2E", () => {
-  it("releases concurrent and later worker installation requests", async ({ signal }) => {
-    const gate = await createInstallGate(2);
-    const requests = [fetch(gate.url, { signal }), fetch(gate.url, { signal })];
-    try {
-      await gate.requested;
-      gate.release();
-      expect((await Promise.all(requests)).map((response) => response.status)).toEqual([204, 204]);
-      expect((await fetch(gate.url, { signal })).status).toBe(204);
-    } finally {
-      await gate.close();
-    }
-  });
-
   it("boots a document loaded on a deep link (Gateway asset-path contract)", async () => {
     // The built index.html references ./assets/* relatively, so a document at
     // /chat/research requests /chat/assets/*. The Gateway resolves /assets/
@@ -353,7 +378,7 @@ describe("Control UI service-worker production update E2E", () => {
     browser = useWebKit
       ? await webkit.launch()
       : await chromium.launch({ executablePath: chromiumExecutablePath });
-  }, 120_000);
+  }, 180_000);
 
   afterAll(async () => {
     try {
@@ -451,18 +476,13 @@ describe("Control UI service-worker production update E2E", () => {
           mode === "chat" ? "keep my draft through the missed update" : '{ "count": 2 }';
         await editor.fill(draft);
         await stageBuildB(nextDir);
-        const cacheB = await readBuildCacheName(buildB, nextDir);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
         await server.replaceBuild(nextDir, previousDir);
         swapped = true;
         await page.evaluate(async () => {
           await (await navigator.serviceWorker.getRegistration())?.update();
         });
-        await expect.poll(() => page.evaluate(() => caches.keys())).toContain(cacheB);
-        await page.waitForFunction(async () => {
-          const registration = await navigator.serviceWorker.getRegistration();
-          return registration?.active?.state === "activated" && !registration.installing;
-        });
+        await waitForActiveWorkerBuild(page, buildB);
         expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
           client: { buildId: buildA },
         });

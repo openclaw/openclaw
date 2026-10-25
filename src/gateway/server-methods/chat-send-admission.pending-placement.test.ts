@@ -34,6 +34,21 @@ function seedSession(sessionKey: string, sessionId: string) {
   replaceSessionEntrySync({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
 }
 
+async function prepareLocalAdmission(name: string, getRuntimeConfig: () => OpenClawConfig) {
+  const cfg = getRuntimeConfig();
+  setRuntimeConfigSnapshot(cfg, cfg);
+  const sessionKey = `agent:main:dashboard:${name}`;
+  const runId = `${name}-input`;
+  seedSession(sessionKey, `${name}-session`);
+  const context = createDirectChatContext({ getRuntimeConfig });
+  const { request, session } = await prepareChatAdmission({
+    client: null,
+    params: { sessionKey, message: "Keep this input", idempotencyKey: runId },
+    context,
+  });
+  return { request, session, context, runId, sessionKey, client: null, respond: vi.fn() };
+}
+
 function cleanupAdmission(
   admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined,
   runId: string,
@@ -48,16 +63,8 @@ it.each(["restart", "stop"] as const)(
   "preserves client retry only when an unstarted chat admission is interrupted by %s",
   async (reason) => {
     const cfg: OpenClawConfig = { agents: mainAgents() };
-    setRuntimeConfigSnapshot(cfg, cfg);
-    const sessionKey = "agent:main:dashboard:pending-restart";
-    const runId = "pending-restart-input";
-    seedSession(sessionKey, "pending-restart-session");
-    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-    const { request, session } = await prepareChatAdmission({
-      client: null,
-      params: { sessionKey, message: "Keep this input", idempotencyKey: runId },
-      context,
-    });
+    const params = await prepareLocalAdmission("pending-restart", () => cfg);
+    const { session, sessionKey, context, runId, respond } = params;
     const target = {
       scope: session.storePath,
       identities: [sessionKey, session.backingSessionId],
@@ -76,13 +83,11 @@ it.each(["restart", "stop"] as const)(
     const queued = createDeferred();
     const begin = sessionLifecycle.beginSessionEffect;
     using observation = vi.spyOn(sessionLifecycle, "beginSessionEffect");
-    observation.mockImplementationOnce((params) => {
-      const admission = begin(params);
+    observation.mockImplementationOnce((effect) => {
+      const admission = begin(effect);
       queued.resolve();
       return admission;
     });
-    const respond = vi.fn();
-    const params = { request, session, client: null, context, respond };
     const pending = admitChatSend(params);
     let retried: Awaited<ReturnType<typeof admitChatSend>> | undefined;
     try {
@@ -244,16 +249,7 @@ it.each<[name: string, patch: OpenClawConfig, allowed: boolean]>([
     },
   };
   let currentConfig = cfg;
-  setRuntimeConfigSnapshot(cfg, cfg);
-  const sessionKey = "agent:main:dashboard:reload-preparation";
-  const runId = "chat-reload-preparation";
-  seedSession(sessionKey, "reload-preparation-session");
-  const context = createDirectChatContext({ getRuntimeConfig: () => currentConfig });
-  const { request, session } = await prepareChatAdmission({
-    client: null,
-    params: { sessionKey, message: "Keep this turn", idempotencyKey: runId },
-    context,
-  });
+  const params = await prepareLocalAdmission("reload-preparation", () => currentConfig);
   currentConfig = {
     ...cfg,
     ...patch,
@@ -264,15 +260,16 @@ it.each<[name: string, patch: OpenClawConfig, allowed: boolean]>([
     },
   };
   setRuntimeConfigSnapshot(currentConfig, currentConfig);
-  const respond = vi.fn();
   let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
   try {
-    admitted = await admitChatSend({ request, session, client: null, context, respond });
+    admitted = await admitChatSend(params);
     expect(admitted.ok).toBe(allowed);
     if (!allowed) {
-      expectRpcError(respond, { message: expect.stringContaining("Session preparation changed") });
+      expectRpcError(params.respond, {
+        message: expect.stringContaining("Session preparation changed"),
+      });
     }
   } finally {
-    cleanupAdmission(admitted, runId);
+    cleanupAdmission(admitted, params.runId);
   }
 });

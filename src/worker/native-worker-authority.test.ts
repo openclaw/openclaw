@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
-import { completionModel } from "../agents/simple-completion.test-support.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import {
   testWorkerLaunchInput,
@@ -48,7 +48,7 @@ function fixture(native = true, steps: Step[] = ["ready"]) {
     descriptor.assignment.inference = "runtime-local";
   }
   const ref = descriptor.assignment.modelRef;
-  const model = completionModel({
+  const model = makeProviderModelFixture({
     provider: ref.provider,
     id: ref.model,
     api: "openai-completions",

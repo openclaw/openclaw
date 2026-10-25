@@ -12,6 +12,10 @@ import {
   requireNativeDatabaseFile,
 } from "../infra/database-engine/physical-facts.js";
 import { assertPostgresCatalog } from "../infra/database-engine/postgres-catalog.js";
+import {
+  postgresIndexOrderingMigration,
+  withLegacyPostgresIndexOrdering,
+} from "../infra/database-engine/postgres-index-ordering.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
@@ -35,7 +39,11 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
-import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
+import {
+  admitStateSchemaFacts,
+  PostgresSchemaAdmissionUnavailableError,
+} from "./openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 import { statePostgresRuntime as runtime } from "./postgres-schema.generated/runtime.js";
 
@@ -79,10 +87,15 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   if (!fresh && getStateRuntimeSchemaAdmission(db)?.startupReady) {
     return;
   }
-  const facts = getPostgresPhysicalFacts(db);
-  if (!facts) {
-    throw new Error(`Missing PostgreSQL state admission. ${recovery}`);
-  }
+  const facts = withPostgresSchemaAdmissionRetry(db, () => {
+    const admitted = getPostgresPhysicalFacts(db);
+    if (!admitted) {
+      throw new PostgresSchemaAdmissionUnavailableError(
+        `Missing PostgreSQL state admission. ${recovery}`,
+      );
+    }
+    return admitted;
+  });
   const tables = new Set(
     facts.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table),
   );
@@ -150,9 +163,23 @@ const statePostgresSchema = {
     };
   }),
 };
-const statePostgresSchemaV30 = {
-  postgres: withLegacyLocalWorkspaceManifests(statePostgresSchema.postgres),
+const statePostgresSchemaV32 = {
+  postgres: withLegacyPostgresIndexOrdering(statePostgresSchema.postgres, "schema-nullability"),
   postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+    ...fragment,
+    sql: withLegacyPostgresIndexOrdering(fragment.sql, "schema-nullability"),
+  })),
+};
+const statePostgresSchemaV31 = {
+  postgres: withLegacyPostgresIndexOrdering(statePostgresSchemaV32.postgres),
+  postgresFragments: statePostgresSchemaV32.postgresFragments.map((fragment) => ({
+    ...fragment,
+    sql: withLegacyPostgresIndexOrdering(fragment.sql),
+  })),
+};
+const statePostgresSchemaV30 = {
+  postgres: withLegacyLocalWorkspaceManifests(statePostgresSchemaV31.postgres),
+  postgresFragments: statePostgresSchemaV31.postgresFragments.map((fragment) => ({
     ...fragment,
     tables: fragment.tables.filter((table) => table !== "local_workspace_manifest_nodes"),
     sql: withLegacyLocalWorkspaceManifests(fragment.sql),
@@ -246,7 +273,7 @@ export const stateEngineSchema: StoreSchema = {
     {
       version: 31,
       fromSchema: statePostgresSchemaV30,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV31,
       sql: `DO $workspace$
         DECLARE baseline_constraint text;
         BEGIN
@@ -270,13 +297,37 @@ export const stateEngineSchema: StoreSchema = {
         END $workspace$;
         ${statePostgresVersionSql(31)}`,
     },
+    {
+      version: 32,
+      fromSchema: statePostgresSchemaV31,
+      schema: statePostgresSchemaV32,
+      sql: `${postgresIndexOrderingMigration(
+        [
+          statePostgresSchemaV32.postgres,
+          ...statePostgresSchemaV32.postgresFragments.map((fragment) => fragment.sql),
+        ].join("\n"),
+      )}
+        ${statePostgresVersionSql(32)}`,
+    },
+    {
+      version: 33,
+      fromSchema: statePostgresSchemaV32,
+      schema: statePostgresSchema,
+      sql: `${postgresIndexOrderingMigration(
+        [runtime.eagerSql, ...runtime.fragments.map((fragment) => fragment.sql)].join("\n"),
+        "schema-nullability",
+      )}
+        ${statePostgresVersionSql(33)}`,
+    },
   ],
 };
 
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
   const facts = getPostgresPhysicalFacts(db);
   if (!facts) {
-    throw new Error(`Missing PostgreSQL state admission. ${recovery}`);
+    throw new PostgresSchemaAdmissionUnavailableError(
+      `Missing PostgreSQL state admission. ${recovery}`,
+    );
   }
   const fragment = runtime.fragments.find((item) => item.tables.includes(table));
   if (!fragment) {
@@ -311,8 +362,16 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  // Lazy fragments can be created before Doctor upgrades a predecessor's index ordering.
   // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
-  db.exec(fragment.sql);
+  db.exec(
+    facts.version < 33
+      ? withLegacyPostgresIndexOrdering(
+          fragment.sql,
+          facts.version < 32 ? "sqlite" : "schema-nullability",
+        )
+      : fragment.sql,
+  );
   admitPostgresPhysicalFacts({
     db,
     namespace: facts.namespace,

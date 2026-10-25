@@ -3,6 +3,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { omitNullRequestHeaders } from "../../../packages/llm-core/src/utils/request-headers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
@@ -497,7 +498,7 @@ export function createPdfTool(options?: {
                       prompt: promptRaw,
                       maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
                       baseUrl: model.baseUrl,
-                      headers: requestModel.headers,
+                      headers: omitNullRequestHeaders(requestModel.headers),
                       request: getModelProviderRequestTransport(requestModel),
                       signal: modelSignal,
                     }),
@@ -553,7 +554,7 @@ export function createPdfTool(options?: {
                 : {}),
               baseUrl: model.baseUrl,
               requestConfig: {
-                headers: model.headers,
+                headers: omitNullRequestHeaders(model.headers),
                 request: getModelProviderRequestTransport(model),
               },
               signal: modelSignal,

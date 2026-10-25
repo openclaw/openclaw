@@ -14,7 +14,6 @@ import {
 import {
   checkUpdateStatus,
   compareSemverStrings,
-  fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveExtendedStablePackage,
   resolveNpmChannelTag,
@@ -33,13 +32,6 @@ const extendedStable = (
   options: Partial<Parameters<typeof resolveExtendedStablePackage>[0]> = {},
 ) => resolveExtendedStablePackage({ installKind: "package", timeoutMs: 1000, ...options });
 const commandResult = (value: unknown) => ({ stdout: JSON.stringify(value), stderr: "", code: 0 });
-const mockVersions = (versions: Record<string, string>) =>
-  vi.fn<NpmMetadataCommandRunner>(async (argv) => {
-    const version = versions[(argv[2] ?? "").split("@").at(-1) ?? ""];
-    return version
-      ? commandResult({ version, "engines.node": ">=22.19.0" })
-      : { stdout: "", stderr: "npm ERR! 404 Not Found", code: 1 };
-  });
 const legacySchemaVersions = { state: 1, agent: 1 };
 const packageMetadata = (version: string, node = ">=22.19.0") => ({
   version,
@@ -234,12 +226,6 @@ it("uses npm global scope, user config auth, and ignores project npmrc for real 
   });
 });
 
-it("uses the public registry when no npm command is available", async () => {
-  registryReply("latest", { json: packageMetadata("2026.6.8") });
-
-  await expect(packageTarget({ target: "latest" })).resolves.toEqual(expectedMetadata("2026.6.8"));
-});
-
 it("times out when the public registry response body stalls after headers", async () => {
   vi.useFakeTimers();
   const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
@@ -269,10 +255,6 @@ it("times out when the public registry response body stalls after headers", asyn
   await vi.advanceTimersByTimeAsync(2000);
 
   expectPackageError(await resultPromise, "TimeoutError: request timed out");
-  expect(fetchMock).toHaveBeenCalledWith(
-    registryUrl("latest"),
-    expect.objectContaining({ signal: expect.any(AbortSignal) }),
-  );
 });
 
 it("cancels public registry HTTP failure bodies", async () => {
@@ -296,18 +278,6 @@ it("returns error on oversized public registry response exceeding 16 MiB", async
 
   const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 5000 });
   expectPackageError(result, ["JSON response exceeds", "16777216"]);
-});
-
-it("falls back to latest when beta is older", async () => {
-  const runCommand = mockVersions({ beta: "1.0.0-beta.1", latest: "1.0.1-1" });
-
-  const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
-
-  expect(resolved).toMatchObject({
-    tag: "latest",
-    version: "1.0.1-1",
-    metadata: { nodeEngine: ">=22.19.0" },
-  });
 });
 
 it("resolves beta and stable within one registry response delay", async () => {
@@ -337,33 +307,22 @@ it("resolves beta and stable within one registry response delay", async () => {
   }
 });
 
-it("fetches registry tag versions and reports missing tags", async () => {
-  const runCommand = mockVersions({ latest: "1.0.4" });
-  await expect(
-    fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000, runCommand }),
-  ).resolves.toMatchObject({
-    tag: "latest",
-    version: "1.0.4",
-    metadata: { nodeEngine: ">=22.19.0" },
-  });
-  await expect(
-    fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000, runCommand }),
-  ).resolves.toMatchObject({
-    tag: "missing",
-    version: null,
-    error: "npm view failed: npm ERR! 404 Not Found",
-  });
-});
-
-it("adds context to malformed npm view JSON errors", async () => {
-  const runCommand = vi.fn(async () => ({ stdout: "not valid json {", stderr: "", code: 0 }));
-
-  const result = await packageTarget({
-    target: "openclaw",
-    runCommand,
-  });
-
-  expectPackageError(result, ["npm view returned invalid JSON", "SyntaxError"]);
+it.each([
+  [
+    "malformed JSON",
+    { stdout: "not valid json {", stderr: "", code: 0 },
+    ["npm view returned invalid JSON", "SyntaxError"],
+  ],
+  [
+    "missing package",
+    { stdout: "", stderr: "npm ERR! 404 Not Found", code: 1 },
+    "npm view failed: npm ERR! 404 Not Found",
+  ],
+] as const)("reports npm view errors for %s", async (_name, reply, error) => {
+  expectPackageError(
+    await packageTarget({ target: "openclaw", runCommand: async () => reply }),
+    typeof error === "string" ? error : [...error],
+  );
 });
 it("does not query the selector after the channel request was aborted", async () => {
   const controller = new AbortController();

@@ -34,13 +34,15 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
 import { createReplyTurnParticipants } from "../sessions/session-controller.tool-authority.js";
-import type { PreparedAgentRunDispatch } from "./agent-turn/agent-run-admission-types.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import * as gatewayDispatch from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
 import { runIndependentCreationInputCase } from "./server.agent-input-authority.create.test-helper.js";
-import { installAuthorityProofGateway } from "./server.agent-runtime-authority-proof.test-support.js";
+import {
+  holdExecution,
+  installAuthorityProofGateway,
+} from "./server.agent-runtime-authority-proof.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { withPreparedSessionResolve } from "./sessions-resolve.js";
@@ -98,24 +100,12 @@ describe("spawn input ownership transfer", () => {
   const holdInput = async (
     scope: { storePath: string; agentId: string },
     beforeStaging: boolean,
+    signal: AbortSignal,
   ) => {
     const staged = createDeferred();
-    const entered = createDeferred<PreparedAgentRunDispatch>();
     const releaseWriter = createDeferred();
-    const releaseExecution = createDeferred();
     let writer: Promise<unknown> | undefined;
-    let execution: Promise<void> | undefined;
-    let prepared: PreparedAgentRunDispatch | undefined;
-    const module = await import("./agent-turn/agent-run-execution-phase.js");
-    const execute = module.startAgentRunExecution;
-    const executionSpy = vi
-      .spyOn(module, "startAgentRunExecution")
-      .mockImplementationOnce((params) => {
-        prepared = params.prepared;
-        entered.resolve(params.prepared);
-        execution = releaseExecution.promise.then(() => execute(params));
-        return execution;
-      });
+    const execution = await holdExecution(signal);
     const stage = pendingInputs.stageSessionPendingInput;
     const stageSpy = vi
       .spyOn(pendingInputs, "stageSessionPendingInput")
@@ -137,26 +127,18 @@ describe("spawn input ownership transfer", () => {
         return await pending;
       });
     return {
+      ...execution,
       staged,
-      entered,
-      executionSpy,
       releaseWriter,
-      releaseExecution,
-      get prepared() {
-        return prepared;
-      },
-      get execution() {
-        return execution;
-      },
       release(this: void) {
         releaseWriter.resolve();
-        releaseExecution.resolve();
       },
       async close(pending?: Promise<unknown>) {
         this.release();
-        await Promise.allSettled([writer, pending, execution]);
+        await Promise.allSettled([writer, pending, execution.resume()]);
+        // A pending dispatch can enter execution after resume; drain it before restoring the spy.
+        await execution.cleanup().catch(() => {});
         stageSpy.mockRestore();
-        executionSpy.mockRestore();
       },
     };
   };
@@ -436,12 +418,11 @@ describe("spawn input ownership transfer", () => {
           client,
         );
         sending = pending;
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           prepared.promise,
-          pending.then(() => {
-            throw new Error("Send ended before preparing real custody");
-          }),
-        ]);
+          pending,
+          "Send ended before preparing real custody",
+        );
         const revokedKey = revoked === "requester" ? parentKey : childKey;
         const entry = (await loadSessionEntryAsync(revokedKey, { agentId: "main" })).entry;
         if (!entry) {
@@ -532,7 +513,7 @@ describe("spawn input ownership transfer", () => {
         const transcript = sessionAccessor.loadTranscriptEventsSync(scope);
         admission = prepareAdmission(config, `send-policy-source-${runId}`, "send-policy-proof");
         const admitted = await admission.admit("embedded");
-        held = await holdInput(scope, boundary === "before staging");
+        held = await holdInput(scope, boundary === "before staging", signal);
         signal.addEventListener("abort", held.release, { once: true });
         if (boundary === "before acknowledgement") {
           const dispatch = gatewayDispatch.dispatchGatewayMethodInProcess;
@@ -563,7 +544,7 @@ describe("spawn input ownership transfer", () => {
         );
         if (boundary !== "before staging") {
           expect((await withinTest(pending, signal)).details).toMatchObject({ status: "accepted" });
-          await withinTest(held.entered.promise, signal);
+          await withinTest(held.entered, signal);
           expect((await listSessionPendingInputs(scope)).total).toBe(1);
         }
         withdraw();
@@ -577,19 +558,18 @@ describe("spawn input ownership transfer", () => {
             error: expect.stringContaining("tools.agentToAgent.send"),
           });
           expect(result.details).not.toHaveProperty("sentBeforeError");
-          expect(held.executionSpy).not.toHaveBeenCalled();
+          expect(held.observer).not.toHaveBeenCalled();
           expect(agentCommandMock).not.toHaveBeenCalled();
           expect((await listSessionPendingInputs(scope)).total).toBe(0);
           expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(transcript);
         } else {
-          const prepared = await held.entered.promise;
+          const prepared = await held.entered;
           const recorder = expectDefined(prepared.userTurn.recorder, "accepted input recorder");
           const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
           expect(persisted?.appended).toBe(true);
           expect(persisted?.message.content).toContain(message);
           expect((await listSessionPendingInputs(scope)).total).toBe(0);
-          held.releaseExecution.resolve();
-          await withinTest(held.execution!, signal);
+          await withinTest(held.resume(), signal);
           expect(agentCommandMock).toHaveBeenCalledOnce();
           expect(agentCommandMock.mock.calls[0]?.[0]).toMatchObject({ sessionKey: targetKey });
         }
@@ -674,7 +654,7 @@ describe("spawn input ownership transfer", () => {
       }
       return;
     }
-    const held = await holdInput(scope, boundary === "before staging");
+    const held = await holdInput(scope, boundary === "before staging", signal);
     signal.addEventListener("abort", held.release, { once: true });
     let dispatch: Promise<unknown> | undefined;
     try {
@@ -691,15 +671,11 @@ describe("spawn input ownership transfer", () => {
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         held.staged.promise,
-        outcome.then((value) => {
-          if ("error" in value) {
-            throw value.error;
-          }
-          throw new Error(`Dispatch ended before staging: ${JSON.stringify(value)}`);
-        }),
-      ]);
+        dispatch,
+        "Dispatch ended before staging",
+      );
       if (boundary === "before staging") {
         admission.close();
         held.releaseWriter.resolve();
@@ -707,11 +683,11 @@ describe("spawn input ownership transfer", () => {
           "error.message",
           "tool invocation authority is no longer active",
         );
-        expect(held.prepared).toBeUndefined();
+        expect(held.observer).not.toHaveBeenCalled();
         expect((await listSessionPendingInputs(scope)).total).toBe(0);
       } else {
         expect(await outcome).toHaveProperty("value.status", "accepted");
-        const prepared = await held.entered.promise;
+        const prepared = await held.entered;
         const recorder = prepared.userTurn.recorder!;
         expect(recorder.getPendingInputMessage?.()).toBeDefined();
         admission.close();

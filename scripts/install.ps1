@@ -13,7 +13,7 @@ param(
     [switch]$DryRun,
     [switch]$NodeOnly,
     [string]$NodePrefix,
-    [ValidatePattern("^\d+\.\d+\.\d+$")]
+    [ValidatePattern("^(?:\d+\.\d+\.\d+)?$")]
     [string]$NodeVersion,
     [switch]$Help
 )

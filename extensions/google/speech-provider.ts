@@ -118,10 +118,7 @@ function splitGoogleTtsDialogue(
 function composeGoogleInteractionsSpeechStyle(
   parts: Array<string | undefined>,
 ): string | undefined {
-  const style = parts
-    .map((part) => normalizeOptionalString(part))
-    .filter((part): part is string => part !== undefined)
-    .join("\n\n");
+  const style = parts.filter((part): part is string => part !== undefined).join("\n\n");
   return style || undefined;
 }
 
@@ -352,19 +349,18 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
     personaPrompt: config.personaPrompt,
     timeoutMs: req.timeoutMs,
   };
+  assertSupportedGoogleTtsModel(params.model);
+  const interactions = isGoogleInteractionsTtsModel(params.model);
+  const dialogue = params.speakers
+    ? splitGoogleTtsDialogue(params.text, params.speakers)
+    : undefined;
+  if (!interactions && dialogue) {
+    throw new Error(
+      "Google TTS multi-speaker dialogue requires gemini-3.8-flash-tts or gemini-3.8-flash-lite-tts.",
+    );
+  }
   return retryAsync(
     async () => {
-      assertSupportedGoogleTtsModel(params.model);
-      const interactions = isGoogleInteractionsTtsModel(params.model);
-      if (
-        !interactions &&
-        params.speakers &&
-        splitGoogleTtsDialogue(params.text, params.speakers)
-      ) {
-        throw new Error(
-          "Google TTS multi-speaker dialogue requires gemini-3.8-flash-tts or gemini-3.8-flash-lite-tts.",
-        );
-      }
       const { assertOkOrThrowProviderError, postJsonRequest, readProviderJsonResponse } =
         await import("openclaw/plugin-sdk/provider-http");
       const { resolveGoogleGenerativeAiHttpRequestConfig } = await import("./http-request.js");
@@ -380,9 +376,6 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
 
       let interactionsBody: Record<string, unknown> | undefined;
       if (interactions) {
-        const dialogue = params.speakers
-          ? splitGoogleTtsDialogue(params.text, params.speakers)
-          : undefined;
         let content: Array<Record<string, unknown>>;
         if (dialogue) {
           content = dialogue.map((turn) => {
@@ -405,7 +398,7 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
             params.audioProfile,
             params.personaPrompt,
           ]);
-          const speaker = normalizeOptionalString(params.speakerName);
+          const speaker = params.speakerName;
           const textBlock: Record<string, unknown> = { type: "text", text: params.text };
           if (style || speaker) {
             textBlock.annotations = [
@@ -460,10 +453,8 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
                   parts: [
                     {
                       text: [
-                        normalizeOptionalString(params.audioProfile),
-                        normalizeOptionalString(params.speakerName)
-                          ? `Speaker name: ${params.speakerName}`
-                          : undefined,
+                        params.audioProfile,
+                        params.speakerName ? `Speaker name: ${params.speakerName}` : undefined,
                         params.text,
                       ]
                         .filter((part): part is string => part !== undefined)

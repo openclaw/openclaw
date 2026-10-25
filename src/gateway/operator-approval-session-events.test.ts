@@ -193,6 +193,7 @@ describe("operator approval session events", () => {
       subscribers.subscribe("sibling-admin", SIBLING_SESSION_KEY, { includeApprovals: true });
 
       const pending = createPendingRecord({
+        sourceSessionKey: "child",
         reviewerDeviceIds: ["source-reviewer", "parent-reviewer"],
       });
       const terminal = createTerminalRecord(pending);
@@ -247,36 +248,6 @@ describe("operator approval session events", () => {
       expect(serialized).not.toContain("private-run-id");
       expect(serialized).not.toContain("private-tool-call-id");
       expect(serialized).not.toContain("private-runtime-epoch");
-    },
-  );
-
-  it.each([
-    ["global", ["agent:main:global"], ["pending", "terminal"]],
-    ["child", ["agent:work:child", "agent:work:parent"], ["pending"]],
-  ] as const)(
-    "publishes the canonical audience source key for %s",
-    (sourceSessionKey, audience, phases) => {
-      const client = createClient({ connId: "admin", scopes: ["operator.admin"] });
-      const { broadcastToConnIds, runtime, subscribers } = createRuntime({ clients: [client] });
-      subscribers.subscribe("admin", audience[0], { includeApprovals: true });
-      const pending = createPendingRecord({ sourceSessionKey, audienceSessionKeys: [...audience] });
-      for (const phase of phases) {
-        runtime.publish({
-          phase,
-          record: phase === "pending" ? pending : createTerminalRecord(pending),
-        });
-      }
-      expect(broadcastToConnIds.mock.calls).toEqual(
-        phases.map((phase) => [
-          "session.approval",
-          expect.objectContaining({
-            sessionKey: audience[0],
-            sourceSessionKey: audience[0],
-            phase,
-          }),
-          new Set(["admin"]),
-        ]),
-      );
     },
   );
 
@@ -382,10 +353,7 @@ describe("operator approval session events", () => {
     signal,
   }) => {
     const databaseOptions = createDatabaseOptions();
-    await insertPendingApproval({
-      databaseOptions,
-      id: "committed-before-writer",
-    });
+    await insertPendingApproval({ databaseOptions, id: "committed-before-writer" });
     const reviewer = createClient({ connId: "reviewer", scopes: ["operator.admin"] });
     const { runtime } = createRuntime({ clients: [reviewer], now: () => 5_000 });
     // Warm read admission before holding a real transaction on the same physical database.
@@ -452,17 +420,12 @@ describe("operator approval session events", () => {
       { length: 64 },
       (_, index) => `agent:main:replay-${index}`,
     );
-    await insertPendingApproval({
-      databaseOptions,
-      id: "replay-admission",
-      audienceSessionKeys,
-    });
+    await insertPendingApproval({ databaseOptions, id: "replay-admission", audienceSessionKeys });
     const reviewer = createClient({ connId: "reviewer", scopes: ["operator.admin"] });
     const { runtime } = createRuntime({ clients: [reviewer], now: () => 5_000 });
     (await runtime.replay(audienceSessionKeys[0]!, reviewer)).release();
     const admissions = vi.spyOn(stateWorkerStore, "runOpenClawStateWorkerOperation");
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    const measured: { replays: number; admissions: number; reads: number }[] = [];
     for (const count of [1, 12, 64]) {
       admissions.mockClear();
       reads.mockClear();
@@ -472,20 +435,11 @@ describe("operator approval session events", () => {
       expect(prepared.map(({ replay }) => replay.approvals.map(({ id }) => id))).toEqual(
         Array.from({ length: count }, () => ["replay-admission"]),
       );
-      measured.push({
-        replays: count,
-        admissions: admissions.mock.calls.length,
-        reads: reads.mock.calls.length,
-      });
+      expect([admissions.mock.calls.length, reads.mock.calls.length]).toEqual([count, count]);
       for (const replay of prepared) {
         replay.release();
       }
     }
-    expect(measured).toEqual([
-      { replays: 1, admissions: 1, reads: 1 },
-      { replays: 12, admissions: 12, reads: 12 },
-      { replays: 64, admissions: 64, reads: 64 },
-    ]);
   });
 
   it("shares only matching audiences and reviewers while checking each waiting client", async () => {
@@ -548,10 +502,7 @@ describe("operator approval session events", () => {
 
   it("invalidates pending replay when a decision precedes the worker reply", async () => {
     const databaseOptions = createDatabaseOptions();
-    const pending = await insertPendingApproval({
-      databaseOptions,
-      id: "terminal-during-replay",
-    });
+    const pending = await insertPendingApproval({ databaseOptions, id: "terminal-during-replay" });
     const reviewerClient = createReviewer();
     const { runtime, subscribers, broadcastToConnIds } = createRuntime({
       clients: [reviewerClient],

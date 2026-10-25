@@ -34,7 +34,6 @@ import {
   type ModelCatalogSource,
   type ModelCatalogStatus,
   type ModelCatalogSuppression,
-  type ModelCatalogThinkingLevelMap,
   type ModelCatalogTieredCost,
   type ModelCatalogVercelGatewayRouting,
   type NormalizedModelCatalogRow,
@@ -53,19 +52,6 @@ const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
 /** Reject object keys that can mutate prototypes when copied into records. */
 function isBlockedObjectKey(key: string): boolean {
   return key === "__proto__" || key === "prototype" || key === "constructor";
-}
-
-function normalizeModelCatalogThinkingLevelMap(
-  value: unknown,
-): ModelCatalogThinkingLevelMap | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized = normalizeCatalogFields(MODEL_CATALOG_THINKING_LEVELS, (level) => {
-    const mapped = value[level];
-    return mapped === null ? null : normalizeOptionalString(mapped);
-  });
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function normalizeStringMap(value: unknown): Record<string, string> | undefined {
@@ -98,13 +84,6 @@ function normalizeModelCatalogApi(value: unknown): ModelCatalogApi | undefined {
   return MODEL_CATALOG_API_SET.has(api) ? (api as ModelCatalogApi) : undefined;
 }
 
-function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | undefined {
-  const inputs = normalizeTrimmedStringList(value).filter((input): input is ModelCatalogInput =>
-    MODEL_CATALOG_INPUTS.has(input),
-  );
-  return inputs.length > 0 ? inputs : undefined;
-}
-
 function normalizeModelCatalogContextWindows(
   value: unknown,
 ): ModelCatalogContextWindowOption[] | undefined {
@@ -131,24 +110,6 @@ function normalizeModelCatalogContextWindows(
           left.contextWindow - right.contextWindow || left.id.localeCompare(right.id),
       )
     : undefined;
-}
-
-function normalizeModelCatalogContextWindowSelection(value: {
-  contextWindows?: unknown;
-  contextWindowDefault?: unknown;
-}): {
-  contextWindows?: ModelCatalogContextWindowOption[];
-  contextWindowDefault?: string;
-} {
-  const contextWindows = normalizeModelCatalogContextWindows(value.contextWindows);
-  const contextWindowDefault = normalizeOptionalString(value.contextWindowDefault);
-  // Options and default are one atomic tuple: options without a valid default
-  // would advertise a capability the picker cannot render a selection for, so
-  // a missing or invalid default drops the option list with it.
-  return contextWindowDefault &&
-    contextWindows?.some((option) => option.id === contextWindowDefault)
-    ? { contextWindows, contextWindowDefault }
-    : {};
 }
 
 function normalizeModelCatalogTieredCost(value: unknown): ModelCatalogTieredCost[] | undefined {
@@ -410,21 +371,6 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   return Object.keys(compat).length > 0 ? compat : undefined;
 }
 
-function normalizeModelCatalogStatus(value: unknown): ModelCatalogStatus | undefined {
-  const status = normalizeOptionalString(value) ?? "";
-  return MODEL_CATALOG_STATUSES.has(status) ? (status as ModelCatalogStatus) : undefined;
-}
-
-function normalizeModelCatalogImageTokenMode(
-  value: unknown,
-): ModelCatalogImageInputConfig["tokenMode"] {
-  const tokenMode = normalizeOptionalString(value) ?? "";
-  if (tokenMode === "tile" || tokenMode === "detail" || tokenMode === "provider") {
-    return tokenMode;
-  }
-  return undefined;
-}
-
 function normalizeModelCatalogMediaInput(value: unknown): ModelCatalogMediaInputConfig | undefined {
   if (!isRecord(value) || !isRecord(value.image)) {
     return undefined;
@@ -436,8 +382,8 @@ function normalizeModelCatalogMediaInput(value: unknown): ModelCatalogMediaInput
       normalizedImage[field] = normalized;
     }
   }
-  const tokenMode = normalizeModelCatalogImageTokenMode(value.image.tokenMode);
-  if (tokenMode) {
+  const tokenMode = normalizeOptionalString(value.image.tokenMode) ?? "";
+  if (tokenMode === "tile" || tokenMode === "detail" || tokenMode === "provider") {
     normalizedImage.tokenMode = tokenMode;
   }
   return Object.keys(normalizedImage).length > 0 ? { image: normalizedImage } : undefined;
@@ -463,19 +409,43 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const api = normalizeModelCatalogApi(value.api);
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
   const headers = normalizeStringMap(value.headers);
-  const input = normalizeModelCatalogInputs(value.input);
+  const inputs = normalizeTrimmedStringList(value.input).filter(
+    (input): input is ModelCatalogInput => MODEL_CATALOG_INPUTS.has(input),
+  );
+  const input = inputs.length > 0 ? inputs : undefined;
   const reasoning = typeof value.reasoning === "boolean" ? value.reasoning : undefined;
   const contextWindow = normalizePositiveNumber(value.contextWindow);
-  const contextWindowSelection = normalizeModelCatalogContextWindowSelection(value);
+  const contextWindows = normalizeModelCatalogContextWindows(value.contextWindows);
+  const contextWindowDefault = normalizeOptionalString(value.contextWindowDefault);
+  // Options and default are one atomic tuple: options without a valid default
+  // would advertise a capability the picker cannot render a selection for, so
+  // a missing or invalid default drops the option list with it.
+  const contextWindowSelection =
+    contextWindowDefault && contextWindows?.some((option) => option.id === contextWindowDefault)
+      ? { contextWindows, contextWindowDefault }
+      : {};
   const contextTokens = normalizePositiveInteger(value.contextTokens);
   const parameterCount = normalizePositiveInteger(value.parameterCount);
   const family = normalizeModelFamily(value.family);
   const maxTokens = normalizePositiveNumber(value.maxTokens);
-  const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(value.thinkingLevelMap);
+  const rawThinkingLevelMap = value.thinkingLevelMap;
+  const normalizedThinkingLevelMap = isRecord(rawThinkingLevelMap)
+    ? normalizeCatalogFields(MODEL_CATALOG_THINKING_LEVELS, (level) => {
+        const mapped = rawThinkingLevelMap[level];
+        return mapped === null ? null : normalizeOptionalString(mapped);
+      })
+    : undefined;
+  const thinkingLevelMap =
+    normalizedThinkingLevelMap && Object.keys(normalizedThinkingLevelMap).length > 0
+      ? normalizedThinkingLevelMap
+      : undefined;
   const cost = normalizeModelCatalogCost(value.cost);
   const compat = normalizeModelCatalogCompat(value.compat);
   const mediaInput = normalizeModelCatalogMediaInput(value.mediaInput);
-  const status = normalizeModelCatalogStatus(value.status);
+  const normalizedStatus = normalizeOptionalString(value.status) ?? "";
+  const status = MODEL_CATALOG_STATUSES.has(normalizedStatus)
+    ? (normalizedStatus as ModelCatalogStatus)
+    : undefined;
   const statusReason = normalizeOptionalString(value.statusReason) ?? "";
   const replaces = normalizeTrimmedStringList(value.replaces);
   const replacedBy = normalizeOptionalString(value.replacedBy) ?? "";

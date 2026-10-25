@@ -2,6 +2,9 @@ import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
+import * as loggingConfig from "../logging/config.js";
 import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import * as publicationLifecycles from "../state/github-publication-session-lifecycles.js";
@@ -214,8 +217,6 @@ describe("Gateway GitHub publication", () => {
       expect.arrayContaining([
         `core.hooksPath=${os.devNull}`,
         "core.fsmonitor=false",
-        "maintenance.auto=false",
-        "gc.auto=0",
         "--no-auto-maintenance",
         "--recurse-submodules=no",
       ]),
@@ -230,11 +231,9 @@ describe("Gateway GitHub publication", () => {
       draft: false,
     });
     for (const [, options] of mocks.runCommand.mock.calls) {
-      expect(options?.env).toMatchObject({
-        GIT_CONFIG_COUNT: "1",
-        GIT_CONFIG_KEY_0: "core.hooksPath",
-        GIT_CONFIG_VALUE_0: os.devNull,
-      });
+      expect(options?.env).toMatchObject(
+        appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),
+      );
     }
     const persisted = database.db
       .prepare("SELECT * FROM github_publication_requests WHERE session_id = ?")
@@ -409,6 +408,68 @@ describe("Gateway GitHub publication", () => {
       code: "workspace_changed",
     });
     expect(commands.some((argv) => argv.includes("push"))).toBe(false);
+  });
+
+  it.each([
+    "fatal: Authentication failed",
+    "fatal: Could not resolve host",
+    "fatal: remote error: upload-pack: not our ref aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  ])("retains the Git fetch recovery diagnostic: %s", async (diagnostic) => {
+    const database = openDatabase();
+    const coordinator = coordinatorFor(database);
+    const requestId = "publication-fetch-diagnostic";
+    seedLocalPublication(database, { requestId, status: "publishing" });
+    overrideCommands((_command, argv) =>
+      argv.includes("fetch")
+        ? { ...commandResult("", 1), stderr: Buffer.from(diagnostic) }
+        : undefined,
+    );
+
+    const error = await coordinator.resumeSessionRequests().catch((cause: unknown) => cause);
+    expect(formatErrorMessage(error)).toContain(diagnostic);
+    expect(await coordinator.readAsync(requestId)).toMatchObject({ status: "publishing" });
+    expect(commandMatches("push")).toHaveLength(0);
+    expect(githubPosts()).toHaveLength(0);
+  });
+
+  it("bounds and redacts Git fetch diagnostics without custom logging configuration", async () => {
+    const database = openDatabase();
+    const coordinator = coordinatorFor(database);
+    seedLocalPublication(database, {
+      requestId: "publication-fetch-redaction",
+      status: "publishing",
+    });
+    const logging = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue(undefined);
+    const token = `ghp_${"x".repeat(36)}`;
+    const diagnostic = [
+      "\u001b[31mfatal: Authentication failed\u001b[0m",
+      "https://user:fixture-password@example.test/repo?unknown=fixture-query#fixture-fragment",
+      "https://user:fi'xture@example.test/repo",
+      "Authorization: Bearer fixture-bearer",
+      `GH_TOKEN=${token}`,
+      "password=fixture-secret",
+      "é".repeat(2_048),
+    ].join("\n");
+    overrideCommands((_command, argv) =>
+      argv.includes("fetch")
+        ? { ...commandResult("", 1), stderr: Buffer.from(diagnostic) }
+        : undefined,
+    );
+    try {
+      const error = await coordinator.resumeSessionRequests().catch((cause: unknown) => cause);
+      const message = formatErrorMessage(error);
+      expect(message).toContain("fatal: Authentication failed");
+      expect(message).not.toMatch(
+        /fixture-(?:password|query|fragment|bearer|secret)|example\.test/u,
+      );
+      expect(message).not.toContain(token);
+      expect(message).not.toContain("\u001b");
+      expect(message).not.toContain("\n");
+      const detail = message.split("Git fetch: ").at(-1)!;
+      expect(Buffer.byteLength(detail)).toBeLessThanOrEqual(1_024);
+    } finally {
+      logging.mockRestore();
+    }
   });
 
   it.for(["settled", "pending"] as const)(

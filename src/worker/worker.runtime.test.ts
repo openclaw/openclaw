@@ -12,6 +12,7 @@ import { Value } from "typebox/value";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { validateWorkerComputerParams } from "../../packages/gateway-protocol/src/index.js";
+import { RequestFrameSchema } from "../../packages/gateway-protocol/src/schema/frames.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -41,6 +42,7 @@ import {
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import * as workerTurnAdmission from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -59,6 +61,7 @@ import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
+import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -67,14 +70,10 @@ import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as workerTranscriptRuntime from "./embedded-agent-transcript.runtime.js";
-import {
-  buildWorkerConnectParams,
-  parseWorkerLaunchDescriptor,
-  type WorkerLaunchDescriptor,
-} from "./launch-descriptor.js";
+import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
-import { createWorkerConnection } from "./worker-connection.js";
+import type { createWorkerConnection } from "./worker-connection.js";
 import {
   buildWorkerProcessTurn,
   parseWorkerProcessMessage,
@@ -97,6 +96,11 @@ import {
   registerWorkerGatewayToolAvailabilityTests,
   registerWorkerGatewayToolRpcTests,
   createWorkerToolSurfaceForTest,
+  createWorkerHelloForTest,
+  createWorkerConnectionForTest,
+  buildWorkerExecToolCall,
+  WorkerExecApprovalFixture,
+  type WorkerExecFixtureOptions,
 } from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -156,41 +160,12 @@ function computerDescriptor(): NonNullable<WorkerLaunchDescriptor["assignment"][
   };
 }
 
-function connectionFor(
-  launch: WorkerLaunchDescriptor,
-  options: Partial<Parameters<typeof createWorkerConnection>[0]> = {},
-) {
-  return createWorkerConnection({
-    endpoint: launch.connectionEndpoint,
-    connectParams: buildWorkerConnectParams(launch),
-    ...options,
-  });
-}
 const RECONNECT_BACKOFF = { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 };
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 const githubProfileDir = (stateDir: string, turnId: string) =>
   path.join(stateDir, "github-profiles", sha256(turnId).slice(0, 16));
 const workerSessions = () =>
   listRunningSessions().filter((session) => session.scopeKey === `worker:${SESSION_ID}`);
-
-function hello(
-  admission: Omit<WorkerConnectRequestFrame["params"]["admission"], "runId">,
-  toolSurface: WorkerToolSurface,
-  heartbeatIntervalMs = 60_000,
-) {
-  const { environmentId, sessionId, ownerEpoch, rpcSetVersion, handshake } = admission;
-  return {
-    type: "worker-hello-ok" as const,
-    toolSurface,
-    environmentId,
-    sessionId,
-    ownerEpoch,
-    rpcSetVersion,
-    protocolFeatures: [...handshake.protocolFeatures],
-    credentialExpiresAtMs: Date.now() + 60_000,
-    policy: { heartbeatIntervalMs, maxPayload: 25 * 1024 * 1024 },
-  };
-}
 
 type ToolCallPlan = { args: Record<string, unknown>; toolCallId: string; toolName: string };
 const toolCall = (
@@ -226,20 +201,10 @@ type InferenceOutput = {
   event: (event: WorkerInferenceEventFrame["payload"]["event"]) => void;
   finish: (outcome: WorkerInferenceTerminalOutcome) => void;
 };
-const USAGE = {
-  input: 2,
-  output: 3,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 5,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const USAGE = createUsageFixture(2, 3, 5);
 
-type FakeGatewayOptions = {
+type FakeGatewayOptions = WorkerExecFixtureOptions & {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
-  backgroundCommand?: string;
-  backgroundYieldMs?: number;
-  execCommand?: string;
   execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
@@ -273,7 +238,7 @@ function assistantMessage(
   };
 }
 
-class FakeWorkerGateway {
+class FakeWorkerGateway extends WorkerExecApprovalFixture {
   config?: OpenClawConfig;
   toolSurface!: () => WorkerToolSurface;
   private readonly httpServer: Server;
@@ -295,6 +260,7 @@ class FakeWorkerGateway {
   readonly acceptedTranscriptRequests: WorkerTranscriptCommitParams[] = [];
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
+  readonly turnAdmissionRequests: workerTurnAdmission.WorkerTurnAdmissionParams[] = [];
   readonly gatewayToolRequests: WorkerGatewayToolInvokeParams[] = [];
   readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
@@ -312,6 +278,7 @@ class FakeWorkerGateway {
   }
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
+    super(options);
     this.httpServer = createServer();
     this.webSocketServer = new WebSocketServer({ server: this.httpServer });
     this.webSocketServer.on("connection", (socket) => this.accept(socket));
@@ -373,7 +340,25 @@ class FakeWorkerGateway {
     if (Value.Check(WorkerInferenceCancelRequestFrameSchema, parsed)) {
       return this.handleInferenceCancel(socket, parsed);
     }
-    if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+    if (Value.Check(RequestFrameSchema, parsed)) {
+      if (
+        parsed.method === workerTurnAdmission.WORKER_TURN_ADMISSION_METHOD &&
+        workerTurnAdmission.validateWorkerTurnAdmissionParams(parsed.params)
+      ) {
+        this.methods.push(parsed.method);
+        this.turnAdmissionRequests.push(structuredClone(parsed.params));
+        this.applicationOrder.push("admission");
+        const lastTranscript = this.acceptedTranscriptRequests.at(-1);
+        // This fixture starts with admitted input; only worker output advances its leaf.
+        this.reply(socket, parsed.id, {
+          outcome: "allow",
+          baseLeafId: lastTranscript ? `leaf-${lastTranscript.seq}` : "leaf-base",
+        });
+        return;
+      }
+      if (this.handleExecApproval(parsed, (id, payload) => this.reply(socket, id, payload))) {
+        return;
+      }
       if (parsed.method === "worker.gatewayTool.cancel") {
         this.methods.push(parsed.method);
         this.send(socket, { type: "res", id: parsed.id, ok: true, payload: { cancelled: false } });
@@ -423,9 +408,8 @@ class FakeWorkerGateway {
         return;
       }
     }
-    const unsupported: unknown = parsed;
-    if (isRecord(unsupported) && typeof unsupported.method === "string") {
-      this.methods.push(unsupported.method);
+    if (isRecord(parsed) && typeof parsed.method === "string") {
+      this.methods.push(parsed.method);
     }
     socket.close(1008, "invalid-frame");
   }
@@ -453,7 +437,11 @@ class FakeWorkerGateway {
     this.reply(
       socket,
       frame.id,
-      hello(frame.params.admission, this.toolSurface(), this.options.heartbeatIntervalMs),
+      createWorkerHelloForTest(
+        frame.params.admission,
+        this.toolSurface(),
+        this.options.heartbeatIntervalMs,
+      ),
     );
   }
 
@@ -553,6 +541,7 @@ class FakeWorkerGateway {
   private handleInference(socket: WebSocket, frame: WorkerInferenceStartRequestFrame): void {
     this.methods.push(frame.method);
     this.inferenceRequests.push(structuredClone(frame.params));
+    this.applicationOrder.push("inference");
     if (this.inferencePlanIndex === 0 && this.options.execApprovals) {
       saveExecApprovals(this.options.execApprovals);
     }
@@ -698,31 +687,7 @@ class FakeWorkerGateway {
     output: InferenceOutput,
     options: { background: boolean; safe: boolean },
   ): void {
-    const toolCallId = "local-exec-call";
-    const args = options.background
-      ? {
-          // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
-          command:
-            this.options.backgroundCommand ??
-            (process.platform === "win32"
-              ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-                  "setInterval(() => undefined, 1000)",
-                )}`
-              : "exec sleep 60"),
-          ...(this.options.backgroundYieldMs === undefined
-            ? { background: true }
-            : { yieldMs: this.options.backgroundYieldMs }),
-        }
-      : {
-          command:
-            this.options.execCommand ??
-            (options.safe ? "wc -c" : "printf worker-local > local-proof.txt"),
-        };
-    this.sendToolCallTurn(output, {
-      args,
-      toolCallId,
-      toolName: "exec",
-    });
+    this.sendToolCallTurn(output, buildWorkerExecToolCall(this.options, options));
   }
 
   private sendToolCallTurn(output: InferenceOutput, tool: ToolCallPlan): void {
@@ -865,7 +830,7 @@ async function withConnection(
   connectionOptions: Partial<Parameters<typeof createWorkerConnection>[0]> = {},
 ) {
   const { gateway, launch } = await setup(options);
-  const connection = connectionFor(launch, connectionOptions);
+  const connection = createWorkerConnectionForTest(launch, connectionOptions);
   try {
     await run(connection, gateway);
   } finally {
@@ -1248,7 +1213,7 @@ it.each(["initial admission", "running turn"] as const)(
     const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-admission-"));
     tempDirs.push(workspaceDir);
     const launch = descriptor(path.join(workspaceDir, "gateway.sock"), workspaceDir);
-    const connection = connectionFor(launch);
+    const connection = createWorkerConnectionForTest(launch);
     // Production formats the last failure into the deadline message
     // (WorkerConnection.failAdmissionDeadline); model that here.
     const deadline = new WorkerAdmissionDeadlineExceededError(
@@ -1259,7 +1224,7 @@ it.each(["initial admission", "running turn"] as const)(
       start.mockRejectedValue(deadline);
     } else {
       start.mockResolvedValue(
-        hello(launch.admission, {
+        createWorkerHelloForTest(launch.admission, {
           generation: "surface",
           presentation: createToolSurfacePresentationForTest(),
           tools: [],
@@ -1821,7 +1786,7 @@ describe("worker reconnect clients", () => {
       silenceFirstLiveEvent: true,
       silenceFirstInference: true,
     });
-    const connection = connectionFor(launch, {
+    const connection = createWorkerConnectionForTest(launch, {
       requestTimeoutMs: 40,
       reconnectBackoff: RECONNECT_BACKOFF,
     });

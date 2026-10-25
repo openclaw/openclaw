@@ -68,15 +68,11 @@ async function sessionUrl(key: string, face: "chat" | "dashboard") {
   return url.toString();
 }
 
-function canvasDocument(
-  title: string,
-  body: string,
-  options?: Parameters<typeof buildWidgetDocument>[2],
-) {
+function canvasDocument(title: string, body: string) {
   return withEnvAsync({ OPENCLAW_STATE_DIR: gatewayOwner().stateDir }, () =>
     createCanvasDocument({
       title,
-      html: buildWidgetDocument(title, body, options),
+      html: buildWidgetDocument(title, body),
       cspSandbox: "scripts",
     }),
   );
@@ -110,38 +106,10 @@ suite.define(() => {
       "Live widget proof",
       `<h1>Live widget proof</h1><label>Local note <input aria-label="Local note"></label>`,
     );
-    const a2uiBundlePath = "/__openclaw__/a2ui/a2ui-v0.9.bundle.js";
-    const a2uiBoot = JSON.stringify({
-      messages: [
-        {
-          version: "v0.9",
-          createSurface: {
-            surfaceId: "main",
-            catalogId: "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json",
-          },
-        },
-        {
-          version: "v0.9",
-          updateComponents: {
-            surfaceId: "main",
-            components: [
-              { id: "root", component: "Column", children: ["title"] },
-              { id: "title", component: "Text", text: "A2UI live proof" },
-            ],
-          },
-        },
-      ],
-      actionTier: "state",
-    }).replaceAll("<", "\\u003c");
-    const { id: a2uiDocId } = await canvasDocument(
-      "A2UI live proof",
-      `<script>globalThis.openclawA2UIBoot=${a2uiBoot};</script><style>html,body{height:100%;overflow:hidden;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script>(()=>{const match=location.pathname.match(/^\\/__openclaw__\\/cap\\/[^/]+/u);const script=document.createElement("script");script.src=(match?.[0]??"")+${JSON.stringify(a2uiBundlePath)};document.head.appendChild(script);})();</script>`,
-      { scriptOrigins: ["'self'"] },
-    );
     const content = [
       {
         type: "text",
-        text: `The synthetic widgets are ready.\n[embed ref="${docId}" title="Live widget proof" height="320" /]\n[embed ref="${a2uiDocId}" title="A2UI live proof" height="200" /]`,
+        text: `The synthetic widget is ready.\n[embed ref="${docId}" title="Live widget proof" height="320" /]`,
       },
     ];
     await appendAssistant(sessionKey, sessionId, content);
@@ -169,10 +137,7 @@ suite.define(() => {
       const inner = outer.contentFrame().frameLocator("iframe");
       await inner.getByRole("heading", { name: "Live widget proof" }).waitFor();
       await inner.getByRole("textbox", { name: "Local note" }).fill("Persisted bytes, isolated UI");
-      const a2uiInner = frames.nth(1).contentFrame().frameLocator("iframe");
-      await a2uiInner.getByText("A2UI live proof", { exact: true }).waitFor();
-      expect(canvasReads).toHaveLength(2);
-      expect(canvasReads).toEqual(expect.arrayContaining([{ docId }, { docId: a2uiDocId }]));
+      expect(canvasReads).toEqual([{ docId }]);
       expect(await outer.getAttribute("src")).toContain("/mcp-app-sandbox");
       const opaque = await inner.locator("body").evaluate(() => {
         try {

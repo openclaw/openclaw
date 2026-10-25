@@ -3,7 +3,7 @@ import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
   claimCodexAppServerLiveThread,
@@ -11,10 +11,12 @@ import {
   hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
 } from "./client-runtime.js";
+import type { CodexAppServerClient } from "./client.js";
 import { ownCodexInferenceClient } from "./inference-routing.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import {
   assistantMessage,
   createParams,
@@ -37,7 +39,9 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import { getCurrentSharedClientEntry } from "./shared-client-lifecycle.js";
+import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
 import * as threadOwnership from "./thread-ownership.js";
+import type { CodexAppServerTurnRouter } from "./turn-router.js";
 
 setupRunAttemptTestHooks();
 
@@ -65,6 +69,27 @@ const complete = (harness: ReturnType<typeof createStartedThreadHarness>) =>
   harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
 describe("Codex attempt subscription recovery", () => {
+  it("requires startup before a prepared attempt can supply live resources", () => {
+    type Prepared = ReturnType<typeof runAttemptResources.prepareCodexAttemptResources>;
+    expectTypeOf<Prepared["state"]["client"]>().toEqualTypeOf<CodexAppServerClient | undefined>();
+    expectTypeOf<Prepared["state"]["thread"]>().toEqualTypeOf<
+      CodexAppServerThreadLifecycleBinding | undefined
+    >();
+    expectTypeOf<Prepared["state"]["turnRouter"]>().toEqualTypeOf<
+      CodexAppServerTurnRouter | undefined
+    >();
+    expectTypeOf<Prepared>().not.toMatchTypeOf<StartedCodexAttemptResources>();
+    expectTypeOf<
+      StartedCodexAttemptResources["state"]["client"]
+    >().toEqualTypeOf<CodexAppServerClient>();
+    expectTypeOf<
+      StartedCodexAttemptResources["state"]["thread"]
+    >().toEqualTypeOf<CodexAppServerThreadLifecycleBinding>();
+    expectTypeOf<
+      StartedCodexAttemptResources["state"]["turnRouter"]
+    >().toEqualTypeOf<CodexAppServerTurnRouter>();
+  });
+
   it("reports an unavailable binding reader before admitting a native turn", async () => {
     const prepare = runAttemptResources.prepareCodexAttemptResources;
     vi.spyOn(runAttemptResources, "prepareCodexAttemptResources").mockImplementationOnce(
@@ -322,7 +347,11 @@ describe("Codex attempt subscription recovery", () => {
                     throw new Error("expired cleanup queued optional retention");
                   });
                 } else if (revoked === "successor") {
-                  resources.state.thread.liveThreadOwnership?.forget();
+                  const thread = resources.state.thread;
+                  if (!thread) {
+                    throw new Error("Expected the adopted thread during monitor setup");
+                  }
+                  thread.liveThreadOwnership?.forget();
                   await claimCodexAppServerLiveThread(harness.client, threadId);
                   hostRevoked = true;
                 } else if (revoked === "closed") {
@@ -399,7 +428,11 @@ describe("Codex attempt subscription recovery", () => {
       ]);
       await run.waitForTurnAccepted();
       const { connection } = resources.prompt.context.runtime;
-      const { threadId } = resources.state.thread;
+      const thread = resources.state.thread;
+      if (!thread) {
+        throw new Error("Expected the adopted thread after startup");
+      }
+      const { threadId } = thread;
       const rowFailure = new Error("row reader release failed");
       const rowWaiting = createDeferred<void>();
       const releaseRow = createDeferred<void>();
@@ -549,6 +582,7 @@ describe("Codex attempt subscription recovery", () => {
       );
       expect(compact).not.toHaveBeenCalled();
       expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
+        "configRequirements/read",
         "config/read",
         "configRequirements/read",
         "thread/read",

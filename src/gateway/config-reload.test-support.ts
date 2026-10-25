@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { assert, expect, it, onTestFinished, vi, type TestContext } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type {
   ConfigFileSnapshot,
   ConfigWriteNotification,
@@ -228,19 +229,11 @@ export function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigF
   const runtimeConfig = partial.runtimeConfig ?? partial.config ?? {};
   const parsed = partial.parsed ?? sourceConfig;
   return {
-    path: "/tmp/openclaw.json",
+    ...createTestConfigSnapshot(sourceConfig, runtimeConfig),
     includedPaths: [],
-    exists: true,
     raw: partial.exists === false ? null : JSON.stringify(parsed),
     parsed,
-    sourceConfig,
-    resolved: sourceConfig,
-    valid: true,
-    runtimeConfig,
     config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
     ...partial,
   };
 }
@@ -438,19 +431,14 @@ export function registerReverseHotReloadTest() {
     await waitForReloadState(() => onHotReload.mock.calls.length === 2);
     await flushReload(harness.reloader);
 
-    expect(onHotReload).toHaveBeenCalledTimes(2);
     expect(onHotReload.mock.calls.map(([, config]) => config)).toEqual([configA, initialConfig]);
     expect(onHotReload.mock.calls[1]?.[0].hotReasons).toContain("hooks.path");
-    expect(harness.onConfigAccepted).toHaveBeenCalledTimes(2);
-    expect(harness.onConfigAccepted.mock.calls.map((call) => call[0])).toEqual([
-      configA,
-      initialConfig,
-    ]);
-    expect(harness.onConfigApplied).toHaveBeenCalledTimes(2);
-    expect(harness.onConfigApplied.mock.calls.map(([, config]) => config)).toEqual([
-      configA,
-      initialConfig,
-    ]);
+    for (const configs of [
+      harness.onConfigAccepted.mock.calls.map(([config]) => config),
+      harness.onConfigApplied.mock.calls.map(([, config]) => config),
+    ]) {
+      expect(configs).toEqual([configA, initialConfig]);
+    }
     expect(promoteSnapshot.mock.calls.map(([snapshot]) => snapshot.hash)).toEqual([
       "post-commit-a",
       "reverse-b",

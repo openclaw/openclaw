@@ -116,6 +116,17 @@ it("preserves non-secret transport liveness timestamps", () => {
   expect(snapshot).toEqual(safeFields);
 });
 
+it.each([
+  {
+    input: [" alice ", 42, true, null, {}, ""],
+    expected: { allowFrom: ["alice", "42"] },
+  },
+  { input: [" ", {}, false], expected: {} },
+  { input: "alice", expected: {} },
+])("projects supported allowFrom entries from $input", ({ input, expected }) => {
+  expect(projectSafeChannelAccountSnapshotFields({ allowFrom: input })).toEqual(expected);
+});
+
 it("projects recorded lifecycle alongside channel-authored healthState", () => {
   expect(
     projectSafeChannelAccountSnapshotFields({ lifecycle: "blocked", healthState: "degraded" }),

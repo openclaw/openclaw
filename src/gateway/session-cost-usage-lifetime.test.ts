@@ -69,6 +69,21 @@ const sessionFresh = (totalTokens: number) => ({
 });
 const timestamp = Date.parse("2026-09-18T12:00:00Z");
 const mainConfig = () => ({ agents: { entries: { main: {} } } });
+const topologyAgents = () => ({
+  ownership: "explicit" as const,
+  entries: { main: {}, alpha: {}, beta: {} },
+});
+
+function refuseStartup(agentId: string) {
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId,
+    paths: [resolveOpenClawAgentSqlitePath({ agentId })],
+    pending: true,
+    reason: "Startup preparation is pending",
+  });
+  recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+  return refusal;
+}
 
 function observeProjection(config: Parameters<typeof costWindow>[0]) {
   const publications: SessionCostUsagePublication[] = [];
@@ -357,13 +372,7 @@ it("projects committed usage after startup preparation without borrowing its exp
       await wait(firstStarted.promise);
       expect(await wait(outcomes[0]!)).toEqual({ ok: true, context: "owner" });
       const initialRequests = requested.mock.calls.length;
-      const refusal = createAgentDatabaseInspectionRefusal({
-        agentId: target.agentId,
-        paths: [resolveOpenClawAgentSqlitePath({ agentId: target.agentId })],
-        pending: true,
-        reason: "Startup preparation is pending",
-      });
-      recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+      const refusal = refuseStartup(target.agentId);
       holdRefresh = true;
       await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, () =>
         publisher.run("preparation", async () => {
@@ -404,11 +413,12 @@ it("projects committed usage after startup preparation without borrowing its exp
   return run;
 });
 
-it("refreshes only the admitted topology owner from the eligible roster", async ({ signal }) => {
+it("routes startup, shared selectors, invalidations, and admitted topology owners", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const config = {
-      agents: { ownership: "explicit" as const, entries: { main: {}, alpha: {}, beta: {} } },
-    };
+    const agents = topologyAgents();
+    let config: Parameters<typeof costWindow>[0] = { agents };
     setRuntimeConfigSnapshot(config);
     await state.writeText("agents/unowned/marker", "Synthetic unowned agent");
     const requested = vi
@@ -416,121 +426,55 @@ it("refreshes only the admitted topology owner from the eligible roster", async 
       .mockImplementation(() => {});
     const roster = vi.spyOn(agentList, "listGatewayAgentsBasic");
     const waitForRoster = () => withinTest(roster.mock.results.at(-1)!.value, signal);
-    const lifetime = startProjection(config);
+    const requestedAgents = () => requested.mock.calls.map(([request]) => request.agentId);
+    const lifetime = startSessionCostUsageProjectionLifetime({
+      getConfig: () => config,
+      warn: vi.fn(),
+    });
+    const topology = { agentId: "alpha", topology: true } as const;
+    const cases: Array<
+      [
+        name: string,
+        scope: Extract<SessionRowChange, { all: true }>["scope"],
+        store?: string,
+        factsInvalidated?: true,
+      ]
+    > = [
+      ["unqualified agent", { agentId: "alpha" }],
+      ["unknown object scope", {}],
+      ["topology without an owner", { topology: true }],
+      ["explicit store path", { ...topology, storePath: state.path("shared.sqlite") }],
+      ["config", "config"],
+      ["stores", "stores"],
+      ["forced topology invalidation", topology, undefined, true],
+      ["shared store selector", topology, state.path("shared.sqlite")],
+      ["custom store template", topology, state.path("{agentId}", "sessions.json")],
+      ["whitespace store selector", topology, " "],
+    ];
     try {
       await waitForRoster();
-      expect(requested.mock.calls.map(([request]) => request.agentId)).toEqual([
-        "main",
-        "alpha",
-        "beta",
-      ]);
+      expect(requestedAgents()).toEqual(["main", "alpha", "beta"]);
+      for (const [name, scope, store, factsInvalidated] of cases) {
+        config = { agents, ...(store === undefined ? {} : { session: { store } }) };
+        requested.mockClear();
+        sessionChanges.emit({ all: true, scope, factsInvalidated });
+        await waitForRoster();
+        expect(requestedAgents(), name).toEqual(["main", "alpha", "beta"]);
+      }
+      config = { agents };
       requested.mockClear();
       for (const agentId of ["alpha", "beta", "alpha"]) {
         sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
         await waitForRoster();
       }
-      expect(requested.mock.calls.map(([request]) => request.agentId)).toEqual([
-        "alpha",
-        "beta",
-        "alpha",
-      ]);
+      expect(requestedAgents()).toEqual(["alpha", "beta", "alpha"]);
       requested.mockClear();
-      recordAgentDatabaseAdmissions(
-        [
-          createAgentDatabaseInspectionRefusal({
-            agentId: "alpha",
-            paths: [resolveOpenClawAgentSqlitePath({ agentId: "alpha" })],
-            pending: true,
-            reason: "Synthetic pending preparation",
-          }),
-        ],
-        { source: "startup" },
-      );
+      refuseStartup("alpha");
       for (const agentId of ["unowned", "alpha"]) {
         sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
         await waitForRoster();
       }
       expect(requested).not.toHaveBeenCalled();
-    } finally {
-      await lifetime.stop();
-    }
-  });
-});
-
-it("retains full usage refreshes for shared selectors and unqualified invalidations", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const agents = {
-      ownership: "explicit" as const,
-      entries: { main: {}, alpha: {}, beta: {} },
-    };
-    let config: Parameters<typeof costWindow>[0] = { agents };
-    setRuntimeConfigSnapshot(config);
-    const requested = vi
-      .spyOn(cacheRuntime, "requestCostUsageCacheRefresh")
-      .mockImplementation(() => {});
-    const roster = vi.spyOn(agentList, "listGatewayAgentsBasic");
-    const waitForRoster = () => withinTest(roster.mock.results.at(-1)!.value, signal);
-    const lifetime = startSessionCostUsageProjectionLifetime({
-      getConfig: () => config,
-      warn: vi.fn(),
-    });
-    const cases: Array<{
-      name: string;
-      scope: Extract<SessionRowChange, { all: true }>["scope"];
-      store?: string;
-      factsInvalidated?: true;
-    }> = [
-      { name: "unqualified agent", scope: { agentId: "alpha" } },
-      { name: "unknown object scope", scope: {} },
-      { name: "topology without an owner", scope: { topology: true } },
-      {
-        name: "explicit store path",
-        scope: { agentId: "alpha", storePath: state.path("shared.sqlite"), topology: true },
-      },
-      { name: "config", scope: "config" },
-      { name: "stores", scope: "stores" },
-      {
-        name: "forced topology invalidation",
-        scope: { agentId: "alpha", topology: true },
-        factsInvalidated: true,
-      },
-      {
-        name: "shared store selector",
-        scope: { agentId: "alpha", topology: true },
-        store: state.path("shared.sqlite"),
-      },
-      {
-        name: "custom store template",
-        scope: { agentId: "alpha", topology: true },
-        store: state.path("{agentId}", "sessions.json"),
-      },
-      {
-        name: "whitespace store selector",
-        scope: { agentId: "alpha", topology: true },
-        store: " ",
-      },
-    ];
-    try {
-      await waitForRoster();
-      for (const scenario of cases) {
-        config = {
-          agents,
-          ...(scenario.store === undefined ? {} : { session: { store: scenario.store } }),
-        };
-        requested.mockClear();
-        sessionChanges.emit({
-          all: true,
-          scope: scenario.scope,
-          factsInvalidated: scenario.factsInvalidated,
-        });
-        await waitForRoster();
-        expect(
-          requested.mock.calls.map(([request]) => request.agentId),
-          scenario.name,
-        ).toEqual(["main", "alpha", "beta"]);
-      }
     } finally {
       await lifetime.stop();
     }

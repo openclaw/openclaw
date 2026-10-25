@@ -2,6 +2,10 @@
 export { openEngineStore } from "../infra/database-engine/open.js";
 export { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 export {
+  postgresIndexOrderingMigration,
+  withLegacyPostgresIndexOrdering,
+} from "../infra/database-engine/postgres-index-ordering.js";
+export {
   runEngineStoreReadSnapshot,
   runEngineWorkerWrite,
 } from "../infra/database-engine/adapters.js";

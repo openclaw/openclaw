@@ -43,7 +43,9 @@ function registered(host?: string) {
 function document(url = pullUrl) {
   return { url, title: "Plugin reader", body: "**Public**", author: "octocat" };
 }
-function preview(overrides: Partial<ControlUiGitHubPreview> = {}): ControlUiGitHubPreview {
+function preview(
+  overrides: Partial<ControlUiGitHubPreview & { kind: "issue" | "pull" }> = {},
+): ControlUiGitHubPreview {
   return {
     ...pullTarget,
     title: "Plugin reader",
@@ -156,9 +158,9 @@ it.each([undefined, "ghe.example.test"])(
     expect(registry.registry.gatewayHandlers).not.toHaveProperty("controlUi.githubPreview");
     expectReader(registry);
     expect(registry.registry.controlUiDescriptors).toHaveLength(host ? 4 : 2);
-    expect(
-      registry.registry.controlUiDescriptors[1]?.descriptor.linkReader?.previewMethod,
-    ).toBeUndefined();
+    expect(registry.registry.controlUiDescriptors[1]?.descriptor.linkReader?.previewMethod).toBe(
+      "github.preview",
+    );
     expect(fetchMock).not.toHaveBeenCalled();
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
     registry.rollbackPluginGlobalSideEffects("github", registry.registry.plugins[0]!);
@@ -219,13 +221,46 @@ it.each([
   ["github.image", { url: assetUrl }],
   ["github.detail", { url: "https://example.com/owner/repo/issues/1" }],
   ["github.detail", { url: "https://github.com/owner/repo/pull/1/checks" }],
-  ["github.preview", { url: "https://github.com/owner/repo/commit/abcdef0" }],
+  ["github.preview", { url: "https://github.com/owner/repo/commit/not-a-sha" }],
   ["github.detail", { url: pullUrl, section: "unknown" }],
   ["github.preview", { url: pullUrl, section: "overview" }],
   ["github.preview", { url: "https://github.com/owner/repo/issues/1", agentId: " " }],
 ] as const)("rejects malformed %s requests before network access", async (method, params) => {
   const respond = await request(method, params);
   expectFailure(respond, { code: "INVALID_REQUEST", message: "invalid " + method + " params" });
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("adapts commit hover metadata without opening the full reader", async () => {
+  const target = {
+    kind: "commit",
+    owner: "octocat",
+    repo: "repo",
+    sha: "abcdef0123456789",
+  } as const;
+  const url = "https://github.com/octocat/repo/commit/abcdef0123456789#diff-example";
+  hostSuccess({
+    ...target,
+    title: "Fix commit previews",
+    state: "committed",
+    login: "octocat",
+    createdAt: date,
+    updatedAt: date,
+    additions: 3,
+    deletions: 2,
+  });
+  expectSuccess(await request("github.preview", { url }), {
+    url,
+    title: "Fix commit previews",
+    subtitle: "octocat/repo · abcdef012345",
+    badge: { label: "Commit", tone: "neutral" },
+    author: "octocat",
+    metadata: [
+      { label: "", value: "+3", tone: "positive" },
+      { label: "", value: "−2", tone: "negative" },
+    ],
+  });
+  expect(dispatchGatewayMethod).toHaveBeenCalledExactlyOnceWith("controlUi.githubPreview", target);
   expect(fetchMock).not.toHaveBeenCalled();
 });
 

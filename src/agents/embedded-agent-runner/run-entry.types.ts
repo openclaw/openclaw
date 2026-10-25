@@ -41,6 +41,9 @@ export type RunEntryCandidateOptions = {
   agentHarnessRuntimeOverride: string | undefined;
   assistantErrorTranscript: AssistantErrorTranscript;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
+  /** Turn-local Access escalation; preserves the refused attempt's account. */
+  cyberAccessProgram?: "daybreak_blue";
+  authProfileId?: string;
   classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;

@@ -47,10 +47,21 @@ The shared settlement owner preserves callback order and joins pending
 presentation work before terminal delivery. Projection draining stays under the
 attempt cancellation and settlement deadline.
 
+After a transient provider retry, final-answer recovery uses the original
+persisted user prompt and the completed tool results. It can produce a summary
+when the native turn finishes without text, without running those tools again.
+
 The Codex adapter retains native item identities, protocol parsing, approvals,
 hook handling, and transcript provenance. Constructed messages are persisted
 through the existing scoped transcript APIs; the shared projection helpers do
 not own storage.
+
+The adapter validates native responses with checks and diagnostic schemas generated
+from the pinned app-server schemas. This removes runtime schema compilation and
+normalization while preserving invalid-response diagnostics. Protocol sync regenerates both outputs.
+For validator-only changes, run
+`pnpm codex-app-server:validators:gen` and verify with
+`pnpm codex-app-server:validators:check` without running Codex.
 
 Run tool summaries retain explicit native-tool failures recorded before execution,
 including malformed patches and workspace refusals. A successful retry leaves the
@@ -424,6 +435,8 @@ tool profile must allow all native shell and filesystem capabilities: `coding`
 and `full` do, while `messaging` and `minimal` disable the native surface. Agent
 and provider profile overrides and explicit tool restrictions still apply.
 
+Codex-native file edits remain limited to the turn cwd; linked worktrees need OpenClaw file tools or a managed worktree (`worktree: true`).
+
 Selecting a managed GitHub Identity also uses OpenClaw's host-owned tools instead
 of native Code Mode. The same exec owner used by the built-in runtime binds the
 selected profile at child launch, preserves approval and caller lifetime checks,
@@ -508,6 +521,27 @@ matching completion or source closure, including when the sandbox exec-server
 is disabled. Idle conversation eviction does not interrupt that work.
 The existing unknown-outcome audit diagnostic remains; cancellation and a
 command with no confirmed live owner retain their failure handling.
+
+### Intentional yield and native interruption markers
+
+`sessions_yield` pauses the OpenClaw run while it waits for a follow-up event.
+OpenClaw returns the dynamic tool result, then uses `turn/interrupt` to stop the
+native Codex turn. The current app-server protocol has no client-requested normal
+completion: `turn/completed` is a server notification, `turn/interrupt` accepts
+only thread and turn IDs, and `DynamicToolCallResponse` carries only content and
+success. Returning that tool result alone allows another model step; OpenClaw's
+internal terminal-tool flag cannot finish the native turn through the protocol.
+
+As a result, Codex can persist a `<turn_aborted>` marker saying the user
+interrupted the previous turn even when the agent intentionally yielded.
+OpenClaw preserves native history and adds explicit yield context to the saved
+continuation: the pause was agent-requested, and a native interruption marker for
+that yield does not mean the user requested Stop or canceled the task. Work
+continues when the expected follow-up arrives. Avoiding this native marker needs
+an upstream completion or per-interrupt reason contract; OpenClaw does not
+disable interruption guidance globally or rewrite the native rollout.
+
+### Stop and cancellation
 
 Stopping an active Codex run interrupts its turn. After a parent yields to native
 children, Stop waits for its admitted descendants to reach real terminal events
@@ -669,7 +703,7 @@ same child result after the parent replies.
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
 - Managed Codex app-server `0.160.0` or newer. The plugin ships
-  `@openai/codex` `0.162.1` and uses a newer stable `codex` from `PATH` only
+  `@openai/codex` `0.164.0` and uses a newer stable `codex` from `PATH` only
   after it passes a version check and an app-server handshake; see
   [Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
   Explicit custom, remote, and macOS desktop-owned

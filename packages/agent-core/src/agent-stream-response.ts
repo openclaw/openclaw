@@ -8,12 +8,7 @@ import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  Context,
-  ToolResultMessage,
-} from "@openclaw/llm-core";
+import type { AssistantMessage, Context, ToolResultMessage } from "@openclaw/llm-core";
 import { AssistantRepetitionGuard } from "./assistant-repetition-guard.js";
 import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
@@ -27,7 +22,6 @@ import { createStreamSteering } from "./stream-steering.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
 import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
-import { normalizeCoreContextMessages } from "./turn-interruption.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
@@ -58,19 +52,6 @@ export type ExecutedToolCallBatch = {
   intervention?: ToolLoopIntervention;
   fatal?: { error: unknown };
 };
-
-function resolveAssistantMessageUpdate(
-  event: Extract<AssistantMessageEvent, { contentIndex: number }>,
-  currentMessage: AssistantMessage,
-): AssistantMessage {
-  if ("partial" in event && event.partial) {
-    return event.partial;
-  }
-  if (event.type !== "text_delta") {
-    return currentMessage;
-  }
-  return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
-}
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
   if (message.stopReason === "toolUse") {
@@ -187,7 +168,21 @@ export async function streamAgentResponse(
     const transformed = config.transformContext
       ? await config.transformContext(messages, projectionSignal)
       : messages;
-    return config.convertToLlm(normalizeCoreContextMessages(transformed));
+    return config.convertToLlm(
+      transformed.map<AgentMessage>((message) => {
+        if (message.role !== "custom" || message.customType !== "openclaw:turn-aborted") {
+          return message;
+        }
+        return {
+          role: "user",
+          content:
+            typeof message.content === "string"
+              ? [{ type: "text", text: message.content }]
+              : message.content,
+          timestamp: message.timestamp,
+        };
+      }),
+    );
   };
   const llmMessages = await convertMessages(sourceMessages);
   let requestPrefix: string | undefined;
@@ -374,7 +369,16 @@ export async function streamAgentResponse(
                         delta: event.delta,
                       }
                     : undefined;
-                const message = resolveAssistantMessageUpdate(event, partialMessage);
+                let message: AssistantMessage = partialMessage;
+                if ("partial" in event && event.partial) {
+                  message = event.partial;
+                } else if (event.type === "text_delta") {
+                  message = appendTextDeltaToAssistantMessage(
+                    partialMessage,
+                    event.contentIndex,
+                    event.delta,
+                  );
+                }
                 partialMessage = message;
                 if (event.contentIndex < committedContentCount) {
                   break;

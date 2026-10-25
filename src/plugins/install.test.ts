@@ -1042,7 +1042,11 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     const { result, warnings } = installed;
     expect(result.ok).toBe(true);
     expect(warnings).toEqual(
-      update ? [] : [expect.stringMatching(/^Repaired OpenClaw host link at /)],
+      update
+        ? [
+            'Plugin runtime compatibility: [scan-incomplete] peer-dep-plugin@1.0.0 package.json:1:1: Missing required runtime dependency "unrelated-host"; install package dependencies before qualification.',
+          ]
+        : [expect.stringMatching(/^Repaired OpenClaw host link at /)],
     );
     if (!result.ok) {
       return;

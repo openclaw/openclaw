@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/index.js";
 import { isExecutionIdentityCollectionEnabled } from "../../audit/audit-config.js";
@@ -144,9 +145,8 @@ export async function resumeMainSession(
       },
     );
   }
-  const isCurrent = () => {
-    return source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
-  };
+  const isCurrent = () =>
+    source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
   if (!isCurrent()) {
     return "skipped";
   }
@@ -255,6 +255,7 @@ async function resumeMainSessionWithinAdmission(
     expectedRecoveryRunId: recoveryRunId,
     expectedRecoverySourceRunId: sourceRunId,
     expectedSessionId: params.entry.sessionId,
+    pendingFinalDelivery: params.entry.pendingFinalDelivery,
     lifecycleGeneration,
     sessionKeys: Array.from(new Set([dispatchSessionKey, params.sessionKey])),
     shouldContinue: params.shouldContinue,
@@ -711,7 +712,7 @@ async function resumeMainSessionWithinAdmission(
       return rejected;
     }
     log.warn(
-      `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+      `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? formatErrorStackWithMessage(error) : String(error)}`,
     );
     return "failed";
   } finally {

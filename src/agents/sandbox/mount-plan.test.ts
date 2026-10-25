@@ -6,7 +6,7 @@ import { DOCKER_SANDBOX_ENGINE as engine, execContainer } from "./container-engi
 import { resolveDockerSourceNamespace } from "./docker-mount-source.js";
 import {
   prepareSandboxMountPlan,
-  sandboxMountPlanMatchesContainer as matchesContainer,
+  compareSandboxMountPlan,
   sandboxContainerShowsWorkspacePaths,
 } from "./mount-plan.js";
 
@@ -80,7 +80,9 @@ async function expectMounts(
     stderr: "",
     code: 0,
   });
-  expect(await matchesContainer({ engine, containerName: "retained", plan })).toBe(matches);
+  expect(
+    (await compareSandboxMountPlan({ engine, containerName: "retained", plan })) === "match",
+  ).toBe(matches);
 }
 
 describe("managed mount plan", () => {

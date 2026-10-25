@@ -10,6 +10,7 @@ import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/type
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { readUserProfileSnapshotSync } from "../../state/user-profile-list-item.test-support.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import {
   disposeSessionReadContexts,
   trackSessionReadProfileSubscription,
@@ -111,14 +112,8 @@ export function createSessionPlacementFactsReader(
 
 export function identifiedClient(profileId: string): GatewayClient {
   const client: GatewayClient = {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
-    authenticatedUserProfile: { profileId, displayName: profileId, hasAvatar: false, updatedAt: 1 },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
+    authenticatedUserProfile: gatewayProfile(profileId, profileId),
   };
   const refresh = () => {
     const identity = client.authenticatedUserProfile?.profileId ?? profileId;

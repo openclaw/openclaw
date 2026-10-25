@@ -3,12 +3,17 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEmbeddedAttemptToolConstructionPlan } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
+import * as gateway from "./tools/in-process-gateway.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
 beforeEach(() => setRuntimeConfigSnapshot({}));
-afterEach(() => clearRuntimeConfigSnapshot());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.restoreAllMocks();
+});
 
 function widget(tools: ReturnType<typeof createOpenClawTools>) {
   return tools.find((candidate) => candidate.name === "show_widget");
@@ -33,13 +38,7 @@ it("applies tool policy to recovered dashboard authoring", () => {
   const options = {
     sessionKey: "agent:main:dashboard:recovered",
     pinnedWidgetAuthoring: true,
-    toolConstructionPlan: {
-      includeBaseCodingTools: false,
-      includeShellTools: false,
-      includeChannelTools: false,
-      includeOpenClawTools: true,
-      includePluginTools: false,
-    },
+    toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
   };
   expectPinnedOnlySchema(createOpenClawCodingTools(options));
   const deniedTools = createOpenClawCodingTools({
@@ -91,4 +90,34 @@ it("keeps scheduled turns with a real inline client on the normal widget surface
   );
   expect(tool).toMatchObject({ requiredClientCaps: ["inline-widgets"] });
   expect(tool?.parameters).not.toMatchObject({ required: expect.arrayContaining(["pin"]) });
+});
+
+it("pins from a recovered turn that keeps the session's inline widget catalog", async () => {
+  const agentSessionKey = "agent:main:dashboard:recovered";
+  const recorded = widget(createOpenClawTools({ agentSessionKey, clientCaps: ["inline-widgets"] }));
+  const recovered = widget(
+    createOpenClawTools({
+      agentSessionKey,
+      pinnedWidgetAuthoring: true,
+      listingClientCaps: ["inline-widgets"],
+      clientCaps: [],
+    }),
+  );
+  expect(recovered?.parameters).toEqual(recorded?.parameters);
+  expect(recovered?.description).toBe(recorded?.description);
+  const put = vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
+    widgets: [{ name: "status", tabId: "main", grantState: "none" }],
+    resolvedWidgetName: "status",
+  });
+  const call = { title: "Status", name: "status", widget_code: "<p>ready</p>" };
+
+  const pinned = await recovered!.execute("pin-call", { ...call, pin: true });
+  expect(put).toHaveBeenCalledWith(
+    "board.widget.put",
+    expect.objectContaining({ sessionKey: agentSessionKey, name: "status" }),
+  );
+  expect(pinned.content[0]).toMatchObject({ text: expect.stringContaining('"status": "pinned"') });
+  await expect(recovered!.execute("inline-call", call)).rejects.toThrow(
+    "no connected client can show inline widgets this turn; set pin=true",
+  );
 });

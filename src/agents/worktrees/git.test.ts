@@ -7,10 +7,13 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { resolveWorktreeBase } from "./base-ref.js";
+import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { gitIdentity } from "./git-fixture.test-support.js";
 import {
   commandError,
@@ -56,6 +59,26 @@ describe("Git ref mutation ownership", () => {
     await requireGit(root, ["update-ref", queuedRef, "HEAD"]);
     return root;
   }
+
+  it.each([false, true])(
+    "disables automatic maintenance on an unregistered repository (sourceOnly=%s)",
+    async (sourceOnly) => {
+      const root = await repository();
+      const policy = gitMaintenanceEnvironment();
+      for (const [envKey, key] of Object.entries(policy)) {
+        if (!envKey.startsWith("GIT_CONFIG_KEY_") || !key) {
+          continue;
+        }
+        const disabled = policy[envKey.replace("_KEY_", "_VALUE_")]!;
+        const enabled = disabled === "0" ? "1" : "true";
+        await requireGit(root, ["config", "--local", key, enabled]);
+        await withWorktreeGitConfig(root, sourceOnly, {}, async (git) => {
+          expect(await git.require(root, ["config", "--get", key])).toBe(disabled);
+        });
+        expect(await requireGit(root, ["config", "--local", "--get", key])).toBe(enabled);
+      }
+    },
+  );
 
   it("rejects incomplete required stdout through the worktree wrapper", async () => {
     const root = await repository();
@@ -209,14 +232,9 @@ describe("Git ref mutation ownership", () => {
 
   it("rejects an interrupted explicit-base lookup even with exit code zero", async () => {
     const root = await repository();
-    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce({
-      stdout: "refs/heads/-fixture\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "signal",
-    });
+    vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce(
+      createCommandResult({ stdout: "refs/heads/-fixture\n", termination: "signal" }),
+    );
     await expect(resolveWorktreeBase(root, "-fixture")).rejects.toThrow("terminated");
   });
 
@@ -277,14 +295,9 @@ describe("Git ref mutation ownership", () => {
       if (command !== "symbolic-ref") {
         return run(argv, options);
       }
-      return Promise.resolve({
-        stdout: "refs/remotes/origin/main\n",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "signal",
-      });
+      return Promise.resolve(
+        createCommandResult({ stdout: "refs/remotes/origin/main\n", termination: "signal" }),
+      );
     });
     await expect(resolveWorktreeBase(root)).rejects.toThrow("Remote default branch is unavailable");
   });

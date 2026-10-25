@@ -1,7 +1,9 @@
-import { listSessionTranscriptArchivesReadOnly } from "./session-accessor.sqlite-history.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { listSessionTranscriptInstances } from "./session-history.js";
+import {
+  listSessionTranscriptArchivesReadOnly,
+  listSessionTranscriptInstances,
+} from "./session-history-read.js";
 import { selectMemorySessionTargets } from "./session-memory-targets-policy.js";
 import type {
   MemorySessionSelectors,

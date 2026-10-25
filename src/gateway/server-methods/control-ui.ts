@@ -275,7 +275,10 @@ function parseCheckDetailsParams(
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
   const headSha = typeof params.headSha === "string" ? params.headSha : "";
   const target = gitHubPublicApi.parseControlUiGitHubPreviewTarget({ ...params, kind: "pull" });
-  return target && sessionKey && sessionKey.length <= 512 && /^[0-9a-f]{40}$/i.test(headSha)
+  return target?.kind === "pull" &&
+    sessionKey &&
+    sessionKey.length <= 512 &&
+    /^[0-9a-f]{40}$/i.test(headSha)
     ? {
         sessionKey,
         owner: target.owner,

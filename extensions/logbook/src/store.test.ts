@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { dayKeyFor } from "./day.js";
+import { LOGBOOK_SCHEMA_VERSION } from "./store-schema.js";
 import { LogbookStore } from "./store.js";
 import {
   BASE,
@@ -291,12 +292,15 @@ describe("LogbookStore", () => {
     // The future-version file must reach its first managed admission here.
     fs.renameSync(databasePath, `${databasePath}.seed`);
     fs.copyFileSync(`${databasePath}.seed`, databasePath);
-    execSql(databasePath, "PRAGMA user_version = 2");
+    const futureVersion = LOGBOOK_SCHEMA_VERSION + 1;
+    execSql(databasePath, `PRAGMA user_version = ${futureVersion}`);
 
     await expect(LogbookStore.open(dir, workerModuleUrl)).rejects.toThrow(
-      "Logbook database uses newer schema version 2; this build supports 1",
+      `Logbook database uses newer schema version ${futureVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
     );
-    expect(readRows(databasePath, "PRAGMA user_version")).toEqual([{ user_version: 2 }]);
+    expect(readRows(databasePath, "PRAGMA user_version")).toEqual([
+      { user_version: futureVersion },
+    ]);
     expect(readRows(databasePath, "SELECT day, text FROM standups")).toEqual([
       { day: DAY, text: "Preserved future-version fixture" },
     ]);

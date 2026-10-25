@@ -11,6 +11,7 @@ import { buildSandboxHostDocument, buildSandboxHostPath } from "../../src/agents
 import type { RouteId } from "../../ui/src/app-route-paths.ts";
 import { openSessionMenuSubmenu } from "../../ui/src/e2e/session-management.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
+import { clickBoardWidgetControl } from "../../ui/src/test-helpers/control-ui-e2e-widget.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
@@ -40,6 +41,10 @@ import {
 import { dialogScenes } from "./dialog-scenes.ts";
 import { documentScenes } from "./document-scenes.ts";
 import { finalDialogCoverageLimits, finalDialogScenes } from "./final-dialog-scenes.ts";
+import {
+  launchRetentionNativeVisibilityContext,
+  performanceRetentionScenes,
+} from "./performance-scenes.ts";
 import { resourceDialogScenes } from "./resource-dialog-scenes.ts";
 import { specialDialogCoverageNotes, specialDialogScenes } from "./special-dialog-scenes.ts";
 
@@ -93,6 +98,7 @@ const selectedWorkloads = [
   ...["session-switch", "stream", "reconnect", "dialog-mcp-confirmation"].filter((id) =>
     filter.test(id),
   ),
+  ...performanceRetentionScenes.filter((scene) => filter.test(scene.id)).map((scene) => scene.id),
 ];
 if (!selectedWorkloads.length) {
   throw new Error("Retention selection matches no workloads");
@@ -104,9 +110,16 @@ const samples: Array<{
   metrics: Awaited<ReturnType<typeof captureRetention>>;
 }> = [];
 const coverage: Array<{ workload: string; outcome: string }> = [];
-let browser: Awaited<ReturnType<typeof chromium.launch>>;
 let server: Awaited<ReturnType<typeof startBuiltControlUiE2eServer>>;
 let build: { buildId: string; version: string };
+
+function launchBrowser() {
+  return chromium.launch({
+    executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
+    headless: true,
+    args: ["--use-fake-device-for-media-stream", "--disable-gpu"],
+  });
+}
 
 beforeAll(async () => {
   const html = await readFile(path.join(bundleDir, "index.html"), "utf8");
@@ -118,11 +131,9 @@ beforeAll(async () => {
   }
   build = JSON.parse(identity);
   server = await startBuiltControlUiE2eServer(bundleDir);
-  browser = await chromium.launch({
-    executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-    headless: true,
-    args: ["--use-fake-device-for-media-stream"],
-  });
+  const browser = await launchBrowser();
+  const browserVersion = browser.version();
+  await browser.close();
   await writeFile(
     path.join(directory, "manifest.json"),
     JSON.stringify(
@@ -130,7 +141,7 @@ beforeAll(async () => {
         revision: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
         build,
         bundleDir,
-        browser: browser.version(),
+        browser: browserVersion,
         platform: process.platform,
         arch: process.arch,
         load: os.loadavg(),
@@ -139,7 +150,7 @@ beforeAll(async () => {
         acceptance:
           "Report-only census. Warm repeated workloads should plateau after bounded caches fill; rank sustained growth by post-GC bytes/cycle and inspect strong retainers before changing owners.",
         instrumentation:
-          "Production renderer; synthetic Gateway; native clocks; timer ID sets retain no callbacks; uninterrupted CDP profiler; Solid rc.16 production owner slots (_parent/De/He/R), disposed bit 64; detachedness=2 native nodes. Heap counters include the mock and probe overhead.",
+          "Production renderer; synthetic Gateway; native clocks; GPU disabled for headless census stability; timer ID sets retain no callbacks, callback counts are cumulative; uninterrupted CDP profiler; Solid rc.18 production owner slots (_parent/De/He/R), disposed bit 64; detachedness=2 native nodes. Heap counters include the mock and probe overhead. Hidden idle uses a fresh native Chromium window minimized without freezing.",
         exclusions:
           "Standalone approval/question and boot-only Gateway confirmation use repeated full-document navigation; all other workloads preserve the SPA document. Native OS pickers, Linux companion dialogs, arbitrary third-party dialogs, and every visual/loading/error variant are outside this census.",
         coverageLimits: finalDialogCoverageLimits,
@@ -152,7 +163,6 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await browser?.close();
   await server?.close();
   await writeFile(
     path.join(directory, "census.json"),
@@ -221,12 +231,23 @@ async function measure(
     gateway: MockGatewayControls,
     sample: (cycle: number) => Promise<void>,
   ) => Promise<void>,
+  nativeVisibility = false,
 ) {
-  const context = await browser.newContext({
-    viewport: { width: 1440, height: 1000 },
-    serviceWorkers: "block",
-  });
+  const native = nativeVisibility ? await launchRetentionNativeVisibilityContext(directory) : null;
+  // Preserve one document/CDP session within a workload; isolate native browser
+  // teardown between workloads so one process crash cannot erase the census.
+  const browser = native ? null : await launchBrowser();
+  const context =
+    native?.context ??
+    (await browser!.newContext({
+      viewport: { width: 1440, height: 1000 },
+      serviceWorkers: "block",
+    }));
   const page = await context.newPage();
+  if (native) {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.bringToFront();
+  }
   page.setDefaultTimeout(20_000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -284,8 +305,22 @@ async function measure(
     throw error;
   } finally {
     await cdp.detach();
-    await context.close();
+    if (native) {
+      await native.close();
+    } else {
+      await browser!.close();
+    }
   }
+}
+
+for (const scene of performanceRetentionScenes.filter((entry) => filter.test(entry.id))) {
+  it(
+    scene.id,
+    async () => {
+      await measure(scene.id, scene.fixture(build), scene.run, scene.nativeVisibility);
+    },
+    scene.timeoutMs,
+  );
 }
 
 // Reuse the existing route and interaction recipes; navigation never reloads
@@ -333,6 +368,9 @@ for (const scene of selectedScenes) {
           await sample(0);
           for (let cycle = 1; cycle <= 10; cycle++) {
             await visit();
+            if (scene.id === "dialog-browser-auth-recovery") {
+              console.log(`[retention] ${scene.id} visit ${cycle}/10`);
+            }
             if (cycle === 5 || cycle === 10) {
               await sample(cycle);
             }
@@ -547,7 +585,7 @@ if (filter.test("dialog-mcp-confirmation")) {
           const app = await findAppFrame(page);
           await expect.poll(() => app.locator("#initialized").textContent()).toBe("ready");
           const visit = async () => {
-            await app.locator("#send-message").click();
+            await clickBoardWidgetControl(page, app.locator("#send-message"));
             const confirmation = page.getByRole("alertdialog");
             await confirmation.getByText("summarize selection", { exact: true }).waitFor();
             await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();

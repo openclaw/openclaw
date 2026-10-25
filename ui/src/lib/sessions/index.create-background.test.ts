@@ -70,6 +70,9 @@ it.each(["current", "key-only", "cancelled", "replaced"])(
       outcome === "key-only"
         ? sessions.create({ agentId: "main" }, { signal: controller.signal })
         : sessions.createResult({ agentId: "main" }, { signal: controller.signal });
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("sessions.create", expect.anything(), expect.anything()),
+    );
     if (outcome === "cancelled") {
       controller.abort();
     } else if (outcome === "replaced") {

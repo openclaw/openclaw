@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   hasInternalDiagnosticEventInterest,
+  hasModelCallPromptStatsInterest,
   onInternalDiagnosticEventInterest,
 } from "./diagnostic-event-listener-presence.js";
 import {
@@ -27,6 +28,31 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   vi.restoreAllMocks();
 });
+
+it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
+  "requests prompt stats only for interested subscribers over their lifetime (%#)",
+  (subscribe) => {
+    const listener = () => {};
+    subscribe(listener, { include: [started, completed], includePromptStats: false });
+    expect(hasInternalDiagnosticEventInterest(started, true)).toBe(true);
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+    subscribe(() => {}, { include: [log] });
+    subscribe(() => {}, { includeTrusted: [] });
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+    const stop = subscribe(() => {}, { includeTrusted: [completed] });
+    expect(hasModelCallPromptStatsInterest()).toBe(true);
+    stop();
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+    subscribe(listener);
+    expect(hasModelCallPromptStatsInterest()).toBe(true);
+    subscribe(listener, { exclude: [started, completed, "model.call.error"] });
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+    const stopBroad = subscribe(listener);
+    resetDiagnosticEventsForTest();
+    stopBroad();
+    expect(hasModelCallPromptStatsInterest()).toBe(false);
+  },
+);
 
 it("notifies only newly interested producers across filters, unsubscribe, and reset", () => {
   onInternalDiagnosticEvent(() => {}, { include: [queued] });
@@ -100,6 +126,7 @@ it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
   "filters trusted event types before cloning without narrowing untrusted interest (%#)",
   async (subscribe) => {
     const seen: Array<{ type: string; trusted: boolean; seq: number }> = [];
+    const trace = { traceId: "a".repeat(32), spanId: "b".repeat(16) };
     const clone = vi.spyOn(globalThis, "structuredClone");
     const stop = subscribe(
       (event, metadata) => {
@@ -110,10 +137,13 @@ it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
     expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(true);
     expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
 
-    emitTrustedDiagnosticEvent({ type: "message.queued", source: "core" });
+    emitTrustedDiagnosticEvent({ type: "message.queued", source: "core", trace });
     expect(clone).not.toHaveBeenCalled();
     emitDiagnosticEvent(
-      Object.assign({ type: "message.queued" as const, source: "plugin" }, { trusted: true }),
+      Object.assign(
+        { type: "message.queued" as const, source: "plugin", trace },
+        { trusted: true },
+      ),
     );
     emitTrustedDiagnosticEvent({
       type: "model.call.started",
@@ -121,9 +151,10 @@ it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
       callId: "call",
       provider: "test",
       model: "test",
+      trace,
     });
-    emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored" });
-    emitDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored" });
+    emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored", trace });
+    emitDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored", trace });
     emitDiagnosticEvent({ type: "model.usage", usage: { total: 1 } });
     await waitForDiagnosticEventsDrained();
 

@@ -1076,15 +1076,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it.each([
     { name: "delta blocks", partials: ["hello"], block: "lo world", expected: "hellolo world" },
     {
-      name: "new generation snapshots",
-      partials: [
-        "Preparing the lookup plan with enough text to count as one block.",
-        "Found",
-        "Found the answer.",
-      ],
+      name: "authoritative corrected snapshots",
+      partials: ["Old draft answer.", "Corrected answer.", "Old draft"],
       block: undefined,
-      expected:
-        "Preparing the lookup plan with enough text to count as one block.Found the answer.",
+      expected: "Old draft",
     },
     {
       name: "private reasoning tags",

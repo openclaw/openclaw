@@ -47,6 +47,8 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       .acceptedFor("sendDocument")
       .map((call) => resolveTelegramTestUpload(call.fields, "document"));
   const replyId = (fields: Record<string, unknown>) => telegramReplyId(fields) ?? null;
+  const sentTexts = () => sends().map((call) => call.fields.text);
+  const uploadTexts = () => Promise.all(uploads().map((file) => file.text()));
 
   async function transcriptCase(sessionId: string) {
     const context = http.createContext();
@@ -137,9 +139,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         manager.appendMessage(assistant(recoveredAnswer));
         manager.flushPendingPersistence();
       },
-      {
-        allowErrors: Boolean(controls),
-      },
+      { allowErrors: Boolean(controls) },
     );
     expect(modelRuns).toBe(1);
     if (controls) {
@@ -151,7 +151,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         recoveredAnswer,
         recoveredAnswer,
       ]);
-      expect(sends().map((call) => call.fields.text)).toEqual([recoveredAnswer]);
+      expect(sentTexts()).toEqual([recoveredAnswer]);
       expect(http.texts()).toEqual([recoveredAnswer]);
     }
   });
@@ -182,7 +182,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       },
       { replyToMode: "first", finalReply: replyPayloads },
     );
-    expect(sends().map((call) => call.fields.text)).toEqual([first, recoveredAnswer]);
+    expect(sentTexts()).toEqual([first, recoveredAnswer]);
     expect(sends().map((call) => replyId(call.fields))).toEqual([context.msg.message_id, null]);
     expect(http.callsFor("deleteMessage")).toEqual([]);
   });
@@ -207,7 +207,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
       },
       { finalReply: { text: shortened } },
     );
-    expect(sends().map((call) => call.fields.text)).toEqual([shortened]);
+    expect(sentTexts()).toEqual([shortened]);
     expect(sends()[0]?.fields.reply_parameters).toBeUndefined();
     expect(sends()[0]?.fields.reply_to_message_id).toBeUndefined();
   });
@@ -231,17 +231,11 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         await http.waitForText(recoveredAnswer, "sendMessage");
         previewId = [...visibleMessages.keys()][0];
       },
-      {
-        cfg,
-        mode: "partial",
-        finalReply: [payload, { text: recoveredAnswer }],
-      },
+      { cfg, mode: "partial", finalReply: [payload, { text: recoveredAnswer }] },
     );
     expect(http.texts().filter(Boolean)).toEqual([shortened, recoveredAnswer]);
     expect(visibleMessages.get(previewId!)).toBe(shortened);
-    expect(await Promise.all(uploads().map((file) => file.text()))).toEqual([
-      "Attachment belonging only to the earlier answer.\n",
-    ]);
+    expect(await uploadTexts()).toEqual(["Attachment belonging only to the earlier answer.\n"]);
   });
 
   it("deduplicates only accepted source aliases after a partial block and recovered final", async () => {
@@ -302,11 +296,7 @@ describe("Telegram transcript-backed answer recovery through HTTP", () => {
         finalReply: { text: recoveredAnswer, mediaUrls: sources.slice(0, 2), mediaUrl: sources[2] },
       },
     );
-    expect(await Promise.all(uploads().map((file) => file.text()))).toEqual([
-      "Document B\n",
-      "Document A\n",
-      "Document C\n",
-    ]);
+    expect(await uploadTexts()).toEqual(["Document B\n", "Document A\n", "Document C\n"]);
     expect(uploads().map((file) => file.name)).toEqual(["B.txt", "A.txt", "C.txt"]);
     const final = acceptedCalls.filter(
       (call) => (call.fields.caption ?? call.fields.text) === recoveredAnswer,

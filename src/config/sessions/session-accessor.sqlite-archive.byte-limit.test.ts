@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -34,12 +34,13 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-archive-byte-lim
 async function* buffers(...parts: string[]) {
   yield* parts.map((part) => Buffer.from(part));
 }
-
-let tempDir: string;
-
-beforeEach(() => {
-  tempDir = sessionDirs.make();
-});
+async function records(source: AsyncIterable<Uint8Array>, limit?: number) {
+  const collected: string[] = [];
+  for await (const record of readTranscriptArchiveRecords(source, limit)) {
+    collected.push(record.toString("utf8"));
+  }
+  return collected;
+}
 
 it.each([
   "aggregate blobs",
@@ -48,6 +49,7 @@ it.each([
   "valid identity",
   "valid compressed",
 ] as const)("enforces archive page byte limits for %s", async (kind) => {
+  const tempDir = sessionDirs.make();
   const env = { OPENCLAW_STATE_DIR: tempDir };
   const databasePath = path.join(tempDir, "bounded.sqlite");
   const options = { agentId: "main", env, path: databasePath };
@@ -123,25 +125,19 @@ it.each([
 });
 
 it("bounds each framed record before reading more input and excludes its final newline", async () => {
-  async function* chunks() {
-    yield* buffers('{"x":', '"xx"}');
-    throw new Error("Read beyond the record capacity");
+  for (const parts of [
+    ['{"x":', '"xx"}'],
+    ['{"x":"', "xxxx"],
+  ]) {
+    async function* chunks() {
+      yield* buffers(...parts);
+      throw new Error("Read beyond the record capacity");
+    }
+    await expect(readTranscriptArchiveRecords(chunks(), 8).next()).rejects.toThrow(
+      "record exceeds the task-history read capacity",
+    );
   }
-  await expect(readTranscriptArchiveRecords(chunks(), 8).next()).rejects.toThrow(
-    "record exceeds the task-history read capacity",
-  );
-  async function* quotedChunks() {
-    yield* buffers('{"x":"', "xxxx");
-    throw new Error("Read beyond the quoted record capacity");
-  }
-  await expect(readTranscriptArchiveRecords(quotedChunks(), 8).next()).rejects.toThrow(
-    "record exceeds the task-history read capacity",
-  );
-  const records = [];
-  for await (const record of readTranscriptArchiveRecords(buffers('{\n"x":0', "}\n{}"), 8)) {
-    records.push(record.toString("utf8"));
-  }
-  expect(records).toEqual(['{\n"x":0}', "{}"]);
+  await expect(records(buffers('{\n"x":0', "}\n{}"), 8)).resolves.toEqual(['{\n"x":0}', "{}"]);
   await expect(readTranscriptArchiveRecords(buffers('{"x":"xx"}')).next()).resolves.toMatchObject({
     value: Buffer.from('{"x":"xx"}'),
     done: false,
@@ -157,15 +153,12 @@ it("frames quoted controls and invalid raw newlines across chunk boundaries", as
         yield input.subarray(offset, offset + size);
       }
     }
-    const records = [];
-    for await (const record of readTranscriptArchiveRecords(chunks())) {
-      records.push(record.toString("utf8"));
-    }
-    expect(records).toEqual([quoted, '{"x":"raw', 'newline"}', "{}"]);
+    await expect(records(chunks())).resolves.toEqual([quoted, '{"x":"raw', 'newline"}', "{}"]);
   }
 });
 
 it("aborts encoded output at the cap and removes staging files", async () => {
+  const tempDir = sessionDirs.make();
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   const sessionId = "archive-output-overflow";
   const sessionKey = "agent:main:archive-output-overflow";

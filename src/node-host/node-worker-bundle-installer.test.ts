@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import * as timers from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fixtureReceiptClientSource,
@@ -146,6 +147,141 @@ describe("node worker bundle installer", () => {
     const served = await serve(fixture.archive, fixture.input.archive.token);
     return { fixture, served, ...installation(fixture, served.gatewayUrl) };
   }
+
+  it("stages a verified archive without activation and reuses it for the first session", async () => {
+    const { fixture, served, installer, ensure, inspect } = await setup();
+    const prefetch = () =>
+      installer.ensure({
+        input: { ...fixture.input, prefetch: 1 },
+        gatewayUrl: served.gatewayUrl,
+      });
+
+    await prefetch();
+    await prefetch();
+
+    expect(served.requests).toHaveBeenCalledTimes(1);
+    await expect(fs.readdir(bundleDirectory(fixture))).resolves.toEqual(["bundle.tgz"]);
+    await expect(inspect()).resolves.toMatchObject({ status: "missing" });
+    await expect(ensure()).resolves.toEqual(fixture.input.build);
+    expect(served.requests).toHaveBeenCalledTimes(1);
+    await expect(inspect()).resolves.toMatchObject({ status: "installed" });
+    expect(existsSync(path.join(bundleDirectory(fixture), "bundle.tgz"))).toBe(false);
+  });
+
+  it.each(["session", "disconnect"])("cancels unfinished prefetch on %s", async (reason) => {
+    const fixture = await bundleFixture();
+    const started = createDeferredCore();
+    let requests = 0;
+    const served = await serve(
+      fixture.archive,
+      fixture.input.archive.token,
+      undefined,
+      (_req, res) => {
+        res.writeHead(200, { "content-length": fixture.archive.length });
+        if (++requests === 1) {
+          res.flushHeaders();
+          started.resolve();
+        } else {
+          res.end(fixture.archive);
+        }
+      },
+    );
+    const { installer, ensure, inspect } = installation(fixture, served.gatewayUrl);
+    const connection = new AbortController();
+    const prefetch = installer.ensure({
+      input: { ...fixture.input, prefetch: 1 },
+      gatewayUrl: served.gatewayUrl,
+      signal: connection.signal,
+    });
+    const interrupted = expect(prefetch).rejects.toThrow(
+      reason === "session" ? "yielded to a session" : "node disconnected",
+    );
+    await started.promise;
+    if (reason === "disconnect") {
+      connection.abort(new Error("node disconnected"));
+    }
+
+    await expect(ensure()).resolves.toEqual(fixture.input.build);
+    await interrupted;
+
+    expect(served.requests).toHaveBeenCalledTimes(2);
+    await expect(inspect()).resolves.toMatchObject({ status: "installed" });
+  });
+
+  it("does not enqueue prefetch behind a foreground acquisition", async () => {
+    const fixture = await bundleFixture();
+    const started = createDeferredCore<http.ServerResponse>();
+    const served = await serve(
+      fixture.archive,
+      fixture.input.archive.token,
+      undefined,
+      (_req, res) => {
+        started.resolve(res);
+      },
+    );
+    const { installer, ensure } = installation(fixture, served.gatewayUrl);
+    const foreground = ensure();
+    const response = await started.promise;
+
+    await installer.ensure({
+      input: { ...fixture.input, prefetch: 1 },
+      gatewayUrl: served.gatewayUrl,
+    });
+    response.writeHead(200, { "content-length": fixture.archive.length }).end(fixture.archive);
+    await foreground;
+
+    expect(served.requests).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["failed download", "corrupt staged archive"])(
+    "falls back to session acquisition after %s",
+    async (failure) => {
+      const fixture = await bundleFixture();
+      let prefetching = true;
+      const served = await serve(
+        fixture.archive,
+        fixture.input.archive.token,
+        undefined,
+        (_req, res) => {
+          res.writeHead(200, { "content-length": fixture.archive.length });
+          res.end(
+            prefetching && failure === "failed download"
+              ? Buffer.alloc(fixture.archive.length)
+              : fixture.archive,
+          );
+        },
+      );
+      const { installer, ensure, inspect } = installation(fixture, served.gatewayUrl);
+      const prefetch = installer.ensure({
+        input: { ...fixture.input, prefetch: 1 },
+        gatewayUrl: served.gatewayUrl,
+      });
+      if (failure === "failed download") {
+        await expect(prefetch).rejects.toThrow("integrity validation");
+      } else {
+        await prefetch;
+        await fs.writeFile(path.join(bundleDirectory(fixture), "bundle.tgz"), "corrupt");
+      }
+      prefetching = false;
+
+      await expect(ensure()).resolves.toEqual(fixture.input.build);
+
+      expect(served.requests).toHaveBeenCalledTimes(2);
+      await expect(inspect()).resolves.toMatchObject({ status: "installed" });
+    },
+  );
+
+  it("prunes unretained prefetched archives through normal bundle retention", async () => {
+    const { fixture, served, installer, retain } = await setup();
+    await installer.ensure({
+      input: { ...fixture.input, prefetch: 1 },
+      gatewayUrl: served.gatewayUrl,
+    });
+
+    await expect(retain([])).resolves.toMatchObject({ deleted: 1, hasMore: false });
+
+    expect(existsSync(bundleDirectory(fixture))).toBe(false);
+  });
 
   it.each([1, 4])(
     "resumes an authenticated download after %i interruptions",
@@ -631,6 +767,27 @@ describe("node worker bundle installer", () => {
     await expect(
       fs.readFile(path.join(bundleDirectory(fixture), "bootstrap-receipt.json"), "utf8"),
     ).resolves.toContain(fixture.input.build.bundleHash);
+  });
+
+  it("prewarms a downloaded worker with the standalone executable's generic runtime", async () => {
+    const marker = path.join(root, "generic-worker-prewarmed");
+    const fixture = await bundleFixture({
+      bundlePrewarm: 1,
+      workerSource: `import fs from "node:fs";
+if (process.env.BUN_BE_BUN !== "1") throw new Error("downloaded worker needs generic runtime");
+fs.writeFileSync(${JSON.stringify(marker)}, process.execPath);
+`,
+    });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(root).href);
+    try {
+      await expect(installation(fixture, served.gatewayUrl).ensure()).resolves.toEqual(
+        fixture.input.build,
+      );
+      await expect(fs.readFile(marker, "utf8")).resolves.toBe(process.execPath);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("shares an in-flight prewarmed bundle check without sharing cancellation or later trust", async () => {

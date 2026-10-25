@@ -30,6 +30,7 @@ import {
   type UpdateCommandExecutor,
   registerUpdateCommandTerminalPreparation,
 } from "./update-command-executor.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
@@ -207,6 +208,28 @@ beforeEach(() => {
   };
   boundaries.store.mockResolvedValue(store);
 });
+
+it.each(["parent", "childKey"])(
+  "rejects malformed delegated %s before opening a store",
+  async (field) => {
+    boundaries.store.mockClear();
+    const operation = vi.fn();
+    const input: Record<string, unknown> = {
+      runId: "run",
+      root,
+      databasePath: boundaries.databasePath,
+      parent: lease(root, "parent", process.ppid),
+      childKey: `${root}/.openclaw-update-child-00000000-0000-0000-0000-000000000000`,
+      [field]: null,
+    };
+
+    await expect(withDelegatedExecutor(input, "run", root, operation)).rejects.toBeInstanceOf(
+      UpdateCommandRecoveryPendingError,
+    );
+    expect(boundaries.store).not.toHaveBeenCalled();
+    expect(operation).not.toHaveBeenCalled();
+  },
+);
 
 function runWithExecutorFence<T>(
   kind: "direct" | "delegated",

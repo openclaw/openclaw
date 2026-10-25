@@ -7,6 +7,10 @@ describe("resolveFeishuToolAccount", () => {
     appId: `${name}-app-id`,
     appSecret: `${name}-app-secret`, // pragma: allowlist secret
   });
+  const mixedCaseAccounts = () => ({
+    Ops: { enabled: true, ...credentials("ops"), tools: { wiki: false } },
+    admin: { enabled: true, ...credentials("admin"), tools: { wiki: true } },
+  });
   const cfg = {
     channels: {
       feishu: {
@@ -40,20 +44,7 @@ describe("resolveFeishuToolAccount", () => {
           channels: {
             feishu: {
               enabled: true,
-              accounts: {
-                Ops: {
-                  enabled: true,
-                  appId: "ops-app-id",
-                  appSecret: "ops-app-secret", // pragma: allowlist secret
-                  tools: { wiki: false },
-                },
-                admin: {
-                  enabled: true,
-                  appId: "admin-app-id",
-                  appSecret: "admin-app-secret", // pragma: allowlist secret
-                  tools: { wiki: true },
-                },
-              },
+              accounts: mixedCaseAccounts(),
             },
           },
         },
@@ -71,20 +62,7 @@ describe("resolveFeishuToolAccount", () => {
             feishu: {
               enabled: true,
               defaultAccount: "Ops",
-              accounts: {
-                Ops: {
-                  enabled: true,
-                  appId: "ops-app-id",
-                  appSecret: "ops-app-secret", // pragma: allowlist secret
-                  tools: { wiki: false },
-                },
-                admin: {
-                  enabled: true,
-                  appId: "admin-app-id",
-                  appSecret: "admin-app-secret", // pragma: allowlist secret
-                  tools: { wiki: true },
-                },
-              },
+              accounts: mixedCaseAccounts(),
             },
           },
         },

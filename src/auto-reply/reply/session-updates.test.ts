@@ -161,6 +161,7 @@ describe("ensureSkillSnapshot", () => {
         };
         const patch = operation.patch;
         expect(patch).not.toHaveProperty("sessionId");
+        expect(patch).not.toHaveProperty("updatedAt");
         if (isFirstTurnInSession) {
           expect(patch).toHaveProperty("systemSent", true);
         } else {

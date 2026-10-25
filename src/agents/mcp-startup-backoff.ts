@@ -1,6 +1,5 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { redactMcpDiagnosticError } from "./mcp-error.js";
 
 type StartupState = {
   owner: AbortSignal;
@@ -15,6 +14,8 @@ const startups = resolveGlobalSingleton(
   Symbol.for("openclaw.mcpStartupBackoff"),
   () => new Map<string, StartupState>(),
 );
+
+let errorModule: Promise<typeof import("./mcp-error.js")> | undefined;
 
 export class McpStartupBackoffError extends Error {
   readonly retryAfterMs: number;
@@ -63,6 +64,7 @@ export async function connectWithMcpStartupBackoff(
   connect: () => Promise<void>,
   recoveryRetryMs: number,
 ): Promise<void> {
+  const { redactMcpDiagnosticError } = await (errorModule ??= import("./mcp-error.js"));
   // Serialize startup, not transport ownership: healthy sessions still connect independently.
   while (startups.get(key)?.pending) {
     await racePromiseWithAbortSignal(

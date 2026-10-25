@@ -79,10 +79,8 @@ suite.define(() => {
             const pane = document.querySelector("openclaw-chat-pane")!;
             const renderControls = (mobile: boolean) => {
               pane.innerHTML = mobile
-                ? '<div class="agent-chat__header--mobile"><openclaw-chat-header-session-menu>' +
-                  '<button class="chat-header-session-menu__trigger" aria-expanded="false">Session actions</button>' +
-                  '<div class="oc-menu" role="menu" hidden><button role="menuitem">Panels</button></div>' +
-                  '</openclaw-chat-header-session-menu></div><div class="chat-mobile-host" hidden>Panel sheet</div>'
+                ? '<div class="agent-chat__header--mobile"><button aria-expanded="false">Panels</button>' +
+                  '</div><div class="chat-mobile-host" hidden>Panel sheet</div>'
                 : '<div class="sidebar-region__header">Session</div>' +
                   '<div class="sidebar-region__panels-toggle"><button aria-expanded="false">Panels</button></div>';
               const trigger = pane.querySelector("button")!;
@@ -92,11 +90,7 @@ suite.define(() => {
                   String(Number(pane.getAttribute("data-trigger-clicks")) + 1),
                 );
                 trigger.setAttribute("aria-expanded", "true");
-                pane.querySelector(".oc-menu")?.removeAttribute("hidden");
-              });
-              pane.querySelector('[role="menuitem"]')?.addEventListener("click", () => {
-                pane.querySelector(".oc-menu")!.setAttribute("hidden", "");
-                pane.querySelector(".chat-mobile-host")!.removeAttribute("hidden");
+                pane.querySelector(".chat-mobile-host")?.removeAttribute("hidden");
               });
             };
             if (previous) {

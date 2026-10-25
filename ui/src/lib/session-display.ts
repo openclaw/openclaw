@@ -30,7 +30,7 @@ const CHANNEL_LABELS = new Map<string, string>([
 const OPAQUE_ID_RUN_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{10,}/gi;
 
-function shortenOpaqueIdRuns(text: string): string {
+export function shortenOpaqueIdRuns(text: string): string {
   return text.replace(OPAQUE_ID_RUN_RE, (match) => `…${match.slice(-4)}`);
 }
 
@@ -293,25 +293,20 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
-  const resolveNamedOrFallback = (): string => {
-    if (label && label !== key) {
-      return applyTypedPrefix(label);
-    }
-    if (displayName && displayName !== key) {
-      return applyTypedPrefix(displayName);
-    }
+  let name = fallbackName;
+  if (label && label !== key) {
+    name = applyTypedPrefix(label);
+  } else if (displayName && displayName !== key) {
+    name = applyTypedPrefix(displayName);
+  } else {
     // Unnamed work sessions read as their checkout instead of an opaque key.
     const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
     if (workSubtitle && row?.worktree) {
-      return applyTypedPrefix(workSubtitle);
+      name = applyTypedPrefix(workSubtitle);
+    } else if (derivedTitle && derivedTitle !== key) {
+      name = applyTypedPrefix(derivedTitle);
     }
-    if (derivedTitle && derivedTitle !== key) {
-      return applyTypedPrefix(derivedTitle);
-    }
-    return fallbackName;
-  };
-
-  const name = resolveNamedOrFallback();
+  }
   if (!accountId || accountId === "default") {
     return name;
   }

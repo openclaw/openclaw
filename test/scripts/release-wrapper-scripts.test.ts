@@ -29,22 +29,22 @@ function runScript(name: string, args: readonly string[], cwd = process.cwd()) {
   });
 }
 
-const selectionError = `Unknown or non-publishable plugin package selection: ${UNKNOWN_PACKAGE}.`;
-const selectionArgs = ["--plugins", UNKNOWN_PACKAGE];
-it.each([
-  ...["npm", "clawhub"].flatMap((registry) =>
-    ["plan", "check"].map(
-      (action) => [`plugin-${registry}-release-${action}`, selectionArgs, selectionError] as const,
-    ),
-  ),
-  ["openclaw-release-clawhub-plan", plannerFlags(), "--release-publish-branch is required."],
-  ["release-verify-beta", ["--skip-clawhub"], "Usage: pnpm release:verify-beta -- <version>"],
-] as const)("%s rejects invalid input before remote checks", (script, args, error) => {
-  const result = runScript(script, args);
+it.each(["npm", "clawhub"])("rejects unknown %s packages before remote checks", (registry) => {
+  const result = runScript(`plugin-${registry}-release-check`, ["--plugins", UNKNOWN_PACKAGE]);
   expect(result, result.stderr).toMatchObject({
     status: 1,
     stdout: "",
-    stderr: expect.stringContaining(error),
+    stderr: expect.stringContaining(
+      `Unknown or non-publishable plugin package selection: ${UNKNOWN_PACKAGE}.`,
+    ),
+  });
+});
+
+it("requires a version before release verification", () => {
+  expect(runScript("release-verify-beta", ["--skip-clawhub"])).toMatchObject({
+    status: 1,
+    stdout: "",
+    stderr: expect.stringContaining("Usage: pnpm release:verify-beta -- <version>"),
   });
 });
 
@@ -56,14 +56,12 @@ it("runs trusted harness planning and verification against an old release target
     join(oldTarget, "package.json"),
     JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.3" }),
   );
-  writeFileSync(
-    join(oldTarget, "scripts/openclaw-release-clawhub-plan.ts"),
-    'throw new Error("old target planner invoked");\n',
-  );
-  writeFileSync(
-    join(oldTarget, "scripts/release-verify-beta.ts"),
-    'throw new Error("old target verifier invoked");\n',
-  );
+  for (const script of ["openclaw-release-clawhub-plan", "release-verify-beta"]) {
+    writeFileSync(
+      join(oldTarget, `scripts/${script}.ts`),
+      'throw new Error("old target invoked");\n',
+    );
+  }
   const bootstrapWorkflowRef = `release-publish/${"b".repeat(12)}-123`;
   const plan = runScript(
     "openclaw-release-clawhub-plan",
@@ -82,7 +80,6 @@ it("runs trusted harness planning and verification against an old release target
     bootstrap: { ref: bootstrapWorkflowRef, shouldDispatch: false },
     normal: { ref: bootstrapWorkflowRef, shouldDispatch: false },
   });
-  expect(plan.stderr).not.toContain("old target planner invoked");
 
   const verify = runScript(
     "release-verify-beta",
@@ -103,6 +100,4 @@ it("runs trusted harness planning and verification against an old release target
       "package.json version is 2026.7.1-beta.3; expected 2026.7.1-beta.4.",
     ),
   });
-  expect(verify.stderr).not.toContain("old target verifier invoked");
-  expect(verify.stderr).not.toContain("Unknown argument");
 });

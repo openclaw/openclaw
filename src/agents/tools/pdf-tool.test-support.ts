@@ -20,9 +20,8 @@ export function requirePdfTool(options: Parameters<typeof createPdfTool>[0]) {
 }
 
 export function stubPdfInput(text = "PDF") {
-  const load = vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
-  const extract = vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({ text, images: [] });
-  return { load, extract };
+  vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+  vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({ text, images: [] });
 }
 
 type StubPreparedRuntimeSnapshot = {
@@ -85,6 +84,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       modelFound?: boolean;
       pluginRegistry?: PluginRegistry;
       baseUrl?: string;
+      headers?: Record<string, string | null>;
       mediaUnderstandingProviders?: MediaUnderstandingProvider[];
     } = {},
   ) {
@@ -109,6 +109,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       api: params.api ?? (provider === "openai" ? "openai-responses" : "anthropic-messages"),
       maxTokens: 8192,
       input: modalities,
+      ...(params.headers ? { headers: params.headers } : {}),
     };
     const modelRegistry = createPdfModelRegistry((_provider, id) =>
       params.modelFound === false ? null : { id, name: id, ...model },

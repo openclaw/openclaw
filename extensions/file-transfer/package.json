@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/file-transfer",
-  "version": "2026.10.6",
+  "version": "2026.10.7",
   "description": "OpenClaw file transfer plugin (file_fetch, dir_list, dir_fetch, file_write)",
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.26.11",
+    "@openclaw/fs-safe": "0.26.13",
     "minimatch": "10.2.6",
-    "typebox": "1.3.37"
+    "typebox": "1.4.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -14,6 +14,12 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "build": {
+      "workerEntries": [
+        "./src/node-host/dir-fetch-archive.worker.ts",
+        "./src/node-host/dir-list.worker.ts"
+      ]
+    }
   }
 }

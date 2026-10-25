@@ -4,6 +4,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
@@ -271,9 +272,9 @@ it.each([
         expect((await fs.stat(cleanupRoot!)).isDirectory()).toBe(true);
       } else {
         expect(
-          (await fs.readdir(temporaryRoot, { recursive: true })).filter((entry) =>
-            path.basename(entry).startsWith("upload-"),
-          ),
+          (await listDirectoryTreeStrict(temporaryRoot))
+            .map((walkEntry) => walkEntry.relativePath)
+            .filter((entry) => path.basename(entry).startsWith("upload-")),
         ).toEqual([]);
       }
       failPublication = false;

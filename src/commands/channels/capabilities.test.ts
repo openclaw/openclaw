@@ -45,14 +45,10 @@ vi.mock("../../channels/plugins/read-only.js", () => ({
 vi.mock("../../config/config.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  const { createTestConfigReadMocks } = await import("../test-runtime-config-helpers.js");
   return {
     ...actual,
-    getRuntimeConfig: mocks.loadConfig,
-    loadConfig: mocks.loadConfig,
-    captureRuntimeConfigAsyncReader:
-      (...args: Parameters<typeof mocks.loadConfig>) =>
-      async () =>
-        mocks.loadConfig(...args),
+    ...createTestConfigReadMocks(mocks, "loadConfig"),
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
     readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
     replaceConfigFile: mocks.replaceConfigFile,
@@ -317,6 +313,38 @@ describe("channelsCapabilitiesCommand", () => {
     await channelsCapabilitiesCommand({ channel: "telegram", timeout: "1" }, runtime);
 
     expect(logs[0]?.split("\n")).toContain("Check: failed (check timed out after 1ms)");
+  });
+
+  it("renders remote probe failures and diagnostics as terminal-safe text", async () => {
+    const evil = "\u001b]52;c;QQ==\u0007evil\u001b[2J\r\nforged";
+    selectPlugin({
+      id: "telegram",
+      account: { accountId: "default", botToken: "bot-token" },
+      status: {
+        probeAccount: async () => ({ ok: false, error: evil }),
+        formatCapabilitiesProbe: () => [],
+        buildCapabilitiesDiagnostics: async () => ({
+          lines: [{ text: `Diag: ${evil}`, tone: "error" }, { text: evil }],
+        }),
+      },
+    });
+
+    await channelsCapabilitiesCommand({ channel: "telegram" }, runtime);
+
+    const output = logs.join("\n");
+    const withoutWhitespaceControl = output.replaceAll("\n", "");
+    expect(withoutWhitespaceControl).not.toMatch(/\p{Cc}/u);
+    expect(output).not.toContain("52;c;QQ==");
+    expect(output).toContain("Check: failed (evil\\r\\nforged)");
+    expect(output).toContain("Diag: evil\\r\\nforged");
+    expect(output.split("\n")).toContain("evil\\r\\nforged");
+
+    logs.length = 0;
+    await channelsCapabilitiesCommand({ channel: "telegram", json: true }, runtime);
+    expect(JSON.parse(logs[0] ?? "{}").channels[0]).toMatchObject({
+      probe: { error: evil },
+      diagnostics: { lines: [{ text: `Diag: ${evil}`, tone: "error" }, { text: evil }] },
+    });
   });
 
   it("serializes diagnostics when capability diagnostics exceed their timeout", async () => {

@@ -3,6 +3,7 @@
 import { assert, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
 
 function placementSession(
@@ -41,6 +42,7 @@ function presentation(
     workspaceResultReconciling: false,
     onRecover: vi.fn(),
     onReclaim: vi.fn(),
+    onRetryMove: vi.fn(),
     ...overrides,
   });
 }
@@ -140,3 +142,62 @@ it("projects local restart work ahead of the stale failed placement", () => {
   });
   expect(presentation(row).runError?.summary).toContain("no longer recognizes the lease");
 });
+
+it.each(["retry", "missing-receipt", "reconciling", "read-only"] as const)(
+  "keeps failed move admission closed with %s presentation",
+  (scenario) => {
+    const row = placementSession(scenario === "reconciling" ? "reconciling" : "draining");
+    row.sessionId = "move-session";
+    row.placementMove = {
+      target: { kind: "gateway" },
+      updatedAtMs: 1,
+      error: "Workspace reconciliation failed.",
+      ...(scenario !== "missing-receipt"
+        ? {
+            retry: {
+              expected: { generation: 1, environmentId: "worker:one", ownerEpoch: 1 },
+              target: { kind: "gateway" as const },
+            },
+          }
+        : {}),
+    };
+    const onRetryMove = vi.fn();
+    const result = presentation(row, {
+      onRetryMove,
+      gatewaySnapshot: {
+        phase: "connected",
+        client: createTestGatewayClient(async () => ({})),
+        hello: {
+          features: { methods: ["sessions.move"] },
+          auth: {
+            role: "operator",
+            scopes: scenario === "read-only" ? ["operator.read"] : ["operator.write"],
+          },
+        },
+      } as ApplicationGatewaySnapshot,
+    });
+    expect(result).toMatchObject({
+      state: { kind: "move-failed" },
+      blocksSend: true,
+      busyMessage: null,
+      disabledBanner: { title: "Move failed", text: "Workspace reconciliation failed." },
+    });
+    if (scenario === "missing-receipt" || scenario === "reconciling") {
+      expect(result.disabledBanner?.onAction).toBeUndefined();
+    } else {
+      expect(result.disabledBanner?.actionLabel).toBe("Retry move");
+      if (scenario === "read-only") {
+        expect(result.disabledBanner?.disabledReason).toBeTruthy();
+      } else {
+        expect(result.disabledBanner?.disabledReason).toBeUndefined();
+        result.disabledBanner?.onAction?.();
+        expect(onRetryMove).toHaveBeenCalledOnce();
+        expect(presentation(row, { movingKey: row.key })).toMatchObject({
+          state: { kind: "busy" },
+          blocksSend: true,
+          disabledBanner: undefined,
+        });
+      }
+    }
+  },
+);

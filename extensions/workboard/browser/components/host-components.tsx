@@ -12,7 +12,7 @@ type SelectPickerProps = Parameters<Components["mountSelectPicker"]>[1];
 type AppearancePickerProps = Parameters<Components["mountAppearancePicker"]>[1];
 type AppearanceGlyphProps = Parameters<Components["mountAppearanceGlyph"]>[1];
 type SessionSummaryProps = Parameters<Components["mountSessionSummary"]>[1];
-type Styled = { class?: string; className?: string };
+type Styled = { class?: JSX.HTMLAttributes<HTMLElement>["class"]; className?: string };
 
 function hostMount<Props extends object>(
   read: () => Props,

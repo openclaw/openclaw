@@ -6,7 +6,7 @@ import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, test } from "vitest";
-import { createMxcFsBridge } from "../src/fs-bridge.js";
+import { MxcFsBridge } from "../src/fs-bridge.js";
 
 async function makeWorkspace() {
   const workspace = await tempWorkspace({
@@ -49,7 +49,7 @@ function makeSandbox(workspaceDir: string, overrides: Partial<SandboxContext> = 
 }
 
 function directoryReader(params: Partial<SandboxContext> & { workspaceDir: string }) {
-  const bridge = createMxcFsBridge({ sandbox: makeSandbox(params.workspaceDir, params) });
+  const bridge = new MxcFsBridge(makeSandbox(params.workspaceDir, params));
   const read = expectDefined(bridge.readDirectory?.bind(bridge), "MXC directory reader");
   return (filePath: string, cwd?: string) => read({ filePath, cwd });
 }
@@ -112,7 +112,7 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
       skillsWorkspaceDir,
       workspaceAccess,
     });
-    sandbox.fsBridge = createMxcFsBridge({ sandbox });
+    sandbox.fsBridge = new MxcFsBridge(sandbox);
     const tools = createOpenClawCodingTools({
       sandbox,
       workspaceDir,

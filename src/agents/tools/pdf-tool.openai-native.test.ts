@@ -35,6 +35,7 @@ async function runCase(params: {
   metadata?: typeof completePages;
   unsupported?: boolean;
   authValue?: string;
+  headers?: Record<string, string | null>;
 }) {
   return withTempPdfAgentDir(async (agentDir) => {
     const native = vi.fn(async () =>
@@ -44,6 +45,7 @@ async function runCase(params: {
       provider: "openai",
       input: params.input ?? ["text", "image"],
       baseUrl: "https://api.openai.com/v1",
+      headers: params.headers,
       mediaUnderstandingProviders: [{ id: "openai", analyzePdf: native }],
     });
     if (params.authValue) {
@@ -130,6 +132,17 @@ describe("OpenAI native PDF opt-in", () => {
     expect(result.details).toMatchObject({ native: false });
     expect(extract).toHaveBeenCalledOnce();
     expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it("materializes nullable model headers before the native provider handoff", async () => {
+    const { native } = await runCase({
+      enabled: true,
+      metadata: completePages,
+      headers: { "X-Pdf-Fixture": "kept", "X-Pdf-Removed": null },
+    });
+    expect(native).toHaveBeenCalledWith(
+      expect.objectContaining({ headers: { "X-Pdf-Fixture": "kept" } }),
+    );
   });
 
   it("opens prepared credential sentinels only at the admitted provider handoff", async () => {

@@ -50,19 +50,19 @@ import {
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
-const baseModel: Model<"openai-completions"> = {
-  id: "test-model",
-  name: "Test model",
-  api: "openai-completions",
-  provider: "custom-openai-compatible",
-  baseUrl: "https://proxy.example/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
-  maxTokens: 4_096,
-};
+const baseModel: Model<"openai-completions"> = makeProviderModel(
+  "openai-completions",
+  "custom-openai-compatible",
+  "test-model",
+  {
+    name: "Test model",
+    baseUrl: "https://proxy.example/v1",
+    reasoning: false,
+    maxTokens: 4_096,
+  },
+);
 
 const userMessage = { role: "user", content: "hello", timestamp: 1 } as const;
 const context: Context = { messages: [userMessage] };

@@ -37,37 +37,17 @@ const delivery = vi.hoisted(() => ({
 }));
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
-  const withDelivery = (
-    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
-  ): typeof owner => {
-    return {
-      ...owner,
-      get fileIdentity() {
-        return owner.fileIdentity;
-      },
-      runExisting: (source, operation, options) =>
-        owner.runExisting(
-          source,
-          (worker) =>
-            operation({
-              execute: async (command, commandOptions) => {
-                const result = await worker.execute(command, commandOptions);
-                delivery.afterCommit?.(command.type);
-                return result;
-              },
-            }),
-          options,
-        ),
-    };
-  };
+  const { decorateSessionExecutionCaptures } =
+    await import("./session-execution-delivery.test-support.js");
   return {
     ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
-    captureOpenClawAgentDatabasePreparationExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
-    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
+    ...decorateSessionExecutionCaptures(actual, (worker) => ({
+      execute: async (command, commandOptions) => {
+        const result = await worker.execute(command, commandOptions);
+        delivery.afterCommit?.(command.type);
+        return result;
+      },
+    })),
   };
 });
 
@@ -94,6 +74,10 @@ function fixture() {
   };
 }
 
+function withFixture(run: (f: ReturnType<typeof fixture>) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
+}
+
 const resetFault = useSqliteWorkerFault([
   {
     name: "reject_reset_reactions",
@@ -111,8 +95,7 @@ afterEach(() => {
 it.each(["turn", "reset"] as const)(
   "publishes an acknowledged %s exactly once after a lost worker reply",
   async (operation) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const committed = vi.fn();
       const lostReply = vi.fn();
       delivery.afterCommit = (type) => {
@@ -150,8 +133,7 @@ it.each(["turn", "reset"] as const)(
 );
 
 it("rolls back the turn and its pending-input custody after an idempotency conflict", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const committed = vi.fn();
     const before = f.read();
     const pending = await stageSessionPendingInput(f.scope, {
@@ -195,8 +177,7 @@ it.each([
 ] as const)(
   "refuses revoked authority at the $operation $stage grant",
   async ({ operation, stage }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const before = f.read();
       let current = true;
       let resetPrepared = false;
@@ -269,8 +250,7 @@ it.each([
 it.for(["turn", "reset"] as const)(
   "joins a turn completion and concurrent %s in physical FIFO order",
   async (operation, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const order: string[] = [];
@@ -358,8 +338,7 @@ it.for(["turn", "reset"] as const)(
 );
 
 it("commits a reset with zero host SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const committed = vi.fn();
     const sql = observeHostDataSql();
     try {
@@ -383,8 +362,7 @@ it("commits a reset with zero host SQL", async () => {
 });
 
 it("reconciles a dirty reset transcript through the host owner after commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     await f.append({
       messages: [
         { eventId: "dirty-reset-seed", message: { role: "user", content: "Retained history" } },
@@ -433,8 +411,7 @@ it("reconciles a dirty reset transcript through the host owner after commit", as
 it.for([false, true])(
   "preserves reset conflict identity and does not overwrite a concurrent entry (boundary=%s)",
   async (withBoundary) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const concurrent = { sessionId: "original", updatedAt: 2, label: "concurrent writer" };
       const replaceAfterSelection = vi.fn(() => replaceSessionEntrySync(f.scope, concurrent));
       delivery.afterCommit = (type) => {
@@ -472,8 +449,7 @@ it.for([false, true])(
 );
 
 it("rolls collaboration cleanup back with a refused reset and clears only the committed target", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const siblingKey = "agent:main:compound-sibling";
     await replaceSessionEntry(
       { ...f.scope, sessionKey: siblingKey },
@@ -537,8 +513,7 @@ it("rolls collaboration cleanup back with a refused reset and clears only the co
 });
 
 it("preserves worker custody refusal identity so callers cannot fall back to another dispatch", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const message = {
       role: "user" as const,
       content: "owned input",
@@ -566,8 +541,7 @@ it("preserves worker custody refusal identity so callers cannot fall back to ano
 });
 
 it("commits a pending-input turn with zero host SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const pending = await stageSessionPendingInput(f.scope, {
       runId: "compound-turn",
       message: {
@@ -636,8 +610,7 @@ it("commits a pending-input turn with zero host SQL", async () => {
 });
 
 it("evaluates the latest-assistant predicate against earlier writes in the same turn", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const message = {
       role: "assistant",
       content: [{ type: "text", text: "already appended" }],
@@ -702,8 +675,7 @@ it("evaluates the latest-assistant predicate against earlier writes in the same 
 });
 
 it("replays an exactly consumed input after its live custody has finished", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const pending = await stageSessionPendingInput(f.scope, {
       runId: "finished-turn",
       message: {
@@ -743,8 +715,7 @@ it("replays an exactly consumed input after its live custody has finished", asyn
 });
 
 it("prepares a goal message with the same intent that commits with the goal", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     let observed: unknown;
     const prepare = vi.fn((message: unknown) => {
       observed = structuredClone(message);

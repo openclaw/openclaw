@@ -1,11 +1,13 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
@@ -64,6 +66,19 @@ function describeTool(tool: AnyAgentTool): ToolDefinition {
   return { name: tool.name, description: tool.description, parameters: tool.parameters };
 }
 
+function sameToolParameters(left: unknown, right: unknown): boolean {
+  if (left === right) {
+    return true;
+  }
+  const a = getPublishedRuntimeToolInputSchema(left);
+  const b = getPublishedRuntimeToolInputSchema(right);
+  // Restored transcript pins have no publication fact; derive only their side.
+  return a || b
+    ? (a?.canonicalFingerprint ?? sha256Hex(stableStringify(left))) ===
+        (b?.canonicalFingerprint ?? sha256Hex(stableStringify(right)))
+    : stableStringify(left) === stableStringify(right);
+}
+
 /**
  * The session pins every tool definition it has sent, so a turn that builds fewer
  * tools keeps the provider prefix: retained definitions refuse their calls. New or
@@ -118,10 +133,7 @@ export function prepareSessionToolSurface(params: {
     if (changed && pin?.description === tool.description) {
       return tool;
     }
-    const sameParameters =
-      pin &&
-      (pin.parameters === tool.parameters ||
-        stableStringify(pin.parameters) === stableStringify(tool.parameters));
+    const sameParameters = pin && sameToolParameters(pin.parameters, tool.parameters);
     changed ||= !sameParameters;
     return sameParameters && pin.description !== tool.description
       ? copyAgentToolMetadata(tool, { ...tool, description: pin.description })
@@ -409,10 +421,12 @@ export function recordToolResultPromptProjection(
     cacheTtl,
     content: cacheTtl
       ? message.content
-      : message.content.flatMap((block) =>
-          isRecord(block) && block.type === "text" && typeof block.text === "string"
-            ? [{ type: "text" as const, text: block.text }]
-            : [],
+      : freezeJsonSnapshot(
+          message.content.flatMap((block) =>
+            isRecord(block) && block.type === "text" && typeof block.text === "string"
+              ? [{ type: "text" as const, text: block.text }]
+              : [],
+          ),
         ),
   });
 }

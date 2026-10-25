@@ -17,6 +17,9 @@ including JSON5, `$include`, and environment substitutions.
 Startup waits for the config watcher's initial reconciliation, queued file-stability
 checks, and any resulting reload attempt before completing. Initial config
 publication cannot race the first request after startup.
+Plugin lifecycle requests such as `plugins.reload` that arrive while startup is
+still settling wait only for that initial reconciliation, then apply the current
+config, including an edit the watcher had queued. Startup completes after them.
 Credential refreshes that leave the effective config unchanged preserve pending
 work instead of invalidating its config snapshot.
 

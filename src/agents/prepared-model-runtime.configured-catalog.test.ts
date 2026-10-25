@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   prepareProviderStaticCatalog,
@@ -7,6 +8,7 @@ import {
 } from "../plugins/provider-discovery.js";
 import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/setup.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { orderModelCatalogForPicker } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
@@ -18,19 +20,29 @@ import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-c
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 
+function captureRegistry(
+  registry: ModelRegistry,
+  config: OpenClawConfig,
+  pluginMetadataSnapshot: PluginMetadataSnapshot,
+) {
+  return prepareCapturedRuntimeFacts({
+    agentFacts: { input: { config }, configuredModelRefs: [] },
+    workspaceFacts: { pluginMetadataSnapshot, inlineProviderModels: [] },
+    templateModelRegistry: registry,
+    configuredRuntimeModels: [],
+  });
+}
+
 describe("configured catalog registry composition", () => {
   it.each([true, false])(
     "keeps startup and refresh order consistent (manifest=%s)",
     async (manifest) => {
-      const models = ["z-strong", "m-current", "a-small"].map((id) => ({
-        id,
-        name: id,
-        contextWindow: 32_000,
-        maxTokens: 4096,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        reasoning: false,
-        input: ["text" as const],
-      }));
+      const models = ["z-strong", "m-current", "a-small"].map((id) =>
+        Object.assign(
+          modelDefinition(id, { contextWindow: 32_000, maxTokens: 4096, reasoning: false }),
+          { input: ["text" as const] },
+        ),
+      );
       const provider = {
         api: "openai-responses" as const,
         baseUrl: "https://fixture.invalid/v1",
@@ -61,12 +73,7 @@ describe("configured catalog registry composition", () => {
           providers: { fixture: provider },
         }),
       });
-      const { modelCatalog } = prepareCapturedRuntimeFacts({
-        agentFacts: { input: { config }, configuredModelRefs: [] },
-        workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
-        templateModelRegistry: registry,
-        configuredRuntimeModels: [],
-      });
+      const { modelCatalog } = captureRegistry(registry, config, metadataSnapshot);
       const refreshed = await buildPreparedModelCatalogSnapshot({
         config,
         agentDir: "captured:agent",
@@ -134,12 +141,7 @@ describe("configured catalog registry composition", () => {
       pluginMetadataSnapshot: metadataSnapshot,
       staticProviderConfigs,
     });
-    const { modelCatalog } = prepareCapturedRuntimeFacts({
-      agentFacts: { input: { config }, configuredModelRefs: [] },
-      workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
-      templateModelRegistry: registry,
-      configuredRuntimeModels: [],
-    });
+    const { modelCatalog } = captureRegistry(registry, config, metadataSnapshot);
 
     // The producer answers the alias too; the startup publication folds it into the canonical row.
     expect(Object.keys(staticProviderConfigs).toSorted()).toEqual(["fixture", "fixture-alias"]);
@@ -181,12 +183,7 @@ describe("configured catalog registry composition", () => {
         loadPolicy.mockClear().mockReturnValue({
           normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^legacy-/, `${scope}-`),
         });
-        const { modelCatalog } = prepareCapturedRuntimeFacts({
-          agentFacts: { input: { config }, configuredModelRefs: [] },
-          workspaceFacts: { pluginMetadataSnapshot: metadataSnapshot, inlineProviderModels: [] },
-          templateModelRegistry: registry,
-          configuredRuntimeModels: [],
-        });
+        const { modelCatalog } = captureRegistry(registry, config, metadataSnapshot);
         expect(modelCatalog.entries.map(({ id }) => id)).toEqual(
           Array.from({ length: rowCount }, (_, index) => [
             `legacy-${index}`,
@@ -282,17 +279,13 @@ describe("configured catalog registry composition", () => {
               api: "openai-completions",
               baseUrl: "https://fixture.invalid/v1",
               models: [
-                {
-                  id: "selected",
+                modelDefinition("selected", {
                   name: "Configured selected",
                   contextWindow: 32_000,
                   maxTokens: 4096,
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   ...(modelApi ? { api: modelApi } : {}),
                   ...(modelBaseUrl ? { baseUrl: modelBaseUrl } : {}),
-                },
+                }),
               ],
             },
           },
@@ -567,16 +560,13 @@ describe("synthetic configured context publication", () => {
             fixture: {
               baseUrl: discovered.baseUrl,
               models: [
-                {
-                  id: "new-model",
+                modelDefinition("new-model", {
                   name: "New model",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: discovered.contextWindow,
                   maxTokens: 4096,
                   ...limits,
-                },
+                }),
               ],
             },
           },
@@ -680,12 +670,7 @@ it("carries typed-only manifest facts into static preparation without creating c
     includePluginCatalogs: false,
     pluginMetadataSnapshot: metadata,
   });
-  const facts = prepareCapturedRuntimeFacts({
-    agentFacts: { input: { config }, configuredModelRefs: [] },
-    workspaceFacts: { pluginMetadataSnapshot: metadata, inlineProviderModels: [] },
-    templateModelRegistry: registry,
-    configuredRuntimeModels: [],
-  });
+  const facts = captureRegistry(registry, config, metadata);
   expect(
     facts.modelCatalog.entries.find(
       (entry) => entry.provider === "fixture" && entry.id === "typed",
@@ -728,15 +713,12 @@ it.each([
           api: "openai-responses",
           baseUrl: "https://catalog.fixture.invalid/v1",
           models: [
-            {
-              id: "typed",
+            modelDefinition("typed", {
               name: "Configured",
               ...(custom ? { baseUrl: "https://custom.fixture.invalid/v1" } : {}),
               reasoning: false,
-              input: ["text"],
               maxTokens: 256,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
+            }),
           ],
         },
       },
@@ -747,12 +729,7 @@ it.each([
     includePluginCatalogs: false,
     pluginMetadataSnapshot: metadata,
   });
-  const facts = prepareCapturedRuntimeFacts({
-    agentFacts: { input: { config }, configuredModelRefs: [] },
-    workspaceFacts: { pluginMetadataSnapshot: metadata, inlineProviderModels: [] },
-    templateModelRegistry: registry,
-    configuredRuntimeModels: [],
-  });
+  const facts = captureRegistry(registry, config, metadata);
   const rows = facts.modelCatalog.entries.filter(
     (entry) => entry.provider === "fixture" && entry.id === "typed",
   );

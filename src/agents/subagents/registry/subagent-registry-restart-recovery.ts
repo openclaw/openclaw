@@ -66,7 +66,9 @@ type RequesterSettleWakeRecoveryTarget = {
 
 /** The dispatched frozen cohort owns this exact requester input across a restart. */
 function findRequesterSettleWakeRecoveryBatch(
-  params: RequesterSettleWakeRecoveryTarget,
+  params: Omit<RequesterSettleWakeRecoveryTarget, "gatewayRuntime"> & {
+    gatewayRuntime?: GatewayRecoveryRuntime;
+  },
   requireGatewayCurrent = true,
   allowPending = false,
 ): SubagentRunRecord[] | undefined {
@@ -134,6 +136,48 @@ function findRequesterSettleWakeRecoveryBatch(
     }
   }
   return undefined;
+}
+
+/** An admitted private input keeps its processing receipt owner across Gateway generations. */
+export function resolvePrivateRequesterSettleRecoveryOwner(
+  requester: {
+    entry?: { sessionId: string; lifecycleRevision?: string };
+    agentId?: string;
+    canonicalKey: string;
+    storePath?: string;
+    physicalStorePath?: string;
+  },
+  runId: string | undefined,
+): "owned" | "unrestorable" | undefined {
+  const storePath = requester.physicalStorePath ?? requester.storePath;
+  if (!runId || !requester.entry || !requester.agentId || !storePath) {
+    return undefined;
+  }
+  const batch = findRequesterSettleWakeRecoveryBatch(
+    {
+      runId,
+      requesterSessionKey: requester.canonicalKey,
+      requesterAgentId: requester.agentId,
+      sessionId: requester.entry.sessionId,
+      lifecycleRevision: requester.entry.lifecycleRevision,
+      storePath,
+    },
+    false,
+    true,
+  );
+  if (
+    !batch?.some((entry) => entry.completionTarget === "parent") ||
+    !batch.every(
+      (entry) =>
+        entry.requesterSettleWake?.privateInput?.runId === runId &&
+        entry.requesterSettleWake.yieldedFinalDeliverable !== true,
+    )
+  ) {
+    return undefined;
+  }
+  return batch.some((entry) => getUnrestorableSubagentCompletionSourceReason(entry))
+    ? "unrestorable"
+    : "owned";
 }
 
 export async function captureRequesterSettleWakeRecoverySource(
@@ -464,7 +508,6 @@ export async function recoverInterruptedSubagentRow(
     ) {
       // Keep the task and its parent delivery with the registry. Ordinary admission
       // transfers that custody to the continuation before executing any model work.
-      const continuationRunId = `subagent-restart-recovery:${runId}`;
       const { continuation, agentToolCaller } = await subagentRuns.runWithCompletionAuthority(
         entry,
         async () => ({
@@ -476,23 +519,6 @@ export async function recoverInterruptedSubagentRow(
         if (!continuation) {
           return { status: "deferred" };
         }
-        const assertAdmissionCurrent = () => {
-          agentToolCaller?.assertCurrent?.();
-          const successor = subagentRuns.get(continuationRunId);
-          const ownsSuccessor =
-            successor?.taskRunId === (entry.taskRunId ?? runId) &&
-            successor.childSessionKey === childSessionKey &&
-            successor.childAgentId === entry.childAgentId &&
-            successor.execution.status === "running" &&
-            !successor.killIntent &&
-            !successor.killReconciliation;
-          if (!isGatewayCurrent() || (!ownsSuccessor && !isCurrent())) {
-            throw new Error("Subagent restart continuation owner changed");
-          }
-          // Admission can outlive the temporary RPC capture. Registry custody transfers
-          // to the successor and retains the restored principal until its work settles.
-          subagentRuns.runWithCompletionAuthority(ownsSuccessor ? successor : entry, () => {});
-        };
         const recovered = await continuation.run(() =>
           dispatchGatewayMethodInProcess<SessionsRecoverResult>(
             "sessions.recover",
@@ -502,7 +528,9 @@ export async function recoverInterruptedSubagentRow(
               syntheticScopeMode: "exact",
               syntheticScopes: continuation.scopes,
               agentToolCaller,
-              sessionMutationCommitGuard: assertAdmissionCurrent,
+              // Recovery/chat admission owns the handoff. Retain requester revocation,
+              // not the predecessor registry row that admission replaces.
+              sessionMutationCommitGuard: agentToolCaller?.assertCurrent,
             },
           ),
         );

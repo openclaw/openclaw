@@ -1,48 +1,20 @@
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { describe, expect, it } from "vitest";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { assertOpenClawMigrationWitnessPreserved as assertWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
   agentWitness as captureWitness,
   migrationFixture,
   row,
   rows,
-  seedVersion,
+  seedAgentV30Schema,
 } from "./schema-migration.test-support.js";
 
-const predecessor = 31;
-const target = 32;
 const scope = ["schema_meta"];
-const withFixture = migrationFixture({ seed, predecessor, target, scope, admission: true });
-const schemaV27 = fs.readFileSync(
-  new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),
-  "utf8",
-);
 
-function seed(database: DatabaseSync): void {
-  database.exec(schemaV27);
-  seedVersion(database, predecessor);
-  // Frozen v27 plus the published v28–31 transformations, without candidate DDL.
+function seed(database: DatabaseSync, predecessor: number): void {
+  seedAgentV30Schema(database, predecessor);
   database.exec(`
-    DROP INDEX idx_agent_transcript_event_parent;
-    DROP INDEX idx_agent_session_windows_conversation;
-    CREATE INDEX idx_agent_session_windows_conversation
-      ON session_windows(primary_conversation_id) WHERE primary_conversation_id IS NOT NULL;
-    DROP TABLE memory_entry_origins;
-    ${extractSqliteTableSchema(schemaV27, "memory_entry_origins").replace(
-      ") STRICT;",
-      ") STRICT, WITHOUT ROWID;",
-    )}
-    DROP INDEX idx_agent_session_nodes_last_interaction_at;
-    DROP INDEX idx_agent_session_reactions_message;
-    ALTER TABLE trajectory_runtime_events ADD COLUMN event_utf8_bytes INTEGER;
-    ALTER TABLE trajectory_runtime_events ADD COLUMN event_payload BLOB;
-    ALTER TABLE trajectory_runtime_events ADD COLUMN event_codec TEXT;
-    DROP INDEX idx_agent_trajectory_runtime_run;
-    CREATE INDEX idx_agent_trajectory_runtime_run
-      ON trajectory_runtime_events(session_id, run_id, created_at,
-        COALESCE(event_utf8_bytes, octet_length(event_json)));
     DROP TRIGGER memory_index_sources_revision_after_insert;
     DROP TRIGGER memory_index_sources_revision_after_update;
     DROP TRIGGER memory_index_sources_revision_after_delete;
@@ -87,38 +59,52 @@ function retained(database: DatabaseSync) {
   };
 }
 
-it.each(["commit", "rollback"] as const)(
-  "keeps SQLite rows, indexes and statistics unchanged during decoder metadata migration (%s)",
-  async (outcome) => {
+describe.each([
+  [31, 32],
+  [32, 33],
+])("PostgreSQL search metadata %s→%s", (predecessor, target) => {
+  const withFixture = migrationFixture({
+    seed: (db) => seed(db, predecessor),
+    predecessor,
+    target,
+    scope,
+    admission: target === OPENCLAW_AGENT_SCHEMA_VERSION,
+  });
+  it.each(["commit", "rollback"] as const)(
+    "keeps SQLite rows, indexes and statistics unchanged (%s)",
+    async (outcome) => {
+      await withFixture(
+        "vector-decoder.sqlite",
+        async ({ database, migrate }) => {
+          const before = retained(database);
+          const witness = captureWitness(database);
+          await migrate(outcome);
+          const version = outcome === "rollback" ? predecessor : target;
+          expect(retained(database)).toEqual({
+            ...before,
+            userVersion: version,
+            schemaVersion: version,
+          });
+          expect(assertWitnessPreserved(witness, captureWitness(database))).toEqual({
+            warnings: [],
+          });
+          expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")).toEqual({
+            bytes: "000100FF",
+          });
+          expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
+        },
+        "state",
+      );
+    },
+  );
+
+  it("restores only SQLite migration metadata while preserving later unrelated writes", async () => {
     await withFixture(
-      "vector-decoder.sqlite",
-      async ({ database, migrate }) => {
-        const before = retained(database);
-        const witness = captureWitness(database);
-        await migrate(outcome);
-        const version = outcome === "rollback" ? predecessor : target;
-        expect(retained(database)).toEqual({
-          ...before,
-          userVersion: version,
-          schemaVersion: version,
-        });
-        expect(assertWitnessPreserved(witness, captureWitness(database))).toEqual({ warnings: [] });
-        expect(row(database, "SELECT hex(blob) AS bytes FROM cache_entries")).toEqual({
-          bytes: "000100FF",
-        });
-        expect(rows(database, "PRAGMA foreign_key_check")).toEqual([]);
+      "vector-decoder-restore.sqlite",
+      async ({ database, restore }) => {
+        await restore(() => retained(database));
       },
       "state",
     );
-  },
-);
-
-it("restores only SQLite migration metadata while preserving later unrelated writes", async () => {
-  await withFixture(
-    "vector-decoder-restore.sqlite",
-    async ({ database, restore }) => {
-      await restore(() => retained(database));
-    },
-    "state",
-  );
+  });
 });

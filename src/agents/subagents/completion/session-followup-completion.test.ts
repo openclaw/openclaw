@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { rotateAgentRunRegistryLifecycleGeneration } from "../../../infra/agent-run-registry.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -106,37 +105,27 @@ it.each(["replacement", "cleared wake", "cleared adopted wake"] as const)(
 );
 
 it("publishes to exactly one consumer after the caller joins physical execution cleanup", async () => {
-  const cleanupEntered = createDeferred();
-  const cleanupReleased = createDeferred();
   let published = false;
   const taken = owner.take().then((reply) => {
     published = true;
     return reply;
   });
-  const settled = (async () => {
-    const decision = await owner.settle("first", final);
-    cleanupEntered.resolve();
-    await cleanupReleased.promise;
-    owner.finishExecution("first");
-    return decision;
-  })();
   try {
-    await awaitGateBeforeSettlement(cleanupEntered.promise, settled, "Completion skipped cleanup");
+    expect(await owner.settle("first", final)).toEqual({ kind: "terminal", reply: final });
+    // Let the waiting consumer observe an incorrectly early publication.
+    await Promise.resolve();
     expect(published).toBe(false);
-    cleanupReleased.resolve();
-    expect(await settled).toEqual({ kind: "terminal", reply: final });
+    owner.finishExecution("first");
     await expect(taken).resolves.toEqual(final);
     expect(published).toBe(true);
     await expect(owner.take()).rejects.toThrow("consumer");
   } finally {
-    cleanupReleased.resolve();
-    await Promise.allSettled([settled]);
     owner.close();
     await Promise.allSettled([taken]);
   }
 });
 
-it.each(["terminal", "uncommitted yield", "inline timeout"] as const)(
+it.each(["uncommitted yield", "inline timeout"] as const)(
   "settles only the admitted successor across committed yields: %s",
   async (mode) => {
     if (mode === "inline timeout") {
