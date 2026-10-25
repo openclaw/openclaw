@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import { cancelTrackedTextResponse as createTrackedResponse } from "../../test-support/streaming-error-response.js";
 
 const realGlobalFetch = globalThis.fetch.bind(globalThis);
 
@@ -114,19 +115,6 @@ const video = {
   previewUrl: "https://e.example/preview.jpg",
   altContent: { type: "image", url: "https://e.example/preview.jpg", size: "full" },
 };
-
-function createTrackedResponse(body: string, init: ResponseInit) {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(body));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return { response: new Response(stream, init), wasCanceled: () => canceled };
-}
 
 describe("LINE send helpers", () => {
   const fixedSentAt = 1_800_000_000_000;
@@ -703,18 +691,14 @@ describe("LINE send helpers", () => {
   });
 
   it("coalesces concurrent group-name cache misses", async () => {
-    let resolveSummary: (summary: { groupId: string; groupName: string }) => void = () => {};
-    getGroupSummaryMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveSummary = resolve;
-      }),
-    );
+    const summary = Promise.withResolvers<{ groupId: string; groupName: string }>();
+    getGroupSummaryMock.mockReturnValueOnce(summary.promise);
 
     const first = sendModule.getLineGroupName("Cconcurrent", options);
     const second = sendModule.getLineGroupName("Cconcurrent", options);
     expect(getGroupSummaryMock).toHaveBeenCalledTimes(1);
 
-    resolveSummary({ groupId: "Cconcurrent", groupName: "Release Squad" });
+    summary.resolve({ groupId: "Cconcurrent", groupName: "Release Squad" });
     await expect(Promise.all([first, second])).resolves.toEqual(["Release Squad", "Release Squad"]);
     await expect(sendModule.getLineGroupName("Cconcurrent", options)).resolves.toBe(
       "Release Squad",

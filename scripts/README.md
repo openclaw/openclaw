@@ -43,6 +43,20 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Runtime script generation and proof builds
+
+`pnpm runtime:scripts:gen` bundles embedded programs and their materializer.
+Whitespace minification removes esbuild's source-path comments, so generated
+bytes stay identical when dependencies move between pnpm virtual stores.
+`pnpm runtime:scripts:check` still requires an exact byte match; source-run build
+stamps still hash the complete generated files.
+
+Use `pnpm build qaRuntime` for reusable runtime test artifacts. Controllers that
+also verify `dist/build-info.json` against a source commit should use
+`pnpm build sourcePerformance`, which adds that identity metadata without a UI
+or declaration build. Keep generated files unchanged after either build so
+equivalent-input admission can certify the same source bytes.
+
 ## Exact memory search benchmark
 
 Use `scripts/bench-memory-search.mjs` against a disposable PostgreSQL database
@@ -98,6 +112,40 @@ profiling and report median, p95, and min–max; every cell over 20% worse is ma
 for review. These are report-only measurements, not timing gates. Wall time is
 automation-to-assertion time, not INP. Keep failed attempts alongside successful
 captures and compare only runs with the same fixture, viewport, and collection mode.
+
+Heavy-content steps use `heavy-<fixture>-<action>` IDs. Fixtures are `code`
+(5,000 TypeScript lines), `auto-code` (5,000 language-free lines), `diff`
+(5,000 changed lines across ten files), `oversized-code` (the existing Markdown
+parse-limit fallback), `table` (300 rows × 12 columns), `tool-diff` (5,000 native
+input patch rows, existing 400-line preview cap), `tool-diff-error` (the same
+patch rejected with a complete error message and Raw selected initially),
+`terminal` (5,000 output lines), `json` (5,000 values, above the JSON formatter cap), `json-format` (1,900
+values, within that cap), and `images`
+(40 synthetic PNGs). Actions include `arrival`, `stream` (20 frame-separated
+updates), `expand`, `collapse`, `scroll`, `copy`, `output-open`, and JSON
+`raw-toggle` where those controls exist. These scenarios use an empty transcript
+to isolate content cost. Copy uses an instrumented clipboard boundary and checks
+the exact copied string; it does not measure operating-system clipboard latency.
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts \
+  --bundle-dir <baseline> --compare-bundle-dir <candidate> --pairs 10 \
+  --viewport desktop --thread-cpu-time --first-pair-screenshots \
+  --steps heavy-tool-diff-expand,heavy-tool-diff-error-expand,heavy-json-format-output-open,heavy-json-format-raw-toggle
+```
+
+Record a baseline/baseline control on a loaded host. Compare renderer CPU,
+long-task maximum, DOM/highlight counts, and heap-byte deltas alongside wall
+latency; heap deltas are transient allocation measurements, not retained-heap
+proof. The heavy-content targets are no arrival task above 100 ms and no scroll
+task above 50 ms. Review every median/p95 cell; a clean median regression is at
+most 5% with no worse p95 (or another ten pairs confirming the band). Any 20%
+regression blocks; a missed target does not invalidate a measured improvement.
+Run `--trace` separately for attribution, never mix traced and untraced timings.
+If the owned Chromium process crashes in the macOS display/compositor path,
+use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select the installed matching
+Playwright headless shell for both arms. The manifest records the executable;
+compare only against the same browser configuration.
 
 ## Control UI request waterfalls
 
@@ -210,29 +258,39 @@ the Vite config resolves this setting before Chokidar selects its native backend
 
 ## Formatting and lint selection
 
-`lib/dev-tool.mts` selects the pinned Bun fork for local formatting, with an
-oxfmt fallback, and oxlint for linting. CI formatting still gates on oxfmt and
-checks Bun parity. See the
+`lib/dev-tool.mts` selects the pinned Bun fork for local formatting and linting,
+with oxfmt and oxlint fallbacks. CI gates on oxfmt and oxlint and checks Bun
+parity in the same jobs. See the
 [local development tools reference](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork)
 for overrides, staging, and benchmark details. On a clean AWS `c7a.8xlarge`,
 three interleaved runs measured `pnpm format` at 0.62 s with Bun versus 1.41 s
 with oxfmt, and `pnpm format:check` at 0.62 s versus 1.38 s. The loaded Mac
 sanity run measured 15.65 s versus 14.74 s for writes and 14.31 s versus 16.40 s
-for checks; the write gain is not universal. `DEFAULT_LINT_TOOL` waits for upstream commit
-`b39aa848` and diagnostic parity. Bun receives the repository's existing
-configuration; no separate formatter configuration is maintained.
+for checks; the write gain is not universal. An earlier native comparison on
+the same AWS host measured S3 (`1.4.4-canary.1+ef37c31de`) at 23.3 s versus
+oxlint 1.87.0 at 143.3 s summed across core, scripts, extensions, and UI:
+6.15× faster at default threads, with no missing or extra diagnostics.
+These native timings exclude wrapper preparation.
+One loaded M3 Ultra Mac pair with S3 and oxlint 1.88.0 reported identical 243
+diagnostics: whole `pnpm lint --format=json` times were 635.0 s for Bun and
+912.7 s for oxlint, while summed native lint times were 1,037.8 s and 819.6 s.
+The runs held the shared build lock, but background load reached 86 and the
+first oxlint run generated declarations reused by Bun. This confirms parity,
+not a Mac lint-speed gain; the oxlint override remains useful.
+Bun receives the repository's existing configuration; no separate configuration
+is maintained.
 
-| Caller                                                                                                                                | Selection and reason                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `format`, `format:check`, `format:fix`, `format:diff`, `format:all`                                                                   | `run-format.mts` uses the selector. In CI, checks compare oxfmt and Bun on identical arguments and require oxfmt success.         |
-| `check.mts`, `check-changed.mts`, `ci-check-plan.mts`, `ci.yml`                                                                       | Consume `format:check`, including CI parity, without another job or runner.                                                       |
-| `pre-commit/format-staged.sh`, `.pre-commit-config.yaml`                                                                              | `run-node-tool.sh` uses the selector when dependencies exist; index-only formatting and partial staging remain owned by the hook. |
-| Dependency-less `pre-commit/run-node-tool.sh` recovery                                                                                | Retains its verified tooling-owner oxfmt fallback so code-only checkouts can satisfy the CI gate without installing dependencies. |
-| `run-lint.mts` and `run-oxlint-shards.mts`                                                                                            | `run-oxlint.mts` selects the executable after existing scope/resource preparation; all shards honor the override.                 |
-| `format-docs.mts`                                                                                                                     | Retains oxfmt for the dedicated docs CI gate and temporary-copy checks.                                                           |
-| `lib/format-generated-module.mts`, `generate-prompt-snapshots.ts`, `lib/codex-app-server-protocol-source.ts`                          | Retain oxfmt so generated modules, snapshots, and protocol bytes match CI regeneration.                                           |
-| `generate-control-ui-validators.mts`, `plugin-sdk-shipped-surface.mts`, `database-worker-inventory.mjs`, `qa/render-maturity-docs.ts` | Retain the oxfmt API for reproducible generated-artifact gates, including explicit per-artifact options.                          |
-| `crabbox-hydrate.yml`                                                                                                                 | Only verifies the oxfmt dependency is installed for CI; does not invoke formatting.                                               |
+| Caller                                                                                                                                | Selection and reason                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `format`, `format:check`, `format:fix`, `format:diff`, `format:all`                                                                   | `run-format.mts` uses the selector. In CI, checks compare oxfmt and Bun on identical arguments and require oxfmt success.                                                                                                                      |
+| `check.mts`, `check-changed.mts`, `ci-check-plan.mts`, `ci.yml`                                                                       | Consume `format:check`, including CI parity, without another job or runner.                                                                                                                                                                    |
+| `pre-commit/format-staged.sh`, `.pre-commit-config.yaml`                                                                              | `run-node-tool.sh` uses the selector when dependencies exist; index-only formatting and partial staging remain owned by the hook.                                                                                                              |
+| Dependency-less `pre-commit/run-node-tool.sh` recovery                                                                                | Retains its verified tooling-owner oxfmt fallback so code-only checkouts can satisfy the CI gate without installing dependencies.                                                                                                              |
+| `run-lint.mts` and `run-oxlint-shards.mts`                                                                                            | `run-oxlint.mts` selects the executable after existing scope/resource preparation; all local shards honor `OPENCLAW_LINT_TOOL`. CI compares full diagnostic multisets on identical prepared configs and targets, then requires oxlint success. |
+| `format-docs.mts`                                                                                                                     | Retains oxfmt for the dedicated docs CI gate and temporary-copy checks.                                                                                                                                                                        |
+| `lib/format-generated-module.mts`, `generate-prompt-snapshots.ts`, `lib/codex-app-server-protocol-source.ts`                          | Retain oxfmt so generated modules, snapshots, and protocol bytes match CI regeneration.                                                                                                                                                        |
+| `generate-control-ui-validators.mts`, `plugin-sdk-shipped-surface.mts`, `database-worker-inventory.mjs`, `qa/render-maturity-docs.ts` | Retain the oxfmt API for reproducible generated-artifact gates, including explicit per-artifact options.                                                                                                                                       |
+| `crabbox-hydrate.yml`                                                                                                                 | Only verifies the oxfmt dependency is installed for CI; does not invoke formatting.                                                                                                                                                            |
 
 There is no lint-staged formatter configuration; staged-file formatting belongs
 to the hooks above. References in configuration, test fixtures, and scope
@@ -268,19 +326,24 @@ it. The complete semantic program is preserved on cache misses.
 ## Maintenance Rules
 
 Fixed validators are emitted from their canonical schemas. Gateway, Control UI,
-Codex, and plugin generators share the standalone TypeBox emitter in
+Codex, and fixed first-party generators share the standalone TypeBox emitter in
 `lib/typebox-standalone.mts`; it binds explicit static captures and rejects
-unsupported ones.
+unsupported ones. Lobster uses the Ajv standalone emitter to preserve its
+dependency-owned error contract.
 
-| Schemas                                                     | Regenerate                             |
-| ----------------------------------------------------------- | -------------------------------------- |
-| Gateway protocol                                            | `pnpm gateway:validators:gen`          |
-| Control UI protocol                                         | `pnpm ui:validators:gen`               |
-| Codex app-server protocol                                   | `pnpm codex-app-server:validators:gen` |
-| Model registry, theme, TypeSafe, and computer-use contracts | `pnpm static:validators:gen`           |
+| Schemas                                                     | Regenerate                                                         |
+| ----------------------------------------------------------- | ------------------------------------------------------------------ |
+| Gateway protocol                                            | `pnpm gateway:validators:gen`                                      |
+| Control UI protocol                                         | `pnpm ui:validators:gen`                                           |
+| Codex app-server protocol                                   | `pnpm codex-app-server:validators:gen`                             |
+| Model registry, theme, TypeSafe, and computer-use contracts | `pnpm static:validators:gen`                                       |
+| Lobster fixed payload/envelope contracts                    | `pnpm lobster:validators:gen --package-dir <pnpm-patch-directory>` |
 
 Run `pnpm validators:check` after schema changes to verify the committed
 validators are current. CI runs this freshness check alongside the normal build.
+The Lobster generator writes only inside an explicit `pnpm patch` edit directory;
+after regeneration, run `pnpm patch-commit <directory>` to refresh the dependency
+patch. Its check command reads the installed patched schemas without modifying them.
 
 - Read `scripts/AGENTS.md` before changing scripts.
 - Keep package scripts, generators, generated-artifact checks, docs references,
@@ -290,3 +353,7 @@ validators are current. CI runs this freshness check alongside the normal build.
   behavior.
 
 See also [Scripts](https://docs.openclaw.ai/help/scripts) for public-facing script guidance.
+
+### Dynamic validator benchmark
+
+`node --import ./scripts/tsx.mjs scripts/bench-dynamic-validators.mts <jit|aot> [iterations] [warmup] [mcp|plugin|llm|llm-coerce]` measures the actual validation owners. Compare five interleaved fresh baseline/candidate processes per fixture; import/setup and warm CPU/wall costs are reported separately.

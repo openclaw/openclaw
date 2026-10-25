@@ -3,6 +3,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { clearBootRecords, type BootRecord } from "../app/boot-record.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
@@ -231,12 +232,7 @@ describe("sidebar snapshot lifecycle", () => {
           scope: scope.gatewayScope,
           recoveryScope: scope.recoveryScope,
           profileId: scope.profileId,
-          agents: {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [{ id: "main" }],
-          },
+          agents: makeBootRoster(),
           groups: [],
           sectionOrder: [],
         },
@@ -666,7 +662,7 @@ describe("sidebar snapshot lifecycle", () => {
       authMethod: "trusted-proxy",
       credential: "",
       savedAt: Date.now(),
-      agents: { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
+      agents: makeBootRoster(),
       groups: [],
       sectionOrder: [],
     };

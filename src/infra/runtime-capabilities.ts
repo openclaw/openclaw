@@ -5,6 +5,7 @@ import {
 } from "../../cli-invocation.mjs";
 import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import type { DiagnosticProfileOutcome } from "../logging/diagnostic-profile.js";
+import { getRuntimeExecutionProfile } from "./runtime-profile.js";
 
 type Capability = {
   state: "available" | "unavailable" | "unknown";
@@ -128,6 +129,7 @@ export function collectRuntimeCapabilities() {
             ? `Use the retained source debugger at ${build.build.debugEntry} with its matching Bun executable. No debugger port was opened by diagnostics.`
             : "Use the runtime inspector to attach; no debugger port was opened by diagnostics.",
         };
+  const executionProfile = buildError ? "unknown" : getRuntimeExecutionProfile();
   return {
     schemaVersion: 1,
     process: {
@@ -138,6 +140,10 @@ export function collectRuntimeCapabilities() {
       flavor,
     },
     build: build ?? null,
+    execution: {
+      profile: executionProfile,
+      dynamicCode: executionProfile === "embedded-aot" ? "interpreted" : "runtime-default",
+    },
     ...(buildError ? { buildError } : {}),
     capabilities: {
       executableMemory,
@@ -188,6 +194,14 @@ export function formatRuntimeCapabilities(report: ReturnType<typeof collectRunti
     if (report.build.plugins) {
       lines.push(`Embedded plugins: ${report.build.plugins.embedded.join(", ")}`);
     }
+  }
+  lines.push(
+    `Execution profile: ${report.execution.profile}; dynamic code=${report.execution.dynamicCode}`,
+  );
+  if (report.execution.dynamicCode === "interpreted") {
+    lines.push(
+      "Fetched plugins, Node Code Mode, and QA expressions run interpreted in this AOT build; use a JIT build for full speed. Runtime flags and module availability still apply.",
+    );
   }
   for (const [name, capability] of Object.entries(report.capabilities)) {
     lines.push(`${name}: ${capability.state}. ${capability.reason}`);

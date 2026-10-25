@@ -409,6 +409,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
       diskSpace.invalidate();
       scheduleDiskSpaceSweep?.();
     });
+    const uninstallOrphanWorkspaceChanges = dispatchService.subscribeOrphanWorkspaceChanges();
     const uninstallConfigChanges = sessionChanges.subscribeFacts((change) => {
       if (
         "all" in change &&
@@ -571,6 +572,7 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
           uninstallSessionIdentityMutation();
           uninstallPlacementChanges();
           uninstallConfigChanges();
+          uninstallOrphanWorkspaceChanges();
           uninstallSessionMaintenancePreservation();
           uninstallPlacementAdmission();
         }
@@ -668,10 +670,9 @@ export function createGatewayWorkerPlacementRuntime(params: GatewayWorkerPlaceme
         "Worker placement reconcile sweep failed",
       );
       void sweepDiskSpace();
-      const atMs = scope.now() + WORKER_PLACEMENT_RECONCILE_INTERVAL_MS;
       scope.schedule({
         id: "worker-placements:reconcile",
-        atMs,
+        atMs: scope.now() + WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
         everyMs: WORKER_PLACEMENT_RECONCILE_INTERVAL_MS,
         run: sweepActivePlacements,
       });

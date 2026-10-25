@@ -8,7 +8,9 @@ import {
   type NativeBrowserTab,
 } from "../../app/native-browser-bridge.ts";
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
-import { listen } from "../../lib/reactive/listener.ts";
+import { observeDocumentScroll } from "../../lib/reactive/document-scroll.ts";
+import { observeIntersection, observeResize } from "../../lib/reactive/observers.ts";
+import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { readBrowserInspectedNode, type BrowserPanelTab } from "./browser-client.ts";
 import type { BrowserPanelInputOwner } from "./browser-panel-input-owner.ts";
@@ -224,24 +226,23 @@ export function createBrowserPanelNative(controller: BrowserPanelNativeHost) {
     mountStage(element: HTMLElement): () => void {
       presentationStage = element;
       intersecting = true;
-      const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
-      const intersection =
+      const stopSize =
+        typeof ResizeObserver === "function" ? observeResize([element], schedule) : undefined;
+      const stopIntersection =
         typeof IntersectionObserver === "function"
-          ? new IntersectionObserver(([entry]) => {
+          ? observeIntersection([element], ([entry]) => {
               intersecting = entry?.isIntersecting ?? intersecting;
               schedule();
             })
-          : null;
-      resize?.observe(presentationStage);
-      intersection?.observe(presentationStage);
-      const stopScroll = listen(document, "scroll", schedule, true);
-      const stopResize = listen(window, "resize", schedule);
+          : undefined;
+      const stopScroll = observeDocumentScroll(document, schedule);
+      const stopResize = observeWindowResize(window, schedule);
       presentation.update();
       return () => {
         presentation.hide();
         presentationStage = null;
-        resize?.disconnect();
-        intersection?.disconnect();
+        stopSize?.();
+        stopIntersection?.();
         stopScroll();
         stopResize();
       };

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createTestTranscript, renderChatView } from "./chat-view.test-helpers.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -19,47 +20,51 @@ describe("initial chat delivery controls", () => {
     { connected: false, recorded: false },
     { connected: false, recorded: true },
     { connected: true, recorded: true },
-  ])("keeps the pending initial turn discardable without Retry (%o)", ({ connected, recorded }) => {
-    const onRetrySessionPlacementStartup = vi.fn();
-    const onDiscardSessionPlacementStartup = vi.fn();
-    const container = renderChatView({
-      connected,
-      canSend: false,
-      messages: recorded
-        ? [
-            {
-              role: "user",
-              content: "pending prompt",
-              __openclaw: { idempotencyKey: "initial:user" },
-            },
-          ]
-        : [],
-      placementStartup: {
-        sessionKey: "main",
-        targetKind: "profile",
-        phase: connected ? "sending" : "reconnecting",
-        startedAt: 1,
-        initialTurn: {
-          id: "initial",
-          sendRunId: "initial",
-          text: "pending prompt",
-          createdAt: 1,
-          sendAttempts: 1,
-          sendState: connected ? "sending" : "waiting-reconnect",
+  ])(
+    "keeps the pending initial turn discardable without Retry (%o)",
+    async ({ connected, recorded }) => {
+      const onRetrySessionPlacementStartup = vi.fn();
+      const onDiscardSessionPlacementStartup = vi.fn();
+      const container = renderChatView({
+        connected,
+        canSend: false,
+        messages: recorded
+          ? [
+              {
+                role: "user",
+                content: "pending prompt",
+                __openclaw: { idempotencyKey: "initial:user" },
+              },
+            ]
+          : [],
+        placementStartup: {
+          sessionKey: "main",
+          targetKind: "profile",
+          phase: connected ? "sending" : "reconnecting",
+          startedAt: 1,
+          initialTurn: {
+            id: "initial",
+            sendRunId: "initial",
+            text: "pending prompt",
+            createdAt: 1,
+            sendAttempts: 1,
+            sendState: connected ? "sending" : "waiting-reconnect",
+          },
         },
-      },
-      onRetrySessionPlacementStartup,
-      onDiscardSessionPlacementStartup,
-    });
-    expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1);
-    expect(container.querySelectorAll(".chat-send-status")).toHaveLength(1);
-    const status = container.querySelector(".chat-send-status");
-    expect(status?.textContent).toContain(connected ? "Queued" : "Waiting for reconnect");
-    expect(status?.querySelector(".chat-send-status__retry")).toBeNull();
-    status?.querySelector<HTMLButtonElement>(".chat-send-status__discard")?.click();
-    expect(onDiscardSessionPlacementStartup).toHaveBeenCalledOnce();
-    expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
-  });
+        onRetrySessionPlacementStartup,
+        onDiscardSessionPlacementStartup,
+      });
+      await flushDeferredRowPrune();
+      expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1);
+      expect(container.querySelectorAll(".chat-send-status")).toHaveLength(1);
+      const status = container.querySelector(".chat-send-status");
+      expect(status?.textContent).toContain(connected ? "Queued" : "Waiting for reconnect");
+      expect(status?.querySelector(".chat-send-status__retry")).toBeNull();
+      status?.querySelector<HTMLButtonElement>(".chat-send-status__discard")?.click();
+      expect(onDiscardSessionPlacementStartup).toHaveBeenCalledOnce();
+      expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps Retry and Discard reachable when exact history deduplicates the rejected initial turn", () => {
     const onRetrySessionPlacementStartup = vi.fn();

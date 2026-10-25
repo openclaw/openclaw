@@ -1,7 +1,9 @@
-import { splitSystemPromptRelocatableBoundary } from "@openclaw/ai/internal/shared";
+import {
+  ensureSystemPromptCacheBoundary,
+  splitSystemPromptRelocatableBoundary,
+} from "@openclaw/ai/internal/shared";
 import { buildHarnessVisibleReplyGuidance } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
@@ -22,9 +24,28 @@ import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { buildInterruptedInputContext } from "../interrupted-input-context.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
+import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 import { cliBackendLog } from "./log.js";
 import type { CliReusableSession, RunCliAgentParams } from "./types.js";
+
+export function finalizeCliSystemPrompt(
+  systemPrompt: string,
+  model: string,
+  replacements: Parameters<typeof applyPluginTextReplacements>[1],
+): string {
+  const replaced = applyPluginTextReplacements(systemPrompt, replacements);
+  // Identity belongs after the cache boundary even for marker-free hook overrides.
+  // Otherwise idle and active turns would place it on different sides of the prefix.
+  return appendModelIdentitySystemPrompt({
+    systemPrompt:
+      buildModelIdentityPromptLine(model) && replaced.trim().length > 0
+        ? ensureSystemPromptCacheBoundary(replaced)
+        : replaced,
+    model,
+  });
+}
 
 export function buildCliVisibleReplyGuidance(
   params: Pick<
@@ -60,6 +81,7 @@ export async function prepareCliTurnPromptContext(
     runtimeContextFragments?: RunCliAgentParams["runtimeContextFragments"];
     sessionTarget?: RunCliAgentParams["sessionTarget"];
     thinkLevel?: ThinkLevel;
+    nativeDelegationTools?: readonly string[];
     requesterProfileId?: string;
     configuredTimezone?: string;
     prompt: string;
@@ -118,6 +140,7 @@ export async function prepareCliTurnPromptContext(
       buildProactiveSubagentOrchestrationSection({
         enabled: params.thinkLevel === "ultra",
         hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
+        nativeDelegationTools: params.nativeDelegationTools,
       }).join("\n"),
       interruptedInputContext
         ? labelRuntimeContextText(projectRuntimeContextFragments([interruptedInputContext]))
@@ -224,25 +247,13 @@ export function createCliCurrentPromptRenderer(
   reusableCliSession: CliReusableSession,
   notes: {
     sessionGapContext?: string;
-    preservedTurnsContext?: string;
-    writer?: CliHistoryWriter;
   } = {},
 ) {
-  // Missed exchanges are saved conversation text: native reuse alone cannot replay them.
   let context = params.currentInboundContext;
-  const preservedTurnsContext = notes.writer ? notes.preservedTurnsContext : undefined;
-  const completionContext =
-    reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
-      ? preservedTurnsContext
-      : undefined;
-  const note = [
+  const note =
     reusableCliSession.mode === "reuse-with-drift"
       ? buildCliSessionDriftNote(reusableCliSession.drift.reasons)
-      : undefined,
-    completionContext,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join("\n\n");
+      : undefined;
   if (note) {
     context = context
       ? {

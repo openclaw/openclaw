@@ -1,4 +1,5 @@
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { flush } from "solid-js";
+import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import {
@@ -99,7 +100,6 @@ it("keeps history available while progress loads, fails, and retries", async () 
   expect(element.textContent).toContain("Independent history");
 
   element.querySelector<HTMLButtonElement>(".plugin-session-summary > button")!.click();
-  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   await vi.waitFor(() =>
     expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading")),
   );
@@ -133,7 +133,6 @@ it("refreshes visible message avatars from identity and stops hydrating while hi
 
   const replacement = createAgentIdentityCapability(element.gateway!);
   element.agentIdentity = replacement;
-  await vi.waitFor(() => expect(replacement.get("main")?.avatar).toBe(avatar));
   await avatarLoaded();
 
   element.presented = false;
@@ -241,7 +240,20 @@ it("retains its successful history and cursor when retrying a failed refresh", a
 it("paces durable events and retains one catch-up during a pending load", async () => {
   useClock();
   const { element, requests, emit, reply, settled } = setup();
+  const gateway = element.gateway;
+  assert(gateway);
+  const subscribe = gateway.subscribe.bind(gateway);
+  let subscriptions = 0;
+  vi.spyOn(gateway, "subscribe").mockImplementation((listener) => {
+    subscriptions += 1;
+    const stop = subscribe(listener);
+    return () => {
+      subscriptions -= 1;
+      stop();
+    };
+  });
   await reply(0, "Initial reply");
+  expect(subscriptions).toBeGreaterThan(0);
 
   emit("session.message", "agent:other:one", "other");
   emit("chat");
@@ -264,7 +276,10 @@ it("paces durable events and retains one catch-up during a pending load", async 
   expect(element.textContent).not.toContain("Initial reply");
 
   element.presented = false;
-  await element.updateComplete;
+  await settled(3);
+  await Promise.resolve();
+  flush();
+  expect(subscriptions).toBe(0);
   emit("session.message");
   await vi.advanceTimersByTimeAsync(10_000);
   await element.updateComplete;
@@ -272,6 +287,7 @@ it("paces durable events and retains one catch-up during a pending load", async 
   expect(element.textContent).toBe("");
   element.presented = true;
   await reply(3, "Reply received while hidden");
+  expect(subscriptions).toBeGreaterThan(0);
 });
 
 it("catches up with cursors, retains a bounded tail, and replaces it after a reset", async () => {

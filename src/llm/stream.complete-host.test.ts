@@ -1,7 +1,9 @@
+import { fileURLToPath } from "node:url";
 import { createApiRegistry, createLlmRuntime, getAiTransportHost } from "@openclaw/ai";
 import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
@@ -358,4 +360,37 @@ it("cancels admission and rechecks authority without sending queued requests", a
   await Promise.all([abortProof, embeddedAbortProof, retiredProof]);
   expect(providerStream).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(60_000);
+});
+
+it("releases admitted request callbacks across completion, retry, and abandoned consumption", async ({
+  signal,
+}) => {
+  // V8 collection proof runs in Node even when the surrounding suite uses Bun.
+  const result = await runNodeScript(
+    [
+      "--expose-gc",
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/perf/provider-rate-limit-retention.ts",
+      "--turns",
+      "11",
+      "--payload-bytes",
+      "8",
+    ],
+    { ...process.env, NODE_OPTIONS: "" },
+    15_000,
+    {
+      cwd: fileURLToPath(new URL("../../", import.meta.url)),
+      signal,
+      maxBuffer: 64 * 1024,
+      requireProcessTreeExit: process.platform !== "win32",
+    },
+  );
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    turns: 11,
+    retainedCallbacks: 0,
+    retainedPayloadBytes: 0,
+  });
 });

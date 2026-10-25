@@ -8,6 +8,7 @@ import { createNestedGitEnv } from "../../test/helpers/temp-repo.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import * as updateRunReader from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as installedCommand from "./schtasks.installed-command.test-support.js";
 import {
@@ -449,25 +450,17 @@ describe("published installed update progress", () => {
       integrity: "sha512-synthetic",
     })),
   };
-  const active: UpdateRunRecord = {
-    runId: "00000000-0000-0000-0000-000000000000",
-    createdAtMs: invokedAt + 1,
-    updatedAtMs: invokedAt + 2,
-    trigger: "cli",
-    phase: "verifying",
-    status: "running",
-    reason: null,
-    origin: {},
-    target: {},
-    before: {},
-    after: {},
-    steps: [completedStep(invokedAt + 1, invokedAt + 2)],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
-    finishedAtMs: null,
-    downtimeMs: null,
-  };
+  const active: UpdateRunRecord = createUpdateRunRecordFixture(
+    "00000000-0000-0000-0000-000000000000",
+    {
+      createdAtMs: invokedAt + 1,
+      updatedAtMs: invokedAt + 2,
+      phase: "verifying",
+      status: "running",
+      steps: [completedStep(invokedAt + 1, invokedAt + 2)],
+      finishedAtMs: null,
+    },
+  );
 
   const task: InstalledTask = {
     profile: "synthetic-update",

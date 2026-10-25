@@ -7,6 +7,7 @@ import {
 import { streamAnthropic } from "../providers/anthropic.js";
 import type { Context, Model } from "../types.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
+import { collectEventTypes } from "./openai-stream-cases.test-support.js";
 
 const originalHost = getAiTransportHost();
 
@@ -60,10 +61,7 @@ describe("Anthropic context-window completion", () => {
     configureAiTransportHost({ buildModelFetch: () => fetchMock });
 
     const stream = await run(model, context, { apiKey: "test-key" });
-    const eventTypes: string[] = [];
-    for await (const event of stream) {
-      eventTypes.push(event.type);
-    }
+    const eventTypes = await collectEventTypes(stream);
     const result = await stream.result();
 
     expect(fetchMock).toHaveBeenCalledOnce();

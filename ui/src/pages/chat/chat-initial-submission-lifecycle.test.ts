@@ -6,7 +6,7 @@ import { clearChatHistory } from "./chat-history-actions.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatPageHost } from "./chat-pending-inputs.test-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { admitChatSubmission } from "./history-merge.ts";
 import { applyChatCacheSnapshot } from "./session-message-cache.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";

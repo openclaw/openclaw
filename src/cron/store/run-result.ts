@@ -25,6 +25,7 @@ export function cronRunResultEvent(
     completionStatus: quiet ? "failed" : result.completionStatus,
     error: quiet ? "queued manual run skipped: trigger condition not met" : result.error,
     summary: quiet ? undefined : result.summary,
+    result: quiet ? undefined : result.result,
     diagnostics: result.diagnostics,
     delivered: result.deliveryState.delivered,
     deliveryStatus: result.deliveryState.status,

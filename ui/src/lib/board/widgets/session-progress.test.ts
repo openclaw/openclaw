@@ -14,10 +14,11 @@ function createContext(
   progressRead: () => Promise<unknown> = async () => ({ card: null }),
   describe: () => Promise<{ session: GatewaySessionRow | null }> = async () => ({ session: null }),
 ) {
+  const listRead = vi.fn((_params?: Record<string, unknown>) => sessionsResult([], 1));
   const { gateway, sessions, selection, connect, disconnect, emitEvent } =
-    createSubscriptionHydrationHarness(async (method) => {
+    createSubscriptionHydrationHarness(async (method, params) => {
       if (method === "sessions.list") {
-        return sessionsResult([], 1);
+        return listRead(params);
       }
       if (method === "sessions.describe") {
         return describe();
@@ -50,14 +51,21 @@ function createContext(
     connect,
     disconnect,
     emitEvent,
+    listRead,
+    targets: () => subscribe.mock.calls.map(([target]) => target),
     subscriptions: () => [active, subscribe.mock.calls.length],
   };
 }
 
-function mount(context: ApplicationContext) {
+function mount(
+  context: ApplicationContext,
+  sessionKey = "agent:main:progress-widget",
+  active = true,
+) {
   const provider = createApplicationContextProvider(context);
   const element = document.createElement("openclaw-session-progress-widget");
-  element.session = { sessionKey: "agent:main:progress-widget" };
+  element.session = { sessionKey };
+  element.active = active;
   provider.append(element);
   document.body.append(provider);
   return { provider, element };
@@ -304,4 +312,73 @@ it("follows a replacement session generation at the same dashboard target", asyn
   element.remove();
   await element.updateComplete;
   expect(owner.subscriptions()[0]).toBe(0);
+});
+
+it("keeps target observations separate across agents and applications without loading dashboard rosters", async () => {
+  const first = createContext();
+  const second = createContext();
+  const left = mount(first.context, "agent:main:left");
+  const right = mount(first.context, "agent:main:right");
+  right.element.session = { sessionKey: "right", agentId: " main " };
+  const writer = mount(first.context, "agent:writer:progress");
+  const otherApplication = mount(second.context, "agent:main:other");
+  for (const { element } of [left, right, writer, otherApplication]) {
+    await ready(element);
+  }
+  expect(first.targets()).toEqual([
+    { key: "agent:main:left", agentId: "main" },
+    { key: "agent:main:right", agentId: "main" },
+    { key: "agent:writer:progress", agentId: "writer" },
+  ]);
+  expect(second.targets()).toEqual([{ key: "agent:main:other", agentId: "main" }]);
+  expect(first.subscriptions()).toEqual([3, 3]);
+  expect(second.subscriptions()).toEqual([1, 1]);
+
+  left.element.active = false;
+  await left.element.updateComplete;
+  expect(first.subscriptions()).toEqual([2, 3]);
+  right.element.active = false;
+  await right.element.updateComplete;
+  expect(first.subscriptions()).toEqual([1, 3]);
+
+  left.element.active = true;
+  await left.element.updateComplete;
+  expect(first.subscriptions()).toEqual([2, 4]);
+  left.element.remove();
+  writer.element.remove();
+  await Promise.all([left.element.updateComplete, writer.element.updateComplete]);
+  expect(first.subscriptions()).toEqual([0, 4]);
+  expect(second.subscriptions()).toEqual([1, 1]);
+  for (const owner of [first, second]) {
+    expect(owner.listRead.mock.calls.some(([params]) => params?.source === "dashboard")).toBe(
+      false,
+    );
+  }
+});
+
+it("reads only active widget targets without acquiring a dashboard roster", async () => {
+  const describe = vi.fn(async () => ({ session: null }));
+  const owner = createContext(undefined, describe);
+  const first = mount(owner.context, "agent:main:first", false);
+  await first.element.updateComplete;
+  expect(owner.subscriptions()).toEqual([0, 0]);
+  expect(describe).not.toHaveBeenCalled();
+
+  first.element.active = true;
+  await ready(first.element);
+  expect(describe).toHaveBeenCalledOnce();
+  const second = mount(owner.context, "agent:main:second");
+  await ready(second.element);
+  expect(owner.subscriptions()).toEqual([2, 2]);
+  expect(describe).toHaveBeenCalledTimes(2);
+
+  first.element.active = false;
+  second.element.active = false;
+  await Promise.all([first.element.updateComplete, second.element.updateComplete]);
+  expect(owner.subscriptions()).toEqual([0, 2]);
+  first.element.active = true;
+  await ready(first.element);
+  expect(owner.subscriptions()).toEqual([1, 3]);
+  expect(describe).toHaveBeenCalledTimes(3);
+  expect(owner.listRead.mock.calls.some(([params]) => params?.source === "dashboard")).toBe(false);
 });

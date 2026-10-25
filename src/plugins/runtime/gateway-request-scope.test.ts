@@ -50,7 +50,7 @@ describe("gateway request scope", () => {
     expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual(expected);
   }
 
-  it("enters a repeated Gateway scope once without a separate recovery restore frame", () => {
+  it("enters a repeated Gateway scope once with recovery in the same store", () => {
     const entries = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
     const runs = vi.spyOn(AsyncLocalStorage.prototype, "run");
     try {
@@ -59,7 +59,7 @@ describe("gateway request scope", () => {
           expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(TEST_SCOPE),
         ),
       );
-      expect(entries).toHaveBeenCalledTimes(2);
+      expect(entries).toHaveBeenCalledTimes(1);
       expect(runs).not.toHaveBeenCalled();
     } finally {
       entries.mockRestore();
@@ -233,12 +233,26 @@ describe("gateway request scope", () => {
     const first = createEmptyPluginRegistry();
     const second = createEmptyPluginRegistry();
     const declaredProviderOwners = new Map([["fixture", new Set(["fixture-owner"])]]);
-    const caller = { ...TEST_SCOPE, pluginRegistry: first, declaredProviderOwners };
+    const marker = Symbol("request fact");
+    const hidden = Symbol("hidden fact");
+    const caller = {
+      ...TEST_SCOPE,
+      pluginRegistry: first,
+      declaredProviderOwners,
+      [marker]: "caller",
+    };
+    Object.defineProperties(caller, {
+      hidden: { get: () => assert.fail("non-enumerable field read") },
+      [hidden]: { get: () => assert.fail("non-enumerable symbol read") },
+    });
     runtimeScope.withPluginRuntimeGatewayRequestScope(caller, () => {
       expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(caller);
       runtimeScope.withPluginRuntimePluginScope({ pluginId: "fixture" }, () => {
         const child = runtimeScope.getPluginRuntimeGatewayRequestScope()!;
         expect(child).not.toBe(caller);
+        expect(Reflect.get(child, marker)).toBe("caller");
+        expect(Object.hasOwn(child, hidden)).toBe(false);
+        expect(Object.hasOwn(child, "hidden")).toBe(false);
         const copied = { ...child };
         child.pluginRegistry = second;
         expect(requireActivePluginRegistry()).toBe(second);

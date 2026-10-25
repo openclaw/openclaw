@@ -12,7 +12,7 @@ import {
   listenLoopback,
   readRequestText,
 } from "../../test/helpers/gateway-integration-fixtures.js";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
@@ -165,10 +165,7 @@ async function startStreamServer(
   write: (res: ServerResponse) => void,
   contentType = "application/json",
 ) {
-  let resolveClosed: () => void = () => undefined;
-  const closed = new Promise<void>((resolve) => {
-    resolveClosed = resolve;
-  });
+  const { promise: closed, resolve: resolveClosed } = createDeferred();
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       await readJsonBody(req);

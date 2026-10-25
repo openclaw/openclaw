@@ -1,4 +1,9 @@
 import { vi } from "vitest";
+import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
+
+export function createMSTeamsTestConfig(msteams: MSTeamsConfig): OpenClawConfig {
+  return { channels: { msteams } };
+}
 
 export function createMSTeamsSetupPrompter(
   credentials?: readonly [appId: string, appPassword: string, tenantId: string],

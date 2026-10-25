@@ -94,7 +94,7 @@ export async function runAnnounceAgentCall(params: {
           () => deadline.abort(new Error("gateway request timeout for agent")),
           params.timeoutMs,
         );
-  timer?.unref?.();
+  timer?.unref();
   try {
     signal.throwIfAborted();
     const dispatch = async () => {
@@ -268,7 +268,7 @@ export function resolvePrivateCompletionDeliveryResult(
   // Successful internal consumption may be silent or start the next child.
   // Queue acceptance alone is not consumption, and no external receipt is owed.
   const delivery: SubagentAnnounceDeliveryResult =
-    response?.status === "ok" && response?.inputProcessingCompleted === true
+    response?.status === "ok" && response.inputProcessingCompleted === true
       ? { delivered: true, path: "direct" }
       : {
           delivered: false,

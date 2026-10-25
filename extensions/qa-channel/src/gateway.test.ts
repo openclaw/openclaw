@@ -61,6 +61,19 @@ async function startJsonServer(
   };
 }
 
+function createInboundMessage(text: string) {
+  return {
+    id: "msg-1",
+    accountId: "default",
+    direction: "inbound" as const,
+    conversation: { id: "alice", kind: "direct" as const },
+    senderId: "alice",
+    text,
+    timestamp: Date.now(),
+    reactions: [],
+  };
+}
+
 describe("qa-channel gateway", () => {
   const stops: Array<() => Promise<void>> = [];
 
@@ -71,16 +84,7 @@ describe("qa-channel gateway", () => {
 
   it("lets native commands bypass the ordered inbound queue", async () => {
     const controller = new AbortController();
-    const message = {
-      id: "msg-1",
-      accountId: "default",
-      direction: "inbound" as const,
-      conversation: { id: "alice", kind: "direct" as const },
-      senderId: "alice",
-      text: "hello",
-      timestamp: Date.now(),
-      reactions: [],
-    };
+    const message = createInboundMessage("hello");
     const server = await startJsonServer(() => ({
       body: JSON.stringify({
         cursor: 3,
@@ -107,10 +111,7 @@ describe("qa-channel gateway", () => {
       }),
     }));
     stops.push(() => server.stop());
-    let releaseFirst: (() => void) | undefined;
-    const firstPending = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const { promise: firstPending, resolve: releaseFirst } = Promise.withResolvers<void>();
     vi.mocked(handleQaInbound).mockImplementation(async ({ message: inbound }) => {
       if (inbound.text === "hello") {
         await firstPending;
@@ -197,16 +198,7 @@ describe("qa-channel gateway", () => {
 
   it("stops the ordered inbound queue after the first dispatch failure", async () => {
     const controller = new AbortController();
-    const message = {
-      id: "msg-1",
-      accountId: "default",
-      direction: "inbound" as const,
-      conversation: { id: "alice", kind: "direct" as const },
-      senderId: "alice",
-      text: "first",
-      timestamp: Date.now(),
-      reactions: [],
-    };
+    const message = createInboundMessage("first");
     const server = await startJsonServer(() => ({
       body: JSON.stringify({
         cursor: 2,
@@ -265,10 +257,7 @@ describe("qa-channel gateway", () => {
       }
     });
 
-    let rejectSecond = (_error: Error) => {};
-    const secondAttempt = new Promise<void>((_resolve, reject) => {
-      rejectSecond = reject;
-    });
+    const { promise: secondAttempt, reject: rejectSecond } = Promise.withResolvers<void>();
     let restarting = false;
     const recoveredMessageIds: string[] = [];
     const restartedController = new AbortController();

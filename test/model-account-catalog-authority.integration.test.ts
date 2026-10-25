@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createModelAccountConnectService } from "../src/gateway/model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../src/gateway/server-chat-metadata-lifecycle.js";
 import { createDirectChatContext } from "../src/gateway/server-chat.agent-events.test-helpers.js";
+import { callAgentHandler } from "../src/gateway/server-methods/agents-mutate.test-support.js";
 import {
   createModelsListTestContext,
   catalogEntry,
@@ -20,7 +21,6 @@ import {
 } from "../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "../src/gateway/server-methods/models.js";
 import { roleConfig } from "../src/gateway/server-methods/sessions-reactions.test-support.js";
-import type { RespondFn } from "../src/gateway/server-methods/types.js";
 import { usersAuthConnectHandlers } from "../src/gateway/server-methods/users-auth-connect.js";
 import {
   readPreparedCatalog,
@@ -298,25 +298,19 @@ it.each([
           onChanged: () => broadcastChatMetadataChanged(context),
         });
         context.modelAccountConnectService = service;
-        const request = async (
+        const request = (
           method: "models.list" | "users.unlinkAuthProfile",
           params: Record<string, unknown>,
-        ) => {
-          const respond = vi.fn<RespondFn>();
-          const handler = expectDefined(
-            method === "models.list" ? modelsHandlers[method] : usersAuthConnectHandlers[method],
-            "registered handler",
-          );
-          await handler({
-            req: { type: "req", id: "catalog-link-proof", method, params },
+        ) =>
+          callAgentHandler(
+            expectDefined(
+              method === "models.list" ? modelsHandlers[method] : usersAuthConnectHandlers[method],
+              "registered handler",
+            ),
+            method,
             params,
-            context,
-            client,
-            respond,
-            isWebchatConnect: () => false,
-          });
-          return respond;
-        };
+            { context, client },
+          );
         transport.resolveAuth.mockResolvedValue(resolvedAuth(selected));
         const allowed = boundary === null;
         const gate =

@@ -64,6 +64,7 @@ import {
   type PortDescriptor,
   type PortTable,
 } from "./port-descriptor.js";
+import { withLegacyPostgresIndexOrdering } from "./postgres-index-ordering.js";
 import { pgSearchName, postgresSearchSql } from "./postgres-search-schema.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
@@ -146,12 +147,12 @@ export async function loadAgentPortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "agent") {
       return backup;
     }
-    // Schema 30 appends columns; 31–33 change only PostgreSQL search or triggers.
+    // Schema 30 appends columns; 31–35 change only PostgreSQL search, triggers, or indexes.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 33 ||
-      ![27, 28, 29, 30, 31, 32].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 35 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -338,6 +339,7 @@ export async function loadAgentPortDescriptor(
           runWithAgentDatabaseMaintenanceAuthority(
             {
               signal: new AbortController().signal,
+              assertCurrent,
               assertOwned: assertCurrent,
               assertOwnedInTransaction: assertCurrent,
               renew: assertCurrent,
@@ -397,6 +399,11 @@ export async function loadAgentPortDescriptor(
   let postData = legacyRevision
     ? withLegacyAgentPostgresMemoryRevisionTriggers(descriptor.postData)
     : descriptor.postData;
+  postData = withLegacyPostgresIndexOrdering(
+    postData,
+    sourceVersion === 34 ? "schema-nullability" : "sqlite",
+    descriptor.preData,
+  );
   if (legacyTrajectory) {
     postData = withLegacyAgentPostgresTrajectoryStorage(postData);
   }

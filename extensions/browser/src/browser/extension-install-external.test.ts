@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   useInstallFixture,
+  withAdvancingInstallClock,
   chromeStoreInstallRequests,
   removeChromeStoreInstallRequests,
   uninstallChromeExtensionNativeHosts,
@@ -60,15 +61,8 @@ describe("Chrome Store installation request", () => {
     const value = await fixture("darwin");
     const chrome = value.productRoot();
     await expect(fs.access(chrome.userDataDir)).rejects.toMatchObject({ code: "ENOENT" });
-    let now = 0;
     const status = await value.install({
-      deps: {
-        ...value.deps,
-        now: () => now,
-        sleep: async (ms) => {
-          now += ms;
-        },
-      },
+      deps: withAdvancingInstallClock(value.deps),
     });
 
     expect(status.registrations.find((entry) => entry.product === "chrome")).toMatchObject({

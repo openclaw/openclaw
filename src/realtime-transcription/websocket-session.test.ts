@@ -226,6 +226,19 @@ it("does not replay successfully flushed audio after a later frame fails", async
   expect(sentFrames).toEqual(["first", "second"]);
 });
 
+it("owns only the queued audio bytes while waiting for provider readiness", async () => {
+  const sendAudio = vi.fn((audio: Buffer) => {
+    expect(audio).toEqual(Buffer.alloc(960, 7));
+    expect(audio.buffer.byteLength).toBe(960);
+  });
+  const { session } = await setup({ sendAudio });
+  const source = Buffer.alloc(960, 7);
+  session.sendAudio(source);
+  source.fill(0);
+  await session.connect();
+  expect(sendAudio).toHaveBeenCalledOnce();
+});
+
 it("flushes a large retained audio tail in order after reconnect", async () => {
   const { frames, ready, onFrame } = collectFrames<Buffer>(4);
   const { session, connections } = await setup(

@@ -1,5 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { Picker, type PickerParams, type PickerOption } from "./select-picker.ts";
@@ -88,17 +89,14 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 
 describe("Picker", () => {
   it("keeps closed choices unmounted across catalog refreshes and shows current choices on open", async () => {
-    const p = await mount({ searchable: false });
+    const groupBy = vi.fn(() => undefined);
+    const p = await mount({ searchable: false, groupBy });
     const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
     expect(p.rows()).toHaveLength(0);
+    expect(groupBy).not.toHaveBeenCalled();
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));
-    observer.observe(menu, {
-      attributes: true,
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
+    observer.observe(menu, allMutationObserverOptions());
     try {
       await p.update({
         options: [{ value: "updated", label: "Updated choice" }],
@@ -106,14 +104,17 @@ describe("Picker", () => {
       });
       mutations.push(...observer.takeRecords());
       expect(mutations).toHaveLength(0);
+      expect(groupBy).not.toHaveBeenCalled();
       expect(p.trigger.getAttribute("aria-label")).toBe("Model: Updated choice");
       await p.key("ArrowDown");
       expect(p.rows().map((row) => row.textContent?.trim())).toEqual(["Updated choice"]);
       expect(document.activeElement).toBe(p.picker.querySelector(".picker-select__options"));
       await p.key("Escape");
       expect(p.rows()).toHaveLength(0);
+      groupBy.mockClear();
       await p.update({ options, value: "fixture/anchor" });
       expect(p.rows()).toHaveLength(0);
+      expect(groupBy).not.toHaveBeenCalled();
       await p.open();
       expect(p.rows()).toHaveLength(options.length);
       expect(p.params.onChange).not.toHaveBeenCalled();
@@ -215,12 +216,7 @@ describe("Picker", () => {
       if (!grouped) {
         observer.observe(p.picker.querySelector(".picker-select__options")!, { childList: true });
       }
-      observer.observe(retained, {
-        attributes: true,
-        childList: true,
-        characterData: true,
-        subtree: true,
-      });
+      observer.observe(retained, allMutationObserverOptions());
       try {
         await p.search("atlas");
         mutations.push(...observer.takeRecords());

@@ -46,7 +46,15 @@ it("reports the executing AOT image and configured restrictions without probing 
   expect(report.nativeCompatibility.modules).toEqual([
     expect.objectContaining({ name: "@openclaw/fs-safe", qualification: "unverified" }),
   ]);
+  expect(report.execution).toEqual({ profile: "embedded-aot", dynamicCode: "interpreted" });
   expect(formatRuntimeCapabilities(report)).toContain("flavor=aot");
+  expect(formatRuntimeCapabilities(report)).toContain("run interpreted in this AOT build");
+  vi.stubGlobal("__openclawStandaloneBuildInfo", {
+    mode: "jit",
+    openclaw: { version: "2026.10.3" },
+    bun: { version: "1.4.4" },
+  });
+  expect(collectRuntimeCapabilities().execution).toEqual(report.execution);
 });
 
 it("honors the last code-generation flag and leaves malformed environment options unknown", () => {

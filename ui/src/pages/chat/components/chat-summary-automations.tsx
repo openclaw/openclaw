@@ -30,7 +30,9 @@ import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import "../../../styles/chat/summary-automations.css";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { SessionAutomationResult } from "./session-automation-result.tsx";
+import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -362,6 +364,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     return 10;
   });
   const jobs = () => inventory.jobs().slice(0, shown());
+  const formatSchedule = createSessionAutomationSchedule();
   const hasCachedRows = () => inventory.jobs().length > shown();
   const more = () => hasCachedRows() || (inventory.hasMore() && !inventory.error());
 
@@ -455,7 +458,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     if (inventory.connected() && job.runningAtMs !== undefined) {
       return t("common.running");
     }
-    return job.schedule ? sessionAutomationSchedule(job.schedule) : "";
+    return job.schedule ? formatSchedule(job.schedule) : "";
   }
   const errorNotice = () =>
     inventory.connected() && (
@@ -525,33 +528,38 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
                 )}
                 {job().autoDisabled && <span class="chat-summary__automation-attention" />}
               </span>
-              <HoverMarquee
-                class="chat-summary__automation-title"
-                content={job().name.trim() || job().id}
-                options={{ host: () => row }}
-              />
-              {state() && (
-                <span
-                  class={[
-                    "chat-summary__automation-state",
-                    { "is-attention": Boolean(job().autoDisabled) },
-                  ]}
-                  title={metadataTitle()}
-                >
-                  {running() ? (
-                    <>
-                      <span class="session-run-spinner" aria-hidden="true" />
-                      <span class="sr-only">{state()}</span>
-                    </>
-                  ) : (
-                    <HoverMarquee
-                      class="chat-summary__automation-metadata"
-                      content={state()}
-                      options={{ host: () => row, stationary: true }}
-                    />
+              <span class="chat-summary__automation-copy">
+                <span class="chat-summary__automation-heading">
+                  <HoverMarquee
+                    class="chat-summary__automation-title"
+                    content={job().name.trim() || job().id}
+                    options={{ host: () => row }}
+                  />
+                  {state() && (
+                    <span
+                      class={[
+                        "chat-summary__automation-state",
+                        { "is-attention": Boolean(job().autoDisabled) },
+                      ]}
+                      title={metadataTitle()}
+                    >
+                      {running() ? (
+                        <>
+                          <span class="session-run-spinner" aria-hidden="true" />
+                          <span class="sr-only">{state()}</span>
+                        </>
+                      ) : (
+                        <HoverMarquee
+                          class="chat-summary__automation-metadata"
+                          content={state()}
+                          options={{ host: () => row, stationary: true }}
+                        />
+                      )}
+                    </span>
                   )}
                 </span>
-              )}
+                <SessionAutomationResult job={job()} />
+              </span>
             </a>
           );
         }}
@@ -571,7 +579,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
       {inventory.lifecycle}
-      <Loading>
+      <ChatLazyBoundary>
         <Show when={inventory.readable()}>
           <Show when={inventory.jobs().length > 0}>
             <Show
@@ -612,7 +620,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
             }
           />
         </Show>
-      </Loading>
+      </ChatLazyBoundary>
     </openclaw-chat-summary-automations>
   );
 }

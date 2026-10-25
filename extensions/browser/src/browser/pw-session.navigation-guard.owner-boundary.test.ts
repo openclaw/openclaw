@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import * as navigationGuardModule from "./navigation-guard.js";
 import { withPageNavigationRequestGuard } from "./pw-session.js";
+import { createMockRoute, type MockRoute } from "./pw-tools-core.guard-test-support.js";
 
 const strictPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
 
@@ -16,12 +17,6 @@ const PROXY_ENV_KEYS = [
   "https_proxy",
 ] as const;
 
-type MockRoute = {
-  continue: () => Promise<void>;
-  fallback: () => Promise<void>;
-  fulfill: (response: { status: number; body: string }) => Promise<void>;
-  abort: () => Promise<void>;
-};
 type MockRequest = {
   isNavigationRequest: () => boolean;
   frame: () => object;
@@ -53,16 +48,6 @@ function installBrowserMocks() {
     pageUnroute,
     getRouteHandler: () => routeHandler,
     mainFrame,
-  };
-}
-
-function createMockRoute(route?: Partial<MockRoute>): MockRoute {
-  return {
-    continue: vi.fn(async () => {}),
-    fallback: vi.fn(async () => {}),
-    fulfill: vi.fn(async () => {}),
-    abort: vi.fn(async () => {}),
-    ...route,
   };
 }
 
@@ -99,14 +84,8 @@ describe("pw-session navigation guard owner boundary", () => {
     const controller = new AbortController();
     const abortReason = new Error("caller aborted during policy check");
     const route = createMockRoute();
-    let resolvePolicyStarted!: () => void;
-    const policyStarted = new Promise<void>((resolve) => {
-      resolvePolicyStarted = resolve;
-    });
-    let releasePolicy: () => void = () => {};
-    const policyPending = new Promise<void>((resolve) => {
-      releasePolicy = resolve;
-    });
+    const { promise: policyStarted, resolve: resolvePolicyStarted } = Promise.withResolvers<void>();
+    const { promise: policyPending, resolve: releasePolicy } = Promise.withResolvers<void>();
     let observedPolicySignal: AbortSignal | undefined;
     let observedPolicyCheck: Promise<void> | undefined;
     let dispatched: Promise<void> | undefined;

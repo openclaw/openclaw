@@ -53,6 +53,7 @@ import {
 } from "./dynamic-tools.js";
 import {
   installResultMiddleware,
+  flattenSpecsWithNamespace,
   mediaResult,
   textToolResult,
   throwingResultObserver,
@@ -65,7 +66,6 @@ import {
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolCallResponse,
-  type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
@@ -192,16 +192,6 @@ function callArg(
     throw new Error(`Expected ${label}`);
   }
   return call[argIndex];
-}
-
-function flattenSpecsWithNamespace(
-  specs: readonly CodexDynamicToolSpec[],
-): Array<CodexDynamicToolFunctionSpec & { namespace?: string }> {
-  return specs.flatMap((spec) =>
-    spec.type === "namespace"
-      ? spec.tools.map((tool) => ({ ...tool, namespace: spec.name }))
-      : [spec],
-  );
 }
 
 function specNames(specs: readonly CodexDynamicToolSpec[]): string[] {
@@ -1431,10 +1421,7 @@ it("records the hook-selected file after remote Slack upload preparation", async
 });
 describe("Codex automation tool references", () => {
   function setup(options: { registeredSpecs?: CodexDynamicToolSpec[] } = {}) {
-    const execute = vi.fn(async (_id: string, args: unknown) => ({
-      content: [{ type: "text" as const, text: "observed" }],
-      details: args,
-    }));
+    const execute = vi.fn(async (_id: string, args: unknown) => textToolResult("observed", args));
     const tools = [
       createTool("automations", { execute }),
       createTool("sandbox_exec", { catalogMode: "direct-only" }),

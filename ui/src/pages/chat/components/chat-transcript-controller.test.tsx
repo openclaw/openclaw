@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
@@ -304,6 +304,7 @@ it.each(["append", "reorder", "focused reorder"] as const)(
 
 it("reconciles an implicit end anchor when committed content has no scroll range", async () => {
   const flushFrames = stubAnimationFrames();
+  transcriptDomState.measuredRowHeight = 20;
   const { container, transcript, draw } = threadFixture(
     threadProps("pane-underfill-anchor", "agent:main:underfill", messages(18, "message")),
   );
@@ -324,7 +325,7 @@ it("reconciles an implicit end anchor when committed content has no scroll range
     await Promise.resolve();
     flush();
   }
-  expect(transcriptRows(container)[0]?.dataset.index).toBe("0");
+  await waitForSolid(() => expect(transcriptRows(container)[0]?.dataset.index).toBe("0"));
   expect(container.textContent).toContain("message 0");
 });
 

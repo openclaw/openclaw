@@ -10,6 +10,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { assertOpenClawAgentCurrentRuntimeSchema } from "../../state/openclaw-agent-db-schema-helpers.js";
 import * as agentDb from "../../state/openclaw-agent-db.js";
@@ -26,6 +27,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { listSessionTranscriptArchivesReadOnly } from "./session-history-read.js";
 import * as history from "./session-history.js";
 import * as historyReaders from "./session-transcript-worker-readers.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
 const jsonLines = (events: readonly unknown[]) =>
@@ -479,8 +481,8 @@ it.each([false, true])(
         runId,
       );
     const files = () =>
-      fs
-        .readdirSync(env.OPENCLAW_STATE_DIR, { recursive: true, encoding: "utf8" })
+      listDirectoryTreeStrictSync(env.OPENCLAW_STATE_DIR)
+        .map((walkEntry) => walkEntry.relativePath)
         .toSorted((left, right) => left.localeCompare(right));
     const filesBefore = files();
 
@@ -619,12 +621,10 @@ it("retains exact multiline imported events through deletion and final-answer lo
     };
     const rows = [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "user",
-        parentId: null,
-        message: { role: "user", content: 'Keep braces {}, brackets [] and \\"quotes\\".' },
-      },
+      messageEvent("user", null, {
+        role: "user",
+        content: 'Keep braces {}, brackets [] and \\"quotes\\".',
+      }),
       answer,
     ].map((event, index) => ({
       session_id: sessionId,

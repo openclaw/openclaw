@@ -400,10 +400,9 @@ export function prepareEmbeddedAgentRunCompletionClaim(
   revokeCompletionClaim(sessionId, undefined, target);
   EMBEDDED_RUN_COMPLETION_CLAIMS.add(claim);
   const consume = (allowUnregistered: boolean): boolean => {
-    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.has(claim)) {
+    if (!EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim)) {
       return false;
     }
-    EMBEDDED_RUN_COMPLETION_CLAIMS.delete(claim);
     if (!claim.promoted) {
       claim.settleRegistration(undefined);
     }

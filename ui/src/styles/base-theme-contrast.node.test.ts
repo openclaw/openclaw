@@ -277,7 +277,6 @@ function readBubbleBackgrounds(rules: Rule[]) {
     readPaint(readRule(rules, selector), "--chat-bubble-background");
   return {
     user: background(USER_BUBBLE_RULE),
-    lightUser: background(LIGHT_USER_BUBBLE_RULE),
     lightUserText: readColorToken(readPaint(readRule(rules, LIGHT_USER_BUBBLE_RULE), "color")),
     senderTint: background(SENDER_TINT_BUBBLE_RULE),
     lightSenderTint: background(LIGHT_SENDER_TINT_BUBBLE_RULE),
@@ -337,7 +336,7 @@ describe("Control UI theme contrast", () => {
   const bubblePaints = (theme: string, tokens: TokenMap) => {
     const light = theme === "light" || theme.endsWith("-light");
     const page = resolveOpaqueColor("var(--bg)", tokens);
-    const user = composite(resolveColor(light ? bubbles.lightUser : bubbles.user, tokens), page);
+    const user = composite(resolveColor(bubbles.user, tokens), page);
     const tinted = (value: string) =>
       Array.from({ length: 360 }, (_, hue) =>
         composite(resolveColor(value, new Map(tokens).set("--chat-sender-hue", String(hue))), page),

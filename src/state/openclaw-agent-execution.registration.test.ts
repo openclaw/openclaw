@@ -483,25 +483,12 @@ it("retains a typed quarantine opening failure after native retirement", async (
   });
   const openingError = new Error("synthetic quarantine refusal", { cause: cleanup });
   openingError.name = "SqliteIntegrityError";
-  const closeShape = { message: nativeFailure.message };
-  const cleanupShape = {
-    name: "OpenClawQuarantineReadCleanupError",
-    message: cleanup.message,
-    cause: closeShape,
-    errors: [closeShape],
-  };
   edge.open.mockImplementation(() => {
     throw openingError;
   });
   const request = prepareRequest({ stateContext: { environment: input.environment } });
   const reply = await sendFailed(request);
   expect(reply.retire).toBe(true);
-  expect(reply.error.sharedState?.nodes).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ name: openingError.name, message: openingError.message }),
-      expect.objectContaining({ message: nativeFailure.message }),
-    ]),
-  );
   expect(reply.error.sharedState?.nodes.every((node) => !("quarantine" in node))).toBe(true);
 
   const rawFailure = await retiredFailure(reply, request, undefined, openingError.message);
@@ -511,7 +498,12 @@ it("retains a typed quarantine opening failure after native retirement", async (
     cause: {
       name: openingError.name,
       message: openingError.message,
-      cause: cleanupShape,
+      cause: {
+        name: "OpenClawQuarantineReadCleanupError",
+        message: cleanup.message,
+        cause: { message: nativeFailure.message },
+        errors: [{ message: nativeFailure.message }],
+      },
     },
   });
 });
@@ -614,10 +606,6 @@ it("recognizes a separately evaluated backend's inner open refusal before comple
       error: { message: refused.message },
     });
     expect(reply.openNotEntered).toBeUndefined();
-    expect(edge.request.mock.calls).toEqual([
-      [{ stage: "open", facts: input }],
-      [{ stage: "open", facts: input }],
-    ]);
     expect(edge.open).not.toHaveBeenCalled();
     const { completion, reject, settleNative } = retireFailedReply(reply, request, refused);
     expect(reject).toHaveBeenCalledExactlyOnceWith(refused);

@@ -721,6 +721,24 @@ it.each(["local", "repository"] as const)(
       const repositories = getSessionRepositoryWorkspaceStore();
       const repository = source === "repository" ? await f.seedRepository() : undefined;
       await f.subscribe();
+      const read = createControlUiSessionPrRead({
+        client: f.client,
+        sessionKey,
+        getRuntimeConfig: f.context.getRuntimeConfig,
+        getSessionRowProjection: () => getSessionRowProjection(f.context),
+        isCurrentClient: () => !f.client.invalidated,
+      })!;
+      const target = await read();
+      expect(target).toBeDefined();
+      const sorts = vi.spyOn(Array.prototype, "sort");
+      try {
+        for (let index = 0; index < 3; index++) {
+          target!.assertCurrent!();
+        }
+        expect(sorts).not.toHaveBeenCalled();
+      } finally {
+        sorts.mockRestore();
+      }
       const statements = observeSqliteReadSql(StatementSync.prototype);
       try {
         for (let index = 1; index < 20; index++) {
@@ -748,14 +766,11 @@ it.each(["local", "repository"] as const)(
       }
       if (repository) {
         const previousCache = f.load.mock.calls[0]?.[1];
-        const read = createControlUiSessionPrRead({
-          client: f.client,
-          sessionKey,
-          getRuntimeConfig: f.context.getRuntimeConfig,
-          getSessionRowProjection: () => getSessionRowProjection(f.context),
-          isCurrentClient: () => !f.client.invalidated,
-        })!;
         expect((await read())?.source).toMatchObject({ repo: "publication" });
+        const unavailable = { pullRequests: [], rateLimited: false };
+        f.load.mockImplementation(async (_params, _signal, current) =>
+          current.target.source === null ? unavailable : snapshot,
+        );
         // Read before background preparation can replace the invalidated repository facts.
         const notifiedRead = vi.fn(read);
         const stop = sessionChanges.subscribe((change) => {
@@ -773,8 +788,8 @@ it.each(["local", "repository"] as const)(
         } finally {
           stop();
         }
-        const unavailable = { pullRequests: [], rateLimited: false };
-        f.load.mockResolvedValue(unavailable);
+        // Settle the replacement load, then verify another poll emits no stale snapshot.
+        await f.subscriptions.pollNow();
         await f.subscriptions.pollNow();
         expect(previousCache?.aborted).toBe(true);
         expect(frames(f.socket)).toEqual([

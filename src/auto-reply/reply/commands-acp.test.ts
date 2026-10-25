@@ -936,6 +936,42 @@ describe("/acp command", () => {
     );
   });
 
+  it.each([
+    [
+      { runtime: { installCommand: "pnpm openclaw plugins install acpx" } },
+      "pnpm openclaw plugins install acpx",
+    ],
+    [
+      { backend: "acpx" },
+      `openclaw plugins install ${path.join(process.cwd(), "extensions", "acpx")}`,
+    ],
+    [
+      { backend: "custom-backend" },
+      'Install and enable the plugin that provides ACP backend "custom-backend".',
+    ],
+  ] as const)("shows install guidance through /acp install (%j)", async (acp, hint) => {
+    const result = await runCommand("/acp install", {
+      ...baseCfg,
+      acp: { ...baseCfg.acp, ...acp },
+    });
+    expectReplyText(result, "ACP install:", `run: ${hint}\nthen:`);
+  });
+
+  it("offers the package install when no workspace extension exists", async () => {
+    const cwd = vi
+      .spyOn(process, "cwd")
+      .mockReturnValue(path.join(process.cwd(), "missing-workspace"));
+    try {
+      expectReplyText(
+        await runCommand("/acp install"),
+        "ACP install:",
+        "run: openclaw plugins install acpx\nthen:",
+      );
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
   it("explains when acpx is blocked by plugins.allow", async () => {
     hoisted.getAcpRuntimeBackendMock.mockReturnValue(null);
     hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {

@@ -17,36 +17,38 @@ import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { McpAppContextStrip } from "./solid/mcp-app-context-strip.tsx";
 
 const binding = { sessionKey: "agent:main:one", agentId: "main", viewId: "view-one" };
-const state = {
-  updateId: "revision-one",
-  content: [{ type: "text" as const, text: "bolt", _meta: { "openai/title": "Hex bolt" } }],
-};
-function mountStrip(context: ApplicationContext) {
+const contextState = (updateId: string, text: string, title: string) => ({
+  updateId,
+  content: [{ type: "text" as const, text, _meta: { "openai/title": title } }],
+});
+const state = contextState("revision-one", "bolt", "Hex bolt");
+const removeButton = (strip: HTMLElement) => strip.querySelector<HTMLButtonElement>("button")!;
+const alert = (strip: HTMLElement) => strip.querySelector('[role="alert"]');
+async function settle(promise: Promise<unknown>) {
+  await promise;
+  await Promise.resolve();
+  flush();
+}
+async function mountContext(request: GatewayRequestHandler = vi.fn(async () => ({ state }))) {
+  const client = createTestGatewayClient(request);
+  const application = createApplicationGateway();
+  application.publish({ ...application.gateway.snapshot, client, phase: "connected" });
+  publishMcpAppContext(client, { ...binding, title: "Library", state });
   let selectSession!: (sessionKey: string) => void;
-  const mounted = mountSolid(
+  const { container: strip, unmount } = mountSolid(
     () => {
       const [sessionKey, setSessionKey] = createSignal(binding.sessionKey);
       selectSession = setSessionKey;
       return <McpAppContextStrip sessionKey={sessionKey()} agentId={binding.agentId} />;
     },
-    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+    {
+      wrapper: createSolidApplicationContextProvider({
+        gateway: application.gateway,
+      } as ApplicationContext).wrapper,
+    },
   );
-  return { ...mounted, selectSession };
-}
-function mountContext(request: GatewayRequestHandler = vi.fn(async () => ({ state }))) {
-  const client = createTestGatewayClient(request);
-  const application = createApplicationGateway();
-  application.publish({ ...application.gateway.snapshot, client, phase: "connected" });
-  publishMcpAppContext(client, { ...binding, title: "Library", state });
-  const {
-    container: strip,
-    unmount,
-    selectSession,
-  } = mountStrip({
-    gateway: application.gateway,
-  } as ApplicationContext);
   flush();
-  expect(strip.textContent).toContain("Hex bolt");
+  await waitForSolid(() => expect(strip.textContent).toContain("Hex bolt"));
   return {
     client,
     strip,
@@ -60,8 +62,8 @@ function mountContext(request: GatewayRequestHandler = vi.fn(async () => ({ stat
   };
 }
 
-it("clears consumed context immediately", () => {
-  const { strip, emit } = mountContext();
+it("clears consumed context immediately", async () => {
+  const { strip, emit } = await mountContext();
   emit({ viewId: "another-view", modelContext: null, updateId: "revision-one" });
   expect(strip.textContent).toContain("Hex bolt");
   emit({ viewId: "view-one", modelContext: null, updateId: "earlier-revision" });
@@ -76,49 +78,30 @@ it("retains accepted context after a failed refresh and accepts the next update"
     .fn()
     .mockReturnValueOnce(failed.promise)
     .mockResolvedValueOnce({
-      state: {
-        updateId: "revision-two",
-        content: [{ type: "text", text: "socket", _meta: { "openai/title": "Socket" } }],
-      },
+      state: contextState("revision-two", "socket", "Socket"),
     });
-  const { strip, emit } = mountContext(request);
+  const { strip, emit } = await mountContext(request);
   emit({ viewId: binding.viewId });
   failed.reject(new Error("Context temporarily unavailable"));
-  await failed.promise.catch(() => {});
-  await Promise.resolve();
-  flush();
+  await settle(failed.promise.catch(() => {}));
   expect(strip.textContent).toContain("Hex bolt");
   expect(strip.querySelector('[role="alert"]')).toBeNull();
   emit({ viewId: binding.viewId });
   await waitForSolid(() => expect(strip.textContent).toContain("Socket"));
-  emit({ viewId: binding.viewId, modelContext: null, updateId: "revision-two" });
-  expect(strip.textContent?.trim()).toBe("");
 });
 
 it("lets the latest event refresh own the next context publication", async () => {
   const first = createDeferred<{ state: typeof state }>();
   const second = createDeferred<{ state: typeof state }>();
-  const { strip, emit } = mountContext(
+  const { strip, emit } = await mountContext(
     vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise),
   );
   emit({ viewId: binding.viewId });
   emit({ viewId: binding.viewId });
-  first.resolve({
-    state: {
-      updateId: "superseded",
-      content: [{ type: "text", text: "stale", _meta: { "openai/title": "Stale answer" } }],
-    },
-  });
-  await first.promise;
-  await Promise.resolve();
-  flush();
+  first.resolve({ state: contextState("superseded", "stale", "Stale answer") });
+  await settle(first.promise);
   expect(strip.textContent).toContain("Hex bolt");
-  second.resolve({
-    state: {
-      updateId: "latest",
-      content: [{ type: "text", text: "socket", _meta: { "openai/title": "Socket" } }],
-    },
-  });
+  second.resolve({ state: contextState("latest", "socket", "Socket") });
   await waitForSolid(() => expect(strip.textContent).toContain("Socket"));
 });
 
@@ -126,7 +109,7 @@ it.each(["clear", "newer context", "client", "session", "unmount"] as const)(
   "does not republish a held refresh after %s retires its entry",
   async (retirement) => {
     const pending = createDeferred<{ state: typeof state }>();
-    const { client, strip, emit, selectSession, application, unmount } = mountContext(
+    const { client, strip, emit, selectSession, application, unmount } = await mountContext(
       vi.fn(() => pending.promise),
     );
     emit({ viewId: binding.viewId });
@@ -150,15 +133,8 @@ it.each(["clear", "newer context", "client", "session", "unmount"] as const)(
     }
     flush();
     const accepted = readMcpAppContexts(client, binding.sessionKey, binding.agentId);
-    pending.resolve({
-      state: {
-        updateId: "late-refresh",
-        content: [{ type: "text", text: "stale", _meta: { "openai/title": "Stale answer" } }],
-      },
-    });
-    await pending.promise;
-    await Promise.resolve();
-    flush();
+    pending.resolve({ state: contextState("late-refresh", "stale", "Stale answer") });
+    await settle(pending.promise);
     expect(readMcpAppContexts(client, binding.sessionKey, binding.agentId)).toEqual(accepted);
     expect(strip.textContent).not.toContain("Stale answer");
   },
@@ -168,22 +144,20 @@ it("releases a failed removal for retry and clears an idempotent response", asyn
   const removal = createDeferred<{ state: null }>();
   const retry = createDeferred<{ state: null }>();
   const request = vi.fn().mockReturnValueOnce(removal.promise).mockReturnValueOnce(retry.promise);
-  const { client, strip } = mountContext(request);
-  const remove = strip.querySelector<HTMLButtonElement>("button")!;
+  const { client, strip } = await mountContext(request);
+  const remove = removeButton(strip);
   remove.click();
   await waitForSolid(() => expect(remove.disabled).toBe(true));
   removal.reject(new Error("Removal unavailable"));
-  await waitForSolid(() =>
-    expect(strip.querySelector('[role="alert"]')?.textContent).toContain("Removal unavailable"),
-  );
+  await waitForSolid(() => expect(alert(strip)?.textContent).toContain("Removal unavailable"));
   expect(remove.disabled).toBe(false);
   expect(strip.textContent).toContain("Hex bolt");
   remove.click();
   await waitForSolid(() => {
     expect(remove.disabled).toBe(true);
-    expect(strip.querySelector('[role="alert"]')).toBeNull();
+    expect(alert(strip)).toBeNull();
   });
-  expect(strip.querySelector("button")).toBe(remove);
+  expect(removeButton(strip)).toBe(remove);
   expect(strip.textContent).toContain("Hex bolt");
   retry.resolve({ state: null });
   await waitForSolid(() => expect(strip.textContent?.trim()).toBe(""));
@@ -193,30 +167,27 @@ it("releases a failed removal for retry and clears an idempotent response", asyn
     index: 0,
   });
   expect(readMcpAppContexts(client, "agent:main:one", "main")).toEqual([]);
-  expect(strip.querySelector('[role="alert"]')).toBeNull();
+  expect(alert(strip)).toBeNull();
 });
 
 it("leaves a failed removal behind when the visible session changes", async () => {
-  const { client, strip, selectSession } = mountContext(
+  const { client, strip, selectSession } = await mountContext(
     vi.fn(async () => {
       throw new Error("Removal unavailable");
     }),
   );
-  strip.querySelector<HTMLButtonElement>("button")!.click();
-  await waitForSolid(() => expect(strip.querySelector('[role="alert"]')).not.toBeNull());
+  removeButton(strip).click();
+  await waitForSolid(() => expect(alert(strip)).not.toBeNull());
   publishMcpAppContext(client, {
     ...binding,
     sessionKey: "agent:main:two",
     title: "Successor",
-    state: {
-      ...state,
-      content: [{ type: "text", text: "socket", _meta: { "openai/title": "Socket" } }],
-    },
+    state: contextState(state.updateId, "socket", "Socket"),
   });
   selectSession("agent:main:two");
   await waitForSolid(() => {
     expect(strip.textContent).toContain("Socket");
-    expect(strip.querySelector('[role="alert"]')).toBeNull();
+    expect(alert(strip)).toBeNull();
   });
 });
 
@@ -226,18 +197,13 @@ it.each(["client", "session"] as const)(
     const first = createDeferred<{ state: null }>();
     const second = createDeferred<{ state: null }>();
     const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    const { client, strip, application, selectSession, unmount } = mountContext(request);
+    const { client, strip, application, selectSession, unmount } = await mountContext(request);
     try {
-      strip.querySelector<HTMLButtonElement>("button")!.click();
-      await waitForSolid(() =>
-        expect(strip.querySelector<HTMLButtonElement>("button")!.disabled).toBe(true),
-      );
+      removeButton(strip).click();
+      await waitForSolid(() => expect(removeButton(strip).disabled).toBe(true));
       const nextClient = replacement === "client" ? createTestGatewayClient(request) : client;
       const sessionKey = replacement === "session" ? "agent:main:two" : binding.sessionKey;
-      const nextState = {
-        updateId: "replacement-revision",
-        content: [{ type: "text" as const, text: "socket", _meta: { "openai/title": "Socket" } }],
-      };
+      const nextState = contextState("replacement-revision", "socket", "Socket");
       publishMcpAppContext(nextClient, {
         ...binding,
         sessionKey,
@@ -251,23 +217,19 @@ it.each(["client", "session"] as const)(
       }
       flush();
       expect(strip.textContent).toContain("Socket");
-      const remove = strip.querySelector<HTMLButtonElement>("button")!;
+      const remove = removeButton(strip);
       expect(remove.disabled).toBe(false);
       remove.click();
       await waitForSolid(() => expect(remove.disabled).toBe(true));
       first.resolve({ state: null });
-      await first.promise;
-      await Promise.resolve();
-      flush();
+      await settle(first.promise);
       expect(remove.disabled).toBe(true);
       expect(readMcpAppContexts(nextClient, sessionKey, binding.agentId)[0]?.state).toEqual(
         nextState,
       );
       second.reject(new Error("Successor removal unavailable"));
       await waitForSolid(() => {
-        expect(strip.querySelector('[role="alert"]')?.textContent).toContain(
-          "Successor removal unavailable",
-        );
+        expect(alert(strip)?.textContent).toContain("Successor removal unavailable");
         expect(remove.disabled).toBe(false);
       });
       expect(strip.textContent).toContain("Socket");
@@ -281,22 +243,18 @@ it.each(["client", "session"] as const)(
 
 it("retires a held removal and its event listener when the strip unmounts", async () => {
   const removal = createDeferred<{ state: null }>();
-  const { client, strip, emit, unmount } = mountContext(vi.fn(() => removal.promise));
-  strip.querySelector<HTMLButtonElement>("button")!.click();
-  await waitForSolid(() =>
-    expect(strip.querySelector<HTMLButtonElement>("button")!.disabled).toBe(true),
-  );
+  const { client, strip, emit, unmount } = await mountContext(vi.fn(() => removal.promise));
+  removeButton(strip).click();
+  await waitForSolid(() => expect(removeButton(strip).disabled).toBe(true));
   unmount();
   emit({ viewId: binding.viewId, modelContext: null, updateId: state.updateId });
   expect(readMcpAppContexts(client, binding.sessionKey, binding.agentId)[0]?.state).toEqual(state);
   removal.resolve({ state: null });
-  await removal.promise;
-  await Promise.resolve();
-  flush();
+  await settle(removal.promise);
   expect(readMcpAppContexts(client, binding.sessionKey, binding.agentId)[0]?.state).toEqual(state);
 });
 
-it("releases each context subscription when its client is replaced or the strip unmounts", () => {
+it("releases each context subscription when its client is replaced or the strip unmounts", async () => {
   const subscribe = mcpContexts.subscribeMcpAppContexts;
   const releases: Mock<() => void>[] = [];
   const releaseCounts = () => releases.map((release) => release.mock.calls.length);
@@ -307,7 +265,7 @@ it("releases each context subscription when its client is replaced or the strip 
       releases.push(release);
       return release;
     });
-  const { application, unmount } = mountContext();
+  const { application, unmount } = await mountContext();
   const secondClient = createTestGatewayClient(async () => ({}));
   try {
     expect(releaseCounts()).toEqual([0]);

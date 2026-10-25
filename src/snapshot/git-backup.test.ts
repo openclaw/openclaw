@@ -10,6 +10,7 @@ import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
 import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import { executeGitCommand, requireGitCommand as requireGit } from "../infra/git-exec.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { spawnCommand } from "../process/exec-spawn.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -440,9 +441,16 @@ it("redacts and durably preserves credential-bearing push diagnostics", async ()
       "https://***:***@example.invalid/repository?access_token=***",
     );
     expect(result.pushWarning?.length).toBeLessThanOrEqual(1_200);
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Warning: Git backup committed, but push failed: ${result.pushWarning}`,
+    const warning = runtime.error.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.startsWith("Warning: Git backup committed, but push failed: "));
+    expectDiagnostics(warning, "https://***:***@example.invalid/repository?access_token=***");
+    expectDiagnostics(
+      redactSensitiveText(warning ?? ""),
+      "https://***:***@example.invalid/repository?access_token=***",
     );
+    expect(warning).toContain("\\n");
+    expect(warning).not.toMatch(/\p{Cc}/u);
 
     const persisted = (await readBackupRunFreshness(process.env)).latest?.error;
     expect(persisted).toBe(result.pushWarning);

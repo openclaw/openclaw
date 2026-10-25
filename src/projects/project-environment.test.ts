@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 const mocks = vi.hoisted(() => {
   const lease = () => ({
     signal: new AbortController().signal,
+    assertCurrent: vi.fn(),
     assertOwned: vi.fn(),
     assertOwnedInTransaction: vi.fn(),
   });
@@ -235,6 +236,7 @@ it.each(cases)(
       };
       const lease: OpenClawStateLeaseContext = {
         signal: new AbortController().signal,
+        assertCurrent() {},
         assertOwned() {},
         assertOwnedInTransaction: mocks.forbiddenSqlite,
       };
