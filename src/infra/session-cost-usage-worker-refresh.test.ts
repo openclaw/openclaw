@@ -96,15 +96,13 @@ function expectIncomplete(entry: UsageCostRollupEntry, total: number) {
 }
 
 it("stops reading subsequent transcript pages when its owner cancels", async () => {
-  const controller = new AbortController();
   const reason = new Error("usage client disconnected");
   const readSequences: number[] = [];
   await expect(
     scan([...initial, makeRow(9, "b", "a", 4)], undefined, "initial", readSequences, () => {
       if (readSequences.length > 0) {
-        controller.abort(reason);
+        throw reason;
       }
-      controller.signal.throwIfAborted();
     }),
   ).rejects.toBe(reason);
   expect(readSequences).toEqual([1, 4]);
@@ -145,11 +143,7 @@ it.each<[string, Row[], [number, number, string], string?]>([
   ["rewind", [initial[0]!], [1, 1, "root"], "rewound"],
   [
     "compact",
-    [
-      control(1, "compaction", "compact", null),
-      makeRow(4, "a", "compact", 2),
-      makeRow(9, "b", "a", 4),
-    ],
+    [control(1, "compaction", "root", null), ...appended.slice(1, 3)],
     [6, 2, "b"],
     "compacted",
   ],
@@ -158,12 +152,11 @@ it.each<[string, Row[], [number, number, string], string?]>([
   const readSequences: number[] = [];
   const result = await scan(rows, previous, generation, readSequences);
   expectUsage(result, ...expected);
-  if (generation !== "initial") {
+  if (generation !== "initial" || _change === "append") {
     expect(result.rollup).toEqual((await scan(rows, undefined, generation)).rollup);
-    expect(readSequences).toEqual(rows.map((row) => row.seq));
-  } else if (_change === "append") {
-    expect(readSequences).toEqual([9, 12, 16]);
-    expect(result.rollup).toEqual((await scan(rows)).rollup);
+    expect(readSequences).toEqual(
+      generation !== "initial" ? rows.map((row) => row.seq) : [9, 12, 16],
+    );
   }
 });
 

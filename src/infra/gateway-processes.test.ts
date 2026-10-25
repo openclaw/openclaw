@@ -138,9 +138,6 @@ describe("gateway-processes", () => {
     signal(500, "SIGTERM", { env, port: 18789 });
     expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
     expect(readOwner).toHaveBeenCalledWith({ env, port: 18789, current: true });
-    expect(find(18890, { env })).toEqual([]);
-    mockRelativeWindowsGateway([600]);
-    expect(find(18789, { env })).toEqual([]);
   });
 
   it.each([

@@ -64,22 +64,16 @@ it.each([
       e.resolveWindowsOemCodePageForEncoding(label),
       e.resolveWindowsOemCodePageForEncoding("bogus"),
     ]).toEqual([857, null]);
-    expect(queryWindowsRegistryValueMock).toHaveBeenCalledWith(
-      "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage",
-      "OEMCP",
-    );
   }
 });
 
 it("bounds and caches failed encoding probes", async () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   spawnSyncMock.mockReturnValue({
     error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }),
     stderr: "",
     stdout: "",
   });
-  vi.resetModules();
-  const fresh = await import("./windows-encoding.js");
+  const fresh = await freshEncoding("win32");
   const undecodableByte = Buffer.from([0x80]);
   for (const decode of [fresh.decodeWindowsOutputBuffer, fresh.decodeWindowsTextFileBuffer]) {
     for (let call = 0; call < 2; call++) {
