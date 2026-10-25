@@ -5,7 +5,10 @@ import { beforeEach, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
 const harness = vi.hoisted(() => ({ dispose: vi.fn() }));
-vi.mock("./harness.js", () => ({ createMuseAgentHarness: () => harness }));
+vi.mock("./harness.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./harness.js")>()),
+  createMuseAgentHarness: () => harness,
+}));
 
 beforeEach(() => {
   harness.dispose.mockReset();
