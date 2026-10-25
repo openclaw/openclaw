@@ -716,6 +716,117 @@ describe("config cli", () => {
     );
   });
 
+  describe("config diff", () => {
+    it("reports a recovery action when the config file is missing", async () => {
+      setSnapshotOnce({
+        ...buildSnapshot({ resolved: {}, config: {} }),
+        exists: false,
+        raw: null,
+      });
+      await expect(runConfigCommand(["config", "diff"])).rejects.toThrow(ExitError);
+      expectErrorIncludes("Config file not found:");
+      expectErrorIncludes("openclaw onboard");
+      expect(mockLog).not.toHaveBeenCalled();
+    });
+
+    it("lists paths filled by runtime defaults and redacts secrets", async () => {
+      const secret = "diff-secret-token-xyz";
+      const sourceConfig = {
+        gateway: { mode: "local", auth: { mode: "token", token: secret } },
+      } satisfies OpenClawConfig;
+      const runtimeConfig = {
+        ...sourceConfig,
+        agents: { defaults: { heartbeat: { every: "30m" }, maxConcurrent: 32 } },
+        gateway: {
+          ...sourceConfig.gateway,
+          port: 18789,
+          auth: { mode: "token", token: secret },
+        },
+      } satisfies OpenClawConfig;
+      setSnapshot(sourceConfig, runtimeConfig);
+
+      await runConfigCommand(["config", "diff", "--json"]);
+
+      const payload = lastMockArg(defaultRuntime.writeJson) as {
+        count: number;
+        differences: Array<{ path: string; authored: unknown; effective: unknown }>;
+      };
+      expect(payload.count).toBeGreaterThan(0);
+      expect(JSON.stringify(payload)).not.toContain(secret);
+      expect(
+        payload.differences.some(
+          (entry) =>
+            entry.path.includes("agents") ||
+            entry.path.includes("heartbeat") ||
+            entry.path.includes("maxConcurrent") ||
+            entry.path.includes("port"),
+        ),
+      ).toBe(true);
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+
+    it("preserves literal model keys when reporting alias differences", async () => {
+      const sourceConfig = {
+        agents: { defaults: { models: { "openai/gpt-5.4": {} } } },
+      } satisfies OpenClawConfig;
+      const runtimeConfig = {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.4": { alias: "gpt" } },
+          },
+        },
+      } satisfies OpenClawConfig;
+      setSnapshot(sourceConfig, runtimeConfig);
+
+      await runConfigCommand(["config", "diff", "--json"]);
+
+      const payload = lastMockArg(defaultRuntime.writeJson) as {
+        differences: Array<{ path: string; authored: unknown; effective: unknown }>;
+      };
+      const aliasEntry = payload.differences.find(
+        (entry) =>
+          entry.path.includes("openai/gpt-5.4") && entry.path.includes("alias"),
+      );
+      expect(aliasEntry).toBeDefined();
+      expect(aliasEntry?.authored).toBeNull();
+      expect(aliasEntry?.effective).toBe("gpt");
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+
+    it("reports sensitive differences without emitting raw secret values", async () => {
+      const authored = " synthetic-key ";
+      const effective = "synthetic-key";
+      const sourceConfig = {
+        talk: { providers: { elevenlabs: { apiKey: authored } } },
+      } satisfies OpenClawConfig;
+      const runtimeConfig = {
+        talk: { providers: { elevenlabs: { apiKey: effective } } },
+      } satisfies OpenClawConfig;
+      setSnapshot(sourceConfig, runtimeConfig);
+
+      await runConfigCommand([
+        "config",
+        "diff",
+        "--path",
+        "talk.providers.elevenlabs.apiKey",
+        "--json",
+      ]);
+
+      const payload = lastMockArg(defaultRuntime.writeJson) as {
+        count: number;
+        differences: Array<{ path: string; authored: unknown; effective: unknown }>;
+      };
+      expect(payload.count).toBeGreaterThan(0);
+      const blob = JSON.stringify(payload);
+      expect(blob).not.toContain(authored.trim());
+      expect(blob).not.toContain(effective);
+      expect(
+        payload.differences.some((entry) => entry.path.includes("apiKey")),
+      ).toBe(true);
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+  });
+
   describe("config schema", () => {
     it("prints the supplied schema with the config schema marker", async () => {
       const schema = { type: "object", properties: { fixture: { type: "string" } } };

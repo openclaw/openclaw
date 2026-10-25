@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw config` (get/set/patch/unset/file/schema/validate)"
+summary: "CLI reference for `openclaw config` (get/set/patch/unset/file/schema/validate/diff)"
 read_when:
   - You want to read or edit config non-interactively
   - You manage config externally and want OpenClaw to leave it unchanged
@@ -7,7 +7,7 @@ title: "Config"
 sidebarTitle: "Config"
 ---
 
-Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
+Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, diff authored versus effective values, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
 `config set`, `config patch`, and `config unset` require the local Gateway to be
 stopped. These commands hold exclusive state ownership while publishing the file
@@ -19,7 +19,7 @@ restriction, not an authentication failure. For online changes, use
 [Config RPC](/gateway/configuration/config-rpc).
 
 <Note>
-When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
+When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`, `config diff`) still work; config writers refuse.
 </Note>
 
 ## Externally managed config
@@ -236,6 +236,21 @@ values. `openclaw config validate` can validate the container and overall
 config shape, but it cannot type-check provider-specific parameter names or
 values. Passing validation does not prove that a param is supported; consult
 the provider docs and verify behavior on the selected runtime and provider.
+
+
+### `config diff`
+
+Compare the authored source config (includes and env resolved) with the local materialized runtime snapshot. Output is JSON listing each differing path with redacted `authored` and `effective` values. This reads local snapshots only; it does not query a live Gateway or expand complete component defaults beyond local materialization.
+
+- Exit `0` when the command completes (including zero differences).
+- Use `--path <dot-or-bracket-path>` to scope comparison to one subtree.
+- Secret values are compared before redaction so whitespace or normalization mismatches still appear as differences, then emitted values use the shared redactor.
+
+```bash
+openclaw config diff
+openclaw config diff --path agents.defaults
+openclaw config diff --path 'agents.defaults.models["openai/gpt-5.4"]'
+```
 
 ## Values
 

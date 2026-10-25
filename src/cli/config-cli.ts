@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { isDeepStrictEqual } from "node:util";
 import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
@@ -14,8 +15,8 @@ import {
   writeRuntimeJson,
   writeRuntimeStdout,
 } from "../runtime.js";
-import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
-import { shortenHomePath } from "../utils.js";
+import { formatConcreteConfigPath, parseConcreteConfigPathTokens } from "../shared/dot-path.js";
+import { isPlainObject, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import type {
   ConfigMutationOptions,
@@ -272,11 +273,146 @@ export async function runConfigUnset(opts: {
   });
 }
 
+function collectAuthoredEffectiveDiffSegments(
+  prev: unknown,
+  next: unknown,
+  prefix: readonly string[],
+  paths: string[][],
+): void {
+  if (prev === next) {
+    return;
+  }
+  const prevIsPlainObject = isPlainObject(prev);
+  const nextIsPlainObject = isPlainObject(next);
+  if (prevIsPlainObject && nextIsPlainObject) {
+    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
+    for (const key of keys) {
+      const prevValue = prev[key];
+      const nextValue = next[key];
+      if (prevValue === undefined && nextValue === undefined) {
+        continue;
+      }
+      collectAuthoredEffectiveDiffSegments(prevValue, nextValue, [...prefix, key], paths);
+    }
+    return;
+  }
+  if (Array.isArray(prev) && Array.isArray(next) && isDeepStrictEqual(prev, next)) {
+    return;
+  }
+  paths.push([...prefix]);
+}
+
+export async function runConfigDiff(opts: { path?: string; json?: boolean; runtime?: RuntimeEnv }) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  const json = Boolean(opts.json);
+  try {
+    const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
+    const { ensureValidConfigSnapshotForCli } = await import("./config-cli-validation.js");
+    const { redactConfigObject } = await import("../config/redact-snapshot.js");
+    const { snapshot, pluginMetadataSnapshot } = await readConfigFileSnapshotWithPluginMetadata({
+      observe: false,
+      completePluginMetadata: true,
+    });
+    if (!snapshot.exists) {
+      const shortPath = shortenHomePath(snapshot.path);
+      const message = `Config file not found: ${shortPath}`;
+      if (json) {
+        writeRuntimeJson(
+          runtime,
+          { ...formatCliJsonFailure(message), valid: false, path: snapshot.path },
+          0,
+        );
+      } else {
+        runtime.error(danger(message));
+        runtime.error(
+          `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
+        );
+      }
+      exitCliAfterOutput(runtime, 1);
+    }
+    ensureValidConfigSnapshotForCli(snapshot, runtime, { json });
+    const runtimeSchema = pluginMetadataSnapshot
+      ? (await import("../config/runtime-schema.js")).buildRuntimeConfigSchemaFromRegistry(
+          pluginMetadataSnapshot.manifestRegistry,
+          snapshot.sourceConfig,
+        )
+      : undefined;
+    const uiHints =
+      runtimeSchema?.uiHints ??
+      (await import("../config/schema-base.js")).computeBaseConfigUiHints();
+    // Compare original snapshots so sensitive/normalized differences stay visible,
+    // then project redacted values only for emitted JSON.
+    const authoredRaw = snapshot.sourceConfig as Record<string, unknown>;
+    const effectiveRaw = snapshot.config as Record<string, unknown>;
+    const authoredRedacted = redactConfigObject(authoredRaw, uiHints) as Record<string, unknown>;
+    const effectiveRedacted = redactConfigObject(effectiveRaw, uiHints) as Record<string, unknown>;
+    let authoredView: unknown = authoredRaw;
+    let effectiveView: unknown = effectiveRaw;
+    let scopeSegments: string[] = [];
+    let scopePath: string | null = null;
+    if (opts.path) {
+      scopePath = opts.path;
+      scopeSegments = parseConfigSetPath(opts.path);
+      const authoredRes = getAtPath(authoredRaw, scopeSegments);
+      const effectiveRes = getAtPath(effectiveRaw, scopeSegments);
+      authoredView = authoredRes.found ? authoredRes.value : undefined;
+      effectiveView = effectiveRes.found ? effectiveRes.value : undefined;
+    }
+    const relativeSegmentPaths: string[][] = [];
+    collectAuthoredEffectiveDiffSegments(authoredView, effectiveView, [], relativeSegmentPaths);
+    const entries = relativeSegmentPaths.map((relativeSegments) => {
+      const fullSegments = [...scopeSegments, ...relativeSegments];
+      if (fullSegments.length === 0) {
+        const authoredRootRes = scopeSegments.length
+          ? getAtPath(authoredRedacted, scopeSegments)
+          : { found: true, value: authoredRedacted };
+        const effectiveRootRes = scopeSegments.length
+          ? getAtPath(effectiveRedacted, scopeSegments)
+          : { found: true, value: effectiveRedacted };
+        return {
+          path: scopePath ?? "<root>",
+          authored: authoredRootRes.found ? (authoredRootRes.value ?? null) : null,
+          effective: effectiveRootRes.found ? (effectiveRootRes.value ?? null) : null,
+        };
+      }
+      const pathLabel = formatConcreteConfigPath(fullSegments, authoredRaw);
+      const authoredRes = getAtPath(authoredRedacted, fullSegments);
+      const effectiveRes = getAtPath(effectiveRedacted, fullSegments);
+      return {
+        path: pathLabel,
+        authored: authoredRes.found ? authoredRes.value : null,
+        effective: effectiveRes.found ? effectiveRes.value : null,
+      };
+    });
+    writeRuntimeJson(
+      runtime,
+      {
+        path: snapshot.path,
+        compared: { authored: "sourceConfig", effective: "runtimeConfig" },
+        scope: scopePath,
+        differences: entries,
+        count: entries.length,
+      },
+      0,
+    );
+  } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
+    if (json) {
+      writeRuntimeJson(runtime, formatCliJsonFailure(err));
+      exitCliAfterOutput(runtime, 1);
+    }
+    runtime.error(danger(formatErrorMessage(err)));
+    exitCliAfterOutput(runtime, 1);
+  }
+}
+
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
+      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate/diff). Run without subcommand for guided setup.",
     )
     .addHelpText("after", () => formatDocsHelp("/cli/config"))
     .option(
@@ -551,5 +687,16 @@ export function registerConfigCli(program: Command) {
         }
         exitCliAfterOutput(runtime, 1);
       }
+    });
+
+  cmd
+    .command("diff")
+    .description(
+      "Show paths that differ between authored sourceConfig and effective runtimeConfig (redacted)",
+    )
+    .option("--path <path>", "Limit the comparison to a config subtree")
+    .option("--json", "Output JSON", false)
+    .action(async (opts: { path?: string; json?: boolean }) => {
+      await runConfigDiff({ path: opts.path, json: Boolean(opts.json) });
     });
 }
