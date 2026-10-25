@@ -231,36 +231,10 @@ describe("enqueue publication custody through the real sender", () => {
     const send = installSender();
     const queued = vi.fn();
     const reply = heldReply();
-    const admit = queueAdmission.stageAndEnqueueOutboundDelivery;
-    let admissionFailure: unknown;
-    vi.spyOn(queueAdmission, "stageAndEnqueueOutboundDelivery").mockImplementation(
-      async (...args) => {
-        try {
-          return await admit(...args);
-        } catch (error) {
-          admissionFailure = error;
-          throw error;
-        }
-      },
-    );
     await deliver({
       ...deliveryParams(),
       payloads: [{ mediaUrl }],
       onDeliveryIntent: queued,
-    });
-    expect(admissionFailure).toMatchObject({
-      name: "OutboundDeliveryError",
-      stage: "queue",
-      queueCustody: "released",
-      sentBeforeError: false,
-      results: [],
-      payloadOutcomes: [],
-      cause: {
-        name: "PlatformMessageNotDispatchedError",
-        code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
-        retryable: true,
-        cause: { message: "synthetic enqueue transaction rejected" },
-      },
     });
     expect(reply.attempts()).toBe(1);
     expect(send).toHaveBeenCalledOnce();

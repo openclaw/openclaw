@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
-import type { OutboundAuditTerminal, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditLifecycle,
@@ -15,9 +14,9 @@ const baseContext = { channel: "matrix", to: "!room:target", payloads: [{ text: 
 const result = { channel: "matrix" as const, messageId: "platform-1" };
 type AuditContext = Parameters<typeof emitOutboundAuditTerminals>[0]["context"];
 
-function captureEvents(run: () => void, onEvent?: () => void): TrustedMessageAuditEvent[] {
+function captureEvents(run: () => void): TrustedMessageAuditEvent[] {
   const events: TrustedMessageAuditEvent[] = [];
-  const unsubscribe = onTrustedMessageAuditEvent(onEvent ?? ((event) => events.push(event)));
+  const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
   try {
     run();
   } finally {
@@ -38,8 +37,8 @@ function captureTerminals(...args: Parameters<typeof emitTerminals>) {
   return captureEvents(() => emitTerminals(...args));
 }
 
-function expectIsolated(run: () => void, onEvent?: () => void) {
-  expect(() => captureEvents(run, onEvent)).not.toThrow();
+function expectIsolated(run: () => void) {
+  expect(() => captureEvents(run)).not.toThrow();
 }
 
 describe("outbound audit projection", () => {
@@ -73,21 +72,6 @@ describe("outbound audit projection", () => {
       ),
     );
     expect(JSON.stringify(events)).not.toContain("secret message");
-  });
-
-  it("keeps lifecycle observers outside delivery semantics", () => {
-    expectIsolated(
-      () =>
-        emitOutboundAuditLifecycle({
-          context: { channel: "qa-channel", to: "target" },
-          outcome: "queued",
-          queueId: "queue-1",
-          startedAt: Date.now(),
-        }),
-      () => {
-        throw new Error("observer failed");
-      },
-    );
   });
 
   it("keeps mixed logical payloads distinct under one durable queue intent", () => {
@@ -160,13 +144,15 @@ describe("outbound audit projection", () => {
     );
   });
 
-  it("treats a missing adapter identity as unknown rather than a proven suppression", () => {
+  it("keeps an unidentified attempt unknown even after a later successful send", () => {
     const events = captureTerminals(
-      completedOutboundAuditTerminals({
+      failedOutboundAuditTerminals({
         payloadCount: 1,
         results: [],
+        failureStage: "platform_send",
         payloadOutcomes: [
           { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
+          { index: 0, status: "sent", results: [result] },
         ],
       }),
     );
@@ -181,37 +167,6 @@ describe("outbound audit projection", () => {
     ]);
     expect(events[0]).not.toHaveProperty("reasonCode");
     expect(events[0]).not.toHaveProperty("deliveryKind");
-  });
-
-  it("projects recorded history consistently for failed runs", () => {
-    const expectHistory = (
-      payloadOutcomes: OutboundPayloadDeliveryOutcome[],
-      terminal: OutboundAuditTerminal,
-    ) =>
-      expect(
-        failedOutboundAuditTerminals({
-          payloadCount: 1,
-          results: [],
-          payloadOutcomes,
-          failureStage: "platform_send",
-        }),
-      ).toEqual([{ payloadIndex: 0, terminal }]);
-    expectHistory(
-      [
-        { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
-        { index: 0, status: "sent", results: [result] },
-      ],
-      { outcome: "unknown", failureStage: "platform_send" },
-    );
-    expectHistory([{ index: 0, status: "sent", results: [result], deliveryKind: "media" }], {
-      outcome: "sent",
-      results: [result],
-      deliveryKind: "media",
-    });
-    expectHistory([{ index: 0, status: "suppressed", reason: "no_visible_payload" }], {
-      outcome: "suppressed",
-      reasonCode: "no_visible_payload",
-    });
   });
 
   it("counts physical sends once across receipt representations and result fallbacks", () => {

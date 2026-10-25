@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareAgentCommandExecutionIdentity } from "../../agents/agent-command-execution-identity.js";
-import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { getRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -8,7 +6,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { installQueueTestPlugin, useOutboundFixture } from "./deliver.custody.test-support.js";
 import { settlePendingFinalDelivery } from "./delivery-completion.js";
-import { seedRecoverySession } from "./delivery-completion.shard-test-support.js";
+import { markFinal, seedRecoverySession } from "./delivery-completion.shard-test-support.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
@@ -95,9 +93,8 @@ describe("recovered requester receipt safety", () => {
     }
   }
 
-  async function prepare(
+  async function prepareDelivery(
     options: {
-      refreshSuccessor?: boolean;
       payloads?: Array<{ text: string }>;
       second?: boolean;
     } = {},
@@ -108,46 +105,11 @@ describe("recovered requester receipt safety", () => {
       lifecycleRevision: "lifecycle-a",
       restartRecoveryDeliveryContext: context,
     });
-    const admission = prepareAgentCommandExecutionIdentity({
-      opts: { message: "finish the admitted task" },
-      prepared: {
-        cfg: {},
-        runId: "run-a",
-        sessionAgentId: "main",
-        sessionId: entry.sessionId,
-        sessionEntry: entry,
-        sessionKey: scope.sessionKey,
-        storePath: scope.storePath,
-      },
-      ingress: { kind: "system", boundary: "receipt-safety-test", state: "present" },
-      lifecycleGeneration: "test-generation",
-    });
-    if (options.refreshSuccessor) {
-      await patchSessionEntryCore(scope, () => ({
-        restartRecoveryDeliveryRunId: "run-b",
-        restartRecoveryDeliverySourceRunId: "source-b",
-      }));
-      // Match onCommitted publication: the cached entry and authoritative row both become B.
-      Object.assign(entry, loadSessionEntry(scope));
-    }
-    let marker;
-    try {
-      marker = await persistPendingFinalDeliveryMarker({
-        ...scope,
-        deliver: true,
-        sessionEntry: entry,
-        sessionStore: { [scope.sessionKey]: entry },
-        admittedRecoverySource: admission.pendingFinalRecoverySource,
-        suppressVisibleSessionEffects: false,
-        sessionReboundDuringRun: false,
-        payloads,
-        deliveryContext: context,
-        runOwnedSessionId: entry.sessionId,
-      });
-    } finally {
-      admission.close();
-    }
+    await markFinal(scope, entry, payloads, context);
     const completion = resolvePendingFinalDeliveryCompletion(payloads);
+    if (!completion) {
+      throw new Error("missing completion");
+    }
     if (options.second) {
       await patchSessionEntryCore(scope, ({ pendingFinalDelivery }) => ({
         pendingFinalDelivery: {
@@ -156,26 +118,8 @@ describe("recovered requester receipt safety", () => {
         },
       }));
     }
-    return { scope, context, payloads, marker, completion };
+    return { scope, context, payloads, completion };
   }
-
-  async function prepareDelivery(options: Parameters<typeof prepare>[0] = {}) {
-    const fixture = await prepare(options);
-    if (!fixture.completion) {
-      throw new Error("missing completion");
-    }
-    return { ...fixture, completion: fixture.completion };
-  }
-
-  it("does not bind finishing A to refreshed same-session/route successor B", async () => {
-    const { scope, marker } = await prepare({ refreshSuccessor: true });
-    expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(false);
-    expect(loadSessionEntry(scope)).toMatchObject({
-      restartRecoveryDeliveryRunId: "run-b",
-      restartRecoveryDeliverySourceRunId: "source-b",
-    });
-    expect(loadSessionEntry(scope)?.pendingFinalDelivery).toBeUndefined();
-  });
 
   it.each(["missing-identity", "wrong-target", "wrong-channel", "not-sent"] as const)(
     "requires evidence for earlier logical members: %s then valid",

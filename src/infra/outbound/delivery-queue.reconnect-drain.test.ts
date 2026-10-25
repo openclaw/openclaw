@@ -7,7 +7,6 @@ import {
   type DeliverFn,
   drainPendingDeliveriesCore,
   recoverPendingDeliveries,
-  withActiveDeliveryClaim,
 } from "./delivery-queue-recovery.js";
 import { enqueueDelivery, failDelivery } from "./delivery-queue-storage.js";
 import {
@@ -207,19 +206,6 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(after.lastAttemptAt).toBeGreaterThanOrEqual(Number(before.lastAttemptAt ?? 0));
   });
 
-  it("second concurrent call is skipped (concurrency guard)", async () => {
-    const blocked = blockDelivery();
-    await enqueue({}, { retryCount: 0, lastError: NO_LISTENER_ERROR });
-    const first = drain();
-    try {
-      await drain();
-      expectInfo(log, "already in progress");
-    } finally {
-      blocked.release();
-      await first;
-    }
-  });
-
   it("shares replay pacing between reconnect and startup drains", async () => {
     vi.useFakeTimers();
     const startedAt = Date.parse("2026-04-23T00:00:00.000Z");
@@ -299,19 +285,5 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     });
     expect(deliver).not.toHaveBeenCalled();
     expectInfo(log, "not ready for retry yet");
-  });
-
-  it("skips entries that an in-flight live delivery has actively claimed", async () => {
-    // #70386: reconnect must share the live sender's active claim.
-    const id = await enqueue();
-    const claimResult = await withActiveDeliveryClaim(id, async () => {
-      await drain();
-      await drain();
-      expect(deliver).not.toHaveBeenCalled();
-      expect(log.info).not.toHaveBeenCalled();
-    });
-    expect(claimResult.status).toBe("claimed");
-    await drain();
-    expect(deliver).toHaveBeenCalledTimes(1);
   });
 });

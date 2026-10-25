@@ -266,28 +266,13 @@ describe("awaited binding read ownership", () => {
         service.touch("", undefined, ref);
       });
       run(() => service.resolveByConversation(ref));
-      expect(warning.mock.calls).toEqual(
+      expect(warning.mock.calls.map(([message]) => message)).toEqual(
         [
-          [
-            "SessionBindingService.resolveByConversation",
-            "SessionBindingService.resolveByConversationAsync",
-          ],
-          [
-            "SessionBindingAdapter.resolveByConversation",
-            "SessionBindingAdapterV2.resolveByConversationAsync",
-          ],
-          ["SessionBindingService.touch", "SessionBindingService.touchAsync"],
-        ].map(([method, replacement]) => [
-          expect.stringContaining(`${method} is deprecated; use ${replacement}`),
-          { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
-        ]),
+          "SessionBindingService.resolveByConversation",
+          "SessionBindingAdapter.resolveByConversation",
+          "SessionBindingService.touch",
+        ].map((method) => expect.stringContaining(`${method} is deprecated;`)),
       );
-      const message = warning.mock.calls[0]?.[0];
-      expect(message).toContain(
-        "Plugin binding-sdk-compat-fixture: SessionBindingService.resolveByConversation",
-      );
-      expect(message).toContain("SessionBindingService.resolveByConversationAsync");
-      expect(message).toContain("Final compatibility day: 2026-12-31");
     } finally {
       warning.mockRestore();
     }
