@@ -12,7 +12,8 @@ Acceptance rule, registered before measurement:
   benchmark-only preload. Count notifications and reload passes before/after.
   A successful recovery must notify once, and an edit during the outage must be
   adopted by the replacement's initial scan. Preserve bounded retry, polling
-  fallback, retirement and shutdown behavior.
+  fallback, retirement and shutdown behavior, including one final notification
+  when recovery is disabled.
 - Metrics: frozen v3.1.4 SQL observer statement/request/MAIN counts per phase and
   per operation; warm MAIN must not increase. The target is two recovery reload
   notifications reduced to one, with the corresponding reload SQL removed.
@@ -25,3 +26,6 @@ Acceptance rule, registered before measurement:
 The existing file-adapter tests cover real file observation and deterministic
 watcher-health failure delivery. Extend that suite for single-notification crash
 recovery and a change during downtime; do not add a production test hook.
+
+On a loaded host, `--ready-timeout-seconds 600` extends only the setup deadline
+(default 180 seconds). It does not change the settling or measurement window.
