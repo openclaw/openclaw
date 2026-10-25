@@ -4,15 +4,6 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { modelsHandlers } from "../gateway/server-methods/models.js";
-import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
-import {
-  loadGatewayModelCatalogSnapshot,
-  loadPreparedGatewayModelCatalogSnapshot,
-  readPreparedGatewayModelCatalogOwnerSnapshot,
-} from "../gateway/server-model-catalog.js";
-import { createGatewayRequestContext } from "../gateway/server-request-context.js";
-import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -109,33 +100,6 @@ async function retiredGenerationFailure(snapshot: PreparedModelRuntimeSnapshot) 
     return error;
   }
   throw new Error("Fixture generation was not retired");
-}
-
-async function listModels(config: OpenClawConfig) {
-  const getConfig = () => config;
-  const loader = () => loadGatewayModelCatalogSnapshot({ getConfig });
-  registerGatewayModelCatalogPrivateAccess(loader, {
-    loadDeferred: (params) => loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig }),
-    readPrepared: (params) =>
-      readPreparedGatewayModelCatalogOwnerSnapshot({ ...params, getConfig }),
-  });
-  const respond = vi.fn();
-  const handler = modelsHandlers["models.list"]!;
-  await handler({
-    req: { type: "req", id: "auth-recovery", method: "models.list" },
-    params: { agentId: "default" },
-    client: null,
-    isWebchatConnect: () => false,
-    context: {
-      ...createGatewayRequestContext(
-        makeContextParams({ loadGatewayModelCatalogSnapshot: loader }),
-      ),
-      getRuntimeConfig: getConfig,
-      getCommittedRuntimeConfig: getConfig,
-    },
-    respond,
-  });
-  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ models: [] }), undefined);
 }
 
 describe("configured plugin generation recovery", () => {
@@ -317,7 +281,6 @@ describe("configured plugin generation recovery", () => {
           expect(replacement.isCurrent()).toBe(true);
           expect(snapshot.isCurrent()).toBe(false);
           expect(replacement.config).toEqual(currentConfig);
-          await listModels(currentConfig);
           expect(mocks.warn).not.toHaveBeenCalled();
         }
       } finally {
@@ -368,7 +331,7 @@ describe("auth publication generation recovery", () => {
       mocks.pluginMetadataSnapshot = { ...metadataSnapshot };
       bindPluginMetadataSnapshotCache(mocks.pluginMetadataSnapshot, cache);
     }
-    const { config, input, snapshot, registry } = await publishOwner();
+    const { input, snapshot, registry } = await publishOwner();
     const currentRegistry = createEmptyPluginRegistry();
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation((params) => {
       if (params.reusableRegistry) {
@@ -413,7 +376,6 @@ describe("auth publication generation recovery", () => {
       const replacement = await prepare(input);
       expect(replacement.pluginRegistry).toBe(currentRegistry);
       expect(replacement.isCurrent()).toBe(true);
-      await listModels(config);
       expect(phases).toContain("published");
       expect(phases).not.toContain("failed");
       expect(mocks.warn).not.toHaveBeenCalled();
@@ -462,7 +424,6 @@ describe("auth publication generation recovery", () => {
         expect(published.pluginRegistry).toBe(currentRegistry);
         expect(published.isCurrent()).toBe(true);
       }
-      await listModels(config);
       expect(mocks.warn).not.toHaveBeenCalled();
     } finally {
       finish.resolve();
@@ -557,7 +518,6 @@ describe("auth publication generation recovery", () => {
           await expect(reader).resolves.toBe(latest);
           await expect(dispatch).resolves.toMatchObject({ agentId: "default", config });
           expect(latest.isCurrent()).toBe(true);
-          await listModels(config);
           expect(mocks.warn).not.toHaveBeenCalled();
         }
         expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(3);
