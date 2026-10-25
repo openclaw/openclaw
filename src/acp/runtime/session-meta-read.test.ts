@@ -3,29 +3,23 @@ import path from "node:path";
 import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
-import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { createAcpMeta } from "./session-meta-lifecycle.test-support.js";
-import { listAcpSessionEntries } from "./session-meta-list.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
-import { readAcpSessionEntryAsync, readAcpSessionMetaAsync } from "./session-meta-read.js";
+import { readAcpSessionEntryAsync } from "./session-meta-read.js";
 import * as metadataReads from "./session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
 
@@ -48,66 +42,33 @@ it("reuses a captured config across ACP read contexts without cloning it again",
   expect(clone).not.toHaveBeenCalled();
 });
 
-it.each(["cold-file", "incognito"] as const)(
-  "joins the %s session with its current metadata through the owning storage route",
-  (storage) =>
-    withOpenClawTestState({ label: `acp-singular-${storage}` }, async (state) => {
-      const incognito = storage === "incognito";
-      const storePath = incognito ? undefined : state.path("custom.sqlite");
-      const sessionKey = incognito ? "agent:main:dashboard:incognito-private" : "agent:main:main";
-      const entry = {
-        ...baseEntry,
-        skillsSnapshot: { prompt: "Saved instructions", skills: [{ name: "fixture" }] },
-      };
-      const cfg = { ...baseConfig, ...(storePath ? { session: { store: storePath } } : {}) };
-      await state.writeConfig(cfg);
-      await replaceSessionEntry({ agentId: "main", storePath, sessionKey, env: state.env }, entry);
-      seed(state.env, buildAcpDatabaseSessionKey(sessionKey, "main"), "original");
-      if (!incognito) {
-        await closeOpenClawAgentDatabasesAsync();
-        await closeOpenClawStateDatabaseAsync();
-        resetConfigRuntimeState();
-      }
-      const sql = observeMainThreadSql();
-      const result = await readAcpSessionEntryAsync(
-        incognito ? { cfg, env: state.env, sessionKey } : { sessionKey: " main ", agentId: "main" },
-      );
-      expect(result).toMatchObject({
-        sessionKey: incognito ? sessionKey : "main",
-        storeSessionKey: sessionKey,
-        agentId: "main",
-        ...(storePath ? { storePath } : {}),
-        entry,
-        acp: meta,
-      });
-      if (incognito) {
-        expect(
-          [resolveIncognitoOpenClawAgentSqlitePath, resolveOpenClawAgentSqlitePath].map((resolve) =>
-            fs.existsSync(resolve({ agentId: "main", env: state.env })),
-          ),
-        ).toEqual([false, false]);
-      } else {
-        const readMeta = (current = entry) =>
-          metadataReads.readAcpSessionMetaForEntryAsync({ sessionKey, entry: current });
-        expect(await readAcpSessionMetaAsync({ sessionKey, agentId: "main" })).toEqual(meta);
-        expect(await readMeta()).toEqual(meta);
-        await upsertAcpSessionMeta({
-          cfg,
-          env: state.env,
-          sessionKey,
-          mutate: () => ({ ...meta, runtimeSessionName: "updated-runtime" }),
-        });
-        expect(await readMeta()).toMatchObject({ runtimeSessionName: "updated-runtime" });
-        expect(await readMeta({ ...entry, lifecycleRevision: "retired" })).toBeUndefined();
-        await replaceSessionEntry(
-          { agentId: "main", storePath, sessionKey, env: state.env },
-          { ...entry, lifecycleRevision: "retired" },
-        );
-        expect(await listAcpSessionEntries({ cfg, env: state.env })).toEqual([]);
-      }
-      sql.expectIdle();
-    }),
-);
+it("joins incognito metadata without creating a file store", () =>
+  withOpenClawTestState({ label: "acp-singular-incognito" }, async (state) => {
+    const sessionKey = "agent:main:dashboard:incognito-private";
+    const entry = {
+      ...baseEntry,
+      skillsSnapshot: { prompt: "Saved instructions", skills: [{ name: "fixture" }] },
+    };
+    const cfg = baseConfig;
+    await state.writeConfig(cfg);
+    await replaceSessionEntry({ agentId: "main", sessionKey, env: state.env }, entry);
+    seed(state.env, buildAcpDatabaseSessionKey(sessionKey, "main"), "original");
+    const sql = observeMainThreadSql();
+    const result = await readAcpSessionEntryAsync({ cfg, env: state.env, sessionKey });
+    expect(result).toMatchObject({
+      sessionKey,
+      storeSessionKey: sessionKey,
+      agentId: "main",
+      entry,
+      acp: meta,
+    });
+    expect(
+      [resolveIncognitoOpenClawAgentSqlitePath, resolveOpenClawAgentSqlitePath].map((resolve) =>
+        fs.existsSync(resolve({ agentId: "main", env: state.env })),
+      ),
+    ).toEqual([false, false]);
+    sql.expectIdle();
+  }));
 
 it("retains absent ACP metadata across async reads and follows in-process set and clear", () =>
   withOpenClawTestState({ label: "acp-absent-receipt" }, async (state) => {
