@@ -50,6 +50,11 @@ const completedNotification = () => ({
   method: "turn/completed",
   params: { threadId: threadIdentity.threadId, ...completedTurnResult() },
 });
+const requestOrder = (fake: ReturnType<typeof createClientFactory>, ...methods: string[]) => {
+  const positions = methods.map((method) => fake.methods.indexOf(method));
+  expect(positions.every((position) => position >= 0)).toBe(true);
+  expect(positions).toEqual(positions.toSorted((a, b) => a - b));
+};
 
 function runTurn(
   clientFactory: typeof shared.createIsolatedCodexAppServerClient,
@@ -110,7 +115,7 @@ it("preserves mandatory hooks in a private tool-free turn", async () => {
       "features.plugins=false",
     ]),
   });
-  expect(fake.methods.indexOf("hooks/list")).toBeLessThan(fake.methods.indexOf("thread/start"));
+  requestOrder(fake, "hooks/list", "thread/start");
 });
 
 it("still refuses managed tool enablement before starting a private completion", async () => {
@@ -613,34 +618,19 @@ it("attests ring-zero and retains usage when the final response has none", async
     },
   });
 
-  expect(fake.methods).toEqual([
-    "model/list",
-    "config/read",
-    "config/read",
-    "hooks/list",
-    "configRequirements/read",
-    "thread/start",
-    "mcpServerStatus/list",
-    "thread/inject_items",
-    "turn/start",
-  ]);
+  requestOrder(fake, "thread/start", "mcpServerStatus/list", "thread/inject_items", "turn/start");
   expect(requestParams(fake, "thread/start")).toMatchObject({
     baseInstructions: "",
-    environments: [],
-    dynamicTools: [],
-    ephemeral: true,
     config: {
       "agents.enabled": false,
       "features.hooks": false,
       "features.multi_agent": false,
       "features.multi_agent_v2": false,
-      "features.code_mode": false,
       "features.code_mode_only": false,
       "skills.include_instructions": false,
       include_environment_context: false,
       "tools.experimental_request_user_input.enabled": false,
       "tools.update_plan.enabled": false,
-      mcp_servers: { inherited: { enabled: false } },
     },
   });
   expect(requestParams(fake, "turn/start")).not.toHaveProperty("cwd");

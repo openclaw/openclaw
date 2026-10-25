@@ -1,3 +1,4 @@
+import { setImmediate as flushIo } from "node:timers/promises";
 import type { SandboxFsBridge } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
@@ -38,12 +39,30 @@ function pendingIo<T>() {
 }
 const fileRpc = (socket: Socket, method: string, name: string, params = {}) =>
   rpc(socket, `fs/${method}`, { path: uri(name), ...params });
+const removeTree = (socket: Socket, name: string, sandbox: unknown) =>
+  fileRpc(socket, "remove", name, { recursive: true, force: true, sandbox });
 const copy = (socket: Socket, source: string, destination: string, params = {}) =>
   rpc(socket, "fs/copy", { sourcePath: uri(source), destinationPath: uri(destination), ...params });
 const openFile = (socket: Socket, handleId: string, path = uri(`${handleId}.txt`)) =>
   rpc(socket, "fs/open", { handleId, path });
 const readBlock = (socket: Socket, handleId: string, offset: number, len: number) =>
   rpc(socket, "fs/readBlock", { handleId, offset, len });
+const closeFile = (socket: Socket, handleId: string) =>
+  expect(rpc(socket, "fs/close", { handleId })).resolves.toEqual({});
+async function disconnect(socket: Socket) {
+  const closed = waitForSocketClose(socket);
+  socket.close();
+  await closed;
+}
+async function bufferedFile(text: string, size = Buffer.byteLength(text)) {
+  const data = Buffer.from(text);
+  const readFile = vi.fn(async () => data);
+  const socket = await connect({ readFile, stat: async () => fileStat(size) });
+  return { data, readFile, socket };
+}
+function expectWrite(writeFile: unknown, name: string, data: Buffer, mkdir = false) {
+  expect(writeFile).toHaveBeenCalledWith({ filePath: `/workspace/${name}`, data, mkdir });
+}
 const expectError = (request: Promise<unknown>, code: number, message?: string) =>
   expect(request).rejects.toMatchObject(message ? { code, message } : { code });
 const write = (socket: Socket, path: string, text: string, sandbox?: unknown) =>
@@ -128,11 +147,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const sandbox = { ...createSandboxContext({}), fsBridge: legacyBridge };
     const socket = await openSandboxSocket(sandbox);
     await expect(write(socket, uri("legacy.txt"), "compatible")).resolves.toEqual({});
-    expect(writeFile).toHaveBeenCalledWith({
-      filePath: "/workspace/legacy.txt",
-      data: Buffer.from("compatible"),
-      mkdir: false,
-    });
+    expectWrite(writeFile, "legacy.txt", Buffer.from("compatible"));
     await expect(
       fileRpc(socket, "createDirectory", "legacy-dir", { recursive: true }),
     ).resolves.toEqual({});
@@ -191,13 +206,9 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     await expect(write(socket, uri(".git/config"), "blocked", workspacePolicy)).rejects.toThrow(
       "Codex fs sandbox denied write access",
     );
-    await expect(
-      fileRpc(socket, "remove", "", {
-        recursive: true,
-        force: true,
-        sandbox: workspacePolicy,
-      }),
-    ).rejects.toThrow("because /workspace/.git is not writable");
+    await expect(removeTree(socket, "", workspacePolicy)).rejects.toThrow(
+      "because /workspace/.git is not writable",
+    );
     expect(writeFile).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
   });
@@ -218,13 +229,9 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       );
     }
     await write(socket, uri("private/nested/allowed.txt"), "ok", policy);
-    await expect(
-      fileRpc(socket, "remove", "private", {
-        recursive: true,
-        force: true,
-        sandbox: policy,
-      }),
-    ).rejects.toThrow("because /workspace/private/*.txt is not writable");
+    await expect(removeTree(socket, "private", policy)).rejects.toThrow(
+      "because /workspace/private/*.txt is not writable",
+    );
     expect(readFile).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
     expect(writeFile).toHaveBeenCalledTimes(1);
@@ -267,11 +274,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         ],
       }),
     );
-    expect(writeFile).toHaveBeenCalledWith({
-      filePath: "/workspace/allowed.txt",
-      data: Buffer.from("ok"),
-      mkdir: false,
-    });
+    expectWrite(writeFile, "allowed.txt", Buffer.from("ok"));
   });
 
   it("fails closed for unsupported Codex fs sandbox glob classes", async () => {
@@ -289,13 +292,9 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const remove = vi.fn(async () => undefined);
     const socket = await connect({ remove });
     const policy = makeWorkspacePolicy(globPath("**/*.pem"));
-    await expect(
-      fileRpc(socket, "remove", "src", {
-        recursive: true,
-        force: true,
-        sandbox: policy,
-      }),
-    ).rejects.toThrow("because /workspace/**/*.pem is not writable");
+    await expect(removeTree(socket, "src", policy)).rejects.toThrow(
+      "because /workspace/**/*.pem is not writable",
+    );
     expect(remove).not.toHaveBeenCalled();
   });
 
@@ -321,11 +320,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         mtimeMs: 1,
       }),
     });
-    await rpc(socket, "fs/copy", {
-      sourcePath: "file:///workspace/source-dir",
-      destinationPath: "file:///workspace/destination-dir",
-      recursive: true,
-    });
+    await copy(socket, "source-dir", "destination-dir", { recursive: true });
     for (const suffix of ["", "/subdir"]) {
       expect(mkdirp).toHaveBeenCalledWith({ filePath: `/workspace/destination-dir${suffix}` });
       expect(runShellCommand).toHaveBeenCalledWith(
@@ -359,20 +354,11 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       filePath: "/workspace/source.txt",
       maxBytes: 512 * 1024 * 1024,
     });
-    expect(writeFile).toHaveBeenCalledWith({
-      filePath: "/workspace/destination.txt",
-      data,
-      mkdir: true,
-    });
+    expectWrite(writeFile, "destination.txt", data, true);
   });
 
   it("bounds legacy whole-file reads within the sandbox filesystem bridge", async () => {
-    const data = Buffer.from("bounded legacy read");
-    const readFile = vi.fn(async () => data);
-    const socket = await connect({
-      readFile,
-      stat: async () => fileStat(data.byteLength),
-    });
+    const { data, readFile, socket } = await bufferedFile("bounded legacy read");
     await expect(fileRpc(socket, "readFile", "note.txt")).resolves.toEqual({
       dataBase64: data.toString("base64"),
     });
@@ -383,11 +369,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   });
 
   it("rejects oversized file reads before buffering through the fs bridge", async () => {
-    const readFile = vi.fn(async () => Buffer.from("too-large"));
-    const socket = await connect({
-      readFile,
-      stat: async () => fileStat(512 * 1024 * 1024 + 1),
-    });
+    const { readFile, socket } = await bufferedFile("too-large", 512 * 1024 * 1024 + 1);
     await expect(fileRpc(socket, "readFile", "huge.bin")).rejects.toThrow(
       "file is too large to read through Codex sandbox exec-server",
     );
@@ -412,12 +394,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
 describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
   it("streams sandbox files through connection-owned Codex file handles", async () => {
-    const data = Buffer.from("0123456789");
-    const readFile = vi.fn(async () => data);
-    const socket = await connect({
-      readFile,
-      stat: async () => fileStat(data.byteLength),
-    });
+    const { data, readFile, socket } = await bufferedFile("0123456789");
     await expect(openFile(socket, "stream-1", uri("attachment.txt"))).resolves.toEqual({
       handleId: "stream-1",
     });
@@ -440,8 +417,8 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
       maxBytes: data.byteLength,
       signal: expect.any(AbortSignal),
     });
-    await expect(rpc(socket, "fs/close", { handleId: "stream-1" })).resolves.toEqual({});
-    await expect(rpc(socket, "fs/close", { handleId: "stream-1" })).resolves.toEqual({});
+    await closeFile(socket, "stream-1");
+    await closeFile(socket, "stream-1");
     await expectError(readBlock(socket, "stream-1", 0, 1), -32004);
   });
 
@@ -477,8 +454,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
 
   it("enforces sandbox read policy before opening a streamed file", async () => {
     const readFile = vi.fn(async () => Buffer.from("secret"));
-    const sandbox = createSandboxContext({ readFile });
-    const socket = await openSandboxSocket(sandbox);
+    const socket = await connect({ readFile });
 
     await expect(
       rpc(socket, "fs/open", {
@@ -497,11 +473,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
   });
 
   it("rejects duplicate, oversized, and invalid sandbox file read handles", async () => {
-    const data = Buffer.from("bounded");
-    const socket = await connect({
-      readFile: async () => data,
-      stat: async () => fileStat(data.byteLength),
-    });
+    const { socket } = await bufferedFile("bounded");
     const path = "file:///workspace/bounded.txt";
     await rpc(socket, "fs/open", { handleId: "bounded", path });
     await expectError(rpc(socket, "fs/open", { handleId: "bounded", path }), -32600);
@@ -561,7 +533,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     await vi.waitFor(() => expect(stat).toHaveBeenCalledTimes(128));
     expect(signals()).toHaveLength(128);
     expect(readFile).not.toHaveBeenCalled();
-    await expect(rpc(socket, "fs/close", { handleId: "stat-0" })).resolves.toEqual({});
+    await closeFile(socket, "stat-0");
     expect(signals()[0]?.aborted).toBe(true);
     await expectError(openFile(socket, "stat-0", uri("reused.bin")), -32600);
     await expectError(
@@ -576,9 +548,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     sendOpen(socket, 30_000, "stat-0", "file:///workspace/recovered.bin");
     await vi.waitFor(() => expect(stat).toHaveBeenCalledTimes(129));
     expect(readFile).not.toHaveBeenCalled();
-    const disconnected = waitForSocketClose(socket);
-    socket.close();
-    await disconnected;
+    await disconnect(socket);
     await vi.waitFor(() => {
       expect(signals()).toHaveLength(129);
       expect(signals().every((signal) => signal.aborted)).toBe(true);
@@ -586,9 +556,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     for (const releaseStat of releaseStats.values()) {
       releaseStat(fileStat(1));
     }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await flushIo();
     expect(readFile).not.toHaveBeenCalled();
   });
 
@@ -602,13 +570,13 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
     const first = openFile(socket, "first");
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(1));
     const firstSignal = readFile.mock.calls[0]?.[0].signal;
-    await expect(rpc(socket, "fs/close", { handleId: "first" })).resolves.toEqual({});
+    await closeFile(socket, "first");
     expect(firstSignal?.aborted).toBe(true);
     await expectError(readBlock(socket, "first", 0, 1), -32004);
     await expectError(openFile(socket, "first"), -32600);
     const second = openFile(socket, "second");
     await vi.waitFor(() => expect(readFile).toHaveBeenCalledTimes(2));
-    await expect(rpc(socket, "fs/close", { handleId: "second" })).resolves.toEqual({});
+    await closeFile(socket, "second");
     expect(readFile.mock.calls[1]?.[0].signal?.aborted).toBe(true);
     await expectError(
       openFile(socket, "overflow"),
@@ -646,16 +614,12 @@ describe("OpenClaw Codex sandbox exec-server filesystem streaming", () => {
 
     sendOpen(socket, 2, "stat-pending", "file:///workspace/stat-pending.txt");
     await vi.waitFor(() => expect(stat).toHaveBeenCalledTimes(2));
-    const disconnected = waitForSocketClose(socket);
-    socket.close();
-    await disconnected;
+    await disconnect(socket);
     // The client can close before the server observes and cancels the peer connection.
     await vi.waitFor(() => expect(signal?.aborted).toBe(true));
     stats.get("/workspace/stat-pending.txt")?.(fileStat(5));
     reads.get("/workspace/pending.txt")?.(Buffer.from("small"));
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await flushIo();
     expect(readFile).toHaveBeenCalledTimes(1);
   });
 });
