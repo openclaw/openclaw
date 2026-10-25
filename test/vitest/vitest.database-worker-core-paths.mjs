@@ -69,6 +69,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/mixed-agent-readers.conformance.test.ts",
   "src/infra/database-engine/mixed-agent-lifecycle.conformance.test.ts",
   "src/infra/database-engine/device-pairing.conformance.test.ts",
+  "src/infra/database-engine/sql-probe.conformance.test.ts",
+  "src/infra/database-engine/message-progress-retention.conformance.test.ts",
   "src/infra/database-engine/worker-environment-companion.postgres.test.ts",
   "src/infra/database-engine/gateway-session-startup.conformance.test.ts",
   "src/infra/database-engine/session-actor.conformance.test.ts",
