@@ -12,6 +12,7 @@ import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/c
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../../process/spawn-broker/host.js";
 import { supportsSpawnBrokerCommandTransport } from "../../process/spawn-broker/pipe.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import {
   createDockerPersistentExecCapability,
   listDockerPersistentExecContainers,
@@ -486,25 +487,21 @@ it.each(["stop", "revocation"] as const)(
   async (interruption) => {
     const f = revocableRuntime();
     const prepared = await f.prepare({ assertCurrent: f.assertCurrent });
-    const inspecting = createDeferredCore();
-    const release = createDeferredCore();
+    const inspection = createEnteredGate();
     interceptOnce(
       (args) => f.state.spawned && args[0] === "inspect" && args.at(-1) === childId,
-      async () => {
-        inspecting.resolve();
-        await release.promise;
-      },
+      inspection.wait,
       true,
     );
     const rejection = expect(prepared.start(async () => {})).rejects.toThrow(
       interruption === "revocation" ? "authority revoked" : "stopped during START",
     );
-    await inspecting.promise;
+    await inspection.entered;
     const cleanup = interruption === "stop" ? prepared.stop() : undefined;
     if (interruption === "revocation") {
       f.revoke();
     }
-    release.resolve();
+    inspection.release();
     await rejection;
     await cleanup;
     expectExtinct(f, await prepared.stopped);
@@ -538,12 +535,8 @@ it.each([
         true,
       );
     }
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const admit = vi.fn(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const admission = createEnteredGate();
+    const admit = vi.fn(admission.wait);
     const rejection = expect(prepared.start(admit)).rejects.toThrow(
       interruption === "revocation"
         ? "authority revoked"
@@ -552,11 +545,11 @@ it.each([
           : "stopped during START admission",
     );
     if (during === "admission") {
-      await entered.promise;
+      await admission.entered;
       expect(mocks.spawn).not.toHaveBeenCalled();
       interrupt();
     }
-    release.resolve();
+    admission.release();
     await rejection;
     await cleanup;
     expect(admit).toHaveBeenCalledTimes(during === "admission" ? 1 : 0);
@@ -588,18 +581,12 @@ it.each([
     };
     let error: unknown;
     if (phase === "admission") {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const starting = outcome(
-        prepared.start(async () => {
-          entered.resolve();
-          await release.promise;
-        }),
-      );
-      await entered.promise;
+      const admission = createEnteredGate();
+      const starting = outcome(prepared.start(admission.wait));
+      await admission.entered;
       expect(mocks.spawn).not.toHaveBeenCalled();
       changeParent();
-      release.resolve();
+      admission.release();
       error = await starting;
       expect(mocks.spawn).not.toHaveBeenCalled();
     } else {

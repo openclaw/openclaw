@@ -9,6 +9,7 @@ import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runExecProcess } from "../bash-tools.exec-runtime.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { registerSandboxBackend } from "./backend.js";
 import type {
   CreateSandboxBackendParams,
@@ -154,12 +155,10 @@ async function seedLegacyRuntime() {
 describe("durable sandbox runtime generations", () => {
   it("rejects hosted custody released during reserved backend discovery before allocation", async () => {
     using owner = acquireSandboxGatewayOwner(workspaceDir);
-    const entered = createDeferred();
-    const resume = createDeferred();
+    const discovery = createEnteredGate();
     const allocate = vi.fn();
     install(async (params) => {
-      entered.resolve();
-      await resume.promise;
+      await discovery.wait();
       params.assertRuntimeCurrent?.();
       allocate();
       return handle(params);
@@ -167,12 +166,12 @@ describe("durable sandbox runtime generations", () => {
     const preparation = resolve();
     try {
       await awaitGateBeforeSettlement(
-        entered.promise,
+        discovery.entered,
         preparation,
         "Backend discovery not reached",
       );
       owner.release();
-      resume.resolve();
+      discovery.release();
       const error = await preparation.catch((failure: unknown) => failure);
       expect(allocate).not.toHaveBeenCalled();
       expect(error).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
@@ -180,7 +179,7 @@ describe("durable sandbox runtime generations", () => {
         expect.objectContaining({ runtimeState: "pending" }),
       ]);
     } finally {
-      resume.resolve();
+      discovery.release();
       await preparation.catch(() => {});
     }
   });
@@ -356,23 +355,16 @@ describe("durable sandbox runtime generations", () => {
 
   it("prevents adoption of a legacy runtime while provider removal is pending", async () => {
     await seedLegacyRuntime();
-    const started = createDeferred();
-    const finish = createDeferred();
+    const removal = createEnteredGate();
     const factory = vi.fn(async (params: CreateSandboxBackendParams) => handle(params));
-    install(
-      factory,
-      vi.fn<SandboxBackendManager["removeRuntime"]>(async () => {
-        started.resolve();
-        await finish.promise;
-      }),
-    );
+    install(factory, vi.fn<SandboxBackendManager["removeRuntime"]>(removal.wait));
     const removing = removeSandboxContainer("legacy-runtime");
-    await started.promise;
+    await removal.entered;
     try {
       await expect(resolve()).rejects.toThrow("removed or is being removed");
       expect(factory).not.toHaveBeenCalled();
     } finally {
-      finish.resolve();
+      removal.release();
       await removing;
     }
   });
@@ -408,9 +400,8 @@ describe("durable sandbox runtime generations", () => {
   });
 
   it("serializes concurrent creators onto one durable generation", async () => {
-    const started = createDeferred();
+    const allocation = createEnteredGate();
     const secondReservation = createDeferred();
-    const finish = createDeferred();
     const runtimeIds: string[] = [];
     let active = 0;
     let maximumActive = 0;
@@ -427,8 +418,7 @@ describe("durable sandbox runtime generations", () => {
         active++;
         maximumActive = Math.max(maximumActive, active);
         runtimeIds.push(backend.runtimeId);
-        started.resolve();
-        await finish.promise;
+        await allocation.wait();
         active--;
         return backend;
       },
@@ -436,7 +426,7 @@ describe("durable sandbox runtime generations", () => {
     const first = resolve();
     let second: ReturnType<typeof resolve> | undefined;
     try {
-      await awaitGateBeforeSettlement(started.promise, first, "First creator did not start");
+      await awaitGateBeforeSettlement(allocation.entered, first, "First creator did not start");
       second = resolve();
       await awaitGateBeforeSettlement(
         secondReservation.promise,
@@ -444,14 +434,14 @@ describe("durable sandbox runtime generations", () => {
         "Second creator did not reserve a runtime",
       );
       expect(nextId).toBe(2);
-      finish.resolve();
+      allocation.release();
       const contexts = await Promise.all([first, second]);
       expect(contexts.map((context) => context?.runtimeId)).toEqual(["reserved-1", "reserved-1"]);
       expect(runtimeIds).toEqual(["reserved-1", "reserved-1"]);
       expect(maximumActive).toBe(1);
       expect((await readRegistry()).entries).toHaveLength(1);
     } finally {
-      finish.resolve();
+      allocation.release();
       await Promise.allSettled([first, second]);
     }
   });

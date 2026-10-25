@@ -20,6 +20,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { rejectOnNextAbort } from "../test-helpers/abort-signal.js";
 import { requireGit } from "../worktrees/git.js";
 import { insertRegistryWorktree } from "../worktrees/registry.js";
@@ -630,10 +631,8 @@ it.each(["source", "registry", "parent container"] as const)(
 
 it("joins an in-flight authority check and workspace finalization before releasing durable custody", async () => {
   const f = await fixture();
-  const checking = createDeferredCore();
-  const checked = createDeferredCore();
-  const finalizing = createDeferredCore();
-  const finalized = createDeferredCore();
+  const checking = createEnteredGate();
+  const finalizing = createEnteredGate();
   const createStore = persistentExecStore.createSandboxPersistentExecStore;
   const storeFactory = vi
     .spyOn(persistentExecStore, "createSandboxPersistentExecStore")
@@ -643,8 +642,7 @@ it("joins an in-flight authority check and workspace finalization before releasi
         ...store,
         async checkExecutionCurrent(...args) {
           const result = await store.checkExecutionCurrent(...args);
-          checking.resolve();
-          await checked.promise;
+          await checking.wait();
           return result;
         },
       };
@@ -652,24 +650,23 @@ it("joins an in-flight authority check and workspace finalization before releasi
   vi.mocked(withSettledLocalWorkspaceProjectionPath).mockImplementationOnce(
     async (_params, operation) => {
       await operation();
-      finalizing.resolve();
-      await finalized.promise;
+      await finalizing.wait();
     },
   );
   const run = await f.start();
   const wake = f.clock.advanceBy(20_000);
-  await checking.promise;
+  await checking.entered;
   const settlement = run.waitForExtinction?.();
   try {
     expect(f.preparation.stop).not.toHaveBeenCalled();
     await f.expectCustody({ phase: "running" });
-    checked.resolve();
-    await finalizing.promise;
+    checking.release();
+    await finalizing.entered;
     await f.expectCustody({ phase: "stopped" });
     expect(f.releaseAuthority).not.toHaveBeenCalled();
   } finally {
-    checked.resolve();
-    finalized.resolve();
+    checking.release();
+    finalizing.release();
     try {
       await Promise.all([settlement, wake]);
     } finally {

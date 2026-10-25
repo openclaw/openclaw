@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { sandboxListCommand } from "../../commands/sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
@@ -24,6 +20,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { registerSandboxBackend } from "./backend.js";
 import { sandboxRegistryPublication } from "./registry-publication.js";
 import {
@@ -213,30 +210,26 @@ describe("registry race safety", () => {
 
   it("settles accepted removal across direct database close", async ({ signal }) => {
     const entry = await reserve("close-boundary");
-    const providerEntered = createDeferred();
-    const releaseProvider = createDeferred();
-    const cleanup = vi.fn(async () => {
-      providerEntered.resolve();
-      await releaseProvider.promise;
-    });
+    const provider = createEnteredGate();
+    const cleanup = vi.fn(provider.wait);
     const removing = removeRuntime(entry, cleanup);
     let closing: Promise<void> | undefined;
     try {
       await withinTest(
         awaitGateBeforeSettlement(
-          providerEntered.promise,
+          provider.entered,
           removing,
           "Removal settled before its provider accepted cleanup",
         ),
         signal,
       );
       closing = closeOpenClawStateDatabaseAsync();
-      releaseProvider.resolve();
+      provider.release();
       await withinTest(Promise.all([removing, closing]), signal);
       expect(cleanup).toHaveBeenCalledOnce();
       await expectAbsent(entry.containerName);
     } finally {
-      releaseProvider.resolve();
+      provider.release();
       await Promise.allSettled([removing, closing]);
     }
   });

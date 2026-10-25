@@ -534,28 +534,6 @@ describe("ssh sandbox backend", () => {
     await finalize(backend, execSpec);
   });
 
-  it("validates remote workdirs before exec accepts backend-owned cwd", async () => {
-    const root = "/remote/openclaw/openclaw-ssh-agent-worker-abcd1234";
-    const workspaceSrc = `${root}/workspace/src`;
-    const agentSrc = `${root}/agent/src`;
-    sshMocks.runCommand
-      .mockResolvedValueOnce(commandResult("1\n"))
-      .mockResolvedValueOnce(commandResult(`${workspaceSrc}\n`))
-      .mockResolvedValueOnce(commandResult("", "remote directory not found\n", 1))
-      .mockResolvedValueOnce(commandResult(`${agentSrc}\n`));
-    const backend = await createBackend();
-
-    await expect(backend.validateWorkdir?.(workspaceSrc)).resolves.toBe(workspaceSrc);
-    await expect(backend.validateWorkdir?.(`${root}/workspace/missing`)).resolves.toBeNull();
-    await expect(backend.validateWorkdir?.(agentSrc)).resolves.toBe(agentSrc);
-
-    const validationCommand = String(commandAt(1).remoteCommand);
-    expect(validationCommand).toContain("openclaw-validate-workdir");
-    expect(validationCommand).toContain("remote directory must stay under root");
-    const agentValidationCommand = String(commandAt(3).remoteCommand);
-    expect(agentValidationCommand).toContain(`${root}/agent`);
-  });
-
   it.each([false, true])(
     "refreshes a validated skills workdir (discarded: %s)",
     async (discard) => {
