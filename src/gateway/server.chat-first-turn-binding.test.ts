@@ -18,23 +18,14 @@ import {
   requestRpcSourceCancellation,
 } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import * as subscriptions from "./server-runtime-subscriptions.js";
+import { createProductState, productModelConfig } from "./server.chat-product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 it("binds native chat.send, preserves its stopped partial, and resumes terminal recovery residue", async () => {
-  const state = await createOpenClawTestState({
-    label: "first-turn-binding",
-    env: {
-      ...KERNEL_TEST_ENV,
-      VITEST: process.env.VITEST,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    },
-  });
+  const state = await createProductState("first-turn-binding");
   const runId = "first-native-turn";
   const sessionKey = "agent:main:first-turn-binding";
   const partial = "This is the first native assistant partial.";
@@ -83,27 +74,11 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     await listenProvider(providerServer),
     "first-turn",
   );
+  const modelConfig = productModelConfig(state.workspaceDir, provider);
   const cfg = {
     cron: { enabled: false },
-    agents: {
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: provider.modelRef },
-        models: {
-          [provider.modelRef]: {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-        },
-      },
-    },
-    models: {
-      mode: "replace",
-      providers: {
-        [provider.providerId]: { ...provider.config, request: { allowPrivateNetwork: true } },
-      },
-    },
+    agents: { defaults: modelConfig.defaults },
+    models: modelConfig.models,
     plugins: { slots: { memory: "none" } },
     tools: { profile: "minimal" },
     gateway: { auth: { mode: "token", token: "first-turn-test" } },
@@ -144,6 +119,11 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
     observeSubscriptions.mock.calls.at(-1)?.[0],
     "Gateway subscriptions",
   );
+  const historyForSession = () =>
+    gateway!.client.request<{
+      sessionId: string;
+      sessionInfo: { activeLeafEntryId: string | null };
+    }>("chat.history", { sessionKey });
   expect(loadExactSessionEntryReadOnly({ sessionKey })?.entry).toBeUndefined();
   await gateway.client.request("sessions.messages.subscribe", { key: sessionKey });
   expect(
@@ -204,10 +184,7 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
   expect(runtime.chatRunState.resolveBuffer(runId).text).toBe(partial);
   expect.soft(getRpcSourceIdentity(source).sessionId).toBe(sessionId);
   expect(lifecycle).toContainEqual(expect.objectContaining({ phase: "start", sessionId }));
-  const history = await gateway.client.request<{
-    sessionId: string;
-    sessionInfo: { activeLeafEntryId: string | null };
-  }>("chat.history", { sessionKey });
+  const history = await historyForSession();
   expect(history).toMatchObject({
     sessionId,
     sessionInfo: { activeLeafEntryId: expect.any(String) },
@@ -320,10 +297,7 @@ it("binds native chat.send, preserves its stopped partial, and resumes terminal 
         ),
       }));
     }
-    const currentHistory = await gateway.client.request<{
-      sessionId: string;
-      sessionInfo: { activeLeafEntryId: string | null };
-    }>("chat.history", { sessionKey });
+    const currentHistory = await historyForSession();
     expect(currentHistory.sessionId).toBe(sessionId);
     expect(
       await gateway.client.request("chat.send", {

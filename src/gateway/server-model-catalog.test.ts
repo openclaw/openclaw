@@ -43,12 +43,7 @@ const snapshot: ModelCatalogSnapshot = {
 function ownerConfig(agentId = "main", extra: OpenClawConfig = {}): OpenClawConfig {
   return {
     ...extra,
-    agents: {
-      ...extra.agents,
-      entries: {
-        [agentId]: { agentDir, workspace: workspaceDir },
-      },
-    },
+    agents: { ...extra.agents, entries: { [agentId]: { agentDir, workspace: workspaceDir } } },
   };
 }
 
