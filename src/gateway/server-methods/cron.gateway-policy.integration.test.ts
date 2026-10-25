@@ -285,41 +285,18 @@ describe("Gateway automation policy", () => {
     },
   );
 
-  it.each(["policy absent", "ordinary caller", "read-only runtime"] as const)(
-    "keeps mutation admission restricted for %s",
-    async (scenario) => {
-      await withCron(async ({ cron, invoke, readJobs }) => {
-        const job = await cron.add(jobInput);
-        const before = await readJobs();
-        setRuntimeConfigSnapshot(scenario === "policy absent" ? {} : managed);
-        await withModelTurn("channel-owner", async (identity) => {
-          for (const method of ["cron.update", "cron.remove", "cron.run"]) {
-            const response = await invoke(
-              method,
-              {
-                id: job.id,
-                ...(method === "cron.update" ? { patch: { description: "denied" } } : {}),
-              },
-              scenario === "ordinary caller" ? undefined : identity,
-              undefined,
-              [scenario === "read-only runtime" ? "operator.read" : "operator.write"],
-            );
-            expect(response[0]).toBe(false);
-            expect(response[2]?.message).toBe("missing scope: operator.admin");
-          }
-        });
-        expect(await readJobs()).toEqual(before);
-      });
-    },
-  );
-
-  it.each(["cron.update", "cron.remove", "cron.run"])(
-    "rejects %s when the admitted caller is revoked before commit",
-    async (method) => {
-      await withCron(async ({ cron, invoke, readJobs }) => {
-        const job = await addOwnedJob(cron);
-        const before = await readJobs();
-        setRuntimeConfigSnapshot(managed);
+  it.each([
+    "policy absent",
+    "ordinary caller",
+    "read-only runtime",
+    "revoked before commit",
+  ] as const)("keeps mutation authority restricted for %s", async (scenario) => {
+    await withCron(async ({ cron, invoke, readJobs }) => {
+      const job = await addOwnedJob(cron);
+      const before = await readJobs();
+      setRuntimeConfigSnapshot(scenario === "policy absent" ? {} : managed);
+      for (const method of ["cron.update", "cron.remove", "cron.run"]) {
+        // Each method needs a fresh admitted run so revocation happens at its own commit.
         await withModelTurn("channel-owner", async (identity) => {
           const response = await invoke(
             method,
@@ -327,15 +304,23 @@ describe("Gateway automation policy", () => {
               id: job.id,
               ...(method === "cron.update" ? { patch: { description: "denied" } } : {}),
             },
-            identity,
-            () => releaseAgentRunDelegatedAuthority(identity.delegatedAuthority),
+            scenario === "ordinary caller" ? undefined : identity,
+            scenario === "revoked before commit"
+              ? () => releaseAgentRunDelegatedAuthority(identity.delegatedAuthority)
+              : undefined,
+            [scenario === "read-only runtime" ? "operator.read" : "operator.write"],
           );
-          expectDenied(response, "authority is no longer active");
+          if (scenario === "revoked before commit") {
+            expectDenied(response, "authority is no longer active");
+          } else {
+            expect(response[0]).toBe(false);
+            expect(response[2]?.message).toBe("missing scope: operator.admin");
+          }
         });
         expect(await readJobs()).toEqual(before);
-      });
-    },
-  );
+      }
+    });
+  });
 
   it.each([
     ["conversion", false, { payload: { kind: "command", argv: ["fixture-command"] } }],

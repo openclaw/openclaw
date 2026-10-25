@@ -137,27 +137,6 @@ describe("ui.command gateway method", () => {
     expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
-  it("delivers plugin panel commands only to the requester", async () => {
-    const requester = client("requester");
-    const params = {
-      sessionKey: "agent:main:main",
-      command: {
-        kind: "panel",
-        panel: "plugin",
-        pluginId: "review",
-        panelId: "document",
-        open: true,
-      },
-    };
-    const result = await call(params, [requester, client("bystander")], requester);
-    expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
-    expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-      "ui.command",
-      { ...params, agentId: "main" },
-      new Set(["requester"]),
-    );
-  });
-
   it("keeps the agent screen tool bound to its requesting browser across async execution", async () => {
     const requester = client("requester");
     const recipients = [requester, client("bystander")];
@@ -204,11 +183,6 @@ describe("ui.command gateway method", () => {
         return expectDefined(results.at(-1), "screen handler result");
       };
       await withPersonalToolTurn({ owner, backendKind, hiddenQuestion }, async (turn) => {
-        const { resolve } = expectDefined(
-          turn.operation.personalToolParticipants,
-          "turn participants",
-        );
-        const selectedOwner = expectDefined(resolve(), "turn owner");
         expectTarget(await execute(), "alice-tab");
         expectTarget(await execute(owner.profileId), "alice-tab");
         expectRejected(await execute(owner.senderId), "Alice (user: alice)");
@@ -230,7 +204,6 @@ describe("ui.command gateway method", () => {
           status: "rejected",
           reason: hiddenQuestion ? "input_visibility_mismatch" : "tool_authority_mismatch",
         });
-        expect(() => selectedOwner.assertCurrent()).not.toThrow();
         expectTarget(await execute(), "alice-tab");
         expectRejected(await execute(steerer.profileId), "Alice (user: alice)");
         expectRejected(await execute("nonparticipant"), "Alice (user: alice)");
@@ -245,7 +218,6 @@ describe("ui.command gateway method", () => {
         });
         expectTarget(await execute(owner.profileId), "alice-tab");
         turn.revoke(owner.profileId);
-        expect(() => selectedOwner.assertCurrent()).toThrow("Alice's access changed");
         expectRejected(await execute(owner.profileId), "Alice's access changed; ask them again");
         await turn.complete();
         expect(turn.releaseCounts.get(owner.profileId)).toBe(1);

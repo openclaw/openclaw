@@ -28,7 +28,6 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
 }));
 
 import {
-  createUsageSessionStoreFixture,
   freshUsageBatch,
   invokeUsage,
   usageClient,
@@ -64,7 +63,7 @@ async function runSessionsUsage(
   runtimeConfig: OpenClawConfig = config,
   client?: GatewayClient,
   method: "sessions.usage" | "usage.cost" = "sessions.usage",
-  rows: UsageSessionStoreFixture & { storePath?: string; agentId?: string } = projectionFixture,
+  rows: UsageSessionStoreFixture & { storePath?: string; agentId?: string } = { store: {} },
 ) {
   const [ok, payload, error] = usageReply(
     await invokeUsage(method, params, runtimeConfig, { rows, client }),
@@ -78,7 +77,6 @@ describe("sessions.usage result cache and owner attribution", () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     vi.clearAllMocks();
     config = { ...config };
-    projectionFixture = { store: {} };
     mocks.discoverAllSessions.mockImplementation(async (params: { agentId?: string }) => [
       {
         sessionId: `session-${params.agentId ?? "unknown"}`,
@@ -121,54 +119,6 @@ describe("sessions.usage result cache and owner attribution", () => {
       expect(result).toMatchObject({
         sessions: [{ key, sessionId, label: "Private usage", usage: { totalTokens: 13 } }],
         totals: { totalTokens: 13 },
-      });
-    });
-  });
-
-  it("partitions usage by role identity and excludes foreign sessions before aggregation", async () => {
-    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const firstProfile = ensureProfileForEmail("first@example.com");
-      const secondProfile = ensureProfileForEmail("second@example.com");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const roleConfig = usageRoleConfig(config);
-      const store = {
-        "agent:main:first": ownedRow("session-first", 200, firstProfile.id, {
-          visibility: "shared",
-        }),
-        "agent:main:second": ownedRow("session-second", 100, secondProfile.id, {
-          visibility: "shared",
-        }),
-      };
-      projectionFixture = createUsageSessionStoreFixture(
-        store,
-        Object.keys(store).map((key) => [key, "main"] as const),
-      );
-      mocks.discoverAllSessions.mockResolvedValue([
-        { sessionId: "session-first", sessionFile: "/tmp/first.jsonl", mtime: 200 },
-        { sessionId: "session-second", sessionFile: "/tmp/second.jsonl", mtime: 100 },
-      ]);
-      for (const [profileId, expectedKeys, tokens] of [
-        [undefined, ["agent:main:first", "agent:main:second"], 20],
-        [firstProfile.id, ["agent:main:first"], 10],
-        [secondProfile.id, ["agent:main:second"], 10],
-      ] as const) {
-        const client = usageClient(profileId);
-        const result: SessionsUsageResult = await runSessionsUsage(baseParams, roleConfig, client);
-        expect(await runSessionsUsage(baseParams, roleConfig, client)).toEqual(result);
-        expect(result.sessions.map(({ key }) => key)).toEqual(expectedKeys);
-        expect(result.totals.totalTokens).toBe(tokens);
-      }
-      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
-
-      const deniedCost = await runSessionsUsage(
-        baseParams,
-        roleConfig,
-        usageClient(firstProfile.id),
-        "usage.cost",
-      );
-      expect(deniedCost).toMatchObject({
-        code: "FORBIDDEN",
-        message: expect.stringContaining("sessions hidden by your operator role"),
       });
     });
   });
@@ -435,6 +385,22 @@ describe("usage creator attribution", () => {
       );
       const client = usageClient(ada.id);
       const roleConfig = usageRoleConfig({ agents: { entries: { main: {} } } });
+      for (const [profileId, expectedKeys, tokens] of [
+        [undefined, ["agent:main:bob", "agent:main:ada"], 30],
+        [ada.id, ["agent:main:ada"], 10],
+        [bob.id, ["agent:main:bob"], 20],
+      ] as const) {
+        const viewer = usageClient(profileId);
+        const result = await query({ limit: 20 }, viewer, roleConfig);
+        expect(await query({ limit: 20 }, viewer, roleConfig)).toEqual(result);
+        expect(result.sessions.map(({ key }) => key)).toEqual(expectedKeys);
+        expect(result.totals.totalTokens).toBe(tokens);
+      }
+      expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(4);
+      expect(await runSessionsUsage(baseParams, roleConfig, client, "usage.cost")).toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("sessions hidden by your operator role"),
+      });
       const restricted = await query({}, client, roleConfig);
       expect(restricted).toMatchObject({
         creatorOptions: [{ actor: { id: ada.id } }],
