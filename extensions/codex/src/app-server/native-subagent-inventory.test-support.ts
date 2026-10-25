@@ -11,6 +11,7 @@ import type { CodexInferenceThreadQualification } from "./inference-qualificatio
 import {
   createNativeSubagentAssignmentStore,
   createNativeSubagentSessionAuthority,
+  createNativeSubagentSubmissionStore,
 } from "./native-subagent-assignment-store.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
@@ -25,7 +26,6 @@ import {
   turnStartedNotification,
 } from "./native-subagent-monitor.test-support.js";
 import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
-import type { CodexNativeSubagentSubmissionStore } from "./native-subagent-submission.js";
 import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
 import { createParams, tempDir } from "./run-attempt-test-harness.js";
 import {
@@ -111,33 +111,16 @@ export async function fixture() {
       storePath: resolveStorePath(undefined, { agentId: identity.agentId }),
     });
     const authority = createNativeSubagentSessionAuthority(parent);
-    const assignmentStore = createNativeSubagentAssignmentStore({
+    const storeOptions = {
       bindingStore: registrationStore,
       readBinding: () => registrationStore.read(identity),
       identity,
       owner,
       assertLifecycleCurrentAsync: parent.assertCurrent,
       authority,
-    });
-    const submissionStore: CodexNativeSubagentSubmissionStore = {
-      assertCurrent: () => assignmentStore.assertCurrent(),
-      assertCurrentAsync: () => assignmentStore.assertCurrentAsync(),
-      read: () => registrationStore.readNativeSubagentSubmissions(identity, owner),
-      record: (receipt, assertCurrent) =>
-        registrationStore.mutate(
-          identity,
-          { kind: "record-native-subagent-submission", owner, receipt },
-          assertCurrent,
-          authority,
-        ),
-      consume: (receipt, assertCurrent) =>
-        registrationStore.mutate(
-          identity,
-          { kind: "consume-native-subagent-submission", owner, receipt },
-          assertCurrent,
-          authority,
-        ),
     };
+    const assignmentStore = createNativeSubagentAssignmentStore(storeOptions);
+    const submissionStore = createNativeSubagentSubmissionStore(storeOptions);
     ensureCodexAppServerClientRuntime(client.client, { agentDir: tempDir });
     const registered =
       createDeferred<Awaited<ReturnType<typeof codexNativeSubagentMonitorRuntime.register>>>();
