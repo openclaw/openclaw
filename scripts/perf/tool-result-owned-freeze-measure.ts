@@ -83,7 +83,7 @@ const settings = resolveCacheTtlPruningSettings({ mode: "cache-ttl" });
 assert(settings);
 const softSettings = { ...settings, hardClear: false };
 const workloads = ["soft", "hard", "restored-hard", "restored-text"] as const;
-function request(workload: (typeof workloads)[number]) {
+const request = (workload: (typeof workloads)[number]) => {
   const state = createToolResultPromptProjectionState();
   if (workload === "restored-text") {
     restoreCacheTtlToolResultProjections(state, textCheckpoint);
@@ -103,7 +103,7 @@ function request(workload: (typeof workloads)[number]) {
     });
   }
   return state;
-}
+};
 for (const workload of workloads) {
   const proof = request(workload);
   assert.equal(proof.replacements.size, tools.length);
