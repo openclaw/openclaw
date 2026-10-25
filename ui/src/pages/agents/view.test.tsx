@@ -410,6 +410,8 @@ describe("renderAgents", () => {
       container,
     );
 
+    await vi.dynamicImportSettled();
+
     const tabs = [...container.querySelectorAll(".agents-hub-tabs .hub-tab")].map((tab) =>
       directText(tab),
     );
