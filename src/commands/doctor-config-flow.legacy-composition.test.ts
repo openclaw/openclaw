@@ -132,30 +132,28 @@ it(
   getCliProcessTestTimeout(CLI_TIMEOUT, CLI_TIMEOUT, CLI_TIMEOUT, CLI_TIMEOUT),
 );
 
-it.each([false, true])("repairs unowned update keys with deferred input=%s", (deferred) =>
+it("repairs unowned keys after update migrations while preserving legacy settings", () =>
   withCoreHome(async (home) => {
-    const retainedInput = { source: "synthetic-plugin-data" };
     const configPath = await writeCoreConfig(home, {
-      obsoleteUpdateSetting: true,
+      meta: { lastTouchedAt: "2026-05-01T00:00:00.000Z" },
+      agents: {
+        entries: {
+          main: { memorySearch: { enabled: false } },
+          research: { memorySearch: { enabled: false } },
+          writer: { memorySearch: { enabled: false } },
+        },
+      },
+      gateway: {
+        mode: "local",
+        port: await getFreePort(),
+        tailscale: { mode: "off", resetOnExit: false },
+        nodes: { denyCommands: ["camera.snap"] },
+      },
       commands: { ownerDisplay: "raw" },
-      agents: { entries: { main: { memorySearch: { enabled: false } } } },
-      ...(deferred ? { retainedInput } : {}),
+      tools: { media: { audio: { models: [{ provider: "openai", model: "whisper-1" }] } } },
+      obsoleteUpdateSetting: true,
     });
     const original = await read(configPath);
-    if (deferred) {
-      await recordDeferredPluginMigrations({
-        env: process.env,
-        pending: [
-          {
-            pluginId: "pending-owner",
-            reason: "Plugin repair is deferred.",
-            command: "openclaw doctor --fix",
-            configPaths: [["retainedInput"]],
-            validationExcludedPaths: [["retainedInput"]],
-          },
-        ],
-      });
-    }
     await withEnvAsync(
       {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
@@ -166,23 +164,56 @@ it.each([false, true])("repairs unowned update keys with deferred input=%s", (de
         const saved = await readConfigFileSnapshot();
         expect(saved.valid, JSON.stringify(saved.issues)).toBe(true);
         expect(saved.sourceConfig).not.toHaveProperty("obsoleteUpdateSetting");
+        expect(saved.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
         expect(saved.sourceConfig).not.toHaveProperty("commands.ownerDisplay");
-        expect(saved.sourceConfig.agents?.entries?.main).toHaveProperty(
-          "memory.search.enabled",
-          false,
-        );
-        expect(saved.sourceConfig.agents?.entries?.main).not.toHaveProperty("memorySearch");
-        if (deferred) {
-          expect(saved.sourceConfig).toHaveProperty("retainedInput", retainedInput);
+        expect(saved.sourceConfig).not.toHaveProperty("gateway.tailscale.resetOnExit");
+        expect(saved.sourceConfig.agents?.ownership).toBe("explicit");
+        expect(saved.sourceConfig.agents?.defaults?.systemAgent?.agentId).toBe("main");
+        for (const entry of Object.values(saved.sourceConfig.agents?.entries ?? {})) {
+          expect(entry).toHaveProperty("memory.search.enabled", false);
+          expect(entry).not.toHaveProperty("memorySearch");
         }
+        expect(saved.sourceConfig.gateway?.nodes?.commands?.deny).toEqual(["camera.snap"]);
+        expect(saved.sourceConfig.tools?.media?.models).toEqual([
+          { provider: "openai", model: "whisper-1", capabilities: ["audio"] },
+        ]);
         expect(await read(`${configPath}.bak`)).toBe(original);
         const repaired = await read(configPath);
         expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
         expect(await read(configPath)).toBe(repaired);
       },
     );
-  }),
-);
+  }));
+
+it("keeps deferred plugin input while repairing an unowned update key", () =>
+  withCoreHome(async (home) => {
+    const retainedInput = { source: "synthetic-plugin-data" };
+    const configPath = await writeCoreConfig(home, { retainedInput, obsoleteUpdateSetting: true });
+    await recordDeferredPluginMigrations({
+      env: process.env,
+      pending: [
+        {
+          pluginId: "pending-owner",
+          reason: "Plugin repair is deferred.",
+          command: "openclaw doctor --fix",
+          configPaths: [["retainedInput"]],
+          validationExcludedPaths: [["retainedInput"]],
+        },
+      ],
+    });
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      },
+      async () => {
+        await repairConfig(configPath);
+        const saved = JSON.parse(await read(configPath));
+        expect(saved.retainedInput).toEqual(retainedInput);
+        expect(saved).not.toHaveProperty("obsoleteUpdateSetting");
+      },
+    );
+  }));
 
 it.each(["duplicate ids", "whole-entry include"])(
   "refuses ambiguous legacy roster persistence for %s",
@@ -222,53 +253,56 @@ it.each(["duplicate ids", "whole-entry include"])(
     }),
 );
 
-it("preserves the canonical memory reference over migrated defaults through environment rotation", () =>
-  withCoreHome(async (home) => {
-    // Normal/escaped migrated refs: automatic-config-repair.test.ts and config-flow-steps.references.test.ts.
-    await withEnvAsync(memoryEnv(), async () => {
-      const apiKey = "${DOCTOR_MEMORY_KEY}";
-      const canonicalApiKey = "${DOCTOR_CANONICAL_MEMORY_KEY}";
-      const configPath = await writeCoreConfig(home, {
-        memory: { search: search(false, 9, { remote: { apiKey: canonicalApiKey } }) },
-        agents: {
-          defaults: {
-            memorySearch: search(true, 7, {
-              provider: "${DOCTOR_MEMORY_PROVIDER}",
-              remote: { apiKey },
-            }),
-          },
-          entries: {
-            ops: {
-              memorySearch: search(true, 3, { provider: "auto" }),
-              memory: { search: search(false, 5) },
+it.each([
+  ["$${DOCTOR_MEMORY_KEY}", "auto", undefined],
+  ["${DOCTOR_MEMORY_KEY}", "${DOCTOR_MEMORY_PROVIDER}", undefined],
+  ["${DOCTOR_MEMORY_KEY}", "auto", "${DOCTOR_CANONICAL_MEMORY_KEY}"],
+] satisfies Array<[string, string, string | undefined]>)(
+  "preserves migrated %s references while canonicalizing %s with canonical key %s",
+  (apiKey, provider, canonicalApiKey) =>
+    withCoreHome(async (home) => {
+      await withEnvAsync(memoryEnv(), async () => {
+        const expectedKey = apiKey.startsWith("$$")
+          ? "${DOCTOR_MEMORY_KEY}"
+          : `${canonicalApiKey ? "canonical" : "memory"}-secret-canary`;
+        const rotatedKey = apiKey.startsWith("$$") ? expectedKey : `rotated-${expectedKey}`;
+        const remote = canonicalApiKey ? { remote: { apiKey: canonicalApiKey } } : {};
+        const configPath = await writeCoreConfig(home, {
+          memory: { search: search(false, 9, remote) },
+          agents: {
+            defaults: {
+              memorySearch: search(true, 7, { provider, remote: { apiKey } }),
+            },
+            entries: {
+              ops: {
+                memorySearch: { ...search(true, 3), provider: "auto" },
+                memory: { search: search(false, 5) },
+              },
             },
           },
-        },
-      });
-      await using ctx = await prepareDoctorContext(configPath);
-      await withEnvAsync(memoryEnv("rotated-"), async () => {
-        await runInitialConfigWriteHealth(ctx);
-        const snapshot = await readConfigFileSnapshot();
-        expect(snapshot.valid).toBe(true);
-        expect(snapshot.sourceConfig.memory?.search?.remote?.apiKey).toBe(
-          "rotated-canonical-secret-canary",
+        });
+        await using ctx = await prepareDoctorContext(configPath);
+        await withEnvAsync(memoryEnv("rotated-"), async () => {
+          await runInitialConfigWriteHealth(ctx);
+          const snapshot = await readConfigFileSnapshot();
+          expect(snapshot.valid).toBe(true);
+          expect(snapshot.sourceConfig.memory?.search?.remote?.apiKey).toBe(rotatedKey);
+        });
+        expect(ctx.configWriteRefusal).toBeUndefined();
+        expect(ctx.configResult.cfg.memory?.search?.remote?.apiKey).toBe(expectedKey);
+        const saved = JSON.parse(await read(configPath));
+        expect(saved.memory.search).toEqual(
+          search(false, 9, { provider: "openai", remote: { apiKey: canonicalApiKey ?? apiKey } }),
         );
+        expect(saved.agents.defaults).not.toHaveProperty("memorySearch");
+        const ops = saved.agents.entries.ops;
+        expect(ops.memory.search).toEqual(search(false, 5, { provider: "openai" }));
+        expect(ops).not.toHaveProperty("memorySearch");
+        expect((await readConfigFileSnapshot()).valid).toBe(true);
+        expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
       });
-      expect(ctx.configWriteRefusal).toBeUndefined();
-      expect(ctx.configResult.cfg.memory?.search?.remote?.apiKey).toBe("canonical-secret-canary");
-      const saved = JSON.parse(await read(configPath));
-      expect(saved.memory.search).toEqual(
-        search(false, 9, { provider: "openai", remote: { apiKey: canonicalApiKey } }),
-      );
-      expect(saved.agents.defaults).not.toHaveProperty("memorySearch");
-      expect(saved.agents.entries.ops.memory.search).toEqual(
-        search(false, 5, { provider: "openai" }),
-      );
-      expect(saved.agents.entries.ops).not.toHaveProperty("memorySearch");
-      expect((await readConfigFileSnapshot()).valid).toBe(true);
-      expect((await repairConfig(configPath)).shouldWriteConfig).toBe(false);
-    });
-  }));
+    }),
+);
 
 it.each([undefined, true, false])(
   "preserves message bypass inheritance and precedence with explicit root denial %s",

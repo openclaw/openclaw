@@ -344,7 +344,12 @@ describe("stateless Claw Add", () => {
         getCurrentConfig: () => ({ agents: { entries: {} } }),
       });
 
-      expect(result.error).toMatchObject({ code: "add_failed", message: "publish failed" });
+      expect(result.error).toMatchObject({
+        code: "add_failed",
+        message: changed
+          ? "publish failed Shared plugins or MCP servers already added were kept; remove them separately if unused."
+          : "publish failed",
+      });
       expect(result.packages.map((ref) => ref.status)).toEqual(["rolled_back", "complete"]);
       expect(result.mcpServers).toEqual(changed ? [introducedMcp, reusedMcp] : [reusedMcp]);
       if (changed) {
