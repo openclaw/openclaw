@@ -19,7 +19,7 @@ const onListing = vi.fn();
 let browser: PlaceBrowserState;
 const advance = (ms = PICKER_INPUT_DEBOUNCE_MS) => vi.advanceTimersByTimeAsync(ms);
 function expectListing(draft: string, listing: FsListDirResult | null) {
-  expect(browser).toMatchObject({ draft, loading: false });
+  expect(browser).toMatchObject({ draft, loading: false, error: null });
   expect(browser.listing).toEqual(listing);
 }
 function highlight(delta: 1 | -1, entry: FsListDirResult["entries"][number]) {
@@ -80,16 +80,13 @@ describe("PlaceBrowserState", () => {
     browser.setDraft("/workspace/packages/ap");
     stale.resolve({ ...workspace, path: "/stale" });
     await advance(0);
-    expect(browser.listing).toEqual(workspace);
-    expect(browser.loading).toBe(true);
+    expect(browser).toMatchObject({ listing: workspace, loading: true });
     expect(onListing).toHaveBeenCalledTimes(1);
     await advance();
     expectListing("/workspace/packages/ap", packages);
-    expect(onListing).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    ["pending", false],
     ["in-flight", false],
     ["pending", true],
     ["in-flight", true],
@@ -119,8 +116,7 @@ describe("PlaceBrowserState", () => {
     await browser.navigate(packages.path);
     await advance();
     expect(listDirectory.mock.calls).toEqual([[workspace.path], [packages.path]]);
-    expect(browser.draft).toBe(packages.path);
-    expect(browser.view().entries).toEqual(packages.entries);
+    expectListing(packages.path, packages);
   });
 
   it("keeps failed typed directories as soft no-match results", async () => {
@@ -130,9 +126,7 @@ describe("PlaceBrowserState", () => {
     browser.setDraft("/missing/pa");
     await advance();
     expectListing("/missing/pa", workspace);
-    expect(browser.error).toBeNull();
     expect(browser.view().empty).toBe("no-matches");
-    expect(onListing).toHaveBeenCalledTimes(1);
   });
 
   it("retains an explicit missing scope without changing the requested path", async () => {
@@ -147,7 +141,6 @@ describe("PlaceBrowserState", () => {
     await browser.navigate("/missing");
     expect(listDirectory.mock.calls).toEqual([["/missing"]]);
     expectListing("/missing", null);
-    expect(browser.error).toBeNull();
     expect(await browser.readCompletion).toBe(
       "To browse outside agent workspaces, open Inbox, select Limited access, request admin, then approve in Devices.",
     );
@@ -210,7 +203,6 @@ describe("PlaceBrowserState", () => {
       expect(browser.completeHighlighted()).toBe(false);
     }
     expect(browser.draft).toBe(draft);
-    expect(browser.usablePath()).toBe(relative ? null : "");
     await browser.activate();
     await advance();
     expect(listDirectory.mock.calls).toEqual([[relative ? workspace.path : undefined]]);

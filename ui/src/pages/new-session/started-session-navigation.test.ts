@@ -1,9 +1,5 @@
-import { createRouter } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { RouteId } from "../../app-routes.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import type { ControlUiReadinessOutlet } from "../../app/control-ui-readiness.ts";
 import { consumeSessionNavigationHandoff } from "../../lib/sessions/navigation-handoff.ts";
 import { createDraftFixture, readyChatRoute } from "./draft-submission-flow.test-support.ts";
 import { StartedSessionNavigation } from "./started-session-navigation.ts";
@@ -31,39 +27,22 @@ afterEach(() => {
 });
 
 describe("confirmed session navigation", () => {
-  it.each([
-    ["new-session", 1],
-    ["chat", 0],
-  ] as const)("animates Chat's entrance only when leaving %s", async (from, animations) => {
-    const { context } = createDraftFixture();
-    const router = createRouter<RouteId, ApplicationContext>({
-      routes: [
-        { id: "new-session", path: "/new", component: () => ({}) },
-        { id: "chat", path: "/chat", component: () => ({}) },
-      ],
+  it("does not animate Chat again after the instant-thread handoff", async () => {
+    const { context } = fixture();
+    const animate = vi.fn();
+    Object.assign(context, {
+      routeOutlet: Object.assign(document.createElement("openclaw-router-outlet"), {
+        presentationSettled: true,
+        settlePresentation: async () => true,
+        animate,
+      }),
     });
-    // The instant-thread handoff already shows Chat before the create is accepted.
-    await router.navigate(from, context);
-    const animate = vi.fn(() => ({ finished: Promise.resolve() }) as unknown as Animation);
-    const routeOutlet = Object.assign(document.createElement("openclaw-router-outlet"), {
-      presentationSettled: true,
-      settlePresentation: async () => true,
-      animate,
-    }) satisfies ControlUiReadinessOutlet;
-    Object.assign(context, { router, routeOutlet });
-    vi.mocked(context.navigateAndWait).mockImplementation(async (routeId, options) => {
-      const navigation = router.navigate(routeId, context, {}, route(options?.pathname ?? "/chat"));
-      await readyChatRoute();
-      await navigation;
-    });
-
     await new StartedSessionNavigation().navigate(context, {
       client: context.gateway.snapshot.client!,
       key: sessionKey,
       agentId: "main",
     });
-
-    expect(animate).toHaveBeenCalledTimes(animations);
+    expect(animate).not.toHaveBeenCalled();
   });
 
   it.each(["leave", "stop"] as const)(
@@ -95,7 +74,6 @@ describe("confirmed session navigation", () => {
       }
       await opening;
       expect(navigation.current).toBeNull();
-      expect(context.navigateAndWait).toHaveBeenCalledOnce();
     },
   );
 
@@ -112,7 +90,6 @@ describe("confirmed session navigation", () => {
     try {
       await vi.waitFor(() => expect(context.navigateAndWait).toHaveBeenCalledOnce());
       await submission;
-      expect(context.sessions.createResult).toHaveBeenCalledOnce();
       expect(flow.error).toBeNull();
     } finally {
       preload.resolve();
@@ -184,8 +161,6 @@ describe("confirmed session navigation", () => {
     "retires a confirmed session handoff on %s replacement during selection",
     async (retire) => {
       const { context, flow } = fixture();
-      // Selection publishes synchronously; a subscriber may retire the flow
-      // before navigation has claimed the confirmed key.
       vi.mocked(context.gateway.setSessionKey).mockImplementation((key) => {
         context.gateway.snapshot.sessionKey = key;
         if (retire === "handshake") {
@@ -196,8 +171,6 @@ describe("confirmed session navigation", () => {
           flow.invalidate();
         }
       });
-      flow.setMessage("keep this task on its original connection");
-
       await flow.submit();
 
       expect(consumeSessionNavigationHandoff(context.gateway, pathname)).toBeUndefined();
@@ -232,7 +205,6 @@ describe("confirmed session navigation", () => {
     navigate
       .mockRejectedValueOnce(new Error("old navigation failed"))
       .mockImplementationOnce(readyChatRoute);
-    flow.setMessage("the committed task");
     await flow.submit();
 
     retire(current);

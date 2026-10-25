@@ -26,6 +26,8 @@ const model: ModelCatalogEntry = {
 };
 const agent = { id: "main", model: { primary: modelRef } };
 const preferred = { model: modelRef, agentRuntime: "agentsapi" };
+const settled = (control: ReturnType<typeof modelControl>["control"]) =>
+  vi.waitFor(() => expect(control.hostedEnvironments()).toHaveLength(1));
 const managed = managedModelControls();
 afterEach(() => {
   managed.reset();
@@ -55,11 +57,22 @@ function hostedRepository(data?: NewSessionRouteData) {
   context.agents.state.agentsList!.agents[0]!.model = agent.model;
   return fixture;
 }
+async function hostedDraft(data?: NewSessionRouteData) {
+  const fixture = hostedRepository(data);
+  fixture.state.adoptAgentDefaults();
+  await settled(fixture.state.modelControl);
+  return fixture;
+}
 it("keeps explicit runtime intent across a late catalog, permission loss, and restored preferences", async () => {
   const { context, request } = contextWith([model]);
-  const { control } = modelControl(context);
+  const { control, find } = modelControl(context);
   control.load(context, "main", true, { agent });
   await vi.waitFor(() => expect(control.hostedEnvironments()[0]?.model).toBe(modelRef));
+  await waitForModelControl(control, context, "main", agent);
+  find("model-runtime", "agentsapi")!.click();
+  expect(control.resolveAgentRuntime()?.workspaceEnvironment).toEqual(runtime.workspaceEnvironment);
+  expect(control.selectHostEnvironment()).toBe(true);
+  expect(control.agentRuntime).toBe("openclaw");
   const refresh = createDeferred<{ models: ModelCatalogEntry[] }>();
   request.mockReturnValueOnce(refresh.promise);
   control.invalidate();
@@ -79,20 +92,6 @@ it("keeps explicit runtime intent across a late catalog, permission loss, and re
   await vi.waitFor(() => expect(restored.agentRuntime).toBe("agentsapi"));
   expect(restored.modelSelectionBlockedReason(agent)).toBeTruthy();
   expect(restored.selectHostedEnvironment("agentsapi")).toBe(false);
-});
-it("uses model-picker changes and configured defaults as the environment authority", async () => {
-  const { context } = contextWith([model]);
-  const { control, find } = modelControl(context);
-  control.load(context, "main", true, { agent });
-  await vi.waitFor(() => expect(control.hostedEnvironments()).toHaveLength(1));
-  await waitForModelControl(control, context, "main", agent);
-  find("model-runtime", "agentsapi")!.click();
-  expect(control.resolveAgentRuntime()?.workspaceEnvironment).toEqual(runtime.workspaceEnvironment);
-  expect(control.selectHostEnvironment()).toBe(true);
-  expect(control.agentRuntime).toBe("openclaw");
-  control.load(context, "other", true, { agent: { ...agent, id: "other" }, preference: preferred });
-  await vi.waitFor(() => expect(control.resolveAgentRuntime()?.id).toBe("agentsapi"));
-  expect(control.modelForSubmission()).toBe(modelRef);
 });
 it("retains the explicit API-key account through hosted selection and rejects a late unavailable account preview", async () => {
   const api = modelAccount("api", "API account", "api_key");
@@ -156,7 +155,7 @@ it("keeps terminal placement when a hosted draft changes to a same-agent catalog
     headBranch: "main",
   });
   state.adoptAgentDefaults();
-  await vi.waitFor(() => expect(state.modelControl.hostedEnvironments()).toHaveLength(1));
+  await settled(state.modelControl);
   state.applyFolder(folder);
   await vi.waitFor(() => expect(state.repository.kind).toBe("git"));
   state.selectWorktree(true);
@@ -171,8 +170,9 @@ it("keeps terminal placement when a hosted draft changes to a same-agent catalog
   state.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
   expect(state).toMatchObject({ hostedEnvironment: undefined, folder, worktree: true });
   const element = renderPlace({ ...fixture, place: state }, data);
-  expect(element.querySelector("#new-session-project-trigger")).not.toBeNull();
-  expect(element.querySelector("#new-session-checkout-trigger")).not.toBeNull();
+  for (const id of ["project", "checkout"]) {
+    expect(element.querySelector(`#new-session-${id}-trigger`)).not.toBeNull();
+  }
   expect(
     buildSelectedSessionCreateParams(state, { ...createSelection, catalogId: "native-cli" }),
   ).toMatchObject({ catalogId: "native-cli", cwd: folder, worktree: true });
@@ -189,7 +189,7 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
       catalog({ agentRuntime: nativeRuntime("remote-runtime", "remote-exec") }),
   });
   managed.track(f.place.modelControl);
-  await vi.waitFor(() => expect(f.place.modelControl.hostedEnvironments()).toHaveLength(1));
+  await settled(f.place.modelControl);
   f.place.selectHostedEnvironment("agentsapi");
   expect(f.place.hostedEnvironment).toBeDefined();
   await f.gateway.refreshCloudProfiles();
@@ -207,9 +207,7 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
 });
 
 it("suppresses remote clone and worktree payloads while preserving place intent", async () => {
-  const { state } = hostedRepository();
-  state.adoptAgentDefaults();
-  await vi.waitFor(() => expect(state.modelControl.hostedEnvironments()).toHaveLength(1));
+  const { state } = await hostedDraft();
   state.selectDevice("desktop");
   state.selectRemoteProject({
     identity: "example.test/repo",

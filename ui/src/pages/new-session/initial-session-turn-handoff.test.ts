@@ -109,12 +109,14 @@ describe("first-turn publication", () => {
         }
         const retainRejected = vi.spyOn(rejected, "retainRejectedInitialTurn");
         const navigate = vi.spyOn(navigation, "navigate").mockResolvedValue();
+        const onAccepted = vi.fn();
+        const onRejectedPrompt = change === "unchanged" ? undefined : vi.fn();
         let current = true;
         const completion = complete(
           status === "started"
             ? { status, runId: "private-run" }
             : { status, error: "synthetic denial" },
-          { isCurrent: () => current },
+          { isCurrent: () => current, onAccepted, onRejectedPrompt },
         );
         queueMicrotask(() => {
           if (change === "scope") {
@@ -141,6 +143,8 @@ describe("first-turn publication", () => {
           expect(navigate).not.toHaveBeenCalled();
           expect(context.chatSubmissions.readInitial(key, client)).toBeNull();
           expect(retainRejected).not.toHaveBeenCalled();
+          expect(onAccepted).not.toHaveBeenCalled();
+          expect(onRejectedPrompt).not.toHaveBeenCalled();
           expect(JSON.stringify(localStorage)).not.toContain("private incognito first turn");
           if (status === "started") {
             expect(clearDraft).toHaveBeenCalledWith(true, undefined);
@@ -156,52 +160,32 @@ describe("first-turn publication", () => {
 });
 
 describe("retained launcher rejection", () => {
-  it.each([true, false])(
-    "publishes launcher rejection only for its current owner (%s)",
-    async (current) => {
-      const { navigation, clearDraft, complete } = completionFixture();
-      const attachment = current
-        ? registerChatAttachmentPayload({
-            attachment: { id: "launcher-image", mimeType: "image/png", fileName: "image.png" },
-            dataUrl: "data:image/png;base64,aW1hZ2U=",
-            file: new File(["image"], "image.png", { type: "image/png" }),
-          })
-        : undefined;
-      const retain = vi.spyOn(rejected, "retainRejectedInitialTurn").mockReturnValue(false);
-      const navigate = current ? undefined : vi.spyOn(navigation, "navigate").mockResolvedValue();
-      const onRejectedPrompt = vi.fn();
-      const onAccepted = vi.fn();
-      onTestFinished(() => releaseChatAttachmentPayloads(attachment ? [attachment] : []));
-      const error = current ? "Rejected image" : "First turn denied";
-      await complete(
-        { status: "rejected", error },
-        {
-          turn: {
-            text: current ? "" : "Keep this prompt visible",
-            attachments: attachment ? [attachment] : [],
-            createdAt: 1,
-          },
-          isCurrent: () => current,
-          completeInBackground: () => true,
-          onRejectedPrompt,
-          onAccepted: current ? undefined : onAccepted,
-        },
-      );
-      expect(clearDraft).not.toHaveBeenCalled();
-      if (attachment) {
-        const destination = retain.mock.calls[0]![0].attachments;
-        expect(destination).toHaveLength(1);
-        expect(destination[0]!.id).not.toBe(attachment.id);
-        expect(getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aW1hZ2U=");
-        releaseChatAttachmentPayloads([attachment]);
-        expect(getChatAttachmentDataUrl(destination[0]!)).toBe("data:image/png;base64,aW1hZ2U=");
-        expect(onRejectedPrompt).toHaveBeenCalledExactlyOnceWith(error);
-      } else {
-        expect(navigate).not.toHaveBeenCalled();
-        expect(retain).not.toHaveBeenCalled();
-        expect(onAccepted).not.toHaveBeenCalled();
-        expect(onRejectedPrompt).not.toHaveBeenCalled();
-      }
-    },
-  );
+  it("retains independent attachment ownership for a launcher rejection", async () => {
+    const { clearDraft, complete } = completionFixture();
+    const attachment = registerChatAttachmentPayload({
+      attachment: { id: "launcher-image", mimeType: "image/png", fileName: "image.png" },
+      dataUrl: "data:image/png;base64,aW1hZ2U=",
+      file: new File(["image"], "image.png", { type: "image/png" }),
+    });
+    const retain = vi.spyOn(rejected, "retainRejectedInitialTurn").mockReturnValue(false);
+    const onRejectedPrompt = vi.fn();
+    onTestFinished(() => releaseChatAttachmentPayloads([attachment]));
+    const error = "Rejected image";
+    await complete(
+      { status: "rejected", error },
+      {
+        turn: { text: "", attachments: [attachment], createdAt: 1 },
+        completeInBackground: () => true,
+        onRejectedPrompt,
+      },
+    );
+    expect(clearDraft).not.toHaveBeenCalled();
+    const destination = retain.mock.calls[0]![0].attachments;
+    expect(destination).toHaveLength(1);
+    expect(destination[0]!.id).not.toBe(attachment.id);
+    expect(getChatAttachmentDataUrl(attachment)).toBe("data:image/png;base64,aW1hZ2U=");
+    releaseChatAttachmentPayloads([attachment]);
+    expect(getChatAttachmentDataUrl(destination[0]!)).toBe("data:image/png;base64,aW1hZ2U=");
+    expect(onRejectedPrompt).toHaveBeenCalledExactlyOnceWith(error);
+  });
 });

@@ -11,23 +11,6 @@ import {
   resolveAutomaticDevicePlacementDisabledReason,
 } from "./device-placement.ts";
 
-function mountSessionItem(item: Partial<Parameters<typeof SessionMenuItem>[0]["item"]>) {
-  return mountSolid(() =>
-    createComponent(SessionMenuItem, {
-      item: {
-        value: "auto",
-        label: "Auto",
-        compact: true,
-        disabled: true,
-        checked: false,
-        onSelect: vi.fn(),
-        ...item,
-      },
-      submitting: false,
-    }),
-  ).container.querySelector('[slot="content"]');
-}
-
 type CloudParams = Parameters<typeof mountCloudProfiles>[0];
 function cloud(params: Partial<CloudParams>) {
   const container = document.createElement("div");
@@ -71,12 +54,22 @@ describe("cloud target menu", () => {
   });
 
   it("renders saved-pairing remediation commands without redeeming a new join URL", () => {
-    const card = mountSessionItem({
-      value: "device:disabled",
-      label: "Device",
-      title: "Hosting disabled",
-      remediation: "enable-session-hosting",
-    });
+    const { container } = mountSolid(() =>
+      createComponent(SessionMenuItem, {
+        item: {
+          value: "device:disabled",
+          label: "Device",
+          compact: true,
+          disabled: true,
+          checked: false,
+          onSelect: vi.fn(),
+          title: "Hosting disabled",
+          remediation: "enable-session-hosting",
+        },
+        submitting: false,
+      }),
+    );
+    const card = container.querySelector('[slot="content"]');
     expect(card?.textContent).toContain(
       "Session hosting is disabled. Run these commands on the paired device:",
     );
@@ -95,13 +88,12 @@ describe("cloud target menu", () => {
         sessionHost: false,
       },
     ];
-    const card = mountSessionItem({
-      title: resolveAutomaticDevicePlacementDisabledReason(
+    expect(
+      resolveAutomaticDevicePlacementDisabledReason(
         environments,
         projectDevicePlacements(environments),
       ),
-    });
-    expect(card?.textContent?.trim()).toBe(
+    ).toBe(
       "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
     );
   });
@@ -150,14 +142,12 @@ describe("cloud target menu", () => {
   });
 
   it.each([
-    {
-      machine: { id: "standard", label: "Standard", cpu: 32, memoryGb: 64 },
-      expected: "32 vCPU · 64 GB",
-    },
-    { machine: { id: "compute", label: "Compute", cpu: 48 }, expected: "48 vCPU" },
-    { machine: { id: "memory", label: "Memory", memoryGb: 256 }, expected: "256 GB" },
-    { machine: { id: "custom", label: "Custom" }, expected: "Custom" },
-  ])("renders a single machine as fixed provider configuration", ({ machine, expected }) => {
+    [{ cpu: 32, memoryGb: 64 }, "32 vCPU · 64 GB"],
+    [{ cpu: 48 }, "48 vCPU"],
+    [{ memoryGb: 256 }, "256 GB"],
+    [{}, "Custom"],
+  ] as const)("renders a single machine as fixed configuration: %j", (shape, expected) => {
+    const machine = { id: "fixed", label: "Custom", ...shape };
     const { find } = cloud({
       profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
       selectedMachine: machine.id,
@@ -200,12 +190,11 @@ describe("cloud target menu", () => {
         { id: "ssh", providerId: "static-ssh" },
       ],
       selectedId: "",
-      ...(global
-        ? { disabled: true, disabledReason: reason }
-        : {
-            profileDisabledReason: (profile: CloudParams["profiles"][number]) =>
-              profile.id === "aws" ? reason : undefined,
-          }),
+      disabled: global,
+      disabledReason: reason,
+      profileDisabledReason: global
+        ? undefined
+        : (profile) => (profile.id === "aws" ? reason : undefined),
     });
 
     const disabled = find("cloud:aws");
@@ -214,10 +203,8 @@ describe("cloud target menu", () => {
     expect(disabled?.getAttribute("aria-description")).toContain(reason);
     expect(enabled?.disabled).toBe(false);
     expect(enabled?.getAttribute("aria-disabled")).toBe(global ? "true" : null);
-    if (global) {
-      expect(enabled?.getAttribute("aria-description")).toContain(reason);
-    } else {
-      expect(enabled?.getAttribute("aria-description")).toBe("Cloud worker provider: static-ssh");
-    }
+    expect(enabled?.getAttribute("aria-description")).toBe(
+      `Cloud worker provider: static-ssh${global ? `, ${reason}` : ""}`,
+    );
   });
 });
