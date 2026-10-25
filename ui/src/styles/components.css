@@ -3340,7 +3340,7 @@ td.data-table-key-col {
   }
 
   .exec-approval-header {
-    align-items: flex-start;
+    align-items: baseline;
     gap: 10px;
   }
 
@@ -3394,7 +3394,6 @@ td.data-table-key-col {
 
   .exec-approval-warning,
   .exec-approval-error,
-  .exec-approval-summary,
   .exec-approval-scope {
     margin: 0;
     font-size: inherit;
@@ -3402,7 +3401,6 @@ td.data-table-key-col {
     overflow-wrap: anywhere;
   }
 
-  .exec-approval-summary,
   .exec-approval-scope {
     color: var(--muted);
   }
@@ -3428,22 +3426,41 @@ td.data-table-key-col {
     border-radius: var(--radius-md);
     font-size: 13px;
   }
+
+  .exec-approval-actions .btn.danger {
+    background: transparent;
+    border-color: transparent;
+    color: var(--muted);
+  }
+
+  .exec-approval-actions .btn.danger:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
 }
 
-.exec-approval-identity,
+.exec-approval-sentence {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.exec-approval-identity {
+  display: inline-flex;
+  align-items: baseline;
+  max-width: 100%;
+  gap: 6px;
+  vertical-align: baseline;
+}
+
+.exec-approval-identity .exec-approval-agent {
+  align-self: center;
+}
+
 .exec-approval-request {
   display: inline-flex;
   align-items: center;
   min-width: 0;
   max-width: 100%;
-  gap: 8px;
-}
-
-.exec-approval-agent-name {
-  font-weight: 500;
-}
-
-.exec-approval-request {
   gap: 6px;
   color: color-mix(in srgb, var(--text) 90%, transparent);
 
@@ -3454,9 +3471,37 @@ td.data-table-key-col {
   }
 }
 
+.exec-approval-sentence .exec-approval-request {
+  display: inline;
+}
+
+.exec-approval-agent-name {
+  font-weight: 500;
+}
+
+.exec-approval-fallback-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-md);
+  corner-shape: superellipse(1.5);
+  background: var(--bg-hover);
+  color: var(--muted);
+}
+
 .exec-approval-shortcut {
+  padding: 0 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
   font-size: 11px;
+  letter-spacing: -0.04em;
   opacity: 0.85;
+}
+
+.exec-approval-card .exec-approval-shortcut > span:not(:first-child) {
+  margin-inline-start: 0;
 }
 
 .exec-approval-agent {
@@ -3466,15 +3511,8 @@ td.data-table-key-col {
   width: 24px;
   height: 24px;
   border-radius: var(--radius-full);
-  background: var(--bg-hover);
-  color: var(--muted);
   font-size: 12px;
   font-weight: 500;
-
-  svg {
-    width: 14px;
-    height: 14px;
-  }
 }
 
 .exec-approval-source {
@@ -3503,6 +3541,7 @@ td.data-table-key-col {
 .exec-approval-prompt {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0 10px;
   margin-bottom: 2px;
   font-size: 12px;
@@ -3511,11 +3550,17 @@ td.data-table-key-col {
 }
 
 .exec-approval-host {
-  color: var(--info);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-weight: 400;
+}
+
+.exec-approval-meta .exec-approval-host {
+  font-family: var(--mono);
 }
 
 .exec-approval-cwd {
-  color: var(--ok);
+  color: var(--muted);
 }
 
 .exec-approval-command-line {
@@ -3569,6 +3614,8 @@ td.data-table-key-col {
 }
 
 .exec-approval-details.oc-popover {
+  /* A viewport budget lets native positioning flip instead of shrinking above the trigger. */
+  max-height: min(420px, calc(100dvh - 16px));
   width: 380px;
   max-width: calc(100dvw - 32px);
   padding: 12px;
@@ -3590,10 +3637,35 @@ td.data-table-key-col {
 }
 
 .exec-approval-status {
-  flex: 1;
-  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  color: var(--muted);
   font-size: 13px;
   line-height: 19px;
+}
+
+.exec-approval-status-label {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.exec-approval-info--error::after,
+.exec-approval-mobile-summary--error::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--danger);
+}
+
+.exec-approval-mobile-summary--error {
+  position: relative;
 }
 
 .exec-approval-actions .btn.exec-approval-action--pending {
@@ -3632,7 +3704,7 @@ td.data-table-key-col {
   display: grid;
   --exec-approval-row-bg: var(--card);
 
-  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -3661,6 +3733,10 @@ td.data-table-key-col {
 .exec-approval-list__agent {
   grid-column: 1;
   grid-row: 1;
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+  font-size: 10px;
 }
 
 .exec-approval-list__command {
@@ -3685,6 +3761,52 @@ td.data-table-key-col {
   font-variant-numeric: tabular-nums;
   text-align: end;
   white-space: nowrap;
+}
+
+.exec-approval-card--command .exec-approval-list {
+  padding: 12px 0 0;
+  margin-top: 2px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+
+.exec-approval-card--command .exec-approval-list__heading {
+  padding: 0 0 4px;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.exec-approval-card--command .exec-approval-list__item {
+  padding-inline: 0;
+}
+
+.exec-approval-card--command .exec-approval-countdown,
+.exec-approval-card--command .exec-approval-list__expiry {
+  color: var(--muted);
+}
+
+.exec-approval-card--command openclaw-approval-countdown[data-urgent="true"] {
+  color: var(--accent);
+}
+
+.exec-approval-more {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: var(--cursor-action);
+}
+
+.exec-approval-more:hover {
+  color: var(--text);
 }
 
 .secret-reveal__value {

@@ -98,6 +98,10 @@ describe("openclaw-exec-approval", () => {
     const pending = createDeferred();
     const onDecision = vi.fn<ExecApprovalProps["onDecision"]>(() => pending.promise);
     const { dialog } = await renderOpenedApproval(createExecRequest(), { onDecision });
+    expect(container.querySelectorAll(".exec-approval-shortcut")).toHaveLength(1);
+    expect(query(".exec-approval-shortcut")?.closest("button")?.getAttribute("aria-label")).toBe(
+      "Allow once",
+    );
     dialog.dispatchEvent(chord("Enter"));
     await waitForSolid(() => {
       expect(onDecision).toHaveBeenCalledOnce();
@@ -142,8 +146,8 @@ describe("openclaw-exec-approval", () => {
     }
     flush();
 
-    expect(countdown.textContent?.trim()).toBe("expires in 01:31");
-    expect(dialog.getAttribute("aria-description")).toBe("expires in 01:31");
+    expect(countdown.textContent?.trim()).toBe("1:31");
+    expect(dialog.getAttribute("aria-description")).toBe("expires in 1:31");
 
     const card = container.querySelector(".exec-approval-card");
     nowMs = 1_000;
@@ -153,10 +157,10 @@ describe("openclaw-exec-approval", () => {
     }
     tick();
     flush();
-    expect(countdown.textContent?.trim()).toBe("expires in 01:30");
+    expect(countdown.textContent?.trim()).toBe("1:30");
     await getRenderedModalDialog(container);
 
-    expect(dialog.getAttribute("aria-description")).toBe("expires in 01:30");
+    expect(dialog.getAttribute("aria-description")).toBe("expires in 1:30");
     expect(container.querySelector(".exec-approval-card")).toBe(card);
   });
 
@@ -175,7 +179,7 @@ describe("openclaw-exec-approval", () => {
     const pending = container.querySelector(".exec-approval-list")!;
     expect(card.contains(pending)).toBe(true);
     expect(
-      pending.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING,
+      actions.compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     expect(activeId()).toBe("approval-oldest");
@@ -183,6 +187,9 @@ describe("openclaw-exec-approval", () => {
     await approval.updateComplete;
 
     expect(activeId()).toBe("approval-newer");
+    expect(
+      container.querySelector(".exec-approval-list__agent .identity-avatar--agent"),
+    ).toBeNull();
     expect(queue.map((entry) => entry.id)).toEqual(["approval-oldest", "approval-newer"]);
     container.querySelector<HTMLButtonElement>(".exec-approval-actions button:last-child")!.click();
     expect(onDecision).toHaveBeenCalledWith("approval-newer", "allow-once");
@@ -255,13 +262,20 @@ describe("openclaw-exec-approval", () => {
       );
 
       if (connected) {
-        expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
-          "Review only. Sign in with approval access to record a decision.",
+        expect(container.querySelector(".exec-approval-status")?.textContent).toContain(
+          "You don’t have permission to approve.",
+        );
+        expect(container.querySelector(".exec-approval-status-label")?.textContent).toBe(
+          "View only",
         );
       } else {
         expect(container.textContent).not.toContain("Sign in");
       }
+      expect(buttons).toHaveLength(connected ? 0 : 3);
       expect(buttons.every((button) => button.disabled)).toBe(true);
+      if (!connected) {
+        expect(container.querySelector(".exec-approval-status")?.textContent).toBe("Offline.");
+      }
 
       buttons[0]?.click();
       modal.dispatchEvent(chord("Enter"));

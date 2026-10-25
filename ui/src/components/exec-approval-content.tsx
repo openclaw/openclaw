@@ -1,13 +1,36 @@
 import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
+import { summarizeApprovalScopeLabel } from "../app/approval-presentation.ts";
 import type { ExecApprovalRequest, ExecApprovalRequestPayload } from "../app/exec-approval.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { shortenOpaqueIdRuns } from "../lib/session-display.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import type { ExecApprovalCardProps } from "./exec-approval-card-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Popover } from "./solid/popover.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
+
+function ExecApprovalHost(props: {
+  request: ExecApprovalRequestPayload;
+  nodeDisplayName?: string;
+}) {
+  return (
+    <span
+      class="exec-approval-host"
+      title={props.request.host === "node" ? (props.request.nodeId ?? undefined) : undefined}
+    >
+      {props.request.host === "sandbox"
+        ? t("execApproval.labels.sandbox")
+        : props.request.host === "node"
+          ? props.nodeDisplayName ||
+            (props.request.nodeId
+              ? shortenOpaqueIdRuns(props.request.nodeId)
+              : t("execApproval.labels.node"))
+          : props.request.host}
+    </span>
+  );
+}
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
   if (!value) {
@@ -18,6 +41,25 @@ function renderMetaRow(label: string, value?: string | null, opts?: { path?: boo
       <span>{label}</span>
       <span>{opts?.path ? formatApprovalDisplayPath(value) : value}</span>
     </div>
+  );
+}
+
+function ExecApprovalHostDetails(props: {
+  request: ExecApprovalRequestPayload;
+  nodeDisplayName?: string;
+}) {
+  return (
+    <>
+      <Show when={props.request.host}>
+        <div class="exec-approval-meta-row">
+          <span>{t("execApproval.labels.host")}</span>
+          <ExecApprovalHost request={props.request} nodeDisplayName={props.nodeDisplayName} />
+        </div>
+      </Show>
+      {props.request.host === "node"
+        ? renderMetaRow(t("execApproval.labels.node"), props.request.nodeId)
+        : undefined}
+    </>
   );
 }
 
@@ -66,17 +108,20 @@ function renderDetails(content: SolidJSX.Element) {
 export function ExecApprovalBody(props: {
   request: ExecApprovalRequestPayload;
   variant: ExecApprovalCardProps["variant"];
+  positionAnchor?: HTMLElement;
+  nodeDisplayName?: string;
+  lastError?: string;
 }) {
   const detailsId = createUniqueId();
   return (
     <div class="exec-approval-terminal">
       <div class="exec-approval-shell mono">
-        <Show when={props.request.host || props.request.cwd}>
+        <Show when={(props.request.host && props.request.host !== "gateway") || props.request.cwd}>
           <div class="exec-approval-prompt">
-            <Show when={props.request.host}>
-              <span class="exec-approval-host">
+            <Show when={props.request.host && props.request.host !== "gateway"}>
+              <span>
                 <span class="sr-only">{t("execApproval.labels.host")}: </span>
-                {props.request.host}
+                <ExecApprovalHost request={props.request} nodeDisplayName={props.nodeDisplayName} />
               </span>
             </Show>
             <Show when={props.request.cwd}>
@@ -96,9 +141,12 @@ export function ExecApprovalBody(props: {
       </div>
       <Show
         when={
+          props.lastError ||
+          props.request.host ||
           props.request.resolvedPath ||
           props.request.ask ||
           props.request.security ||
+          props.request.scope?.kind === "standing-grant" ||
           (props.variant === "modal" && props.request.sessionKey)
         }
       >
@@ -107,16 +155,31 @@ export function ExecApprovalBody(props: {
           label={t("execApproval.requestDetails")}
           triggerTitle={t("execApproval.requestDetails")}
           trigger={<Icon name="info" />}
-          triggerClass="exec-approval-info"
+          triggerClass={[
+            "exec-approval-info",
+            { "exec-approval-info--error": Boolean(props.lastError) },
+          ]}
           class="exec-approval-details"
           placement="top-end"
+          positionAnchor={props.positionAnchor}
         >
           <div class="exec-approval-meta">
+            <ExecApprovalHostDetails
+              request={props.request}
+              nodeDisplayName={props.nodeDisplayName}
+            />
             {renderMetaRow(t("execApproval.labels.resolved"), props.request.resolvedPath, {
               path: true,
             })}
             {renderMetaRow(t("execApproval.labels.security"), props.request.security)}
             {renderMetaRow(t("execApproval.labels.ask"), props.request.ask)}
+            {props.request.scope?.kind === "standing-grant"
+              ? renderMetaRow(
+                  t("execApproval.labels.scope"),
+                  summarizeApprovalScopeLabel(props.request.scope),
+                )
+              : undefined}
+            {renderMetaRow(t("execApproval.labels.lastError"), props.lastError)}
             {props.variant === "modal"
               ? renderMetaRow(t("execApproval.labels.session"), props.request.sessionKey)
               : undefined}
@@ -127,7 +190,11 @@ export function ExecApprovalBody(props: {
   );
 }
 
-export function MobileExecApprovalBody(props: { request: ExecApprovalRequestPayload }) {
+export function MobileExecApprovalBody(props: {
+  request: ExecApprovalRequestPayload;
+  nodeDisplayName?: string;
+  lastError?: string;
+}) {
   const commandScrollState = useScrollState(true, false);
   let disclosure: HTMLDetailsElement;
   let metadata: HTMLDivElement;
@@ -170,7 +237,13 @@ export function MobileExecApprovalBody(props: { request: ExecApprovalRequestPayl
   return (
     <>
       <details class="exec-approval-mobile-disclosure" ref={(element) => (disclosure = element)}>
-        <summary class="exec-approval-mobile-summary" onClick={toggle}>
+        <summary
+          class={[
+            "exec-approval-mobile-summary",
+            { "exec-approval-mobile-summary--error": Boolean(props.lastError) },
+          ]}
+          onClick={toggle}
+        >
           <Icon name="terminal" class="exec-approval-mobile-terminal" />
           <ExecApprovalCommand request={props.request} scrollState={commandScrollState} />
           <Icon name="chevronDown" class="exec-approval-mobile-chevron" />
@@ -178,16 +251,21 @@ export function MobileExecApprovalBody(props: { request: ExecApprovalRequestPayl
         <div class="exec-approval-mobile-metadata" ref={(element) => (metadata = element)}>
           <Show
             when={
+              props.lastError ||
               props.request.host ||
               props.request.cwd ||
               props.request.resolvedPath ||
               props.request.security ||
+              props.request.scope?.kind === "standing-grant" ||
               props.request.ask
             }
           >
             <div class="exec-approval-meta">
               <div class="exec-approval-mobile-host">
-                {renderMetaRow(t("execApproval.labels.host"), props.request.host)}
+                <ExecApprovalHostDetails
+                  request={props.request}
+                  nodeDisplayName={props.nodeDisplayName}
+                />
               </div>
               {renderMetaRow(t("execApproval.labels.directory"), props.request.cwd, { path: true })}
               {renderMetaRow(t("execApproval.labels.resolved"), props.request.resolvedPath, {
@@ -195,6 +273,13 @@ export function MobileExecApprovalBody(props: { request: ExecApprovalRequestPayl
               })}
               {renderMetaRow(t("execApproval.labels.security"), props.request.security)}
               {renderMetaRow(t("execApproval.labels.ask"), props.request.ask)}
+              {props.request.scope?.kind === "standing-grant"
+                ? renderMetaRow(
+                    t("execApproval.labels.scope"),
+                    summarizeApprovalScopeLabel(props.request.scope),
+                  )
+                : undefined}
+              {renderMetaRow(t("execApproval.labels.lastError"), props.lastError)}
             </div>
           </Show>
         </div>

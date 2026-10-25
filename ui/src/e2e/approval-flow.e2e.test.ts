@@ -43,7 +43,7 @@ async function openChat(options: Parameters<typeof installMockGateway>[1] = {}) 
 }
 
 suite.define(() => {
-  it("keeps approvals passive until the Inbox opens the full queue", async () => {
+  it("keeps approvals passive and opens the queue from the Inbox or inline link", async () => {
     const { page, request } = await openChat({ sessionKey: activeSessionKey });
     await request("approval-inline", "echo inline", 1_000);
 
@@ -62,6 +62,13 @@ suite.define(() => {
     await inboxPanel.locator('[data-approval-id="approval-other"]').waitFor();
     await expect.poll(() => inboxPanel.locator("[data-approval-id]").count()).toBe(2);
     await inboxPanel.getByRole("tab", { name: "Approvals 2" }).waitFor();
+    await page.keyboard.press("Escape");
+    await inlineApproval(page, "approval-inline")
+      .getByRole("button", { name: "1 more pending" })
+      .click();
+    const modal = page.locator("openclaw-exec-approval .exec-approval-card");
+    await modal.locator(".exec-approval-list__item", { hasText: "echo other" }).click();
+    await expect.poll(() => modal.getAttribute("data-approval-id")).toBe("approval-other");
   });
 
   it("reviews command details without moving or resolving the pending decision", async () => {
@@ -110,6 +117,9 @@ suite.define(() => {
     });
 
     await request("approval-review-only", "echo review only", 1_000);
+    const card = inlineApproval(page, "approval-review-only");
+    await card.getByText("View only", { exact: true }).waitFor();
+    expect(await card.locator(".exec-approval-actions button").count()).toBe(0);
 
     await approvalInboxButton(page).click();
     const inboxPanel = approvalInboxPanel(page);
@@ -117,9 +127,7 @@ suite.define(() => {
     await expect
       .poll(() => inboxRow.locator(".sidebar-approval-row__command").textContent())
       .toContain("echo review only");
-    await inboxRow
-      .getByText("Review only. Sign in with approval access to record a decision.", { exact: true })
-      .waitFor();
+    await inboxRow.getByText("You don’t have permission to approve.", { exact: true }).waitFor();
     expect(
       await inboxRow
         .locator(".sidebar-approval-row__actions button")

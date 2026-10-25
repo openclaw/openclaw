@@ -621,7 +621,7 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-approval-row__timer--urgent {
-  color: var(--warn);
+  color: var(--accent);
 }
 
 .sidebar-approval-row__command {

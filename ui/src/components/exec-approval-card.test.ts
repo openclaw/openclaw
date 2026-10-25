@@ -160,10 +160,15 @@ describe("exec approval card", () => {
       expect(allow.hasAttribute("aria-busy")).toBe(false);
     });
     expect(onDecision).toHaveBeenCalledExactlyOnceWith(request.id, "deny");
-    view.update({ error: "Could not record your decision. Try again." });
+    view.update({ error: "Approval failed: gateway unavailable" });
     pending.resolve();
     await waitForSolid(() => {
-      expect(view.getByRole("alert").textContent).toContain("Could not record your decision");
+      expect(view.getByRole("alert").textContent).toBe(
+        "Couldn’t confirm your decision. Try again.",
+      );
+      expect(container.querySelector(".exec-approval-details")?.textContent).toContain(
+        "Approval failed: gateway unavailable",
+      );
       expect(deny.hasAttribute("aria-busy")).toBe(false);
       expect(deny.disabled).toBe(false);
       expect(allow.disabled).toBe(false);
@@ -213,6 +218,7 @@ describe("exec approval card", () => {
         expiresAtMs: 61_000,
         request: {
           command: "tail -F app.log",
+          agentId: "release",
           host: "sandbox",
           ask: "always",
           warningText: "Runs after this turn and restarts automatically until stopped.",
@@ -222,13 +228,14 @@ describe("exec approval card", () => {
       });
       expect(request).not.toBeNull();
       const card = renderCard(request!);
-      expect(text(".exec-approval-title")).toBe("Watch application errors");
+      expect(text(".exec-approval-title")).toContain(
+        operation === "add"
+          ? "release wants to start “Watch application errors”"
+          : "release wants to change “Watch application errors”",
+      );
       expect(text(".exec-approval-command")).toBe("tail -F app.log");
       expect(card?.textContent).toContain(
         "Runs after this turn and restarts automatically until stopped.",
-      );
-      expect(text(".exec-approval-summary")).toContain(
-        "Runs in your sandbox after you leave this chat, until stopped.",
       );
       expect(card?.textContent).toContain(
         operation === "add" ? "Start watching" : "Save watcher change",
@@ -320,11 +327,11 @@ describe("exec approval card", () => {
     const timer = view.getByRole("timer");
     const actions = buttons();
     expect(actions).toHaveLength(3);
-    expect(timer.getAttribute("aria-label")).toBe("expires in 00:02");
+    expect(timer.getAttribute("aria-label")).toBe("expires in 0:02");
     expect(actions.every((button) => !button.disabled)).toBe(true);
     await vi.advanceTimersByTimeAsync(2_000);
     flush();
-    expect(timer).toMatchObject({ textContent: "00:00", title: "expired" });
+    expect(timer).toMatchObject({ textContent: "0:00", title: "expired" });
     expect(timer.getAttribute("aria-label")).toBe("expired");
     expect(actions.every((button) => button.disabled)).toBe(true);
     for (const button of actions) {
@@ -422,7 +429,7 @@ describe("exec approval card", () => {
     expect(card?.textContent).toContain("Approval requested by session cloud-child");
   });
 
-  it("keeps host and cwd visible while collapsing lower-value exec metadata", () => {
+  it("keeps cwd visible and presents host and policy in request details", () => {
     const card = renderCard(
       approval({
         kind: "exec",
@@ -440,7 +447,7 @@ describe("exec approval card", () => {
       "inline",
     );
     const details = card?.querySelector(".exec-approval-details");
-    expect(card?.querySelector(".exec-approval-prompt")?.textContent).toContain("gateway");
+    expect(details?.textContent).toContain("gateway");
     expect(card?.querySelector(".exec-approval-prompt")?.textContent).toContain("/workspace");
     expect(
       card?.querySelector('[aria-label="Request details"]')?.getAttribute("aria-expanded"),
@@ -448,6 +455,7 @@ describe("exec approval card", () => {
     expect(details?.textContent).toContain("Resolved");
     expect(details?.textContent).toContain("/usr/bin/pnpm");
     expect(details?.textContent).toContain("Ask");
+    expect(text(".exec-approval-title")).toContain("main wants to run a command");
     expect(details?.textContent).toContain("Security");
     expect(details?.textContent).toContain("allowlist");
     expect(card?.querySelector('[data-approval-chip="agent"]')).toBeNull();
@@ -465,7 +473,7 @@ describe("exec approval card", () => {
     const view = mountUpdatingCard(request, { presentation: "mobile", onDecision });
     const disclosure = container.querySelector<HTMLDetailsElement>("details")!;
     expect(disclosure.open).toBe(false);
-    expect(view.getByRole("timer").textContent).toContain("expires in");
+    expect(view.getByRole("timer").getAttribute("aria-label")).toContain("expires in");
     expect(view.getByText("Exec approval needed")).toBeTruthy();
     disclosure.querySelector("summary")!.click();
     expect(disclosure.open).toBe(true);
@@ -485,14 +493,47 @@ describe("exec approval card", () => {
 
     view.update({ busy: false, error: "Approval failed: connection lost" });
     flush();
-    expect(view.getByRole("alert").textContent).toBe("Approval failed: connection lost");
+    expect(view.getByRole("alert").textContent).toBe("Couldn’t confirm your decision. Try again.");
+    expect(container.querySelector(".exec-approval-mobile-metadata")?.textContent).toContain(
+      "Approval failed: connection lost",
+    );
     allow.click();
     expect(onDecision).toHaveBeenCalledExactlyOnceWith("approval-1", "allow-once");
 
     view.update({ approval: { ...request, id: "approval-2" }, canGrant: false });
     flush();
     expect(container.querySelector<HTMLDetailsElement>("details")!.open).toBe(false);
-    expect(view.getByRole<HTMLButtonElement>("button", { name: "Allow once" }).disabled).toBe(true);
+    expect(view.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(view.getByRole("status").textContent).toContain("View only");
+  });
+
+  it("labels an existing standing-grant duration without changing the decision", () => {
+    const request = approval({
+      kind: "exec",
+      request: {
+        command: "git status --short",
+        scope: {
+          kind: "standing-grant",
+          automation: "Repository status",
+          command: "git status --short",
+          expiresInDays: 7,
+        },
+      },
+      expiresAtMs: Date.now() + 60_000,
+    });
+    const onDecision = vi.fn();
+    const view = mountUpdatingCard(request, { presentation: "mobile", onDecision });
+    const allow = view.getByRole<HTMLButtonElement>("button", { name: "Always allow (7 days)" });
+    expect(allow.title).toBe("Always allow (7 days)");
+    expect(container.querySelector(".exec-approval-mobile-metadata")?.textContent).toContain(
+      "Repository status",
+    );
+    allow.click();
+    expect(onDecision).toHaveBeenCalledExactlyOnceWith(request.id, "allow-always");
+    view.update({ approval: { ...request, request: { command: request.request.command } } });
+    flush();
+    expect(view.getByRole("button", { name: "Always allow" })).toBe(allow);
+    view.unmount();
   });
 
   it("cancels an active pointer-triggered mobile disclosure animation on unmount", () => {
@@ -558,7 +599,7 @@ describe("exec approval card", () => {
         surface === "modal" ? "Exec approval needed" : "Codex approval",
       );
       if (surface === "modal") {
-        expect(card!.textContent).toContain("Always allow here");
+        expect(card!.textContent).toContain("Always allow");
       } else {
         expect(card!.querySelector("details")).toBeNull();
       }

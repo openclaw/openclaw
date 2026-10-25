@@ -208,20 +208,23 @@ it("places inline approval above the composer and enforces its grant projection"
   expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
   expectFooterContext(container, inlineSurface);
   flush();
-  expect(text("countdown")?.trim()).toBe("expires in 01:00");
+  expect(text("countdown")?.trim()).toBe("1:00");
   expect(text("command-span")).toBe("rm -r");
-  expect(text("error")).toBe("Approval failed: gateway unavailable");
-  expect(text("warning")?.trim()).toBe(
-    "Review only. Sign in with approval access to record a decision.",
+  expect(text("error")).toBe("Couldn’t confirm your decision. Try again.");
+  expect(container.querySelector(".exec-approval-details")?.textContent).toContain(
+    "Approval failed: gateway unavailable",
   );
+  expect(text("status")?.trim()).toContain("You don’t have permission to approve.");
   const buttons = [
     ...container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
   ];
-  expect(buttons.every((button) => button.disabled)).toBe(true);
+  expect(buttons).toHaveLength(0);
   buttons[0]?.click();
   expect(onApprovalDecision).not.toHaveBeenCalled();
 
   const authorizedContainer = await render(true);
-  authorizedContainer.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
+  authorizedContainer
+    .querySelector<HTMLButtonElement>('.exec-approval-actions button[aria-label="Allow once"]')
+    ?.click();
   expect(onApprovalDecision).toHaveBeenCalledWith("approval-inline", "allow-once");
 });

@@ -1,5 +1,5 @@
 // Control UI modal presents approvals after an explicit operator action.
-import { For, createSignal, onSettled } from "solid-js";
+import { For, Show, createSignal, onSettled } from "solid-js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -10,6 +10,7 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.
 import { ApprovalCountdown, approvalRemainingLabel } from "./approval-countdown.tsx";
 import {
   approvalTitle,
+  ApprovalAgentAvatar,
   ExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card-solid.tsx";
@@ -21,6 +22,7 @@ export type ExecApprovalProps = {
   connected: boolean;
   canGrant: boolean;
   errors: ReadonlyMap<string, string>;
+  nodeNames?: ReadonlyMap<string, string>;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
@@ -33,13 +35,15 @@ function renderApprovalQueueList(params: {
   if (others.length === 0) {
     return undefined;
   }
+  const label = t("execApproval.morePending", { count: String(others.length) });
   return (
-    <div class="exec-approval-list" aria-label={t("execApproval.otherPending")}>
-      <div class="exec-approval-list__heading">{t("execApproval.otherPending")}</div>
+    <div class="exec-approval-list" aria-label={label}>
+      <div class="exec-approval-list__heading">{label}</div>
       <For each={others}>
         {(entry) => {
           const command = entry.request.command;
-          const agent = entry.request.agentId?.trim() || "—";
+          const agentId = entry.request.agentId?.trim();
+          const agent = agentId || "—";
           return (
             <button
               class="exec-approval-list__item"
@@ -47,13 +51,12 @@ function renderApprovalQueueList(params: {
               aria-label={t("execApproval.reviewRequest", { agent, command })}
               onClick={() => params.onSelect(entry.id)}
             >
-              <span
-                class="exec-approval-list__agent exec-approval-agent"
-                title={agent}
-                aria-hidden="true"
+              <Show
+                when={agentId}
+                fallback={<span class="exec-approval-list__agent" aria-hidden="true" />}
               >
-                {agent.slice(0, 1).toUpperCase()}
-              </span>
+                {(id) => <ApprovalAgentAvatar agentId={id()} class="exec-approval-list__agent" />}
+              </Show>
               <span class="exec-approval-list__command mono" title={command}>
                 {command}
               </span>
@@ -171,6 +174,9 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
               <ExecApprovalCard
                 props={{
                   approval: active()!,
+                  nodeDisplayName: bridgeProps.props!.nodeNames?.get(
+                    active()!.request.nodeId ?? "",
+                  ),
                   busy: bridgeProps.props!.busy,
                   connected: bridgeProps.props!.connected,
                   canGrant: bridgeProps.props!.canGrant,
