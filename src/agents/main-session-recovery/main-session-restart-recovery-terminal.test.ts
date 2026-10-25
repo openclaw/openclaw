@@ -11,9 +11,86 @@ import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runti
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { finishAgentCommandCleanup } from "../command/cleanup.js";
+import { settleInterruptedRestartRecovery } from "./main-session-restart-recovery-failure.js";
 import { markStartupOrphanedMainSessionsForRecovery as markOrphans } from "./main-session-restart-recovery-marking.js";
 import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
+
+it.each(["completed", "interrupted"] as const)(
+  "records a parent interruption only for an actually interrupted child: %s",
+  async (scenario) => {
+    await withOpenClawTestState({ label: `legacy-child-${scenario}` }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      const cfg = { session: { store: storePath } };
+      const parentTarget = { agentId: "main", sessionKey: "agent:main:parent", storePath };
+      await replaceSessionEntry(parentTarget, {
+        sessionId: "parent",
+        lifecycleRevision: "parent-revision",
+        updatedAt: 100,
+      });
+      const parent = loadSessionEntry(parentTarget);
+      expect(parent?.lifecycleRevision).toBeTruthy();
+      const target = { agentId: "main", sessionKey: "agent:main:subagent:legacy-child", storePath };
+      const entry: SessionEntry = {
+        sessionId: "legacy-child",
+        updatedAt: 100,
+        status: scenario === "completed" ? "done" : "interrupted",
+        abortedLastRun: scenario === "interrupted",
+        spawnDepth: 1,
+        spawnedBy: parentTarget.sessionKey,
+        spawnedBySessionId: parent?.sessionId,
+        parentSessionLifecycleRevision: parent?.lifecycleRevision,
+        lastRunId: "child-run",
+        restartRecoveryTerminalRunIds: ["child-run"],
+        mainRestartRecovery: { cycleId: "child-cycle", revision: 1, chargedAttempts: 0 },
+        pendingFinalDelivery: { kind: "replayable", text: "The child finished.", createdAt: 100 },
+      };
+      await replaceSessionEntry(target, entry);
+      if (scenario === "completed") {
+        await markOrphans({ stateDir: state.stateDir });
+        const unexpected = async (): Promise<never> => {
+          throw new Error("completed child must not execute or deliver");
+        };
+        await expect(
+          recoverStore({
+            cfg,
+            gatewayRuntime: {
+              prepareRestartRecovery: unexpected,
+              dispatchAgent: unexpected,
+              dispatchSessionMethod: unexpected,
+              waitForAgent: unexpected,
+              sendRecoveryNotice: unexpected,
+              resumeChatInput: unexpected,
+            },
+            storePath,
+            stateDir: state.stateDir,
+            handledSessionKeys: new Set(),
+          }),
+        ).resolves.toMatchObject({ settled: 1, started: 0, failed: 0 });
+        expect(loadSessionEntry(target)).toMatchObject({ status: "done", lastRunId: "child-run" });
+      } else {
+        await expect(
+          settleInterruptedRestartRecovery({
+            ...target,
+            cfg,
+            entry,
+            reason: "the interrupted child's original authority is unavailable",
+            assertCurrent: () => {},
+          }),
+        ).resolves.toEqual({ outcome: "settled" });
+      }
+      const parentTranscript = JSON.stringify(
+        await loadTranscriptEvents({ ...parentTarget, sessionId: "parent" }),
+      );
+      if (scenario === "completed") {
+        expect(parentTranscript).not.toContain("could not resume its interrupted turn");
+      } else {
+        expect(parentTranscript).toContain("could not resume its interrupted turn");
+      }
+    });
+  },
+);
 
 it("does not replay a terminally failed legacy pending final on the next boot", async () => {
   await withOpenClawTestState({ label: "legacy-final-terminal" }, async (state) => {

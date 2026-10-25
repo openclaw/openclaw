@@ -149,7 +149,9 @@ export async function settleInterruptedRestartRecovery(params: {
     },
   });
   if (result.ok) {
-    await notifyInterruptedChildParent(params);
+    if (!params.preserveCompletedOutcome) {
+      await notifyInterruptedChildParent(params);
+    }
     return { outcome: "settled" };
   }
   if ("code" in result && result.code === "session-rebound") {
