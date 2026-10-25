@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
@@ -11,6 +12,7 @@ import {
   createDownloadCaptureForPage,
   type BrowserDownloadCaptureOptions,
 } from "./pw-download-capture.js";
+import { downloadReadStream } from "./pw-download-test-doubles.js";
 
 const pendingOr = <T>(outcome: Promise<T>) => Promise.race([outcome, Promise.resolve("pending")]);
 
@@ -23,26 +25,26 @@ function makeCapture({
   download?: {
     filename?: string;
     url?: string;
-    saveAs?: (tempPath: string) => Promise<void>;
+    createReadStream?: () => Promise<Readable>;
     cancel?: () => Promise<void>;
   };
 } = {}) {
   const page = new EventEmitter();
   const state = { downloadWaiterDepth: 0 };
-  const saveAs = vi.fn(download.saveAs ?? (async () => {}));
+  const createReadStream = vi.fn(download.createReadStream ?? (async () => Readable.from([])));
   const cancel = vi.fn(download.cancel ?? (async () => {}));
   const capture = createDownloadCaptureForPage(page, state, timeout, options);
   const outcome = capture.promise.catch((error: unknown) => error);
   return {
     capture,
     outcome,
-    saveAs,
+    createReadStream,
     cancel,
     emit: () =>
       page.emit("download", {
         url: () => download.url ?? "https://example.com/export.csv",
         suggestedFilename: () => download.filename ?? "export.csv",
-        saveAs,
+        createReadStream,
         cancel,
       }),
     expectReleased: () => {
@@ -74,7 +76,7 @@ describe("Playwright download capture cancellation", () => {
     cancelGate.resolve();
 
     await expect(f.outcome).resolves.toBe(rejection);
-    expect(f.saveAs).not.toHaveBeenCalled();
+    expect(f.createReadStream).not.toHaveBeenCalled();
     f.expectReleased();
   });
 
@@ -117,7 +119,7 @@ describe("Playwright download capture cancellation", () => {
         expect(f.cancel).toHaveBeenCalledOnce();
         validation.resolve();
         await (deadline ? vi.advanceTimersByTimeAsync(0) : nextTurn());
-        expect(f.saveAs).not.toHaveBeenCalled();
+        expect(f.createReadStream).not.toHaveBeenCalled();
         f.expectReleased();
       } finally {
         controller.abort(new Error("download test cleanup"));
@@ -138,24 +140,37 @@ describe("Playwright download capture cancellation", () => {
       const outputPath = path.join(outputRoot, "cancelled.bin");
       const { write, writeSettled } = observeOutputWriteSettlement(outputFiles);
       const saveGate = Promise.withResolvers<void>();
-      const saveStarted = Promise.withResolvers<string>();
-      if (deadline) {
-        vi.useFakeTimers();
-      }
+      const partialReady = Promise.withResolvers<string>();
+      const openFile = fs.open.bind(fs);
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+        const handle = await openFile(file, flags, mode);
+        if (flags !== "w" || !String(file).endsWith(".part")) {
+          return handle;
+        }
+        const writeChunk = handle.write.bind(handle);
+        handle.write = (async (
+          buffer: Buffer,
+          offset?: number,
+          length?: number,
+          position?: number | null,
+        ) => {
+          const result = await writeChunk(buffer, offset, length, position);
+          partialReady.resolve(String(file));
+          await saveGate.promise;
+          return result;
+        }) as typeof handle.write;
+        return handle;
+      });
       const f = makeCapture({
         mode: "explicit",
         outputPath,
         outputRoot,
         signal: controller.signal,
-        timeout: deadline ? 25 : 1_000,
+        timeout: deadline ? 1_000 : 5_000,
         download: {
           filename: "cancelled.bin",
           url: "https://example.com/cancelled.bin",
-          saveAs: async (tempPath) => {
-            await fs.writeFile(tempPath, "cancelled partial contents", "utf8");
-            saveStarted.resolve(tempPath);
-            await saveGate.promise;
-          },
+          createReadStream: downloadReadStream("cancelled partial contents"),
           cancel: async () => {
             saveGate.resolve();
           },
@@ -163,11 +178,10 @@ describe("Playwright download capture cancellation", () => {
       });
       try {
         f.emit();
-        const partialPath = await withinTest(saveStarted.promise, signal);
+        const partialPath = await withinTest(partialReady.promise, signal);
         await expect(fs.readFile(partialPath, "utf8")).resolves.toBe("cancelled partial contents");
         if (deadline) {
-          await vi.advanceTimersByTimeAsync(25);
-          await expect(pendingOr(f.outcome)).resolves.toMatchObject({
+          await expect(f.outcome).resolves.toMatchObject({
             message: "Timeout waiting for download",
           });
         } else {
@@ -189,6 +203,7 @@ describe("Playwright download capture cancellation", () => {
           await writeSettled.promise;
         }
         write.mockRestore();
+        openSpy.mockRestore();
         vi.useRealTimers();
         await fs.rm(outputRoot, { recursive: true, force: true });
       }
@@ -226,9 +241,7 @@ describe("Playwright download capture cancellation", () => {
         download: {
           url: "https://example.com/published.bin",
           filename: "published.bin",
-          saveAs: async (tempPath: string) => {
-            await fs.writeFile(tempPath, "completed download", "utf8");
-          },
+          createReadStream: downloadReadStream("completed download"),
         },
       });
       try {
@@ -258,4 +271,56 @@ describe("Playwright download capture cancellation", () => {
       }
     },
   );
+
+  it("publishes a download that stays within its byte budget", async () => {
+    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-budget-ok-"));
+    const outputPath = path.join(outputRoot, "kept.bin");
+    const f = makeCapture({
+      mode: "explicit",
+      outputPath,
+      outputRoot,
+      maxBytes: 4,
+      download: {
+        filename: "kept.bin",
+        url: "https://example.com/kept.bin",
+        createReadStream: async () => Readable.from([Buffer.from("abcd")]),
+      },
+    });
+    try {
+      f.emit();
+      await expect(f.capture.promise).resolves.toMatchObject({ path: outputPath });
+      await expect(fs.readFile(outputPath)).resolves.toEqual(Buffer.from("abcd"));
+      expect(f.cancel).not.toHaveBeenCalled();
+    } finally {
+      await f.outcome;
+      await fs.rm(outputRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("cancels a streamed download that crosses its byte budget", async () => {
+    const outputRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-download-budget-"));
+    const outputPath = path.join(outputRoot, "oversized.bin");
+    const f = makeCapture({
+      mode: "explicit",
+      outputPath,
+      outputRoot,
+      maxBytes: 4,
+      download: {
+        filename: "oversized.bin",
+        url: "https://example.com/oversized.bin",
+        createReadStream: async () => Readable.from([Buffer.from("abcd"), Buffer.from("e")]),
+      },
+    });
+    try {
+      f.emit();
+      await expect(f.outcome).resolves.toMatchObject({
+        message: "Browser download exceeds 4 bytes",
+      });
+      expect(f.cancel).toHaveBeenCalled();
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await f.outcome;
+      await fs.rm(outputRoot, { recursive: true, force: true });
+    }
+  });
 });
