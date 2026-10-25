@@ -1,6 +1,11 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expressionBuilder } from "kysely";
+import {
+  clearClientNativeTokens,
+  claimClientNativeToken,
+  type ClientNativeTokenSelector,
+} from "./client-credential-native-tokens.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import {
   salvageStoredIdentityRow,
@@ -125,83 +130,21 @@ export function performClientCredentialOperation(
       }
       return { kind: "identity", identity: null };
     }
-    case "native.tokens.clear": {
-      const deviceId = operation.device_id;
-      const selector = operation.selector;
-
-      if (selector.kind === "all") {
-        return {
-          kind: "cleared",
-          count: Number(
-            executeSqliteQuerySync(
-              database,
-              db.deleteFrom("device_auth_tokens").where("device_id", "=", deviceId),
-            ).numAffectedRows,
-          ),
-        };
-      }
-      const rows = executeSqliteQuerySync(
-        database,
-        db.selectFrom("device_auth_tokens").select("role").where("device_id", "=", deviceId),
-      );
-      const roles = rows.rows
-        .filter(({ role }) => {
-          const decoded = decodeRole(role);
-          if (selector.kind === "role") {
-            return decoded.role === selector.role.trim();
-          }
-          if (selector.kind === "gateway") {
-            return decoded.gateway === selector.gateway;
-          }
-          return decoded.gateway === null;
-        })
-        .map(({ role }) => role);
-      if (roles.length === 0) {
-        return { kind: "cleared", count: 0 };
-      }
-      executeSqliteQuerySync(
-        database,
-        db
-          .deleteFrom("device_auth_tokens")
-          .where("device_id", "=", deviceId)
-          .where("role", "in", roles),
-      );
-      return { kind: "cleared", count: roles.length };
-    }
-    case "native.token.claim": {
-      // A scoped winner is retained; the ambiguous legacy token is always consumed.
-      const deviceId = operation.device_id;
-      const role = operation.role;
-      const gateway = operation.gateway;
-
-      const legacyRole = role.trim();
-      const source = executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("device_auth_tokens")
-          .selectAll()
-          .where("device_id", "=", deviceId)
-          .where("role", "=", legacyRole),
-      );
-      if (!source) {
-        return { kind: "changed", changed: false };
-      }
-      executeSqliteQuerySync(
-        database,
-        db
-          .insertInto("device_auth_tokens")
-          .values({ ...source, role: encodeClientNativeTokenRole(role, gateway) })
-          .onConflict((conflict) => conflict.columns(["device_id", "role"]).doNothing()),
-      );
-      executeSqliteQuerySync(
-        database,
-        db
-          .deleteFrom("device_auth_tokens")
-          .where("device_id", "=", deviceId)
-          .where("role", "=", legacyRole),
-      );
-      return { kind: "changed", changed: true };
-    }
+    case "native.tokens.clear":
+      return {
+        kind: "cleared",
+        count: clearClientNativeTokens(database, operation.device_id, operation.selector),
+      };
+    case "native.token.claim":
+      return {
+        kind: "changed",
+        changed: claimClientNativeToken(
+          database,
+          operation.device_id,
+          operation.role,
+          operation.gateway,
+        ),
+      };
     case "token.list": {
       const table =
         operation.gateway_scope === undefined
@@ -360,34 +303,4 @@ export function performClientCredentialOperation(
     default:
       throw new Error("Unsupported client credential operation.");
   }
-}
-
-type ClientNativeTokenSelector =
-  | { kind: "all" }
-  | { kind: "role"; role: string }
-  | { kind: "gateway"; gateway: string }
-  | { kind: "unscoped" };
-
-function encodeClientNativeTokenRole(role: string, gateway: string): string {
-  return `v2.${Buffer.from(gateway).toString("base64url")}.${Buffer.from(role.trim()).toString("base64url")}`;
-}
-
-function decodeRole(stored: string): { role: string; gateway: string | null } {
-  const parts = stored.split(".");
-  if (parts.length === 3 && parts[0] === "v2" && parts[1] !== undefined && parts[2] !== undefined) {
-    try {
-      const decode = (component: string) => {
-        if (!/^[A-Za-z0-9_-]*$/u.test(component) || component.length % 4 === 1) {
-          throw new Error("Invalid component");
-        }
-        return new TextDecoder("utf-8", { fatal: true }).decode(
-          Buffer.from(component, "base64url"),
-        );
-      };
-      return { gateway: decode(parts[1]), role: decode(parts[2]) };
-    } catch {
-      /* Older malformed keys remain unscoped, matching the native codec. */
-    }
-  }
-  return { role: stored, gateway: null };
 }

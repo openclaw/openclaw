@@ -35,12 +35,14 @@ import {
 } from "./plugin-registry-snapshot.js";
 export { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
 
+type PluginLookUpTable = Pick<
+  PluginMetadataSnapshot,
+  "index" | "manifestRegistry" | "plugins" | "normalizePluginId" | "owners"
+>;
+
 type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
-  lookUpTable?: Pick<
-    PluginMetadataSnapshot,
-    "index" | "manifestRegistry" | "plugins" | "normalizePluginId" | "owners"
-  >;
+  lookUpTable?: PluginLookUpTable;
 };
 
 type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
@@ -49,8 +51,29 @@ type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
 };
 
+type ResolvePluginContributionOwnersParams = PluginRegistryContributionOptions & {
+  contribution: PluginMetadataContributionKey;
+  matches: string | ((contributionId: string) => boolean);
+};
+
+type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
+  contribution: PluginMetadataContributionKey;
+};
+
 type ManifestContractLookupParams = LoadPluginRegistryParams & {
   manifestRecords?: readonly PluginManifestRecord[];
+};
+
+type ResolveManifestContractPluginIdsParams = ManifestContractLookupParams & {
+  contract: PluginManifestContractListKey;
+  origin?: PluginOrigin;
+  onlyPluginIds?: readonly string[];
+};
+
+type ResolveManifestContractOwnerPluginIdParams = ManifestContractLookupParams & {
+  contract: PluginManifestContractListKey;
+  value: string | undefined;
+  origin?: PluginOrigin;
 };
 
 function loadManifestContractRecords(
@@ -155,9 +178,7 @@ export function normalizePluginsConfigWithRegistry(
 }
 
 export function listPluginContributionIds(
-  params: PluginRegistryContributionOptions & {
-    contribution: PluginMetadataContributionKey;
-  },
+  params: ListPluginContributionIdsParams,
 ): readonly string[] {
   const plugins = listContributionManifestPlugins(params);
   return normalizeSortedUniqueStringEntries(
@@ -166,10 +187,7 @@ export function listPluginContributionIds(
 }
 
 export function resolvePluginContributionOwners(
-  params: PluginRegistryContributionOptions & {
-    contribution: PluginMetadataContributionKey;
-    matches: string | ((contributionId: string) => boolean);
-  },
+  params: ResolvePluginContributionOwnersParams,
 ): readonly string[] {
   if (params.lookUpTable && typeof params.matches === "string") {
     const index = params.lookUpTable.index;
@@ -196,11 +214,7 @@ export function resolvePluginContributionOwners(
 }
 
 export function resolveManifestContractPluginIds(
-  params: ManifestContractLookupParams & {
-    contract: PluginManifestContractListKey;
-    origin?: PluginOrigin;
-    onlyPluginIds?: readonly string[];
-  },
+  params: ResolveManifestContractPluginIdsParams,
 ): string[] {
   return loadManifestContractRecords(params)
     .filter(
@@ -213,11 +227,7 @@ export function resolveManifestContractPluginIds(
 }
 
 export function resolveManifestContractOwnerPluginId(
-  params: ManifestContractLookupParams & {
-    contract: PluginManifestContractListKey;
-    value: string | undefined;
-    origin?: PluginOrigin;
-  },
+  params: ResolveManifestContractOwnerPluginIdParams,
 ): string | undefined {
   const normalizedValue = (params.value ?? "").trim().toLowerCase();
   if (!normalizedValue) {
