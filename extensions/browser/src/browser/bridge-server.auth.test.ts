@@ -1,5 +1,4 @@
-import { createServer } from "node:http";
-import { promisify } from "node:util";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
@@ -52,22 +51,14 @@ describe("startBrowserBridgeServer auth", () => {
   });
 
   it("rejects startup when the bridge port is already in use", async () => {
-    const blocker = createServer();
-    await new Promise<void>((resolve) => {
-      blocker.listen(0, "127.0.0.1", resolve);
-    });
-    const address = blocker.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected blocker TCP address");
-    }
-
-    try {
-      await expect(startBridge({ ...tokenAuth, port: address.port })).rejects.toMatchObject({
-        code: "EADDRINUSE",
-      });
-    } finally {
-      await promisify(blocker.close.bind(blocker))();
-    }
+    await withServer(
+      (_req, res) => res.end(),
+      async (baseUrl) => {
+        await expect(
+          startBridge({ ...tokenAuth, port: Number(new URL(baseUrl).port) }),
+        ).rejects.toMatchObject({ code: "EADDRINUSE" });
+      },
+    );
   });
 
   it("closes ingress but retains exact bridge cleanup state for retry", async () => {

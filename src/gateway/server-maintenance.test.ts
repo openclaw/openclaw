@@ -60,6 +60,11 @@ vi.mock("../media/store.js", async () => {
   };
 });
 
+// mock-isolation: Timer fixtures control managed cleanup while retaining the real lazy owner path.
+vi.mock("./managed-image-attachments.js", () => ({
+  cleanupManagedOutgoingMediaRecords: cleanupManagedOutgoingMediaRecordsMock,
+}));
+
 const MEDIA_CLEANUP_TTL_MS = 24 * 60 * 60_000;
 const fixtureSources: RpcSourceRef[] = [];
 
@@ -74,7 +79,6 @@ function createMaintenanceTimerDeps() {
     ...createGatewayMaintenanceStateForTest(),
     logHealth: { info: vi.fn(), error: vi.fn() },
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
-    runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
 }
 

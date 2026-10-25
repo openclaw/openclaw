@@ -24,7 +24,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createOperatorRecoveryAuthority } from "../operator-recovery.test-support.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 import {
   prepareCommandSessionRecoveryEntry,
@@ -198,28 +198,10 @@ it.each([
   "binds operator recovery custody for $sourceTool from $requesterProfileId",
   ({ sourceTool, requesterProfileId, retained }) => {
     const runId = "announce:requester-settle:main:agent:main:main:child-run";
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "original-operator",
-      scopes: ["operator.read"],
-      assertCurrent() {},
-      recoverySnapshot: {
-        profileId: "original-operator",
-        scopes: ["operator.read"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "original-grant",
-          role: "operator",
-          authMethod: "token",
-        },
-        controlUiAdmin: false,
-        localOperator: false,
-        sourceIngress: "control-ui",
-      },
-    });
+    const operatorAuthority = createOperatorRecoveryAuthority(
+      "original-operator",
+      "original-grant",
+    );
     const { nextEntry } = prepareCommandSessionRecoveryEntry({
       entry: {
         sessionId: "requester-session",

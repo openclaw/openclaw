@@ -312,6 +312,8 @@ export async function startGatewayWithClient(
     scopes?: string[];
     onEvent?: (evt: { event?: string; payload?: unknown }) => void;
     hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
+    channelAutostartSuppression?: GatewayServerOptions["channelAutostartSuppression"];
+    tryRecoverChannelAutostartSuppression?: GatewayServerOptions["tryRecoverChannelAutostartSuppression"];
   } & ({ port?: number; portClaim?: never } | { port?: never; portClaim: TestPortClaim }),
 ) {
   const gatewayStartupEnv = captureEnv([
@@ -342,6 +344,8 @@ export async function startGatewayWithClient(
         auth: params.auth ?? { mode: "token", token: params.token },
         controlUiEnabled: false,
         hotReloadRecovery: params.hotReloadRecovery,
+        channelAutostartSuppression: params.channelAutostartSuppression,
+        tryRecoverChannelAutostartSuppression: params.tryRecoverChannelAutostartSuppression,
       });
     const startedServer = secureClaim
       ? await startClaimedGateway(secureClaim, start)

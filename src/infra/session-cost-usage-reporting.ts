@@ -34,7 +34,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { sleep } from "../utils/sleep.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
   createUsageCostResolver,
@@ -55,8 +54,6 @@ import type {
   SessionUsageTimeSeries,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";
-
-const USAGE_COST_DIRECT_REFRESH_RETRY_MS = 25;
 
 type SessionUsageDiagnosticParams = {
   sessionId?: string;
@@ -169,22 +166,17 @@ export async function loadSessionCostSummary(params: {
   if (inventory.files.length === 0) {
     return null;
   }
-  while (
-    (await refreshCostUsageCacheForAgent({
-      config: params.config,
-      agentId: params.agentId,
-      agentDir: prepared.agentDir,
-      databasePath: prepared.location.databasePath,
-      storePath: prepared.location.storePath,
-      env: prepared.location.env,
-      sessionFiles: [sessionFile],
-      sessionActor: prepared.sessionActor,
-    })) === "busy"
-  ) {
-    // Direct detail callers require the requested session, unlike background
-    // summary refreshes. Wait for the agent-wide writer to release, then retry.
-    await sleep(USAGE_COST_DIRECT_REFRESH_RETRY_MS);
-  }
+  await refreshCostUsageCacheForAgent({
+    config: params.config,
+    agentId: params.agentId,
+    agentDir: prepared.agentDir,
+    databasePath: prepared.location.databasePath,
+    storePath: prepared.location.storePath,
+    env: prepared.location.env,
+    sessionFiles: [sessionFile],
+    sessionActor: prepared.sessionActor,
+    waitForRefresh: true,
+  });
   const pricingFingerprint = await resolveUsageCostPricingFingerprint(
     prepared.config,
     prepared.agentDir,
@@ -288,12 +280,11 @@ export async function loadSessionLogs(
   return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
     const logs: SessionLogEntry[] = [];
     if (scoped.limit !== undefined && scoped.limit !== null) {
-      if (!Number.isFinite(scoped.limit) || scoped.limit <= 0) {
+      if (!Number.isInteger(scoped.limit) || scoped.limit <= 0) {
         return [];
       }
     }
     const limit = scoped.limit ?? 50;
-    const boundedLimit = Number.isInteger(limit);
     const retentionLimit = limit * 2;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
@@ -406,7 +397,7 @@ export async function loadSessionLogs(
       });
       // Timestamps can arrive out of order, so keep a bounded sorted window instead
       // of relying on transcript append order or retaining the whole file.
-      if (boundedLimit && logs.length > retentionLimit) {
+      if (logs.length > retentionLimit) {
         logs.sort((a, b) => a.timestamp - b.timestamp);
         logs.splice(0, logs.length - limit);
       }

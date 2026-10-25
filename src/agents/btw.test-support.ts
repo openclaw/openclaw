@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import type { AssistantMessage, AssistantMessageEvent } from "../llm/types.js";
+import type { AssistantMessageEvent } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   createOpenClawTestState,
@@ -11,6 +11,7 @@ import * as mocks from "./btw.mocks.test-support.js";
 import { guardModelFixtureWorkspace } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resetModelGenerationFixtureState } from "./embedded-agent-runner/model.generation-scope.test-support.js";
 import type { AgentHarness } from "./harness/types.js";
+import { createUsageFixture } from "./test-helpers/usage-fixtures.js";
 export let state: OpenClawTestState;
 let workspaceGuard: ReturnType<typeof guardModelFixtureWorkspace>;
 beforeAll(async () => {
@@ -46,14 +47,7 @@ const MATH_QUESTION = "What is 17 * 19?";
 export const MATH_ANSWER = "323";
 let defaultPluginMetadataSnapshot: ReturnType<typeof resolvePluginMetadataSnapshot> | undefined;
 
-const DEFAULT_USAGE = {
-  input: 1,
-  output: 2,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 3,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
+const DEFAULT_USAGE = createUsageFixture(1, 2, 3);
 
 export function makeAsyncEvents(events: unknown[]) {
   // Minimal async iterable that matches provider stream shape without loading
@@ -76,15 +70,13 @@ export function createSessionEntry(overrides: Partial<SessionEntry> = {}) {
   };
 }
 
-function createAssistantDoneEvent(
-  content: AssistantMessage["content"],
-): Extract<AssistantMessageEvent, { type: "done" }> {
+export function createDoneEvent(text: string): Extract<AssistantMessageEvent, { type: "done" }> {
   return {
     type: "done",
     reason: "stop",
     message: {
       role: "assistant",
-      content,
+      content: [{ type: "text", text }],
       provider: DEFAULT_PROVIDER,
       api: "anthropic-messages",
       model: DEFAULT_MODEL,
@@ -93,10 +85,6 @@ function createAssistantDoneEvent(
       timestamp: Date.now(),
     },
   };
-}
-
-export function createDoneEvent(text: string) {
-  return createAssistantDoneEvent([{ type: "text", text }]);
 }
 
 export function mockDoneAnswer(text: string) {
@@ -196,10 +184,7 @@ export function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {
 }
 
 export function runMathSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
-  return runSideQuestion({
-    question: MATH_QUESTION,
-    ...overrides,
-  });
+  return runSideQuestion({ question: MATH_QUESTION, ...overrides });
 }
 
 export function clearBuiltSessionMessages() {
@@ -207,11 +192,7 @@ export function clearBuiltSessionMessages() {
 }
 
 export function createUserTranscriptMessage(content: unknown[] = [{ type: "text", text: "seed" }]) {
-  return {
-    role: "user",
-    content,
-    timestamp: 1,
-  };
+  return { role: "user", content, timestamp: 1 };
 }
 
 export function createAssistantTranscriptMessage(
@@ -238,17 +219,16 @@ export function createAssistantTranscriptMessage(
   };
 }
 
-export function createTranscriptEntry(params: {
+export function createTranscriptEntry({
+  id,
+  parentId = null,
+  message,
+}: {
   id: string;
   parentId?: string | null;
   message: unknown;
 }) {
-  return {
-    type: "message",
-    id: params.id,
-    parentId: params.parentId ?? null,
-    message: params.message,
-  };
+  return { type: "message", id, parentId, message };
 }
 
 export function mockTranscriptEntries(entries: unknown[]) {
@@ -298,8 +278,7 @@ export function expectPreparedAuthSupport(
 export async function runMathSideQuestionAndCaptureContext() {
   mockDoneAnswer(MATH_ANSWER);
   await runMathSideQuestion();
-  const context = mockArg(mocks.streamSimpleMock, 0, 1);
-  return context;
+  return mockArg(mocks.streamSimpleMock, 0, 1);
 }
 
 export function expectRecordFields(
@@ -320,11 +299,7 @@ export function streamContext(callIndex = 0): {
   messages?: Array<Record<string, unknown>>;
   systemPrompt?: unknown;
 } {
-  const call = mocks.streamSimpleMock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected streamSimple call at index ${callIndex}`);
-  }
-  return (call[1] ?? {}) as {
+  return (mockArg(mocks.streamSimpleMock, callIndex, 1) ?? {}) as {
     messages?: Array<Record<string, unknown>>;
     systemPrompt?: unknown;
   };
@@ -339,9 +314,7 @@ export function contextMessages(context: unknown): Array<Record<string, unknown>
 }
 
 export function expectTextBlockContains(block: unknown, text: string): void {
-  const record = expectRecordFields(block, { type: "text" });
-  expect(typeof record.text).toBe("string");
-  expect(record.text).toContain(text);
+  expectRecordFields(block, { type: "text", text: expect.stringContaining(text) });
 }
 
 export function expectNoAssistantMessages(context: unknown) {
@@ -353,24 +326,18 @@ export function expectNoAssistantMessages(context: unknown) {
 }
 
 export function expectSanitizedAssistantContext(context: unknown, text: string) {
-  const messages = contextMessages(context);
-  expect(messages).toHaveLength(3);
-  expectRecordFields(messages[0], { role: "user" });
-  expectRecordFields(messages[1], {
-    role: "assistant",
-    content: [{ type: "text", text }],
-  });
-  expectRecordFields(messages[2], { role: "user" });
+  expect(contextMessages(context)).toEqual([
+    expect.objectContaining({ role: "user" }),
+    expect.objectContaining({ role: "assistant", content: [{ type: "text", text }] }),
+    expect.objectContaining({ role: "user" }),
+  ]);
 }
 
 export function expectSeedOnlyUserContext(context: unknown) {
-  const messages = contextMessages(context);
-  expect(messages).toHaveLength(2);
-  expectRecordFields(messages[0], {
-    role: "user",
-    content: [{ type: "text", text: "seed" }],
-  });
-  expectRecordFields(messages[1], { role: "user" });
+  expect(contextMessages(context)).toEqual([
+    expect.objectContaining({ role: "user", content: [{ type: "text", text: "seed" }] }),
+    expect.objectContaining({ role: "user" }),
+  ]);
 }
 
 export function mockOpenAIPlatformProfile(): void {
@@ -390,51 +357,20 @@ export function setupBtwTestHooks() {
   });
 
   beforeEach(() => {
-    mocks.streamSimpleMock.mockReset();
-    mocks.parseSessionEntriesMock.mockReset();
-    mocks.migrateSessionEntriesMock.mockReset();
-    mocks.buildSessionContextMock.mockReset();
-    mocks.ensureOpenClawModelsJsonMock.mockReset();
-    mocks.loadPreparedModelRuntimeSnapshotMock.mockReset();
+    for (const mock of Object.values(mocks)) {
+      if (vi.isMockFunction(mock)) {
+        mock.mockReset();
+      }
+    }
     mocks.snapshotResources.acquire = undefined;
-    mocks.discoverAuthStorageMock.mockReset();
-    mocks.discoverModelsMock.mockReset();
-    mocks.getModelRegistryRuntimeMock.mockReset();
     mocks.getModelRegistryRuntimeMock.mockReturnValue({
       apiRegistry: {},
       llmRuntime: { streamSimple: mocks.streamSimpleMock },
     });
-    mocks.resolveModelAsyncMock.mockReset();
-    mocks.resolveModelWithRegistryMock.mockReset();
-    mocks.ensureAuthProfileStoreMock.mockReset();
-    mocks.ensureAuthProfileStoreWithoutExternalProfilesMock.mockReset();
-    mocks.getApiKeyForModelMock.mockReset();
-    mocks.requireApiKeyMock.mockReset();
-    mocks.resolveSessionAuthSelectionMock.mockReset();
-    mocks.getActiveEmbeddedRunSnapshotMock.mockReset();
-    mocks.resolveSessionAgentIdMock.mockReset();
-    mocks.resolveSessionAgentIdsMock.mockReset();
-    mocks.resolveAgentWorkspaceDirMock.mockReset();
-    mocks.listAgentEntriesMock.mockReset();
-    mocks.prepareProviderRuntimeAuthMock.mockReset();
-    mocks.registerProviderStreamForModelMock.mockReset();
-    mocks.resolveEmbeddedAgentStreamMock.mockReset();
-    mocks.prepareCliRunContextMock.mockReset();
-    mocks.executePreparedCliRunMock.mockReset();
-    mocks.diagDebugMock.mockReset();
-    mocks.ensureSelectedAgentHarnessPluginMock.mockReset();
-    mocks.createAgentHarnessHostCapabilitiesMock.mockReset();
-    mocks.closeAgentHarnessHostCapabilitiesMock.mockReset();
-    mocks.listSessionEntriesCoreMock.mockReset();
     mocks.listSessionEntriesCoreMock.mockReturnValue([]);
-    mocks.loadSessionEntryMock.mockReset();
     mocks.loadSessionEntryMock.mockReturnValue(undefined);
-    mocks.loadTranscriptEventsMock.mockReset();
-    mocks.shouldPreferExplicitConfigApiKeyAuthMock.mockReset();
     mocks.shouldPreferExplicitConfigApiKeyAuthMock.mockReturnValue(false);
-    mocks.hasUsableCustomProviderApiKeyMock.mockReset();
     mocks.hasUsableCustomProviderApiKeyMock.mockReturnValue(false);
-    mocks.resolveProviderEntryApiKeyProfileReferenceMock.mockReset();
     mocks.resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "none" });
     clearAgentHarnesses();
     if (!defaultPluginMetadataSnapshot) {

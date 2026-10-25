@@ -15,24 +15,14 @@ import {
 } from "../../../test-helpers/native-gateways.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { SessionDiffProps } from "./chat-sidebar-content-types.ts";
+import {
+  fileResult,
+  FRESH_PATCH,
+  mountPanel,
+  result,
+  SNAPSHOT_PATCH,
+} from "./session-diff-panel.test-support.tsx";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
-
-function mountPanel() {
-  const [props, setProps] = createSignal<SessionDiffProps>({
-    owner: null,
-    execNode: null,
-    loader: null,
-    loadFileText: null,
-    openFile: null,
-    revealFile: null,
-  });
-  const view = mountSolid(() => <SessionDiffPanel {...props()} />);
-  return {
-    panel: view.container.querySelector<HTMLElement>("openclaw-session-diff")!,
-    unmount: view.unmount,
-    update: (patch: Partial<SessionDiffProps>) => setProps((current) => ({ ...current, ...patch })),
-  };
-}
 
 afterEach(async () => {
   await vi.dynamicImportSettled();
@@ -40,54 +30,6 @@ afterEach(async () => {
   clearNativeGatewayTestState();
   vi.restoreAllMocks();
 });
-
-function result(branch: string): SessionsDiffResult {
-  return {
-    sessionKey: "agent:main:test",
-    branch,
-    baseRef: "main",
-    files: [],
-    additions: 0,
-    deletions: 0,
-  };
-}
-
-const SNAPSHOT_PATCH = [
-  "--- a/example.txt",
-  "+++ b/example.txt",
-  "@@ -3 +3 @@",
-  "-before",
-  "+snapshot line",
-].join("\n");
-
-const FRESH_PATCH = [
-  "--- a/example.txt",
-  "+++ b/example.txt",
-  "@@ -1,3 +1,3 @@",
-  " fresh gap edit",
-  " context",
-  "-before",
-  "+fresh snapshot line",
-].join("\n");
-
-function fileResult(patch: string): SessionsDiffResult {
-  return {
-    sessionKey: "agent:main:test",
-    branch: "feature/test",
-    baseRef: "main",
-    files: [
-      {
-        path: "example.txt",
-        status: "modified",
-        additions: 1,
-        deletions: 1,
-        patch,
-      },
-    ],
-    additions: 1,
-    deletions: 1,
-  };
-}
 
 describe("SessionDiffPanel readiness", () => {
   it("renders a skeleton only while a real diff request is pending", async () => {

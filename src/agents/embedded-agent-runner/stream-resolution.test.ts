@@ -458,9 +458,9 @@ describe("embedded provider stream activity", () => {
         });
         const requestSignal = requestSignals[turn];
         expect(requestSignal).toBeDefined();
-        notifyLlmRequestActivity(requestSignal, turn === 1);
+        notifyLlmRequestActivity(requestSignal, turn === 1, 900_000);
         expect(onCallerActivity).toHaveBeenCalledTimes(turn + 1);
-        expect(onCallerActivity).toHaveBeenLastCalledWith(turn === 1);
+        expect(onCallerActivity).toHaveBeenLastCalledWith(turn === 1, 900_000);
 
         const events = [];
         for await (const event of stream) {

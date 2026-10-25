@@ -33,6 +33,7 @@ import { bindInProcessSessionDeliveryGeneration } from "../in-process-session-de
 import { revokeMessageActionTurnCapability } from "../message-action-turn-capability.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { startGatewayMaintenanceTimers } from "../server-maintenance.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
 import { registerSendDeliveryAttemptTests } from "./send.delivery-attempt.test-support.js";
 import { registerSendSessionRoutingTests } from "./send.session-routing.test-support.js";
@@ -1062,12 +1063,11 @@ describe("gateway send mirroring", () => {
       setRuntimeConfigSnapshot(cfg);
       const context = makeContext(() => cfg);
       const client = {
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        },
+        authenticatedUserProfile: gatewayProfile(
+          profile.id,
+          profile.displayName,
+          profile.updatedAt,
+        ),
         connect: { scopes: ["operator.write"] },
       };
       mockDeliverySuccess("required-outbound-message");

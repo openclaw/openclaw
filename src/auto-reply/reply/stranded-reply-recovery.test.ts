@@ -15,7 +15,7 @@ function recover(overrides: Partial<Parameters<typeof resolveStrandedReplyRecove
     sourceReplyDeliveryMode: "message_tool_only",
     sendPolicyDenied: false,
     successfulSourceReplyDelivery: false,
-    isHeartbeat: false,
+
     isRoomEvent: false,
     ...overrides,
   });
@@ -68,6 +68,31 @@ describe("buildStrandedReplyRetryFollowupRun lifecycle ownership", () => {
     expect(onComplete).toHaveBeenCalledTimes(1);
     completeFollowupRunLifecycle(parent);
     expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("expires the client turn's skill authoring grant instead of rebinding it", async () => {
+    // chat.send mints a personal grant that refuses a second run; carrying it over killed the retry.
+    const parent = createMockFollowupRun({ prompt: "user question" });
+    parent.run.skillLibraryAuthoring = {
+      target: "personal",
+      defaultTarget: "workspace",
+      multipleProfiles: true,
+      bind: () => {
+        throw new Error("Personal authoring cannot move to a replacement run.");
+      },
+      invoke: vi.fn(),
+    };
+
+    const recovery = recover({ base: parent });
+    if (recovery.kind !== "retry") {
+      throw new Error("expected retry recovery");
+    }
+    const authoring = recovery.run.run.skillLibraryAuthoring;
+    expect(authoring?.defaultTarget).toBe("personal");
+    expect(() => authoring?.bind({} as never)).not.toThrow();
+    await expect(authoring?.invoke({ action: "list" })).rejects.toMatchObject({
+      code: "AUTHORITY_EXPIRED",
+    });
   });
 });
 
@@ -138,7 +163,7 @@ describe("resolveStrandedReplyRecovery", () => {
 
   it.each([
     { label: "room events", isRoomEvent: true },
-    { label: "heartbeats", isHeartbeat: true },
+
     { label: "send-policy denial", sendPolicyDenied: true },
     { label: "completed delivery", successfulSourceReplyDelivery: true },
   ])("does not recover $label", (override) => {

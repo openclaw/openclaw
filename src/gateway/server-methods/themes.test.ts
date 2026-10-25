@@ -33,6 +33,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { themeHandlers } from "./themes.js";
 import { pluginTheme } from "./themes.test-support.js";
 import type {
@@ -66,21 +67,10 @@ afterEach(async () => {
 function client(profileId?: string): GatewayClient {
   const result: GatewayClient = {
     connId: "requester-browser",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.write"],
-      client: { id: GATEWAY_CLIENT_IDS.CONTROL_UI, version: "test", platform: "test", mode: "ui" },
-    },
+    connect: gatewayConnect(["operator.write"], { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: "ui" }),
   };
   if (profileId) {
-    result.authenticatedUserProfile = {
-      profileId,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    };
+    result.authenticatedUserProfile = gatewayProfile(profileId);
   }
   return result;
 }

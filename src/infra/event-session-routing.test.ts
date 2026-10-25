@@ -4,7 +4,6 @@ import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
   resolveMainScopedEventSessionKey,
-  scopedHeartbeatWakeOptionsForPolicy,
   type EventSessionRoutingPolicy,
 } from "./event-session-routing.js";
 
@@ -16,12 +15,6 @@ const singleOwnerConfig: OpenClawConfig = {
 };
 function expectRoute(sessionKey: string, policy: EventSessionRoutingPolicy, destination: string) {
   expect(resolveEventSessionKeyForPolicy(sessionKey, policy)).toBe(destination);
-  expect(scopedHeartbeatWakeOptionsForPolicy(sessionKey, { reason: "exec-event" }, policy)).toEqual(
-    {
-      reason: "exec-event",
-      sessionKey: destination,
-    },
-  );
 }
 
 describe("event session routing", () => {

@@ -32,6 +32,7 @@ export function resolveEmbeddedAgentRunRecoverySnapshot(
     const target = controller.target;
     return (
       target !== undefined &&
+      controller.attachment?.projectSessionActive !== false &&
       matchesStore(target.storeScope, operation.agentId) &&
       matchesGateway(operation) &&
       !operation.result &&

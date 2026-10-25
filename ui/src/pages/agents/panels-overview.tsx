@@ -9,7 +9,7 @@ import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
 import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
-import { failPanelRefresh } from "../../components/panel-refresh-status.ts";
+import { failPanelRefresh } from "../../components/panel-refresh-status-state.ts";
 import "../../components/tooltip.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";

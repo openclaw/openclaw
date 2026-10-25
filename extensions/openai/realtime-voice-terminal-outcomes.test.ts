@@ -1,11 +1,11 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeVoiceResponseOutcome } from "openclaw/plugin-sdk/realtime-voice";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describe, expect, it } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 const responseId = "response_1";
 const send = (ws: WebSocket, event: Record<string, unknown>) => ws.send(JSON.stringify(event));
@@ -61,10 +61,7 @@ async function capture(
       }
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = (server.address() as AddressInfo).port;
+  const port = await listenOnLoopback(server);
   const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
     providerConfig: { apiKey: "fixture-value", azureEndpoint: `http://127.0.0.1:${port}` },
     onAudio() {},

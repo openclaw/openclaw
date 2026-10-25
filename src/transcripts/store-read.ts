@@ -400,8 +400,8 @@ function readTranscriptPage<Entry>(
   const keys = query
     .select(["session_id", "started_at"])
     .orderBy("started_at_ms", (order) => order.desc().nullsLast())
-    .orderBy("session_id", (order) => order.asc().nullsFirst())
-    .orderBy("started_at", (order) => order.asc().nullsFirst())
+    .orderBy("session_id", "asc")
+    .orderBy("started_at", "asc")
     .limit(limit + 1);
   // Select identities before projecting notes and participants, so the scan
   // evaluates expensive payloads only for this page and its lookahead.
@@ -420,8 +420,8 @@ function readTranscriptPage<Entry>(
         ),
     )
       .orderBy("meeting_transcript_sessions.started_at_ms", (order) => order.desc().nullsLast())
-      .orderBy("meeting_transcript_sessions.session_id", (order) => order.asc().nullsFirst())
-      .orderBy("meeting_transcript_sessions.started_at", (order) => order.asc().nullsFirst()),
+      .orderBy("meeting_transcript_sessions.session_id", "asc")
+      .orderBy("meeting_transcript_sessions.started_at", "asc"),
   );
   const entries: Entry[] = [];
   let bytes = 0;

@@ -85,7 +85,7 @@ it.each(["static", "factory", "versioned factory"] as const)(
 it.each(["static", "factory", "versioned factory"] as const)(
   "keeps unreadable and circular %s schemas registered for per-tool quarantine",
   (kind) => {
-    for (const failure of ["getter", "circular"] as const) {
+    for (const failure of ["getter", "circular", "proxy"] as const) {
       const { builder, api, resolve } = createOwner();
       const circular = Type.Object<Record<string, TSchema>>({});
       circular.properties.self = circular;
@@ -93,6 +93,12 @@ it.each(["static", "factory", "versioned factory"] as const)(
       if (failure === "getter") {
         Object.defineProperty(broken, "parameters", {
           get() {
+            throw new Error("schema not ready");
+          },
+        });
+      } else if (failure === "proxy") {
+        broken.parameters = new Proxy(circular, {
+          ownKeys() {
             throw new Error("schema not ready");
           },
         });

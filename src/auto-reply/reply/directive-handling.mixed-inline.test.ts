@@ -8,6 +8,7 @@ import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.ru
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
+import { createFixtureRouteModels } from "../../agents/test-helpers/model-fallback-config-fixture.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
@@ -133,15 +134,7 @@ describe("mixed inline directives", () => {
     const { result, sessionEntry } = await applyMixedDirectives({
       body: "please reply /model fixture-route/reasoner -s",
       cfg: {
-        models: {
-          providers: {
-            "fixture-route": {
-              api: "openai-responses",
-              baseUrl: "https://fixture.invalid/v1",
-              models: [],
-            },
-          },
-        },
+        models: createFixtureRouteModels(),
       },
       allowedModels: [
         { provider: "anthropic", id: "claude-opus-4-6", name: "Opus", reasoning: false },

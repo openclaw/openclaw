@@ -55,7 +55,7 @@ export function DetailView(
         <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
         <AdminRequired {...props} />
         {hasDetailTabs() ? <DetailTabs {...props} /> : undefined}
-        <ErrorBanner error={props.error} />
+        <ErrorBanner error={props.error} reads={props.reads} />
         <NoticeBanner notice={props.notice} />
         <div
           id="cron-detail-panel"

@@ -17,7 +17,7 @@ import {
   startOpenAiResponsesModelServer,
 } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { withFullRuntimeReplyConfig } from "../auto-reply/reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import {
@@ -33,7 +33,6 @@ import {
   connectOk,
   createGatewaySuiteHarness,
   installGatewayTestHooks,
-  onceMessage,
   prepareGatewayReplyRuntimeForTest,
   rpcReq,
   writeSessionStore,
@@ -87,22 +86,6 @@ async function createSessionStoreFile(): Promise<string> {
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
   return storePath;
-}
-
-// Observe the canonical session.message event on the subscribed connection.
-function waitForSessionMessageEvent(
-  ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
-  sessionKey: string,
-  timeoutMs?: number,
-) {
-  return onceMessage(
-    ws,
-    (message) =>
-      message.type === "event" &&
-      message.event === "session.message" &&
-      asOptionalRecord(message.payload)?.sessionKey === sessionKey,
-    timeoutMs,
-  );
 }
 
 describe("exec completion WebChat publication", () => {
@@ -174,6 +157,7 @@ describe("exec completion WebChat publication", () => {
       let reconnected: Awaited<ReturnType<typeof connect>> | undefined;
       let receipt: SessionEventReceipt | undefined;
       const notifications: unknown[] = [];
+      const live = createDeferred<Record<string, unknown>>();
       const collect = (data: RawData) => {
         const event = asOptionalRecord(JSON.parse(rawDataToString(data)));
         const payload = asOptionalRecord(event?.payload);
@@ -183,6 +167,7 @@ describe("exec completion WebChat publication", () => {
           JSON.stringify(payload.message).includes(marker)
         ) {
           notifications.push(payload);
+          live.resolve(payload);
         }
       };
       ws.on("message", collect);
@@ -194,18 +179,18 @@ describe("exec completion WebChat publication", () => {
           ws.close();
           await closed;
         }
-        const live = disconnected ? undefined : waitForSessionMessageEvent(ws, sessionKey);
         await prepareGatewayReplyRuntimeForTest({ force: true, config: cfg });
         gatewayReplyMock.mockImplementation((ctx, options, config) =>
           getReplyFromConfig(ctx, options, withFullRuntimeReplyConfig(config ?? cfg)),
         );
+        const expectedTarget = await captureSessionEventTargetForHost("main", sessionKey);
         receipt = enqueueSessionEventForHost(
           `Exec completed (webchat-proof, code 0) :: ${marker}`,
           {
             agentId: "main",
             sessionKey,
             source: "exec",
-            expectedTarget: await captureSessionEventTargetForHost("main", sessionKey),
+            expectedTarget,
             abortSignal: signal,
           },
         );
@@ -215,8 +200,11 @@ describe("exec completion WebChat publication", () => {
           executionStarted: true,
         });
         expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-        if (live) {
-          const event = requireRecord((await live).payload, "exec completion event");
+        if (!disconnected) {
+          const event = requireRecord(
+            await withinTest(live.promise, signal),
+            "exec completion event",
+          );
           expect(event.message).toMatchObject({
             role: "assistant",
             content: [{ type: "text", text: marker }],

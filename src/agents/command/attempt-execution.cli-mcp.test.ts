@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { InMemoryTransport } from "@modelcontextprotocol/client";
-import { Server } from "@modelcontextprotocol/server";
+import { Server, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -28,6 +28,7 @@ import {
   setCliRunnerPrepareTestDeps,
 } from "../cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "../cli-runner/types.js";
+import { OpenClawStreamableHTTPClientTransport } from "../mcp-http-transport.js";
 import * as mcpTransport from "../mcp-transport.js";
 import {
   makeRunAgentAttemptParams,
@@ -74,9 +75,12 @@ describe("CLI attempt session MCP overrides", () => {
     overlays = [];
     setActivePluginRegistry(createEmptyPluginRegistry());
     await bindSessionMcpRuntimeTestScheduler();
-    // Keep discovery and serialization real; only the external MCP transport is in memory.
+    // Exercise the real HTTP transport without sending requests outside the test process.
     vi.spyOn(mcpTransport, "resolveMcpTransport").mockImplementation(() => {
-      const [client, transport] = InMemoryTransport.createLinkedPair();
+      const transport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: randomUUID,
+        enableJsonResponse: true,
+      });
       const server = new Server(
         { name: "session-override-proof", version: "1" },
         { capabilities: { tools: {} } },
@@ -84,7 +88,13 @@ describe("CLI attempt session MCP overrides", () => {
       server.setRequestHandler("tools/list", async () => ({
         tools: [{ name: "read_docs", inputSchema: { type: "object" } }],
       }));
-      void server.connect(transport);
+      const connected = server.connect(transport);
+      const client = new OpenClawStreamableHTTPClientTransport(new URL("https://mcp.example.com"), {
+        fetch: async (input, init) => {
+          await connected;
+          return transport.handleRequest(new Request(input, init));
+        },
+      });
       servers.push(server);
       return {
         transport: client,

@@ -2,6 +2,7 @@ import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import {
   Errored,
   Loading,
+  Show,
   createMemo,
   createSignal,
   createStore,
@@ -26,7 +27,11 @@ import {
   type CiAutomationJobs,
 } from "../../../lib/session-pr-automation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
-import { ChatCiAutomationView, type ChatCiAutomationProps } from "./chat-ci-automation.tsx";
+import {
+  ChatCiAutomationError,
+  ChatCiAutomationView,
+  type ChatCiAutomationProps,
+} from "./chat-ci-automation.tsx";
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
 
 /** Cron owns durable settings and execution; this element retains only the visible projection. */
@@ -39,18 +44,18 @@ const inputHandlers = new WeakMap<HTMLElement, (key: keyof Props) => void>();
 
 type AutomationState = {
   jobs: CiAutomationJobs;
+  inventoryReady: boolean;
   pending: Partial<CiAutomationOptions>;
   schedulerEnabled: boolean | undefined;
-  error: string | null;
 };
 type Inventory = { jobs: CiAutomationJobs; schedulerEnabled: boolean };
 
 function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   const [state, setState] = createStore<AutomationState>({
     jobs: {},
+    inventoryReady: false,
     pending: {},
     schedulerEnabled: undefined,
-    error: null,
   });
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   const gatewayProjection = createMemo(() => {
@@ -74,6 +79,8 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   const [receipt, setReceipt] = createSignal(Promise.resolve<Inventory | undefined>(undefined));
   const read = createMemo(() => receipt());
   const [presentationScope, setPresentationScope] = createSignal({});
+  const completions = new Set<Promise<void>>();
+  const [attempt, setAttempt] = createSignal<{ result: Promise<null> }>();
   // Synchronous admission is separate from Solid's deferred presentation writes.
   const writes = new Set<CiAutomationOption>();
   const disclosure = createCiDisclosure(host, handleVisibility, () => {
@@ -207,6 +214,8 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
 
   function reset(): void {
     version += 1;
+    completions.clear();
+    setAttempt(undefined);
     setPresentationScope({});
     cancelRead();
     inventoryVersion = -1;
@@ -214,9 +223,9 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     writes.clear();
     setState((draft) => {
       draft.jobs = {};
+      draft.inventoryReady = false;
       draft.pending = {};
       draft.schedulerEnabled = undefined;
-      draft.error = null;
     });
     void setReceipt(Promise.resolve(undefined));
     refreshPending = true;
@@ -285,6 +294,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
           accepted = { jobs, schedulerEnabled: status.enabled };
           setState((draft) => {
             draft.jobs = jobs;
+            draft.inventoryReady = true;
             draft.schedulerEnabled = status.enabled;
           });
           return accepted;
@@ -293,6 +303,9 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
       } catch (error) {
         if (current()) {
           inventoryVersion = -1;
+          setState((draft) => {
+            draft.inventoryReady = false;
+          });
           throw new Error(formatUiError(error, t("chat.pullRequests.automationLoadFailed")), {
             cause: error,
           });
@@ -307,7 +320,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     }
   }
 
-  async function setEnabled(option: CiAutomationOption, enabled: boolean): Promise<void> {
+  function setEnabled(option: CiAutomationOption, enabled: boolean): void {
     if (
       !disclosure.visible() ||
       inventoryVersion !== version ||
@@ -326,50 +339,62 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
     // A pre-click inventory must never overwrite newer intent or its acknowledged revision.
     cancelRead();
     writes.add(option);
+    // Same-turn actions share a transaction. Keep per-option settlement independent.
     setState((draft) => {
-      // Each option settles independently, including a rejected sibling write.
       draft.pending[option] = enabled;
-      draft.error = null;
     });
+    const completion = commit();
+    completions.add(completion);
+    // Keep the first concurrent failure visible through the remaining sibling completions.
+    const result = Promise.all(completions).then(() => null);
+    setAttempt({ result });
+    void result.catch(() => {});
+    void completion.catch(() => {}).finally(() => completions.delete(completion));
     queueRefresh();
-    try {
-      const job = await setCiAutomationEnabled(
-        admitted.client,
-        admitted.target,
-        option,
-        enabled,
-        currentJob,
-      );
-      if (!admitted.current()) {
-        return;
-      }
-      if (accepted) {
-        accepted = { ...accepted, jobs: { ...accepted.jobs, [option]: job } };
-      }
-      setState((draft) => {
-        draft.jobs[option] = job;
-      });
-    } catch (error) {
-      if (admitted.current()) {
-        // A rejected acknowledgement may hide an accepted write. Never mutate again
-        // until a complete authoritative inventory has reconciled the actual outcome.
-        inventoryVersion = -1;
+
+    async function commit() {
+      try {
+        const job = await setCiAutomationEnabled(
+          admitted.client,
+          admitted.target,
+          option,
+          enabled,
+          currentJob,
+        );
+        if (!admitted.current()) {
+          return;
+        }
+        if (accepted) {
+          accepted = { ...accepted, jobs: { ...accepted.jobs, [option]: job } };
+        }
         setState((draft) => {
-          draft.error = formatUiError(error, t("chat.pullRequests.automationSaveFailed"));
+          draft.jobs[option] = job;
         });
-      }
-    } finally {
-      if (admitted.current()) {
-        writes.delete(option);
-        setState((draft) => {
-          delete draft.pending[option];
-        });
-        queueRefresh();
+      } catch (error) {
+        if (admitted.current()) {
+          // A rejected acknowledgement may hide an accepted write. Never mutate again
+          // until a complete authoritative inventory has reconciled the actual outcome.
+          inventoryVersion = -1;
+          setState((draft) => {
+            draft.inventoryReady = false;
+          });
+          throw new Error(formatUiError(error, t("chat.pullRequests.automationSaveFailed")), {
+            cause: error,
+          });
+        }
+      } finally {
+        if (admitted.current()) {
+          writes.delete(option);
+          setState((draft) => {
+            delete draft.pending[option];
+          });
+          queueRefresh();
+        }
       }
     }
   }
 
-  type ViewProps = Omit<ChatCiAutomationProps, "loading">;
+  type ViewProps = Omit<ChatCiAutomationProps, "loading" | "error">;
   const view = createMemo<ViewProps>(() => {
     const snapshot = gatewayProjection()?.read();
     const unavailable = !automationTarget(props)
@@ -389,15 +414,12 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
       saving: Object.keys(state.pending).length > 0,
       jobs: state.jobs,
       schedulerEnabled: state.schedulerEnabled,
-      error: state.error,
       disabled: Boolean(unavailable),
       disabledReason: unavailable,
       retryDisabled: !automationTarget(props) || !canRead(snapshot),
-      onChange: (option, enabled) => void setEnabled(option, enabled),
+      onChange: (option, enabled) => setEnabled(option, enabled),
       onRetry: () => {
-        setState((draft) => {
-          draft.error = null;
-        });
+        setAttempt(undefined);
         refreshPending = true;
         load();
       },
@@ -405,11 +427,12 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
   });
   return {
     view,
+    attempt,
     read,
     scope: presentationScope,
     hasInventory: () => {
       latest(read);
-      return inventoryVersion === version;
+      return state.inventoryReady;
     },
   };
 }
@@ -421,9 +444,32 @@ function ChatCiAutomationContent(props: Props, host: SolidBridgeElement<Props>) 
   const content = (loading = false, error?: () => string, retry?: () => void) => (
     <ChatCiAutomationView
       {...model.view()}
+      errorContent={
+        <Show when={error ? undefined : model.attempt()} keyed>
+          {(attempt) => {
+            const outcome = createMemo(() => attempt.result, { loadingValue: undefined });
+            return (
+              <Errored
+                fallback={(mutationError) => (
+                  <ChatCiAutomationError
+                    error={formatUiError(mutationError())}
+                    loading={isPending(model.read)}
+                    saving={model.view().saving}
+                    retryDisabled={model.view().retryDisabled}
+                    onRetry={model.view().onRetry}
+                    controls={props.controls}
+                  />
+                )}
+              >
+                {outcome()}
+              </Errored>
+            );
+          }}
+        </Show>
+      }
       loading={loading || isPending(model.read)}
       disabled={loading || Boolean(error) || model.view().disabled || !model.hasInventory()}
-      error={error ? error() : model.view().error}
+      error={error ? error() : null}
       onRetry={retry ?? model.view().onRetry}
       menuPresentation={props.menuPresentation}
       controls={props.controls}

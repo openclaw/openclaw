@@ -2,18 +2,22 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createSlackActions } from "./channel-actions.js";
+import {
+  createDisabledSlackActions,
+  createInvokeSpy,
+  dispatch,
+} from "./message-action-dispatch.test-support.js";
 import { listSlackMessageActions } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
+
+const schemasFor = (discovery: ReturnType<typeof describeSlackMessageTool>) =>
+  Array.isArray(discovery.schema) ? discovery.schema : discovery.schema ? [discovery.schema] : [];
 
 function requireSchemaProperty(
   discovery: ReturnType<typeof describeSlackMessageTool>,
   property: string,
 ) {
-  const schemas = Array.isArray(discovery.schema)
-    ? discovery.schema
-    : discovery.schema
-      ? [discovery.schema]
-      : [];
+  const schemas = schemasFor(discovery);
   const schema = schemas.find((entry) => property in entry.properties);
   if (!schema) {
     throw new Error(`Missing schema property ${property}`);
@@ -30,18 +34,14 @@ const configuredSlack: OpenClawConfig = {
 
 describe("Slack message tools", () => {
   it("forwards trusted current-conversation, requester-account, and action authority context", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
+    const invoke = createInvokeSpy();
     const assertDirectAdapterHandoff = vi.fn();
-    const actions = createSlackActions("slack", { invoke });
-    if (!actions.handleAction) {
-      throw new Error("Slack message actions must provide an executor.");
-    }
     const toolContext = {
       currentChannelProvider: "slack" as const,
       currentChannelId: "C_CURRENT",
     };
 
-    await actions.handleAction({
+    await dispatch(invoke, {
       channel: "slack",
       action: "read",
       cfg: {} as OpenClawConfig,
@@ -69,13 +69,9 @@ describe("Slack message tools", () => {
   });
 
   it("preserves a workspace-qualified channel for reactions", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
-    const actions = createSlackActions("slack", { invoke });
-    if (!actions.handleAction) {
-      throw new Error("Slack message actions must provide an executor.");
-    }
+    const invoke = createInvokeSpy();
 
-    await actions.handleAction({
+    await dispatch(invoke, {
       channel: "slack",
       action: "react",
       cfg: {} as OpenClawConfig,
@@ -97,13 +93,9 @@ describe("Slack message tools", () => {
   });
 
   it("preserves a workspace-qualified channel for implicit upload destinations", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
-    const actions = createSlackActions("slack", { invoke });
-    if (!actions.handleAction) {
-      throw new Error("Slack message actions must provide an executor.");
-    }
+    const invoke = createInvokeSpy();
 
-    await actions.handleAction({
+    await dispatch(invoke, {
       channel: "slack",
       action: "upload-file",
       cfg: {} as OpenClawConfig,
@@ -134,13 +126,9 @@ describe("Slack message tools", () => {
   });
 
   it("forwards complete trusted context for current-requester member info", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
-    const actions = createSlackActions("slack", { invoke });
-    if (!actions.handleAction) {
-      throw new Error("Slack message actions must provide an executor.");
-    }
+    const invoke = createInvokeSpy();
 
-    await actions.handleAction({
+    await dispatch(invoke, {
       channel: "slack",
       action: "member-info",
       cfg: {} as OpenClawConfig,
@@ -165,13 +153,9 @@ describe("Slack message tools", () => {
   });
 
   it("does not accept Slack read authority from generic tool context", async () => {
-    const invoke = vi.fn(async () => ({ content: [], details: { ok: true } }));
-    const actions = createSlackActions("slack", { invoke });
-    if (!actions.handleAction) {
-      throw new Error("Slack message actions must provide an executor.");
-    }
+    const invoke = createInvokeSpy();
 
-    await actions.handleAction({
+    await dispatch(invoke, {
       channel: "slack",
       action: "read",
       cfg: {} as OpenClawConfig,
@@ -299,25 +283,11 @@ describe("Slack message tools", () => {
       channels: {
         slack: {
           botToken: "xoxb-root",
-          actions: {
-            channels: false,
-            reactions: false,
-            messages: false,
-            pins: false,
-            memberInfo: false,
-            emojiList: false,
-          },
+          actions: createDisabledSlackActions(),
           accounts: {
             default: {
               botToken: "xoxb-default",
-              actions: {
-                channels: false,
-                reactions: false,
-                messages: false,
-                pins: false,
-                memberInfo: false,
-                emojiList: false,
-              },
+              actions: createDisabledSlackActions(),
             },
             work: {
               botToken: "xoxb-work",
@@ -416,11 +386,7 @@ describe("Slack message tools", () => {
       } as OpenClawConfig,
     });
 
-    const schemas = Array.isArray(discovery.schema)
-      ? discovery.schema
-      : discovery.schema
-        ? [discovery.schema]
-        : [];
+    const schemas = schemasFor(discovery);
     const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
     expect(propertyNames).not.toContain("emoji");
   });
@@ -453,25 +419,14 @@ describe("Slack message tools", () => {
         channels: {
           slack: {
             botToken: "xoxb-test",
-            actions: {
-              channels: false,
-              reactions: false,
-              messages: false,
-              pins: false,
-              memberInfo: false,
-              emojiList: false,
-            },
+            actions: createDisabledSlackActions(),
           },
         },
       } as OpenClawConfig,
     });
 
     expect(discovery.actions).toEqual(["send"]);
-    const schemas = Array.isArray(discovery.schema)
-      ? discovery.schema
-      : discovery.schema
-        ? [discovery.schema]
-        : [];
+    const schemas = schemasFor(discovery);
     const propertyNames = schemas.flatMap((entry) => Object.keys(entry.properties));
     expect(propertyNames).not.toContain("fileId");
     expect(propertyNames).not.toContain("messageId");

@@ -121,20 +121,6 @@ export function expectedPlainRecovery(
   ].join("\n");
 }
 
-export function expectedManagedRuntimeRecoverySteps(
-  manager: "nvm" | "system",
-  root: string,
-): UpdateRecoveryStep[] {
-  const steps = expectedRuntimeRecoverySteps("24.22.1", root, "2026.5.20", clearedContext);
-  if (manager === "nvm") {
-    steps[2] = {
-      kind: "select-runtime",
-      command: expectedRuntimeSelectionCommand("nvm", "24.22.1"),
-    };
-  }
-  return steps;
-}
-
 export const unsupportedServiceRuntimeFixture = {
   status: "unsupported",
   version: "22.18.0",

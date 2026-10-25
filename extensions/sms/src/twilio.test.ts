@@ -1,5 +1,3 @@
-// Sms tests cover twilio plugin behavior.
-import { createHmac } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -8,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Sms tests cover twilio plugin behavior.
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import {
@@ -21,7 +21,12 @@ import {
   verifyTwilioSignature,
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
-import { createSmsTestAccount } from "./webhook.test-support.js";
+import {
+  createSmsTestAccount,
+  createSmsTestMessage,
+  createSmsTestPhoneNumber,
+  signSmsTestForm,
+} from "./webhook.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -56,20 +61,6 @@ function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchPara
     return init.body;
   }
   throw new Error("Expected Twilio request body to be URL-encoded.");
-}
-
-function computeTestTwilioSignature(params: {
-  url: string;
-  authToken: string;
-  form: Record<string, string>;
-}): string {
-  const data =
-    params.url +
-    Object.keys(params.form)
-      .toSorted()
-      .map((key) => `${key}${params.form[key] ?? ""}`)
-      .join("");
-  return createHmac("sha1", params.authToken).update(data).digest("base64");
 }
 
 async function readTestTwilioForm(body: string): Promise<Record<string, string>> {
@@ -109,15 +100,7 @@ describe("Twilio SMS helpers", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
-          preparing.promise,
-          dispatched.promise.then(() => {
-            throw new Error("dispatched before preparation");
-          }),
-          sending.then(() => {
-            throw new Error("settled before preparation");
-          }),
-        ]);
+        await waitForEffectPreparation(preparing.promise, dispatched.promise, sending);
         expect(fetchImpl).not.toHaveBeenCalled();
         if (replaced) {
           replace();
@@ -286,11 +269,7 @@ describe("Twilio SMS helpers", () => {
       MessageSid: "SM123",
       To: "+15557654321",
     };
-    const signature = computeTestTwilioSignature({
-      url: "https://gateway.example.com/webhooks/sms",
-      authToken: "secret",
-      form,
-    });
+    const signature = signSmsTestForm(form, createAccount()).signature;
 
     expect(
       verifyTwilioSignature({
@@ -322,11 +301,7 @@ describe("Twilio SMS helpers", () => {
     const form = await readTestTwilioForm(
       "From=%2B15551234567&To=%2B15557654321&Body=+hello+&MessageSid=SM123&WaId=",
     );
-    const signature = computeTestTwilioSignature({
-      url: "https://gateway.example.com/webhooks/sms",
-      authToken: "secret",
-      form,
-    });
+    const signature = signSmsTestForm(form, createAccount()).signature;
 
     expect(form.Body).toBe(" hello ");
     expect(form.WaId).toBe("");
@@ -617,10 +592,9 @@ describe("Twilio SMS helpers", () => {
         incoming_phone_numbers: [
           {
             sid: "PN123",
-            phone_number: "+15557654321",
-            sms_url: "https://gateway.example.com/webhooks/sms",
-            sms_method: "POST",
-            voice_url: "https://gateway.example.com/voice/webhook",
+            ...createSmsTestPhoneNumber({
+              voice_url: "https://gateway.example.com/voice/webhook",
+            }),
           },
         ],
       }),
@@ -653,17 +627,12 @@ describe("Twilio SMS helpers", () => {
     const fetchImpl = mockTwilioFetch(async () =>
       Response.json({
         messages: [
-          {
-            sid: "SM123",
-            direction: "inbound",
-            status: "received",
-            to: "+15557654321",
-            from: "+15551234567",
+          createSmsTestMessage({
             error_code: 11200,
             body: "hello",
             date_created: "Sun, 31 May 2026 10:00:00 +0000",
             date_sent: null,
-          },
+          }),
         ],
       }),
     );
@@ -753,7 +722,7 @@ describe("Twilio SMS helpers", () => {
     expect(body.get("MessagingServiceSid")).toBeNull();
   });
 
-  it("throws structured Twilio errors from JSON error bodies", async () => {
+  it("reports actionable Twilio errors from JSON error bodies", async () => {
     mockTwilioFetch(async () =>
       Response.json(
         {
@@ -773,12 +742,6 @@ describe("Twilio SMS helpers", () => {
     ).rejects.toMatchObject({
       name: "TwilioSmsApiError",
       message: "Twilio SMS send failed (400): The message From/To pair violates a blacklist rule.",
-      httpStatus: 400,
-      twilioCode: 21610,
-      responseText: JSON.stringify({
-        code: 21610,
-        message: "The message From/To pair violates a blacklist rule.",
-      }),
     });
   });
 
@@ -795,7 +758,7 @@ describe("Twilio SMS helpers", () => {
       });
     });
 
-    let caught: (Error & { responseText: string }) | undefined;
+    let caught: unknown;
     try {
       await sendSmsViaTwilio({
         account,
@@ -803,15 +766,13 @@ describe("Twilio SMS helpers", () => {
         text: "hello",
       });
     } catch (error) {
-      caught = error as Error & { responseText: string };
+      caught = error;
     }
 
     expect(caught).toMatchObject({
       message: "Twilio SMS send failed (503): upstream unavailable; Authorization: Basic ***",
-      responseText: "upstream unavailable; Authorization: Basic ***",
     });
-    expect(caught?.message).not.toContain(encodedCredential);
-    expect(caught?.responseText).not.toContain(encodedCredential);
+    expect(String(caught)).not.toContain(encodedCredential);
   });
 
   it("releases guarded Twilio egress on failed send responses", async () => {

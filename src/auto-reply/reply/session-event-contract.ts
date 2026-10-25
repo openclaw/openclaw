@@ -46,7 +46,8 @@ export type SessionEventOutcome = {
   summary?: string;
   nextCheckMs?: number;
   sourceDeliveryOutcome?: SourceDeliveryOutcome;
-  automationResult?: CronRunTelemetry & Pick<CronRunOutcome, "replyDisposition" | "diagnostics">;
+  automationResult?: CronRunTelemetry &
+    Pick<CronRunOutcome, "replyDisposition" | "diagnostics" | "result">;
   /** Recorded controller restart outcome, before the error is flattened. */
   interruptedByRestart?: boolean;
   error?: string;
@@ -128,6 +129,8 @@ export type ScheduledSessionAutomation = {
   modelFallbackPolicy?: {
     useSubagentFallbacks: boolean;
     inheritDefaultFallbacksForAgentStringModel: boolean;
+    /** Stored provenance when the turn uses the session's model selection. */
+    sessionModelOverrideSource?: "auto" | "user";
   };
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Original Control UI admin classification, revalidated by the restored operator source. */

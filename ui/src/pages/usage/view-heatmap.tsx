@@ -191,7 +191,9 @@ export function renderUsageHeatmap(
   rangeStartDate: string,
   rangeEndDate: string,
 ) {
-  if (daily.length === 0) {
+  // Up to two months the daily chart already shows every day; the calendar earns its space beyond.
+  const rangeDays = (Date.parse(rangeEndDate) - Date.parse(rangeStartDate)) / 86_400_000 + 1;
+  if (daily.length === 0 || rangeDays <= 62) {
     return undefined;
   }
   const heatmap = buildUsageHeatmap(daily, rangeStartDate, rangeEndDate);

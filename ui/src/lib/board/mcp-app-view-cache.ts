@@ -2,8 +2,6 @@ import type { BoardWidget, BoardWidgetAppViewResult } from "@openclaw/gateway-pr
 import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import type { BoardWidgetAppViewState } from "./view-types.ts";
 
-type AppViewRequest = () => Promise<BoardWidgetAppViewResult>;
-
 export class BoardMcpAppViewCache {
   private readonly entries = new Map<string, Promise<BoardWidgetAppViewState>>();
 
@@ -26,7 +24,7 @@ export class BoardMcpAppViewCache {
 
   async resolve(
     widget: BoardWidget,
-    request: AppViewRequest,
+    request: () => Promise<BoardWidgetAppViewResult>,
     force: boolean,
   ): Promise<BoardWidgetAppViewState> {
     const key = this.key(widget);

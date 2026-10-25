@@ -256,7 +256,6 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
           detected: legacyState,
           integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
           config: ctx.cfg,
-          ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
           legacySessionSurfaces,
         });
         recordDoctorHealthWarnings(

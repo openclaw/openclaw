@@ -1,4 +1,4 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -174,8 +174,7 @@ function isDefinitiveAbortMiss(response: unknown, gatewayRunId: string): boolean
   const result = asNullableRecord(response);
   return (
     typeof result?.aborted === "boolean" &&
-    Array.isArray(result.runIds) &&
-    result.runIds.every((runId) => typeof runId === "string") &&
+    isStringArray(result.runIds) &&
     !result.runIds.includes(gatewayRunId)
   );
 }
@@ -184,7 +183,6 @@ type SessionCleanupOptions = {
   childAgentId?: string;
   isCurrent?: () => boolean;
   emitLifecycleHooks?: boolean;
-  deleteTranscript?: boolean;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   callGateway?: GatewayCall;
@@ -199,7 +197,7 @@ function requestProvisionalSessionCleanup(
     ...options,
     childSessionKey,
     callGateway: options?.callGateway ?? callSubagentGateway,
-    deleteTranscript: options?.deleteTranscript === true,
+    deleteTranscript: true,
     timeoutMs: options?.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
   });
 }
@@ -218,7 +216,6 @@ export async function cleanupFailedSpawnBeforeAgentStart(params: {
   childAgentId?: string;
   attachmentId?: string;
   emitLifecycleHooks?: boolean;
-  deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
   waitForCleanup?: () => Promise<void> | undefined;
   expectedSessionId?: string;
@@ -333,7 +330,6 @@ export async function terminateAcceptedCollectorRun(params: {
   }
   const cleanup = await requestProvisionalSessionCleanup(params.childSessionKey, {
     isCurrent: params.isCurrent,
-    deleteTranscript: true,
     expectedSessionId: params.expectedSessionId,
     expectedLifecycleRevision: params.expectedLifecycleRevision,
     callGateway: call,

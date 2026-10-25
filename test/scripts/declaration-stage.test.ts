@@ -211,14 +211,8 @@ describe("canonical declaration stage", () => {
   );
   it("does not publish on missing entry", async () => {
     const { dist, invocation, publish, read } = fixture();
-    const invocations = [
-      invocation({ "plugin-sdk/public.d.ts": 'export type { Shared } from "../shared.js";' }),
-      invocation({ "shared.d.ts": "export type Shared = string;" }),
-    ];
     const before = fs.readdirSync(dist, { recursive: true }).map(String).toSorted();
-    await expect(
-      publish(invocations, ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"]),
-    ).rejects.toThrow();
+    await expect(publish([invocation({})])).rejects.toThrow("Missing canonical declaration");
     expect(fs.readdirSync(dist, { recursive: true }).map(String).toSorted()).toEqual(before);
     expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
   });

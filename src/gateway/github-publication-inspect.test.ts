@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { SessionGitHubPullRequestInspectResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
@@ -16,6 +17,8 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { setCanonicalUserPreferences } from "../state/user-preferences.js";
+import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import {
   syncCanonicalGitHubIdentity,
   ensureCanonicalEnterpriseGitHubProfile,
@@ -212,13 +215,79 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     expect(await f.invoke()).toMatchObject({ author: { accountId: 202, login: "secondary" } });
   });
 
+  it.each(
+    [false, true].flatMap((enabled) => ["before", "during"].map((timing) => ({ enabled, timing }))),
+  )(
+    "preserves verified identity and own-PR checks with credit $enabled $timing inspection",
+    async ({ enabled, timing }) => {
+      const f = await fixture();
+      const before = getUserProfileListItem(f.guestProfile);
+      // Start at the opposite value so every case changes consent, including opt-in.
+      await expect(
+        setCanonicalUserPreferences(f.guestProfile, {
+          [GIT_COAUTHOR_PREFERENCE_KEY]: !enabled,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+      let changed = false;
+      const toggle = async () => {
+        await expect(
+          setCanonicalUserPreferences(f.guestProfile, {
+            [GIT_COAUTHOR_PREFERENCE_KEY]: enabled,
+          }),
+        ).resolves.toMatchObject({ ok: true });
+        changed = true;
+      };
+      if (timing === "before") {
+        await toggle();
+      } else {
+        f.onRead(async (endpoint) => {
+          if (!changed && endpoint.endsWith("/pulls/7")) {
+            await toggle();
+          }
+        });
+      }
+      if (timing === "during") {
+        await expect(f.invoke()).rejects.toThrow(
+          "Authenticated profile verification is unavailable",
+        );
+      }
+      // Consent invalidates a prepared request, not the verified identity or a fresh ownership check.
+      expect(await f.invoke()).toMatchObject({ author: { accountId: 101, login: "contributor" } });
+      expect(changed).toBe(true);
+      expect(getUserProfileListItem(f.guestProfile)).toEqual(before);
+      f.pr.user.id = 999;
+      await expect(f.invoke()).rejects.toThrow("not authored by a GitHub account linked to you");
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    "does not misdiagnose a publisher-authored PR as broken publisher credentials (raw=%s)",
+    async (raw) => {
+      const f = await fixture();
+      f.pr.user = { id: 42, login: "publisher" };
+      const before = loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY });
+      await expect(f.invoke({}, raw)).rejects.toThrow(
+        "This PR is not authored by a GitHub account linked to you. inspect_pr checks your PR authorship, not the managed publisher's credentials. For this session's published PR, use edit without title or body; for a new PR, use publish. A bot-authored PR from another session cannot be imported with inspect_pr or prepare_pr.",
+      );
+      expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: SESSION_KEY })).toEqual(
+        before,
+      );
+      expect(f.requests.map((args) => args.at(-1))).toEqual([
+        "repos/example/repository",
+        "repos/example/repository/pulls/7",
+      ]);
+      expect(f.externalWrites).toEqual([]);
+    },
+  );
+
   it.each(["unlinked", "wrong author"])("rejects %s without exposing PR data", async (variant) => {
     const f = await fixture({ linked: variant !== "unlinked" });
     if (variant === "wrong author") {
       f.pr.user.id = 999;
     }
     await expect(f.invoke()).rejects.toThrow(
-      variant === "unlinked" ? "Link a verified" : "could not be verified as yours",
+      variant === "unlinked" ? "Link a verified" : "not authored by a GitHub account linked to you",
     );
     if (variant === "unlinked") {
       expect(f.requests).toEqual([]);
@@ -403,7 +472,7 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     );
     expect(await f.invoke()).toMatchObject({ host, author: { accountId: 101 } });
     f.pr.user = { id: 303, login: "contributor-other" };
-    await expect(f.invoke()).rejects.toThrow("could not be verified as yours");
+    await expect(f.invoke()).rejects.toThrow("not authored by a GitHub account linked to you");
   });
 
   it("rejects arbitrary hosts, credential URLs and non-PR paths before network access", async () => {

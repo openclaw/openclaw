@@ -124,6 +124,23 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
   });
 });
 
+it("prepares warm placement authority without enumerating the process environment", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const store = createWorkerSessionPlacementStore();
+    const sessionId = "environment-free-placement-read";
+    const warm = await store.prepareSessionPlacement(sessionId);
+    warm.release();
+    using keys = vi.spyOn(Object, "keys");
+    const read = await store.prepareSessionPlacement(sessionId);
+    try {
+      expect(read.current()).toBeUndefined();
+      expect(keys.mock.calls.filter(([source]) => source === process.env)).toHaveLength(0);
+    } finally {
+      read.release();
+    }
+  });
+});
+
 it("installs the committed placement when acquisition overlaps its writer receipt", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const store = createWorkerSessionPlacementStore();

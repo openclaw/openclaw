@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createMemo } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { UsersListModelAccountsResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import {
@@ -21,6 +22,7 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -38,6 +40,9 @@ import {
   refreshPageChat,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
+
+beforeEach(installModelPickerLayout);
 
 function composerControls(state: ChatPageHost) {
   return renderChatPaneComposerControls({
@@ -75,12 +80,7 @@ describe("chat pane composer controls", () => {
         "chat.startup": { messages: [], metadata: { commands: [] } },
         "chat.history": { messages: [] },
         "sessions.list": createSessionsListResult(),
-        "agents.list": {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }],
-        },
+        "agents.list": makeBootRoster(),
       });
       store.current().request.mockImplementation(async (method, params) => request(method, params));
       const hello = {
@@ -284,6 +284,7 @@ describe("chat pane composer controls", () => {
       await waitForSolid(() =>
         expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
       );
+      expandModelProviders(container);
       expect(container.textContent).toContain(failureLabel);
 
       const refresh =
@@ -318,6 +319,7 @@ describe("chat pane composer controls", () => {
       request.mockResolvedValueOnce({ models: cachedModels });
       await refreshChatModelCatalogOnDemand(state);
       flush();
+      expandModelProviders(container);
       expect(container.textContent).toContain("Cached Model");
       expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     },
@@ -395,6 +397,7 @@ describe("chat pane composer controls", () => {
       await waitForSolid(() =>
         expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
       );
+      expandModelProviders(container);
       if (cachedCatalog) {
         expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
         expect(
@@ -471,6 +474,7 @@ describe("chat pane composer controls", () => {
     await waitForSolid(() =>
       expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
     );
+    expandModelProviders(container);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");

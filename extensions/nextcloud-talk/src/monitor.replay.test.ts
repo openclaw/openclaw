@@ -4,9 +4,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createMockIncomingRequest, postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerNextcloudTalkWebhook } from "./monitor.js";
-import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
+import { createSignedCreateMessageRequest, signWebhookBody } from "./monitor.test-fixtures.js";
 import { startWebhookServer as startServer, webhookRegistry } from "./monitor.test-harness.js";
-import { generateNextcloudTalkSignature } from "./signature.js";
 
 afterEach(() => vi.useRealTimers());
 const path = "/nextcloud-test";
@@ -26,19 +25,6 @@ async function startPair(
   const expectDeliveries = (a: number, b: number) =>
     expect([first.mock.calls.length, second.mock.calls.length]).toEqual([a, b]);
   return { first, second, firstHandle, secondHandle, expectDeliveries };
-}
-
-function signWebhookBody(body: string, secret = "nextcloud-secret") {
-  const { random, signature } = generateNextcloudTalkSignature({ body, secret });
-  return {
-    body,
-    headers: {
-      "content-type": "application/json",
-      "x-nextcloud-talk-random": random,
-      "x-nextcloud-talk-signature": signature,
-      "x-nextcloud-talk-backend": "https://nextcloud.example",
-    },
-  };
 }
 
 function postWebhook(

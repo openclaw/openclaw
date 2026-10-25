@@ -1,8 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { onSettled } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
@@ -16,11 +13,7 @@ import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { createAttachmentDraft } from "./chat-attachment-preparation.test-support.ts";
 import { makeMenu } from "./chat-composer-menu.test-support.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-
-const composerStyles = readFileSync(
-  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../styles/chat/composer.css"),
-  "utf8",
-);
+import "./chat-camera-capture.tsx";
 
 let host: HTMLDivElement;
 let restoreDialog: () => void;
@@ -87,9 +80,6 @@ function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: strin
 it.each([false, true])(
   "selects existing media through the real menu and draft owner (imagesOnly=%s)",
   async (imagesOnly) => {
-    const stylesheet = document.head.appendChild(document.createElement("style"));
-    stylesheet.textContent = composerStyles;
-    onTestFinished(() => stylesheet.remove());
     const draft = createAttachmentDraft({
       maxBytes: 1024,
       maxImageBytes: 1024,
@@ -115,23 +105,6 @@ it.each([false, true])(
     const action = host.querySelector<HTMLButtonElement>(`[data-value="${kind}"]`)!;
     expect(action.textContent).toBe(imagesOnly ? "Photo" : "Photos & videos");
     const picker = input(kind);
-    for (const fileInput of host.querySelectorAll<HTMLInputElement>('input[type="file"]')) {
-      const style = getComputedStyle(fileInput);
-      expect(
-        {
-          display: style.display,
-          position: style.position,
-          opacity: style.opacity,
-          pointerEvents: style.pointerEvents,
-        },
-        fileInput.className,
-      ).toEqual({
-        display: "none",
-        position: "fixed",
-        opacity: "0",
-        pointerEvents: "none",
-      });
-    }
     const open = clickSpy(picker);
     action.click();
     expect(open).toHaveBeenCalledOnce();

@@ -1,9 +1,12 @@
+import { Check } from "typebox/schema";
 import { beforeEach, expect, it, vi } from "vitest";
+import { createProtocolValidator } from "../../../packages/gateway-protocol/src/protocol-validator.js";
+import { WebSearchStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/web-search.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   snapshot: vi.fn<() => AuthProfileStore | undefined>(),
@@ -71,11 +74,43 @@ vi.mock("../../agents/model-catalog-decisions.js", () => ({
   }),
   resolveCatalogDecisionRuntime: () => ({ id: "openclaw" }),
 }));
-import { prepareWebSearchStatus } from "./web-search-status.js";
+// mock-isolation: Prepared-auth projection admits a synthetic requester without an identity database.
+vi.mock("./users-profile-access.js", () => ({
+  prepareAuthenticatedProfile: async () => ({ assertCurrent: () => {} }),
+}));
+import { webSearchHandlers } from "./web-search.js";
 
-const readStatus = async (config: OpenClawConfig) =>
-  (await prepareWebSearchStatus({ getRuntimeConfig: () => config } as GatewayRequestContext, {}))
-    .status;
+const validateStatus = createProtocolValidator(WebSearchStatusResultSchema, (value) =>
+  Check(WebSearchStatusResultSchema, value),
+);
+
+const readStatus = async (config: OpenClawConfig) => {
+  const context = { getRuntimeConfig: () => config } as GatewayRequestContext;
+  const params = {};
+  const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
+  await webSearchHandlers["webSearch.status"]!({
+    req: { type: "req", id: "search-status", method: "webSearch.status" },
+    params,
+    client: {
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
+        scopes: ["operator.read"],
+      },
+    },
+    context,
+    respond,
+    isWebchatConnect: () => false,
+  });
+  expect(respond).toHaveBeenCalledTimes(1);
+  const [ok, payload, error] = respond.mock.calls[0] ?? [];
+  expect([ok, error]).toEqual([true, undefined]);
+  if (!validateStatus(payload)) {
+    throw new Error(JSON.stringify(validateStatus.errors));
+  }
+  return payload;
+};
 const publishProfile = (profile: AuthProfileStore["profiles"][string] | undefined) =>
   mocks.snapshot.mockReturnValue(
     profile ? { version: 1, profiles: { "openai:fixture": profile } } : undefined,

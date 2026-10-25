@@ -8,6 +8,7 @@ import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-suppo
 import type { UsageProps } from "./types.ts";
 import { texts } from "./view-render.test-support.ts";
 import {
+  usageMessages,
   buildAggregatesFromSessions,
   projectUsageData,
   createUsageProps,
@@ -68,6 +69,37 @@ function averageCostSummary(container: ParentNode) {
 }
 
 describe("renderUsage", () => {
+  it("identifies each query removal action and removes only its named token", () => {
+    const base = createUsageProps();
+    const [queryDraft, setQueryDraft] = createSignal('provider:openai "label:Team Planning"');
+    const container = mountUsage({
+      ...base,
+      filters: {
+        ...base.filters,
+        get queryDraft() {
+          return queryDraft();
+        },
+      },
+      callbacks: {
+        ...base.callbacks,
+        filters: { ...base.callbacks.filters, onQueryDraftChange: setQueryDraft },
+      },
+    });
+    const buttons = () => [
+      ...container.querySelectorAll<HTMLButtonElement>(".usage-query-chip button"),
+    ];
+    expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Remove filter: provider:openai",
+      'Remove filter: "label:Team Planning"',
+    ]);
+    buttons()[1]!.click();
+    flush();
+    expect(queryDraft().trim()).toBe("provider:openai");
+    expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Remove filter: provider:openai",
+    ]);
+  });
+
   it("parses each draft once for chips, suggestions, and every filter", () => {
     const base = createUsageProps();
     const [filters, setFilters] = createSignal({ ...base.filters, queryDraft: "provider:OpenAI" });
@@ -391,12 +423,13 @@ describe("renderUsage", () => {
     for (const label of ["OpenRouter", "Production", "75% left", "$64.50", "$5.00 / $20.00"]) {
       expect(card?.textContent).toContain(label);
     }
-    expect(texts(container, ".provider-usage-billing-row strong", false)).toEqual([
-      "$64.50",
-      "$5.00 / $20.00",
-      "¥13 / ¥20",
-      "1.5  Credits  / 3  Credits ",
-    ]);
+    expect(
+      Array.from(
+        container.querySelectorAll(".provider-usage__row .oc-menu-panel-usage-value"),
+        (value) => value.textContent,
+      ),
+    ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
+    expect(card?.querySelector(".provider-usage__window-value")?.textContent).toBe("75% left");
   });
 
   it("keeps complete insights and history beyond the visible page", () => {
@@ -430,14 +463,7 @@ describe("renderUsage", () => {
             usage: {
               ...visibleUsage,
               dailyBreakdown: [{ ...visibleDay, tokens: 10, cost: 0.1 }],
-              messageCounts: {
-                total: 2,
-                user: 1,
-                assistant: 1,
-                toolCalls: 0,
-                toolResults: 0,
-                errors: 0,
-              },
+              messageCounts: usageMessages(),
             },
           },
         ],
@@ -445,9 +471,14 @@ describe("renderUsage", () => {
       { startDate: "2026-05-01", endDate: "2026-05-14" },
     );
 
-    expect(
-      textAt(container, ".usage-overview-card .usage-summary-card--hero .usage-summary-value"),
-    ).toBe("100");
+    const messagesValue = [
+      ...container.querySelectorAll(".usage-overview-card .usage-summary-card"),
+    ]
+      .find((card) =>
+        card.querySelector(".usage-summary-title")?.textContent?.startsWith("Messages"),
+      )
+      ?.querySelector(".usage-summary-value");
+    expect(messagesValue?.textContent?.trim()).toBe("100");
     expect(container.textContent).toContain(
       "Cost data is missing for some or all sessions in this range.",
     );
@@ -456,7 +487,7 @@ describe("renderUsage", () => {
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
     expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
-    expect(textAt(container, ".cost-window-card--range .cost-window-card__value")).toBe("$10.00");
+    expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
   });
 
   it("shows the empty state for an all-zero successful response", () => {

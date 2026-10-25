@@ -7,7 +7,7 @@ import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway, projectMentions, projectOverlays } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectAgents, projectAgentIdentity } from "../lib/reactive/domain-capabilities.ts";
@@ -362,13 +362,9 @@ export function SidebarAttentionPanel(
                   class="sidebar-brand__icon"
                   aria-label={t("attention.mentions.notifications")}
                   href={pathForRoute("notifications", context.basePath)}
-                  onClick={(event) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    props.onNavigate("notifications");
-                  }}
+                  onClick={(event) =>
+                    handleNavigationClick(event, () => props.onNavigate("notifications"))
+                  }
                 >
                   <Icon name="settings" />
                 </a>

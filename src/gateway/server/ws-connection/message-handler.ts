@@ -49,6 +49,7 @@ import {
 } from "../../ingress-attribution.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
+import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import {
   MAX_PREAUTH_PAYLOAD_BYTES,
   MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
@@ -236,16 +237,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       const context = buildRequestContext();
       const resolvedAt = Date.now();
       for (const superseded of result.created ? (result.superseded ?? []) : []) {
-        context.broadcast(
-          "node.pair.resolved",
-          {
-            requestId: superseded.requestId,
-            nodeId: superseded.nodeId,
-            decision: "rejected",
-            ts: resolvedAt,
-          },
-          { dropIfSlow: true },
-        );
+        broadcastRejectedNodePairing(context.broadcast, superseded, resolvedAt);
       }
       if (result.created) {
         context.broadcast("node.pair.requested", result.request, {

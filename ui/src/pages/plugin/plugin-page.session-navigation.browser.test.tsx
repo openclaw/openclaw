@@ -18,13 +18,12 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { ControlUiPluginSessionOpenMessage } from "./plugin-frame-session-navigation.ts";
 import { PluginPage } from "./plugin-page.tsx";
 
 const pluginPath = "/plugins/example/panel";
 const externalPath = "https://unrelated.example/panel";
 const sessionKey = "agent:writer:subagent:11111111-2222-4333-8444-555555555555";
-const message: ControlUiPluginSessionOpenMessage = {
+const message = {
   type: "openclaw-plugin-session-open",
   sessionKey,
 };

@@ -25,6 +25,8 @@ const scriptEntries = productionConfig.workspaces["."].entry.filter(
 const repositoryToolEntries = [
   // Knip loads this configuration, which consumes the Vite runnerImport compiler.
   "config/knip.config.ts!",
+  // This compiler projects exact source-derived generated and module-hook imports.
+  "config/knip-dynamic-consumers.mjs!",
   // ui/config/control-ui-locales.ts invokes the catalogue through Vite's runnerImport.
   "config/knip-vite-consumers.mjs!",
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
@@ -52,8 +54,9 @@ const config = {
   ignore: [
     "scripts/**/*.d.{mts,cts,ts}",
     "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}",
-    // Generated declaration companion; application scans own its executable validator.
+    // Generated declaration companions; application scans own their executable validators.
     "packages/gateway-protocol/src/compiled/sender-identity.d.ts",
+    "packages/gateway-protocol/src/compiled/protocol.generated/*.d.ts",
   ],
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
   // checked by the application scans; this pass owns only scripts/** exports.
@@ -93,6 +96,14 @@ const config = {
   },
   workspaces: {
     ".": {
+      // These opt-in commands pass non-default Vitest configs. Let Knip's
+      // Vitest owner load the configs and their selected suites as real inputs.
+      vitest: {
+        config: [
+          "scripts/control-ui-parity/vitest.config.ts",
+          "scripts/control-ui-retention/vitest.config.ts",
+        ],
+      },
       entry: [
         ...scriptEntries,
         ...repositoryToolEntries,

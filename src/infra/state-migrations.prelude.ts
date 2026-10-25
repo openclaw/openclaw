@@ -185,6 +185,9 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
       path: databasePath,
     })),
   ]);
+  const entryStateChanges = (repaired: number) =>
+    repaired > 0 ? [`Canonicalized entry state for ${repaired} durable session row(s).`] : [];
+
   const sharedStep = (
     id: string,
     source: LegacyStateMigrationEndpoint[],
@@ -244,10 +247,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
             },
           });
           return {
-            changes:
-              report.repaired > 0
-                ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
-                : [],
+            changes: entryStateChanges(report.repaired),
             warnings: [],
           };
         },
@@ -279,10 +279,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
               });
               return {
                 completed: true,
-                changes:
-                  report.repaired > 0
-                    ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
-                    : [],
+                changes: entryStateChanges(report.repaired),
               };
             } catch (error) {
               mediaEntryStatePreparationError ??=
@@ -321,10 +318,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
               })),
           });
           return {
-            changes:
-              report.repaired > 0
-                ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
-                : [],
+            changes: entryStateChanges(report.repaired),
             warnings: [],
           };
         },

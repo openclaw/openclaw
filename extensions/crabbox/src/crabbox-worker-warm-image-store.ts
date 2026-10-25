@@ -12,10 +12,13 @@ import {
   type RecipePreparation,
 } from "./crabbox-worker-warm-image-recipe.js";
 import {
+  crabboxWarmImageCaptureStatus,
   legacyLeaseSelector,
   LEGACY_WARM_LEASE_MAX_ENTRIES,
   projectCrabboxLegacyWarmLeases,
   WARM_IMAGE_MAX_ENTRIES,
+  withoutCrabboxWarmImageOperation,
+  type WarmImageOperation,
 } from "./crabbox-worker-warm-image-records.js";
 
 export type CrabboxState = Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStoreV2">;
@@ -82,23 +85,13 @@ export type WarmProfileRecord = {
   /** Latest native-capture refusal; retained for display without suppressing later attempts. */
   captureUnsupported?: { atMs: number; provider: string; message: string };
   allocations: Record<string, WarmAllocationRecord>;
-  operation?:
-    | {
-        type: "capture";
-        id: string;
-        startedAtMs: number;
-        leaseId?: string;
-        provider?: string;
-        phase: "scrubbing" | "creating" | "uncertain";
-      }
-    | { type: "retire"; checkpointId: string };
+  operation?: WarmImageOperation;
 };
 
 export class CrabboxWarmImageRequestError extends Error {}
 // Match the former enrollment registry's capacity without evicting replay obligations;
 // 256 bounded lease records leave ample room under the plugin store's 1 MiB row limit.
 const WARM_IMAGE_MAX_ALLOCATIONS = 256;
-const CAPTURE_WARNING_AGE_MS = 1_200_000;
 
 const openLegacyLeases = (state: CrabboxState, env?: NodeJS.ProcessEnv) =>
   state.openKeyedStoreV2<unknown>({
@@ -618,34 +611,6 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
   };
 }
 
-export function withoutCrabboxWarmImageOperation(record: WarmProfileRecord): WarmProfileRecord {
-  const profile = { ...record };
-  delete profile.operation;
-  return profile;
-}
-
-export function crabboxWarmImageCaptureStatus(record: WarmProfileRecord) {
-  const capture = record.operation?.type === "capture" ? record.operation : undefined;
-  if (!capture) {
-    return undefined;
-  }
-  return {
-    selector: capture.id,
-    startedAtMs: capture.startedAtMs,
-    ...(capture.leaseId ? { leaseId: capture.leaseId } : {}),
-    ...(capture.provider ? { provider: capture.provider } : {}),
-    phase: capture.phase,
-    stale: Date.now() - capture.startedAtMs >= CAPTURE_WARNING_AGE_MS,
-  };
-}
-
-export const CRABBOX_WARM_IMAGE_WAIT_HINT =
-  "The capture may still be preparing its source or waiting for provider readiness. Inspect openclaw crabbox warm-images --json and allow the owning capture to settle.";
-
-export function crabboxWarmImageRecoveryHint(selector: string): string {
-  return `Stop the owning Gateway and capture processes, confirm any worker being recovered is stopped, and resolve any untracked checkpoint in the Crabbox catalog before running: openclaw crabbox warm-images --recover ${selector} --acknowledge-provider-cleanup. Then restart the Gateway; the next eligible worker can capture again.`;
-}
-
 export async function listCrabboxWarmImages(state: CrabboxState, env?: NodeJS.ProcessEnv) {
   return (await openCrabboxWarmImageStore(state, env).entries()).map(({ key, value }) =>
     projectCrabboxWarmImage(key, value),
@@ -700,9 +665,12 @@ export async function clearCrabboxWarmImageCapture(
   store: ReturnType<typeof openCrabboxWarmImageStore>,
   key: string,
   selector: string,
+  assertCurrent?: () => void,
 ): Promise<boolean> {
-  const matches = (current: WarmProfileRecord) =>
-    current.operation?.type === "capture" && current.operation.id === selector;
+  const matches = (current: WarmProfileRecord) => {
+    assertCurrent?.();
+    return current.operation?.type === "capture" && current.operation.id === selector;
+  };
   if (
     await store.deleteIf(
       key,

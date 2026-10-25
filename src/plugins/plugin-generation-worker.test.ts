@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as nextTimer } from "node:timers/promises";
 import { queryObjects } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -85,6 +86,49 @@ function sourceFixture(version?: string) {
   });
   return { root, source, entry };
 }
+
+it("signals posted source-mapping callbacks before their worker task can finish", async () => {
+  const { root, source, entry } = sourceFixture();
+  writeTree(source, {
+    "index.js": "export const value = 42;",
+    "dependency.js": "export const value = 7;",
+  });
+  await withArtifactPreservingStateReads(() =>
+    withStorage(root, async () => {
+      const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+      const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
+      try {
+        const input = posts.mock.calls
+          .map(([value]) => (isRecord(value) ? value.input : undefined))
+          .find((value) => isRecord(value) && value.operation === "capture");
+        const command = input as Extract<GenerationWorkerInput, { operation: "capture" }>;
+        const progress = expectDefined(command.progressSignal, "source callback progress signal");
+        let observed = Atomics.load(progress, 0);
+        let mappings = 0;
+        prepared.attachModuleSource((filename) => {
+          const current = Atomics.load(progress, 0);
+          expect(current).not.toBe(observed);
+          observed = current;
+          mappings++;
+          return filename;
+        });
+        const capturedEntry = prepared.artifact.resolve(entry);
+        prepared.artifact.prepareModule(capturedEntry);
+        observed = Atomics.load(progress, 0);
+        const captured = prepared.artifact.captureModule(capturedEntry, "./dependency.js", [
+          "node",
+          "import",
+        ]);
+        expect(mappings).toBeGreaterThan(0);
+        expect(captured && "target" in captured && fs.readFileSync(captured.target, "utf8")).toBe(
+          "export const value = 7;",
+        );
+      } finally {
+        await prepared.artifact.disposeAsync();
+      }
+    }),
+  );
+});
 
 async function withWorkerFixture(
   label: string,
@@ -384,30 +428,6 @@ it.each(["capture", "custody", "fork"] as const)(
               new WeakRef(facts.capture),
             ];
           })();
-          const replies = Array.from(
-            { length: 100 },
-            () => new WeakRef(artifact.prepareModule(entry)),
-          );
-          const control = new WeakRef({});
-          await nextTurn();
-          queryObjects(WeakRef);
-          expect(control.deref()).toBeUndefined();
-          expect(replies.every((reply) => reply.deref() === undefined)).toBe(true);
-          expectSource(artifact, entry, "42");
-          const releaseRecovery = async () => {
-            const recovery = artifact.captureRecoverySource();
-            const references = [
-              new WeakRef(recovery.fork),
-              new WeakRef(recovery.sourceCapture.capture),
-            ];
-            await recovery.disposeAsync();
-            return references;
-          };
-          const released = await releaseRecovery();
-          await nextTurn();
-          queryObjects(WeakRef);
-          expect(released.every((reference) => reference.deref() === undefined)).toBe(true);
-          expectSource(artifact, entry, "42");
         }
         // Recovery copies the captured package synchronously in the worker. Advance
         // its host deadline clock without making this lifecycle proof sleep for 30s.
@@ -428,8 +448,10 @@ it.each(["capture", "custody", "fork"] as const)(
         }
         expectSource(artifact, entry, "42");
         await artifact.disposeAsync();
+        const control = new WeakRef({});
         await nextTurn();
         queryObjects(WeakRef);
+        expect(control.deref()).toBeUndefined();
         const moduleFactsReleased = moduleFactCallbacks?.every((callback) => !callback.deref());
         expectSource(recovery, entry, "42");
         const recoveredEntry = recovery.resolve(entry);

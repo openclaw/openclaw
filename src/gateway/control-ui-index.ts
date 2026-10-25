@@ -44,7 +44,7 @@ function rewriteControlUiIndexHtmlAssetHrefs(
     replacements.set(`href="${buildControlUiRootAssetPath(normalized, asset)}"`, assetHref);
   }
   // Copy the document once instead of once per matching asset.
-  const pattern = new RegExp([...replacements.keys()].map(escapeRegExp).join("|"), "g");
+  const pattern = new RegExp(Array.from(replacements.keys(), escapeRegExp).join("|"), "g");
   return html.replace(pattern, (match) => replacements.get(match) ?? match);
 }
 

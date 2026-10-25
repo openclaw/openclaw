@@ -15,6 +15,7 @@ import {
 
 export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "gemini",
+  aliases: ["google"],
   defaultModel: DEFAULT_GEMINI_EMBEDDING_MODEL,
   transport: "remote",
   authProviderId: "google",

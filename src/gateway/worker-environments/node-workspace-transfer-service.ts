@@ -16,6 +16,7 @@ import {
 } from "./node-workspace-transfer-snapshot.js";
 import {
   readNodeWorkspaceUpload,
+  removeNodeWorkspaceUpload,
   type NodeWorkspaceTransferUpload,
 } from "./node-workspace-upload-reader.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
@@ -47,6 +48,7 @@ type UploadOperation = {
   direction: "upload";
   token: string;
   baseManifestRef: string;
+  resultVersion?: 2;
   expiresAtMs: number;
   state: "ready" | "receiving" | "completed";
   isAuthorized: () => boolean;
@@ -133,7 +135,7 @@ export function createNodeWorkspaceTransferService(options: {
         } finally {
           try {
             if (operation.uploaded) {
-              await fsp.rm(operation.uploaded.stagingRoot, { recursive: true, force: true });
+              await removeNodeWorkspaceUpload(operation.uploaded);
             }
           } finally {
             // Keep the slot until cleanup settles, including errors. Duplicate discard
@@ -366,7 +368,12 @@ export function createNodeWorkspaceTransferService(options: {
 
     prepareSync: (params: SyncPreparation) => replaceContext({ ...params, kind: "sync" }),
 
-    prepareUpload(environmentId: string, baseManifestRef: string, authorize?: () => void): string {
+    prepareUpload(
+      environmentId: string,
+      baseManifestRef: string,
+      authorize?: () => void,
+      resultVersion?: 2,
+    ): string {
       authorize?.();
       const context = contexts.get(environmentId);
       if (!context || !MANIFEST_REF_PATTERN.test(baseManifestRef) || !isCurrentContext(context)) {
@@ -380,6 +387,7 @@ export function createNodeWorkspaceTransferService(options: {
         direction: "upload",
         token,
         baseManifestRef,
+        ...(resultVersion ? { resultVersion } : {}),
         expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
         state: "ready",
         isAuthorized: () => isOperationAuthorized(authorize),
@@ -518,6 +526,9 @@ export function createNodeWorkspaceTransferService(options: {
       }
       const { context, route } = authorization;
       const snapshot = context.snapshots.get(route.manifestRef);
+      if (snapshot?.gitPackPath) {
+        return snapshot.gitPackPath;
+      }
       const { baseCommit } = context;
       if (!context.localPath || !baseCommit || snapshot?.manifest.baseCommit !== baseCommit) {
         return undefined;
@@ -588,6 +599,7 @@ export function createNodeWorkspaceTransferService(options: {
           uploaded = await readNodeWorkspaceUpload({
             request: params.request,
             baseManifestRef: operation.baseManifestRef,
+            resultVersion: operation.resultVersion,
             temporaryRoot: authorization.context.temporaryRoot,
             signal,
             assertCurrent,
@@ -617,7 +629,7 @@ export function createNodeWorkspaceTransferService(options: {
           return { manifestRef: uploaded.currentManifestRef };
         } catch (error) {
           if (uploaded) {
-            await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
+            await removeNodeWorkspaceUpload(uploaded);
           }
           if (authorization.context.upload === operation && !operation.disposal) {
             authorization.context.upload = undefined;

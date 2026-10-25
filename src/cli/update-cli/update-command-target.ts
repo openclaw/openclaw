@@ -2,6 +2,7 @@ import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { isBunRuntime } from "../../daemon/runtime-binary.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
@@ -28,6 +29,7 @@ import {
   resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { resolveNativePackageProjectRoot } from "../../infra/update-native-package-owner.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
@@ -69,7 +71,7 @@ import { assertUpdatePackageActivationAdmission } from "./update-command-package
 import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
-import type { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
@@ -588,6 +590,34 @@ export async function resolveUpdateCommandTarget(
           endedAtMs: Date.now(),
         },
       });
+      if (
+        updateInstallKind === "package" &&
+        !opts.dryRun &&
+        !packageAlreadyCurrent &&
+        canResolveRegistryVersionForPackageTarget(packageInstallSpec ?? tag) &&
+        packageRuntimeTarget?.nodeEngine
+      ) {
+        // Candidate admission can stage before the activation runtime check.
+        const runtime = await resolvePackageRuntimePreflight({
+          engineOnly: true,
+          channel,
+          requestedChannel,
+          target: packageRuntimeTarget,
+          root,
+          nodeRunner: managedServiceNodeRunner ?? packageUpdateNodeRunner,
+          timeoutMs: updateStepTimeoutMs,
+        });
+        if (!runtime.ok) {
+          await refuseUpdate(
+            "preflight-node-runtime-incompatible",
+            runtime.error,
+            runtime.failureFacts,
+            runtime.recoverySteps,
+          );
+          return undefined;
+        }
+      }
+
       // No-op updates need no candidate snapshot; package-space warnings remain advisory above.
       if (
         updateInstallKind === "package" &&
@@ -598,10 +628,16 @@ export async function resolveUpdateCommandTarget(
       ) {
         const env = opts.run?.env ?? process.env;
         const source = await readUpdateCandidateSource(env, legacyConfigPlan);
+        const backupProject =
+          packageInstallTarget &&
+          resolveNativePackageProjectRoot(packageInstallTarget, packageInstallEnv ?? env);
         const snapshot = await assessInitialUpdateSnapshotCapacity({
           config: source.config,
           stateDir: resolveStateDir(env),
           env,
+          backupDirectory: backupProject
+            ? path.dirname(resolvePathViaExistingAncestorSync(backupProject))
+            : (packageInstallTarget?.globalRoot ?? path.dirname(root)),
         });
         opts.run?.executorFence?.assertCurrent();
         recordPreflightStep(snapshot);

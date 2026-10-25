@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { serialize } from "node:v8";
+import { deflateRawSync } from "node:zlib";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -7,7 +9,10 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stagedInputPathDirectory } from "../../media/staged-inputs.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
-import { selectLocalWorkspaceCanonicalPaths } from "./local-workspace-inventory.js";
+import {
+  parseLocalWorkspaceSourcePaths,
+  selectLocalWorkspaceCanonicalPaths,
+} from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
@@ -16,6 +21,10 @@ import {
   type LocalWorkspaceManifestNode,
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
+import type {
+  LocalWorkspaceMutation,
+  LocalWorkspacePreparedUpdate,
+} from "./local-workspace-store.types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import {
@@ -26,9 +35,19 @@ import {
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
+export type LocalWorkspaceBaselineDocument = {
+  rawManifest: string;
+  manifestRef: string;
+  buildCacheInputs: string[];
+};
+
 export type LocalWorkspaceManifestAction =
   | { kind: "scan"; target: "canonical" | "projection"; canonicalRoot: string }
-  | { kind: "materialize" };
+  | { kind: "materialize" }
+  | (LocalWorkspaceBaselineDocument & {
+      kind: "replace";
+      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
+    });
 
 export type LocalWorkspaceManifestScan = {
   version: 1;
@@ -36,7 +55,7 @@ export type LocalWorkspaceManifestScan = {
   previousRoot: string | null;
   resultingRoot: string;
   records: LocalWorkspaceManifestRecord[];
-  observedRecords: LocalWorkspaceManifestRecord[];
+  observation?: LocalWorkspacePreparedUpdate;
   removed: string[];
   replace?: true;
   baseManifestRaw: string;
@@ -46,11 +65,12 @@ export type LocalWorkspaceManifestScan = {
   buildCacheInputs: string[];
 };
 
-export type LocalWorkspaceManifestCheckpoint = Omit<LocalWorkspaceManifestScan, "observedRecords">;
+export type LocalWorkspaceManifestCheckpoint = Omit<LocalWorkspaceManifestScan, "observation">;
 
 export type LocalWorkspaceManifestValue =
   | LocalWorkspaceManifestScan
-  | { kind: "materialize"; rawManifest: string; manifestRef: string };
+  | { kind: "materialize"; rawManifest: string; manifestRef: string }
+  | { kind: "replace"; update: LocalWorkspacePreparedUpdate };
 
 export type LocalWorkspaceManifestInput = {
   id: string;
@@ -81,15 +101,16 @@ export function readLocalWorkspaceManifestRows(
   if (!row || row.revision !== input.revision) {
     throw new Error("Local workspace binding changed");
   }
-  const nodes = row.baseline_json
-    ? []
-    : executeSqliteQuerySync(
-        db,
-        query
-          .selectFrom("local_workspace_manifest_nodes")
-          .select("node_json")
-          .where("worktree_id", "=", input.id),
-      ).rows;
+  const nodes =
+    row.baseline_json || input.action.kind === "replace"
+      ? []
+      : executeSqliteQuerySync(
+          db,
+          query
+            .selectFrom("local_workspace_manifest_nodes")
+            .select("node_json")
+            .where("worktree_id", "=", input.id),
+        ).rows;
   return { row, nodes };
 }
 
@@ -119,11 +140,55 @@ function manifestDocument(
   };
 }
 
+function prepareUpdate(
+  mutation: Extract<LocalWorkspaceMutation, { kind: "update" }>,
+): LocalWorkspacePreparedUpdate {
+  return {
+    revision: mutation.revision,
+    patch: {
+      ...mutation.patch,
+      ...(mutation.manifest
+        ? { baseline_ref: mutation.manifest.resultingRoot, baseline_json: null }
+        : {}),
+    },
+    mutation: deflateRawSync(serialize(mutation)),
+  };
+}
+
 export async function executeLocalWorkspaceManifestRead(
   snapshot: ReturnType<typeof readLocalWorkspaceManifestRows>,
   action: LocalWorkspaceManifestAction,
 ): Promise<LocalWorkspaceManifestValue> {
   const { row } = snapshot;
+  if (action.kind === "replace") {
+    const manifest = parseWorkerWorkspaceManifest(
+      action.rawManifest,
+      action.manifestRef,
+      action.buildCacheInputs,
+    );
+    const records = createLocalWorkspaceManifestTree([
+      ...manifest.entries,
+      ...(manifest.directories ?? []).map((entryPath) => ({
+        path: entryPath,
+        type: "directory" as const,
+      })),
+    ]);
+    const resultingRoot = localWorkspaceManifestRootReference(records, manifest.baseCommit);
+    const mutation: LocalWorkspaceMutation = {
+      kind: "update",
+      revision: row.revision,
+      patch: action.patch,
+      manifest: {
+        previousRoot: row.baseline_ref,
+        resultingRoot,
+        records: [...records.values()],
+        removed: [],
+        replace: true,
+      },
+    };
+    // Keep the full tree between workers; the host publishes only the accepted root.
+    return { kind: "replace", update: prepareUpdate(mutation) };
+  }
   if (action.kind === "materialize" && row.baseline_json && row.baseline_ref) {
     // Pending legacy receipts name these exact bytes until acceptance migrates them.
     return { kind: "materialize", rawManifest: row.baseline_json, manifestRef: row.baseline_ref };
@@ -255,13 +320,35 @@ export async function executeLocalWorkspaceManifestRead(
   const base = manifestDocument(previousNodes, row.base_commit, retained);
   const current = manifestDocument(currentNodes, row.base_commit, retained);
   const replace = row.baseline_json !== null || row.baseline_ref === null;
+  const admitted = retained.length ? parseLocalWorkspaceSourcePaths(row.source_paths_json) : [];
+  const known = new Set(admitted);
+  const added = retained.filter((entryPath) => !known.has(entryPath));
+  const observation =
+    added.length || (!replace && observedRecords.length)
+      ? prepareUpdate({
+          kind: "update",
+          revision: row.revision,
+          patch: added.length ? { source_paths_json: JSON.stringify([...admitted, ...added]) } : {},
+          // Metadata for unchanged nodes cannot advance content or consume pending edits.
+          ...(!replace && observedRecords.length
+            ? {
+                manifest: {
+                  previousRoot: row.baseline_ref,
+                  resultingRoot: row.baseline_ref!,
+                  records: observedRecords,
+                  removed: [],
+                },
+              }
+            : {}),
+        })
+      : undefined;
   return {
     version: 1,
     kind: "scan",
     previousRoot: row.baseline_ref,
     resultingRoot: localWorkspaceManifestRootReference(records, row.base_commit),
     records: [...(replace ? records : changedRecords).values()],
-    observedRecords: replace ? [] : observedRecords,
+    observation,
     removed: updated.removed,
     ...(replace ? { replace: true } : {}),
     baseManifestRaw: base.rawManifest,

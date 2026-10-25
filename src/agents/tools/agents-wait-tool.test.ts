@@ -2,6 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { typeCheckSources } from "../../../test/helpers/typescript.js";
+import { projectAgentHistoryActivity } from "../../infra/agent-activity-events.js";
+import {
+  createNestedToolActivity,
+  readNestedToolActivity,
+} from "../../sessions/nested-tool-activity.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { applyCodeModeCatalog, buildCodeModeCatalogPrompt } from "../code-mode.js";
@@ -341,6 +346,8 @@ describe("agents_wait", () => {
     });
     failed.execution = {
       status: "terminal",
+      startedAt: 100,
+      endedAt: 175,
       outcome: { status: "error", error: "provider failed after tool output" },
     };
     failed.completion = { required: false, resultText: null, capturedAt: 10 };
@@ -356,11 +363,44 @@ describe("agents_wait", () => {
           structured: { partial: true },
           error: "provider failed after tool output",
           sessionKey: failed.childSessionKey,
+          groupId: "group",
+          runtimeMs: 75,
         },
       ],
       pending: ["pending"],
     });
     expect(isToolResultError(result)).toBe(false);
+    const activity = createNestedToolActivity({
+      runId: "owning-parent-run",
+      scopeId: "code-mode-scope",
+      afterEntryId: null,
+      startOrder: 0,
+      toolCallId: "wait-call",
+      toolName: "agents_wait",
+      input: { ids: ["failed", "pending"] },
+      result,
+      isError: false,
+      startedAt: 1,
+      timestamp: 2,
+    });
+    records.clear();
+    const persisted = JSON.stringify(activity);
+    const history = projectAgentHistoryActivity([
+      { messageId: "persisted-wait", message: JSON.parse(persisted) },
+    ]);
+    expect(history[0]?.items[0]).toMatchObject({ name: "agents_wait", status: "completed" });
+    expect(readNestedToolActivity(JSON.parse(persisted))?.details.result.details).toMatchObject({
+      completed: [
+        {
+          runId: "failed",
+          sessionKey: "agent:worker:subagent:failed",
+          runtimeMs: 75,
+          status: "failed",
+          error: "provider failed after tool output",
+        },
+      ],
+      pending: ["pending"],
+    });
   });
 
   it.each([-60_000, 60_000])(
@@ -770,6 +810,10 @@ describe("agents_wait", () => {
 
   it.each([
     { ids: [" ", "\t"], timeoutSeconds: 0, error: "at least one non-empty run id" },
+    { timeoutSeconds: 0, error: "array of run id strings" },
+    { ids: [7], timeoutSeconds: 0, error: "array of run id strings" },
+    { ids: "missing", timeoutSeconds: 0, error: "array of run id strings" },
+    { ids: 7, timeoutSeconds: 0, error: "array of run id strings" },
     {
       ids: Array.from({ length: 1_001 }, (_, index) => `run-${index}`),
       error: "at most 1000 ids",

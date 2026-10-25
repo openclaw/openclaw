@@ -68,12 +68,16 @@ per-file profiler measurements. Rebalancing adds no jobs or per-job setup.
 The combined inventory matches the local full suite; a failure in one shard leaves
 the others running and fails the aggregate gate.
 
-The PostgreSQL Weekly Qualification workflow runs the same three conformance shards on
-digest-pinned PostgreSQL 16 and 18 images every Monday at 06:43 UTC, or by manual dispatch on main.
-Its six hosted jobs use the same measured shard allocator with a 50-minute job budget,
-with at most three running at once. PR CI keeps only the existing three PostgreSQL 17 shards.
+The PostgreSQL Scheduled Qualification workflow (`postgres-conformance-weekly.yml`) runs
+the same three conformance shards on main with digest-pinned images: PostgreSQL 17 daily
+at 07:17 UTC, and PostgreSQL 16 and 18 every Monday at 06:43 UTC. Manual dispatch accepts
+`versions=all` (the default), `pg16`, `pg17`, or `pg18`. PostgreSQL 17 uses the same image
+pin as PR CI. The daily run adds three hosted jobs at roughly 25 minutes each
+(75 runner-minutes per day); Monday's weekly run retains six jobs. All runs use the same
+measured shard allocator with a 50-minute job budget and at most three jobs running at once.
+PR CI keeps its existing path selection and three PostgreSQL 17 shards.
 All versions start with `max_locks_per_transaction=512` for the conformance workload.
-Weekly failures surface through the workflow's failed jobs, like other standalone scheduled audits;
+Scheduled failures are visible in Actions through the workflow's failed jobs, with no additional notifications;
 the PR failure classifier continues to compare against hourly main CI's matching PostgreSQL 17 jobs.
 
 Full hybrid extension lint packs the same standard chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
@@ -109,6 +113,10 @@ Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmit
 path. Successful 16-class jobs reached 19:04, leaving too little margin under the
 former 20-minute limit. Hosted and retry paths retain their 40-minute budget;
 runner size, worker count, shard split, and individual test deadlines are unchanged.
+Current targets overlap desktop transport proof with the one-worker serial UI
+phase, then join both cleanup owners before running qualified fixtures with the
+existing two-worker ceiling. One-worker overrides, desktop-only selections, and
+frozen targets retain sequential execution.
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
 budget, based on hosted 4-vCPU measurements with a slow-host margin. The release

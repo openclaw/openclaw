@@ -37,6 +37,34 @@ afterEach(() => {
 });
 
 describe("package verification bounds", () => {
+  it.each(["presence", "root", "tree"] as const)(
+    "continues with a warning when the baseline %s stat exceeds its deadline",
+    async (operation) => {
+      await withTestDir({ prefix: "openclaw-baseline-stat-deadline-" }, async (base) => {
+        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const target = operation === "tree" ? path.join(packageRoot, "dist") : packageRoot;
+        const lstat = fs.lstat.bind(fs);
+        let now = performance.now();
+        vi.spyOn(performance, "now").mockImplementation(() => now);
+        let reads = 0;
+        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+          const stat = await lstat(...args);
+          if (String(args[0]) === target && ++reads === (operation === "root" ? 2 : 1)) {
+            now += 1_001;
+          }
+          return stat;
+        });
+        const { result, transaction } = await captureSwap({ ...params, timeoutMs: 1_000 });
+        expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+        expect(result.step.advisory?.message).toContain("Package rollback verification timed out");
+        expect(result.step.stderrTail ?? "").not.toContain("Installation recovery is unverified");
+        await expectInstallation(packageRoot, launcher, true);
+        expect((await transaction.rollback(() => {})).exitCode).toBe(0);
+        await expectInstallation(packageRoot, launcher);
+      });
+    },
+  );
+
   it("keeps a fresh reader usable after a wall-clock jump forward", async () => {
     await withTestDir({ prefix: "openclaw-integrity-clock-forward-" }, async (base) => {
       const reader = createPackageIntegrityReader(1_000);

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   assertOwnedTranscriptWriteCommit,
   runWithOwnedSessionTranscriptWrite,
@@ -152,10 +153,7 @@ describe("independent placement caller scope", () => {
       installWorkerProvider({ ...unusedEnvironments(), get });
       try {
         let queued: Promise<void> | undefined;
-        let release!: () => void;
-        const ready = new Promise<void>((resolve) => {
-          release = resolve;
-        });
+        const { promise: ready, resolve: release } = createDeferred();
         await fromParent(async () => {
           const execute = async () => {
             await expect(

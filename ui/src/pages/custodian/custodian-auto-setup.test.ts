@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -23,12 +24,7 @@ function result(status: SetupAutoResult["status"] = "activated"): SetupAutoResul
 const methods = ["chat", "setup.auto", "setup.activate", "setup.auth.start"].map(
   (method) => "openclaw." + method,
 );
-const agentsList: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "global",
-  agents: [{ id: "main" }],
-};
+const agentsList: AgentsListResult = makeBootRoster({ scope: "global" });
 const reply = { sessionId: "setup-session", reply: "Welcome.", action: "none" };
 type Page = Awaited<ReturnType<typeof mountPage>>["page"];
 type Request = Parameters<typeof createContext>[0];
@@ -252,6 +248,20 @@ it.each(["needs-sign-in", "configured"] as const)("refreshes sign-in from %s", a
   text(page).not.toContain("Use a separate login");
 });
 
+it.each(["cancelled", ""])("explains a sign-in the Gateway cancelled (%j)", async (error) => {
+  const signIn = { authOptionId: "codex-sign-in", label: "ChatGPT" };
+  const request = setupRequest(
+    () => ({ ...unavailable(), status: "needs-sign-in", installedPlugins: ["codex"], signIn }),
+    {
+      "openclaw.setup.auth.start": () => ({ sessionId: "auth-session", done: false }),
+      "wizard.next": () => ({ done: true, status: "cancelled", error }),
+    },
+  );
+  const { page } = await mountSetup(request);
+  await click(page, "Sign in with ChatGPT");
+  alertText(page).toBe("Provider sign-in was cancelled.");
+});
+
 it("uses shell-neutral native capabilities for fallback, Gateway selection, and permissions", async () => {
   const openAiSetup = vi.fn();
   const openGateways = vi.fn();
@@ -316,6 +326,7 @@ it("shows RPC failures and retries without a premature greeting", async () => {
     throw new Error("Gateway lost its connection");
   });
   const { page } = await mountSetup(request);
+  await waitForSolid(() => expect(page.querySelector(".sidebar-issues-button")).not.toBeNull());
   alertText(page).toContain("Gateway lost its connection");
   expect(request).toHaveBeenCalledTimes(1);
   await click(page, "Retry");

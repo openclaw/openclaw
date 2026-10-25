@@ -15,6 +15,11 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  createMockPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ingressRuntime from "./ingress.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
@@ -60,13 +65,14 @@ afterEach(async () => {
     await Promise.all(Array.from(monitors, (monitor) => monitor.stop()));
   } finally {
     monitors.clear();
+    resetGlobalHookRunner();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   }
 });
 
-function createMonitor(
+function createPausedMonitor(
   dispatch: Parameters<typeof createDiscordIngressMonitor>[0]["dispatch"],
   ingressQueue = queue,
 ) {
@@ -78,11 +84,116 @@ function createMonitor(
     dispatch,
   });
   monitors.add(monitor);
+  return monitor;
+}
+function createMonitor(...args: Parameters<typeof createPausedMonitor>) {
+  const monitor = createPausedMonitor(...args);
   monitor.start();
   return monitor;
 }
 
 describe("Discord durable ingress", () => {
+  it("stores only the awaited ingress transform, before any message dispatch", async () => {
+    const raw = {
+      ...createRawMessage("privacy-event"),
+      content: "PRIVATE_PAYLOAD_SENTINEL",
+      attachments: [{ id: "upload", url: "https://example.invalid/private-upload" }],
+    } as unknown as APIMessage;
+    const prepared = createDeferred<void>();
+    const release = createDeferred<void>();
+    const policyOrder: string[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_channel_ingress",
+          handler: async (input) => {
+            const message = (input as { event: APIMessage }).event;
+            policyOrder.push(message.id);
+            if (message.id === raw.id) {
+              prepared.resolve();
+              await release.promise;
+            }
+            return { event: { ...message, content: "[redacted]", attachments: [] } };
+          },
+        },
+      ]),
+    );
+    const dispatch = vi.fn();
+    const monitor = createPausedMonitor(dispatch);
+    const admission = monitor.accept(raw);
+    let follower: Promise<void> | undefined;
+    try {
+      await Promise.race([prepared.promise, admission]);
+      follower = monitor.accept({ ...raw, id: "privacy-follower" });
+      expect(policyOrder).toEqual([raw.id]);
+      expect(await queue.listPending()).toEqual([]);
+      release.resolve();
+      await Promise.all([admission, follower]);
+      expect(policyOrder).toEqual([raw.id, "privacy-follower"]);
+      const pending = await queue.listPending();
+      expect(pending).toMatchObject([
+        {
+          id: raw.id,
+          laneKey: "channel:channel-1",
+          payload: { rawMessage: { content: "[redacted]", attachments: [] } },
+        },
+        {
+          id: "privacy-follower",
+          payload: { rawMessage: { content: "[redacted]", attachments: [] } },
+        },
+      ]);
+      expect(JSON.stringify(pending)).not.toContain("PRIVATE_PAYLOAD_SENTINEL");
+      expect(JSON.stringify(pending)).not.toContain("private-upload");
+      for (const entry of await fs.readdir(stateDir, { recursive: true, withFileTypes: true })) {
+        if (entry.isFile()) {
+          const bytes = await fs.readFile(path.join(entry.parentPath, entry.name));
+          expect(bytes.includes(Buffer.from("PRIVATE_PAYLOAD_SENTINEL"))).toBe(false);
+          expect(bytes.includes(Buffer.from("private-upload"))).toBe(false);
+        }
+      }
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.all([admission, follower]);
+    }
+  });
+
+  it("rejects an ingress policy failure without storing its raw payload or error", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_channel_ingress",
+          handler: () => {
+            throw new Error("PRIVATE_SCOPE_LOOKUP_SENTINEL");
+          },
+        },
+      ]),
+    );
+    const monitor = createPausedMonitor(vi.fn());
+    await expect(monitor.accept(createRawMessage("denied"))).rejects.toThrow(
+      "Channel ingress transform failed",
+    );
+    expect(await queue.listPending()).toEqual([]);
+  });
+
+  it.each(["id", "channel_id"] as const)(
+    "refuses a transform that changes the provider %s",
+    async (field) => {
+      const raw = createRawMessage("identity-event");
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_channel_ingress",
+            handler: () => ({ event: { ...raw, [field]: "changed" } }),
+          },
+        ]),
+      );
+      const monitor = createPausedMonitor(vi.fn());
+      await expect(monitor.accept(raw)).rejects.toThrow("changed event identity or lane");
+      expect(await queue.listPending()).toEqual([]);
+    },
+  );
+
   it("admits a same-channel correction while an earlier claim is deferred and a run is active", async () => {
     const activeStarted = createDeferred<void>();
     const finishActive = createDeferred<void>();

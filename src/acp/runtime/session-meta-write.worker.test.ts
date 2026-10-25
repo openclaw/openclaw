@@ -38,7 +38,6 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import * as entryWorker from "./session-meta-entry.js";
 import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
 import { createAcpMeta, interceptAcpCommit } from "./session-meta-lifecycle.test-support.js";
 import { readAcpSessionEntryAsync } from "./session-meta-read.js";
@@ -127,11 +126,13 @@ it("retains storage guidance when ACP entry rollback loses native settlement", (
       ).rejects.toSatisfy((error: unknown) => {
         expect(formatErrorMessageWithCode(error)).toContain(storageError.message);
         expect(formatErrorMessageWithCode(error)).toContain(settlementError.message);
+        const storageOutcome = classifyGatewayStorageFailure(error);
+        expect(storageOutcome).toBe("session_actor_reconciliation");
         expect(
           renderAssistantRequestFailureCopy({
-            storageFailure: classifyGatewayStorageFailure(error),
+            storageFailure: storageOutcome,
           }),
-        ).toContain("disk is full. Free up space");
+        ).toMatch(/check.*history.*before trying again/i);
         return true;
       });
     } finally {
@@ -385,7 +386,7 @@ it.each([
       const originalEntry = absent ? undefined : requireEntry(scope);
       const reached = createDeferredCore();
       const release = createDeferredCore();
-      const original = entryWorker.updateAcpSessionStoreEntry;
+      const original = sessionEntryWorker.withSessionEntryWorker;
       const intercepted = absent
         ? interceptAcpCommit(async (execute) => {
             reached.resolve();
@@ -393,14 +394,13 @@ it.each([
             return execute();
           })
         : vi
-            .spyOn(entryWorker, "updateAcpSessionStoreEntry")
-            .mockImplementationOnce(async (input) => {
-              expect(input.mutation.kind).toBe("touch");
+            .spyOn(sessionEntryWorker, "withSessionEntryWorker")
+            .mockImplementationOnce(async (...args) => {
               if (boundary === "before-touch") {
                 reached.resolve();
                 await release.promise;
               }
-              const result = await original(input);
+              const result = await original(...args);
               if (boundary === "after-touch") {
                 reached.resolve();
                 await release.promise;

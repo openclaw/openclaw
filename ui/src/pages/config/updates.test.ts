@@ -321,7 +321,7 @@ describe("renderUpdates", () => {
     mountUpdates(props);
     expect(container.textContent).toContain("This Mac");
     expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
-    expect(toggle("Check for updates automatically").disabled).toBe(false);
+    expect(toggle("Check for updates automatically").hasAttribute("aria-disabled")).toBe(false);
     setToggle("Check for updates automatically", false);
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "updates.automatic",

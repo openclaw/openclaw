@@ -27,6 +27,7 @@ import {
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
@@ -214,13 +215,10 @@ async function runPersonalFile(
     }
     // JS UTF-16 length matches the bootstrap cap, including astral characters.
     if (write.content.length > 4_000) {
-      options.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Keep personal instructions within 4,000 characters.",
-        ),
+      respondError(
+        options.respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Keep personal instructions within 4,000 characters.",
       );
       return;
     }

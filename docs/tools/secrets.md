@@ -121,8 +121,9 @@ surfaces the request is delivered as a link to the Control UI prompt — typing
 a credential into a chat message is exactly what this flow exists to avoid, so
 a plain-text reply is not captured as an answer. Links require an enabled Control
 UI and a configured `gateway.publicOrigin`. Without a usable link, delivery
-reports a visible blocker and cancels the pending request. Open a trusted Control
-UI or native app and retry, or ask the operator to configure the public origin.
+reports a visible blocker, returns the same retry guidance to the agent, and
+cancels the pending request. Open a trusted Control UI or native app and retry,
+or ask the operator to configure the public origin.
 
 Creating a credential request requires `operator.admin` plus the agent's trusted,
 live runtime authority. A run ID or an administrator connection alone is not

@@ -33,23 +33,7 @@ const DISCORD_MODEL_PICKER_PAGE_INDICATOR_CUSTOM_ID = "mdlpk:nav-indicator";
 
 type DiscordModelPickerCustomIdState = Parameters<typeof buildDiscordModelPickerCustomId>[0];
 
-type DiscordModelPickerCurrentModelRef = {
-  provider: string;
-  model: string;
-};
-
 type DiscordModelPickerRow = APIActionRowComponent<APIButtonComponent | APIStringSelectComponent>;
-type DiscordModelPickerRenderShellParams = {
-  title: string;
-  refreshWarning?: string;
-  detailLines: string[];
-  rows: DiscordModelPickerRow[];
-  footer?: string;
-  /** Text shown after the divider but before the interactive rows. */
-  preRowText?: string;
-  /** Extra rows appended after the main rows, preceded by a divider. */
-  trailingRows?: DiscordModelPickerRow[];
-};
 
 type DiscordModelPickerRenderedView = {
   components: TopLevelComponents[];
@@ -64,18 +48,10 @@ type DiscordModelPickerProviderViewParams = {
   currentModel?: string;
 };
 
-type DiscordModelPickerModelViewParams = DiscordModelPickerProviderViewParams & {
+function parseCurrentModelRef(raw?: string): {
   provider: string;
-  providerPage?: number;
-  modelBucket?: string;
-  currentRuntime?: string;
-  pendingModel?: string;
-  pendingModelIndex?: number;
-  pendingRuntime?: string;
-  quickModels?: string[];
-};
-
-function parseCurrentModelRef(raw?: string): DiscordModelPickerCurrentModelRef | null {
+  model: string;
+} | null {
   const match = raw?.trim().match(/^([^/]+)\/(.+)$/u);
   if (!match) {
     return null;
@@ -175,9 +151,17 @@ function getActiveBucketId(
   return bucket && bucket.id !== "all" ? bucket.id : undefined;
 }
 
-function buildRenderedShell(
-  params: DiscordModelPickerRenderShellParams,
-): DiscordModelPickerRenderedView {
+function buildRenderedShell(params: {
+  title: string;
+  refreshWarning?: string;
+  detailLines: string[];
+  rows: DiscordModelPickerRow[];
+  footer?: string;
+  /** Text shown after the divider but before the interactive rows. */
+  preRowText?: string;
+  /** Extra rows appended after the main rows, preceded by a divider. */
+  trailingRows?: DiscordModelPickerRow[];
+}): DiscordModelPickerRenderedView {
   const containerComponents: APIContainerComponent["components"] = [
     { type: ComponentType.TextDisplay, content: `## ${params.title}` },
   ];
@@ -357,7 +341,16 @@ export function renderDiscordModelPickerProvidersView(
 }
 
 export function renderDiscordModelPickerModelsView(
-  params: DiscordModelPickerModelViewParams,
+  params: DiscordModelPickerProviderViewParams & {
+    provider: string;
+    providerPage?: number;
+    modelBucket?: string;
+    currentRuntime?: string;
+    pendingModel?: string;
+    pendingModelIndex?: number;
+    pendingRuntime?: string;
+    quickModels?: string[];
+  },
 ): DiscordModelPickerRenderedView {
   const requestedProviderPage = normalizeModelPickerPage(params.providerPage);
   const modelPage = getDiscordModelPickerModelPage({
@@ -626,7 +619,7 @@ export function renderDiscordModelPickerModelsView(
   });
 }
 
-type DiscordModelPickerRecentsViewParams = {
+export function renderDiscordModelPickerRecentsView(params: {
   command: DiscordModelPickerCommandContext;
   userId: string;
   data: ModelsProviderData;
@@ -638,11 +631,7 @@ type DiscordModelPickerRecentsViewParams = {
   page?: number;
   providerPage?: number;
   modelBucket?: string;
-};
-
-export function renderDiscordModelPickerRecentsView(
-  params: DiscordModelPickerRecentsViewParams,
-): DiscordModelPickerRenderedView {
+}): DiscordModelPickerRenderedView {
   const { data, quickModels, currentModel, modelBucket, ...navigationState } = params;
   const recentModels = getDiscordModelPickerRecentModelRefs(data, quickModels);
   const rows = recentModels.map((modelRef, index) => {

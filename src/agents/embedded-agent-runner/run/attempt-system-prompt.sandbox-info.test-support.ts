@@ -7,13 +7,13 @@ import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { ExecElevatedDefaults } from "../../bash-tools.exec-types.js";
-import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import * as sandboxInfo from "../sandbox-info.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
+import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptAttempt = Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0]["attempt"] &
@@ -98,14 +98,7 @@ export async function withPromptFixture(
       const params = {
         attempt,
         activeContextEngine: undefined,
-        bootstrap: {
-          ...buildBootstrapBudgetState({ files: [] }),
-          bootstrapMode: "full",
-          contextFiles: [],
-          bootstrapInjectionStats: [],
-          shouldRecordCompletedBootstrapTurn: false,
-          workspaceNotes: [],
-        },
+        bootstrap: createEmptyPromptBootstrap(),
         setup: createAttemptSetupFixture({
           effectiveCwd: workspaceDir,
           effectiveWorkspace: workspaceDir,

@@ -1,13 +1,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { createHarnessCompletionSourceAssertion } from "../../agents/agent-harness-completion-recovery.js";
 import { claimAgentSessionWriter } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
+import { createOperatorRecoveryAuthority } from "../../agents/operator-recovery.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -134,34 +132,64 @@ it.each(["new input", "accepted input"] as const)(
     }),
 );
 
+it.each([true, false])("keeps scheduled recovery bookkeeping quiet (scheduled=%s)", (scheduled) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const scope = recoveryScope(state.sessionsDir(), "quiet-recovery");
+    const entry: InternalSessionEntry = { sessionId: "quiet-session", updatedAt: 1 };
+    let observed: number[];
+    {
+      await using fixture = await createRecoveryControllerFixture(scope, entry);
+      const controller = fixture.controller({
+        admissionRunId: "quiet-recovery-run",
+        requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: "test-operator" },
+        inputProvenance: scheduled
+          ? { kind: "internal_system", sourceTool: "cron_execution" }
+          : { kind: "external_user" },
+      });
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+      const admitted = expectDefined(loadSessionEntry(scope), "recovery admitted");
+      expect(admitted.restartRecoveryDeliveryRunId).toBe("quiet-recovery-run");
+      expect(admitted.startedAt).toBeGreaterThan(1);
+      await controller.beginBeforeAgentReply();
+      const pending = expectDefined(loadSessionEntry(scope), "hook pending");
+      expect(pending.restartRecoveryBeforeAgentReplyState).toBe("pending");
+      await controller.checkpointBeforeAgentReply({
+        state: "handled-reply",
+        pendingFinalDelivery: {
+          intentId: "quiet-intent",
+          text: "Review is ready.",
+          deliveries: [{ id: "quiet-delivery", state: "prepared" }],
+        },
+      });
+      const checkpoint = expectDefined(loadSessionEntry(scope), "hook checkpoint persisted");
+      expect(checkpoint.restartRecoveryBeforeAgentReplyState).toBe("handled-reply");
+      expect(checkpoint.pendingFinalDelivery).toMatchObject({
+        intentId: "quiet-intent",
+        text: "Review is ready.",
+        createdAt: expect.any(Number),
+      });
+      expect(checkpoint.pendingFinalDelivery?.createdAt).toBeGreaterThan(1);
+      observed = [admitted.updatedAt, pending.updatedAt, checkpoint.updatedAt];
+    }
+    const persisted = await reopen(scope, state.root);
+    expect(persisted.restartRecoveryDeliveryRunId).toBe("quiet-recovery-run");
+    expect(persisted.pendingFinalDelivery?.intentId).toBe("quiet-intent");
+    if (scheduled) {
+      expect([...observed, persisted.updatedAt]).toEqual([1, 1, 1, 1]);
+    } else {
+      expect(observed.every((timestamp) => timestamp > 1)).toBe(true);
+      expect(persisted.updatedAt).toBe(observed.at(-1));
+    }
+  }),
+);
+
 it("keeps an authenticated peer follow-up internal while retaining its operator source", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     const scope = recoveryScope(state.sessionsDir(), "peer-target");
     const entry: InternalSessionEntry = { sessionId: "peer-session", updatedAt: 1 };
     await using actor = await createRecoveryControllerFixture(scope, entry);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "peer-operator",
-      scopes: ["operator.read"],
-      assertCurrent() {},
-      recoverySnapshot: {
-        profileId: "peer-operator",
-        scopes: ["operator.read"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "peer-grant",
-          role: "operator",
-          authMethod: "token",
-        },
-        controlUiAdmin: false,
-        localOperator: false,
-        sourceIngress: "control-ui",
-      },
-    });
+    const operatorAuthority = createOperatorRecoveryAuthority("peer-operator", "peer-grant");
 
     const controller = actor.controller({
       admissionRunId: "peer-run",
@@ -384,8 +412,10 @@ it.each([
           expect(failure).toHaveProperty("message", error);
           if (outcome === "unknown") {
             expect(failure).toHaveProperty("code", "outcome-unknown");
-            expect(renderStorageFailureSummary(classifyGatewayStorageFailure(failure))).toBe(
-              "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+            const storageOutcome = classifyGatewayStorageFailure(failure);
+            expect(storageOutcome).toBe("session_actor_reconciliation");
+            expect(renderStorageFailureSummary(storageOutcome)).toMatch(
+              /check.*history.*before trying again/i,
             );
           }
           await expect(claimWriter()).rejects.toThrow(error);

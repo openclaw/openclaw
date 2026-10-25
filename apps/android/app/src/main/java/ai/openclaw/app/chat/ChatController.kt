@@ -25,6 +25,7 @@ import ai.openclaw.app.gateway.SessionReactionsListParams
 import ai.openclaw.app.gateway.SessionReactionsListResult
 import ai.openclaw.app.gateway.SessionReactionsSetParams
 import ai.openclaw.app.gateway.SessionReactionsSetResult
+import ai.openclaw.app.gateway.isInboundMediaSource
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
@@ -218,6 +219,12 @@ class ChatController internal constructor(
     agentId: String?,
     artifactId: String,
   ) -> GatewayLoadedImage? = { _, _, _, _ -> null },
+  private val loadGatewayInboundImage: suspend (
+    gatewayId: String?,
+    sessionKey: String,
+    agentId: String?,
+    source: String,
+  ) -> GatewayLoadedImage? = { _, _, _, _ -> null },
   private val loadGatewayMediaArtifact: suspend (
     gatewayId: String?,
     sessionKey: String,
@@ -236,6 +243,7 @@ class ChatController internal constructor(
     scope: CoroutineScope,
     session: GatewaySession,
     json: Json,
+    isGatewayReady: () -> Boolean = { true },
     transcriptCache: ChatTranscriptCache? = null,
     cacheScope: () -> ChatCacheScope? = { null },
     currentDefaultAgentId: () -> String? = { "main" },
@@ -243,6 +251,7 @@ class ChatController internal constructor(
     gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
     gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
     currentGatewayCatalogRevision: () -> Long = { 0L },
+    inboundMediaBasePath: () -> String? = { null },
     commandOutbox: ChatCommandOutbox,
     recordModelRecent: (String) -> Unit = {},
     onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
@@ -251,8 +260,12 @@ class ChatController internal constructor(
   ) : this(
     scope = scope,
     json = json,
-    requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
+    requestGateway = { method, paramsJson ->
+      if (!isGatewayReady()) throw GatewayRequestNotEnqueued("Agent discovery is not ready")
+      session.request(method, paramsJson)
+    },
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
+      if (!isGatewayReady()) throw GatewayRequestNotEnqueued("Agent discovery is not ready")
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
@@ -260,13 +273,16 @@ class ChatController internal constructor(
     currentGatewayCatalogRevision = currentGatewayCatalogRevision,
     sessionRouting = { session.sessionRouting },
     captureRequestLease = { gatewayScope ->
-      session.captureRequestLease(gatewayScope?.gatewayId)
+      if (isGatewayReady()) session.captureRequestLease(gatewayScope?.gatewayId) else null
     },
     transcriptCache = transcriptCache,
     cacheScope = cacheScope,
     currentDefaultAgentId = currentDefaultAgentId,
     currentDefaultAgentRevision = currentDefaultAgentRevision,
     loadGatewayImageArtifact = session::loadImageArtifact,
+    loadGatewayInboundImage = { gatewayId, sessionKey, agentId, source ->
+      session.loadInboundImage(gatewayId, inboundMediaBasePath(), sessionKey, agentId, source)
+    },
     loadGatewayMediaArtifact = session::loadMediaArtifact,
     commandOutbox = commandOutbox,
     recordModelRecent = recordModelRecent,
@@ -275,14 +291,17 @@ class ChatController internal constructor(
     onAssistantReplyFinalized = onAssistantReplyFinalized,
   )
 
-  suspend fun loadImageArtifact(artifactId: String): GatewayLoadedImage? {
-    val normalizedArtifactId = artifactId.trim().takeIf(String::isNotEmpty) ?: return null
+  /** Loads either a managed artifact or a canonical Gateway-owned inbound image. */
+  suspend fun loadImageArtifact(imageLoadKey: String): GatewayLoadedImage? {
+    val normalizedKey = imageLoadKey.trim().takeIf(String::isNotEmpty) ?: return null
+    if (normalizedKey.startsWith("media://", ignoreCase = true) && !isInboundMediaSource(normalizedKey)) return null
     val sessionKey = normalizeRequestedSessionKey(_sessionKey.value)
-    return loadGatewayImageArtifact(
+    val load = if (isInboundMediaSource(normalizedKey)) loadGatewayInboundImage else loadGatewayImageArtifact
+    return load(
       currentCacheScope()?.gatewayId,
       sessionKey,
       resolveAgentIdForSessionKey(sessionKey),
-      normalizedArtifactId,
+      normalizedKey,
     )
   }
 
@@ -3089,7 +3108,7 @@ class ChatController internal constructor(
       } else {
         "off"
       }
-    val text = if (trimmed.isEmpty() && attachments.isNotEmpty()) "See attached." else trimmed
+    val text = if (trimmed.isEmpty() && attachments.isNotEmpty()) CHAT_ATTACHMENT_PLACEHOLDER_TEXT else trimmed
 
     // Every send is journaled before the composer clears or any network attempt can lose
     // ownership; the durable row is the single recovery owner across process death.
@@ -5140,6 +5159,17 @@ class ChatController internal constructor(
     if (result !is ChatOutboxEnqueueResult.Queued) return null
     publishOutbox()
     return result.item
+  }
+
+  /**
+   * Bytes for a queued row's photo thumbnail, read straight from the durable outbox chunks.
+   * Only image attachments of a row this controller currently shows qualify, and only up to the
+   * composer image ceiling, so the preview never pulls audio/video or an unbounded blob.
+   */
+  suspend fun loadOutboxImagePreview(attachment: ChatOutboxAttachment): ByteArray? {
+    if (!attachment.isOutboxPreviewImage()) return null
+    if (_outboxItems.value.none { row -> row.attachments.any { it.id == attachment.id } }) return null
+    return runCatching { commandOutbox.loadAttachmentBytes(attachment.id) }.getOrNull()?.takeIf { it.isNotEmpty() }
   }
 
   /** Re-queues a failed outbox item and flushes immediately when the gateway is healthy. */
@@ -8305,17 +8335,44 @@ private fun managedMediaAttachmentId(rawUrl: String?): String? {
 }
 
 internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent> {
-  val content =
+  val parsed =
     obj["content"].asArrayOrNull()?.mapNotNull(::parseChatMessageContent)
       ?: obj["content"].asStringOrNull()?.let { listOf(ChatMessageContent(type = "text", text = it)) }
       ?: obj["text"].asStringOrNull()?.let { listOf(ChatMessageContent(type = "text", text = it)) }
       ?: emptyList()
+  val content = parsed + parseHistoryMediaImages(obj, parsed)
   val transcriptAudio = parseTranscriptAudioContents(obj)
   if (transcriptAudio.isEmpty()) return content
-  return content +
-    transcriptAudio.filterNot { audio ->
-      content.any { it.mimeType == audio.mimeType && it.fileName == audio.fileName }
+  val matched = BooleanArray(transcriptAudio.size)
+  val mergedContent =
+    content.map { part ->
+      if (part.type != "audio") return@map part
+      val index =
+        transcriptAudio.indices.firstOrNull { !matched[it] && part.isSameAttachmentAs(transcriptAudio[it]) }
+          ?: return@map part
+      matched[index] = true
+      val fact = transcriptAudio[index]
+      part.copy(
+        mimeType = part.mimeType ?: fact.mimeType,
+        fileName = part.fileName ?: fact.fileName,
+        sizeBytes = fact.sizeBytes ?: part.sizeBytes,
+        durationMs = fact.durationMs ?: part.durationMs,
+        transcribed = part.transcribed || fact.transcribed,
+      )
     }
+  return mergedContent +
+    transcriptAudio.filterIndexed { index, audio ->
+      !matched[index] && mergedContent.none { it.isSameAttachmentAs(audio) }
+    }
+}
+
+/**
+ * Text and other identity-less parts also carry null MIME and filename, so a bare audio fact
+ * (`kind: "audio"` only) may stand in only for an existing audio part, never for the text.
+ */
+private fun ChatMessageContent.isSameAttachmentAs(audio: ChatMessageContent): Boolean {
+  if (mimeType != audio.mimeType || fileName != audio.fileName) return false
+  return type == "audio" || mimeType != null || fileName != null
 }
 
 internal fun parseChatMessageUsage(obj: JsonObject): ChatMessageUsage? {
@@ -8356,7 +8413,67 @@ internal fun parseChatMessageCost(obj: JsonObject): ChatMessageCost? {
   return parse(direct) ?: parse(nested)
 }
 
+/**
+ * When the Gateway rewrites a user turn (e.g. with a voice transcription) the photo can survive
+ * only in `__openclaw.media`. Restore managed and canonical inbound images; inbound
+ * references are loaded through the Gateway's authenticated assistant-media route.
+ */
+private fun parseHistoryMediaImages(
+  obj: JsonObject,
+  existing: List<ChatMessageContent>,
+): List<ChatMessageContent> {
+  val facts = obj["__openclaw"].asObjectOrNull()?.get("media").asArrayOrNull() ?: return emptyList()
+  return facts.mapNotNull { element ->
+    val fact = element.asObjectOrNull() ?: return@mapNotNull null
+    val mimeType = fact["contentType"].asStringOrNull()
+    val kind = fact["kind"].asStringOrNull() ?: mimeType?.substringBefore('/')
+    if (kind != "image" || mimeType.equals("image/svg+xml", ignoreCase = true)) return@mapNotNull null
+    val url = (fact["url"] ?: fact["path"]).asStringOrNull()?.trim()
+    val artifactId = managedImageArtifactId(url)
+    if (artifactId == null && !isInboundMediaSource(url)) return@mapNotNull null
+    if (existing.any { it.type == "image" && ((artifactId != null && it.artifactId == artifactId) || (url != null && it.url == url)) }) {
+      return@mapNotNull null
+    }
+    ChatMessageContent(
+      type = "image",
+      mimeType = mimeType,
+      fileName = fact["fileName"].asStringOrNull(),
+      artifactId = artifactId,
+      url = url,
+      width = fact["width"].asLongOrNull()?.toInt(),
+      height = fact["height"].asLongOrNull()?.toInt(),
+      sizeBytes = fact["sizeBytes"].asLongOrNull(),
+    )
+  }
+}
+
+/**
+ * Merges legacy `MediaPaths`/`MediaTypes` audio rows with canonical `__openclaw.media` facts.
+ * When both describe the same file, the canonical fact wins (it carries duration, size and
+ * transcription provenance) and the legacy row only fills a missing MIME type, so one audio row
+ * is emitted per voice note.
+ */
 private fun parseTranscriptAudioContents(obj: JsonObject): List<ChatMessageContent> {
+  val legacy = parseLegacyTranscriptAudioContents(obj)
+  val canonical = parseHistoryMediaAudio(obj)
+  val matched = BooleanArray(canonical.size)
+  val merged =
+    legacy.map { row ->
+      val index = canonical.indices.firstOrNull { !matched[it] && canonical[it].isSameAudioAs(row) } ?: return@map row
+      matched[index] = true
+      val fact = canonical[index]
+      fact.copy(
+        mimeType = fact.mimeType ?: row.mimeType,
+        fileName = fact.fileName ?: row.fileName,
+        transcribed = fact.transcribed || row.transcribed,
+      )
+    }
+  return merged + canonical.filterIndexed { index, _ -> !matched[index] }
+}
+
+private fun ChatMessageContent.isSameAudioAs(other: ChatMessageContent): Boolean = fileName == other.fileName && (mimeType == null || other.mimeType == null || mimeType == other.mimeType)
+
+private fun parseLegacyTranscriptAudioContents(obj: JsonObject): List<ChatMessageContent> {
   val paths =
     obj["MediaPaths"].asArrayOrNull()?.mapNotNull { it.asStringOrNull() }
       ?: obj["MediaPath"].asStringOrNull()?.let { listOf(it) }
@@ -8365,12 +8482,45 @@ private fun parseTranscriptAudioContents(obj: JsonObject): List<ChatMessageConte
     obj["MediaTypes"].asArrayOrNull()?.map { it.asStringOrNull().orEmpty() }
       ?: obj["MediaType"].asStringOrNull()?.let { listOf(it) }
       ?: emptyList()
+  val transcribedIndexes =
+    obj["MediaTranscribedIndexes"]
+      .asArrayOrNull()
+      ?.mapNotNull { it.asLongOrNull()?.toInt() }
+      ?.toSet()
+      .orEmpty()
   return paths.mapIndexedNotNull { index, path ->
     val mimeType = types.getOrNull(index)?.takeIf { it.startsWith("audio/") } ?: return@mapIndexedNotNull null
     ChatMessageContent(
       type = "audio",
       mimeType = mimeType,
       fileName = path.substringAfterLast('/').takeIf(String::isNotBlank),
+      transcribed = index in transcribedIndexes,
+    )
+  }
+}
+
+/**
+ * Canonical transcript rows keep a sent voice note only as a durable `__openclaw.media` fact
+ * (kind, label, duration); restore the voice row from it so history refreshes keep it.
+ * Playback of `media://inbound/...` stays with the inbound loader, so no URL is guessed here.
+ */
+private fun parseHistoryMediaAudio(obj: JsonObject): List<ChatMessageContent> {
+  val facts = obj["__openclaw"].asObjectOrNull()?.get("media").asArrayOrNull() ?: return emptyList()
+  return facts.mapNotNull { element ->
+    val fact = element.asObjectOrNull() ?: return@mapNotNull null
+    val mimeType = fact["contentType"].asStringOrNull() ?: fact["mimeType"].asStringOrNull()
+    val kind = fact["kind"].asStringOrNull() ?: mimeType?.substringBefore('/')
+    // An explicit `kind: "audio"` is enough; a MIME type, when present, must still be audio.
+    if (kind != "audio" || (mimeType != null && !mimeType.startsWith("audio/"))) return@mapNotNull null
+    ChatMessageContent(
+      type = "audio",
+      mimeType = mimeType,
+      fileName =
+        fact.nonBlankString("fileName")
+          ?: fact["url"].asStringOrNull()?.substringAfterLast('/')?.takeIf(String::isNotBlank),
+      sizeBytes = fact["sizeBytes"].asLongOrNull(),
+      durationMs = fact["durationMs"].asLongOrNull(),
+      transcribed = fact["transcribed"].asBooleanOrNull() == true,
     )
   }
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
 import {
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
@@ -7,6 +8,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_INFERENCE_SETUP_ERROR } from "../infra/node-runner-inventory.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeDeployEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   createChildAdapter,
@@ -16,7 +18,6 @@ import { assertProcessGroupControl } from "../process/supervisor/service-child-g
 import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
 import type { SpawnSecretInput } from "../process/supervisor/types.js";
-import { WORKER_BUNDLE_ENTRY_PATH } from "../shared/worker-bundle-hash.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import {
   WORKER_NATIVE_INFERENCE_STARTUP_ARG,
@@ -96,7 +97,9 @@ function resolveNodeWorkerEntry(params: {
   if (!isPathInside(root, bundle)) {
     throw new Error("node worker bundle resolves outside its configured root");
   }
-  const entry = fs.realpathSync.native(path.join(bundle, WORKER_BUNDLE_ENTRY_PATH));
+  const entry = fs.realpathSync.native(
+    fileURLToPath(resolveRuntimeDeployEntrypointUrl("worker", bundle)),
+  );
   if (!isPathInside(bundle, entry) || !fs.statSync(entry).isFile()) {
     throw new Error("node worker entry must be a regular file inside its bundle");
   }
@@ -203,7 +206,11 @@ export async function prepareNodeWorkerLaunchTransport(
       exactEnv: true,
     });
     await ready;
-    return { kind: "started", adapter, cleanupMode: "process-group" };
+    return {
+      kind: "started",
+      adapter,
+      cleanupMode: adapter.jobKillOnClose ? "windows-job" : "process-group",
+    };
   }
 
   const endpoint = options.descriptor.connectionEndpoint;

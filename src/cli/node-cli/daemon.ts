@@ -372,7 +372,14 @@ export async function runNodeDaemonLifecycle(
   action: "uninstall" | "start" | "restart" | "stop",
   opts: NodeDaemonOutputOptions = {},
 ) {
-  const params = { serviceNoun: "Node", service: resolveNodeService(), opts };
+  const params = {
+    serviceNoun: "Node",
+    service: resolveNodeService(),
+    renderFailureHints: () => [
+      `Run ${formatCliCommand("openclaw node status")} to inspect the service, then retry.`,
+    ],
+    opts,
+  };
   if (action === "uninstall") {
     return await runServiceUninstall({
       ...params,

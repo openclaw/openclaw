@@ -26,14 +26,10 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
   return {
     ...actual,
-    getRuntimeConfig: mocks.loadConfig,
-    loadConfig: mocks.loadConfig,
-    captureRuntimeConfigAsyncReader:
-      (...args: Parameters<typeof mocks.loadConfig>) =>
-      async () =>
-        mocks.loadConfig(...args),
+    ...createTestConfigReadMocks(mocks, "loadConfig"),
     readConfigFileSnapshot: mocks.readConfigFileSnapshot,
     replaceConfigFile: mocks.replaceConfigFile,
   };

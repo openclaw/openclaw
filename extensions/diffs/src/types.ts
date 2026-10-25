@@ -94,14 +94,6 @@ export type DiffViewerPayload = {
   fileDiff?: FileDiffMetadata;
 };
 
-export type RenderedDiffDocument = {
-  html?: string;
-  imageHtml?: string;
-  title: string;
-  fileCount: number;
-  inputKind: DiffInput["kind"];
-};
-
 export type DiffArtifactContext = {
   agentId?: string;
   sessionId?: string;

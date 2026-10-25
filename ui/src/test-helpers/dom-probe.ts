@@ -10,3 +10,12 @@ export function domProbe(root: Pick<ParentNode, "querySelector" | "querySelector
     present: (...selectors: string[]) => selectors.map((selector) => query(selector) !== null),
   };
 }
+
+export function allMutationObserverOptions() {
+  return {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    characterData: true,
+  };
+}

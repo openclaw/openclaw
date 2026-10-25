@@ -4,7 +4,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { formatDateTimeMs } from "../lib/format.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import "./tooltip.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createTimeout } from "../lib/reactive/timers.ts";
@@ -15,16 +15,14 @@ import {
 import { Icon } from "./solid/icon.tsx";
 import type { MenuItemBindings } from "./solid/menu.tsx";
 
-export type SidebarBuildChipProps = {
+export function SidebarBuildChip(props: {
   basePath: string;
   gatewayVersion: string | null;
   onNavigate?: (routeId: "about") => void;
   variant: "identity" | "settings";
   menuAttributes?: MenuItemBindings;
   copyButtonRef?: (element: HTMLButtonElement) => void;
-};
-
-export function SidebarBuildChip(props: SidebarBuildChipProps) {
+}) {
   const text = createMemo(() =>
     props.variant === "settings"
       ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, props.gatewayVersion)
@@ -47,11 +45,7 @@ export function SidebarBuildChip(props: SidebarBuildChipProps) {
                   onClick(event);
                   return;
                 }
-                if (!shouldHandleNavigationClick(event)) {
-                  return;
-                }
-                event.preventDefault();
-                props.onNavigate?.("about");
+                handleNavigationClick(event, () => props.onNavigate?.("about"));
               }}
             >
               <span class="sidebar-footer-build__text">{label()}</span>

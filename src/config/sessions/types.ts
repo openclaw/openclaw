@@ -167,6 +167,13 @@ export type CliSessionBinding = {
   mcpResumeHash?: string;
   /** Identifies one synthetic history prompt and the trusted local handling of its user turn. */
   reseedReceipt?: CliSessionReseedReceipt;
+  /** Last input snapshot supplied to this native session, independent of recovery authority. */
+  transcriptCursor?: {
+    localSessionId: string;
+    entryId: string | null;
+    runId: string;
+    userEntryId?: string;
+  };
 };
 
 type AcpSessionBinding = {
@@ -303,6 +310,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Durable one-shot prompt additions drained before the next agent turn. */
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
+    /** Latest operator client declaration; retained across internal turns and restart. */
+    clientCapabilities?: string[];
     updatedAt: number;
     /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
     incognito?: true;

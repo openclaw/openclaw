@@ -44,6 +44,20 @@ vi.mock("../model-auth.js", async (importOriginal) => {
 const AGENT_DIR = "/tmp/openclaw-model-config-helper";
 const MODEL = "gpt-5.5";
 
+function hatcheryConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        hatchery: {
+          baseUrl: "https://example.com/v1",
+          apiKey: "sk-configured", // pragma: allowlist secret
+          models: [],
+        },
+      },
+    },
+  };
+}
+
 type Decision = ReturnType<typeof resolveOpenAiImageMediaCandidate>;
 type Profiles = AuthProfileStore["profiles"];
 
@@ -176,17 +190,7 @@ describe("hasProviderAuthForTool", () => {
   });
 
   it("accepts config-backed custom provider auth", () => {
-    const cfg = {
-      models: {
-        providers: {
-          hatchery: {
-            baseUrl: "https://example.com/v1",
-            apiKey: "sk-configured", // pragma: allowlist secret
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = hatcheryConfig();
 
     expect(hasProviderAuthForTool({ provider: "hatchery", cfg })).toBe(true);
   });
@@ -229,17 +233,7 @@ describe("hasProviderAuthForTool", () => {
     // Regression: hasProviderAuthForTool used to call the runtime availability
     // check without the auth store, so inline provider keys in billing cooldown
     // were still advertised as usable tool auth.
-    const cfg = {
-      models: {
-        providers: {
-          hatchery: {
-            baseUrl: "https://example.com/v1",
-            apiKey: "sk-configured", // pragma: allowlist secret
-            models: [],
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = hatcheryConfig();
     const cooldownStats = (disabledUntil: number) => ({
       "inline-api-key:hatchery": { disabledUntil, disabledReason: "billing" as const },
     });

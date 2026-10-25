@@ -1,4 +1,4 @@
-import { action, createOptimistic, createSignal, onSettled } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 
 type CopyAttempt = {
@@ -13,7 +13,16 @@ export function createPullRequestCopy(options: {
   onCopied: () => void;
 }) {
   const [copying, setCopying] = createOptimistic<CopyAttempt | false>(false);
-  const [failedUrl, setFailedUrl] = createSignal<string>();
+  const [receipt, setReceipt] = createSignal<{ url: string; result: Promise<void> }>();
+  const outcome = createMemo(
+    () => {
+      const admitted = receipt();
+      return admitted && options.presented() && admitted.url === options.url()
+        ? admitted.result.then(() => null)
+        : null;
+    },
+    { loadingValue: null },
+  );
   let mounted = false;
   let active: CopyAttempt | undefined;
   const current = (attempt: CopyAttempt) =>
@@ -21,7 +30,7 @@ export function createPullRequestCopy(options: {
   const retire = () => {
     active?.retired.resolve();
     active = undefined;
-    setFailedUrl(undefined);
+    setReceipt(undefined);
   };
   onSettled(() => {
     mounted = true;
@@ -41,7 +50,7 @@ export function createPullRequestCopy(options: {
       const attempt = copying();
       return attempt && current(attempt);
     },
-    failed: () => failedUrl() !== undefined && failedUrl() === options.url(),
+    outcome,
     retire,
     async copy() {
       const url = options.url();
@@ -51,7 +60,6 @@ export function createPullRequestCopy(options: {
       retire();
       const attempt = { url, retired: Promise.withResolvers<void>() };
       active = attempt;
-      setFailedUrl(undefined);
       // Start before the action and its microtask so browser activation remains intact.
       const completion = copyToClipboard(url, () => current(attempt))
         .then((copied) => {
@@ -61,12 +69,12 @@ export function createPullRequestCopy(options: {
           if (copied) {
             options.onCopied();
           } else {
-            setFailedUrl(url);
+            throw new Error("Clipboard copy failed");
           }
         })
-        .catch(() => {
+        .catch((cause: unknown) => {
           if (current(attempt)) {
-            setFailedUrl(url);
+            throw cause;
           }
         })
         .finally(() => {
@@ -74,8 +82,11 @@ export function createPullRequestCopy(options: {
             active = undefined;
           }
         });
+      setReceipt({ url, result: completion });
+      // The alert slot may retire before it observes the admitted outcome.
+      void completion.catch(() => {});
       await Promise.resolve();
-      await present(completion, attempt);
+      await present(completion, attempt).catch(() => {});
     },
   };
 }

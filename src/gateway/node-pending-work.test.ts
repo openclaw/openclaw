@@ -63,11 +63,11 @@ describe("node pending work", () => {
     });
     const retired = oldPairing.enqueue();
     const replacement = newPairing.enqueue();
-    expect(oldPairing.drain({ includeDefaultStatus: false }).items).toEqual([]);
+    expect(oldPairing.drain()).toMatchObject({ items: baseline });
     expect(oldPairing.clear()).toBe(false);
     expect(oldPairing.remove(retired.item.id)).toBe(false);
-    expect(newPairing.drain({ includeDefaultStatus: false })).toMatchObject({
-      items: [{ id: replacement.item.id }],
+    expect(newPairing.drain()).toMatchObject({
+      items: [{ id: replacement.item.id }, ...baseline],
     });
   });
 
@@ -77,9 +77,9 @@ describe("node pending work", () => {
       pairingGeneration: "generation-1",
     });
 
+    using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 2_000);
     drainNodePendingWork("node-retired-generation", {
       pairingGeneration: "generation-2",
-      nowMs: Date.now() + 2_000,
     });
 
     expect(clearNodePendingWork("node-retired-generation", "generation-1")).toBe(false);
@@ -90,7 +90,7 @@ describe("node pending work", () => {
     const location = work.enqueue();
     work.enqueue({ type: "status.request" });
     expect(work.remove(location.item.id)).toBe(true);
-    expect(work.drain({ includeDefaultStatus: false })).toMatchObject({
+    expect(work.drain()).toMatchObject({
       items: [{ type: "status.request" }],
     });
   });
@@ -121,15 +121,12 @@ describe("node pending work", () => {
   });
 
   it("assigns default expiry to queued work without explicit ttl", () => {
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    using dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const expiresAtMs = 1_000 + 24 * 60 * 60_000;
-    try {
-      expect(enqueue("node-default-expiry").item.expiresAtMs).toBe(expiresAtMs);
-    } finally {
-      dateNow.mockRestore();
-    }
+    expect(enqueue("node-default-expiry").item.expiresAtMs).toBe(expiresAtMs);
 
-    const drained = drainNodePendingWork("node-default-expiry", { nowMs: expiresAtMs });
+    dateNow.mockReturnValue(expiresAtMs);
+    const drained = drainNodePendingWork("node-default-expiry");
     expect(drained).toMatchObject({ items: baseline });
   });
 });

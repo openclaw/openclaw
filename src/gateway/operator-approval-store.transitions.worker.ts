@@ -1,5 +1,6 @@
 // Startup recovery, first-answer, consumption, and expiry owned by the approval worker.
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import type { Updateable } from "kysely";
 import { mintMcpToolGrantLocked } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type {
@@ -39,6 +40,22 @@ import type {
   TerminalizeOperatorApprovalsResult,
   ConsumeOperatorApprovalResult,
 } from "./operator-approval-store.types.js";
+
+function updateOperatorApprovalRow(
+  database: OpenClawStateDatabase,
+  id: string,
+  fields: Updateable<OperatorApprovalDatabase["operator_approvals"]>,
+): OperatorApprovalRow {
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    stateDb
+      .updateTable("operator_approvals")
+      .set(fields)
+      .where("approval_id", "=", id)
+      .returningAll(),
+  ).rows[0]!;
+}
 
 export function resolveOperatorApprovalInDatabase(params: {
   id: string;
@@ -94,24 +111,17 @@ export function resolveOperatorApprovalInDatabase(params: {
     }
 
     const auditTimestampMs = clampAuditTimestamp(nowMs, record.createdAtMs);
-    const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .updateTable("operator_approvals")
-        .set(
-          operatorApprovalTerminalFields(
-            params.decision === "deny" ? "denied" : "allowed",
-            "user",
-            auditTimestampMs,
-            params.decision,
-            { kind: params.resolver.kind, id: resolverId },
-          ),
-        )
-        .where("approval_id", "=", id)
-        .returningAll(),
+    row = updateOperatorApprovalRow(
+      database,
+      id,
+      operatorApprovalTerminalFields(
+        params.decision === "deny" ? "denied" : "allowed",
+        "user",
+        auditTimestampMs,
+        params.decision,
+        { kind: params.resolver.kind, id: resolverId },
+      ),
     );
-    row = result.rows[0]!;
     record = requireDecodedRecord(row);
     operatorApprovalPublication.stagePostimages(database.db, [row]);
     if (
@@ -184,24 +194,17 @@ export function forceDenyOperatorApprovalInDatabase(params: {
       return { outcome: "not-due", record };
     }
     const auditTimestampMs = clampAuditTimestamp(nowMs, record.createdAtMs);
-    const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .updateTable("operator_approvals")
-        .set(
-          operatorApprovalTerminalFields(
-            params.status ?? "denied",
-            params.reason,
-            auditTimestampMs,
-            "deny",
-            { kind: params.resolver.kind, id: normalizeNullableString(params.resolver.id) },
-          ),
-        )
-        .where("approval_id", "=", id)
-        .returningAll(),
+    const terminalRow = updateOperatorApprovalRow(
+      database,
+      id,
+      operatorApprovalTerminalFields(
+        params.status ?? "denied",
+        params.reason,
+        auditTimestampMs,
+        "deny",
+        { kind: params.resolver.kind, id: normalizeNullableString(params.resolver.id) },
+      ),
     );
-    const terminalRow = result.rows[0]!;
     operatorApprovalPublication.stagePostimages(database.db, [terminalRow]);
     return { outcome: "denied", record: requireDecodedRecord(terminalRow) };
   }, params.databaseOptions);
@@ -362,20 +365,11 @@ export function consumeOperatorApprovalAllowOnceInDatabase(params: {
       record.resolvedAtMs,
       record.updatedAtMs,
     );
-    const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-    const result = executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .updateTable("operator_approvals")
-        .set({
-          consumed_at_ms: auditTimestampMs,
-          consumed_by: consumerId,
-          updated_at_ms: auditTimestampMs,
-        })
-        .where("approval_id", "=", id)
-        .returningAll(),
-    );
-    row = result.rows[0]!;
+    row = updateOperatorApprovalRow(database, id, {
+      consumed_at_ms: auditTimestampMs,
+      consumed_by: consumerId,
+      updated_at_ms: auditTimestampMs,
+    });
     record = requireDecodedRecord(row);
     operatorApprovalPublication.stagePostimages(database.db, [row]);
     return { outcome: "consumed", record };

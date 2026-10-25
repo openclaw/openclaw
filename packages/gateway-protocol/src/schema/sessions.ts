@@ -5,7 +5,7 @@ import { SESSIONS_FILES_ASSETS_MAX_REFS } from "../session-limits.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./error-shape.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
-import { ChatAttachmentsSchema } from "./logs-chat.js";
+import { ChatAttachmentsSchema, ChatHistoryParamsSchema } from "./logs-chat.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsRecoverParamsSchema, SessionsRecoverResultSchema } from "./sessions-recover.js";
@@ -439,6 +439,7 @@ export const SessionsPreviewParamsSchema = closedObject({
 export const SessionsDescribeParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  includeNativeSubagents: Type.Optional(Type.Boolean()),
   includeDerivedTitles: Type.Optional(Type.Boolean()),
   includeLastMessage: Type.Optional(Type.Boolean()),
 });
@@ -484,6 +485,17 @@ export const SessionsMessagesSubscribeParamsSchema = closedObject({
   mode: Type.Optional(Type.Literal("narration")),
   /** Opt in to sanitized durable approval events for this session and its descendants. */
   includeApprovals: Type.Optional(Type.Literal(true)),
+  /** Read the first transcript snapshot after this observer is admitted. */
+  initialHistory: Type.Optional(
+    closedObject({
+      cursor: ChatHistoryParamsSchema.properties.cursor,
+      knownState: ChatHistoryParamsSchema.properties.knownState,
+      limit: ChatHistoryParamsSchema.properties.limit,
+      maxBytes: ChatHistoryParamsSchema.properties.maxBytes,
+      toolResultMaxChars: ChatHistoryParamsSchema.properties.toolResultMaxChars,
+      inputRunIds: ChatHistoryParamsSchema.properties.inputRunIds,
+    }),
+  ),
 });
 
 /** Latest bounded assistant text for a background narration subscriber. */

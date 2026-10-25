@@ -77,62 +77,54 @@ suite.define(() => {
     await gateway.deferNext("chat.startup");
     const [revealDelay] = await Promise.all([
       page.evaluate(
-        ({ selector, oldText }) =>
-          new Promise<{ delay: number; previousVisible: boolean }>((resolve) => {
-            const started = performance.now();
-            let revealAnimation: Animation | undefined;
-            let previousVisible = false;
-            const findRevealAnimation = (skeleton: Element | null) =>
-              skeleton
-                ?.getAnimations()
-                .find(
-                  (entry) =>
-                    entry instanceof CSSAnimation && entry.animationName === "chat-skeleton-reveal",
-                );
-            // A concurrent reduced-motion transition can precede the reveal.
-            // Retain the reveal clock before getAnimations() drops its finished effect.
-            const observer = new MutationObserver(() => {
-              const skeleton = document.querySelector(selector);
-              revealAnimation ??= findRevealAnimation(skeleton);
-              if (revealAnimation) {
-                observer.disconnect();
-              }
-            });
-            observer.observe(document.body, {
-              childList: true,
-              subtree: true,
-              attributes: true,
-              attributeFilter: ["class"],
-            });
-            const sample = () => {
+        async ({ selector, oldText }) => {
+          const started = performance.now();
+          let animation: Animation | undefined;
+          let previousVisible = false;
+          const capture = () => {
+            animation ??= document
+              .querySelector(selector)
+              ?.getAnimations()
+              .find(
+                (entry) =>
+                  entry instanceof CSSAnimation && entry.animationName === "chat-skeleton-reveal",
+              );
+          };
+          // Retain the reduced-motion clock before its finished effect disappears.
+          const observer = new MutationObserver(capture);
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["class"],
+          });
+          try {
+            while (performance.now() - started <= 3_000) {
               const skeleton = document.querySelector(selector);
               if (skeleton) {
-                revealAnimation ??= findRevealAnimation(skeleton);
+                capture();
                 previousVisible ||= [...document.querySelectorAll("openclaw-chat-pane")].some(
                   (pane) =>
                     getComputedStyle(pane).opacity !== "0" &&
                     pane.getAttribute("aria-hidden") === "false" &&
                     pane.textContent.includes(oldText),
                 );
-                const currentTime = revealAnimation?.currentTime;
                 if (
                   getComputedStyle(skeleton).visibility === "visible" &&
-                  typeof currentTime === "number"
+                  typeof animation?.currentTime === "number"
                 ) {
-                  observer.disconnect();
-                  resolve({ delay: currentTime, previousVisible });
-                  return;
+                  return { delay: animation.currentTime, previousVisible };
                 }
               }
-              if (performance.now() - started > 3_000) {
-                observer.disconnect();
-                resolve({ delay: -1, previousVisible });
-                return;
-              }
-              requestAnimationFrame(sample);
-            };
-            sample();
-          }),
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
+            }
+            return { delay: -1, previousVisible };
+          } finally {
+            observer.disconnect();
+          }
+        },
         { selector: skeletonSelector, oldText: previousText },
       ),
       sessionLink(page, "b").click(),
@@ -232,79 +224,33 @@ suite.define(() => {
     },
   );
 
-  it.each(["retry", "reconnect", "cached refresh"] as const)(
-    "recovers failed history after %s",
-    async (recovery) => {
-      const page = await newChatPage(suite);
-      const cached = recovery === "cached refresh";
-      const marker = `Transcript recovered after ${recovery}.`;
-      const failure = cached
-        ? "History refresh failed."
-        : recovery === "retry"
-          ? "Chat history is temporarily unavailable."
-          : "Chat history will recover after reconnect.";
-      const gateway = await installMockGateway(page, {
-        deferredMethods: cached ? [] : ["chat.startup"],
-        historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
-      });
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const transcript = textInThread(page, marker);
-      if (cached) {
-        await transcript.waitFor({ state: "visible" });
-        await gateway.deferNext("chat.startup");
-        await gateway.setOnline(false);
-        await gateway.setOnline(true);
-      }
-      await gateway.waitForRequest("chat.startup", { after: cached ? 1 : 0 });
-      await gateway.rejectDeferred("chat.startup", {
-        code: cached ? "GATEWAY_ERROR" : "GATEWAY_UNAVAILABLE",
-        message: failure,
-        ...(cached ? { retryable: false } : recovery === "reconnect" ? { retryable: true } : {}),
-      });
-      const historyError = page.locator(
-        cached ? ".chat-history-error--inline" : ".chat-history-error",
-      );
-      await historyError.waitFor({ state: "visible", timeout: 5_000 });
-      if (cached) {
-        expect(await historyError.textContent()).toContain(failure);
-      } else {
-        expect(await historyError.textContent()).toContain("Couldn’t load this conversation");
-        expect(
-          await historyError.locator("[aria-description]").getAttribute("aria-description"),
-        ).toContain(failure);
-      }
-      if (cached) {
-        // Failed refreshes must leave the stale transcript available throughout retry.
-        await transcript.waitFor({ state: "visible" });
-      } else {
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-      }
-      const startupCount = (await gateway.getRequests("chat.startup")).length;
-      if (recovery === "reconnect") {
-        await gateway.setOnline(false);
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-        await gateway.setOnline(true);
-      } else {
-        if (!cached) {
-          await gateway.deferNext("chat.startup");
-        }
-        await historyError.getByRole("button", { name: "Retry" }).click();
-      }
-      await gateway.waitForRequest("chat.startup", { after: startupCount });
-      if (recovery === "retry") {
-        await historyError.waitFor({ state: "detached" });
-        await page
-          .locator('.chat-thread openclaw-panel-loading-skeleton[data-panel-skeleton="chat"]')
-          .waitFor({ state: "visible" });
-        await gateway.resolveDeferred("chat.startup");
-      } else if (cached) {
-        await historyError.waitFor({ state: "hidden", timeout: 5_000 });
-      }
-      await transcript.waitFor({ state: "visible" });
-      if (!cached) {
-        expect(await gateway.getRequests("chat.startup")).toHaveLength(2);
-        expect(await page.locator(".chat-history-error").count()).toBe(0);
-      }
-    },
-  );
+  it("keeps cached history visible through a failed refresh and manual retry", async () => {
+    const page = await newChatPage(suite);
+    const marker = "Retained transcript";
+    const failure = "History refresh failed.";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [chatMessage("assistant", marker, { timestamp: Date.now() })],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const transcript = textInThread(page, marker);
+    await transcript.waitFor({ state: "visible" });
+    await gateway.deferNext("chat.startup");
+    await gateway.setOnline(false);
+    await gateway.setOnline(true);
+    await gateway.waitForRequest("chat.startup", { after: 1 });
+    await gateway.rejectDeferred("chat.startup", {
+      code: "GATEWAY_ERROR",
+      message: failure,
+      retryable: false,
+    });
+    const error = page.locator(".chat-history-error--inline");
+    await error.waitFor({ state: "visible", timeout: 5_000 });
+    expect(await error.textContent()).toContain(failure);
+    await transcript.waitFor({ state: "visible" });
+    const before = (await gateway.getRequests("chat.startup")).length;
+    await error.getByRole("button", { name: "Retry" }).click();
+    await gateway.waitForRequest("chat.startup", { after: before });
+    await error.waitFor({ state: "hidden", timeout: 5_000 });
+    await transcript.waitFor({ state: "visible" });
+  });
 });

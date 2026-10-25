@@ -1,18 +1,14 @@
-import { createMemo, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import type { ProjectsRegisterResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
-import { resolveProjectChip } from "./project-chip.ts";
-import { ProjectChip } from "./project-chip.tsx";
-import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
+import { mountProjectChip } from "./project-chip.test-support.tsx";
 
 function mountBrowser() {
   const fixture = createRepositoryFixture();
-  const { browser, state: place, context, gateway, changed, request } = fixture;
+  const { browser, state: place, context, gateway, request } = fixture;
   Object.assign(gateway, {
     connected: true,
     client: context.gateway.snapshot.client,
@@ -34,39 +30,15 @@ function mountBrowser() {
   vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
   vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
   onTestFinished(() => browser.disconnect());
-  const params: NewSessionPlaceControlsOptions = {
-    place,
-    gateway,
-    context,
-    data: undefined,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: changed,
-  };
-  const view = mountSolid(() => {
-    const [revision, setRevision] = createSignal(0);
-    changed.mockImplementation(() => setRevision((value) => value + 1));
-    const props = createMemo(() => {
-      revision();
-      return {
-        params: { ...params },
-        state: resolveProjectChip({
-          folder: "",
-          workspace: "/workspace",
-          projectId: browser.projectId,
-          selectedRemoteProject: null,
-          projects: browser.projects,
-          recents: [],
-          projectQuery: "",
-        }),
-        nativeTerminal: false,
-      };
-    });
-    return <ProjectChip {...props()} />;
-  });
+  const view = mountProjectChip(fixture, () => ({
+    folder: "",
+    workspace: "/workspace",
+    projectId: browser.projectId,
+    selectedRemoteProject: null,
+    projects: browser.projects,
+    recents: [],
+    projectQuery: "",
+  }));
   browser.synchronize();
   const open = async () => {
     browser.selectGatewayBrowser("/workspace");

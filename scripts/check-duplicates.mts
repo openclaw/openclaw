@@ -38,6 +38,7 @@ const targets = [
   "node-sqlite.mjs",
   "node-version.mjs",
   "openclaw.mjs",
+  "standalone-runtime-profile.mjs",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",

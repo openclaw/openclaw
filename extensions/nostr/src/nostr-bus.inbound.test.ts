@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import * as guardPolicy from "openclaw/plugin-sdk/direct-dm-guard-policy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ import { buildResolvedNostrAccount, TEST_HEX_PRIVATE_KEY } from "./test-fixtures
 
 const BOT_PUBKEY = "b".repeat(64);
 const defaultOnMessage = vi.fn(async () => {});
+const createGuardPolicy = guardPolicy.createDirectDmPreCryptoGuardPolicy;
 const onRejected = vi.fn<NonNullable<Parameters<typeof startNostrBus>[0]["onRejected"]>>();
 
 function rateLimit(maxGlobalPerWindow: number, maxPerSenderPerWindow: number) {
@@ -28,7 +30,7 @@ function countRejection(reason: Parameters<typeof onRejected>[0]): number {
 type RelayHandlers = {
   onevent: (event: Record<string, unknown>) => void | Promise<void>;
   oneose?: () => void;
-  onclose?: (reason: string[]) => void;
+  onclose?: (reasons: Array<{ url: string; reason: string }>) => void;
 };
 
 const mockState = vi.hoisted(() => ({
@@ -57,7 +59,10 @@ vi.mock("nostr-tools", () => {
       mockState.subscribeMany(relays, filters, handlers);
       mockState.handlers.push(handlers);
       return {
-        close: mockState.subscriptionClose,
+        close: async (reason: string) => {
+          await mockState.subscriptionClose(reason);
+          handlers.onclose?.(relays.map((url) => ({ url, reason })));
+        },
       };
     }
 
@@ -136,15 +141,24 @@ function expectDispatchCounts(verify: number, decrypt: number, delivered: number
   ]).toEqual([verify, decrypt, delivered]);
 }
 
-async function startTestNostrBus(options: Partial<Parameters<typeof startNostrBus>[0]> = {}) {
-  activeBus = await startNostrBus({
-    privateKey: TEST_HEX_PRIVATE_KEY,
-    onMessage: defaultOnMessage,
-    onRejected,
-    ...options,
-    trackIngressTask: (task) => ingressTasks.push(task),
-  });
-  return activeBus;
+async function startTestNostrBus(
+  options: Partial<Parameters<typeof startNostrBus>[0]> = {},
+  overrides?: Parameters<typeof createGuardPolicy>[0],
+) {
+  const policy = overrides && vi.spyOn(guardPolicy, "createDirectDmPreCryptoGuardPolicy");
+  policy?.mockReturnValue(createGuardPolicy(overrides));
+  try {
+    activeBus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage: defaultOnMessage,
+      onRejected,
+      ...options,
+      trackIngressTask: (task) => ingressTasks.push(task),
+    });
+    return activeBus;
+  } finally {
+    policy?.mockRestore();
+  }
 }
 
 describe("startNostrBus inbound guards", () => {
@@ -163,12 +177,91 @@ describe("startNostrBus inbound guards", () => {
   });
 
   afterEach(async () => {
-    await activeBus?.close();
-    activeBus = undefined;
-    mockState.handlers = [];
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
+    try {
+      await activeBus?.close();
+    } finally {
+      activeBus = undefined;
+      mockState.handlers = [];
+      vi.useRealTimers();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
+
+  it("relay backfill confirms only after every relay reports real EOSE", async ({ signal }) => {
+    const relays = ["wss://one.example", "wss://two.example"];
+    const complete = createDeferred<void>();
+    const onEose = vi.fn(() => complete.resolve());
+    await startTestNostrBus({ relays, onEose });
+    expect(mockState.subscribeMany.mock.calls.map(([urls]) => urls)).toEqual([
+      [relays[0]],
+      [relays[1]],
+    ]);
+    mockState.handlers[0]?.oneose?.();
+    mockState.handlers[1]?.oneose?.();
+    await withinTest(complete.promise, signal);
+    expect(onEose).toHaveBeenCalledOnce();
+    expect(onEose).toHaveBeenCalledWith("wss://one.example, wss://two.example");
+  });
+
+  it.each(["timeout", "same-turn close"])(
+    "relay backfill rejects synthetic EOSE after %s",
+    async (cause) => {
+      if (cause === "timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const onEose = vi.fn();
+      const bus = await startTestNostrBus({
+        relays: ["wss://one.example", "wss://two.example"],
+        onEose,
+      });
+      expect(mockState.handlers).toHaveLength(2);
+      if (cause === "timeout") {
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      mockState.handlers[0]?.oneose?.();
+      if (cause === "same-turn close") {
+        mockState.handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay closed" }]);
+      }
+      mockState.handlers[1]?.oneose?.();
+      await Promise.resolve();
+      await bus.close();
+      expect(onEose).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([true, false])(
+    "relay backfill reports closure only for remote initiators (local=%s)",
+    async (local) => {
+      const onDisconnect = vi.fn();
+      const onError = vi.fn();
+      const bus = await startTestNostrBus({
+        relays: ["wss://one.example", "wss://two.example"],
+        onDisconnect,
+        onError,
+      });
+      expect(mockState.handlers).toHaveLength(2);
+      if (local) {
+        await bus.close();
+      } else {
+        mockState.handlers[0]?.onclose?.([
+          { url: "wss://one.example", reason: "relay unavailable" },
+        ]);
+      }
+      if (local) {
+        expect(onDisconnect).not.toHaveBeenCalled();
+        expect(onError).not.toHaveBeenCalled();
+      } else {
+        expect(onDisconnect).toHaveBeenCalledOnce();
+        expect(onDisconnect).toHaveBeenCalledWith("wss://one.example");
+        expect(onError).toHaveBeenCalledOnce();
+        expect(onError).toHaveBeenCalledWith(
+          expect.objectContaining({ message: "Subscription closed: relay unavailable" }),
+          "subscription",
+        );
+      }
+    },
+  );
 
   it("classifies a durable queue open failure as unavailable ingress", async () => {
     const queueError = new Error("sqlite unavailable");
@@ -328,10 +421,7 @@ describe("startNostrBus inbound guards", () => {
   it("rate limits repeated invalid signatures before authorization work fans out", async () => {
     mockState.verifyEvent.mockReturnValue(false);
     const authorizeSender = vi.fn(async () => "allow" as const);
-    await startTestNostrBus({
-      authorizeSender,
-      guardPolicy: { rateLimit: rateLimit(1, 10) },
-    });
+    await startTestNostrBus({ authorizeSender }, { rateLimit: rateLimit(1, 10) });
     await emitEvent({ id: "invalid-1" });
     await emitEvent({ id: "invalid-2" });
     expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
@@ -379,11 +469,10 @@ describe("startNostrBus inbound guards", () => {
         return await blocked.promise;
       })
       .mockResolvedValueOnce("allow");
-    const bus = await startTestNostrBus({
-      onMessage,
-      authorizeSender,
-      guardPolicy: { rateLimit: rateLimit(2, 1) },
-    });
+    const bus = await startTestNostrBus(
+      { onMessage, authorizeSender },
+      { rateLimit: rateLimit(2, 1) },
+    );
     try {
       dispatchEvent(createEvent({ id: "blocked-pending", pubkey: `blocked${"a".repeat(57)}` }));
       await withinTest(authorizing.promise, signal);
@@ -412,11 +501,10 @@ describe("startNostrBus inbound guards", () => {
       recentEventIds: [],
     });
     mockState.computeSinceTimestamp.mockReturnValue(1_000);
-    const bus = await startTestNostrBus({
-      ...buildResolvedNostrAccount(),
-      relays: ["wss://relay.example"],
-      guardPolicy: { maxCiphertextBytes: 4, rateLimit: rateLimit(1, 10) },
-    });
+    const bus = await startTestNostrBus(
+      { ...buildResolvedNostrAccount(), relays: ["wss://relay.example"] },
+      { maxCiphertextBytes: 4, rateLimit: rateLimit(1, 10) },
+    );
     expect(mockState.writeNostrBusState).toHaveBeenCalledWith(
       expect.objectContaining({ lastProcessedAt: 1_000, gatewayStartedAt: 900 }),
     );
@@ -441,9 +529,7 @@ describe("startNostrBus inbound guards", () => {
   });
 
   it("does not spend per-sender buckets on oversized ciphertext before verification", async () => {
-    await startTestNostrBus({
-      guardPolicy: { maxCiphertextBytes: 4, rateLimit: rateLimit(10, 1) },
-    });
+    await startTestNostrBus({}, { maxCiphertextBytes: 4, rateLimit: rateLimit(10, 1) });
     await emitEvent({ id: "oversized-sender-1", content: "ciphertext-too-large" });
     await emitEvent({ id: "oversized-sender-2", content: "ciphertext-too-large" });
     await emitEvent({ id: "allowed-after-oversized", content: "ok" });

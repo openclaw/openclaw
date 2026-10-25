@@ -6,6 +6,7 @@ import {
   openBrowserActions,
   type BrowserRequestEnvelope,
 } from "../../../components/browser/browser-panel-controller-test-support.ts";
+import { createApplicationGatewaySnapshot } from "../../../test-helpers/application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -62,17 +63,15 @@ function mount(
     },
     { sessionScoped: !scopes.includes("operator.admin") },
   );
-  const { gateway, publish, publishEvent } = createApplicationGateway({
-    phase: "connected",
-    client,
-    hello: gatewayHelloForMethods(advertised, scopes),
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey,
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway, publish, publishEvent } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client,
+      hello: gatewayHelloForMethods(advertised, scopes),
+      assistantAgentId: "main",
+      sessionKey,
+    }),
+  );
   const provider = createApplicationContextProvider({
     resourceBasePath: "",
     gateway,
@@ -219,6 +218,29 @@ describe("Browser dashboard presentation", () => {
     retrying.resolve(response("first", true));
     await h.waitForText("browser is stopped");
     expect(h.element.textContent).not.toContain("Browser stop failed");
+  });
+
+  it("keeps panel visibility live during a background inspection and retains its failure", async () => {
+    const inspection = createDeferred<ReturnType<typeof response>>();
+    const h = mount(
+      dashboard(async (envelope) =>
+        envelope.method === "GET" ? inspection.promise : response("first"),
+      ),
+    );
+    await h.waitForPanel();
+    const panel = h.panel()!;
+    h.changed();
+    await vi.waitFor(() =>
+      expect(h.actions().filter((entry) => entry.method === "GET")).toHaveLength(1),
+    );
+    h.element.active = false;
+    await vi.waitFor(() => expect(panel.presented).toBe(false));
+    expect(h.panel()).toBe(panel);
+    inspection.reject(new Error("Dashboard inspection failed"));
+    await h.waitForText("Dashboard inspection failed");
+    expect(h.panel()).toBe(panel);
+    expect(panel.presented).toBe(false);
+    expect(h.actions().map((entry) => entry.method)).toEqual(["POST", "GET"]);
   });
 
   it("admits the replacement widget while a retired widget command is pending", async () => {

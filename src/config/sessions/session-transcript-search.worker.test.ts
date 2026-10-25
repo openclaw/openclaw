@@ -34,22 +34,17 @@ import {
   searchSessionTranscriptsReadOnlySync,
 } from "./session-transcript-search.js";
 import {
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   historyLane,
   projectionLane,
   registerSessionTranscriptReaderLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 function transcriptMessage(id: string, content: string, timestamp = 1) {
-  return {
-    type: "message",
-    id,
-    parentId: null,
-    timestamp,
-    message: { role: "assistant", content },
-  };
+  return timedMessageEvent(id, null, timestamp, { role: "assistant", content });
 }
 
 async function searchFixture(
@@ -511,7 +506,7 @@ describe("search reader concurrency", () => {
                 reader.release();
               }
               if (ownedLane) {
-                historyClearTimeout(ownedLane.idleTimer);
+                clearDatabaseWorkerIdleRetirement(ownedLane);
               }
               await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
               const failures = closed.flatMap((result) =>

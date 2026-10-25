@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { NativeBrowserMessage } from "../../app/native-browser-bridge.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createBrowserClient } from "./browser-panel-controller-test-support.ts";
 import "./browser-panel.ts";
+import { createBrowserClient } from "./browser-panel-controller-test-support.ts";
 
 let originalFonts: PropertyDescriptor | undefined;
 
@@ -12,7 +13,7 @@ beforeEach(() => {
   originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", {
     configurable: true,
-    value: { ready: Promise.resolve() },
+    value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
   });
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("ResizeObserver", undefined);
@@ -20,11 +21,7 @@ beforeEach(() => {
 
 afterEach(() => {
   document.body.replaceChildren();
-  if (originalFonts) {
-    Object.defineProperty(document, "fonts", originalFonts);
-  } else {
-    Reflect.deleteProperty(document, "fonts");
-  }
+  restorePropertyDescriptor(document, "fonts", originalFonts);
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });

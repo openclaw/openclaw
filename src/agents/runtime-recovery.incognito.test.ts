@@ -14,10 +14,11 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { waitForSessionNativeAttemptEnd } from "../sessions/session-controller.native-runtime.js";
+import { waitForCapturedSessionNativeAttemptEnd } from "../sessions/session-controller.native-runtime.js";
 import { readSessionControllerOperationState } from "../sessions/session-controller.state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { getEmbeddedRunAttachment } from "./embedded-agent-runner/run-state.js";
 import { claimAgentSessionWriter } from "./embedded-agent-runner/run/session-bootstrap.js";
 import {
   abortAndDrainEmbeddedAgentRun,
@@ -242,10 +243,10 @@ it.each(["settle", "replacement", "incarnation"] as const)(
     );
     const otherBefore = { ...sibling.readSession(other.sessionKey, authority)?.entry };
     let rawSettled = false;
-    const rawSettlement = waitForSessionNativeAttemptEnd(
+    const rawSettlement = waitForCapturedSessionNativeAttemptEnd(
       target.sessionId,
       null,
-      native.handle,
+      getEmbeddedRunAttachment(native.handle),
     ).then(() => {
       rawSettled = true;
     });

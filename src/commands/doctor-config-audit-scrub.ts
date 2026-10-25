@@ -53,7 +53,6 @@ export function configAuditScrubToRepairEffect(
     kind: "file",
     action: "would-scrub-config-audit-log",
     target: result.auditPath,
-    dryRunSafe: false,
   };
 }
 
@@ -66,16 +65,13 @@ export function configAuditScrubToRepairEffect(
 export async function maybeScrubConfigAuditLog(params: {
   shouldRepair: boolean;
   env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  doctorFixCommand?: string;
 }): Promise<void> {
   const env = params.env ?? process.env;
-  const homedir = params.homedir ?? os.homedir;
 
   try {
     const result = await scrubConfigAuditLog({
       env,
-      homedir,
+      homedir: os.homedir,
       ...(!params.shouldRepair ? { dryRun: true } : {}),
     });
     if (params.shouldRepair && result.aborted) {
@@ -87,11 +83,10 @@ export async function maybeScrubConfigAuditLog(params: {
     }
     if (result.rewritten > 0) {
       const count = formatEntryCount(result.rewritten);
-      const fixCommand = params.doctorFixCommand ?? "openclaw doctor --fix";
       note(
         params.shouldRepair
           ? `Scrubbed ${count} in config-audit.jsonl that still contained pre-redactor argv values. Rotate any credentials that may have been written to the log before the forward redactor shipped.`
-          : `${count} in config-audit.jsonl still contain pre-redactor argv values (likely plaintext credentials at rest). Run \`${fixCommand}\` to rewrite the argv/execArgv fields through the same redactor used for new entries.`,
+          : `${count} in config-audit.jsonl still contain pre-redactor argv values (likely plaintext credentials at rest). Run \`openclaw doctor --fix\` to rewrite the argv/execArgv fields through the same redactor used for new entries.`,
         NOTE_TITLE,
       );
     }

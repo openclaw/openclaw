@@ -53,16 +53,6 @@ function parsePossiblyNoisyStatus<T>(schema: z.ZodType<T>, raw: string): T | nul
   return safeParseJsonWithSchema(schema, raw.slice(start, end + 1));
 }
 
-function extractTailnetHostFromStatusJson(raw: string): string | null {
-  const parsed = parsePossiblyNoisyStatus(TailscaleStatusSchema, raw);
-  const dns = parsed?.Self?.DNSName;
-  if (dns && dns.length > 0) {
-    return dns.replace(/\.$/, "");
-  }
-  const ips = parsed?.Self?.TailscaleIPs ?? [];
-  return ips.length > 0 ? (ips[0] ?? null) : null;
-}
-
 function parseLoopbackProxyPort(proxy: string, forAdoption: boolean): number | null {
   // SDK discovery accepts the shipped proxy forms; ownership requires the exact
   // HTTP loopback root written by previous managed releases.
@@ -236,7 +226,9 @@ export async function resolveTailnetHostWithRunner(
       if (!raw) {
         continue;
       }
-      const host = extractTailnetHostFromStatusJson(raw);
+      const parsed = parsePossiblyNoisyStatus(TailscaleStatusSchema, raw);
+      const dns = parsed?.Self?.DNSName;
+      const host = dns && dns.length > 0 ? dns.replace(/\.$/, "") : parsed?.Self?.TailscaleIPs?.[0];
       if (host) {
         return host;
       }

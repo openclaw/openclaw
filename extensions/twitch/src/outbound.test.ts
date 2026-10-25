@@ -59,7 +59,6 @@ describe("outbound", () => {
     vi.mocked(resolveTwitchAccountContext).mockImplementation((_cfg, accountId) => ({
       accountId: accountId?.trim() || "default",
       account,
-      tokenResolution: { token: account?.accessToken ?? "" },
       configured: account ? (params?.configured ?? true) : false,
       availableAccountIds: ["default"],
     }));
@@ -127,6 +126,98 @@ describe("outbound", () => {
         ok: false,
         error: expect.objectContaining({ message: expect.stringContaining("Twitch") }),
       });
+    });
+  });
+
+  describe("messaging target normalization", () => {
+    it.each([
+      ["bare channel", "TestChannel", "testchannel"],
+      ["hash-prefixed channel", "#TestChannel", "testchannel"],
+      ["provider-prefixed channel", "twitch:TestChannel", "testchannel"],
+      ["internal channel target", "twitch:channel:TestChannel", "testchannel"],
+      ["internal channel target alias", "twitch-chat:channel:TestChannel", "testchannel"],
+    ])("resolves %s to the bare channel", (_name, to, expected) => {
+      expect(twitchOutbound.resolveTarget!({ to, allowFrom: [] })).toEqual({
+        ok: true,
+        to: expected,
+      });
+    });
+
+    it.each(["user:alice", "dm:alice", "twitch:user:alice", "twitch:dm:alice"])(
+      "rejects unsupported direct target %s",
+      (to) => {
+        expect(twitchOutbound.resolveTarget!({ to })).toEqual({
+          ok: false,
+          error: expect.objectContaining({ message: expect.stringContaining("Twitch") }),
+        });
+      },
+    );
+  });
+
+  describe("sendText target normalization", () => {
+    it.each([
+      ["bare channel", "TestChannel"],
+      ["hash-prefixed channel", "#TestChannel"],
+      ["provider-prefixed channel", "twitch:TestChannel"],
+      ["internal channel target", "twitch:channel:TestChannel"],
+    ])("dispatches %s to the bare channel", async (_name, to) => {
+      setupAccountContext();
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        messageId: "normalized-target-msg",
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [
+            {
+              channel: "twitch",
+              conversationId: "testchannel",
+              messageId: "normalized-target-msg",
+            },
+          ],
+          kind: "text",
+        }),
+      });
+
+      const result = await twitchOutbound.sendText!({ ...sendParams, to });
+
+      expect(sendMessageTwitchInternal).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "testchannel" }),
+      );
+      expect(result.messageId).toBe("normalized-target-msg");
+    });
+
+    it.each(["user:alice", "dm:alice", "twitch:user:alice", "twitch:dm:alice"])(
+      "rejects unsupported direct target %s instead of falling back to the account channel",
+      async (to) => {
+        setupAccountContext();
+
+        await expect(twitchOutbound.sendText!({ ...sendParams, to })).rejects.toThrow(
+          "Delivering to Twitch requires target <channel-name>",
+        );
+        expect(sendMessageTwitchInternal).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ["empty", ""],
+      ["whitespace-only", "   "],
+      ["hash-only", "#"],
+    ])("keeps the account-channel fallback for %s targets", async (_name, to) => {
+      setupAccountContext();
+      vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+        messageId: "fallback-msg",
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [
+            { channel: "twitch", conversationId: "testchannel", messageId: "fallback-msg" },
+          ],
+          kind: "text",
+        }),
+      });
+
+      const result = await twitchOutbound.sendText!({ ...sendParams, to });
+
+      expect(sendMessageTwitchInternal).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "testchannel" }),
+      );
+      expect(result.messageId).toBe("fallback-msg");
     });
   });
 

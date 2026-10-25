@@ -102,6 +102,47 @@ describe("matrix doctor contract state migrations", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it.each(["credentials", "sync-cache"] as const)(
+    "retains malformed UTF-8 %s while importing a healthy account",
+    async (kind) => {
+      let filePath: string;
+      let healthyPath: string;
+      if (kind === "credentials") {
+        filePath = writeCredentials(
+          "credentials-broken.json",
+          legacyCredentials({ accessToken: "utf8-marker" }),
+        );
+        healthyPath = writeCredentials("credentials-healthy.json", legacyCredentials());
+      } else {
+        const brokenRoot = accountStorageRoot(stateDir, "broken");
+        const healthyRoot = accountStorageRoot(stateDir, "healthy");
+        writeLegacySyncCache(brokenRoot, "utf8-marker");
+        writeLegacySyncCache(healthyRoot, "healthy-token");
+        filePath = path.join(brokenRoot, "bot-storage.json");
+        healthyPath = path.join(healthyRoot, "bot-storage.json");
+      }
+      const bytes = fs.readFileSync(filePath);
+      bytes[bytes.indexOf("utf8-marker")] = 0xff;
+      fs.writeFileSync(filePath, bytes);
+      const result = await migrate(kind === "credentials" ? CREDENTIALS : SYNC);
+      expect(result.warningDisposition).toBe("recoverable");
+      expect(result.warnings).toHaveLength(1);
+      expect(fs.readFileSync(filePath)).toEqual(bytes);
+      expect(fs.existsSync(healthyPath)).toBe(false);
+      if (kind === "credentials") {
+        expect(await openCredentials().lookup(matrixCredentialsStoreKey("broken"))).toBeUndefined();
+        expect(await openCredentials().lookup(matrixCredentialsStoreKey("healthy"))).toMatchObject({
+          accessToken: "legacy-token",
+        });
+      } else {
+        const broken = await SqliteBackedMatrixSyncStore.create(path.dirname(filePath));
+        const healthy = await SqliteBackedMatrixSyncStore.create(path.dirname(healthyPath));
+        expect(await broken.getSavedSyncToken()).toBeNull();
+        expect(await healthy.getSavedSyncToken()).toBe("healthy-token");
+      }
+    },
+  );
+
   it("reports crypto refusal in Doctor without auto-clearing it", async () => {
     const storageRootDir = accountStorageRoot(stateDir);
     fs.mkdirSync(storageRootDir, { recursive: true });
@@ -435,10 +476,10 @@ describe("matrix doctor contract state migrations", () => {
   it("preserves a legacy marker's remaining ingress tombstone retention", async () => {
     const now = Date.now();
     const markerTs = now - MATRIX_INBOUND_DEDUPE_TTL_MS + 1_000;
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(now);
     await expect(
       importInboundDedupeMarkersToIngress({
         context: params.context,
-        now,
         markers: [
           { accountId: "ops", roomId: "!room:example.org", eventId: "$near-expiry", ts: markerTs },
         ],

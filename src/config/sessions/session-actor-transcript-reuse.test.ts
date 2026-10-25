@@ -23,6 +23,7 @@ import { prepareSessionTranscriptHydration } from "./session-transcript-hydratio
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 // mock-isolation: this transport proof does not schedule unrelated maintenance.
@@ -76,12 +77,11 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
     await captureRuntimeConfigAsyncReader()();
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
-    const answer = {
-      type: "message",
-      id: "answer",
-      parentId: "initial-runtime",
-      message: { role: "assistant", content: "Original answer", usage: { input: 200, output: 7 } },
-    };
+    const answer = messageEvent("answer", "initial-runtime", {
+      role: "assistant",
+      content: "Original answer",
+      usage: { input: 200, output: 7 },
+    });
     const events = [
       { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
       {
@@ -91,12 +91,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
         customType: "model-snapshot",
         data: { provider: "synthetic", modelApi: "test-api", modelId: "first-model", timestamp: 1 },
       },
-      {
-        type: "message",
-        id: "question",
-        parentId: "initial-model",
-        message: { role: "user", content: "Original question" },
-      },
+      messageEvent("question", "initial-model", { role: "user", content: "Original question" }),
       {
         type: "custom_message",
         id: "initial-runtime",
@@ -496,12 +491,12 @@ it("slides durable context within its bounds and reloads only when an admission 
     const header = { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" };
     const events = [
       header,
-      ...Array.from({ length: 5 }, (_, index) => ({
-        type: "message",
-        id: `old-${index}`,
-        parentId: index === 0 ? null : `old-${index - 1}`,
-        message: { role: index % 2 === 0 ? "assistant" : "user", content: `Old message ${index}` },
-      })),
+      ...Array.from({ length: 5 }, (_, index) =>
+        messageEvent(`old-${index}`, index === 0 ? null : `old-${index - 1}`, {
+          role: index % 2 === 0 ? "assistant" : "user",
+          content: `Old message ${index}`,
+        }),
+      ),
     ];
     await replaceTranscriptEvents(scope, events);
     const { actor, database } = await acquireActor(fixture, env);

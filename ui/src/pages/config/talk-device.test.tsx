@@ -176,7 +176,11 @@ it("shows rejected native edits and retries the desired value without replacing 
   expect(microphone.value).toBe("");
   expect(container.querySelector('select[aria-label="Microphone"]')).toBe(microphone);
   container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
-  await waitForSolid(() => expect(microphone.value).toBe("builtin"));
+  await waitForSolid(() => {
+    expect(microphone.value).toBe("builtin");
+    expect(container.textContent).toContain("Saving");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
   expect(post).toHaveBeenLastCalledWith({ type: "set", key: "voice.microphone", value: "builtin" });
   const accepted = structuredClone(snapshot);
   accepted.voice.microphone.selectedId = "builtin";

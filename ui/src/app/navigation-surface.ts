@@ -27,10 +27,6 @@ export type ShellNavigationSurfaces = {
   readonly queryRenderedElements: RouteElements["renderedElements"];
 };
 
-export function navDrawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
-  return [...tabbableElements(drawer.children)];
-}
-
 export function dismissNavigationTransientSurfaces(host: ShellNavigationSurfaces): boolean {
   const dismissedPanel = host
     .queryRenderedElements("openclaw-sidebar-attention")
@@ -57,7 +53,7 @@ function trapNavDrawerFocus(drawer: HTMLElement | undefined, event: KeyboardEven
   ) {
     return;
   }
-  const focusable = navDrawerFocusableElements(drawer);
+  const focusable = [...tabbableElements(drawer.children)];
   const active = activeElement(drawer);
   const target = event.shiftKey ? focusable.at(-1) : focusable[0];
   const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);

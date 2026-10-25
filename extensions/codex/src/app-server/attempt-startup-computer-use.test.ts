@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { setupStartupLifecycle } from "./attempt-startup-lifecycle.test-support.js";
 import {
   answerInitialize,
   createAttemptPaths,
@@ -14,10 +13,6 @@ import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import { readCodexComputerUseStatus } from "./computer-use.js";
 import { createComputerUseRequest } from "./computer-use.test-support.js";
 import type { CodexPluginConfig } from "./config.js";
-import { setManagedCodexPluginRoot } from "./managed-binary.js";
-import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
-import { clearSharedCodexAppServerClientAndWait } from "./shared-client.js";
 import { createInferenceReadyClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -31,28 +26,7 @@ const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
 const startThreadWithHarness = createAttemptThreadStarter(tempRoots, pluginConfig);
 
 describe("Computer Use attempt startup", () => {
-  beforeEach(async () => {
-    vi.useRealTimers();
-    vi.stubEnv("CODEX_API_KEY", "");
-    vi.stubEnv("OPENAI_API_KEY", "");
-    await clearSharedCodexAppServerClientAndWait();
-    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
-    defaultCodexPluginMetadataCache.clear();
-    resetCodexTestBindingStore();
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    await clearSharedCodexAppServerClientAndWait();
-    setManagedCodexPluginRoot(undefined);
-    defaultCodexPluginMetadataCache.clear();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    for (const root of tempRoots) {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-    tempRoots.clear();
-  });
+  setupStartupLifecycle(tempRoots, () => vi.useRealTimers());
 
   it("charges initial client acquisition to the one-off status deadline", async () => {
     const { harness, requests, status } = await statusProbe({

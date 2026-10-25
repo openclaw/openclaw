@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
@@ -8,9 +7,10 @@ import {
 } from "./placement-record.js";
 import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { placementClaim, sessionIdentity } from "./placement-suite.test-support.js";
+import { journalOwner, placementClaim, sessionIdentity } from "./placement-suite.test-support.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 const SESSION = sessionIdentity("session-placement-terminal");
 
@@ -166,23 +166,10 @@ describe("worker placement terminal persistence", () => {
       } else if (resultState === "journaled") {
         const basePack = Buffer.from("snapshot");
         await h.store.beginWorkspaceReconciliation(
-          {
-            sessionId: active.sessionId,
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-            placementGeneration: active.generation,
-          },
-          {
-            version: 1,
-            temporaryNonce: "a".repeat(32),
-            baseManifestRef: active.workspaceBaseManifestRef,
-            currentManifestRef: `sha256:${"c".repeat(64)}`,
-            baseEntries: [],
-            appliedEntries: [],
-            baseTree: "f".repeat(40),
-            basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+          journalOwner(active),
+          workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"c".repeat(64)}`, {
             basePack,
-          },
+          }),
         );
       }
 

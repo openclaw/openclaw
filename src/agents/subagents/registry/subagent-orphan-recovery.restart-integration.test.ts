@@ -779,12 +779,12 @@ describe("subagent orphan recovery — faithful restart path", () => {
             suppressChildSessionEffects: owner !== "original",
           }),
         );
-        expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledTimes(
-          owner === "original" ? 1 : 0,
-        );
+        const browserCleanup = vi.mocked(cleanupBrowserSessionsForLifecycleEnd);
+        expect(browserCleanup).toHaveBeenCalledTimes(owner === "original" ? 1 : 0);
         if (owner !== "original") {
           expect(child.read()).toEqual(before);
         } else {
+          expect(browserCleanup).toHaveBeenCalledBefore(vi.mocked(runSubagentAnnounceFlow));
           expect(child.read()).toMatchObject({ status: "interrupted" });
           expect((await readChildRun(childSessionKey))?.execution.interruptionReason).toBe(
             "gateway-restart",

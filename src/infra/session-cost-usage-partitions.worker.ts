@@ -1,5 +1,4 @@
 import { isMainThread } from "node:worker_threads";
-import { expressionBuilder } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import {
@@ -7,6 +6,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
+import { boundedUsageCacheColumn, usageCacheJsonText } from "./session-cost-usage-expressions.js";
 import {
   USAGE_COST_PARTITION_SCOPE,
   readUsageCostPartitionKey,
@@ -90,28 +90,8 @@ export function readSessionCostUsagePartitionsInDatabase(
       .selectFrom("cache_entries")
       .select("key")
       .select((eb) => [
-        (budget
-          ? eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["value_json"]), "<=", 64 * 1024)
-              .then(eb.ref("value_json"))
-              .else(null)
-              .end()
-          : eb.ref("value_json")
-        ).as("value_json"),
-        (budget
-          ? eb
-              .case()
-              .when(
-                eb.fn<number>("length", ["blob"]),
-                "<=",
-                Math.min(1024 * 1024, budget.remainingBytes),
-              )
-              .then(eb.ref("blob"))
-              .else(null)
-              .end()
-          : eb.ref("blob")
-        ).as("blob"),
+        boundedUsageCacheColumn("value_json", budget).as("value_json"),
+        boundedUsageCacheColumn("blob", budget).as("blob"),
         eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
         eb.fn<number>("length", ["blob"]).as("body_bytes"),
       ])
@@ -211,12 +191,7 @@ export function pruneSessionCostUsagePartitionsInDatabase(
 ): void {
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
-  const expression = expressionBuilder<CacheDatabase, "cache_entries">();
   for (const row of existing) {
-    const value =
-      typeof row.valueJson === "string"
-        ? row.valueJson
-        : expression.cast<string>(expression.val(row.valueJson), "text");
     const current = executeSqliteQuerySync(
       db,
       kysely
@@ -224,7 +199,7 @@ export function pruneSessionCostUsagePartitionsInDatabase(
         .select("key")
         .where("scope", "=", USAGE_COST_ROLLUP_SCOPE)
         .where("key", "=", row.key)
-        .where("value_json", "=", value)
+        .where("value_json", "=", usageCacheJsonText(row.valueJson))
         .where("updated_at", "=", row.updatedAt),
     ).rows[0];
     if (current) {

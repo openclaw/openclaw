@@ -9,12 +9,7 @@ import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { resolveRootPath } from "../infra/boundary-path.js";
 import { toErrorObject } from "../infra/errors.js";
-import {
-  canonicalPathFromExistingAncestor,
-  findExistingAncestor,
-  root as fsRoot,
-  FsSafeError,
-} from "../infra/fs-safe.js";
+import { findExistingAncestor, root as fsRoot, FsSafeError } from "../infra/fs-safe.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
   classifyMediaReferenceSource,
@@ -70,6 +65,8 @@ import {
   toolResultFitsBudget,
   type ToolResultBudget,
 } from "./tool-result-limits.js";
+import { toCanonicalRelativeWorkspacePath, writeHostWorkspaceFile } from "./workspace-file-ops.js";
+import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to sanitize oversized images before they hit providers.
@@ -695,6 +692,7 @@ async function assertSandboxPathWithinAnyRoot(params: {
   cwd?: string;
   filePath: string;
   roots: readonly string[];
+  allowLinkedWorktrees?: boolean;
 }) {
   let firstRootEscapeError: unknown;
   const seen = new Set<string>();
@@ -712,6 +710,7 @@ async function assertSandboxPathWithinAnyRoot(params: {
         filePath: params.filePath,
         cwd: index === 0 ? (params.cwd ?? root) : root,
         root,
+        ...(index === 0 && params.allowLinkedWorktrees ? { allowLinkedWorktrees: true } : {}),
       });
     } catch (error) {
       if (!isSandboxRootEscapeError(error)) {
@@ -732,6 +731,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
   root: string,
   options?: {
     additionalRoots?: readonly string[];
+    allowLinkedWorktrees?: boolean;
     containerMounts?: readonly {
       containerRoot: string;
       hostRoot: string;
@@ -806,6 +806,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
               cwd: !workspaceMapping ? options?.resolutionCwd : undefined,
               filePath: sandboxPath,
               roots: [guardedRoot, ...additionalRoots],
+              allowLinkedWorktrees: !options?.bridge && options?.allowLinkedWorktrees,
             });
           }
         } catch (error) {
@@ -1222,27 +1223,6 @@ async function statHostFile(absolutePath: string) {
   }
 }
 
-async function writeWorkspaceFile(
-  root: string,
-  getRoot: () => ReturnType<typeof fsRoot>,
-  absolutePath: string,
-  content: string,
-  abortSignal?: AbortSignal,
-) {
-  const assertCurrent = captureAgentToolSourceExecutionGuard(abortSignal);
-  // Reject lexical escapes before opening the lazily created workspace root.
-  const relative = toRelativeWorkspacePath(root, absolutePath);
-  const rootHandle = await getRoot();
-  // Absolute admitted paths preserve literal "~" workspace directories.
-  await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-    await rootHandle.write(path.resolve(rootHandle.rootReal, relative), content, {
-      mkdir: true,
-      mutationSymlinks: "follow-parents-within-root",
-      assertBeforeMutation: assertCurrent,
-    });
-  });
-}
-
 function createHostMutationOperations(
   root: string,
   options?: {
@@ -1281,17 +1261,25 @@ function createHostMutationOperations(
   // root lazily on first use: constructing the tool (e.g. doctor projecting tool
   // schemas) must not open an fs handle, and a missing workspace dir must not
   // orphan a rejecting promise as "Unhandled promise rejection: root dir not found".
-  let rootPromise: ReturnType<typeof fsRoot> | undefined;
-  const getRoot = () => (rootPromise ??= fsRoot(root));
+  const roots = new Map<string, ReturnType<typeof fsRoot>>();
+  const getRoot = (selectedRoot: string) => {
+    let pending = roots.get(selectedRoot);
+    if (!pending) {
+      pending = fsRoot(selectedRoot);
+      roots.set(selectedRoot, pending);
+    }
+    return pending;
+  };
   return withMemoryWriteProvenance(
     {
       mkdir: async (dir: string) => {
         const assertCurrent = captureAgentToolSourceExecutionGuard(options?.abortSignal);
-        const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
+        const selectedRoot = resolveHostWorkspaceRoot(root, dir);
+        const relative = toRelativeWorkspacePath(selectedRoot, dir, { allowRoot: true });
         // mkdir receives the file's parent, including directory links to the root itself.
         const resolved = await resolveRootPath({
-          absolutePath: path.resolve(root, relative),
-          rootPath: root,
+          absolutePath: path.resolve(selectedRoot, relative),
+          rootPath: selectedRoot,
           boundaryLabel: "workspace root",
         });
         const ancestor = await findExistingAncestor(resolved.rootCanonicalPath);
@@ -1304,7 +1292,7 @@ function createHostMutationOperations(
             });
           });
         }
-        const rootHandle = await getRoot();
+        const rootHandle = await getRoot(selectedRoot);
         const canonicalRelative = toRelativeWorkspacePath(
           rootHandle.rootReal,
           resolved.canonicalPath,
@@ -1312,7 +1300,10 @@ function createHostMutationOperations(
         );
         const mutationOptions = {
           mutationSymlinks: "reject" as const,
-          assertBeforeMutation: assertCurrent,
+          assertBeforeMutation: () => {
+            assertCurrent();
+            toRelativeWorkspacePath(resolveHostWorkspaceRoot(root, dir), dir, { allowRoot: true });
+          },
         };
         await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           if (canonicalRelative) {
@@ -1323,22 +1314,25 @@ function createHostMutationOperations(
         });
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
+        writeHostWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
       readFile: async (absolutePath: string) => {
         // Reads retain the workspace contract of following only symlink parents.
-        const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
-        const rootHandle = await getRoot();
+        const selectedRoot = resolveHostWorkspaceRoot(root, absolutePath);
+        const relative = await toCanonicalRelativeWorkspacePath(selectedRoot, absolutePath);
+        const rootHandle = await getRoot(selectedRoot);
         return (await rootHandle.read(path.resolve(rootHandle.rootReal, relative))).buffer;
       },
       statFile: async (absolutePath: string) => {
-        const relative = toRelativeWorkspacePath(root, absolutePath);
-        return statHostFile(path.resolve(root, relative));
+        const selectedRoot = resolveHostWorkspaceRoot(root, absolutePath);
+        const relative = toRelativeWorkspacePath(selectedRoot, absolutePath);
+        return statHostFile(path.resolve(selectedRoot, relative));
       },
       access: async (absolutePath: string) => {
+        const selectedRoot = resolveHostWorkspaceRoot(root, absolutePath);
         let relative: string;
         try {
           // Canonicalized like readFile so in-workspace symlink parents pass.
-          relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
+          relative = await toCanonicalRelativeWorkspacePath(selectedRoot, absolutePath);
         } catch {
           // Path escapes workspace root.  Don't throw here – the upstream
           // library replaces any `access` error with a misleading "File not
@@ -1348,7 +1342,7 @@ function createHostMutationOperations(
           return;
         }
         try {
-          const rootHandle = await getRoot();
+          const rootHandle = await getRoot(selectedRoot);
           const opened = await rootHandle.open(path.resolve(rootHandle.rootReal, relative));
           await opened.handle.close().catch(() => {});
         } catch (error) {
@@ -1366,21 +1360,6 @@ function createHostMutationOperations(
     } as const,
     options?.memoryWriteProvenance,
   );
-}
-
-async function toCanonicalRelativeWorkspacePath(
-  root: string,
-  absolutePath: string,
-): Promise<string> {
-  const lexicalRelative = toRelativeWorkspacePath(root, absolutePath);
-  const lexicalPath = path.resolve(root, lexicalRelative);
-  const parentPath = path.dirname(lexicalPath);
-  const [rootReal, canonicalParentPath] = await Promise.all([
-    fs.realpath(root),
-    canonicalPathFromExistingAncestor(parentPath),
-  ]);
-  const canonicalPath = path.join(canonicalParentPath, path.basename(lexicalPath));
-  return toRelativeWorkspacePath(rootReal, canonicalPath);
 }
 
 function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {

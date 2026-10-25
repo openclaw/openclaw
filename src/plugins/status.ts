@@ -621,8 +621,6 @@ export function buildPluginCompatibilityNotices(
 
 export function buildPluginCompatibilitySnapshotNotices(params?: {
   config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
 }): PluginCompatibilityNotice[] {
   const report = buildPluginSnapshotReport(params);
   const context = resolvePluginRuntimeLoadContext(params);

@@ -620,7 +620,6 @@ export function captureGenericBindingSupport(ref: ConversationRef) {
       throw new SessionBindingError(
         "BINDING_ADAPTER_UNAVAILABLE",
         "Generic conversation binding owner is no longer available",
-        { channel: ref.channel, accountId: ref.accountId },
       );
     }
   };

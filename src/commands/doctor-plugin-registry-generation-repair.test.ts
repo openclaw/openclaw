@@ -24,7 +24,6 @@ import {
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../plugins/test-helpers/managed-npm-plugin.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { maybeRepairStaleManagedNpmInstallGenerations as repairGenerations } from "./doctor-plugin-generations.js";
 import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
 
 const PACKAGE_NAME = "@proof/openclaw-generation";
@@ -134,14 +133,14 @@ it.each(["record", "recency"] as const)(
       setInstallTimestamp(active, new Date("2026-01-02T00:00:00.000Z"));
       setInstallTimestamp(stale, new Date("2026-01-01T00:00:00.000Z"));
       vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-      await maybeRepairPluginRegistryState({
-        ...repairParams(stateDir),
-        config: { plugins: { allow: [PLUGIN_ID], entries: { [PLUGIN_ID]: { enabled: true } } } },
-      });
+    }
+    await maybeRepairPluginRegistryState({
+      ...repairParams(stateDir),
+      config: { plugins: { allow: [PLUGIN_ID], entries: { [PLUGIN_ID]: { enabled: true } } } },
+    });
+    if (authority === "recency") {
       const persisted = await readRecords({ stateDir });
       expect(persisted?.[PLUGIN_ID]?.installPath).toBe(active);
-    } else {
-      await expect(repairGenerations(repairParams(stateDir))).resolves.toBe(true);
     }
     expect([stale, active].map(hasRetainedManagedNpmInstallMarker)).toEqual([true, false]);
     if (authority === "record") {

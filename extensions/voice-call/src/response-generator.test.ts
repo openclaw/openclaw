@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { normalizeVoiceCallConfig } from "./config.js";
@@ -112,6 +113,11 @@ function requireEmbeddedAgentArgs(
   return args;
 }
 
+/** The harness core config mirrors the fake runtime's model defaults through the configured path. */
+const coreConfigWithDefaultModel = {
+  agents: { defaults: { model: { primary: "together/Qwen/Qwen2.5-7B-Instruct-Turbo" } } },
+} as OpenClawConfig;
+
 async function runGenerateVoiceResponse(
   payloads: ReplyPayload[],
   overrides: Partial<VoiceResponseParams> & { runtime?: AgentRuntime } = {},
@@ -120,7 +126,7 @@ async function runGenerateVoiceResponse(
   const userMessage = params.userMessage ?? "hello there";
   const result = await generateVoiceResponse({
     voiceConfig: voiceConfig(),
-    coreConfig: {},
+    coreConfig: coreConfigWithDefaultModel,
     agentRuntime: runtime ?? createAgentRuntime(payloads).runtime,
     callId: "call-123",
     agentId: "main",
@@ -269,10 +275,8 @@ describe("generateVoiceResponse", () => {
   });
 
   it("delivers a completed reply block before the embedded run settles", async () => {
-    let finishRun: (value: ReturnType<typeof agentResult>) => void = () => {};
-    const runFinished = new Promise<ReturnType<typeof agentResult>>((resolve) => {
-      finishRun = resolve;
-    });
+    const { promise: runFinished, resolve: finishRun } =
+      createDeferred<ReturnType<typeof agentResult>>();
     const { runtime, runEmbeddedAgent } = createAgentRuntime([]);
     runEmbeddedAgent.mockImplementationOnce(async (args: EmbeddedAgentArgs) => {
       await args.onBlockReply?.({ text: '{"spoken":"Already ready."}' });
@@ -282,10 +286,7 @@ describe("generateVoiceResponse", () => {
       expect(await args.resolveReplyDelivery?.(1)).toBe("missing");
       return await runFinished;
     });
-    let reportEarlyDelivery: () => void = () => {};
-    const earlyDeliveryStarted = new Promise<void>((resolve) => {
-      reportEarlyDelivery = resolve;
-    });
+    const { promise: earlyDeliveryStarted, resolve: reportEarlyDelivery } = createDeferred<void>();
     const onEarlyText = vi.fn(async () => {
       reportEarlyDelivery();
       return true;
@@ -305,10 +306,7 @@ describe("generateVoiceResponse", () => {
     const { runtime } = createAgentRuntime([], {
       blockReplyPayloads: [{ text: '{"spoken":"No duplicate."}' }],
     });
-    let finishDelivery: (delivered: boolean) => void = () => {};
-    const deliveryFinished = new Promise<boolean>((resolve) => {
-      finishDelivery = resolve;
-    });
+    const { promise: deliveryFinished, resolve: finishDelivery } = createDeferred<boolean>();
     const onEarlyText = vi.fn(async () => await deliveryFinished);
     let responseSettled = false;
 
@@ -410,6 +408,47 @@ describe("generateVoiceResponse", () => {
     ]);
 
     expect(result.text).toBe("Sounds good. I can help with the next step whenever you are ready.");
+  });
+
+  it("runs the call agent's configured model when responseModel is unset", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Configured model answers."}' },
+    ]);
+
+    const { result } = await runGenerateVoiceResponse([], {
+      runtime,
+      coreConfig: {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-5-5" } } },
+      } as OpenClawConfig,
+    });
+
+    expect(result.text).toBe("Configured model answers.");
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+    });
+  });
+
+  it("runs the agent-specific model over the global default when responseModel is unset", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Agent model answers."}' },
+    ]);
+
+    const { result } = await runGenerateVoiceResponse([], {
+      runtime,
+      coreConfig: {
+        agents: {
+          entries: { main: { model: "anthropic/claude-opus-5-5" } },
+          defaults: { model: { primary: "openai/gpt-5.4" } },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.text).toBe("Agent model answers.");
+    expect(requireEmbeddedAgentArgs(runEmbeddedAgent)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-5-5",
+    });
   });
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {

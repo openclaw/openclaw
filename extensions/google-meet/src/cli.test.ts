@@ -199,6 +199,49 @@ it("can prove Google Meet API create access", async () => {
   });
 });
 
+it.each([
+  ["oauth-token", "https://oauth2.googleapis.com/token"],
+  ["meet-spaces-get", "https://meet.googleapis.com/v2/spaces/existing"],
+  ["meet-spaces-create", "https://meet.googleapis.com/v2/spaces"],
+])("reports and redacts %s failures without losing other checks", async (id, failedUrl) => {
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url === failedUrl) {
+      throw new Error(
+        "access_token=fixture-access refresh_token=fixture-refresh client_secret=fixture-secret",
+      );
+    }
+    return cli.jsonResponse(
+      url === "https://oauth2.googleapis.com/token"
+        ? { access_token: "fixture-access", expires_in: 3600, token_type: "Bearer" }
+        : { name: "spaces/fixture", meetingUri: MEET_URL },
+    );
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  await run(["doctor", "--oauth", "--meeting", "spaces/existing", "--create-space", "--json"], {
+    config: { oauth: { clientId: "fixture-client", refreshToken: "fixture-refresh" } },
+  });
+  const report = json();
+  expect(report).toMatchObject({
+    ok: false,
+    configured: true,
+    checks: expect.arrayContaining([
+      {
+        id,
+        ok: false,
+        message:
+          id === "oauth-token"
+            ? "Google Meet OAuth refresh transport failed"
+            : "access_token=[redacted] refresh_token=[redacted] client_secret=[redacted]",
+      },
+    ]),
+  });
+  expect(report.checks).toHaveLength(id === "oauth-token" ? 2 : 4);
+  expect(fetchMock).toHaveBeenCalledTimes(id === "oauth-token" ? 1 : 3);
+  for (const secret of ["fixture-access", "fixture-refresh", "fixture-secret"]) {
+    expect(output()).not.toContain(secret);
+  }
+});
+
 it("recovers and summarizes an existing Meet tab", async () => {
   const message = "Admit the OpenClaw browser participant in Google Meet.";
   await run(["recover-tab"], {

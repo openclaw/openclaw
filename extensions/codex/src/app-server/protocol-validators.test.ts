@@ -218,4 +218,21 @@ describe("generated response resources", () => {
       assertCodexTurnStartResponse({ turn: { ...turn(12), status: "inProgress" } }),
     ).toThrow("Invalid Codex app-server");
   });
+
+  it("preserves closed question records in native turn responses", () => {
+    const question = { title: "Continue?", options: ["Yes", "No"] };
+    const item = {
+      id: "item-1",
+      type: "agentMessage",
+      text: "Choose an option.",
+      questions: [question],
+    };
+    const response = { turn: { id: "turn-1", status: "inProgress", items: [item] } };
+    expect(assertCodexTurnStartResponse(response)).toBe(response);
+    expect(() =>
+      assertCodexTurnStartResponse({
+        turn: { ...response.turn, items: [{ ...item, questions: [{ ...question, extra: true }] }] },
+      }),
+    ).toThrow("Invalid Codex app-server");
+  });
 });

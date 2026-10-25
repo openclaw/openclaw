@@ -720,6 +720,6 @@ export async function reloadGatewayPlugins(
       recovery.unavailablePluginIds,
       restartDrainSignal.aborted ? undefined : log.error,
     );
-    recovery.dispose();
+    await recovery.dispose();
   }
 }

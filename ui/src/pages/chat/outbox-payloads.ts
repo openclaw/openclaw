@@ -18,10 +18,7 @@ import { captureDurableChatAttachments } from "./durable-composer-persistence.ts
 type Host = ChatComposerScope & { sessionKey?: string };
 type PayloadUpdate = Pick<ChatQueueItem, "attachments" | "attachmentPayload"> & {
   attachmentStorageError?: undefined;
-} & (
-    | { sendState: "unconfirmed" | "held"; sendError: string }
-    | { sendState?: never; sendError?: never }
-  );
+};
 type PayloadResult =
   | { status: "ready"; update: PayloadUpdate }
   | { status: "failed"; reason: OutboxPayloadFailure };
@@ -33,19 +30,15 @@ export function outboxPayloadError(reason: OutboxPayloadFailure): string {
 }
 
 export function failOutboxPayload(item: ChatQueueItem, reason: OutboxPayloadFailure) {
-  const attempted =
-    (item.sendAttempts ?? 0) > 0 ||
-    item.sendRequestStartedAtMs !== undefined ||
-    item.sendState === "unconfirmed";
+  const awaitingDelivery =
+    item.sendState !== "failed" &&
+    ((item.sendAttempts ?? 0) > 0 || item.sendRequestStartedAtMs !== undefined);
   return {
     ...item,
     attachmentStorageError: reason,
+    // Missing local bytes cannot settle an earlier transport attempt or release its FIFO slot.
     sendState:
-      item.sendState === "held"
-        ? ("held" as const)
-        : attempted
-          ? ("unconfirmed" as const)
-          : ("failed" as const),
+      item.sendState === "held" || awaitingDelivery ? ("held" as const) : ("failed" as const),
     sendError: outboxPayloadError(reason),
   };
 }
@@ -160,15 +153,13 @@ async function preparePayload(
           await removeOutboxPayloads([copy.value]);
           return { status: "failed", reason: "unavailable" };
         }
-        // A duplicate tab carries the same submission, never a fresh send. It
-        // owns its copied bytes, but needs explicit review before retrying.
+        // A duplicate tab keeps the original submission ID; server admission
+        // deduplicates its retry while each tab owns its attachment bytes.
         return {
           status: "ready",
           update: {
             ...update,
             attachmentPayload: copy.value,
-            sendState: item.sendState === "held" ? "held" : "unconfirmed",
-            sendError: t("chat.sendErrors.outboxPayloadCopied"),
           },
         };
       }

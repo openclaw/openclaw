@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
@@ -15,6 +15,7 @@ import {
   resolveDirectStoredModelOverride,
   resolveStoredModelOverride,
   resolveStoredModelOverrideAsync,
+  resolveStoredModelOverrideCore,
 } from "./stored-model-overrides.js";
 
 const openai = { provider: "openai", model: "gpt-5.4" };
@@ -249,6 +250,36 @@ describe("stored model overrides", () => {
       sessionStore: { [rootKey]: storedEntry(parent) },
     });
   }
+
+  it.each([
+    ["sync", resolveStoredModelOverrideCore],
+    ["async", resolveStoredModelOverrideAsync],
+  ] as const)("does not load a parent for a resolved %s choice", async (_name, resolve) => {
+    const loadSessionEntry = vi.fn(() => {
+      throw new Error("resolved choices must not load a parent");
+    });
+    for (const [sessionEntry, expected] of [
+      [staleDefault, null],
+      [
+        storedEntry(userPin),
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          source: "session",
+          routeResolution: "raw",
+        },
+      ],
+    ] as const) {
+      const result = await resolve({
+        defaultProvider: "openai",
+        sessionEntry,
+        parentSessionKey: parentKey,
+        loadSessionEntry,
+      });
+      expect(result).toEqual(expected);
+    }
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+  });
 
   it("recovers resolved provenance for legacy auto-fallback overrides", () => {
     expect(

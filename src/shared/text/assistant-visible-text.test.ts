@@ -10,6 +10,7 @@ import {
   stripToolCallXmlTags,
   type AssistantVisibleTextSanitizerProfile,
 } from "./assistant-visible-text.js";
+import * as codeRegions from "./code-ranges.js";
 import { createTextProjection, type TextFilter } from "./text-projection.js";
 
 function expectXml(input: string, expected = input) {
@@ -53,6 +54,21 @@ it("keeps an invisible stream pending until visible text arrives and honors repl
   expect(stream.append("\u200b")).toEqual({ text: "", delta: "" });
   expect(stream.append("👩‍💻")).toEqual({ text: "\u200b👩‍💻", delta: "\u200b👩‍💻" });
   expect(stream.replace("\u2060")).toEqual({ text: "", delta: null });
+});
+
+it("keeps plain-tool code protection independent across interleaved streams and replacements", () => {
+  const literal = createTextProjection([plainToolCallTextFilter]);
+  const hidden = createTextProjection([plainToolCallTextFilter]);
+  const opening = "```text\n[tool:read] ";
+  literal.append(opening);
+  hidden.append("Before\n[tool:read] ");
+  const payload = "{}\n";
+  expect(literal.append(payload).text).toBe(opening + payload);
+  expect(hidden.append(payload + "After").text).toBe("Before\nAfter");
+
+  expect(hidden.replace("[tool:read] {}\n").text).toBe("");
+  expect(literal.append("```\n").text).toBe(opening + payload + "```\n");
+  expect(hidden.append("Fresh").text).toBe("Fresh");
 });
 
 it.each([1, 7, 32])(
@@ -256,6 +272,21 @@ describe("sanitizeAssistantVisibleText", () => {
 describe("assistantTraceTextFilter streamed projection", () => {
   const prose = "An ordinary explanation continues with a function call and a tool call.\n";
   const code = 'const value = { label: "example", nested: { count: 42 } };\n';
+  it("skips line projection when batch text has no trace head", () => {
+    const source = (prose + "```ts\n" + code + "```\n").repeat(64);
+    const project = vi.spyOn(codeRegions, "stripLinesOutsideCode");
+    try {
+      expect(assistantTraceTextFilter.transform(source)).toBe(source);
+      expect(project).not.toHaveBeenCalled();
+      expect(assistantTraceTextFilter.transform(source + "\nTOOL_CALL\t= hidden\nDone.")).toBe(
+        source + "\nDone.",
+      );
+      expect(project).toHaveBeenCalled();
+    } finally {
+      project.mockRestore();
+    }
+  });
+
   it.each([
     ["a real trace head", "", prose, "", true],
     ["a citation paragraph", "See [1] and use `foo`.\n\n", prose, "", true],

@@ -119,6 +119,10 @@ function isInert(target: Element): boolean {
   return false;
 }
 
+function isRadioInput(element: HTMLElement): element is HTMLInputElement {
+  return element.localName === "input" && element.matches("[type=radio i]");
+}
+
 type ModalPolicy = {
   request(open: boolean): void;
   setReturnFocusTarget(target: HTMLElement | null): void;
@@ -411,13 +415,12 @@ function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
     if (isHtmlElement(event.target) && isFocusGuard(event.target)) {
       const eligible = [...tabbableElements(dialog.children)];
       const tabbable = eligible.filter((element) => {
-        if (!(element instanceof HTMLInputElement) || element.type !== "radio" || !element.name) {
+        if (!isRadioInput(element) || !element.name) {
           return true;
         }
         const group = eligible.filter(
           (candidate): candidate is HTMLInputElement =>
-            candidate instanceof HTMLInputElement &&
-            candidate.type === "radio" &&
+            isRadioInput(candidate) &&
             candidate.name === element.name &&
             candidate.form === element.form &&
             candidate.getRootNode() === element.getRootNode(),

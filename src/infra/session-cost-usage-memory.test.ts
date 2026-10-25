@@ -343,19 +343,49 @@ describe("actor memory usage", () => {
     },
   );
 
-  it("reports publication failure while keeping the refreshed usage rollup", async () => {
-    const { append, refresh, report } = await fixture();
-    await append(5);
+  it("releases a failed refresh for another session while keeping the committed rollup", async () => {
+    const first = await fixture();
+    const second = await fixture(
+      {},
+      {
+        sessionKey: "agent:main:dashboard:incognito-waiting-detail",
+        sessionId: "waiting-detail",
+      },
+    );
+    await first.append(5);
+    await second.append(8);
     const stop = failSessionActorMemoryPublication(sessionKey);
+    let waiting: ReturnType<typeof runSessionActorUsage> | undefined;
     try {
-      await expect(refresh()).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
+      const refreshing = runUsage(first.binding, {
+        kind: "refresh",
+        pricingFingerprint: "fixture",
+        sessionFiles: [first.sessionFile],
+      });
+      waiting = runSessionActorUsage(
+        second.binding,
+        {
+          kind: "refresh",
+          pricingFingerprint: "fixture",
+          sessionFiles: [second.sessionFile],
+        },
+        () => undefined,
+        true,
+      );
+      await expect(refreshing).rejects.toMatchObject({ name: "SessionActorStorageCommittedError" });
+      await expect(waiting).resolves.toEqual({ kind: "refresh", changed: true });
     } finally {
       stop();
+      await Promise.allSettled([waiting]);
     }
-    expect(await refresh()).toEqual({ kind: "refresh", changed: false });
-    expect(await report()).toMatchObject({
+    expect(await first.refresh()).toEqual({ kind: "refresh", changed: false });
+    expect(await first.report()).toMatchObject({
       kind: "sessions",
       summaries: [{ input: 5, output: 2 }],
+    });
+    expect(await second.report()).toMatchObject({
+      summaries: [{ totalTokens: 10 }],
+      cacheStatus: { status: "fresh" },
     });
   });
 

@@ -173,6 +173,30 @@ it("publishes changed properties synchronously before rendering and suppresses e
   await expectOutput(host, "next:0:false");
 });
 
+it("preserves enumerable declared props and their children value", async () => {
+  const DeclaredChildren = defineSolidBridge<{ label: string; children: string; count: number }>(
+    "openclaw-solid-declared-children-test",
+    (props) => (
+      <output>
+        {Object.entries(props)
+          .map(([key, value]) => `${key}=${value}`)
+          .join(",")}
+      </output>
+    ),
+    {
+      properties: {
+        label: { default: "initial" },
+        children: { default: "declared", attribute: false },
+        count: { default: 0 },
+      },
+    },
+  );
+  const host = await mountHost(new DeclaredChildren.Element());
+  await expectOutput(host, "label=initial,children=declared,count=0");
+  host.label = "updated";
+  await expectOutput(host, "label=updated,children=declared,count=0");
+});
+
 it("batches property bursts without invalidating unrelated Solid computations", async () => {
   const labels = vi.fn((value: string) => value);
   const counts = vi.fn((value: number) => value);

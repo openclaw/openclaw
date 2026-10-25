@@ -26,8 +26,7 @@ async function mountAgents(client: GatewayBrowserClient, agents: GatewayAgentRow
 describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", () => {
   it("shows the same mixed avatars in count-aware groups without a backing circle", async () => {
     await import("./app-sidebar.tsx");
-    const { renderSidebarAgentMenuSwitcher } = await import("./sidebar-agent-menu-switcher.tsx");
-    const { createMenuControls, Menu } = await import("./solid/menu.tsx");
+    const { renderSidebarAgentMenu } = await import("./app-sidebar-agent-menu.tsx");
     const image =
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR7sAAAAASUVORK5CYII=";
     const agents = Array.from({ length: 8 }, (_, index) => ({
@@ -46,29 +45,28 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     for (const count of [0, 1, 2, 3, 4, 5, 8]) {
       unmount?.();
       unmount = mountSolid(
-        () => {
-          const controls = createMenuControls();
-          return Menu({
-            id: `agent-menu-${count}`,
-            label: "Agents",
-            open: true,
-            controls,
-            items: renderSidebarAgentMenuSwitcher(
-              {
-                activeId: agents[0]!.id,
-                allAgentsScope: true,
-                openMode: "hover",
-                agents: agents.slice(0, count),
-                identities: new Map(),
-                resolveAvatarUrl: (url) => url,
-                avatarErrorHandler: () => () => {},
-                agentUnreadCount: () => 0,
-                onAgentSettings: () => {},
-              },
-              controls,
-            ),
-          });
-        },
+        () =>
+          renderSidebarAgentMenu({
+            activeId: agents[0]!.id,
+            openMode: "hover",
+            agents: agents.slice(0, count),
+            identities: new Map(),
+            resolveAvatarUrl: (url) => url,
+            avatarErrorHandler: () => () => {},
+            agentUnreadCount: () => 0,
+            position: { x: 0, top: 0 },
+            basePath: "",
+            rosterMode: true,
+            creationDisabledReason: null,
+            onShowAllAgents: () => {},
+            onCreateAgent: () => {},
+            onPointerEnter: () => {},
+            onPointerLeave: () => {},
+            onAfterShow: () => {},
+            onSwitchAgent: () => {},
+            onClose: () => {},
+            onNavigate: () => {},
+          }),
         { container: root },
       ).unmount;
       flush();
@@ -192,6 +190,12 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     expect(document.activeElement).toBe(settings);
     expect(settings.hasAttribute("title")).toBe(false);
     expect(getComputedStyle(settings).opacity).toBe("1");
+    const { registerEnglishCatalog } = await import("../lib/reactive/i18n.ts");
+    // A newly opened lazy view can install its catalog while this menu is focused.
+    registerEnglishCatalog(() => {});
+    await sidebar.updateComplete;
+    expect(query(tiles[2]!, ".sidebar-agent-menu__settings")).toBe(settings);
+    expect(document.activeElement).toBe(settings);
     await userEvent.keyboard("{ArrowDown}");
     expect(document.activeElement).toBe(tiles[3]);
     expect(getComputedStyle(settings).opacity).toBe("0");
@@ -224,8 +228,13 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
     await expect.poll(() => document.activeElement).toBe(all);
     expect(all?.getAttribute("aria-current")).toBe("true");
     await userEvent.keyboard("{ArrowDown}");
-    expect(document.activeElement).toBe(sidebar.querySelector('[data-value="agent:main"]'));
+    await expect
+      .poll(() => document.activeElement)
+      .toBe(sidebar.querySelector('[data-value="agent:main"]'));
     await userEvent.keyboard("{ArrowDown}");
+    await expect
+      .poll(() => document.activeElement)
+      .toBe(sidebar.querySelector('[data-value="agent:release"]'));
     await userEvent.tab();
     const releaseSettings = sidebar.querySelector<HTMLButtonElement>(
       '[data-value="agent:release"] .sidebar-agent-menu__settings',

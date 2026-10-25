@@ -78,7 +78,9 @@ describe("formatDocumentTitle", () => {
   });
 });
 
-it("keeps every navigation title and subtitle backed by an English translation", () => {
+it("keeps every navigation title and subtitle backed by an English translation", async () => {
+  const { registerRouteSubtitlesEnglish } = await import("./i18n/locales/en-route-subtitles.ts");
+  registerRouteSubtitlesEnglish();
   // Missing translations return the raw dotted key.
   const rawI18nKey = /^[a-z][a-zA-Z0-9]*\.[a-zA-Z]/;
   for (const routeId of ALL_ROUTES) {

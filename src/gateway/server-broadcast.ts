@@ -576,7 +576,7 @@ export function createGatewayBroadcaster(params: {
               ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
               : (frames.snapshot ??= frameBaseFor(payload));
       let frame: SerializedGatewayFrame | undefined;
-      let delivered: (() => void) | undefined;
+      let delivered: SessionEventProjection["delivered"];
       let presenceDelivery: ReturnType<typeof preparePresenceDelivery> | undefined;
       try {
         if (!sessionProjectionPrepared) {
@@ -710,7 +710,7 @@ export function createGatewayBroadcaster(params: {
       };
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
-        delivered?.();
+        delivered?.(c);
         state.socket.batchWrites?.();
         const wireBytes = state.socket.send(frame, { binary: false }, sent);
         if (presenceDelivery && !state.retired) {

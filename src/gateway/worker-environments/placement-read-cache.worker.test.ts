@@ -11,6 +11,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -161,18 +162,14 @@ describe("worker placement read cache", () => {
   });
 
   it("reuses the disk sweep inventory and observes committed placement transitions", async () => {
-    const runWorkspaceCommand = vi.fn(async () => ({
-      stdout: JSON.stringify({ availableBytes: "6000000000", totalBytes: "10000000000" }),
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-    }));
+    const runWorkspaceCommand = vi.fn(async () =>
+      createCommandResult({
+        stdout: JSON.stringify({ availableBytes: "6000000000", totalBytes: "10000000000" }),
+      }),
+    );
     const unexpected = async () => {
       throw new Error("unexpected workspace mutation during a disk probe");
     };
-    let nowMs = 1_000;
     const warn = vi.fn();
     const monitor = createWorkerPlacementDiskSpaceMonitor({
       placements: reader,
@@ -189,7 +186,6 @@ describe("worker placement read cache", () => {
       },
       runnerAvailability: { read: () => undefined, version: () => 0 },
       warn,
-      now: () => nowMs,
     });
     const unsubscribe = reader.subscribeChanges(() => monitor.invalidate());
     try {
@@ -214,7 +210,6 @@ describe("worker placement read cache", () => {
         to: "draining",
         expectedGeneration: active.generation,
       });
-      nowMs += 15 * 60_000;
       await monitor.sweep();
       expect(monitor.read(draining)).toBeUndefined();
       expect(runWorkspaceCommand).toHaveBeenCalledOnce();
@@ -297,8 +292,13 @@ describe("worker placement read cache", () => {
     unchanged.release();
     const changed = await reader.prepareMaintenancePlacements();
     expect(changed.placements).toEqual([remote]);
+    const callerSnapshot = changed.placements;
+    callerSnapshot[0]!.sessionKey = "caller-change";
+    callerSnapshot.length = 0;
+    expect(changed.placements).toEqual([remote]);
     changed.assertCurrent();
     changed.release();
+    expect(() => changed.placements).toThrow();
     expect(
       reads.mock.calls.filter(([, command]) => command.type === "workers.placementPreservation"),
     ).toHaveLength(1);

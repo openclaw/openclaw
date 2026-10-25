@@ -299,10 +299,20 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     );
   });
 
-  it(
-    "correlates concurrent caretaker replies with their original requests",
-    withFixturePage(async (page) => {
+  describe("Gateway fixture contracts", () => {
+    // These RPC contracts share one mounted preview; UI flows keep fresh pages.
+    let page: Page;
+
+    beforeAll(async () => {
+      page = await browser.newPage();
       await openPreviewChat(page);
+    });
+
+    afterAll(async () => {
+      await page?.close();
+    });
+
+    it("correlates concurrent caretaker replies with their original requests", async () => {
       const replies = await requestPreviewGateway(page, [
         { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
         { method: "openclaw.chat", params: { sessionId: "welcome" } },
@@ -311,33 +321,35 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         { sessionId: "delayed", reply: expect.stringContaining("demo turn 0") },
         { sessionId: "welcome", reply: expect.stringContaining("system caretaker") },
       ]);
-    }),
-  );
+    });
 
-  it(
-    "keeps renamed preview groups authoritative across reads and reloads",
-    withFixturePage(async (page) => {
-      await openPreviewChat(page);
-      await requestPreviewGateway(page, [
-        { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
+    it("keeps generated search-session metadata in the canonical fixture catalog", async () => {
+      const replies = await requestPreviewGateway(
+        page,
+        ["telegram", "claude"].map((search) => ({
+          method: "sessions.list",
+          params: { search },
+        })),
+      );
+      expect(replies).toMatchObject([
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5-mini" }),
+          ]),
+        },
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              label: "Model search result 001",
+              model: "claude-sonnet-4-6",
+            }),
+          ]),
+        },
       ]);
-      for (const reload of [false, true]) {
-        if (reload) {
-          await page.reload();
-          await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-        }
-        expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
-          { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
-        ]);
-      }
-    }),
-  );
+    });
 
-  it(
-    "serves preview session agent:main:tax-research through both chat entry points",
-    withFixturePage(async (page) => {
+    it("serves preview session agent:main:tax-research through both chat entry points", async () => {
       const sessionKey = "agent:main:tax-research";
-      await openPreviewChat(page);
       const sampledAt = 1_790_598_431_356;
       await page.clock.setFixedTime(sampledAt);
       const [description] = (await requestPreviewGateway(page, [
@@ -384,6 +396,25 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           snapshotAt: sampledAt + 2,
         },
       });
+    });
+  });
+
+  it(
+    "keeps renamed preview groups authoritative across reads and reloads",
+    withFixturePage(async (page) => {
+      await openPreviewChat(page);
+      await requestPreviewGateway(page, [
+        { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
+      ]);
+      for (const reload of [false, true]) {
+        if (reload) {
+          await page.reload();
+          await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        }
+        expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
+          { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
+        ]);
+      }
     }),
   );
 
@@ -402,35 +433,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         },
       ]);
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
-    }),
-  );
-
-  it(
-    "keeps generated search-session metadata in the canonical fixture catalog",
-    withFixturePage(async (page) => {
-      await openPreviewChat(page);
-      const replies = await requestPreviewGateway(
-        page,
-        ["telegram", "claude"].map((search) => ({
-          method: "sessions.list",
-          params: { search },
-        })),
-      );
-      expect(replies).toMatchObject([
-        {
-          sessions: expect.arrayContaining([
-            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5-mini" }),
-          ]),
-        },
-        {
-          sessions: expect.arrayContaining([
-            expect.objectContaining({
-              label: "Model search result 001",
-              model: "claude-sonnet-4-6",
-            }),
-          ]),
-        },
-      ]);
     }),
   );
 

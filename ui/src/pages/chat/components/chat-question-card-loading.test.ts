@@ -153,8 +153,9 @@ it("defers controls, retries loading, and mounts only the current connected requ
   await removedCard.updateComplete;
   removed.remove();
 
+  const ready = questionPanelIn(container);
   retryLoad.resolve();
-  const panel = await questionPanelIn(container);
+  const panel = await ready;
   expect(load).toHaveBeenCalledTimes(3);
   expect(card.textContent).toContain("Current question");
   expect(card.textContent).not.toContain("Old question");

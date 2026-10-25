@@ -1,10 +1,11 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
 import { queryObjects } from "node:v8";
+import { emitModelTransportError } from "@openclaw/ai/diagnostics";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as utilityCompletion from "../agents/utility-completion.js";
 import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
@@ -40,8 +41,6 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { sessionActivitySummaryHandlers } from "./server-methods/session-activity-summary.js";
-import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
   createSessionActivitySummaries,
   type SessionActivitySummaryService,
@@ -51,6 +50,8 @@ import {
   createActivityRecapSessionFixture,
   messages,
   preparedActivityRecapModel as prepared,
+  recapRpc as rpc,
+  seedRecapConversation as seedConversation,
   scope,
   target,
   terminal,
@@ -129,27 +130,12 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     };
   };
 
-  const seedConversation = async (
-    session: typeof scope,
-    content: string,
-    entry: Partial<SessionEntry> = {},
-    eventId = `event-${session.sessionKey}`,
-  ) => {
-    await upsertSessionEntryCore(session, { sessionId: session.sessionId, updatedAt: 1, ...entry });
-    await persistSessionTranscriptTurn(session, {
-      messages: [{ eventId, message: { role: "user", content } }],
-      touchSessionEntry: false,
-    });
-  };
-
   const transcript = (
     turns: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"],
     session = scope,
   ) => persistSessionTranscriptTurn(session, { messages: turns, touchSessionEntry: false });
   const currentStore = () =>
     resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId });
-  const notifyTranscript = () =>
-    service.handleTranscript({ target: scope, lifecycleRevision: "lifecycle-1" });
   const summary = (coveredMessages: number, text = completedText) => ({ text, coveredMessages });
   const observeReads = () => {
     const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
@@ -174,28 +160,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       opts: { includeActivitySummary: true },
       ...extra,
     });
-  const rpc = (
-    method: "sessions.describe" | "sessions.activitySummary.ensure",
-    context: ReturnType<typeof createDirectChatContext>,
-  ) => {
-    const respond = vi.fn();
-    const handler =
-      method === "sessions.describe"
-        ? sessionByKeyReadHandlers[method]!
-        : sessionActivitySummaryHandlers[method]!;
-    return {
-      respond,
-      invoke: (params: Record<string, unknown>) =>
-        handler({
-          req: { type: "req", id: "recap", method, params },
-          params,
-          context,
-          client: null,
-          respond,
-          isWebchatConnect: () => false,
-        }),
-    };
-  };
 
   const publication = (ready = () => view()?.state === "current") => {
     const published = createDeferred();
@@ -235,6 +199,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     testState = await createActivityRecapSessionFixture(cfg);
     complete.mockReset().mockImplementation(async () => result(completedText));
     prepare.mockReset().mockImplementation(async () => prepared);
+    vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth").mockResolvedValue(true);
     vi.spyOn(observerModel, "defaultPrepareModel").mockImplementation(prepare);
     vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
     changed.mockReset();
@@ -413,8 +378,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await messages(1, 1);
     const latestWatermark = readSessionTranscriptWatermark(scope);
     expect(latestWatermark.maxSeq).not.toBe(previousWatermark.maxSeq);
-    notifyTranscript();
-    await describeSession("updating", "Only the request is recorded.");
+    await describeSession("stale", "Only the request is recorded.");
 
     terminal(service);
     await withinTest(started.promise, testSignal);
@@ -459,7 +423,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(read()?.activitySummary).toMatchObject(summary(2));
   });
 
-  it("uses committed resident facts for recap notifications and current-authority checks", async () => {
+  it("uses committed resident facts for recap authority checks", async () => {
     await messages(2);
     const prompt = "Saved recap prompt marker. ".repeat(40_000);
     await patchSessionEntryCore(scope, () => ({ skillsSnapshot: { prompt, skills: [] } }));
@@ -471,7 +435,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const queries = observeReads();
     const parse = observeParsing();
     for (let index = 0; index < 50; index += 1) {
-      notifyTranscript();
       complete.mock.calls[0]![0].assertCurrent?.();
     }
     expect(queries.queries).toHaveLength(0);
@@ -498,8 +461,10 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       /transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives/i;
     expect(settlementReads.queries.some((sql) => transcriptSql.test(sql))).toBe(false);
     settlementReads.restore();
-    expect(view()?.state).toBe("updating");
-    await awaitPublication(() => terminal(service));
+    expect(view()?.state).toBe("current");
+    const currentRefresh = new AsyncWorkScope();
+    await currentRefresh.track(() => terminal(service));
+    await currentRefresh.drain();
     expect(read()).toMatchObject({
       sessionId: before.sessionId,
       lifecycleRevision: before.lifecycleRevision,
@@ -511,16 +476,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   });
 
   it("refreshes new work, catches up after archiving, and makes no calls for idle metadata changes", async () => {
-    class CompletedTurnContext {
-      readonly target = { ...scope };
-    }
-    const caller = new AsyncLocalStorage<CompletedTurnContext>();
-    const notifyTranscriptFromTurn = () => {
-      const context = new CompletedTurnContext();
-      caller.run(context, () =>
-        service.handleTranscript({ target: context.target, lifecycleRevision: "lifecycle-1" }),
-      );
-    };
     await messages(2);
     const initialWork = new AsyncWorkScope();
     await initialWork.track(() => ensureRecap(target));
@@ -539,14 +494,11 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(changed).not.toHaveBeenCalled();
     expectProgress("current", 1);
     await messages(2, 2);
-    notifyTranscriptFromTurn();
-    expect(queryObjects(CompletedTurnContext)).toBe(0);
-    expectProgress("updating", 1);
+    expectProgress("stale", 1);
     await awaitPublication(() => terminal(service));
     expect(read()?.activitySummary?.coveredMessages).toBe(4);
     expect(complete).toHaveBeenCalledTimes(2);
     expect(read()?.archivedAt).toBeDefined();
-    expect(queryObjects(CompletedTurnContext)).toBe(0);
   });
 
   it.each(["reset", "delete"] as const)(
@@ -848,7 +800,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await seedConversation(aliasScope, "Prepare deployment", {}, "alias-request");
     const { completion, start } = holdCompletion();
     const aliasEvent = { sessionKey: "main", agentId: "main", sessionId: aliasScope.sessionId };
-    service.handleTranscript(aliasEvent);
     await start(aliasTarget);
     expect(complete).toHaveBeenCalledTimes(1);
     const row = await list({ main: read(aliasScope)! }, { fixtureAgentId: "main" });
@@ -871,11 +822,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       ],
       aliasScope,
     );
-    const before = changed.mock.calls.length;
-    for (let index = 0; index < 10; index += 1) {
-      service.handleTranscript(aliasEvent);
-    }
-    expect(changed.mock.calls.length - before).toBe(1);
     registerAgentRunContext("recap-context-run", aliasEvent);
     service.handleEvent({
       runId: "recap-context-run",
@@ -928,7 +874,14 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       coveredMessages: 3,
       text: "Recap from the relocated store.",
     });
-    expect(complete.mock.calls[1]![0].abortSignal?.aborted).toBe(true);
+    const abortSignal = complete.mock.calls[1]![0].abortSignal;
+    expect(abortSignal?.aborted).toBe(true);
+    const transportLog = { info: vi.fn(), debug: vi.fn(), warn: vi.fn() };
+    emitModelTransportError(transportLog, "model-fetch", "activity recap", abortSignal);
+    expect(transportLog.warn).not.toHaveBeenCalled();
+    expect(transportLog.debug.mock.calls.concat(transportLog.info.mock.calls)).toEqual([
+      ["[model-fetch] aborted activity recap"],
+    ]);
     oldCompletion.resolve(result("Outdated store result."));
     await service.dispose();
     expect(read(relocatedScope)?.activitySummary?.text).toBe("Recap from the relocated store.");

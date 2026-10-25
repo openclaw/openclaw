@@ -291,12 +291,12 @@ describe("LogbookStore", () => {
     // The future-version file must reach its first managed admission here.
     fs.renameSync(databasePath, `${databasePath}.seed`);
     fs.copyFileSync(`${databasePath}.seed`, databasePath);
-    execSql(databasePath, "PRAGMA user_version = 2");
+    execSql(databasePath, "PRAGMA user_version = 3");
 
     await expect(LogbookStore.open(dir, workerModuleUrl)).rejects.toThrow(
-      "Logbook database uses newer schema version 2; this build supports 1",
+      "Logbook database uses newer schema version 3; this build supports 2",
     );
-    expect(readRows(databasePath, "PRAGMA user_version")).toEqual([{ user_version: 2 }]);
+    expect(readRows(databasePath, "PRAGMA user_version")).toEqual([{ user_version: 3 }]);
     expect(readRows(databasePath, "SELECT day, text FROM standups")).toEqual([
       { day: DAY, text: "Preserved future-version fixture" },
     ]);

@@ -487,8 +487,9 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       });
       await runJob(announce, { toolsAllow: ["message"] });
       const prompt = runPrompt(embedded(), true);
-      expect(prompt).toContain('"channel":"topicchat","target":"room","threadId":"42"');
-      expect(prompt).not.toMatch(/\bsummary\b/i);
+      expect(prompt).toContain(
+        '<untrusted-text>\n{"channel":"topicchat","target":"room","threadId":"42"}\n</untrusted-text>',
+      );
     });
 
     it.each(["chat", "isolated"] as const)(

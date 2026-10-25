@@ -14,6 +14,7 @@ import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 import baseStyles from "../../styles/base.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
+import componentStyles from "../../styles/components.css?inline";
 
 const imageData =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
@@ -33,7 +34,7 @@ const left = (row: Element, selector: string) =>
 
 beforeEach(() => {
   styles = document.createElement("style");
-  styles.textContent = baseStyles + queueStyles;
+  styles.textContent = baseStyles + componentStyles + queueStyles;
   document.head.append(styles);
   container = document.createElement("div");
   container.className = "agent-chat__composer-shell";

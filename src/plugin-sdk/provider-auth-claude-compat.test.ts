@@ -2,7 +2,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockClaudeManagedSettings } from "../../test/helpers/claude-managed-settings.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   attestClaudeNativeLoginOwner,
@@ -58,6 +59,15 @@ async function attest(
 ) {
   return (await attestClaudeNativeLoginOwner({ fetchFn, ...options })).owner;
 }
+
+const { realpathSync } = fs;
+let managedSettingsDir: string;
+let managedFixturePath: ReturnType<typeof mockClaudeManagedSettings>;
+
+beforeEach(() => {
+  managedSettingsDir = tempDirs.make("openclaw-claude-managed-");
+  managedFixturePath = mockClaudeManagedSettings(managedSettingsDir);
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -251,6 +261,42 @@ describe("attestClaudeNativeLoginOwner", () => {
         JSON.stringify({ env: { CLAUDE_CODE_USE_BEDROCK: "synthetic" } }),
       );
       expect(await attest({ platform: "linux", env })).toBeUndefined();
+    });
+
+    it("has no owner when Claude's managed settings or a drop-in select another login", async () => {
+      const configDir = tempDirs.make("openclaw-claude-config-");
+      loginIn(configDir, "uuid-a");
+      const options = { platform: "linux" as const, env: { CLAUDE_CONFIG_DIR: configDir } };
+      const writeManaged = (file: string, value: unknown) => {
+        fs.mkdirSync(path.dirname(path.join(managedSettingsDir, file)), { recursive: true });
+        fs.writeFileSync(path.join(managedSettingsDir, file), JSON.stringify(value));
+      };
+      // Claude skips hidden and non-JSON drop-ins.
+      writeManaged("managed-settings.json", { env: { DISABLE_TELEMETRY: "1" } });
+      writeManaged("managed-settings.d/.10-auth.json", { apiKeyHelper: "echo synthetic" });
+      writeManaged("managed-settings.d/10-auth.txt", { env: { ANTHROPIC_API_KEY: "synthetic" } });
+      expect(await attest(options)).toBe("uuid:uuid-a");
+      writeManaged("managed-settings.json", { apiKeyHelper: "echo synthetic" });
+      expect(readClaudeNativeLoginOwner(options)).toBeUndefined();
+      expect(await attest(options)).toBeUndefined();
+      writeManaged("managed-settings.json", {});
+      writeManaged("managed-settings.d/20-auth.json", { env: { ANTHROPIC_API_KEY: "synthetic" } });
+      expect(await attest(options)).toBeUndefined();
+    });
+
+    it("keeps the owner when a managed settings file cannot be resolved", async () => {
+      const configDir = tempDirs.make("openclaw-claude-config-");
+      loginIn(configDir, "uuid-a");
+      const options = { platform: "linux" as const, env: { CLAUDE_CONFIG_DIR: configDir } };
+      expect(await attest(options)).toBe("uuid:uuid-a");
+      vi.mocked(fs.realpathSync).mockImplementation(((target: fs.PathLike) => {
+        if (managedFixturePath(target)) {
+          throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+        }
+        return realpathSync(target);
+      }) as typeof fs.realpathSync);
+      expect(readClaudeNativeLoginOwner(options)).toBe("uuid:uuid-a");
+      expect(await attest(options)).toBe("uuid:uuid-a");
     });
 
     it.each([

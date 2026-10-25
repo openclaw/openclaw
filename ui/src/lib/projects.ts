@@ -1,14 +1,11 @@
 import type { ProjectsListResult } from "../../../packages/gateway-protocol/src/index.js";
-import { parseProjectGitUrl } from "../../../src/projects/project-git-url.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import type { MarkdownGitHubRepositoryAliases } from "../components/markdown-github-repositories.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
 
 type ProjectCatalogSnapshot = {
   result: ProjectsListResult | null;
-  repositories: readonly MarkdownGitHubRepositoryAliases[];
   ready: boolean;
 };
 export type ProjectCatalog = {
@@ -21,59 +18,6 @@ export type ProjectCatalog = {
 
 const catalogs = new WeakMap<ApplicationGateway, ProjectCatalog>();
 
-/** Non-GitHub remote names are negative aliases only; they never supply link coordinates. */
-function unresolvedOriginBasename(origin: string | undefined): string | undefined {
-  if (!origin) {
-    return undefined;
-  }
-  // Mirror the sanitizer's host:path forms, including bracketed IPv6 and
-  // home-relative one-component paths. Local paths never supply aliases.
-  const scp = /^(?![A-Za-z]:[/\\])(?:\[[^\]]+\]|[^:@/\s]+):((?!\/\/)[^\s\\]+)$/u.exec(origin);
-  let pathname = scp?.[1];
-  try {
-    if (!pathname) {
-      const url = new URL(origin);
-      if (!url.hostname || url.username || url.password) {
-        return undefined;
-      }
-      pathname = url.pathname;
-    }
-    const segment = pathname.split("/").findLast(Boolean);
-    const name = segment
-      ? decodeURIComponent(segment)
-          .replace(/\.git$/iu, "")
-          .trim()
-      : "";
-    return name && !/[/\\\p{Cc}]/u.test(name) && name !== "." && name !== ".." ? name : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function projectGitHubRepositories(
-  projects: ProjectsListResult["projects"],
-): MarkdownGitHubRepositoryAliases[] {
-  return projects.map(({ displayName, originUrl }) => {
-    // projects.list removes Git usernames. Restore only known default GitHub shapes,
-    // never arbitrary credentials/hosts, paths, project IDs, or guessed owners.
-    const origin = originUrl
-      ?.replace(/^github\.com:/iu, "git@github.com:")
-      .replace(/^ssh:\/\/github\.com(?::22)?\//iu, "ssh://git@github.com/");
-    const parsed = origin ? parseProjectGitUrl(origin) : null;
-    const [owner, repo] = parsed ? new URL(parsed.url).pathname.slice(1, -4).split("/") : [];
-    if (owner && repo) {
-      return { owner, repo, aliases: [displayName] };
-    }
-    const basename = unresolvedOriginBasename(originUrl);
-    return {
-      aliases:
-        basename && basename.toLowerCase() !== displayName.toLowerCase()
-          ? [displayName, basename]
-          : [displayName],
-    };
-  });
-}
-
 export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog {
   const existing = catalogs.get(gateway);
   if (existing) {
@@ -81,7 +25,7 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
   }
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   const listeners = new Set<() => void>();
-  let snapshot: ProjectCatalogSnapshot = { result: null, repositories: [], ready: false };
+  let snapshot: ProjectCatalogSnapshot = { result: null, ready: false };
   let signature = "";
   let client = gateway.snapshot.client;
   let presentationKey = gatewayPresentationScope(gateway).key;
@@ -90,7 +34,7 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
   const retire = () => {
     connection.invalidate();
     pending = null;
-    snapshot = { result: null, repositories: [], ready: false };
+    snapshot = { result: null, ready: false };
   };
   const notify = () => listeners.forEach((listener) => listener());
   const synchronize = () => {
@@ -138,7 +82,7 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
       return Promise.resolve();
     }
     if (!canCallGatewayMethod(gateway.snapshot, "projects.list", "operator.read")) {
-      snapshot = { result: { projects: [] }, repositories: [], ready: true };
+      snapshot = { result: { projects: [] }, ready: true };
       notify();
       return Promise.resolve();
     }
@@ -152,7 +96,6 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
           }
           snapshot = {
             result,
-            repositories: projectGitHubRepositories(result.projects),
             ready: true,
           };
         },

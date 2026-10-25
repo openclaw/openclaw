@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { isLiveTestEnabled, readLiveTestConfig } from "openclaw/plugin-sdk/test-live";
 import { beforeAll, describe, expect, it } from "vitest";
+import { withPluginsEnabled } from "../test-support/generation-live-test-helpers.js";
 import plugin from "./index.js";
 import { isComfyCapabilityConfiguredAsync } from "./workflow-runtime.js";
 
@@ -16,20 +17,6 @@ type RegisteredMusicProvider = {
   generateMusic: Function;
   isConfiguredAsync?: Function;
 };
-
-function withPluginsEnabled<T>(cfg: T): T {
-  if (!cfg || typeof cfg !== "object") {
-    return cfg;
-  }
-  const record = cfg as Record<string, unknown>;
-  return {
-    ...record,
-    plugins: {
-      ...(record.plugins && typeof record.plugins === "object" ? record.plugins : {}),
-      enabled: true,
-    },
-  } as T;
-}
 
 function requireProvider<T extends { id: string }>(providers: T[], id: string): T {
   const provider = providers.find((entry) => entry.id === id);

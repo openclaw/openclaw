@@ -334,7 +334,6 @@ export function scheduleSessionMaintenance(
                             sessionKey,
                             runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
                             storePath: prepared.storePath,
-                            isHeartbeat: false,
                             replyOperation: operation,
                             abortSignal: operationSignal,
                           });
@@ -358,7 +357,6 @@ export function scheduleSessionMaintenance(
                             runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
                             storePath: prepared.storePath,
                             defaultModel: followupRun.run.model,
-                            isHeartbeat: false,
                             agentHarnessId: request.agentHarnessId,
                             abortSignal: operationSignal,
                             authorize: () => {

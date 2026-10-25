@@ -1,6 +1,6 @@
 import os from "node:os";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
-import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveServiceEntrypointIndex } from "./service-layout.js";
 import {
   hasGatewayServiceEnvironmentOverride,

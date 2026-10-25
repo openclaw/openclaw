@@ -17,7 +17,6 @@ import {
   managedStreamCleanupRegistrations,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
-  withTrustedEnvProxyGuardedFetchModeMock,
 } from "./provider-transport-fetch.test-harness.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
@@ -34,13 +33,39 @@ const streaming: RequestInit = {
 };
 const localModel = { ...model, provider: "local", baseUrl: "http://127.0.0.1:18000/v1" };
 
-function mockResponse(response: Response, release = vi.fn(async () => {})) {
+function mockResponse(
+  response: Response,
+  release = vi.fn(async () => {}),
+  refreshTimeout?: () => void,
+) {
   fetchWithSsrFGuardMock.mockResolvedValue({
     response,
     finalUrl: `${model.baseUrl}/responses`,
     release,
+    refreshTimeout,
   });
   return release;
+}
+
+function mockStream(
+  chunks: string[],
+  contentType?: string,
+  options: Parameters<typeof responseStream>[1] = {},
+) {
+  const source = responseStream(chunks, options);
+  const release = mockResponse(
+    new Response(source.stream, {
+      headers: contentType ? { "content-type": contentType } : undefined,
+    }),
+  );
+  return { ...source, release };
+}
+
+function privateNetworkPolicy(allowPrivateNetwork = false, trustConfiguredBaseUrlOrigin = true) {
+  resolveProviderRequestPolicyConfigMock.mockReturnValue({
+    allowPrivateNetwork,
+    trustConfiguredBaseUrlOrigin,
+  });
 }
 
 function responseStream(
@@ -131,19 +156,9 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it.each([
-    {
-      name: "caps model metadata",
-      timeout: undefined,
-      caller: false,
-      expected: MAX_TIMER_TIMEOUT_MS,
-    },
-    {
-      name: "combines an explicit timeout with caller abort",
-      timeout: 750,
-      caller: true,
-      expected: 750,
-    },
-  ])("$name for local startup and guarded fetch", async ({ timeout, caller, expected }) => {
+    ["caps model metadata", undefined, false, MAX_TIMER_TIMEOUT_MS],
+    ["combines an explicit timeout with caller abort", 750, true, 750],
+  ] as const)("%s for local startup and guarded fetch", async (_, timeout, caller, expected) => {
     const target = { ...localModel, requestTimeoutMs: Number.MAX_SAFE_INTEGER };
     const timeoutController = new AbortController();
     const callerController = new AbortController();
@@ -195,7 +210,6 @@ describe("buildGuardedModelFetch", () => {
       });
       expect(params.dispatcherPolicy).toEqual(dispatcherPolicy);
       expect(params.mode).toBe(explicit ? undefined : "trusted_env_proxy");
-      expect(withTrustedEnvProxyGuardedFetchModeMock).toHaveBeenCalledTimes(explicit ? 0 : 1);
     },
   );
 
@@ -209,15 +223,10 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it.each([
-    {
-      name: "configured origin",
-      trust: true,
-      port: 1234,
-      expected: { allowedOrigins: ["http://10.0.0.5:1234"] },
-    },
-    { name: "explicit private-network denial", trust: false, port: 1234, expected: undefined },
-    { name: "different port", trust: true, port: 4321, expected: undefined },
-  ])("limits private trust to $name", async ({ trust, port, expected }) => {
+    ["configured origin", true, 1234, { allowedOrigins: ["http://10.0.0.5:1234"] }],
+    ["explicit private-network denial", false, 1234, undefined],
+    ["different port", true, 4321, undefined],
+  ] as const)("limits private trust to %s", async (_, trust, port, expected) => {
     const target = { ...model, baseUrl: "http://10.0.0.5:1234/v1" };
     resolveProviderRequestPolicyConfigMock.mockReturnValue({
       allowPrivateNetwork: false,
@@ -235,19 +244,13 @@ describe("buildGuardedModelFetch", () => {
     "metadata-server.example",
     "instance-data.ec2.internal",
   ])("does not implicitly trust metadata endpoint %s", async (host) => {
-    resolveProviderRequestPolicyConfigMock.mockReturnValue({
-      allowPrivateNetwork: false,
-      trustConfiguredBaseUrlOrigin: true,
-    });
+    privateNetworkPolicy();
     await (await request({}, { ...model, baseUrl: `http://${host}/v1` })).text();
     expect(latestGuardedFetchParams().policy).toBeUndefined();
   });
 
   it("rejects implicit NAT64 trust and explains the operator opt-in", async () => {
-    resolveProviderRequestPolicyConfigMock.mockReturnValue({
-      allowPrivateNetwork: false,
-      trustConfiguredBaseUrlOrigin: true,
-    });
+    privateNetworkPolicy();
     fetchWithSsrFGuardMock.mockRejectedValue(new SsrFBlockedError("Blocked address"));
     await expect(
       request(
@@ -265,10 +268,7 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("uses only explicit private-network opt-in for NAT64 literals", async () => {
-    resolveProviderRequestPolicyConfigMock.mockReturnValue({
-      allowPrivateNetwork: true,
-      trustConfiguredBaseUrlOrigin: true,
-    });
+    privateNetworkPolicy(true);
     await (await request({}, { ...model, baseUrl: "http://[64:ff9b:1::8.8.8.8]:1234/v1" })).text();
     expect(latestGuardedFetchParams().policy).toEqual({ allowPrivateNetwork: true });
   });
@@ -290,7 +290,7 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("synthesizes split JSON without a content type into SDK-readable SSE", async () => {
-    mockResponse(new Response(responseStream(['{"ok"', ": true}"]).stream));
+    mockStream(['{"ok"', ": true}"]);
     const response = await request(streaming);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     await expect(parseSse(response)).resolves.toEqual([{ ok: true }]);
@@ -299,12 +299,7 @@ describe("buildGuardedModelFetch", () => {
   it.each([undefined, "application/json; charset=utf-8"])(
     "recognizes split SSE before EOF with content-type %s",
     async (contentType) => {
-      const source = responseStream(["d", "ata", ': {"ok": true}\n\n'], { open: true });
-      mockResponse(
-        new Response(source.stream, {
-          headers: contentType ? { "content-type": contentType } : undefined,
-        }),
-      );
+      const source = mockStream(["d", "ata", ': {"ok": true}\n\n'], contentType, { open: true });
       let response: Response;
       try {
         // Returning before close proves sniffing does not wait for the open stream's EOF.
@@ -334,8 +329,8 @@ describe("buildGuardedModelFetch", () => {
     const count = 5_000;
     const refreshTimeout = vi.fn();
     const payload = { text: "x".repeat(70 * 1024) };
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: new Response(
+    mockResponse(
+      new Response(
         responseStream([
           'data: {"ok":true}\n\n'.repeat(count),
           `data: ${JSON.stringify(payload)}`,
@@ -343,10 +338,9 @@ describe("buildGuardedModelFetch", () => {
         ]).stream,
         { headers: { "content-type": "text/event-stream" } },
       ),
-      finalUrl: `${model.baseUrl}/responses`,
-      release: vi.fn(async () => {}),
+      vi.fn(async () => {}),
       refreshTimeout,
-    });
+    );
     const items = await parseSse(await request());
     expect(items).toHaveLength(count + 1);
     expect(items.slice(0, count)).toEqual(Array.from({ length: count }, () => ({ ok: true })));
@@ -435,12 +429,7 @@ describe("buildGuardedModelFetch", () => {
       const cancel = vi.fn(async () => {
         throw new Error("upstream cancellation failed");
       });
-      const source = responseStream([body], { open: true, cancel });
-      const release = mockResponse(
-        new Response(source.stream, {
-          headers: { "content-type": contentType },
-        }),
-      );
+      const { release } = mockStream([body], contentType, { open: true, cancel });
       const response = await buildGuardedModelFetch(model, undefined, { onSseComment: vi.fn() })(
         `${model.baseUrl}/responses`,
         streaming,
@@ -469,12 +458,11 @@ describe("buildGuardedModelFetch", () => {
 });
 
 describe("buildGuardedModelFetch headers", () => {
-  const headerModel = makeProviderModelFixture<"openai-responses">({
-    id: "fixture-model",
+  const headerModel = {
+    ...model,
     provider: "openai",
-    api: "openai-responses",
     baseUrl: "https://api.openai.com/v1",
-  });
+  };
   const url = `${headerModel.baseUrl}/responses`;
   const egressHeaders = () => new Headers(fetchWithSsrFGuardMock.mock.lastCall?.[0]?.init?.headers);
 
@@ -539,28 +527,15 @@ describe("buildGuardedModelFetch headers", () => {
 });
 
 describe("buildGuardedModelFetch SSE readability", () => {
-  const completionModel = makeProviderModelFixture<"openai-completions">({
-    id: "fixture-model",
-    provider: "openrouter",
-    api: "openai-completions",
-    baseUrl: "https://openrouter.ai/api/v1",
-  });
+  const completionModel = { ...model, api: "openai-completions" as const };
   const url = `${completionModel.baseUrl}/chat/completions`;
-
-  function respond(chunks: string[], contentType?: string) {
-    return mockResponse(
-      new Response(responseStream(chunks).stream, {
-        headers: contentType ? { "content-type": contentType } : undefined,
-      }),
-    );
-  }
 
   installProviderTransportFetchTestHooks();
 
   it.each(["prepared HTML", "untyped HTML"])(
     "rejects %s instead of returning a successful stream",
     async (mode) => {
-      const release = respond(
+      const { release } = mockStream(
         ["<html>not the API</html>"],
         mode === "prepared HTML" ? "text/html" : undefined,
       );
@@ -590,12 +565,12 @@ describe("buildGuardedModelFetch SSE readability", () => {
     "observes comment lines without event separators on %s streams",
     async (mode) => {
       const chunks = [
-        "\uFEFF: keep",
+        "\uFEFF: 🦞 keep",
         "alive\r",
         "\n: second\n: third\r",
-        'event: ping\n\ndata: {"ok": true}\n\n',
+        '🦞: not a comment\nevent: ping\n\ndata: {"ok": true}\n\n',
       ];
-      respond(chunks, "text/event-stream");
+      mockStream(chunks, "text/event-stream");
       const target =
         mode === "official"
           ? { ...completionModel, provider: "openai", baseUrl: "https://api.openai.com/v1" }
@@ -619,18 +594,7 @@ describe("buildGuardedModelFetch SSE readability", () => {
 
   it.each([
     {
-      name: "official OpenAI event-only frames",
-      target: { ...completionModel, provider: "openai", baseUrl: "https://api.openai.com/v1" },
-      input: new Request("https://api.openai.com/v1/responses", { method: "POST" }),
-      init: undefined,
-      chunks: ['event: response.created\n\ndata: {"ok": true}\n\n'],
-      expected: 'event: response.created\n\ndata: {"ok": true}\n\n',
-    },
-    {
       name: "mixed chunked framing and multiline data, excluding blank keepalives",
-      target: completionModel,
-      input: url,
-      init: { method: "POST" },
       chunks: [
         "event: ping\ndata\ndata:\ndata: \t\uFEFF\u00A0\n\nData: ignored\n data: ignored\ndatabase: ignored\n\n",
         'data: {"ok"',
@@ -650,15 +614,12 @@ describe("buildGuardedModelFetch SSE readability", () => {
     },
     {
       name: "a readable EOF tail ending with a blank data line",
-      target: completionModel,
-      input: url,
-      init: undefined,
       chunks: ['data: {"ok": true}\ndata: \t'],
       expected: 'data: {"ok": true}\ndata: \t',
     },
-  ])("preserves $name", async ({ target, input, init, chunks, expected }) => {
-    respond(chunks, "text/event-stream");
-    await expect((await buildGuardedModelFetch(target)(input, init)).text()).resolves.toBe(
+  ])("preserves $name", async ({ chunks, expected }) => {
+    mockStream(chunks, "text/event-stream");
+    await expect((await buildGuardedModelFetch(completionModel)(url)).text()).resolves.toBe(
       expected,
     );
   });

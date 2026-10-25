@@ -112,7 +112,6 @@ describe("iMessage bot-owned thread mention policy", () => {
 
   async function resolveThreadReply(overrides: Parameters<typeof resolveDecision>[0] = {}) {
     return resolveDecision({
-      isKnownFromMeMessageId: undefined,
       cfg: {
         messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
         channels: {

@@ -11,6 +11,7 @@ import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
+import { createArchiveSourceSnapshotFixture } from "./session-transcript-archive.test-support.js";
 import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
 import {
   readLatestSessionUsageFromTranscriptFileAsync,
@@ -92,14 +93,7 @@ async function full(sessionFile?: string) {
   const archiveReader = reader(sessionFile);
   return collectSessionTranscriptMessages(
     (_scope, options) =>
-      archiveReader.readSourcePage(options, {
-        indexedSeq: -1,
-        activeEventCount: 0,
-        totalMessages: 0,
-        generation: undefined,
-        tailEventSeq: undefined,
-        resetSeq: null,
-      }),
+      archiveReader.readSourcePage(options, createArchiveSourceSnapshotFixture()),
     { sessionId: id },
     { mode: "full", reason: "archive selection" },
   );

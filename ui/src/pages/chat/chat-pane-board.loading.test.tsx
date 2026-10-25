@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { IDBFactory } from "fake-indexeddb";
 import { createSignal, flush, Show } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { ChatBoardPanel } from "./chat-pane-surfaces.tsx";
@@ -18,7 +20,7 @@ import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { openSlot } from "./sidebar-layout.ts";
-import "../../components/board/board-view.ts";
+import "../../components/board/board-view.tsx";
 
 type BoardTestPane = HTMLElement & {
   context: ApplicationContext;
@@ -82,53 +84,66 @@ function createGatewayBoardPane(sessionKey: string) {
 }
 
 describe("chat pane board loading states", () => {
-  it("hydrates a full cached transcript while its board waits for connect dispatch", async () => {
-    vi.stubGlobal("indexedDB", new IDBFactory());
-    const sessionKey = "agent:main:dispatch-cached-board";
-    const { pane, request, snapshot, cleanup } = createGatewayBoardPane(sessionKey);
-    const dispatch = createDeferred();
-    const transcript = createDeferred();
-    request.mockReturnValue(createDeferred<BoardSnapshot>().promise);
-    pane.state.settings = {
-      ...pane.state.settings,
-      gatewayUrl: pane.context.gateway.connection.gatewayUrl,
-    };
-    Object.assign(pane.state.client!, {
-      recoveryScope: "admitted-account",
-      recoveryScopeReady: true,
-      initialConnectSent: dispatch.promise,
-    });
-    pane.context.gateway.snapshot.phase = "connecting";
-    Reflect.set(pane, "sessionKey", sessionKey);
-    const store = new SessionSnapshotStore(pane.state.chatMessagesBySession);
-    pane.sessionSnapshotStore = store;
-    const messages = [{ role: "assistant", content: "Retained conversation" }];
-    store.write(resolveChatSnapshotKey(pane.state, { sessionKey }), {
-      messages,
-      sessionId: "retained-session",
-      pagination: { hasMore: false },
-      board: { snapshot, receivedAtMs: Date.now() },
-    });
-    try {
-      await store.flush();
-      const provider = pane.resolveBoardProvider();
-      pane.hydrateStoredChatSnapshot(pane.state, sessionKey);
-      const hydration = chatHistoryRequests(pane.state).initialSnapshotHydration!;
-      hydration.complete = transcript.resolve;
-      await transcript.promise;
-      expect(pane.state.chatMessages).toEqual(messages);
-      expect(provider.hasLoadedSnapshot).toBe(false);
-      dispatch.resolve();
-      await hydration.promise;
-      expect(provider.hasLoadedSnapshot).toBe(true);
-      expect(provider.snapshot$.value).toEqual(snapshot);
-    } finally {
-      dispatch.resolve();
-      cleanup();
-      await clearStoredChatSnapshots();
-      vi.unstubAllGlobals();
-    }
-  });
+  it.each([false, true])(
+    "paints saved rows before connect while board restoration waits (route pending: %s)",
+    async (routePending) => {
+      vi.stubGlobal("indexedDB", new IDBFactory());
+      const sessionKey = "agent:main:dispatch-cached-board";
+      const { pane, request, snapshot, cleanup } = createGatewayBoardPane(sessionKey);
+      const dispatch = createDeferred();
+      request.mockReturnValue(createDeferred<BoardSnapshot>().promise);
+      pane.state.settings = {
+        ...pane.state.settings,
+        gatewayUrl: pane.context.gateway.connection.gatewayUrl,
+      };
+      Object.assign(pane.state.client!, {
+        recoveryScope: "admitted-account",
+        recoveryScopeReady: true,
+        initialConnectSent: dispatch.promise,
+      });
+      pane.context.gateway.snapshot.phase = "connecting";
+      Reflect.set(pane, "sessionKey", sessionKey);
+      Reflect.set(pane, "routeResolutionPending", routePending);
+      const store = new SessionSnapshotStore(pane.state.chatMessagesBySession);
+      pane.sessionSnapshotStore = store;
+      const messages = [{ role: "assistant", content: "Retained conversation" }];
+      store.write(resolveChatSnapshotKey(pane.state, { sessionKey }), {
+        messages,
+        sessionId: "retained-session",
+        pagination: { hasMore: false },
+        board: { snapshot, receivedAtMs: Date.now() },
+      });
+      try {
+        await store.flush();
+        const provider = pane.resolveBoardProvider();
+        const reading = vi.spyOn(store, "read");
+        pane.hydrateStoredChatSnapshot(pane.state, sessionKey);
+        const hydration = chatHistoryRequests(pane.state).initialSnapshotHydration!;
+        await expectDefined(reading.mock.results[0], "snapshot read").value;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+        expect(pane.state.chatMessages).toEqual(messages);
+        expect(provider.hasLoadedSnapshot).toBe(false);
+        vi.useFakeTimers();
+        dispatch.resolve();
+        await dispatch.promise;
+        expect(provider.hasLoadedSnapshot).toBe(true);
+        expect(pane.state.chatMessages).toEqual(messages);
+        await vi.runAllTimersAsync();
+        await hydration.promise;
+        expect(pane.state.chatMessages).toEqual(messages);
+        expect(provider.hasLoadedSnapshot).toBe(true);
+        expect(provider.snapshot$.value).toEqual(snapshot);
+      } finally {
+        dispatch.resolve();
+        vi.useRealTimers();
+        cleanup();
+        await clearStoredChatSnapshots();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("hydrates the transcript without mounting an invalid persisted board", async () => {
     vi.stubGlobal("indexedDB", new IDBFactory());
@@ -277,6 +292,9 @@ describe("chat pane board loading states", () => {
     const provider = pane.resolveBoardProvider();
     try {
       draw();
+      await waitForSolid(() =>
+        expect(container.querySelector("openclaw-board-view")).not.toBeNull(),
+      );
       const view = container.querySelector("openclaw-board-view")!;
       await view.updateComplete;
       const skeleton = container.querySelector("openclaw-panel-loading-skeleton");

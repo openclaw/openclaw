@@ -17,7 +17,7 @@ import {
   nativeCompletionNotification,
   registerCodexNativeSubagentMonitor as registerParent,
 } from "./app-server/native-subagent-monitor.test-support.js";
-import { isJsonObject, type CodexServerNotification } from "./app-server/protocol.js";
+import type { CodexServerNotification } from "./app-server/protocol.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -28,7 +28,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient as releaseClient,
 } from "./app-server/shared-client.js";
-import { createClientHarness } from "./app-server/test-support.js";
+import { createRequestClientHarness } from "./app-server/test-support.js";
 import { createCodexCommandHost } from "./command-host.test-support.js";
 import { createCodexCommand } from "./commands.js";
 import {
@@ -87,40 +87,29 @@ it.each(["claimed-successor", "retained-successor"] as const)(
       "thread/resume": response,
       "thread/unsubscribe": { status: "unsubscribed" },
     };
-    const harness = createClientHarness({
-      onWrite(line, send) {
-        const message: unknown = JSON.parse(line);
-        if (
-          !isJsonObject(message) ||
-          typeof message.method !== "string" ||
-          message.id === undefined
-        ) {
-          return;
-        }
-        const { id, method } = message;
-        let result = Object.hasOwn(responses, method) ? responses[method] : undefined;
-        if (method === "thread/loaded/list") {
-          const snapshot = { data: nativeLoaded ? [threadId] : [], nextCursor: null };
-          replyToLoadedSnapshot = () => send({ id, result: snapshot });
-          return;
-        }
-        if (method === "thread/read") {
-          result = {
-            thread: { ...response.thread, status: { type: nativeLoaded ? "idle" : "notLoaded" } },
-          };
-        } else if (method === "thread/resume") {
-          nativeGeneration += 1;
-          nativeLoaded = true;
-        } else if (method === "thread/unsubscribe") {
-          unsubscribeGenerations.push(nativeGeneration);
-          nativeLoaded = false;
-        }
-        send(
-          result === undefined
-            ? { id, error: { code: -32601, message: `Unexpected R5 wire method ${method}` } }
-            : { id, result },
-        );
-      },
+    const harness = createRequestClientHarness((method, id, _requestParams, send) => {
+      let result = Object.hasOwn(responses, method) ? responses[method] : undefined;
+      if (method === "thread/loaded/list") {
+        const snapshot = { data: nativeLoaded ? [threadId] : [], nextCursor: null };
+        replyToLoadedSnapshot = () => send({ id, result: snapshot });
+        return;
+      }
+      if (method === "thread/read") {
+        result = {
+          thread: { ...response.thread, status: { type: nativeLoaded ? "idle" : "notLoaded" } },
+        };
+      } else if (method === "thread/resume") {
+        nativeGeneration += 1;
+        nativeLoaded = true;
+      } else if (method === "thread/unsubscribe") {
+        unsubscribeGenerations.push(nativeGeneration);
+        nativeLoaded = false;
+      }
+      send(
+        result === undefined
+          ? { id, error: { code: -32601, message: `Unexpected R5 wire method ${method}` } }
+          : { id, result },
+      );
     });
     const notifications: [CodexServerNotification, Promise<void> | void][] = [];
     const addNotificationHandler = harness.client.addNotificationHandler.bind(harness.client);

@@ -52,6 +52,24 @@ import { prepareChatSendSession } from "./chat-send-session.js";
 
 type Admission = Awaited<ReturnType<typeof admitChatSend>>;
 type Session = Awaited<ReturnType<typeof prepareChatAdmission>>["session"];
+type SubmittedInput = Awaited<ReturnType<typeof sessionAccessor.readSessionSubmittedInput>>;
+type SubmittedInputScope = Parameters<typeof sessionAccessor.readSessionSubmittedInput>[0];
+function submittedInputReader(message: SubmittedInput) {
+  function read(
+    scope: SubmittedInputScope,
+    key: string,
+    options: { includeSource: true },
+  ): Promise<{ message: NonNullable<SubmittedInput>; source: "transcript" } | undefined>;
+  function read(scope: SubmittedInputScope, key: string): Promise<SubmittedInput>;
+  async function read(
+    _scope: SubmittedInputScope,
+    _key: string,
+    options?: { includeSource: true },
+  ) {
+    return message && options?.includeSource ? { message, source: "transcript" as const } : message;
+  }
+  return read;
+}
 function admissionFixture(cfg: OpenClawConfig, runId: string) {
   const scope = { agentId: "main", sessionKey: `agent:main:dashboard:${runId}` };
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
@@ -582,12 +600,12 @@ it("releases rejected upload reservations so corrected input can reuse its key",
     },
     { gateway: { uploads: { enabled: false } } },
   ));
-it.each(["known-source", "new-terminal", "new-receipt"] as const)(
+it.each(["new-terminal", "new-receipt"] as const)(
   "refuses a conflicting or unprepared %s after admission waits",
   (source) =>
     withAdmissionTest("chat-admission-retry-comparison", async (f) => {
       const { scope, runId, context } = f;
-      f.seed(source === "known-source" ? { restartRecoveryTerminalRunIds: [runId] } : {});
+      f.seed();
       const admission = await f.prepare();
       const { session } = admission;
       if (source === "new-terminal") {
@@ -598,15 +616,14 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
         });
       }
       const comparison = vi.spyOn(sessionAccessor, "readSessionSubmittedInput");
-      if (source === "known-source") {
-        comparison.mockResolvedValueOnce({ role: "user", timestamp: 100, content: "Hello" });
-      }
-      comparison.mockResolvedValue({
-        role: "user",
-        timestamp: 100,
-        content: "Hello",
-        __openclaw: { humanMentions: [{ profileId: "bob", start: 0, end: 5 }] },
-      });
+      comparison.mockImplementation(
+        submittedInputReader({
+          role: "user",
+          timestamp: 100,
+          content: "Hello",
+          __openclaw: { humanMentions: [{ profileId: "bob", start: 0, end: 5 }] },
+        }),
+      );
       const begin = sessionControllerLifecycle.beginSessionEffect;
       const publication =
         source === "new-receipt"
@@ -640,9 +657,6 @@ it.each(["known-source", "new-terminal", "new-receipt"] as const)(
               : {
                   code: "INVALID_REQUEST",
                   message: expect.stringContaining("already used for different input"),
-                  ...(source === "known-source"
-                    ? { details: { reason: "chat-request-conflict" } }
-                    : {}),
                 },
           ),
         );

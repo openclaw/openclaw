@@ -27,7 +27,7 @@ import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./assistant-panel-solid.tsx";
-import "./assistant-panel-content.ts";
+import "./assistant-panel-content-solid.tsx";
 
 type HomeProps = Parameters<typeof import("./home-session-solid.tsx").HomeSession>[0];
 type TestHome = HTMLElement & HomeProps;

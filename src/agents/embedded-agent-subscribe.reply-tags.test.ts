@@ -171,6 +171,126 @@ function subscribe(options: Omit<Parameters<typeof createSubscribedSessionHarnes
   return emit;
 }
 
+describe("streamed reasoning tag privacy", () => {
+  it.each(["reasoning", "internal", "antml:reasoning", "mm:reasoning"])(
+    "withholds split <%s> blocks before partial or block delivery",
+    async (tag) => {
+      const onPartialReply = vi.fn();
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "reasoning-tags",
+        reasoningMode: "off",
+        onPartialReply,
+        onBlockReply,
+        blockReplyBreak: "text_end",
+      });
+      onTestFinished(() => subscription.unsubscribe());
+      const deltas = [
+        "Before ",
+        "<",
+        tag.slice(0, 2),
+        `${tag.slice(2)}>`,
+        "PRIVATE_MARKER",
+        `</${tag}>`,
+        " After",
+      ];
+      for (const delta of deltas) {
+        emitAssistantTextDelta({ emit, delta });
+        await subscription.waitForPendingEvents();
+        for (const text of extractTextPayloads(onPartialReply.mock.calls)) {
+          expect(text).not.toContain("PRIVATE_MARKER");
+          expect(text).not.toContain("<");
+        }
+      }
+      emitAssistantTextEnd({ emit, content: deltas.join("") });
+      emit({ type: "message_end", message: textAssistant(deltas.join("")) });
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onPartialReply.mock.calls).at(-1)).toBe("Before  After");
+      expect(extractTextPayloads(onBlockReply.mock.calls).join("")).toBe("Before  After");
+    },
+  );
+
+  it.each([
+    ["think", "internal"],
+    ["internal", "reasoning"],
+  ])("withholds nested <%s> and <%s> blocks through the outer close", async (outer, inner) => {
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "nested-reasoning-tags",
+      reasoningMode: "off",
+      onPartialReply,
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+    onTestFinished(() => subscription.unsubscribe());
+    const deltas = [
+      `Before <${outer}>outer<${inner}>inner</${inner}>`,
+      "PRIVATE_MARKER",
+      `</${outer}> After`,
+    ];
+    for (const delta of deltas) {
+      emitAssistantTextDelta({ emit, delta });
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onPartialReply.mock.calls).join("")).not.toContain(
+        "PRIVATE_MARKER",
+      );
+    }
+    emitAssistantTextEnd({ emit, content: deltas.join("") });
+    emit({ type: "message_end", message: textAssistant(deltas.join("")) });
+    await subscription.waitForPendingEvents();
+    expect(extractTextPayloads(onPartialReply.mock.calls).at(-1)).toBe("Before  After");
+    expect(extractTextPayloads(onBlockReply.mock.calls).join("")).toBe("Before  After");
+  });
+
+  it("holds a reasoning tag whose quoted attribute contains a split closing bracket", async () => {
+    const onPartialReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "quoted-reasoning-tag",
+      reasoningMode: "off",
+      onPartialReply,
+    });
+    onTestFinished(() => subscription.unsubscribe());
+    const deltas = ["Before <reasoning note='a>", "b'>PRIVATE_MARKER", "</reasoning> After"];
+    for (const delta of deltas) {
+      emitAssistantTextDelta({ emit, delta });
+      await subscription.waitForPendingEvents();
+      for (const text of extractTextPayloads(onPartialReply.mock.calls)) {
+        expect(text).not.toContain("<");
+        expect(text).not.toContain("PRIVATE_MARKER");
+      }
+    }
+    expect(extractTextPayloads(onPartialReply.mock.calls).at(-1)).toBe("Before  After");
+  });
+
+  it("keeps internal blocks private when reasoning visibility is enabled", () => {
+    const onPartialReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    const emit = subscribe({ reasoningMode: "stream", onPartialReply, onReasoningStream });
+    emitAssistantTextDelta({ emit, delta: "Before <internal>PRIVATE_MARKER</internal> After" });
+    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual(["Before  After"]);
+    expect(onReasoningStream).not.toHaveBeenCalled();
+  });
+
+  it("preserves literal code tags without letting their quotes hide later reasoning tags", () => {
+    const onPartialReply = vi.fn();
+    const emit = subscribe({ reasoningMode: "off", onPartialReply });
+    const literal = "Use `<reasoning note='literal>` and `<internal>literal</internal>`.";
+    emitAssistantTextDelta({
+      emit,
+      delta: `${literal} <reasoning>PRIVATE_MARKER</reasoning> After`,
+    });
+    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual([`${literal}  After`]);
+  });
+
+  it("strips self-closing reasoning tags without hiding the following answer", () => {
+    const onPartialReply = vi.fn();
+    const emit = subscribe({ reasoningMode: "off", onPartialReply });
+    emitAssistantTextDelta({ emit, delta: "Before <reasoning/> After" });
+    expect(extractTextPayloads(onPartialReply.mock.calls)).toEqual(["Before  After"]);
+  });
+});
+
 describe("streamed final tags", () => {
   it.each([
     {

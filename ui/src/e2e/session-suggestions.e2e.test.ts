@@ -425,7 +425,7 @@ suite.define(() => {
     },
   );
 
-  it("shows four owner actions and loads edit into the composer", async () => {
+  it("loads an owner edit without replacing a newer composer draft", async () => {
     const suggestion = pendingSuggestion("suggestion-2", "Please edit this first", 2);
     const { page, gateway, composer } = await openSuggestions("owner", {
       deferredMethods: ["session.suggestions.resolve"],
@@ -437,16 +437,6 @@ suite.define(() => {
 
     const row = page.locator(".session-suggestion");
     await expect(row).toBeVisible();
-    expect(
-      await row
-        .locator("button")
-        .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
-    ).toEqual([
-      "Send Alice's suggestion now",
-      "Queue Alice's suggestion",
-      "Edit Alice's suggestion",
-      "Dismiss Alice's suggestion",
-    ]);
     await page.getByRole("button", { name: "Edit Alice's suggestion" }).click();
     await gateway.waitForRequest("session.suggestions.resolve");
     await expect(composer).toHaveValue("Please edit this first");

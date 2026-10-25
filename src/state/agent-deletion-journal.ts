@@ -71,6 +71,13 @@ function publishDeletingAgent(
     databasePaths: [path.join(entry.agentDir, "openclaw-agent.sqlite"), ...entry.databasePaths],
     cleanupCompleted: false,
   }));
+  agentDeletionJournalPublication.stagePostimages(database.db, [
+    {
+      agentId: entry.agentId,
+      operationId: entry.operationId,
+      cleanupCompleted: entry.cleanupCompleted,
+    },
+  ]);
 }
 
 type AgentDeletionDatabase = Pick<
@@ -407,13 +414,6 @@ export function beginAgentDeletionJournalInDatabase(
       },
     };
     publishDeletingAgent(database, discovery, result.entry);
-    agentDeletionJournalPublication.stagePostimages(database.db, [
-      {
-        agentId: result.entry.agentId,
-        operationId: result.entry.operationId,
-        cleanupCompleted: result.entry.cleanupCompleted,
-      },
-    ]);
     return result;
   }
   const createdAt = Date.now();
@@ -438,13 +438,6 @@ export function beginAgentDeletionJournalInDatabase(
     entry: { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false },
   };
   publishDeletingAgent(database, discovery, result.entry);
-  agentDeletionJournalPublication.stagePostimages(database.db, [
-    {
-      agentId: result.entry.agentId,
-      operationId: result.entry.operationId,
-      cleanupCompleted: result.entry.cleanupCompleted,
-    },
-  ]);
   return result;
 }
 

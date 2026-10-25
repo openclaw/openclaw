@@ -1,5 +1,5 @@
 import type { ImageContent } from "../../llm/types.js";
-import { convertImageToPng, createImageProcessor, type ImageProbe } from "../../media/image-ops.js";
+import { convertImageToPng, createImageProcessor } from "../../media/image-ops.js";
 
 interface ImageBytes {
   data: Buffer;
@@ -12,15 +12,11 @@ type ProcessImageResult =
 
 const INLINE_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
-function baseMimeType(mimeType: string | undefined): string {
-  const normalized = mimeType?.split(";")[0]?.trim().toLowerCase();
-  return normalized === "image/jpg" ? "image/jpeg" : (normalized ?? "");
-}
-
 async function normalizeImageForProvider(
   image: ImageBytes,
 ): Promise<{ image: ImageBytes; convertedFrom?: string } | null> {
-  const mimeType = baseMimeType(image.mimeType);
+  const normalized = image.mimeType?.split(";")[0]?.trim().toLowerCase();
+  const mimeType = normalized === "image/jpg" ? "image/jpeg" : (normalized ?? "");
   if (INLINE_IMAGE_MIME_TYPES.has(mimeType)) {
     return { image: { ...image, mimeType } };
   }
@@ -79,12 +75,6 @@ const MAX_IMAGE_HEIGHT = 2000;
 const MAX_IMAGE_BASE64_BYTES = 4.5 * 1024 * 1024;
 const JPEG_QUALITY = 80;
 
-function orientedDimensions(probe: ImageProbe): { width: number; height: number } {
-  return probe.orientation && probe.orientation >= 5 && probe.orientation <= 8
-    ? { width: probe.height, height: probe.width }
-    : { width: probe.width, height: probe.height };
-}
-
 /** Returns null when the image processor cannot meet the inline dimensions and payload limit. */
 async function resizeImage(img: ImageBytes): Promise<{ image: ImageBytes; hint?: string } | null> {
   const inputBuffer = img.data;
@@ -96,7 +86,10 @@ async function resizeImage(img: ImageBytes): Promise<{ image: ImageBytes; hint?:
     if (!probe) {
       return null;
     }
-    const { width: originalWidth, height: originalHeight } = orientedDimensions(probe);
+    const { width: originalWidth, height: originalHeight } =
+      probe.orientation && probe.orientation >= 5 && probe.orientation <= 8
+        ? { width: probe.height, height: probe.width }
+        : { width: probe.width, height: probe.height };
 
     if (
       originalWidth <= MAX_IMAGE_WIDTH &&

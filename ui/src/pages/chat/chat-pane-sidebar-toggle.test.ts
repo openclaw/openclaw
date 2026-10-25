@@ -2,11 +2,14 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
+import { sidebarPanelFixtureParams } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
 import {
   createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
   type TestChatPane,
@@ -43,6 +46,8 @@ function shortcutPane() {
   });
   result.pane.active = true;
   result.state.browserPanelAvailable = true;
+  result.state.hello!.features!.methods!.push("sessions.companion.state");
+  result.pane.context.gateway.snapshot.hello = result.state.hello;
   return {
     ...result,
     dispatch: (shortcut: (typeof panelCases)[number], modifiers?: KeyboardEventInit) => {
@@ -56,6 +61,27 @@ function shortcutPane() {
 afterEach(() => document.body.replaceChildren());
 
 describe("chat pane sidebar toggles", () => {
+  it("does not open Side Chat with session-only permission", () => {
+    const { pane, state, dispatch } = shortcutPane();
+    const menuActions = () =>
+      pane
+        .renderPaneHeader(
+          createPaneHeaderWorkspaceFixture(state),
+          undefined,
+          false,
+          undefined,
+          false,
+          null,
+          state.sidebarLayout,
+          sidebarPanelDefinitions(sidebarPanelFixtureParams(state)),
+        )
+        .header.panelMenuActions?.map((action) => action.id);
+    expect(menuActions()).toContain("session-companion");
+    state.hello!.auth!.scopes = ["operator.sessions.write"];
+    expect(dispatch(panelCases[1])).toBe(false);
+    expect(isSidebarSlotVisible(state.sidebarLayout, "companion")).toBe(false);
+    expect(menuActions()).not.toContain("session-companion");
+  });
   it("activates a stored Workspace tab from the rail", () => {
     const sidebarLayout = openSlot(openSlot({ columns: [] }, "workspace"), "terminal");
     const state = makeChatHost({ connected: false }) as unknown as ChatPageHost;
@@ -120,7 +146,11 @@ describe("chat pane sidebar toggles", () => {
     const { pane, state, dispatch } = shortcutPane();
     state.connected = true;
     pane.context.gateway.snapshot.phase = "connected";
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(["desktop.observe", "board.get"]);
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
+      "desktop.observe",
+      "board.get",
+      "sessions.companion.state",
+    ]);
     // The provider has resolved Discussion availability for this session.
     pane.sessionDiscussion.record(state.sessionKey.trim(), "available");
     state.sidebarLayout = openSlot(openSlot({ columns: [] }, slot), "terminal");

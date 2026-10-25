@@ -121,10 +121,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
       headers: { "content-type": "text/plain" },
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
-      response: tracked.response,
-      release: vi.fn(async () => {}),
-    }));
+    mockDiscoveryResponse(tracked.response);
 
     let caught: Error | undefined;
     try {

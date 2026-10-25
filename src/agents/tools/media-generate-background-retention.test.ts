@@ -353,12 +353,15 @@ it.each([
     const readStarted = createDeferredCore();
     const resumeRead = createDeferredCore();
     const read = entryReader.withSessionEntryReadOnlyInWorker;
-    vi.spyOn(entryReader, "withSessionEntryReadOnlyInWorker").mockImplementation(
-      (scope, assertCurrent, consume) =>
-        read(scope, assertCurrent, async (result, owner) => {
+    vi.spyOn(entryReader, "readSessionEntryReadOnlyInWorker").mockImplementation(
+      (scope, assertCurrent = () => {}) =>
+        read(scope, assertCurrent, async (result) => {
           readStarted.resolve();
           await resumeRead.promise;
-          return consume(result, owner);
+          if (!result.ok) {
+            throw result.error;
+          }
+          return result.value;
         }),
     );
     let current = true;

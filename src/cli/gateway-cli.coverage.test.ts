@@ -446,9 +446,10 @@ describe("gateway-cli coverage", () => {
       json: false,
     },
   ])(
-    "writes $name export with a service-owned health snapshot",
+    "writes $name export with service-owned health and runtime snapshots",
     async ({ args, timeoutMs, json }) => {
       callGateway.mockClear();
+      callGateway.mockResolvedValue({ ok: true, source: "serving-gateway" });
       const tempDir = tempDirs.make("openclaw-gateway-cli-support-");
       const outputPath = path.join(tempDir, "diagnostics.zip");
       await withEnvAsync(
@@ -458,8 +459,27 @@ describe("gateway-cli coverage", () => {
         },
       );
 
-      expectGatewayCall({ method: "health", timeoutMs, localPortOverride: undefined });
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      for (const method of ["health", "diagnostics.capabilities"]) {
+        expect(callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method,
+            timeoutMs,
+            localPortOverride: undefined,
+            sharedStateMode: "read-only",
+          }),
+        );
+      }
       expect(fs.existsSync(outputPath)).toBe(true);
+      const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
+      const capabilities = zip.file("runtime/gateway-capabilities.json");
+      if (!capabilities) {
+        throw new Error("Diagnostics export is missing Gateway capabilities");
+      }
+      expect(JSON.parse(await capabilities.async("string"))).toMatchObject({
+        status: "ok",
+        data: { source: "serving-gateway" },
+      });
       const output = runtimeLogs.join("\n");
       expect(output).toContain("diagnostics.zip");
       if (json) {

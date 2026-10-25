@@ -29,6 +29,7 @@ import {
 } from "../config/env-substitution.js";
 import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
@@ -363,6 +364,7 @@ async function createRuntimeModelRefResolver(): Promise<ConfigModelRefResolver> 
     const agentDir = resolveAgentDir(config, targetAgentId);
     const workspaceDir = resolveAgentWorkspaceDir(config, targetAgentId);
     const [modelRuntime, preparedRuntime] = await (modelModules ??= loadModelModules());
+    await loadPinnedRuntimeConfigAsync(async () => ({ config }));
 
     // Exact pins need provider hooks in their generation; a catalog-only snapshot cannot load them.
     await using lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(

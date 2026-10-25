@@ -137,6 +137,10 @@ this setting. Native Codex compaction and `/compact` remain owned by Codex and d
 not use this override. A locked model selection also takes precedence over the
 host summary model.
 
+After native compaction, context usage reflects Codex's new history estimate.
+When Codex supplies no estimate, context usage stays unknown until the next
+reported measurement. Compaction does not reset cumulative token usage.
+
 Do not set `compaction.provider` on Codex-backed agents. Doctor removes unsupported
 provider overrides and migrates legacy Lossless configuration as described below.
 

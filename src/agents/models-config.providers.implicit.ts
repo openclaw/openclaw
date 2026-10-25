@@ -351,10 +351,23 @@ export async function runProviderCatalogWithTimeout(
     return prepared.finalizeCatalogResult ? prepared.finalizeCatalogResult(result) : result;
   };
   try {
+    const providerTimeouts = Object.fromEntries(
+      Object.entries(params.config?.models?.providers ?? {})
+        .flatMap(([id, config]): [string, number][] =>
+          config.timeoutSeconds === undefined
+            ? []
+            : [[normalizeProviderId(id), config.timeoutSeconds * 1_000]],
+        )
+        .toSorted(([left], [right]) => left.localeCompare(right)),
+    );
+    const catalogRun = withProviderCatalogDiscoveryBudget(
+      timeoutMs || null,
+      runCatalog,
+      providerTimeouts,
+    );
     if (!timeoutMs) {
-      return await runCatalog();
+      return await catalogRun;
     }
-    const catalogRun = withProviderCatalogDiscoveryBudget(timeoutMs, runCatalog);
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
     return await raceWithTimeout(

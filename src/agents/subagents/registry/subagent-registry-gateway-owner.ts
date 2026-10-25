@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { WRITE_SCOPE } from "../../../gateway/operator-scopes.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
@@ -20,6 +21,7 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { readRestartRecoveryRequesterSource } from "../../requester-run-recovery-source.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
@@ -44,6 +46,12 @@ type ActivationMetrics = {
   publishedRuns: number;
 };
 
+type RecoveryParentSource = Awaited<
+  ReturnType<
+    typeof import("../../../gateway/operator-run-recovery-parent.js").prepareRestartRecoveryParentSource
+  >
+>;
+
 const log = createSubsystemLogger("agents/subagents");
 // Worker admission and unavailable policy startup retry; revoked custody never re-arms itself.
 const deferredCompletionSources = new WeakSet<object>();
@@ -56,6 +64,7 @@ async function restoreChannelSubagentCompletionSource(
   gateway: NonNullable<ReturnType<GatewayContextResolver>>,
   assertCurrent: () => void,
   assertGatewayCurrent: () => void,
+  parentSource?: RecoveryParentSource,
 ) {
   if (!entry.requesterAgentId || !entry.requesterStorePath || !entry.completionRequesterSessionId) {
     return undefined;
@@ -137,6 +146,7 @@ async function restoreChannelSubagentCompletionSource(
       assertGatewayCurrent();
       revoked.signal.throwIfAborted();
       continuation.assertCurrent();
+      parentSource?.source();
     };
     const client = createSyntheticPluginRuntimeClient({
       operatorRoleActor: { kind: "system" },
@@ -156,6 +166,7 @@ async function restoreChannelSubagentCompletionSource(
       release() {
         releaseIdentity();
         continuation.release();
+        parentSource?.release();
       },
       run<T>(run: () => T): T {
         assertSourceCurrent();
@@ -211,6 +222,7 @@ async function restoreSubagentCompletionSource(
   }
   const beforeRestore = performance.now();
   let releaseRestored: (() => void) | undefined;
+  let parentSource: RecoveryParentSource;
   let continuation:
     | Awaited<
         ReturnType<
@@ -222,8 +234,20 @@ async function restoreSubagentCompletionSource(
     const source = entry.operatorRecoverySource;
     const missingSourceReason =
       "The original operator source was not saved for this requester continuation";
+    const childAuthority = resolveSubagentChildAuthority(entry);
+    // A fresh human follow-up carries its own child-targeted source. Parent
+    // delivery identity remains unchanged, and restart successors retain taskRunId.
+    const childSource =
+      source !== undefined &&
+      childAuthority.status === "verified" &&
+      source.agentId === childAuthority.childAgentId &&
+      source.sessionKey === entry.childSessionKey &&
+      source.sessionId === childAuthority.sessionIdentity.sessionId &&
+      source.lifecycleRevision === childAuthority.sessionIdentity.lifecycleRevision &&
+      source.sourceRunId === (entry.taskRunId ?? entry.runId);
     if (
       source &&
+      !childSource &&
       (source.agentId !== entry.requesterAgentId ||
         source.sessionKey !== entry.requesterSessionKey ||
         source.sessionId !== entry.completionRequesterSessionId ||
@@ -235,7 +259,9 @@ async function restoreSubagentCompletionSource(
       );
     }
     const gateway = resolver();
-    const storePath = entry.requesterStorePath;
+    const storePath = childSource
+      ? resolveSubagentChildSessionOwner(entry, getRuntimeConfig()).storePath
+      : entry.requesterStorePath;
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const context = captureOpenClawStateWorkerContext();
     const assertGatewayCurrent = () => {
@@ -263,6 +289,41 @@ async function restoreSubagentCompletionSource(
       }
     };
     assertCurrent();
+    const privateInput = entry.requesterSettleWake?.privateInput;
+    if (
+      privateInput &&
+      entry.completionTarget === "parent" &&
+      entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
+      entry.requesterAgentId &&
+      entry.requesterStorePath &&
+      gateway
+    ) {
+      const requester = {
+        agentId: entry.requesterAgentId,
+        sessionKey: entry.requesterSessionKey,
+        storePath: entry.requesterStorePath,
+      };
+      const requesterEntry = await readSessionEntryReadOnlyInWorker(requester, assertCurrent);
+      if (
+        !requesterEntry ||
+        requesterEntry.sessionId !== entry.completionRequesterSessionId ||
+        requesterEntry.lifecycleRevision !== entry.completionRequesterLifecycleRevision
+      ) {
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Private restart recovery requester session changed.",
+        );
+      }
+      const { prepareRestartRecoveryParentSource } =
+        await import("../../../gateway/operator-run-recovery-parent.js");
+      parentSource = await prepareRestartRecoveryParentSource({
+        entry: requesterEntry,
+        target: requester,
+        // A host private input is delegated, even if operator capture names the child.
+        requesterOrigin: undefined,
+        context: gateway,
+        assertCurrent,
+      });
+    }
     if (!source) {
       if (gateway) {
         continuation = await restoreChannelSubagentCompletionSource(
@@ -271,9 +332,11 @@ async function restoreSubagentCompletionSource(
           gateway,
           assertCurrent,
           assertGatewayCurrent,
+          parentSource,
         );
-        assertCurrent();
         if (continuation) {
+          parentSource = undefined;
+          assertCurrent();
           subagentRuns.bindCompletionAuthority(entry, continuation, true);
           continuation = undefined;
           unrestorableCompletionSources.delete(runtimeKey);
@@ -430,13 +493,38 @@ async function restoreSubagentCompletionSource(
     });
     releaseRestored = restored.release;
     assertCurrent();
+    // Keep parent custody on the independent continuation; the mapped policy-only
+    // authority intentionally drops the original recovery work assertion.
+    const parent = parentSource;
+    const operatorAuthority = parent
+      ? createAdmittedRunOperatorAuthority({
+          ...restored.authority,
+          assertCurrent: composeSessionSourceAssertion([
+            restored.authority.assertCurrent,
+            parent.source,
+          ]),
+          retain: () => {
+            using acquired = new DisposableStack();
+            const release = restored.authority.retain?.();
+            if (release) {
+              acquired.defer(release);
+            }
+            acquired.defer(parent.source.retain());
+            const retained = acquired.move();
+            return () => retained.dispose();
+          },
+          get modelPolicy() {
+            return restored.authority.modelPolicy;
+          },
+        })
+      : restored.authority;
     continuation = await withPluginRuntimeGatewayRequestScope(
       {
         client: createSyntheticPluginRuntimeClient({
           // Retried private inputs retain the sender fields included in their accepted hash.
           authenticatedUserProfile: restored.authenticatedUserProfile,
           operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
-          operatorRunAuthority: restored.authority,
+          operatorRunAuthority: operatorAuthority,
           scopes: [...restored.authority.scopes],
         }),
         context: gateway,
@@ -468,13 +556,16 @@ async function restoreSubagentCompletionSource(
     ) {
       unrestorableCompletionSources.set(
         runtimeKey,
-        "The original operator no longer has access to this requester continuation",
+        error instanceof GatewayOperatorRecoveryAuthorizationError
+          ? error.message
+          : "The original operator no longer has access to this requester continuation",
       );
     }
     log.warn("subagent completion authority was not restored", { runId: entry.runId, error });
   } finally {
     continuation?.release();
     releaseRestored?.();
+    parentSource?.release();
     if (metrics) {
       metrics.authorityRestoreMs += performance.now() - beforeRestore;
     }

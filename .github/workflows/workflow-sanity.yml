@@ -190,7 +190,7 @@ jobs:
 
       - name: Install pre-commit
         if: steps.scope.outputs.changed == 'true'
-        run: python -m pip install --disable-pip-version-check pre-commit==4.6.2
+        run: python -m pip install --disable-pip-version-check pre-commit==4.7.0
 
       - name: Install ShellCheck
         if: steps.scope.outputs.changed == 'true'

@@ -142,7 +142,6 @@ export function replaceSessionWithBranchedTranscriptInTransaction(
 export async function rewriteTranscriptEventRowsExact(
   scope: SessionTranscriptAccessScope,
   params: {
-    allowInitialGenerationMaterialization?: boolean;
     expectedGeneration: string | null;
     rows: readonly { event: TranscriptEvent; expectedEventJson: string; seq: number }[];
   },
@@ -162,10 +161,7 @@ export async function rewriteTranscriptEventRowsExact(
           (database) => {
             const currentGeneration =
               readTranscriptGenerationInTransaction(database, resolved.sessionId) ?? null;
-            const initialGenerationMaterialized =
-              params.allowInitialGenerationMaterialization === true &&
-              params.expectedGeneration === null;
-            if (currentGeneration !== params.expectedGeneration && !initialGenerationMaterialized) {
+            if (currentGeneration !== params.expectedGeneration) {
               return null;
             }
             rewriteSqliteTranscriptEventRowsInTransaction(database, resolved, params.rows);

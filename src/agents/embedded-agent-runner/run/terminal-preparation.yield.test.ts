@@ -173,18 +173,20 @@ it.each([
 });
 
 describe("terminal preparation failure signals", () => {
+  function prepareFailureSignal(trigger: "cron" | "user", lastToolError: ToolError) {
+    return prepareAttempt({
+      runParams: { trigger },
+      attempt: attemptResult({ lastToolError }),
+    });
+  }
+
   it("classifies cron exec denials from tool error metadata", async () => {
     // Cron execution denials are fatal because retrying the same scheduled turn
     // cannot collect interactive approval.
-    const prepared = await prepareAttempt({
-      runParams: { trigger: "cron" },
-      attempt: attemptResult({
-        lastToolError: {
-          toolName: "exec",
-          errorCode: "SYSTEM_RUN_DENIED",
-          error: "SYSTEM_RUN_DENIED: approval required",
-        },
-      }),
+    const prepared = await prepareFailureSignal("cron", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "SYSTEM_RUN_DENIED: approval required",
     });
     expect(prepared.failureSignal).toEqual({
       kind: "execution_denied",
@@ -197,43 +199,28 @@ describe("terminal preparation failure signals", () => {
   });
 
   it("classifies invalid request denials from tool error metadata", async () => {
-    const prepared = await prepareAttempt({
-      runParams: { trigger: "cron" },
-      attempt: attemptResult({
-        lastToolError: {
-          toolName: "bash",
-          errorCode: "INVALID_REQUEST",
-          error: "INVALID_REQUEST: approval denied",
-        },
-      }),
+    const prepared = await prepareFailureSignal("cron", {
+      toolName: "bash",
+      errorCode: "INVALID_REQUEST",
+      error: "INVALID_REQUEST: approval denied",
     });
     expect(prepared.failureSignal?.code).toBe("INVALID_REQUEST");
   });
 
   it("does not mark non-cron runs", async () => {
-    const prepared = await prepareAttempt({
-      runParams: { trigger: "user" },
-      attempt: attemptResult({
-        lastToolError: {
-          toolName: "exec",
-          errorCode: "SYSTEM_RUN_DENIED",
-          error: "SYSTEM_RUN_DENIED: approval required",
-        },
-      }),
+    const prepared = await prepareFailureSignal("user", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
+      error: "SYSTEM_RUN_DENIED: approval required",
     });
     expect(prepared.failureSignal).toBeUndefined();
   });
 
   it("does not mark non-exec validation errors as execution denials", async () => {
-    const prepared = await prepareAttempt({
-      runParams: { trigger: "cron" },
-      attempt: attemptResult({
-        lastToolError: {
-          toolName: "browser",
-          errorCode: "INVALID_REQUEST",
-          error: "INVALID_REQUEST: url required",
-        },
-      }),
+    const prepared = await prepareFailureSignal("cron", {
+      toolName: "browser",
+      errorCode: "INVALID_REQUEST",
+      error: "INVALID_REQUEST: url required",
     });
     expect(prepared.failureSignal).toBeUndefined();
   });
@@ -241,40 +228,25 @@ describe("terminal preparation failure signals", () => {
   it("does not mark tool output that merely mentions host denial tokens", async () => {
     // Match structured error metadata, not arbitrary command output that happens
     // to mention a denial code.
-    const prepared = await prepareAttempt({
-      runParams: { trigger: "cron" },
-      attempt: attemptResult({
-        lastToolError: {
-          toolName: "exec",
-          error: "The fetched page says SYSTEM_RUN_DENIED in its troubleshooting section.",
-        },
-      }),
+    const prepared = await prepareFailureSignal("cron", {
+      toolName: "exec",
+      error: "The fetched page says SYSTEM_RUN_DENIED in its troubleshooting section.",
     });
     expect(prepared.failureSignal).toBeUndefined();
   });
 
   it("does not infer approval-binding denials when the structured code is omitted", async () => {
-    const prepared = await prepareAttempt({
-      runParams: { trigger: "cron" },
-      attempt: attemptResult({
-        lastToolError: {
-          toolName: "exec",
-          error: "Approval cannot safely bind this interpreter/runtime command",
-        },
-      }),
+    const prepared = await prepareFailureSignal("cron", {
+      toolName: "exec",
+      error: "Approval cannot safely bind this interpreter/runtime command",
     });
     expect(prepared.failureSignal).toBeUndefined();
   });
 
   it("uses a structured code even when the message is omitted", async () => {
-    const prepared = await prepareAttempt({
-      runParams: { trigger: "cron" },
-      attempt: attemptResult({
-        lastToolError: {
-          toolName: "exec",
-          errorCode: "SYSTEM_RUN_DENIED",
-        },
-      }),
+    const prepared = await prepareFailureSignal("cron", {
+      toolName: "exec",
+      errorCode: "SYSTEM_RUN_DENIED",
     });
     expect(prepared.failureSignal).toEqual({
       kind: "execution_denied",

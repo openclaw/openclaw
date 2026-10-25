@@ -4,8 +4,11 @@ import {
   formatUpdateTargetLabel,
 } from "../../app/update-schedule-projection.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
+import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { UpdatesViewProps } from "./updates-types.ts";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export function UpdatesStatus(props: UpdatesViewProps & { checking: boolean }) {
   const status = createMemo(() => {
