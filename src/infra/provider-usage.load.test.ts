@@ -11,7 +11,7 @@ import {
 } from "./provider-usage-plugin-runtime.test-mocks.js";
 import { loadProviderUsageSummary } from "./provider-usage.load.js";
 import { ignoredErrors } from "./provider-usage.shared.js";
-import { loadUsageWithAuth, usageNow } from "./provider-usage.test-support.js";
+import { usageNow } from "./provider-usage.test-support.js";
 import type { ProviderUsageSnapshot, UsageSummary } from "./provider-usage.types.js";
 
 const resolveProviderUsageAuthWithPluginMock = getProviderUsageAuthWithPluginMock();
@@ -157,25 +157,7 @@ describe("provider-usage.load", () => {
     },
   );
 
-  it("filters errors that are marked as ignored", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
-      ...claude,
-      error: "HTTP 500",
-    });
-    ignoredErrors.add("HTTP 500");
-    try {
-      const summary = await loadUsageWithAuth(
-        loadProviderUsageSummary,
-        [{ provider: "anthropic", token: "token-a" }],
-        unusedFetch(),
-      );
-      expect(summary.providers).toStrictEqual([]);
-    } finally {
-      ignoredErrors.delete("HTTP 500");
-    }
-  });
-
-  it("returns window and balance-only siblings at the deadline while retaining unfinished work", async () => {
+  it("returns completed non-ignored siblings at the deadline while retaining unfinished work", async () => {
     vi.useFakeTimers();
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(unusedFetch());
     const scope = new AsyncWorkScope();
@@ -192,10 +174,14 @@ describe("provider-usage.load", () => {
     };
     let summaryPromise: Promise<UsageSummary> | undefined;
     let draining: Promise<void> | undefined;
+    ignoredErrors.add("HTTP 500");
     try {
       resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ provider }) => {
         if (provider === "anthropic") {
           return await heldSnapshot.promise;
+        }
+        if (provider === "ignored") {
+          return { ...claude, provider, error: "HTTP 500" };
         }
         return structuredClone(provider === "deepseek" ? balance : { ...codex, provider });
       });
@@ -205,6 +191,7 @@ describe("provider-usage.load", () => {
             { provider: "anthropic", token: "token-a" },
             { provider: "openai", token: "token-codex" },
             { provider: "deepseek", token: "token-d" },
+            { provider: "ignored", token: "token-ignored" },
           ],
           timeoutMs: 5_000,
         }),
@@ -235,6 +222,7 @@ describe("provider-usage.load", () => {
       expect(drained).toBe(true);
       expect(summary.providers[0]?.error).toBe("Timeout");
     } finally {
+      ignoredErrors.delete("HTTP 500");
       heldSnapshot.resolve(lateSnapshot);
       await Promise.allSettled([
         summaryPromise,

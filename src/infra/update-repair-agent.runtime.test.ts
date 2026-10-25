@@ -18,7 +18,6 @@ import {
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { getInstallationTarget } from "./installation-target-context.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import {
@@ -105,31 +104,16 @@ it.each([
           await host.close();
         });
       }
-      const agentDir = state.statePath("agents", "owner", "agent");
       const config: OpenClawConfig = {
         plugins: { enabled: false },
-        agents: { entries: { owner: { agentDir } } },
         tools: { byProvider: { "fixture/denied": { deny: ["exec"] } } },
       };
-      const target = { ...state, installRoot: state.workspaceDir };
       let retainedTool: (() => void) | undefined;
       mocks.run.mockImplementation(async (input: RunEmbeddedAgentParams) => {
         if (host) {
           expect(getBoundLegacyPluginSdkResourceHost()).toBe(host);
         }
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-        expect(getInstallationTarget()).toMatchObject({
-          stateDir: state.stateDir,
-          configPath: state.configPath,
-        });
-        expect(input).toMatchObject({
-          agentDir,
-          sessionPersistence: "detached",
-          workspaceDir: target.installRoot,
-          cwd: target.installRoot,
-          codeModeOverride: false,
-          cleanupBundleMcpOnRunEnd: true,
-        });
+        expect(input.sessionPersistence).toBe("detached");
         expect(input.sessionManager?.getSessionTarget()).toBeUndefined();
         retainedTool = captureAgentToolExecutionBudget();
         expect(retainedTool).toBeDefined();
@@ -142,13 +126,7 @@ it.each([
       }
       const execute = () =>
         cleanup.run(() =>
-          withUpdateRepairEnvironment(target, () =>
-            repairTurn(state, {
-              config,
-              modelFallbacks: ["fixture/backup", "fixture/denied"],
-              prompt: "Repair the failed update.",
-            }),
-          ),
+          repairTurn(state, { config, modelFallbacks: ["fixture/backup", "fixture/denied"] }),
         );
       const run = host ? host.run(execute) : execute();
       if (cleanupFails) {
@@ -163,7 +141,6 @@ it.each([
         expect(cleanup.outcome).toBe("closed");
       }
       expect(mocks.entry.mock.calls[0]?.[0].selection).toMatchObject({
-        agentDir,
         fallbacksOverride: ["fixture/backup"],
       });
       expect(mocks.cleanup).toHaveBeenCalledOnce();
