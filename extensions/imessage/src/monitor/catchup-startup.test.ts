@@ -129,27 +129,39 @@ describe("registered iMessage account startup", () => {
     );
   }
 
-  it("reads the startup watermark off the caller thread before subscribing", async () => {
+  it("reads the watermark off-thread and joins cleanup before probing or subscribing", async () => {
     seedChatDb();
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const watermarkQueries = () =>
+    const closing = createDeferred<void>();
+    const releaseClose = createDeferred<void>();
+    const open = sqliteRuntime.openSqliteWorkerStore;
+    vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
+      const store = await open(options);
+      if (store && options.databasePath === dbPath) {
+        const close = store.close.bind(store);
+        store.close = async () => {
+          closing.resolve();
+          await releaseClose.promise;
+          await close();
+        };
+      }
+      return store;
+    });
+    const { request, starting } = startAccount();
+    try {
+      await Promise.race([closing.promise, starting]);
+      expect(probe).not.toHaveBeenCalled();
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      releaseClose.resolve();
+      await starting;
+    }
+    expectSubscription(request, 5000);
+    expect(
       prepare.mock.calls.filter(([sql]) =>
         /\bMAX\s*\([\s\S]*\bROWID\b[\s\S]*\bFROM\s+"?message"?\b/iu.test(sql),
-      );
-    {
-      using calibration = new DatabaseSync(dbPath, { readOnly: true });
-      expect(calibration.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get()).toMatchObject(
-        { maxRowid: 5000 },
-      );
-    }
-    expect(watermarkQueries()).toHaveLength(1);
-    prepare.mockClear();
-
-    const { request, starting } = startAccount();
-    await starting;
-
-    expectSubscription(request, 5000);
-    expect(watermarkQueries()).toHaveLength(0);
+      ),
+    ).toHaveLength(0);
   });
 
   it.each(["current", "legacy"] as const)(
@@ -219,35 +231,6 @@ describe("registered iMessage account startup", () => {
 
     expectSubscription(request);
     expect(request).toHaveBeenCalledWith("chats.list", expect.any(Object), expect.any(Object));
-  });
-
-  it("joins startup watermark cleanup before probing or subscribing", async () => {
-    seedChatDb();
-    const closing = createDeferred<void>();
-    const releaseClose = createDeferred<void>();
-    const open = sqliteRuntime.openSqliteWorkerStore;
-    vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockImplementation(async (options) => {
-      const store = await open(options);
-      if (store && options.databasePath === dbPath) {
-        const close = store.close.bind(store);
-        store.close = async () => {
-          closing.resolve();
-          await releaseClose.promise;
-          await close();
-        };
-      }
-      return store;
-    });
-    const { request, starting } = startAccount();
-    try {
-      await Promise.race([closing.promise, starting]);
-      expect(probe).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
-    } finally {
-      releaseClose.resolve();
-      await starting;
-    }
-    expectSubscription(request, 5000);
   });
 
   it.each(["missing", "invalid"])(

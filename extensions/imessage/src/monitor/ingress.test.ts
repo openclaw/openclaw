@@ -198,17 +198,21 @@ describe("iMessage durable ingress", () => {
     },
   );
 
-  it("recovers a durable row once and dedupes its GUID across ROWID churn", async () => {
+  it("recovers provenance and dedupes durable GUIDs across ROWID churn", async () => {
     const event = rawRow();
     const interrupted = createIngress();
-    await interrupted.receive(event);
+    await interrupted.receive(event, { catchup: true });
     await interrupted.stop();
 
     closeOpenClawStateDatabaseForTest();
-    const recoveredDispatch = vi.fn(async (_message, claimLifecycle) => {
-      await claimLifecycle.onAdopted();
-      return { kind: "deferred" } as const;
-    });
+    const provenances: Array<{ catchup?: boolean } | undefined> = [];
+    const recoveredDispatch = vi.fn<Parameters<typeof createIMessageDurableIngress>[0]["dispatch"]>(
+      async (_message, claimLifecycle, _receivedAt, provenance) => {
+        provenances.push(provenance);
+        await claimLifecycle.onAdopted();
+        return { kind: "deferred" } as const;
+      },
+    );
     const recovered = createIngress({
       queue: createQueue(stateDir),
       dispatch: recoveredDispatch,
@@ -224,21 +228,8 @@ describe("iMessage durable ingress", () => {
     await recovered.receive(rawRow({ id: 999 }));
     await recovered.waitForIdle();
     expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("carries catchup provenance through the journal to dispatch", async () => {
-    const provenances: Array<{ catchup?: boolean } | undefined> = [];
-    const ingress = createIngress({
-      dispatch: vi.fn(async (_message, claimLifecycle, _receivedAt, provenance) => {
-        provenances.push(provenance);
-        await claimLifecycle.onAdopted();
-      }),
-    });
-    ingress.start();
-    // Catchup bypasses the live Push age fence so old history is not tombstoned.
-    await ingress.receive(rawRow({ guid: "GUID-CATCHUP", id: 900 }), { catchup: true });
-    await ingress.receive(rawRow({ guid: "GUID-LIVE", id: 901 }));
-    await vi.waitFor(() => expect(provenances).toHaveLength(2));
+    await recovered.receive(rawRow({ guid: "GUID-LIVE", id: 901 }));
+    await recovered.waitForIdle();
     expect(provenances).toEqual([{ catchup: true }, {}]);
   });
 

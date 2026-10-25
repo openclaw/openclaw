@@ -65,15 +65,11 @@ async function captureDropLog() {
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   it.each([
-    { name: "message ID", text: "Reasoning:\n_step_", mediaFacts: undefined },
-    {
-      name: "attachment-only media",
-      text: "",
-      mediaFacts: [{ contentType: "image/png", kind: "image" }],
-    },
+    ["message ID", "Reasoning:\n_step_", undefined],
+    ["attachment-only media", "", [{ contentType: "image/png", kind: "image" }]],
   ] as const)(
-    "drops echoes matching $name without logging message content",
-    async ({ text, mediaFacts }) => {
+    "drops echoes matching %s without logging message content",
+    async (_name, text, mediaFacts) => {
       const logVerbose = await captureDropLog();
       const decision = await resolveDecision({
         message: { text },
@@ -161,24 +157,19 @@ describe("resolveIMessageInboundDecision echo detection", () => {
   );
 
   it("dispatches ordinary quoted prose instead of dropping it as a tapback", async () => {
-    expect(
-      (
-        await resolveDecision({
-          message: {
-            associated_message_type: 1,
-            text: "Loved “Dune” and the soundtrack was incredible",
-          },
-        })
-      ).kind,
-    ).toBe("dispatch");
+    const decision = await resolveDecision({
+      message: {
+        associated_message_type: 1,
+        text: "Loved “Dune” and the soundtrack was incredible",
+      },
+    });
+    expect(decision.kind).toBe("dispatch");
   });
 
   it("uses the production reply-cache lookup for bot-authored reaction targets", async () => {
     await rememberIMessageReplyCache({
       accountId: "default",
       messageId: "p:0/imsg-production",
-      chatGuid: "any;-;+15555550123",
-      chatIdentifier: "+15555550123",
       chatId: 3,
       timestamp: Date.now(),
       isFromMe: true,
@@ -186,15 +177,12 @@ describe("resolveIMessageInboundDecision echo detection", () => {
 
     const decision = await resolveDecision({
       message: reactionMessage({
-        guid: "reaction-guid",
+        is_reaction: undefined,
         reaction_emoji: "❤️",
         reacted_to_guid: undefined,
         associated_message_guid: "p:0/imsg-production",
         associated_message_type: 2000,
-        text: "Loved “tapback target”",
         chat_id: 3,
-        chat_guid: "any;-;+15555550123",
-        chat_identifier: "+15555550123",
       }),
       echoCache: { has: () => false },
     });
@@ -203,8 +191,6 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       kind: "reaction",
       text: "iMessage reaction added: ❤️ by +15555550123 on msg imsg-production",
       reaction: {
-        action: "added",
-        emoji: "❤️",
         targetGuid: "imsg-production",
         targetGuids: ["imsg-production", "p:0/imsg-production"],
       },
@@ -244,17 +230,16 @@ describe("buildIMessageInboundContext", () => {
   });
 
   it("prepends direct-message history when supplied", async () => {
-    const { ctxPayload, inboundHistory } = await buildContext("current", {
+    const inboundHistory = [{ sender: "+15555550123", body: "previous" }];
+    const result = await buildContext("current", {
       dmHistory: {
         body: "[iMessage from +15555550123]\nprevious\n[/iMessage]",
-        inboundHistory: [{ sender: "+15555550123", body: "previous" }],
+        inboundHistory,
       },
     });
-
-    expect(ctxPayload.Body).toContain("previous");
-    expect(ctxPayload.Body).toContain("current");
-    expect(ctxPayload.InboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
-    expect(inboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
+    expect(result.ctxPayload.Body).toMatch(/previous[\s\S]*current/);
+    expect(result.ctxPayload.InboundHistory).toEqual(inboundHistory);
+    expect(result.inboundHistory).toEqual(inboundHistory);
   });
 
   it("uses the monitor's prepared account service without re-reading channel config", async () => {

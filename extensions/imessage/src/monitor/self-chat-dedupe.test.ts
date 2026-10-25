@@ -151,28 +151,22 @@ describe("self-chat dedupe", () => {
 
   it("drops catchup-replayed self-chat reflection after observing skipped from-me companion", async () => {
     useFakeTimersAt("2026-06-03T03:48:42Z");
-
     const text = "Catchup reflection";
+    const message = threadMessage({ text });
     rememberIMessageSkippedFromMeForSelfChatDedupe({
       accountId: "default",
-      message: selfChatMessage(
-        threadMessage({
-          id: 86798,
-          text,
-          created_at: "2026-06-03T03:48:28.922Z",
-        }),
-      ),
+      message: selfChatMessage({ ...message, id: 86798, created_at: "2026-06-03T03:48:28.922Z" }),
       bodyText: text,
       selfChatCache,
     });
 
     const reflection = await resolveDecision({
-      message: threadMessage({
+      message: {
+        ...message,
         id: 86799,
         destination_caller_id: `tel:${SELF_CHAT_HANDLE}`,
-        text,
         created_at: "2026-06-03T03:48:28.738Z",
-      }),
+      },
     });
 
     expect(reflection).toEqual({ kind: "drop", reason: "self-chat echo" });
@@ -204,11 +198,8 @@ describe("echo cache — text fallback for null-id inbound messages", () => {
 
   it("still identifies echo via text when inbound message has id: null", async () => {
     useFakeTimersAt();
-
     echoCache.remember(SELF_CHAT_SCOPE, { text: "Sounds good" });
-
     vi.advanceTimersByTime(1000);
-
     expect(
       await resolveDecision({ message: { id: null, text: "Sounds good" }, echoCache }),
     ).toEqual({
