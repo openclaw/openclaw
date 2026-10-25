@@ -43,7 +43,11 @@ function withHook(overrides: Partial<HookStatusEntry> = {}): HookStatusReport {
     hooks: [{ ...hook, ...overrides }],
   };
 }
-const eventlessHook = { events: [], loadable: false, blockedReason: "no events defined" };
+const eventlessHook = {
+  events: [],
+  loadable: false,
+  blockedReason: "no events defined",
+} satisfies Partial<HookStatusEntry>;
 const eventless = withHook(eventlessHook);
 const hookAgent = (workspace: string) => ({
   ownership: "explicit" as const,

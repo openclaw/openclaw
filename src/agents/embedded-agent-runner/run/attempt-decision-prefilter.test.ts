@@ -179,13 +179,13 @@ it.each(["missing_request_context", "next_response_needs_tools"])(
     ];
     for (const [value, shouldPruneTools] of cases) {
       const outcome = answer();
-      const answers = outcome.result.answers;
+      const answers = { ...outcome.result.answers };
       if (value) {
         answers[id] = value;
       } else {
         delete answers[id];
       }
-      mocks.evaluate.mockResolvedValue(outcome);
+      mocks.evaluate.mockResolvedValue({ ...outcome, result: { ...outcome.result, answers } });
       expect((await evaluate()).shouldPruneTools).toBe(shouldPruneTools);
     }
   },

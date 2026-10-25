@@ -29,6 +29,7 @@ vi.mock("../commands/models/list.list-command.js", () => ({
 vi.mock("../commands/models/list.status-command.js", () => ({
   modelsStatusCommand: mocks.modelsStatusCommand,
 }));
+// mock-isolation: Observe auth command routing without invoking interactive provider sign-in.
 vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
   modelsAuthSetupTokenCommand: mocks.modelsAuthSetupTokenCommand,
@@ -49,6 +50,7 @@ vi.mock("../commands/models/auth-order.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/models/auth-order.js")>()),
   modelsAuthOrderUpdateCommand: mocks.modelsAuthOrderUpdateCommand,
 }));
+// mock-isolation: Observe alias command routing without reading stored model configuration.
 vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesListCommand: mocks.modelsAliasesListCommand,
 }));

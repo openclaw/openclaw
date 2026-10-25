@@ -21,6 +21,7 @@ const { sync, update, loadIndex, missingPayloads } = vi.hoisted(() => ({
   missingPayloads: vi.fn(),
 }));
 
+// mock-isolation: Fixed update outcomes avoid package installation while proving cohort reconciliation.
 vi.mock("./update.js", () => ({
   syncPluginsForUpdateChannel: sync,
   updateNpmInstalledPlugins: update,
@@ -31,6 +32,7 @@ vi.mock("./installed-plugin-index.js", async (importOriginal) => ({
   loadInstalledPluginIndex: loadIndex,
 }));
 
+// mock-isolation: Supply scenario-specific missing payloads without inspecting installed plugin state.
 vi.mock("./payload-verification.js", () => ({
   collectMissingPluginInstallPayloads: missingPayloads,
 }));
