@@ -5,6 +5,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -376,9 +377,7 @@ suite.define(() => {
             : { contentType: "image/png", body: imageBytes },
         );
       });
-      const authoritative = {
-        role: "user",
-        content: [{ type: "text", text: message }],
+      const authoritative = chatMessage("user", message, {
         timestamp: Date.now(),
         __openclaw: {
           id: "persisted-image-prompt",
@@ -387,7 +386,7 @@ suite.define(() => {
           media: [{ path: source, contentType: "image/png", fileName: "pixel.png" }],
           mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
         },
-      };
+      });
       const responses = initialPromptResponses(sessionKey, runId, "single-image-prompt");
       const gateway = await installMockGateway(page, {
         deferredMethods: ["chat.startup"],

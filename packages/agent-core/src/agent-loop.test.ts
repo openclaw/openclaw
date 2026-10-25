@@ -14,6 +14,7 @@ import {
   model,
   reply,
   TEST_USAGE,
+  toolResultMessages,
   user,
 } from "./agent-loop.test-support.js";
 import { Agent } from "./agent.js";
@@ -434,15 +435,7 @@ describe("agentLoop tool termination", () => {
           { id: "commit-third", started: false },
         ]),
       );
-      const toolResults = events
-        .filter(
-          (
-            event,
-          ): event is Extract<AgentEvent, { type: "message_end" }> & {
-            message: { role: "toolResult" };
-          } => event.type === "message_end" && event.message.role === "toolResult",
-        )
-        .map((event) => event.message);
+      const toolResults = toolResultMessages(events);
       expect(toolResults.map((message) => message.toolCallId)).toEqual([
         "commit-first",
         "commit-second",
@@ -682,15 +675,7 @@ describe("agentLoop tool termination", () => {
     expect(streamCalls).toBe(1);
     expect(resolverCalls).toEqual(["d_first_tool"]);
     expect(executed).toEqual([]);
-    const toolResults = events
-      .filter(
-        (
-          event,
-        ): event is Extract<AgentEvent, { type: "message_end" }> & {
-          message: { role: "toolResult" };
-        } => event.type === "message_end" && event.message.role === "toolResult",
-      )
-      .map((event) => event.message);
+    const toolResults = toolResultMessages(events);
     expect(toolResults).toHaveLength(3);
     for (const toolResult of toolResults) {
       expect(toolResult).toMatchObject({
@@ -1675,11 +1660,7 @@ describe("agentLoop argument-validation admission", () => {
       ],
     ]);
     expect(executed).toEqual([]);
-    expect(
-      events.flatMap((event) =>
-        event.type === "message_end" && event.message.role === "toolResult" ? [event.message] : [],
-      ),
-    ).toMatchObject([
+    expect(toolResultMessages(events)).toMatchObject([
       {
         toolCallId: "invalid-1",
         isError: true,
