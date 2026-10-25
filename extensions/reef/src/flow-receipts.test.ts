@@ -86,6 +86,21 @@ describe("Reef receipt read durability", () => {
     expect(entries[0]!.event.payload).toEqual({ ids: [entry.id] });
   });
 
+  it("preserves both failures when a receipt lookup and its read audit fail", async () => {
+    const { flow, trusted, audit, peerKeys: alice } = await createFlow();
+    const entry = receiptEntry(signedReceipt(alice, "01JZ0000000000000000000128"));
+    const lookupFailure = new Error("delivery lookup unavailable");
+    const auditFailure = new Error("audit unavailable");
+    vi.spyOn(trusted, "readOutboundDelivery").mockRejectedValueOnce(lookupFailure);
+    vi.spyOn(audit, "appendEvents").mockRejectedValueOnce(auditFailure);
+
+    await expect(flow.processEntries([entry])).rejects.toMatchObject({
+      cause: auditFailure,
+      errors: [lookupFailure, auditFailure],
+    });
+    expect(await audit.entries()).toEqual([]);
+  });
+
   it("retries a failed missing-binding group with one read observation for the batch", async () => {
     const { flow, audit, peerKeys: alice } = await createFlow();
     const batch = [

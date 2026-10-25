@@ -357,7 +357,17 @@ export class ReefMessageFlow {
       settlement = await this.options.trust.readOutboundDelivery(peer, id);
     } catch (error) {
       if (read) {
-        await this.options.audit.appendEvents([read]);
+        try {
+          await this.options.audit.appendEvents([read]);
+        } catch (auditError) {
+          throw new AggregateError(
+            [error, auditError],
+            "Reef receipt lookup and read audit failed",
+            {
+              cause: auditError,
+            },
+          );
+        }
       }
       throw error;
     }
