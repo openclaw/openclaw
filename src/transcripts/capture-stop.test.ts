@@ -72,6 +72,7 @@ afterEach(tempDirs.cleanup);
 describe("transcript provider cleanup custody", () => {
   const fixture = useTranscriptStatusFixture();
   it.each([
+    { owner: "service", failure: "returned", registryChange: "none" },
     { owner: "manual-service", failure: "returned", registryChange: "none" },
     { owner: "tool", failure: "returned", registryChange: "removed" },
     { owner: "tool", failure: "thrown", registryChange: "replaced" },
@@ -104,7 +105,14 @@ describe("transcript provider cleanup custody", () => {
         }
         const request = requests[0]!;
         await request.onUtterance({ text: "Saved before stop" });
-        await expect.soft(tool.stop("notes")).rejects.toThrow("cleanup unavailable");
+        if (owner === "service") {
+          await service.stop();
+          expect
+            .soft(ctx.logger.warn)
+            .toHaveBeenCalledWith(expect.stringMatching(/stop failed.*cleanup unavailable/));
+        } else {
+          await expect.soft(tool.stop("notes")).rejects.toThrow("cleanup unavailable");
+        }
         await expect.soft(tool.status()).resolves.toMatchObject({
           active: [{ sessionId: "notes", cleanupPending: true }],
           pendingFinalization: [],

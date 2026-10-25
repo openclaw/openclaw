@@ -38,6 +38,49 @@ export function registerGatewayCancellationTests({
   resolveGatewayContext: GatewayCloseParams["resolveGatewayContext"];
   setShutdownHook: (hook: () => Promise<void>) => void;
 }) {
+  it("records recovery before canceling received work and running ordinary shutdown hooks", async () => {
+    const order: string[] = [];
+    const marker = vi.fn(() => {
+      order.push("marker");
+    });
+    setShutdownHook(async () => {
+      order.push("hook");
+    });
+    const close = createClose({
+      cancelReceivedWork: (reason) => {
+        expect(isAgentRunRestartAbortReason(reason)).toBe(true);
+        order.push("cancel");
+      },
+      markMainSessionsAbortedForRestart: marker,
+      disposeAllCodeModeRuns: () => {
+        order.push("dispose");
+      },
+    });
+    await close();
+    expect(order).toEqual(["marker", "cancel", "hook", "dispose"]);
+    expect(marker).toHaveBeenCalledOnce();
+  });
+
+  it("aborts queued turns after recording recovery and before shutdown continues", async () => {
+    const { source } = await createSource("queued-1", {}, { phase: "waiting" });
+    let queuedAbortedAtRecovery: boolean | undefined;
+    const close = createClose({
+      markMainSessionsAbortedForRestart: () => {
+        queuedAbortedAtRecovery = source.input.abortSignal.aborted;
+      },
+    });
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(queuedAbortedAtRecovery).toBe(false);
+    expect(source.input.abortSignal.aborted).toBe(true);
+    expect(source.input.phase).toBe("consumed");
+    expect(rpcSourceTesting.size).toBe(0);
+  });
+
   it.each([-60_000, 60_000])(
     "honors the reply drain budget when the wall clock moves by %s ms",
     async (clockShift) => {
@@ -63,30 +106,34 @@ export function registerGatewayCancellationTests({
     },
   );
 
-  it("records recovery before aborting queued turns and retains effect custody after sources settle", async () => {
+  it("reports remaining effect custody after aborted sources settle", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const active = [];
     for (let index = 0; index < 5; index++) {
       active.push(await createSource(`active-${index}`));
     }
     const { source: pendingReply } = await createSource("pending-reply", {}, { phase: "waiting" });
-    const effect = async (name: string, run?: { runId: string }) => {
-      const lease = await beginSessionEffect({
-        target: captureSessionTarget({
-          storeScope: "/synthetic/gateway-close/sessions.sqlite",
-          sessionKey: `agent:main:${name}`,
-          incarnation: name,
-        }),
-        run,
-        resolveGatewayContext: resolveClosingGatewayContext,
-        onInterrupt: () => lease.release(),
-      });
-      return lease;
-    };
-    const background = await effect("background");
+    const background = await beginSessionEffect({
+      target: captureSessionTarget({
+        storeScope: "/synthetic/gateway-close/sessions.sqlite",
+        sessionKey: "agent:main:background",
+        incarnation: "background",
+      }),
+      resolveGatewayContext: resolveClosingGatewayContext,
+      onInterrupt: () => background.release(),
+    });
     const cleanup = createDeferredCore();
     const effectCleanup = createDeferredCore();
-    const retainedEffect = await effect("retained-effect", { runId: "retained-effect-run" });
+    const retainedEffect = await beginSessionEffect({
+      target: captureSessionTarget({
+        storeScope: "/synthetic/gateway-close/sessions.sqlite",
+        sessionKey: "agent:main:retained-effect",
+        incarnation: "retained-effect",
+      }),
+      run: { runId: "retained-effect-run" },
+      resolveGatewayContext: resolveClosingGatewayContext,
+      onInterrupt: () => retainedEffect.release(),
+    });
     const effectWork = retainedEffect.run(() => effectCleanup.promise);
     const retained = active[0]!.source;
     trackSessionControllerSourceWork(retained.input, cleanup.promise);
@@ -96,22 +143,13 @@ export function registerGatewayCancellationTests({
       background.released,
     ]);
     const closed = vi.fn();
-    let queuedAbortedAtRecovery: boolean | undefined;
     const closing = createClose({
       getPendingReplyCount: () => Number(!pendingReply.input.abortSignal.aborted),
-      markMainSessionsAbortedForRestart: () => {
-        queuedAbortedAtRecovery = pendingReply.input.abortSignal.aborted;
-      },
-    })({ reason: "SIGTERM", drainTimeoutMs: 0 }).then((result) => {
-      expect(result.warnings).toContain("restart-reply-drain");
-      closed();
-    });
+    })({ reason: "SIGTERM", drainTimeoutMs: 0 }).then(closed);
     try {
       await sourcesSettled;
       expect(active.every(({ source }) => source.input.abortSignal.aborted)).toBe(true);
       expect(pendingReply.input.abortSignal.aborted).toBe(true);
-      expect(queuedAbortedAtRecovery).toBe(false);
-      expect(pendingReply.input.phase).toBe("consumed");
       expect(background.isActive()).toBe(false);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(formatGatewayPendingCloseSteps()).toMatch(
@@ -177,21 +215,13 @@ export function registerGatewayCancellationTests({
       const markerEntered = createDeferredCore();
       const markerCommitted = createDeferredCore();
       const receivedWork = new AbortController();
-      const order: string[] = [];
-      setShutdownHook(async () => {
-        order.push("hook");
-      });
-      const cancelReceivedWork = vi.fn((reason?: Error) => {
-        order.push("cancel");
-        receivedWork.abort(reason);
-      });
+      const cancelReceivedWork = vi.fn((reason?: Error) => receivedWork.abort(reason));
       const observed: boolean[] = [];
       let finalizingWasPreserved = false;
       const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(
         async () => {
           markerEntered.resolve(undefined);
           await markerCommitted.promise;
-          order.push("marker");
           if (markerFails) {
             throw new Error("marker write failed");
           }
@@ -210,7 +240,6 @@ export function registerGatewayCancellationTests({
           reboundDuringAbort.complete();
         },
         disposeAllCodeModeRuns: () => {
-          order.push("dispose");
           observed.push(owned.abortSignal.aborted && receivedWork.signal.aborted);
         },
         resolveGatewayContext,
@@ -225,8 +254,10 @@ export function registerGatewayCancellationTests({
         markerCommitted.resolve(undefined);
         const result = await closing;
 
+        expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+          expect.objectContaining({ activeRuns: [], reason: "gateway restart shutdown" }),
+        );
         expect(observed).toEqual([true, true]);
-        expect(order).toEqual(["marker", "cancel", "hook", "dispose"]);
         expect(cancelReceivedWork).toHaveBeenCalledOnce();
         expect(isAgentRunRestartAbortReason(receivedWork.signal.reason)).toBe(true);
         expect(isAgentRunRestartAbortReason(owned.abortSignal.reason)).toBe(true);

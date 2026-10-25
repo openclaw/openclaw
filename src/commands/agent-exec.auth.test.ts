@@ -158,6 +158,7 @@ describe("agent exec stored auth", () => {
           profiles: {
             "openai:shared": { ...storedProfile, key: "shared-test-key" },
             "openai:token": { type: "token", provider: "openai", token: "shared-test-token" },
+            "openai:private": { ...storedProfile, copyToAgents: false },
           },
         } satisfies Parameters<typeof setRuntimeAuthProfileStoreSnapshot>[0];
         const localStore = {

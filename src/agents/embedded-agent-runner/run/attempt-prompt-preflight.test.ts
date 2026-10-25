@@ -109,6 +109,15 @@ describe("attempt prompt preflight", () => {
     const discarded = variant === "discarded-invalid";
     const fitting = variant.startsWith("fitting-");
     const unwindowed = variant === "unwindowed-tools";
+    const toolWithOutputSchema = {
+      name: "lookup",
+      description: "Look up a record.",
+      parameters: { type: "object" },
+      outputSchema: {
+        type: "string",
+        description: "result documentation ".repeat(4_000),
+      },
+    };
     const owner = checkpoint(
       false,
       variant === "missing-window" || discarded
@@ -140,17 +149,7 @@ describe("attempt prompt preflight", () => {
       hookMessagesForCurrentPrompt: discarded ? [] : [owner],
       toolSchemaTokens:
         variant === "fitting-with-tool-output-schema"
-          ? estimateToolSchemaTokenPressure([
-              {
-                name: "lookup",
-                description: "Look up a record.",
-                parameters: { type: "object" },
-                outputSchema: {
-                  type: "string",
-                  description: "result documentation ".repeat(4_000),
-                },
-              },
-            ])
+          ? estimateToolSchemaTokenPressure([toolWithOutputSchema])
           : undefined,
     });
     if (discarded || fitting) {

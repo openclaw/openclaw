@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withCliTty } from "../run-main.bare-root.test-support.js";
@@ -91,7 +92,8 @@ function expectOptionFailure(message: string, json: boolean) {
   expectNoCalls(setup, recommendations, acknowledge, refresh, wizard, systemAgent);
   if (json) {
     expect(runtime.log).toHaveBeenCalledOnce();
-    expect(JSON.parse(runtime.log.mock.calls[0][0])).toMatchObject({
+    const call = expectDefined(runtime.log.mock.calls[0], "JSON option diagnostic");
+    expect(JSON.parse(call[0])).toMatchObject({
       ok: false,
       phase: "options",
       error: { type: "cli_error", message: diagnostic },

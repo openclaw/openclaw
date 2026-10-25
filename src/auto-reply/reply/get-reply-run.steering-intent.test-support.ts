@@ -92,6 +92,8 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
       ...routed.result,
       ...levels,
       defaultActivation: routed.result.defaultActivation,
+      ctx,
+      sessionCtx,
       conversation: prepareReplyConversation({ ctx: sessionCtx, sessionEntry }),
     };
   } finally {

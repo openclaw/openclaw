@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { finalizeInboundContextForSdk } from "../auto-reply/reply/inbound-context.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -313,7 +314,7 @@ it.each([
               return normalizedFrom ? { conversationId: `user:${normalizedFrom}` } : null;
             },
           },
-        },
+        } satisfies ChannelPlugin,
       },
     ]),
   );

@@ -211,7 +211,7 @@ describe("paired-device automatic placement selection", () => {
     expectCandidates(result, ["alpha", 0], ["bravo", 2], ["charlie", 5]);
   });
 
-  it.each([
+  it.each<[number, Partial<EnvironmentSummary>, string]>([
     [2, { sessionHost: false }, "pair a node, enable session hosting"],
     [2, { status: "unavailable" }, "all paired session-host nodes are disconnected"],
     [0, {}, "device worker is at capacity"],
@@ -220,7 +220,7 @@ describe("paired-device automatic placement selection", () => {
       { sessionHost: false, issues: [NODE_RUNNER_UPDATE_REQUIRED_ISSUE] },
       "run openclaw update, then reconnect",
     ],
-  ] as const)("explains unavailable hosts (%s, %j)", async (available, overrides, message) => {
+  ])("explains unavailable hosts (%s, %j)", async (available, overrides, message) => {
     expectError(await selectNodes([nodeEnvironment("node", available, overrides)]), message);
   });
 

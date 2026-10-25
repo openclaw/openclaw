@@ -11,6 +11,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { appendMeetingTranscriptUtterance, meetingTranscriptDb } from "./store-sqlite.js";
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
@@ -428,6 +429,47 @@ it("retains admitted ID origins across updates, reopen, and Doctor restoration",
   }
 });
 
+it("bounds exact retry lookups to one caption ID without adding statements", async () => {
+  const target = await admit();
+  writeTransaction((db) => {
+    const queries: string[] = [];
+    const sql = observeMainThreadSql({ onStatement: (query) => queries.push(query) });
+    try {
+      const append = (utterance: TranscriptUtterance) => {
+        sql.clear();
+        queries.length = 0;
+        appendMeetingTranscriptUtterance({
+          database: db,
+          session: target,
+          utterance,
+          metadataJson: null,
+          now: 1,
+        });
+        return [...queries];
+      };
+      const utterance = { id: "new-caption", text: "Speech" };
+      const statements = append(utterance);
+      expect(statements).toHaveLength(4);
+      const retryQuery = statements.find((query) =>
+        /^select .* from "meeting_transcript_utterances"/u.test(query),
+      );
+      expect(retryQuery).toBeDefined();
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${retryQuery}`).all();
+      expect(plan).toContainEqual(
+        expect.objectContaining({
+          detail: expect.stringContaining(
+            "idx_meeting_transcript_utterances_id (session_id=? AND session_started_at=? AND utterance_id=?)",
+          ),
+        }),
+      );
+      expect(append(utterance)).toHaveLength(1);
+      expect(append({ text: "No ID" })).toHaveLength(3);
+    } finally {
+      sql.restore();
+    }
+  });
+});
+
 it("deduplicates exact retries but preserves same-id revisions", async () => {
   const target = await admit();
   const interim = { id: "utterance-1", text: "draft" };
@@ -633,7 +675,10 @@ it("exports canonical durable notes, recovers concurrent manifests, and preserve
   });
   fs.appendFileSync(artifacts.transcriptPath, '{"text":"external edit"}\n');
   const updated = { ...target, stoppedAt: "2026-07-01T11:00:00.000Z" };
-  await store.writeSession(updated);
+  await expect(store.writeSession(updated)).resolves.toMatchObject({
+    inserted: false,
+    inputRevision: expect.any(String),
+  });
   expect(await store.readSession(target.sessionId)).toEqual(updated);
   await writeNotes(target, "Updated notes");
   expect((await store.readSummary(target)).summary?.overview).toBe("Updated notes");

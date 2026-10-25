@@ -190,7 +190,7 @@ describe("backup registration", () => {
     [
       "sqlite create --global --repository /repo --json",
       handlers.sqliteCreate,
-      { global: true, agent: undefined, repository: "/repo" },
+      { global: true, repository: "/repo" },
     ],
     ["sqlite list --repository /repo --json", handlers.sqliteList, { repository: "/repo" }],
     [
