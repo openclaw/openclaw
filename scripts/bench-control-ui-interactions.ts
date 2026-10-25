@@ -246,6 +246,7 @@ type Result = {
   taskMs?: number;
   layoutMs?: number;
   styleMs?: number;
+  durationBreakdownMs?: Record<string, number>;
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
@@ -826,6 +827,11 @@ try {
               }
               result[key] = (after[name] - before[name]) * 1000;
             }
+            result.durationBreakdownMs = Object.fromEntries(
+              Object.entries(after)
+                .filter(([name]) => name.endsWith("Duration"))
+                .map(([name, value]) => [name, (value - before[name]!) * 1000]),
+            );
             result.requests = {};
             for (const request of (await gateway.getRequests()).slice(requestsBefore)) {
               result.requests[request.method] = (result.requests[request.method] ?? 0) + 1;

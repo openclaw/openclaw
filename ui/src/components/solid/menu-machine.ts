@@ -91,10 +91,13 @@ export function useMenuMachine(
     return runtime;
   };
   // Rows share one rendered snapshot; imperative navigation still reads the live machine.
-  const presentation = createMemo(() => {
-    const loaded = current();
-    return loaded ? { runtime: loaded, api: loaded.read() } : undefined;
-  });
+  const presentation = createMemo(
+    () => {
+      const loaded = current();
+      return loaded ? { runtime: loaded, api: loaded.read() } : undefined;
+    },
+    { lazy: true },
+  );
   const run = (intent: (loaded: MenuRuntime) => void) => {
     if (runtime) {
       intent(runtime);
