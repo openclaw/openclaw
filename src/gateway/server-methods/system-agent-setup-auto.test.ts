@@ -219,28 +219,8 @@ describe("Gateway automatic inference setup", () => {
     expect(fixture.activate).toHaveBeenCalledOnce();
     expect(fixture.prepare).not.toHaveBeenCalled();
   });
-
-  it("returns an existing model and ranked alternatives without starting a write", async () => {
-    const current: SetupInferenceCandidate = {
-      ...codex,
-      kind: "existing-model",
-      label: "Current model",
-    };
-    fixture.detect.mockResolvedValue(detection([openai, current, codex], { setupComplete: true }));
-
-    expect(await runSetup()).toEqual({
-      status: "configured",
-      selected: { ...presentedCodex, kind: "existing-model", label: "Current model" },
-      alternatives: [presentedCodex, presentedOpenai],
-      attempts: [],
-      installedPlugins: [],
-    });
-    expect(fixture.readConfig).toHaveBeenCalledOnce();
-    expectUnused(fixture.activate, fixture.prepare, fixture.commit, fixture.audit);
-  });
-
   it.each(["user", "agent"] as const)(
-    "reports configured Codex sharing without a write (home scope: %s)",
+    "returns the configured model, ranked alternatives, and %s sharing without a write",
     async (homeScope) => {
       fixture.readConfig.mockResolvedValue({
         config: {
@@ -254,13 +234,23 @@ describe("Gateway automatic inference setup", () => {
         },
       });
       fixture.detect.mockResolvedValue(
-        detection([{ ...codex, kind: "existing-model" }], { setupComplete: true }),
+        detection([openai, { ...codex, kind: "existing-model" }, codex], { setupComplete: true }),
       );
       const result = await runSetup();
-      expect(result).toMatchObject({ status: "configured" });
-      expect(result.selected?.shared).toBe(homeScope === "user" ? true : undefined);
-      expect(result.separateSignIn).toEqual(homeScope === "user" ? separateSignIn : undefined);
-      expectUnused(fixture.activate, fixture.commit);
+      expect(result).toEqual({
+        status: "configured",
+        selected: {
+          ...presentedCodex,
+          kind: "existing-model",
+          ...(homeScope === "user" ? { shared: true } : {}),
+        },
+        ...(homeScope === "user" ? { separateSignIn } : {}),
+        alternatives: [presentedCodex, presentedOpenai],
+        attempts: [],
+        installedPlugins: [],
+      });
+      expect(fixture.readConfig).toHaveBeenCalledOnce();
+      expectUnused(fixture.activate, fixture.prepare, fixture.commit, fixture.audit);
     },
   );
 

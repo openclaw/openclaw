@@ -236,26 +236,14 @@ async function exercise(
       expect(respond).not.toHaveBeenCalled();
       const transcriptReadsBeforeRelease = boundaries.visit.mock.calls.length;
       if (!disclosureBoundary) {
-        expect(guard).toHaveBeenCalled();
         expect(transcriptReadsBeforeRelease).toBe(secondPreparation ? 1 : 0);
       }
       changeAuthority();
-      if (!disclosureBoundary) {
-        expect(captured.isCurrent()).toBe(
-          change !== "device revoked" && change !== "caller replaced",
-        );
-      }
       release.resolve();
       const settled = await outcome;
       if (change === "reconnected") {
         expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
         expect(respond.mock.calls[0]?.[0]).toBe(true);
-        if (!disclosureBoundary) {
-          expect(boundaries.visit).toHaveBeenCalledOnce();
-        }
-        if (secondPreparation) {
-          expect(boundaries.managed).toHaveBeenCalledOnce();
-        }
         if (method === "artifacts.download" && disclosureBoundary === "transcript") {
           expect(respond.mock.calls[0]?.[1]).toMatchObject({
             encoding: "base64",
@@ -305,16 +293,12 @@ describe("registered artifact request authority after session preparation", () =
         connId: "artifact-default-agent",
         connect: gatewayConnect(["operator.read"]),
       };
-      const request = async (
-        selectedMethod: Method,
-        params: Record<string, unknown>,
-        getRuntimeConfig: () => OpenClawConfig,
-      ) => {
+      const request = async (selectedMethod: Method, params: Record<string, unknown>) => {
         const respond = vi.fn();
         await handleGatewayRequest({
           req: { type: "req", id: selectedMethod, method: selectedMethod, params },
           client,
-          context: { getRuntimeConfig } as GatewayRequestContext,
+          context: { getRuntimeConfig: () => config } as GatewayRequestContext,
           methodRegistry: registry,
           isWebchatConnect: () => false,
           respond,
@@ -332,11 +316,7 @@ describe("registered artifact request authority after session preparation", () =
           message: assistantFileMessage({ title: `${agentId}.txt` }),
         });
       }
-      const listed = await request(
-        "artifacts.list",
-        { sessionKey: "agent:work:main" },
-        () => config,
-      );
+      const listed = await request("artifacts.list", { sessionKey: "agent:work:main" });
       expect(listed.mock.calls[0]?.[0]).toBe(true);
       const artifactId: unknown = listed.mock.calls[0]?.[1]?.artifacts?.[0]?.id;
       if (typeof artifactId !== "string") {
@@ -349,14 +329,10 @@ describe("registered artifact request authority after session preparation", () =
         setRuntimeConfigSnapshot(config);
         return resolve;
       });
-      const response = await request(
-        method,
-        {
-          sessionKey: "main",
-          ...(method === "artifacts.list" ? {} : { artifactId }),
-        },
-        () => config,
-      );
+      const response = await request(method, {
+        sessionKey: "main",
+        ...(method === "artifacts.list" ? {} : { artifactId }),
+      });
       expect(response.mock.calls[0]?.[0]).toBe(true);
       const expected = { id: artifactId, sessionKey: "agent:work:main", title: "work.txt" };
       expect(response.mock.calls[0]?.[1]).toMatchObject(

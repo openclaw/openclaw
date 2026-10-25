@@ -137,23 +137,19 @@ function controlProjectionClock(afterRow?: () => void) {
       return (...viewer) => {
         const prepared = recipient(...viewer);
         const presentation = prepared.getPresentation();
-        return {
-          ...prepared,
-          getPresentation: () => ({
-            ...presentation,
-            snapshot(...rowArgs: Parameters<typeof presentation.snapshot>) {
-              try {
-                return presentation.snapshot(...rowArgs);
-              } finally {
-                presented();
-                clock += 20;
-                cpu.user += 750;
-                cpu.system += 250;
-                afterRow?.();
-              }
-            },
-          }),
-        };
+        const snapshot = presentation.snapshot.bind(presentation);
+        vi.spyOn(presentation, "snapshot").mockImplementation((...rowArgs) => {
+          try {
+            return snapshot(...rowArgs);
+          } finally {
+            presented();
+            clock += 20;
+            cpu.user += 750;
+            cpu.system += 250;
+            afterRow?.();
+          }
+        });
+        return prepared;
       };
     } finally {
       cpu.user += 1_250;

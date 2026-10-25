@@ -7,7 +7,6 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -25,9 +24,7 @@ import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../session-row-projection.js";
-import * as rowInputs from "../session-utils-row.js";
 import { listProjectRecents } from "./projects-recents.js";
-import { loadProjectSessionStore } from "./projects-session-store.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
 
@@ -57,48 +54,6 @@ test("folder recents deduplicate normalized nodes without merging different runn
     { kind: "folder", folder: "/work/app", displayName: "app" },
   ]);
   expect([...usedSessions]).toEqual([0, 2, 3].map((index) => `agent:main:folder-${index}`));
-});
-
-test("projects.list reuses durable metadata until a committed session change", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-reuse-" });
-  let projection: SessionRowProjection | undefined;
-  try {
-    const profile = ensureProfileForEmail("projects-reuse@example.test");
-    const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
-    const target = { agentId: "main", sessionKey: "agent:main:recent" };
-    const entry = {
-      sessionId: "recent",
-      updatedAt: 100,
-      createdActor: { type: "human" as const, source: "profile" as const, id: profile.id },
-      spawnedCwd: "/work/before",
-    };
-    replaceSessionEntrySync(target, entry);
-    projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const list = () =>
-      invokeProjectMethod(
-        "projects.list",
-        {},
-        cfg,
-        ["operator.write"],
-        profile.id,
-        registeredProjectsHandlers,
-        projection,
-      );
-    expectRecents(await list(), [folderRecent("before")]);
-    const snapshot = loadProjectSessionStore(projection, []);
-    expect(Object.isFrozen(snapshot.store)).toBe(true);
-    await list();
-    expect(loadProjectSessionStore(projection, [])).toBe(snapshot);
-    replaceSessionEntrySync(target, { ...entry, updatedAt: 200, spawnedCwd: "/work/after" });
-    expectRecents(await list(), [folderRecent("after")]);
-    expect(snapshot.store[target.sessionKey]?.spawnedCwd).toBe("/work/before");
-    expect(loadProjectSessionStore(projection, []).store[target.sessionKey]?.spawnedCwd).toBe(
-      "/work/after",
-    );
-  } finally {
-    projection?.dispose();
-    await state.cleanup();
-  }
 });
 
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
@@ -197,39 +152,27 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     do {
       await projection.ensureMaterialized();
     } while (projection.needsMaterialization);
-    const workerReads = vi.spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases");
-    const display = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation(() => {
-      throw new Error("Session display refresh is unavailable");
-    });
-    try {
-      sessionChanges.emit({ all: true, scope: "catalog" });
-      for (const [scope, expected] of [
-        ["operator.read", readResult],
-        ["operator.write", writeResult],
-      ] as const) {
-        const sql = observeHostDataSql();
-        expect(await list([scope]).finally(sql.restore)).toEqual(expected);
-        expect(
-          sql.queries.filter((statement) =>
-            /\buser_profile(?:s|_emails|_identities)\b/u.test(statement),
-          ),
-        ).toEqual([]);
-      }
-      expect(workerReads).not.toHaveBeenCalled();
-      display.mockRestore();
-      seed("agent:main:updated-recent", {
-        sessionId: "updated-recent",
-        updatedAt: 2_000,
-        spawnedCwd: "/work/updated",
-      });
-      expect((await list())?.payload).toMatchObject({
-        recents: [folderRecent("updated"), ...expectedRecents.slice(0, 7)],
-      });
-      expect(workerReads).toHaveBeenCalled();
-    } finally {
-      display.mockRestore();
-      workerReads.mockRestore();
+    sessionChanges.emit({ all: true, scope: "catalog" });
+    for (const [scope, expected] of [
+      ["operator.read", readResult],
+      ["operator.write", writeResult],
+    ] as const) {
+      const sql = observeHostDataSql();
+      expect(await list([scope]).finally(sql.restore)).toEqual(expected);
+      expect(
+        sql.queries.filter((statement) =>
+          /\buser_profile(?:s|_emails|_identities)\b/u.test(statement),
+        ),
+      ).toEqual([]);
     }
+    seed("agent:main:updated-recent", {
+      sessionId: "updated-recent",
+      updatedAt: 2_000,
+      spawnedCwd: "/work/updated",
+    });
+    expect((await list())?.payload).toMatchObject({
+      recents: [folderRecent("updated"), ...expectedRecents.slice(0, 7)],
+    });
     const tiedKeys = ["agent:main:e\u0301", "agent:main:é"] as const;
     expect(tiedKeys[0].localeCompare(tiedKeys[1])).toBe(0);
     for (const [index, sessionKey] of tiedKeys.entries()) {

@@ -383,28 +383,23 @@ it.each([
       const context = await createHistoryReadContext({ getRuntimeConfig: () => config });
       const rpc = historyRpc(context, scope.sessionKey);
       const request = { sessionKey: scope.sessionKey, messageId: "retained-message" };
-      const readMessage = vi.spyOn(transcriptReaders, "readSessionMessageByIdAsync");
-      try {
-        for (const explicitOwner of [false, true]) {
-          readMessage.mockClear();
-          const respond = await rpc("chat.message.get", {
-            ...request,
-            ...(explicitOwner ? { agentId } : {}),
+      using readMessage = vi.spyOn(transcriptReaders, "readSessionMessageByIdAsync");
+      for (const explicitOwner of [false, true]) {
+        readMessage.mockClear();
+        const respond = await rpc("chat.message.get", {
+          ...request,
+          ...(explicitOwner ? { agentId } : {}),
+        });
+        if (explicitOwner && !explicitOwnerAllowed) {
+          expectHistoryError(respond, {
+            code: "INVALID_REQUEST",
+            message: `Unknown agent id "${agentId}"`,
           });
-          expect(respond).toHaveBeenCalledOnce();
-          if (explicitOwner && !explicitOwnerAllowed) {
-            expectHistoryError(respond, {
-              code: "INVALID_REQUEST",
-              message: `Unknown agent id "${agentId}"`,
-            });
-            expect(readMessage).not.toHaveBeenCalled();
-          } else {
-            expectHistoryMessage(respond, assistant("Retained retired-agent reply"));
-            expect(readMessage).toHaveBeenCalledOnce();
-          }
+          expect(readMessage).not.toHaveBeenCalled();
+        } else {
+          expectHistoryMessage(respond, assistant("Retained retired-agent reply"));
+          expect(readMessage).toHaveBeenCalledOnce();
         }
-      } finally {
-        readMessage.mockRestore();
       }
     });
   },

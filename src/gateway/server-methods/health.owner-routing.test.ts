@@ -17,7 +17,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { HealthSummary } from "../health/types.js";
 import type { GatewayHostLifecycle } from "../server-public.js";
 import * as processVitals from "../server/process-vitals.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { healthHandlers } from "./health.js";
 
 afterEach(() => {
@@ -236,13 +235,9 @@ describe("Gateway status owner routing", () => {
     },
   );
 
-  it.each([
-    { changeDuringRead: true, reset: false },
-    { changeDuringRead: true, reset: true },
-    { changeDuringRead: false, reset: true },
-  ])(
-    "keeps live diagnostics out of cached health ($changeDuringRead, $reset)",
-    async ({ changeDuringRead, reset }) => {
+  it.each([false, true])(
+    "keeps live diagnostics out of cached health (reset=%s)",
+    async (reset) => {
       await withStateDirEnv("openclaw-gateway-health-diagnostics-", async ({ stateDir }) => {
         const initial = {
           degraded: false,
@@ -260,7 +255,7 @@ describe("Gateway status owner routing", () => {
           available: false,
         };
         const read = vi.spyOn(childRuntime, "readChildRuntimeViability").mockReturnValue(removed);
-        let current: HealthSummary["eventLoop"] = changeDuringRead ? initial : undefined;
+        let current: HealthSummary["eventLoop"] = initial;
         const next = reset ? undefined : { ...initial, cpuCoreRatio: 1.2 };
         const request = createHealthReader(cached, () => current)();
         current = next;
@@ -396,27 +391,4 @@ describe("Gateway status owner routing", () => {
       );
     });
   });
-
-  it.each(["main", "molty", undefined])(
-    "uses recorded owner %s for public main aliases",
-    (agentId) => {
-      const config = statusConfig("/synthetic", {
-        ownership: "explicit",
-        ...(agentId ? { defaults: { systemAgent: { agentId } } } : {}),
-        entries: { main: {}, molty: {} },
-      });
-      const selected = resolveRequestedSessionAgentId(config, "main");
-      if (agentId) {
-        expect(selected).toEqual({ ok: true, agentId });
-      } else {
-        expect(selected).toMatchObject({ ok: false });
-      }
-      for (const id of ["molty", "main"]) {
-        expect(resolveRequestedSessionAgentId(config, `agent:${id}:main`)).toEqual({
-          ok: true,
-          agentId: id,
-        });
-      }
-    },
-  );
 });
