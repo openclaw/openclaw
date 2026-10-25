@@ -2,16 +2,13 @@ import fs from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TICK_INTERVAL_MS } from "../gateway/server-constants.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
-import {
-  acquireGatewayLock,
-  readLockPayloadSync,
-  resolveGatewayLockPaths,
-  resolveGatewayOwnerStatus,
-} from "../infra/gateway-lock.js";
+import { acquireGatewayLock, resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import {
   GATEWAY_SHUTDOWN_RESERVE_MS,
   GATEWAY_SHUTDOWN_TIMEOUT_MS,
@@ -175,6 +172,58 @@ it.each([
   },
 );
 
+it("keeps legacy startup excluded until Doctor's own resources drain", async () => {
+  await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
+    const maintenance = expectDefined(await beginDoctorRepair(), "Doctor maintenance");
+    const { stateLockPath } = resolveGatewayLockPaths(state.env);
+    const claimLegacyLock = () => {
+      fs.mkdirSync(path.dirname(stateLockPath), { recursive: true });
+      fs.closeSync(fs.openSync(stateLockPath, "wx", 0o600));
+      fs.unlinkSync(stateLockPath);
+    };
+    const closing = createDeferredCore();
+    const settle = createDeferredCore();
+    let releasing: Promise<void> | undefined;
+    try {
+      await maintenance.run(async () => {
+        const child = expectDefined(
+          await acquireGatewayLock({
+            env: state.env,
+            role: "sqlite-maintenance",
+            allowInTests: true,
+            timeoutMs: 0,
+          }),
+          "nested maintenance",
+        );
+        await child.release();
+        expect(claimLegacyLock).toThrow(/EEXIST/);
+        expectDefined(getOpenClawDatabaseMaintenanceScope(), "Doctor resource scope").own(
+          {},
+          "shared-resources",
+          async () => {
+            closing.resolve();
+            await settle.promise;
+          },
+        );
+      });
+      releasing = maintenance.release();
+      await awaitGateBeforeSettlement(
+        closing.promise,
+        releasing,
+        "Doctor released before draining its resource",
+      );
+      expect(claimLegacyLock).toThrow(/EEXIST/);
+      settle.resolve();
+      await releasing;
+      expect(claimLegacyLock).not.toThrow();
+    } finally {
+      settle.resolve();
+      await releasing;
+      await maintenance.release();
+    }
+  });
+});
+
 it.each([false, true])(
   "shares the state/agent wait deadline (state wait=%s)",
   async (stateWait) => {
@@ -330,79 +379,3 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
     }
   },
 );
-
-it("keeps the published legacy startup gate through nested Doctor work and resource drainage", async () => {
-  await withOpenClawTestState(
-    { scenario: "external-service", label: "doctor-legacy-startup-exclusion" },
-    async (state) => {
-      const maintenance = await beginDoctorRepair();
-      if (!maintenance) {
-        throw new Error("Expected Doctor maintenance ownership");
-      }
-      const { stateLockPath } = resolveGatewayLockPaths(state.env);
-      // Published 2026.9.4 startup claims this path with exclusive creation and
-      // preserves it when the recorded process identity is still live.
-      const canClaimLegacyStateLock = () => {
-        fs.mkdirSync(path.dirname(stateLockPath), { recursive: true });
-        let descriptor: number;
-        try {
-          descriptor = fs.openSync(stateLockPath, "wx", 0o600);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-            return false;
-          }
-          throw error;
-        }
-        fs.closeSync(descriptor);
-        fs.unlinkSync(stateLockPath);
-        return true;
-      };
-      const closing = createDeferredCore();
-      const settle = createDeferredCore();
-      let releasing: Promise<void> | undefined;
-      try {
-        expect(canClaimLegacyStateLock()).toBe(false);
-        const identity = readLockPayloadSync(stateLockPath, true);
-        expect(identity).toMatchObject({ pid: process.pid, role: "agent-embedded" });
-        expect(await resolveGatewayOwnerStatus(process.pid, identity, process.platform)).toBe(
-          "alive",
-        );
-        await maintenance.run(async () => {
-          const child = await acquireGatewayLock({
-            env: state.env,
-            role: "sqlite-maintenance",
-            allowInTests: true,
-            timeoutMs: 0,
-          });
-          expect(child).not.toBeNull();
-          await child?.release();
-          expect(canClaimLegacyStateLock()).toBe(false);
-          const scope = getOpenClawDatabaseMaintenanceScope();
-          if (!scope) {
-            throw new Error("Expected Doctor's resource scope");
-          }
-          scope.own({}, "shared-resources", async () => {
-            closing.resolve();
-            await settle.promise;
-          });
-        });
-        releasing = maintenance.release();
-        await Promise.race([
-          closing.promise,
-          releasing.then(() => {
-            throw new Error("Doctor released before draining its resource");
-          }),
-        ]);
-        expect(canClaimLegacyStateLock()).toBe(false);
-        settle.resolve();
-        await releasing;
-        expect(fs.existsSync(stateLockPath)).toBe(false);
-        expect(canClaimLegacyStateLock()).toBe(true);
-      } finally {
-        settle.resolve();
-        await releasing;
-        await maintenance.release();
-      }
-    },
-  );
-});
