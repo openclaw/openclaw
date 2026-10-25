@@ -104,7 +104,8 @@ function mount(
     eventListeners: listeners,
     emit: ((event) => {
       // The Gateway snapshots its event subscribers before delivery.
-      for (const listener of [...listeners]) {
+      const delivery = [...listeners];
+      for (const listener of delivery) {
         listener(event);
       }
     }) as GatewayEventListener,
@@ -554,12 +555,11 @@ describe("Canvas widget view", () => {
   it("binds guest retry events before each lookup and releases unresolved bindings", async () => {
     const pending = createDeferred<CanvasDocumentViewResult>();
     const listenersAtLookup: number[] = [];
-    let view!: OpenClawCanvasWidgetView;
     client.request.mockImplementation(() => {
       listenersAtLookup.push(gateways.get(view)!.eventListeners.size);
       return pending.promise;
     });
-    view = mount(client, "cv_pending", document.body, ["operator.sessions.read"]);
+    const view = mount(client, "cv_pending", document.body, ["operator.sessions.read"]);
     await settle(view);
     const events = gateways.get(view)!.eventListeners;
     expect(events.size).toBe(1);

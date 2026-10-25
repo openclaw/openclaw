@@ -24,7 +24,8 @@ export function observeWindowMessage(
         if (!subscribers) {
           return;
         }
-        for (const subscriber of [...subscribers]) {
+        const delivery = [...subscribers];
+        for (const subscriber of delivery) {
           if (!subscribers.has(subscriber)) {
             continue;
           }

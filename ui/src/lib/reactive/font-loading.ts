@@ -13,7 +13,8 @@ export function observeFontLoading(fonts: FontFaceSet | undefined, notify: () =>
     subscription = {
       listeners,
       stop: listen(fonts, "loadingdone", () => {
-        for (const listener of [...listeners]) {
+        const delivery = [...listeners];
+        for (const listener of delivery) {
           if (listeners.has(listener)) {
             try {
               listener();

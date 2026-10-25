@@ -60,7 +60,8 @@ export function createMediaQuerySource(query: string, fallback = false) {
       current.listeners.add(entry);
       current.stop ??= listen(current.media, "change", () => {
         const value = current.media.matches;
-        for (const callback of [...current.listeners]) {
+        const delivery = [...current.listeners];
+        for (const callback of delivery) {
           if (current.listeners.has(callback)) {
             try {
               callback(value);
@@ -104,7 +105,8 @@ export function subscribeDocumentVisibility(
       listeners,
       stop: listen(ownerDocument, "visibilitychange", () => {
         const value = ownerDocument.visibilityState !== "hidden";
-        for (const listener of [...listeners]) {
+        const delivery = [...listeners];
+        for (const listener of delivery) {
           if (listeners.has(listener)) {
             try {
               listener(value);

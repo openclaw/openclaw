@@ -13,7 +13,8 @@ export function observeWindowResize(view: Window, callback: () => void): () => v
     pool = {
       subscribers,
       stop: listen(view, "resize", () => {
-        for (const subscriber of [...subscribers]) {
+        const delivery = [...subscribers];
+        for (const subscriber of delivery) {
           if (!subscribers.has(subscriber)) {
             continue;
           }
