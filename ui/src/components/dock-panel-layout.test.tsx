@@ -160,6 +160,27 @@ it("clamps to viewport changes only while attached", () => {
   expect(reserve("test-resize-lifetime")).toBe("0px");
 });
 
+it("keeps closed dock separators unmounted without calculating viewport bounds", async () => {
+  const layout = createLayout("right");
+  const host = { notify: vi.fn() };
+  const controller = createDock("test-closed", { ...host, layout });
+  controller.connect();
+  const bounds = vi.spyOn(layout, "maxWidth");
+  const { container, unmount } = mountResizer(host, controller);
+  flush();
+  expect(container.querySelector("resizable-divider")).toBeNull();
+  expect(bounds).not.toHaveBeenCalled();
+  controller.setOpen(true);
+  const separator = await separatorIn(container);
+  expect(separator.getAttribute("role")).toBe("separator");
+  expect(bounds).toHaveBeenCalled();
+  controller.setOpen(false);
+  flush();
+  expect(container.querySelector("resizable-divider")).toBeNull();
+  controller.dispose();
+  unmount();
+});
+
 describe("DockLayout inline columns", () => {
   it("lets only the standalone bottom dock own the shared reservation", () => {
     const layout = createLayout("right");
@@ -202,6 +223,7 @@ describe("DockLayout inline columns", () => {
     const options = { ...host, layout };
     const controller = createDock("test-inline", options);
     controller.connect();
+    controller.setOpen(true, false);
     const { container, unmount } = mountResizer(host, controller);
     const separator = await separatorIn(container);
     separator.dispatchEvent(
@@ -230,6 +252,7 @@ describe("DockLayout inline columns", () => {
     const host = { notify: vi.fn() };
     const controller = createDock("test-keyboard", host);
     controller.connect();
+    controller.setOpen(true, false);
     const { container, unmount } = mountResizer(host, controller);
     let separator = await separatorIn(container);
     expect(separator.getAttribute("role")).toBe("separator");

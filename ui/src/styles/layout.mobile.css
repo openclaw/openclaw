@@ -65,10 +65,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
     opacity 100ms ease-out;
 }
 
-.shell--mobile-nav .sidebar-resizer {
-  display: none;
-}
-
 .shell--mobile-nav .shell-nav-backdrop {
   /* Use the positioned app canvas, including its safe-area padding. Safari
      extends fixed backgrounds into browser chrome with an independent fade. */
