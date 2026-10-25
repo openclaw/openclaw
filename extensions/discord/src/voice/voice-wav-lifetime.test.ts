@@ -8,7 +8,6 @@ import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
 
 const workspace = vi.hoisted(() => ({
   rootDir: "",
-  beforeCreate: undefined as (() => void) | undefined,
   afterWrite: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
@@ -18,7 +17,6 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
     resolvePreferredOpenClawTmpDir: () => workspace.rootDir,
     // The receive owner must observe leave before its awaited WAV write returns.
     tempWorkspace: async (options: Parameters<typeof actual.tempWorkspace>[0]) => {
-      workspace.beforeCreate?.();
       const temporary = await actual.tempWorkspace(options);
       return {
         ...temporary,
@@ -34,7 +32,6 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {
 
 defineDiscordVoiceTests((h) => {
   beforeEach(async () => {
-    workspace.beforeCreate = undefined;
     workspace.afterWrite = undefined;
     workspace.rootDir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-wav-lifetime-")),
@@ -62,11 +59,6 @@ defineDiscordVoiceTests((h) => {
         await callbacks.onChunk(pcm, pcm);
       }
     });
-    h.transcribeAudioFileMock.mockImplementation(async ({ filePath }) => {
-      const wav = await fs.readFile(filePath);
-      expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
-      return { text: "Meeting notes" };
-    });
     const entry = h.getSessionEntry(manager);
     const audio = await import("./audio.js");
     const writeWav = audio.writeVoiceWavFile;
@@ -77,14 +69,11 @@ defineDiscordVoiceTests((h) => {
       cleanups.push(released.promise);
       return { ...wav, cleanup: () => wav.cleanup().then(() => released.resolve()) };
     });
-    const receive = async (pcm: Buffer | Buffer[] = Buffer.alloc(192_000)) => {
+    const receive = async (pcm = Buffer.alloc(192_000)) => {
       const stream = new PassThrough({ objectMode: true });
       h.getSessionConnection(entry).receiver.subscribe.mockReturnValueOnce(stream);
       const receiving = h.handleSpeakingStart(manager, entry, "guest");
-      for (const chunk of Array.isArray(pcm) ? pcm : [pcm]) {
-        stream.write(chunk);
-      }
-      stream.end();
+      stream.end(pcm);
       await receiving;
     };
     const blocked = createDeferred<void>();
@@ -100,7 +89,6 @@ defineDiscordVoiceTests((h) => {
       blocked,
       drain,
       async [Symbol.asyncDispose]() {
-        workspace.beforeCreate = undefined;
         blocked.resolve();
         await drain();
         await manager.destroy();

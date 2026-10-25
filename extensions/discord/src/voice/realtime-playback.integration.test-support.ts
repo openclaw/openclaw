@@ -45,7 +45,6 @@ export function createRealtimePlaybackFixture(
         behaviors: { noSubscriber: voiceSdk.NoSubscriberBehavior.Play, maxMissedFrames: 100 },
       }),
     joinVoiceChannel: () => connection,
-    entersState: voiceSdk.entersState,
   });
   const audio = new DiscordAudioTransport(
     {
