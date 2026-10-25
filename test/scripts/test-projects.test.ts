@@ -2749,9 +2749,12 @@ describe("test selector native source facts", () => {
         };
         for (const file of [
           "node-runtime-env.mjs",
+          "runtime-process-scripts.generated.mjs",
           "scripts/lib/test-selector-source-facts.mts",
+          "scripts/lib/test-selector-source-facts.worker.mts",
           "scripts/lib/test-source-term-matcher.mts",
           "src/infra/node-runtime-executable.ts",
+          "src/infra/runtime-process-manifest.ts",
         ]) {
           const target = path.join(cwd, file);
           fs.mkdirSync(path.dirname(target), { recursive: true });

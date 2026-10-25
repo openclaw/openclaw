@@ -18,7 +18,7 @@ export type SqliteLibrarySelection =
       extensionLoadingSupported: true;
     };
 
-type SelectionOptions = { explicitPath?: string };
+type SelectionOptions = { explicitPath?: string; standaloneRoot?: string };
 type LibraryProbe = { version: string; extensionLoadingSupported: boolean };
 const WORKER_SELECTION_KEY = "openclaw.bunSqliteLibrarySelection";
 const WORKER_CAPABILITIES_KEY = "openclaw.sqliteRuntimeCapabilities";
@@ -177,7 +177,7 @@ function createSelector() {
         : { source: "runtime" };
       return selection;
     }
-    const standaloneRoot = getEmbeddedStandaloneRuntimeRoot();
+    const standaloneRoot = options.standaloneRoot ?? getEmbeddedStandaloneRuntimeRoot();
     const bundled =
       override === undefined && standaloneRoot !== undefined
         ? posix.join(standaloneRoot, "lib/libsqlite3.dylib")

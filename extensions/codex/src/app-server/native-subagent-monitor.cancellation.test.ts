@@ -320,6 +320,35 @@ it.each([
   }
 });
 
+it("does not interrupt a native child when requester authority is revoked before consumption", async () => {
+  const f = await nativeChild();
+  let current = true;
+  try {
+    await expect(
+      f.monitor.withDescendantCancellation(
+        {
+          ...requester,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("Stop requester authority was revoked");
+            }
+          },
+        },
+        (cancel) => {
+          current = false;
+          return cancel();
+        },
+      ),
+    ).rejects.toThrow("Stop requester authority was revoked");
+    expect(f.client.request.mock.calls.filter(([method]) => method === "turn/interrupt")).toEqual(
+      [],
+    );
+    expectUntouched(f);
+  } finally {
+    f.client.close();
+  }
+});
+
 it("cancels the current generation after a retained Codex parent thread is reused", async () => {
   const f = await nativeChild();
   const currentRequestCustody: NonNullable<ParentOwner["requestCustody"]> = Object.freeze({});

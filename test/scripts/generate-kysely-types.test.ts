@@ -45,6 +45,7 @@ it("packages a runnable generator closure through the published file policy", ()
   const root = tempDirs.make("kysely-package-");
   for (const file of [
     "package.json",
+    "runtime-process-bootstrap.generated.mjs",
     ...entrypoints,
     "scripts/runtime-postbuild-shared.mjs",
     "src/infra/directory-walk.ts",
