@@ -48,35 +48,20 @@ async function captureBanner() {
 }
 
 describe("formatCliBannerLine", () => {
-  it("omits the tagline when mode is off", () => {
-    expect(formatBanner()).toBe("🦞 OpenClaw 2026.3.7 (abc1234)");
+  it.each([
+    ["off", "🦞 OpenClaw 2026.3.7 (abc1234)"],
+    ["default", "🦞 OpenClaw 2026.3.7 (abc1234) — All your chats, one OpenClaw."],
+  ] as const)("formats %s tagline mode", (mode, expected) => {
+    expect(formatBanner({ mode })).toBe(expected);
   });
-
-  it("uses the default tagline when explicitly requested", () => {
-    expect(formatBanner({ mode: "default" })).toBe(
-      "🦞 OpenClaw 2026.3.7 (abc1234) — All your chats, one OpenClaw.",
-    );
-  });
-
-  it("keeps OPENCLAW_TAGLINE_INDEX behavior in random mode", () => {
+  it.each(["0", "1abc"])("selects a complete index or falls back for %s", (index) => {
+    vi.spyOn(Math, "random").mockReturnValue(index === "0" ? 0.75 : 0);
     const line = formatBanner({
       mode: "random",
-      env: { ...bannerOptions.env, OPENCLAW_TAGLINE_INDEX: "0" },
+      env: { ...bannerOptions.env, OPENCLAW_TAGLINE_INDEX: index },
     });
-
     expect(line).toContain(firstTagline);
     expect(line).not.toContain("All your chats, one OpenClaw.");
-  });
-
-  it("ignores partial OPENCLAW_TAGLINE_INDEX values", () => {
-    vi.spyOn(Math, "random").mockReturnValue(0);
-
-    expect(
-      formatBanner({
-        mode: "random",
-        env: { ...bannerOptions.env, OPENCLAW_TAGLINE_INDEX: "1abc" },
-      }),
-    ).toContain(firstTagline);
   });
 
   it("drops decorative emoji for generic Linux terminals", () => {
@@ -90,7 +75,10 @@ describe("future holiday tagline windows (2028-2030)", () => {
 
   // Sample the public banner across the random pool at a fixed UTC date so
   // floating holidays remain visible without exporting the selection machinery.
-  const activePoolOn = (year: number, monthIndex: number, day: number): string[] => {
+  it.each([
+    [2029, 10, 5],
+    [2030, 9, 25],
+  ])("activates Diwali on %i-%i-%i", (year, monthIndex, day) => {
     vi.setSystemTime(Date.UTC(year, monthIndex, day, 12, 0, 0));
     const random = vi.spyOn(Math, "random");
     const seen = new Set<string>();
@@ -98,17 +86,7 @@ describe("future holiday tagline windows (2028-2030)", () => {
       random.mockReturnValue(i / 200);
       seen.add(formatBanner({ mode: "random" }));
     }
-    return [...seen];
-  };
-  const poolHas = (pool: string[], term: string) =>
-    pool.some((line) => line.toLowerCase().includes(term));
-
-  it("activates the Diwali tagline on 2029-11-05", () => {
-    expect(poolHas(activePoolOn(2029, 10, 5), "diwali")).toBe(true);
-  });
-
-  it("activates the Diwali tagline on 2030-10-25", () => {
-    expect(poolHas(activePoolOn(2030, 9, 25), "diwali")).toBe(true);
+    expect([...seen].some((line) => line.toLowerCase().includes("diwali"))).toBe(true);
   });
 });
 
