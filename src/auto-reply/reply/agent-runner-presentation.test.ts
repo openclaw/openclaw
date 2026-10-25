@@ -124,7 +124,7 @@ it("forwards completed options through the reasoning-bound block handler", async
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       applyReplyToMode: (payload) => payload,
-      typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+      typingSignals: createTypingSignaler({ typing, mode: "never" }),
     },
   });
   const handler = presentation.blockReplyHandler;

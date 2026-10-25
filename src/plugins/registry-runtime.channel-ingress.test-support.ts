@@ -1,3 +1,4 @@
+import { isReplyReasoningVisible } from "../auto-reply/reply/reasoning-visibility-state.js";
 import {
   buildChannelInboundEventContext,
   type BuildChannelInboundEventContextParams as ContextParams,
@@ -41,7 +42,10 @@ export function createRuntimeBuilder(params: {
   } as GatewayRequestContext;
   bindGatewayContextResolver(subagent, params.gatewayContextResolver ?? (() => context));
   const builder = createTestPluginRegistry({
-    channel: { inbound: { buildContext: buildChannelInboundEventContext } },
+    channel: {
+      inbound: { buildContext: buildChannelInboundEventContext },
+      reply: { isReasoningVisible: isReplyReasoningVisible },
+    },
     subagent,
   } as PluginRuntime);
   const record = createPluginRecord({

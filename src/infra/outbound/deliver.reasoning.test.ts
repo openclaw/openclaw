@@ -10,7 +10,7 @@ import type { ChannelHandler } from "./deliver-contracts.js";
 import { deliverOutboundPayloadsCore } from "./deliver-core.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
-// The transport choice is under test; no registered plugin, SDK socket, or database is needed.
+// mock-isolation: exercise core transport selection without plugin, SDK, or database owners.
 vi.mock("./deliver-channel.js", () => ({ createChannelHandler: vi.fn() }));
 
 const releases: Array<() => void> = [];
