@@ -1,6 +1,8 @@
 import { once } from "node:events";
 import { createServer, type RequestListener, type Server } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { retainGatewayResponsePayload } from "../../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import * as gatewayService from "../../daemon/service.js";
@@ -396,6 +398,63 @@ it("records expired recovery readiness before it settles", async () => {
     vi.useRealTimers();
   }
 });
+
+it.each([true, false])(
+  "names the last health probe when readiness expires in a later read (observed=%s)",
+  async (observed) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    mockProcessPlatform("linux");
+    useService();
+    // The retained updater speaks an older protocol than the restarted Gateway.
+    const mismatch = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "protocol mismatch",
+      details: {
+        code: "PROTOCOL_MISMATCH",
+        clientMinProtocol: 5,
+        clientMaxProtocol: 5,
+        expectedProtocol: 4,
+        minimumProbeProtocol: 3,
+      },
+    });
+    retainGatewayResponsePayload(mismatch, undefined);
+    restart.callGateway.mockRejectedValue(mismatch);
+    const inspecting = createDeferred();
+    let completedInspections = observed ? 1 : 0;
+    restart.inspectPortUsage.mockImplementation(async (port) => {
+      if (completedInspections-- > 0) {
+        return { port, status: "busy", listeners: [{ pid: 8000 }], hints: [] };
+      }
+      inspecting.resolve();
+      return await new Promise<never>(() => {});
+    });
+    const verification = verifyGateway({
+      opts: withRun("readiness-timeout"),
+      expectedBuildId: undefined,
+      requireRunningService: true,
+      timeoutMs: 60_000,
+    });
+    try {
+      await inspecting.promise;
+      restart.monotonicClock.nowMs = 60_000;
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(verification).resolves.toMatchObject({ ok: false });
+    } finally {
+      vi.useRealTimers();
+    }
+    const deadline = "Gateway restart observation timed out during health-wait:port-inspection.";
+    // Before the first observation, the wait owner's placeholder carries no probe result.
+    const message = observed
+      ? `${deadline} Last health probe: protocol mismatch: Control UI v5, Gateway v4, connection check min v3`
+      : deadline;
+    expect(result.steps[0]?.failureFacts).toContainEqual({
+      check: "settled",
+      code: "timeout",
+      message,
+    });
+    expect(reportFor(result)).toContain(message);
+  },
+);
 
 it("prefers a pending recovery observation over previously saved healthy facts", async () => {
   result.status = "error";

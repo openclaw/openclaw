@@ -257,6 +257,11 @@ IDs come from `openclaw.plugin.json`, which can differ from the source directory
 name. The selected plugins must already be present in `dist/extensions`; run
 `pnpm build` first.
 
+Selected plugins follow the normal discovery entry contract. A plugin without
+`package.json` or an `openclaw.extensions` declaration uses its default index
+entry. Invalid or empty declarations still fail, and runtime and setup entries
+must be present in the compiled image.
+
 An omitted plugin must have an npm or ClawHub installation route in the existing
 official external catalogs. Unpublished core plugins must remain embedded; the
 error names the plugin to add. The repository's source-only dev/QA plugin class
@@ -398,6 +403,22 @@ Browser MCP and remote repository bootstrap scripts are generated from typed
 sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
 `pnpm runtime:scripts:check` verifies freshness before building. The runtime does
 not need to serialize function bodies or retain loose JavaScript for these scripts.
+
+Local repository snapshots, workspace manifest publication, Git history, and
+publication restore use declared module entries. Resident workspace manifest
+computation calls a generated static module with its own imports. Shell snapshots
+capture their filtered environment through a declared entry as well.
+
+Probes of an external runtime's version and SQLite support execute declared program
+files with that selected runtime. Each temporary program has a private directory
+that is removed after the process finishes. The current process checks its loaded SQLite
+binding once during boot admission, using a fixed in-memory database that closes
+before the shared result resolves. This bootstrap check stays self-contained in
+relocated CLI and portable worker builds and in sealed recovery helpers.
+
+Metadata inventory uses the image's declared entry when it executes the image
+itself. The npm launcher discovery preload is a generated data-URL asset so delayed
+manager descendants can still load it after discovery finishes.
 
 The builder embeds the application modules, bundled plugin entrypoints, worker
 programs, and generated metadata needed by the runtime. It preserves lazy module

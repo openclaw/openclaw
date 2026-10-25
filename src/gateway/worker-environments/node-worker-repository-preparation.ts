@@ -3,7 +3,10 @@ import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-main
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
-import { prepareRepositoryPublicationRestore } from "../github-repository-publication-restore.js";
+import {
+  prepareRepositoryPublicationRestore,
+  RESTORE_PUBLICATION_INDEX_JS,
+} from "../github-repository-publication-restore.js";
 import type { createNodeWorkspaceTransferCommand } from "./node-workspace-transfer-command.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type {
@@ -463,12 +466,13 @@ export async function restoreNodeWorkerRepositoryCheckpoint(params: {
     if (historyNote) {
       workspaceSyncLog.info(historyNote);
     }
-    for (const command of await prepareRepositoryPublicationRestore({
+    for (const batch of await prepareRepositoryPublicationRestore({
       ...checkpoint,
       current: manifest,
     })) {
       const publicationRestored = await exec({
-        ...command,
+        argv: ["node", "-e", RESTORE_PUBLICATION_INDEX_JS, batch.action],
+        input: batch.input,
         timeoutMs: 60_000,
         transportRetry: "never",
         assertCurrent: authorize,
