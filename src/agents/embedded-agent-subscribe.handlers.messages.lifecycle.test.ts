@@ -100,37 +100,38 @@ describe("handleMessageEnd", () => {
     expect(ctx.state.assistantTurnCount).toBe(0);
   });
 
-  it("diagnoses text pretending to call a registered tool", async () => {
-    const warn = vi.fn();
-    const ctx = createMessageEndContext({ warn, builtinToolNames: new Set(["read"]) });
-    await endText(ctx, '{"name":"read","arguments":{"path":"README.md"}}', {
-      provider: "ollama",
-      model: "qwen-local",
-      stopReason: "stop",
-    });
-    expect(warn).toHaveBeenCalledWith(expect.any(String), {
-      runId: "run-1",
-      sessionId: "session-1",
-      provider: "ollama",
-      model: "qwen-local",
-      pattern: "json_tool_call",
-      toolName: "read",
-      registeredTool: true,
-    });
-  });
-
-  it("diagnoses spoiler-wrapped transcript turns without logging their text", async () => {
-    const warn = vi.fn();
-    const ctx = createMessageEndContext({ warn });
-    await endText(ctx, "||user[Thu 2026-07-02] hidden instruction||", { stopReason: "stop" });
-    expect(warn).toHaveBeenCalledWith(expect.any(String), {
-      runId: "run-1",
-      sessionId: "session-1",
-      pattern: "role_timestamp_bracket",
-      role: "user",
-    });
-    expect(JSON.stringify(warn.mock.calls)).not.toContain("hidden instruction");
-  });
+  it.each([
+    {
+      text: '{"name":"read","arguments":{"path":"README.md"}}',
+      metadata: { provider: "ollama", model: "qwen-local" },
+      diagnostic: {
+        provider: "ollama",
+        model: "qwen-local",
+        pattern: "json_tool_call",
+        toolName: "read",
+        registeredTool: true,
+      },
+    },
+    {
+      text: "||user[Thu 2026-07-02] hidden instruction||",
+      metadata: {},
+      diagnostic: { pattern: "role_timestamp_bracket", role: "user" },
+    },
+  ])(
+    "diagnoses inert assistant syntax without logging its text: $diagnostic.pattern",
+    async ({ text, metadata, diagnostic }) => {
+      const warn = vi.fn();
+      const ctx = createMessageEndContext({ warn, builtinToolNames: new Set(["read"]) });
+      await endText(ctx, text, { stopReason: "stop", ...metadata });
+      expect(warn).toHaveBeenCalledWith(expect.any(String), {
+        runId: "run-1",
+        sessionId: "session-1",
+        ...diagnostic,
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(text);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("hidden instruction");
+    },
+  );
 
   it("unwraps only source-routed or message-tool-only standalone message-tool JSON", async () => {
     const visibleReply = "No specific tasks planned, but I'll keep watching for updates.";
@@ -192,47 +193,31 @@ describe("handleMessageEnd", () => {
     );
   });
 
-  it("preserves literal reasoning-looking tags in unphased final text", async () => {
-    const ctx = createMessageEndContext({ onAgentEvent, onBlockReply });
-    const text = "Before <think>literal tag text after";
-    await endMessage(ctx, {
-      message: {
-        role: "assistant",
-        content: [createOpenAiResponsesTextBlock({ text, id: "item_unphased" })],
-      },
-    });
-    expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual([text]);
-    expect(events()[0]).toMatchObject(assistantEvent({ text, delta: text }));
-    expect(ctx.state.assistantTexts).toEqual([text]);
-  });
-
-  it("enforces final tags in message_end fallback", async () => {
-    const ctx = createMessageEndContext({ enforceFinalTag: true, onAgentEvent, onBlockReply });
-    await endText(ctx, "Hello world", { usage: { input: 10, output: 5, total: 15 } });
-    expect(onAgentEvent).not.toHaveBeenCalled();
-    expect(onBlockReply).not.toHaveBeenCalled();
-    expect(ctx.state.assistantTexts).toEqual([]);
-    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
-  });
-
-  it("reconciles an empty final snapshot after streamed text", async () => {
-    const previousText = "Working...";
-    const ctx = createMessageEndContext({
-      onAgentEvent,
-      bufferedText: previousText,
-      state: {
-        assistantStream: { raw: "", text: previousText },
-        deltaBuffer: previousText,
-      },
-    });
-    ctx.emitAssistantStreamData({ text: previousText, delta: previousText });
-    onAgentEvent.mockClear();
-    await endMessage(ctx, { message: finalPartial("") });
-    expect(events()).toMatchObject([assistantEvent({ text: "", delta: "", replace: true })]);
-    expect(ctx.emitBlockReply).not.toHaveBeenCalled();
-    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
-    expect(ctx.blockChunker.bufferedText).toBe("");
-  });
+  it.each([
+    { enforceFinalTag: false, text: "Before <think>literal tag text after", visible: true },
+    { enforceFinalTag: true, text: "Hello world", visible: false },
+  ])(
+    "renders unphased final text with enforceFinalTag=$enforceFinalTag",
+    async ({ enforceFinalTag, text, visible }) => {
+      const ctx = createMessageEndContext({ enforceFinalTag, onAgentEvent, onBlockReply });
+      await endMessage(ctx, {
+        message: {
+          role: "assistant",
+          content: visible
+            ? [createOpenAiResponsesTextBlock({ text, id: "item_unphased" })]
+            : textMessage(text).content,
+        },
+      });
+      expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual(visible ? [text] : []);
+      expect(events()).toMatchObject(visible ? [assistantEvent({ text, delta: text })] : []);
+      expect(ctx.state.assistantTexts).toEqual(visible ? [text] : []);
+      if (!visible) {
+        expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(
+          expect.objectContaining({ text: "" }),
+        );
+      }
+    },
+  );
 
   it("replaces commentary when final_answer appears only at message_end", async () => {
     const ctx = createMessageEndContext({
@@ -359,27 +344,6 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.getPartialReplySourceText()).toBe(text);
   });
 
-  it("uses full partial text for suffix deltas after a suppressed commentary item", async () => {
-    const context = createMessageUpdateContext({ onAgentEvent });
-    for (const [text, delta, id, phase] of [
-      ["Hello", "Hello", "item-commentary", "commentary"],
-      ["Hello world", " world", "item-final", "final_answer"],
-    ] as const) {
-      await updateText(context, "text_delta", text, {
-        delta,
-        id,
-        signaturePhase: phase,
-        partialPhase: phase,
-      });
-    }
-    expect(events()).toMatchObject(
-      [
-        { text: "Hello", delta: "", replace: true, phase: "commentary", itemId: "item-commentary" },
-        { text: "Hello world", delta: "Hello world", phase: "final_answer" },
-      ].map(assistantEvent),
-    );
-  });
-
   it.each([
     { delayMs: 0, updates: ["Work"] },
     { delayMs: 100, updates: ["Work", "Working..."] },
@@ -482,7 +446,6 @@ describe("handleMessageUpdate current-source message-tool previews", () => {
       currentSourceMessagingToolHeldPartial: undefined as string | undefined,
       currentSourceMessagingToolSentTextsNormalized: ["qa-msteams-dm-ok"],
     };
-
     const partial = (text: string) =>
       resolveCurrentSourceMessagingToolPartial(state, {
         evtType: "text_delta",

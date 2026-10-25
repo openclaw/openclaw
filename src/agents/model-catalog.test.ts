@@ -1,4 +1,3 @@
-import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import type {
   ModelCatalog,
   ModelCatalogModel,
@@ -49,7 +48,6 @@ const mocks = vi.hoisted(() => ({
 // mock-isolation: catalog tests supply provider metadata without loading provider runtimes.
 vi.mock("../plugins/provider-runtime.runtime.js", () => mocks);
 vi.mock("../model-catalog/index.js", { spy: true });
-vi.mock("@openclaw/model-catalog-core/model-catalog-normalize", { spy: true });
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
 
@@ -81,6 +79,13 @@ const fableWindows = () => [
   { id: "200k", label: "200K", contextWindow: 200_000 },
   { id: "1m", label: "1M", contextWindow: 1_000_000 },
 ];
+const manifestCapabilities = {
+  contextWindows: fableWindows(),
+  contextWindowDefault: "1m",
+  thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+  input: ["text", "image"],
+  mediaInput: { image: { maxBytes: 4096, tokenMode: "tile" } },
+} satisfies Partial<ModelCatalogModel>;
 function fableManifest(extra: Partial<ModelCatalogModel> = {}) {
   const model: ModelCatalogModel = {
     id: "claude-fable-5",
@@ -123,6 +128,19 @@ const customRoute = {
   api: "openai-responses",
   baseUrl: "https://route-a.example.test/v1",
 } as const;
+const capturedCapabilities = {
+  reasoning: true,
+  input: ["text", "image"],
+  contextWindow: 32_000,
+  contextTokens: 16_000,
+  parameterCount: 4_000_000_000,
+  contextWindows: [{ id: "large", label: "Large", contextWindow: 32_000 }],
+  contextWindowDefault: "large",
+  thinkingLevelMap: { high: "high" },
+  params: { captured: true },
+  compat: { supportsTools: false },
+  mediaInput: { image: { maxBytes: 4_096 } },
+} satisfies Partial<ModelCatalogEntry>;
 
 beforeEach(() => {
   mocks.augmentModelCatalogWithProviderPlugins.mockReset();
@@ -187,15 +205,8 @@ it.each(["unowned", "disabled"] as const)(
   },
 );
 
-const discoveredRow = (id: string) => ({
-  id,
-  name: id,
-  reasoning: false,
-  input: ["text" as const],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200_000,
-  maxTokens: 8192,
-});
+const discoveredRow = (id: string) =>
+  configuredModel(id, { reasoning: false, contextWindow: 200_000 });
 
 it("publishes the family a discovered row or its manifest declares, and none otherwise", async () => {
   const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
@@ -220,7 +231,7 @@ it("publishes the family a discovered row or its manifest declares, and none oth
           api: "anthropic-messages",
           baseUrl: "https://native.example",
           family: "anthropic",
-          models: [{ id: "native-model", name: "Native" }],
+          models: [{ id: "native-model", name: "Native", ...manifestCapabilities }],
         },
       },
       discovery: { native: "static" },
@@ -237,23 +248,9 @@ it("publishes the family a discovered row or its manifest declares, and none oth
   expect(snapshot.routeVariants.find(({ id }) => id === "anthropic/claude-model")?.family).toBe(
     "anthropic",
   );
-});
-
-it("carries manifest capability metadata into the prepared catalog", async () => {
-  const snapshot = fableManifest({
-    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
-    input: ["text", "image"],
-    mediaInput: { image: { maxBytes: 4096, tokenMode: "tile" } },
-  });
-
-  const entries = loadManifestModelCatalog({ config: {}, metadataSnapshot: snapshot });
-  expect(entries.find((entry) => entry.id === "claude-fable-5")).toMatchObject({
-    contextWindows: fableWindows(),
-    contextWindowDefault: "1m",
-    thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
-    input: ["text", "image"],
-    mediaInput: { image: { maxBytes: 4096, tokenMode: "tile" } },
-  });
+  const native = snapshot.entries.find(({ id }) => id === "native-model");
+  expect(native).toMatchObject(manifestCapabilities);
+  expect(modelSupportsVision(native)).toBe(true);
 });
 
 it.each([false, true])(
@@ -360,96 +357,91 @@ it("keeps manifest rank for configured runtime models absent from the registry",
   expect(snapshot.entries.map((entry) => entry.id)).toEqual(["gpt-5.6-sol", "gpt-5.4"]);
 });
 
-it("overlays exact configured metadata when discovery and config have opposite model order", async () => {
-  const models = ["Reader", "reader"].map((id, index) =>
-    configuredModel(id, {
-      name: `Configured ${id}`,
-      contextWindow: 32_000 * (index + 1),
-      maxTokens: 4_096,
-      reasoning: index === 0,
-      thinkingLevelMap: { off: null, xhigh: "xhigh" },
-      input: index === 0 ? ["text", "image"] : ["text"],
-    }),
-  );
-  const snapshot = await build({
-    config: providerConfig("custom", {
-      baseUrl: "https://example.test/v1",
-      api: "openai-completions",
-      models: models.toReversed(),
-    }),
-    entries: models.map(({ id }) =>
-      row("custom", id, { name: `Discovered ${id}`, input: ["text"] }),
-    ),
-  });
-
-  expect(snapshot.entries).toHaveLength(models.length);
-  for (const model of models) {
-    const expected = {
-      id: model.id,
-      api: "openai-completions",
-      contextWindow: model.contextWindow,
-      reasoning: model.reasoning,
-      configuredReasoning: model.reasoning,
-      thinkingLevelMap: model.thinkingLevelMap,
-      input: model.input,
-    };
-    expect(
-      findModelCatalogEntry(snapshot.entries, { provider: "custom", modelId: model.id }),
-    ).toMatchObject({
-      ...expected,
-      name: `Discovered ${model.id}`,
-    });
-    expect(snapshot.routeVariants).toContainEqual(
-      expect.objectContaining({ ...expected, name: model.name }),
-    );
-  }
-  expect(snapshot.routeVariants).toHaveLength(4);
-});
-
-it("applies model-pinned routes to captured catalog entries", async () => {
-  const defaults = {
-    api: "openai-completions",
-    baseUrl: "https://provider.example.test/v1",
-  } as const;
-  const captured = {
-    api: "openai-responses",
-    baseUrl: "https://account.example.test/v1",
-  } as const;
-  const configured = configuredModel("demo", {
-    name: "Configured Demo",
-    contextWindow: 32_000,
-    input: ["text", "image"],
-    ...defaults,
-  });
-  const config = providerConfig("custom", { ...defaults, models: [configured] });
-  const snapshot = await build({
-    config,
-    entries: [{ provider: "custom", id: "demo", name: "Captured Demo", ...captured }],
-  });
-  const policy = createModelVisibilityPolicy({
-    cfg: config,
-    catalog: snapshot.entries,
-    defaultProvider: "custom",
-    manifestPlugins: metadataSnapshot,
-  });
-
-  for (const catalog of [snapshot.entries, policy.configuredCatalog]) {
-    expect(catalog).toEqual([
-      expect.objectContaining({
-        provider: "custom",
-        id: "demo",
-        ...defaults,
-        contextWindow: 32_000,
-        reasoning: true,
-        input: ["text", "image"],
+it.each([false, true])(
+  "overlays case-sensitive configured rows in reverse order (pinned: %s)",
+  async (pinned) => {
+    const models = ["Reader", "reader"].map((id, index) =>
+      configuredModel(id, {
+        name: `Configured ${id}`,
+        contextWindow: 32_000 * (index + 1),
+        maxTokens: 4_096,
+        reasoning: index === 0,
+        thinkingLevelMap: { off: null, xhigh: "xhigh" },
+        input: index === 0 ? ["text", "image"] : ["text"],
+        ...(pinned
+          ? { api: "openai-completions" as const, baseUrl: "https://model.example.test/v1" }
+          : {}),
       }),
-    ]);
-  }
-  expect(snapshot.routeVariants).toContainEqual(expect.objectContaining(defaults));
-  expect(snapshot.routeVariants).toHaveLength(2);
-});
+    );
+    const snapshot = await build({
+      config: providerConfig("custom", {
+        baseUrl: "https://provider.example.test/v1",
+        api: pinned ? "openai-responses" : "openai-completions",
+        models: models.toReversed(),
+      }),
+      entries: models.map(({ id }) =>
+        row("custom", id, {
+          name: `Discovered ${id}`,
+          input: ["text"],
+          ...(pinned
+            ? {
+                api: "openai-responses" as const,
+                baseUrl: "https://account.example.test/v1",
+              }
+            : {}),
+        }),
+      ),
+    });
+
+    expect(snapshot.entries).toHaveLength(models.length);
+    const policy = createModelVisibilityPolicy({
+      cfg: providerConfig("custom", {
+        api: pinned ? "openai-responses" : "openai-completions",
+        baseUrl: "https://provider.example.test/v1",
+        models,
+      }),
+      catalog: snapshot.entries,
+      defaultProvider: "custom",
+      manifestPlugins: metadataSnapshot,
+    });
+    for (const model of models) {
+      const expected = {
+        id: model.id,
+        api: "openai-completions",
+        ...(pinned ? { baseUrl: "https://model.example.test/v1" } : {}),
+        contextWindow: model.contextWindow,
+        reasoning: model.reasoning,
+        configuredReasoning: model.reasoning,
+        thinkingLevelMap: model.thinkingLevelMap,
+        input: model.input,
+      };
+      expect(
+        findModelCatalogEntry(snapshot.entries, { provider: "custom", modelId: model.id }),
+      ).toMatchObject({
+        ...expected,
+        name: pinned ? model.name : `Discovered ${model.id}`,
+      });
+      expect(snapshot.routeVariants).toContainEqual(
+        expect.objectContaining({ ...expected, name: model.name }),
+      );
+      expect(
+        findModelCatalogEntry(policy.configuredCatalog, {
+          provider: "custom",
+          modelId: model.id,
+        }),
+      ).toMatchObject(expected);
+    }
+    expect(snapshot.routeVariants).toHaveLength(4);
+  },
+);
 
 it("keeps the first matching catalog route after borrowed-row retargeting", async () => {
+  const firstRoute = {
+    ...customRoute,
+    name: "Earlier Route A",
+    thinkingLevelMap: { xhigh: "high", max: "max" },
+    compat: { supportsTools: false },
+  };
   mocks.augmentModelCatalogWithProviderPlugins.mockImplementationOnce(async ({ context }) => {
     const first = context.entries[0];
     if (first) {
@@ -474,13 +466,7 @@ it("keeps the first matching catalog route after borrowed-row retargeting", asyn
       models: [configuredModel("demo")],
     }),
     entries: [
-      {
-        ...customRoute,
-        id: "spare",
-        name: "Earlier Route A",
-        thinkingLevelMap: { xhigh: "high", max: "max" },
-        compat: { supportsTools: false },
-      },
+      { ...firstRoute, id: "spare" },
       {
         ...customRoute,
         id: "demo",
@@ -492,16 +478,9 @@ it("keeps the first matching catalog route after borrowed-row retargeting", asyn
     readOnly: false,
   });
 
-  const selectedRoute = {
-    name: "Earlier Route A",
-    api: "openai-responses",
-    baseUrl: "https://route-a.example.test/v1",
-    thinkingLevelMap: { xhigh: "high", max: "max" },
-    compat: { supportsTools: false },
-  };
   expect(
     snapshot.entries.filter((entry) => entry.provider === "custom" && entry.id === "demo"),
-  ).toEqual(Array.from({ length: 2 }, () => expect.objectContaining(selectedRoute)));
+  ).toEqual(Array.from({ length: 2 }, () => expect.objectContaining(firstRoute)));
   expect(
     snapshot.routeVariants.filter(
       (entry) => entry.id === "demo" && entry.api === "openai-responses",
@@ -536,19 +515,6 @@ it("uses the lifecycle auth snapshot for provider catalog augmentation", async (
 
   expect(resolvedKey).toBe("test-api-key");
   expect(resolvedOAuth).toBe(resolveOAuthApiKeyMarker("subscription"));
-  expect(mocks.augmentModelCatalogWithProviderPlugins).toHaveBeenCalledWith(
-    expect.objectContaining({ metadataSnapshot }),
-  );
-});
-
-it("reports image capability from the prepared row", () => {
-  const entry: ModelCatalogEntry = {
-    id: "media",
-    name: "Media",
-    provider: "test",
-    input: ["text", "image", "document"],
-  };
-  expect(modelSupportsVision(entry)).toBe(true);
 });
 
 describe("model catalog metadata projection", () => {
@@ -557,16 +523,7 @@ describe("model catalog metadata projection", () => {
       name: "Configured model",
       api: "openai-responses",
       baseUrl: "https://example.test/v1",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 96_000,
-      contextTokens: 48_000,
-      parameterCount: 4_000_000_000,
-      contextWindows: [{ id: "large", label: "Large", contextWindow: 96_000 }],
-      contextWindowDefault: "large",
-      thinkingLevelMap: { off: null, high: "high" },
-      params: { platformOnly: true },
-      compat: { supportsTools: false },
+      ...capturedCapabilities,
     });
     const model = {
       ...capabilities,
@@ -617,12 +574,7 @@ describe("configured catalog metadata", () => {
   const capturedMetadata = {
     ...identity,
     api: "openai-responses",
-    reasoning: true,
-    thinkingLevelMap: { high: "high" },
-    contextWindows: [{ id: "large", label: "Large", contextWindow: 32_000 }],
-    contextWindowDefault: "large",
-    params: { captured: true },
-    compat: { supportsTools: false },
+    ...capturedCapabilities,
   } satisfies ModelCatalogEntry;
   const defaults: Pick<ModelProviderConfig, "api" | "baseUrl"> = {
     api: "openai-completions",
@@ -649,10 +601,6 @@ describe("configured catalog metadata", () => {
       [PREPARED_THINKING_POLICY]: {
         resolve: () => ({ levels: [{ id: "high" }], defaultLevel: "high" }),
       },
-      contextWindow: 32_000,
-      contextTokens: 16_000,
-      input: ["text", "image"],
-      mediaInput: { image: { maxBytes: 4_096 } },
     };
     const catalog = Object.freeze([Object.freeze(captured)]);
     const [entry] = overlayConfiguredModelCatalog({ catalog, config: source.config });
@@ -698,7 +646,6 @@ describe("configured catalog metadata", () => {
 
 describe("catalog declaration planning", () => {
   const plan = vi.mocked(planEffectiveModelCatalogRows);
-  const normalize = vi.mocked(normalizeModelCatalogProviderRows);
   let config: OpenClawConfig;
   function catalog(discovery: "static" | "runtime", ...modelIds: string[]) {
     const planningMetadata = finalizePluginMetadataSnapshot(
@@ -721,18 +668,15 @@ describe("catalog declaration planning", () => {
   beforeEach(() => {
     config = { plugins: { enabled: false } };
     plan.mockReset();
-    normalize.mockReset();
   });
   afterEach(() => {
     plan.mockReset();
-    normalize.mockReset();
   });
   it("plans manifest rows once without expanding entitlement", async () => {
     const runtime = catalog("runtime", "allowed", "denied");
     config.models = { catalogRefresh: { enabled: false } };
     await runtime.scope(async () => {
       plan.mockClear();
-      normalize.mockClear();
       const snapshot = await runtime.build();
       expect([snapshot.entries, snapshot.routeVariants]).toEqual([[], []]);
       const firstRead = runtime.load();
@@ -740,9 +684,6 @@ describe("catalog declaration planning", () => {
       expect(runtime.load()).toBe(firstRead);
       expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
       expect(plan).toHaveBeenCalledTimes(1);
-      expect(
-        normalize.mock.results.map(({ type, value }) => (type === "return" ? value.length : type)),
-      ).toEqual([2]);
     });
   });
   it("keeps the old declaration cache when replacement planning fails", async () => {

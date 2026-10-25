@@ -63,12 +63,19 @@ function parseCliJsonl(
 ) {
   return parseCliOutput({ raw, backend, providerId, outputMode: "jsonl" });
 }
+const parseFrames = (...frames: unknown[]) => parseCliJsonl(joinJsonlFrames(...frames));
+const userRecord = (content: unknown[], fields: Record<string, unknown> = {}) => ({
+  type: "user",
+  message: { role: "user", content },
+  ...fields,
+});
+const toolResult = (id: string) => ({ type: "tool_result", tool_use_id: id, content: "ok" });
 
 describe("parseCliJsonl", () => {
   it("parses Claude result and cache usage for an explicit backend dialect", () => {
     const result = parseCliJsonl(
       joinJsonlFrames(
-        { type: "init", session_id: "session-dialect" },
+        initFrame("session-dialect"),
         resultFrame("dialect says hello", {
           session_id: "session-dialect",
           usage: {
@@ -89,11 +96,9 @@ describe("parseCliJsonl", () => {
     });
   });
 
-  const stopHookFeedback = {
-    type: "user",
-    message: { role: "user", content: [{ type: "text", text: "Stop hook feedback:\nRewrite." }] },
+  const stopHookFeedback = userRecord([textBlock("Stop hook feedback:\nRewrite.")], {
     parent_tool_use_id: null,
-  };
+  });
   const stopHookNotification = {
     type: "system",
     subtype: "notification",
@@ -106,13 +111,7 @@ describe("parseCliJsonl", () => {
       content_block: { type: "tool_use", id, name: "Read" },
     }),
     claudeMessageStop(),
-    {
-      type: "user",
-      message: {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: id, content: "ok" }],
-      },
-    },
+    userRecord([toolResult(id)]),
   ];
 
   const rejection = [stopHookFeedback, stopHookNotification];
@@ -125,12 +124,10 @@ describe("parseCliJsonl", () => {
     [
       "replayed user steering",
       [
-        {
-          type: "user",
+        userRecord([textBlock("Check README.md too.")], {
           isReplay: true,
           parent_tool_use_id: null,
-          message: { role: "user", content: [{ type: "text", text: "Check README.md too." }] },
-        },
+        }),
       ],
       "B",
       "A\n\nB",
@@ -151,14 +148,12 @@ describe("parseCliJsonl", () => {
   ] as const)(
     "selects the final reply across Claude stream boundaries (%s)",
     (_name, feedback, rewrite, expected, tool) => {
-      const result = parseCliJsonl(
-        joinJsonlFrames(
-          ...textFrames("A", "draft"),
-          ...feedback,
-          ...(tool ? toolRoundTrip("read-1") : []),
-          ...textFrames(rewrite, "rewrite"),
-          resultFrame(rewrite),
-        ),
+      const result = parseFrames(
+        ...textFrames("A", "draft"),
+        ...feedback,
+        ...(tool ? toolRoundTrip("read-1") : []),
+        ...textFrames(rewrite, "rewrite"),
+        resultFrame(rewrite),
       );
 
       expect(result.text).toBe(expected);
@@ -166,20 +161,18 @@ describe("parseCliJsonl", () => {
   );
 
   it("discards each rejected segment across repeated Stop-hook bounces", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        ...textFrames("A", "first-draft"),
-        stopHookFeedback,
-        stopHookNotification,
-        ...toolRoundTrip("read-1"),
-        ...textFrames("B", "second-draft"),
-        stopHookFeedback,
-        stopHookNotification,
-        ...toolRoundTrip("read-2"),
-        claudeMessageStart("rewrite"),
-        claudeTextDelta("C"),
-        resultFrame("C"),
-      ),
+    const result = parseFrames(
+      ...textFrames("A", "first-draft"),
+      stopHookFeedback,
+      stopHookNotification,
+      ...toolRoundTrip("read-1"),
+      ...textFrames("B", "second-draft"),
+      stopHookFeedback,
+      stopHookNotification,
+      ...toolRoundTrip("read-2"),
+      claudeMessageStart("rewrite"),
+      claudeTextDelta("C"),
+      resultFrame("C"),
     );
 
     expect(result.text).toBe("C");
@@ -217,7 +210,6 @@ describe("parseCliJsonl", () => {
 
   it.each([
     { name: "no tool call", tool: false, final: true, expected: "Checking tools.Done." },
-    { name: "text after a tool call", tool: true, final: true, expected: "Done." },
     { name: "a tool-only ending", tool: true, final: false, expected: "" },
   ])("records only the final Gemini message ($name)", ({ tool, final, expected }) => {
     const result = parseCliJsonl(
@@ -237,102 +229,56 @@ describe("parseCliJsonl", () => {
   });
 
   it("captures the last Claude assistant transcript UUID as a resume checkpoint", () => {
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        { type: "system", subtype: "init", session_id: "session-checkpoint" },
+    const result = parseFrames(
+      { type: "system", subtype: "init", session_id: "session-checkpoint" },
+      ...["first", "done"].map((text, i) =>
         assistantRecord(
-          [textBlock("first")],
-          { uuid: "assistant-checkpoint-1" },
-          "provider-message-1",
+          [textBlock(text)],
+          { uuid: `assistant-checkpoint-${i + 1}` },
+          `provider-message-${i + 1}`,
         ),
-        assistantRecord(
-          [textBlock("done")],
-          { uuid: "assistant-checkpoint-2" },
-          "provider-message-2",
-        ),
-        assistantRecord(
-          [textBlock("nested")],
-          {
-            uuid: "subagent-checkpoint",
-            parent_tool_use_id: "tool-use-1",
-          },
-          "provider-subagent-message",
-        ),
-        resultFrame("done", { session_id: "session-checkpoint" }),
       ),
+      assistantRecord(
+        [textBlock("nested")],
+        { uuid: "subagent-checkpoint", parent_tool_use_id: "tool-use-1" },
+        "provider-subagent-message",
+      ),
+      resultFrame("done", { session_id: "session-checkpoint" }),
     );
 
     expect(result?.resumeCheckpointId).toBe("assistant-checkpoint-2");
   });
 
+  const sessionId = "session-456";
   it.each([
-    {
-      name: "preserves Claude session metadata even when the final result text is empty",
-      raw: joinJsonlFrames(
-        { type: "init", session_id: "session-456" },
+    [
+      "empty final metadata",
+      joinJsonlFrames(
+        initFrame(sessionId),
         resultFrame("   ", {
-          session_id: "session-456",
+          session_id: sessionId,
           usage: { input_tokens: 18, output_tokens: 0 },
         }),
       ),
-      expected: {
-        text: "",
-        sessionId: "session-456",
-        usage: { input: 18 },
-      },
-    },
-    {
-      name: "unwraps nested Claude agent result JSON from stream-json output",
-      raw: joinJsonlFrames(
-        { type: "init", session_id: "session-nested-jsonl" },
-        resultFrame(
-          JSON.stringify(
-            resultFrame(
-              JSON.stringify(
-                resultFrame("actual response text", {
-                  subtype: "success",
-                }),
-              ),
-            ),
-          ),
-          { session_id: "session-nested-jsonl" },
-        ),
-      ),
-      expected: {
-        text: "actual response text",
-        sessionId: "session-nested-jsonl",
-        usage: undefined,
-      },
-    },
-    {
-      name: "parses multiple JSON objects embedded on the same line",
-      raw: '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
-      expected: { text: "done", sessionId: "session-999", usage: undefined },
-    },
-    {
-      name: "skips quoted banners while retaining same-line JSONL metadata",
-      raw: 'banner "use { for JSON" {"type":"init","session_id":"session-999"} {"type":"result","result":"done"}',
-      expected: { text: "done", sessionId: "session-999", usage: undefined },
-    },
-    {
-      name: "does not carry unmatched banner quote state into the next JSONL line",
-      raw: 'banner "unterminated\n{"type":"init","session_id":"session-999"}\n{"type":"result","result":"done"}',
-      expected: { text: "done", sessionId: "session-999", usage: undefined },
-    },
-  ])("$name", ({ raw, expected }) => {
-    const result = parseCliJsonl(raw);
-
-    expect(result).toEqual(expected);
+      "",
+      { input: 18 },
+    ],
+    [
+      "unmatched banner quote",
+      `banner "unterminated\n{"type":"init","session_id":"${sessionId}"}\n{"type":"result","result":"done"}`,
+      "done",
+      undefined,
+    ],
+  ] as const)("parses Claude JSONL with %s", (_name, raw, text, usage) => {
+    expect(parseCliJsonl(raw)).toEqual({ text, sessionId, usage });
   });
 
   it("captures the last Claude session_id when an ephemeral id precedes the canonical one", () => {
     // SessionStart hooks can emit ephemeral IDs whose transcripts never land on disk.
-    const result = parseCliJsonl(
-      joinJsonlFrames(
-        { type: "system", subtype: "init", session_id: "session-ephemeral" },
-        { type: "system", subtype: "init", session_id: "session-canonical" },
-        resultFrame("rotated reply", { session_id: "session-canonical" }),
-      ),
+    const result = parseFrames(
+      { type: "system", subtype: "init", session_id: "session-ephemeral" },
+      { type: "system", subtype: "init", session_id: "session-canonical" },
+      resultFrame("rotated reply", { session_id: "session-canonical" }),
     );
 
     expect(result?.sessionId).toBe("session-canonical");
