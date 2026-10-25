@@ -488,7 +488,6 @@ describe("durable model prompt projection at provider dispatch", () => {
                   includeTimestamp: false,
                 }),
                 {
-                  cfg: {},
                   workspaceDir: state.workspaceDir,
                   model: { input: ["text", "image"] },
                   workspaceOnly: true,
