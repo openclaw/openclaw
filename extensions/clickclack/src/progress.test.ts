@@ -49,9 +49,15 @@ function blockedTransport() {
 describe("ClickClack native agent progress", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("serializes turn, item, completion, and clear frames", async () => {
+  it("serializes turn, private-command completion, and clear frames", async () => {
     const { publisher, publishEphemeral, frames } = createPublisher({ agentLabel: "Blackbird" });
-    const tool = { itemId: "tool_1", kind: "tool", name: "search" };
+    const tool = {
+      itemId: "tool_1",
+      kind: "tool",
+      name: "server.exec",
+      meta: "echo private-sentinel",
+      commandBearing: true,
+    };
     publisher.onItemEvent({ ...tool, progressText: "Searching", status: "running" });
     publisher.onItemEvent({
       ...tool,
@@ -62,6 +68,7 @@ describe("ClickClack native agent progress", () => {
     });
     await publisher.finalize();
 
+    expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
     expect(publishEphemeral.mock.calls[0]?.[0]).toMatchObject({
       workspaceId: "ws_1",
       channelId: "chn_1",
@@ -80,30 +87,13 @@ describe("ClickClack native agent progress", () => {
         line: {
           id: "item:tool_1",
           kind: "tool",
-          tool_name: "search",
-          text: "Search: Done",
+          tool_name: "server.exec",
+          text: "Server.exec",
           status: "completed",
         },
       },
       { seq: 3, turn_id: "msg_1", op: "clear" },
     ]);
-  });
-
-  it("hides command metadata from item-only native progress", async () => {
-    const { publisher, publishEphemeral, frames } = createPublisher();
-    publisher.onItemEvent({
-      itemId: "tool_1",
-      kind: "tool",
-      name: "server.exec",
-      meta: "echo private-sentinel",
-      commandBearing: true,
-      phase: "end",
-      status: "completed",
-    });
-    await publisher.finalize();
-
-    expect(JSON.stringify(publishEphemeral.mock.calls)).not.toContain("private-sentinel");
-    expect(frames()[1]).toMatchObject({ line: { text: "Server.exec" } });
   });
 
   it("does not let a progress transport failure interrupt finalization", async () => {

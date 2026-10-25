@@ -97,18 +97,6 @@ describe("createClickClackActivityPublisher", () => {
     expect(JSON.stringify(createActivityMessage.mock.calls)).not.toContain("private-sentinel");
   });
 
-  it("updates a durable row when only the outcome changes to failed", async () => {
-    const { publisher, createActivityMessage, updateMessageBody } = createPublisher();
-    const item = tool({ title: "Read sample", progressText: "sample.txt" });
-    publisher.onItemEvent({ ...item, phase: "start", status: "running" });
-    await publisher.finalize();
-    publisher.onItemEvent({ ...item, phase: "end", status: "failed" });
-    await publisher.finalize();
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(updateMessageBody).toHaveBeenCalledWith("msg_1", expect.stringContaining("failed"));
-    expect(updateMessageBody).toHaveBeenCalledWith("msg_1", expect.stringContaining("Read sample"));
-  });
-
   it("posts the upgraded body directly when frames land before the first POST runs", async () => {
     const { publisher, createActivityMessage, updateMessageBody } = createPublisher();
 
@@ -126,7 +114,7 @@ describe("createClickClackActivityPublisher", () => {
   });
 
   it.each(["POST", "PATCH"])(
-    "publishes updates arriving during an activity %s",
+    "publishes status-only updates arriving during an activity %s",
     async (operation) => {
       const { publisher, createActivityMessage, updateMessageBody } = createPublisher();
       const entered = Promise.withResolvers<void>();
@@ -152,19 +140,20 @@ describe("createClickClackActivityPublisher", () => {
       };
       createActivityMessage.mockImplementation(async ({ body }) => write("POST", body));
       updateMessageBody.mockImplementation(async (_id, body) => write("PATCH", body));
-      const event = tool();
+      const event = tool({ title: "Read sample", progressText: "sample.txt" });
 
-      publisher.onItemEvent({ ...event, progressText: "First" });
+      publisher.onItemEvent({ ...event, status: "running" });
       if (operation === "PATCH") {
         await publisher.finalize();
-        publisher.onItemEvent({ ...event, progressText: "Second" });
+        publisher.onItemEvent({ ...event, status: "blocked" });
       }
       await entered.promise;
-      publisher.onItemEvent({ ...event, progressText: "Latest" });
+      publisher.onItemEvent({ ...event, status: "failed" });
       resume.resolve();
       await publisher.finalize();
 
-      expect(remoteBody).toBe("Read: Latest");
+      expect(createActivityMessage).toHaveBeenCalledOnce();
+      expect(remoteBody).toBe("Read sample: failed; sample.txt");
     },
   );
 
@@ -184,9 +173,10 @@ describe("createClickClackActivityPublisher", () => {
     expect(updateMessageBody).not.toHaveBeenCalled();
   });
 
-  it("renders non-tool item kinds as commentary rows and skips lifecycle lanes", async () => {
+  it("posts non-tool commentary with provenance and skips lifecycle lanes", async () => {
     const { publisher, createActivityMessage } = createPublisher();
-
+    const provenance = { model: "anthropic/claude-opus-4-8", thinking: "low" };
+    publisher.setProvenance(provenance);
     publisher.onItemEvent({ itemId: "p1", kind: "plan", title: "Plan", summary: "step one" });
     publisher.onItemEvent({ itemId: "life1", kind: "lifecycle", progressText: "internal state" });
     await publisher.finalize();
@@ -195,6 +185,7 @@ describe("createClickClackActivityPublisher", () => {
     expect(createActivityMessage.mock.calls[0]?.[0]).toMatchObject({
       kind: "agent_commentary",
       body: "step one",
+      provenance,
     });
   });
 
@@ -204,49 +195,21 @@ describe("createClickClackActivityPublisher", () => {
     publisher.onItemEvent({ itemId: "empty1", kind: "thinking", progressText: " " });
     const thinking = (progressText: string) =>
       commentary(progressText, { itemId: "think1", kind: "thinking" });
-    publisher.onItemEvent(thinking("Checking the runtime"));
+    publisher.onItemEvent(thinking("Checking"));
     await vi.advanceTimersByTimeAsync(700);
-    publisher.onItemEvent(thinking("Checking the runtime and recent rows"));
-    publisher.onItemEvent(
-      commentary("Comparing provider lanes", {
-        itemId: "reason1",
-        kind: "reasoning",
-      }),
-    );
-    publisher.onItemEvent({
-      itemId: "analysis1",
-      kind: "analysis",
-      summary: "Mapping this to ClickClack",
-    });
+    publisher.onItemEvent(thinking("Checked"));
+    publisher.onItemEvent(commentary("Comparing", { itemId: "r1", kind: "reasoning" }));
+    publisher.onItemEvent({ itemId: "a1", kind: "analysis", summary: "Mapping" });
     await publisher.finalize();
 
     expect(createActivityMessage).toHaveBeenCalledTimes(3);
     expect(createActivityMessage.mock.calls.map(([{ body, kind }]) => ({ body, kind }))).toEqual(
-      ["Checking the runtime", "Comparing provider lanes", "Mapping this to ClickClack"].map(
-        (text) => ({ body: `**Thinking**\n\n${text}`, kind: "agent_commentary" }),
-      ),
+      ["Checking", "Comparing", "Mapping"].map((text) => ({
+        body: `**Thinking**\n\n${text}`,
+        kind: "agent_commentary",
+      })),
     );
     expect(updateMessageBody).toHaveBeenCalledTimes(1);
-    expect(updateMessageBody).toHaveBeenCalledWith(
-      "msg_1",
-      "**Thinking**\n\nChecking the runtime and recent rows",
-    );
-  });
-
-  it("stamps resolved provenance onto rows posted after setProvenance", async () => {
-    const { publisher, createActivityMessage } = createPublisher();
-
-    publisher.setProvenance({ model: "anthropic/claude-opus-4-8", thinking: "low" });
-    publisher.onItemEvent(commentary("working on it"));
-    await publisher.finalize();
-
-    expect(createActivityMessage).toHaveBeenCalledTimes(1);
-    expect(createActivityMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "working on it",
-        kind: "agent_commentary",
-        provenance: { model: "anthropic/claude-opus-4-8", thinking: "low" },
-      }),
-    );
+    expect(updateMessageBody).toHaveBeenCalledWith("msg_1", "**Thinking**\n\nChecked");
   });
 });

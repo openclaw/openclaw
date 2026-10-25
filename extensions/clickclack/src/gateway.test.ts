@@ -173,11 +173,12 @@ function emitMessageEvent(
   targetSocket: FakeSocket,
   index: number,
   payload: Record<string, unknown> = {},
+  type = "message.created",
 ) {
   const event = createBacklogEvent(index, "message.created");
   targetSocket.emit(
     "message",
-    Buffer.from(JSON.stringify({ ...event, payload: { ...event.payload, ...payload } })),
+    Buffer.from(JSON.stringify({ ...event, type, payload: { ...event.payload, ...payload } })),
   );
 }
 
@@ -286,27 +287,22 @@ describe("ClickClack gateway", () => {
 
   it.each([
     [
-      "workspace command permission rejection",
       new ClickClackHttpError(403, "forbidden", new Headers()),
       "warn",
-      "[default] ClickClack command menu sync skipped: ClickClack 403: forbidden; verify token/workspace command permissions or set commandMenu: false if menus are not needed",
+      "skipped: ClickClack 403: forbidden; verify token/workspace command permissions or set commandMenu: false if menus are not needed",
     ],
     [
-      "older server",
       new ClickClackHttpError(404, "not found", new Headers()),
       "debug",
-      "[default] ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
+      "skipped: server does not support /api/bots/self/commands",
     ],
-    [
-      "network failure",
-      new Error("network unavailable"),
-      "warn",
-      "[default] ClickClack command menu sync failed: network unavailable",
-    ],
-  ] as const)("continues startup after %s", async (_label, error, level, message) => {
+    [new Error("network unavailable"), "warn", "failed: network unavailable"],
+  ] as const)("continues startup after %s", async (error, level, message) => {
     client.setBotCommands.mockRejectedValueOnce(error);
     await startGateway();
-    expect(ctx.log?.[level]).toHaveBeenCalledWith(message);
+    expect(ctx.log?.[level]).toHaveBeenCalledWith(
+      `[default] ClickClack command menu sync ${message}`,
+    );
     expectStatus({
       running: true,
       lifecycle: "starting",
@@ -519,10 +515,6 @@ describe("ClickClack gateway", () => {
       author: {
         id: "other-bot",
         kind: "bot",
-        display_name: "Other bot",
-        handle: "other-bot",
-        avatar_url: "",
-        created_at: "2026-01-01T00:00:00.000Z",
       },
     });
     await startGateway();
@@ -547,6 +539,38 @@ describe("ClickClack gateway", () => {
     expect(inbound).toHaveBeenCalledWith(
       expect.objectContaining({ correlationId: "fakeco.case_1" }),
     );
+  });
+
+  it.each([
+    { channel_id: "chn_1", id: "msg-101", body: "reply 101", thread_seq: 101 },
+    { direct_conversation_id: "dmc_1", id: "msg_dm_reply", body: "dm thread reply", thread_seq: 1 },
+  ])("fetches thread reply $id directly, outside timeline windows", async (fields) => {
+    const root = "direct_conversation_id" in fields ? "msg_dm_root" : "msg_root";
+    const message = {
+      ...fields,
+      author_id: "human-1",
+      thread_root_id: root,
+      parent_message_id: root,
+    };
+    client.message.mockResolvedValueOnce(message);
+    await startGateway();
+    emitMessageEvent(socket, 1, { message_id: message.id }, "thread.reply_created");
+    await expectCalls(inbound, 1);
+    expect(client.message).toHaveBeenCalledWith(message.id);
+    expect(inbound).toHaveBeenCalledWith(expect.objectContaining({ message }));
+    expect(ctx.log?.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns without dispatching an unreadable thread reply", async () => {
+    client.message.mockRejectedValueOnce(new ClickClackHttpError(404, "not found", new Headers()));
+    await startGateway();
+    emitMessageEvent(socket, 1, {}, "thread.reply_created");
+    await vi.waitFor(() =>
+      expect(ctx.log?.warn).toHaveBeenCalledWith(
+        expect.stringContaining("skipped unreadable ClickClack message before agent dispatch"),
+      ),
+    );
+    expect(inbound).not.toHaveBeenCalled();
   });
 
   it("reconnects after ClickClack websocket errors", async () => {

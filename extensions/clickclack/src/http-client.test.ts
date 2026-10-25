@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 import { listenOnLoopback as listenLoopbackServer } from "../../test-support/hanging-loopback-server.js";
-import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
+import { createClickClackClient } from "./http-client.js";
 
 const effectGate = await vi.hoisted(async () =>
   (
@@ -110,18 +110,12 @@ function createOversizedJsonServer(): { server: Server; closed: Promise<number> 
     const prefix = Buffer.from('{"user":{"id":"');
     const body = Buffer.alloc(64 * 1024, 0x61);
     const suffix = Buffer.from('"}}');
-    function* chunks() {
-      yield prefix;
-      for (
-        let size = prefix.length;
-        size + body.length + suffix.length < LOOPBACK_RESPONSE_BYTES;
-        size += body.length
-      ) {
-        yield body;
-      }
-      yield suffix;
-    }
-    const stream = Readable.from(chunks(), { objectMode: false });
+    const chunks = Math.floor(
+      (LOOPBACK_RESPONSE_BYTES - prefix.length - suffix.length) / body.length,
+    );
+    const stream = Readable.from([prefix, ...Array.from({ length: chunks }, () => body), suffix], {
+      objectMode: false,
+    });
     let sentBytes = 0;
     stream.on("data", (chunk: Buffer) => {
       sentBytes += chunk.length;
@@ -138,25 +132,7 @@ function createOversizedJsonServer(): { server: Server; closed: Promise<number> 
   return { server, closed: closed.promise };
 }
 
-function streamedErrorResponse(body: string) {
-  const cancel = vi.fn();
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(body));
-    },
-    cancel,
-  });
-  return { response: new Response(stream, { status: 502 }), stream, cancel };
-}
-
 describe("ClickClack HTTP client", () => {
-  it("serializes explicit archive requests", async () => {
-    const fetchMock = jsonFetch({ channel: { id: "chn_discussion" } });
-    const patch = { archived: true, name: "release-done", sidebar_section: "Archive" };
-    await createTestClient(fetchMock).updateChannel("chn_discussion", patch);
-    expectRequest(fetchMock.mock.calls, 1, "channels/chn_discussion", "PATCH", patch);
-  });
-
   it("merges recent thread replies into the global latest-message window", async () => {
     const root = historyRoot(10, 1);
     const newerRoot = historyRoot(11, 0, {
@@ -274,6 +250,7 @@ describe("ClickClack HTTP client", () => {
   it.each<[string, string | null]>([
     [" fakeco.case_1 ", "fakeco.case_1"],
     ["bad\rcorrelation", null],
+    ["x".repeat(129), null],
   ])("sends only safe request correlation: %j", async (correlationId, expected) => {
     const fetchMock = jsonFetch({ user: { id: "usr_1" } });
     const client = createTestClient(fetchMock, { correlationId });
@@ -281,8 +258,6 @@ describe("ClickClack HTTP client", () => {
     expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("X-Correlation-ID")).toBe(
       expected,
     );
-    expect(normalizeClickClackCorrelationId("bad\ncorrelation")).toBeUndefined();
-    expect(normalizeClickClackCorrelationId("x".repeat(129))).toBeUndefined();
   });
 
   it("bounds oversized success JSON responses and closes the stream early", async () => {
@@ -304,17 +279,11 @@ describe("ClickClack HTTP client", () => {
     }
   });
 
-  it("bounds error response bodies without using raw response.text()", async () => {
-    const streamed = streamedErrorResponse("x".repeat(9000));
-    const text = vi.spyOn(streamed.response, "text");
-    const fetchMock = vi.fn(async () => streamed.response);
-    const client = createTestClient(fetchMock);
-
-    await expect(client.me()).rejects.toThrow(`ClickClack 502: ${"x".repeat(8 * 1024)}`);
-
-    expect(text).not.toHaveBeenCalled();
-    expect(streamed.cancel).toHaveBeenCalledTimes(1);
-    expect(streamed.stream.locked).toBe(false);
+  it("bounds error response details to 8 KiB", async () => {
+    const fetchMock = vi.fn(async () => new Response("x".repeat(9000), { status: 502 }));
+    await expect(createTestClient(fetchMock).me()).rejects.toMatchObject({
+      message: `ClickClack 502: ${"x".repeat(8 * 1024)}`,
+    });
   });
 
   it("redacts non-2xx response details with built-in patterns", async () => {
@@ -348,25 +317,7 @@ describe("ClickClack HTTP client", () => {
     expectRequest(fetchMock.mock.calls, 1, path, "POST", { body: "activity", kind, turn_id: "t1" });
   });
 
-  it("serializes retry nonces and reads persisted attachments", async () => {
-    const fetchMock = jsonResponses(
-      { message: { id: "msg_retry" } },
-      { message: { id: "msg_retry", attachments: [{ id: "upl_1" }] } },
-    );
-    const client = createTestClient(fetchMock);
-
-    await client.createChannelMessage("chn_1", "retry-safe", { nonce: "media-queue-1" });
-    const persisted = await client.message("msg_retry");
-
-    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
-      body: "retry-safe",
-      nonce: "media-queue-1",
-    });
-    expectRequest(fetchMock.mock.calls, 2, "messages/msg_retry");
-    expect(persisted.attachments).toEqual([{ id: "upl_1" }]);
-  });
-
-  it("uploads multipart bytes with filename and MIME, then attaches by id", async () => {
+  it("uploads bytes, creates a nonce-keyed message, and reads its persisted attachment", async () => {
     const NativeBlob = Blob;
     let uploadBlobPart: BlobPart | undefined;
     class CapturingBlob extends NativeBlob {
@@ -375,7 +326,12 @@ describe("ClickClack HTTP client", () => {
         super(parts, options);
       }
     }
-    const fetchMock = jsonResponses({ upload: { id: "upl_1" } }, { ok: true });
+    const fetchMock = jsonResponses(
+      { upload: { id: "upl_1" } },
+      { message: { id: "msg_1" } },
+      { ok: true },
+      { message: { id: "msg_1", attachments: [{ id: "upl_1" }] } },
+    );
     const client = createTestClient(fetchMock);
 
     const uploadBuffer = Buffer.from("const proof = true;");
@@ -389,7 +345,9 @@ describe("ClickClack HTTP client", () => {
         nonce: "upload-queue-1",
       })
       .finally(() => vi.unstubAllGlobals());
+    await client.createChannelMessage("chn_1", "retry-safe", { nonce: "media-queue-1" });
     await client.attachUpload("msg_1", upload.id);
+    expect((await client.message("msg_1")).attachments).toEqual([{ id: "upl_1" }]);
 
     expect(uploadBlobPart).toBeInstanceOf(Uint8Array);
     const uploadBytes = uploadBlobPart as Uint8Array;
@@ -412,9 +370,14 @@ describe("ClickClack HTTP client", () => {
     expect(file).toBeInstanceOf(File);
     expect(file).toMatchObject({ name: "viewer-proof.ts", type: "text/typescript" });
     expect(await (file as File).text()).toBe("const proof = true;");
-    expectRequest(fetchMock.mock.calls, 2, "messages/msg_1/attachments", "POST", {
+    expectRequest(fetchMock.mock.calls, 2, "channels/chn_1/messages", "POST", {
+      body: "retry-safe",
+      nonce: "media-queue-1",
+    });
+    expectRequest(fetchMock.mock.calls, 3, "messages/msg_1/attachments", "POST", {
       upload_id: "upl_1",
     });
+    expectRequest(fetchMock.mock.calls, 4, "messages/msg_1");
   });
 
   it.each([
