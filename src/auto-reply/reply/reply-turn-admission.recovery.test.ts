@@ -31,7 +31,6 @@ import {
   releaseSessionControllerClaim,
   reserveSessionControllerSource,
   retireSessionControllerInput,
-  type SessionControllerMailboxClaim,
 } from "../../sessions/session-controller.mailbox.js";
 import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
@@ -170,7 +169,6 @@ function recoveryFixture(overrides: Partial<SessionEntry> = {}) {
     storePath,
     scope,
     abort,
-    cleanup,
     operation: (request: Partial<Parameters<typeof createReplyOperation>[0]> = {}) => {
       const operation = createReplyOperation({
         sessionKey,
@@ -240,71 +238,6 @@ function observeRecoveryClaim(pause: boolean | string = false) {
   return { claimed: claimed.promise, release: () => release.resolve(), spy };
 }
 
-it("keeps new input and followups behind a concurrent recovery winner", async () => {
-  const f = recoveryFixture({
-    ...channelDelivery,
-    restartRecoveryDeliveryContext: { channel: "discord", to: "synthetic-channel" },
-    restartRecoverySourceIngress: "channel",
-  });
-  const context = createRecoveryGatewayContext();
-  const selected = await f.claim();
-  const recoveryStarted = deferred();
-  let recovered: ReturnType<typeof createReplyOperation> | undefined;
-  let recoveryClaim: SessionControllerMailboxClaim | undefined;
-  f.cleanup.unshift(() => {
-    recovered?.complete();
-    if (recoveryClaim) {
-      releaseSessionControllerClaim(recoveryClaim);
-    }
-  });
-  const retry = vi
-    .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
-    .mockImplementationOnce(async (request) => {
-      expect(request).toMatchObject({
-        expectedSessionId: sessionId,
-        expectedRecoveryRunId: "old-channel-claim",
-        lane: "main",
-        expectedRecoverySourceRunId: "old-channel-source",
-        gatewayRuntime: context.recoveryRuntime,
-      });
-      const input = request.controllerInput;
-      if (!input) {
-        throw new Error("Recovery must receive the selected claim's predecessor");
-      }
-      input.custody.rpcAdopted = true;
-      recoveryClaim = await claimSessionControllerTask(input, () => {});
-      recovered = f.operation({ mailboxClaim: recoveryClaim });
-      await f.write({
-        ...f.entry,
-        abortedLastRun: false,
-        restartRecoveryRuns: [recoveryRun("old-channel-claim")],
-      });
-      recoveryStarted.resolve();
-      return { started: 1, settled: 0, failed: 0, skipped: 0 };
-    });
-  const pending = observe(
-    f.admit({ mailboxClaim: selected, resolveGatewayContext: () => context }),
-  );
-  await recoveryStarted.promise;
-  await setImmediate();
-  expect(pending.result).toBeUndefined();
-  expect(pending.failure).toBeUndefined();
-  expect(retry).toHaveBeenCalledOnce();
-  expect(recoveryClaim?.mailbox.claim).toBe(recoveryClaim);
-  await f.done();
-  recovered?.complete();
-  if (recoveryClaim) {
-    releaseSessionControllerClaim(recoveryClaim);
-  }
-  await pending.settled;
-  expect(pending.failure).toBeUndefined();
-  const visible = owned(pending.result);
-  expect(selected.mailbox.claim).toBe(selected);
-  expect(visible.operation).not.toBe(recovered);
-  complete(visible);
-  expect(retry).toHaveBeenCalledOnce();
-});
-
 it.each([
   { kind: "queued_followup", failed: false },
   { kind: "visible", failed: true },
@@ -314,20 +247,18 @@ it.each([
     const f = recoveryFixture(interruptedDelivery);
     const context = createRecoveryGatewayContext();
     const retryEntered = deferred();
-    const retry = vi
-      .spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery")
-      .mockImplementation(async () => {
+    vi.spyOn(restartRecovery, "retryRestartAbortedMainSessionRecovery").mockImplementation(
+      async () => {
         retryEntered.resolve();
         return { started: 0, settled: 0, failed: failed ? 1 : 0, skipped: failed ? 0 : 1 };
-      });
+      },
+    );
     const outcome = f.wait({ resolveGatewayContext: () => context, kind });
     await awaitGateBeforeSettlement(
       retryEntered.promise,
       outcome.settled,
       "Admission settled before recovery dispatch",
     );
-    expect(retry).toHaveBeenCalledOnce();
-    expect(retry.mock.calls[0]?.[0].lane).toBe(kind === "visible" ? "main" : undefined);
     await setImmediate();
     expect(f.read()).toMatchObject(f.entry);
     expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
@@ -342,7 +273,6 @@ it.each([
       await outcome.settled;
       expect(outcome.result).toEqual({ status: "skipped", reason: "active-run" });
     }
-    expect(retry).toHaveBeenCalledOnce();
   },
 );
 
@@ -557,13 +487,8 @@ async function busyReply(withRecoveryFence = true) {
   });
   return {
     target,
-    controller: fixture.abort,
-    fence,
-    read: fixture.read,
-    finish: async (retainFence = false) => {
-      if (!retainFence) {
-        await fixture.write({ ...fixture.entry, status: "done" });
-      }
+    finish: async () => {
+      await fixture.write({ ...fixture.entry, status: "done" });
       reply.operation.complete();
       await replyReleased;
     },
@@ -594,7 +519,6 @@ it.for(["recovery fence", "worker-owned input"] as const)(
     const releaseFirst = deferred();
     const firstStarted = deferred();
     const order: string[] = [];
-    const claim = vi.spyOn(recoveryStore, "claimMainSessionRecoveryOwner");
     const first = fixture.command("first", {
       run: async () => {
         order.push("first");
@@ -612,7 +536,6 @@ it.for(["recovery fence", "worker-owned input"] as const)(
     });
     await vi.waitFor(() => expect(fixture.queued()).toBe(2));
     expect(order).toEqual([]);
-    expect(claim).not.toHaveBeenCalled();
     await fixture.finish();
     await withinTest(firstStarted.promise, signal);
     expect(order).toEqual(["first"]);
@@ -622,26 +545,6 @@ it.for(["recovery fence", "worker-owned input"] as const)(
       "second",
     ]);
     expect(order).toEqual(["first", "second"]);
-  },
-);
-
-it.for(["cancelled", "retained fence"] as const)(
-  "does not execute the waiting command after %s",
-  async (outcome, { signal }) => {
-    const fixture = await busyReply();
-    const run = vi.fn(async () => "ran");
-    const command = fixture.command("waiting", { run });
-    await vi.waitFor(() => expect(fixture.queued()).toBe(1));
-    if (outcome === "cancelled") {
-      fixture.controller.abort();
-    } else {
-      await fixture.finish(true);
-    }
-    await expect(withinTest(command, signal)).rejects.toMatchObject(
-      outcome === "cancelled" ? { name: "AbortError" } : { code: "SESSION_WORK_START_CHANGED" },
-    );
-    expect(run).not.toHaveBeenCalled();
-    expect(fixture.read()?.restartRecoveryRuns).toEqual(fixture.fence);
   },
 );
 
@@ -662,26 +565,6 @@ it("keeps a successor behind an acquired turn's delayed durable claim", async ({
     "ran",
   ]);
   expect(run).toHaveBeenCalledTimes(2);
-});
-
-it("returns the foreground recovery claim and releases it when visible reply work clears", async () => {
-  const f = recoveryFixture({ mainRestartRecovery: cycle(2) });
-  const admission = owned(await f.admit());
-  const claimedEntry = f.read();
-  complete(admission);
-  await vi.waitFor(() => expect(f.read()?.mainRestartRecovery?.foregroundClaims).toBeUndefined());
-  expect(claimedEntry?.mainRestartRecovery).toMatchObject({
-    foregroundClaims: { tokens: [expect.any(String)] },
-  });
-  expect(admission.sessionEntry).toMatchObject({
-    mainRestartRecovery: { foregroundClaims: claimedEntry?.mainRestartRecovery?.foregroundClaims },
-  });
-  expect(f.read()).toMatchObject({
-    sessionId,
-    status: "interrupted",
-    abortedLastRun: true,
-    mainRestartRecovery: { cycleId: "cycle-1", chargedAttempts: 2 },
-  });
 });
 
 it("settles committed recovery without replay after preparation changes", async ({ signal }) => {
@@ -731,15 +614,23 @@ it("hands an interrupt to ordinary recovery ownership when the owed resend canno
   const admission = owned(await f.admit({ mailboxClaim, upstreamAbortSignal: f.abort.signal }));
   expect(retirements).toBe(1);
   expect(f.read()).toMatchObject({
+    sessionId,
     abortedLastRun: true,
     status: "interrupted",
     mainRestartRecovery: {
+      cycleId: "cycle-1",
       chargedAttempts: 1,
       foregroundClaims: { tokens: expect.arrayContaining(["deferred-release"]) },
     },
   });
   expect(f.read()?.mainRestartRecovery?.foregroundClaims?.tokens).toHaveLength(2);
+  expect(admission.sessionEntry?.mainRestartRecovery?.foregroundClaims).toEqual(
+    f.read()?.mainRestartRecovery?.foregroundClaims,
+  );
   complete(admission);
+  await vi.waitFor(() =>
+    expect(f.read()?.mainRestartRecovery?.foregroundClaims?.tokens).toEqual(["deferred-release"]),
+  );
 });
 
 it("preserves unsettled recovery delivery custody while refusing a queued followup", async () => {

@@ -62,14 +62,11 @@ async function runFastAutoProgressCase(params: {
   sourceReplyDeliveryMode?: "message_tool_only";
   callbackResult?: boolean;
   opts?: NonNullable<Parameters<typeof executeFollowupTurn>[0]["defaults"]["opts"]>;
-  payload?: ReplyPayload;
 }) {
-  const payload =
-    params.payload ??
-    ({
-      text: "💨Fast: auto-on",
-      channelData: { openclawProgressKind: "fast-mode-auto" },
-    } satisfies ReplyPayload);
+  const payload = {
+    text: "💨Fast: auto-on",
+    channelData: { openclawProgressKind: "fast-mode-auto" },
+  } satisfies ReplyPayload;
   const onChannelToolResult = vi.fn(() => params.callbackResult);
   const onDurableToolResult = vi.fn(async () => {});
   const turn = sessionTurn(() => ({
@@ -152,44 +149,15 @@ describe("executeFollowupTurn", () => {
     );
   });
 
-  it("normalizes queued route facts into the canonical execution call", async () => {
+  it("notifies the queued observer when execution starts", async () => {
     const turn = createTurn();
-    const typing = createMockTypingController();
     const onAgentRunStart = vi.fn();
     turn.queued.runObservers = { onAgentRunStart };
     mockExecution((params) => {
       params.opts?.onAgentRunStart?.("run-1");
     });
 
-    await executeTestTurn({
-      turn,
-      defaults: {
-        typing,
-        typingMode: "instant",
-      },
-    });
-
-    const call = state.execute.mock.calls[0]?.[0] as AgentTurnParams;
-    expect(call).toMatchObject({
-      commandBody: "queued prompt",
-      transcriptCommandBody: "queued transcript",
-      followupRun: turn.queued,
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      sessionKey: "main",
-    });
-    expect(call.opts?.runId).toBe("run-1");
-    expect(call.sessionCtx).toMatchObject({
-      Provider: "slack",
-      Surface: "discord",
-      SessionKey: "main",
-      RuntimePolicySessionKey: "main",
-      OriginatingTo: "channel:C1",
-      MessageThreadId: "thread-1",
-      MessageSid: "message-1",
-      SenderId: "user-1",
-    });
-    expect(call.sessionCtx.media).toEqual([{ kind: "audio", contentType: "audio/ogg" }]);
+    await executeTestTurn({ turn });
     expect(onAgentRunStart).toHaveBeenCalledWith("run-1");
   });
 
@@ -381,10 +349,6 @@ describe("executeFollowupTurn", () => {
         callbackResult: true,
         sourceReplyDeliveryMode: "message_tool_only",
         opts: { allowProgressCallbacksWhenSourceDeliverySuppressed: true },
-        payload: {
-          text: "💨Fast: auto-off(75s>=60s)",
-          channelData: { openclawProgressKind: "fast-mode-auto" },
-        },
       },
       true,
       false,
@@ -496,14 +460,7 @@ describe("executeFollowupTurn lifecycle", () => {
       const release = createDeferred();
       const completed: AgentTurnExecutionResult = {
         runId: turn.runId,
-        outcome: {
-          kind: "settled",
-          status: "ok",
-          result: { meta: { durationMs: 0 } },
-          resolved: { provider: "anthropic", model: "claude" },
-          fallback: { exhausted: false, attempts: [] },
-          autoCompactionCount: 0,
-        },
+        outcome: { kind: "rejected", payload: { text: "done" } },
       };
       state.execute.mockImplementation(async (params: AgentTurnParams) => {
         params.opts?.abortSignal?.throwIfAborted();

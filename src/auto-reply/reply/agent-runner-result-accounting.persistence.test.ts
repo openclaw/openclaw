@@ -1,25 +1,17 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  getOpenClawAgentDatabaseIfOpen,
-  isOpenClawAgentDatabaseOpen,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
 import { recordTurnCompaction } from "./agent-runner-compaction-accounting.js";
+import { createDeliverySuite } from "./agent-runner-delivery-suite.test-support.js";
 import {
   agentAccountingPersistenceDiagnostic as diagnostic,
   createAgentAccountingPersistenceFixture,
@@ -36,52 +28,25 @@ import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-s
 import { incrementCompactionCount } from "./session-updates.js";
 import { createMockTypingController } from "./test-helpers.js";
 
+afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const suite = createDeliverySuite();
+const { createFixture } = suite;
 const turnUsage = Object.freeze({ input: 120, output: 8 });
 const persistedTurnUsage = { inputTokens: 120, outputTokens: 8 };
 const operations: ReplyOperation[] = [];
-let suiteRoot: string;
-let storePath: string;
-let fixtureSequence = 0;
-beforeAll(() => {
-  // openclaw-temp-dir: allow suite database root drains before removal
-  suiteRoot = fs.mkdtempSync(
-    path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-accounting-suite-"),
-  );
-  storePath = path.join(suiteRoot, "openclaw-agent.sqlite");
-  openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-});
-afterAll(async () => {
-  await drainSessionStoreWriterQueuesForTest();
-  await disposeOpenClawAgentDatabaseByPath(storePath);
-  await closeOpenClawAgentDatabasesAsync(suiteRoot);
-  expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
-  fs.rmSync(suiteRoot, { recursive: true, force: true });
-});
 afterEach(() => {
   for (const operation of operations.splice(0)) {
     operation.complete();
   }
 });
-async function createFixture(
-  options: Partial<Parameters<typeof createAgentAccountingPersistenceFixture>[0]> = {},
-) {
-  return createAgentAccountingPersistenceFixture({
-    storePath,
-    root: options.root ?? tempDirs.make("openclaw-context-pressure-"),
-    fixtureId: ++fixtureSequence,
-    registerOperation: (operation) => operations.push(operation),
-    ...options,
-  });
-}
-
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 function createRecoveryFixture(
   { context, sessionId, turn }: Fixture,
   admissionRunId: string,
   lane: "ordinary" | "followup" = "ordinary",
 ) {
-  const scope = { agentId: "main", storePath, sessionKey: context.sessionKey! };
+  const scope = { agentId: "main", storePath: suite.storePath, sessionKey: context.sessionKey! };
   const getSessionId = () => sessionId;
   const actor = createReplyRecoveryActorFixture({
     ...scope,
@@ -180,10 +145,12 @@ it("retains an accepted rejected followup's recovery claim until source delivery
     deliveryEntry = fixture.read();
   });
   turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
-  const admission = vi
-    .spyOn(followupAdmission, "prepareReplyAgentTurn")
-    .mockResolvedValue({ kind: "admitted", configured: undefined, turn });
-  const execution = vi.spyOn(followupExecution, "executeFollowupTurn").mockResolvedValue({
+  vi.spyOn(followupAdmission, "prepareReplyAgentTurn").mockResolvedValue({
+    kind: "admitted",
+    configured: undefined,
+    turn,
+  });
+  vi.spyOn(followupExecution, "executeFollowupTurn").mockResolvedValue({
     commentaryPayloadsEnabled: false,
     execution: {
       runId: turn.runId,
@@ -194,33 +161,28 @@ it("retains an accepted rejected followup's recovery claim until source delivery
     pendingToolTasks: new Set(),
     progress: { drain: async () => {} },
   });
-  try {
-    await withAccountingProvider(() =>
-      createFollowupRunner({
-        defaultModel: diagnostic.model,
-        typing: createMockTypingController(),
-        typingMode: "never",
-      })(turn.queued),
-    );
-    expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        payloads: [expect.objectContaining({ text: "Accepted setup failed", isError: true })],
-        completion: expect.objectContaining({ kind: "failed" }),
-      }),
-    );
-    expect(deliveryEntry).toMatchObject({
-      restartRecoveryDeliveryRunId: "accepted-followup",
-      restartRecoveryDeliverySourceRunId: "accepted-source",
-    });
-    expect(deliveryEntry?.pendingFinalDelivery).toBeUndefined();
-    expect(deliveryEntry?.restartRecoveryTerminalRunIds ?? []).not.toContain("accepted-source");
-    const settledEntry = fixture.read();
-    expect(settledEntry?.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(settledEntry?.restartRecoveryTerminalRunIds).toContain("accepted-source");
-  } finally {
-    admission.mockRestore();
-    execution.mockRestore();
-  }
+  await withAccountingProvider(() =>
+    createFollowupRunner({
+      defaultModel: diagnostic.model,
+      typing: createMockTypingController(),
+      typingMode: "never",
+    })(turn.queued),
+  );
+  expect(deliver).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      payloads: [expect.objectContaining({ text: "Accepted setup failed", isError: true })],
+      completion: expect.objectContaining({ kind: "failed" }),
+    }),
+  );
+  expect(deliveryEntry).toMatchObject({
+    restartRecoveryDeliveryRunId: "accepted-followup",
+    restartRecoveryDeliverySourceRunId: "accepted-source",
+  });
+  expect(deliveryEntry?.pendingFinalDelivery).toBeUndefined();
+  expect(deliveryEntry?.restartRecoveryTerminalRunIds ?? []).not.toContain("accepted-source");
+  const settledEntry = fixture.read();
+  expect(settledEntry?.restartRecoveryDeliveryRunId).toBeUndefined();
+  expect(settledEntry?.restartRecoveryTerminalRunIds).toContain("accepted-source");
 });
 
 it.each([
@@ -258,10 +220,12 @@ it("keeps incognito accounting and final custody on the retained memory owner", 
   const nativePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
   const options = { agentId: "main", env, path: nativePath };
   try {
-    const fixture = await createFixture({
+    const fixture = await createAgentAccountingPersistenceFixture({
       storePath: nativePath,
       incognito: true,
       root,
+      fixtureId: 1,
+      registerOperation: (operation) => operations.push(operation),
     });
     const owner = memorySessionActorOwners.read(options);
     expect(owner).toBeDefined();
@@ -295,7 +259,7 @@ it("completes against the settled writer when the caller still has its pre-run e
   const fixture = await createFixture();
   fixture.context.execution.sessionWriter = {
     agentId: "main",
-    storePath,
+    storePath: suite.storePath,
     sessionKey: fixture.context.sessionKey!,
     sessionId: fixture.sessionId,
     lifecycleRevision: fixture.context.activeSessionEntry!.lifecycleRevision,
@@ -358,38 +322,31 @@ it.each(["success", "publication-failure", "rollback"] as const)(
       pendingFinalDelivery: { text: "done", deliveries: [{ state: "prepared" }] },
       restartRecoveryTerminalRunIds: ["source-turn"],
     };
-    try {
-      if (outcome === "success") {
-        await finalizeReplyAgentRun(context);
-      } else {
-        await expect(finalizeReplyAgentRun(context)).rejects.toThrow(
-          outcome === "rollback"
-            ? "synthetic completion refusal"
-            : /read only|readonly|extensible/i,
-        );
-      }
-      if (outcome === "rollback") {
-        expect(fixture.read()).toEqual(before);
-      } else {
-        expect(fixture.read()).toMatchObject(expected);
-        expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
-      }
-      const commandsBeforeCleanup = observer.commands.length;
-      await controller.clear();
-      if (outcome !== "rollback") {
-        expect(observer.commands).toHaveLength(commandsBeforeCleanup);
-      }
+    if (outcome === "success") {
+      await finalizeReplyAgentRun(context);
+    } else {
+      await expect(finalizeReplyAgentRun(context)).rejects.toThrow(
+        outcome === "rollback" ? "synthetic completion refusal" : /read only|readonly|extensible/i,
+      );
+    }
+    if (outcome === "rollback") {
+      expect(fixture.read()).toEqual(before);
+    } else {
+      expect(fixture.read()).toMatchObject(expected);
       expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
-      if (outcome === "success") {
-        context.replyOperation.complete();
-        await actor.release();
-        await disposeOpenClawAgentDatabaseByPath(storePath);
-        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-        expect(fixture.read()).toMatchObject(expected);
-        expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
-      }
-    } finally {
-      observer.restore();
+    }
+    const commandsBeforeCleanup = observer.commands.length;
+    await controller.clear();
+    if (outcome !== "rollback") {
+      expect(observer.commands).toHaveLength(commandsBeforeCleanup);
+    }
+    expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
+    if (outcome === "success") {
+      context.replyOperation.complete();
+      await actor.release();
+      await suite.reopen();
+      expect(fixture.read()).toMatchObject(expected);
+      expect(fixture.read()?.restartRecoveryDeliveryRunId).toBeUndefined();
     }
   },
 );
@@ -450,23 +407,17 @@ it.each([
     };
     Object.assign(context.followupRun.run, { traceAuthorized: true, traceLevelOverride: "on" });
     context.activeSessionStore = turn.sessionStore;
-    const reader = vi
-      .spyOn(sessionAccessor, "loadSessionEntryReadOnly")
-      .mockReturnValue(replacement);
-    try {
-      const result =
-        lane === "ordinary" ? await finalizeReplyAgentRun(context) : await fixture.deliverQueued();
-      const text = (Array.isArray(result) ? result : [result])
-        .map((payload) => payload?.text)
-        .join("\n");
-      expect(text).not.toContain("REPLACEMENT_DIAGNOSTIC");
-    } finally {
-      reader.mockRestore();
-      expect(turn.session.current()).toMatchObject({
-        sessionId: original.sessionId,
-        lifecycleRevision: original.lifecycleRevision,
-      });
-    }
+    vi.spyOn(sessionAccessor, "loadSessionEntryReadOnly").mockReturnValue(replacement);
+    const result =
+      lane === "ordinary" ? await finalizeReplyAgentRun(context) : await fixture.deliverQueued();
+    const text = (Array.isArray(result) ? result : [result])
+      .map((payload) => payload?.text)
+      .join("\n");
+    expect(text).not.toContain("REPLACEMENT_DIAGNOSTIC");
+    expect(turn.session.current()).toMatchObject({
+      sessionId: original.sessionId,
+      lifecycleRevision: original.lifecycleRevision,
+    });
   },
 );
 
