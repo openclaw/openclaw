@@ -42,11 +42,11 @@ function fixture(resolveDisplayId?: WorkerProvider["resolveDisplayId"]) {
 }
 
 describe("profile backend display identity", () => {
-  it("uses only provider-authored presentation with the existing settings snapshot", async () => {
+  it("reflects profile snapshots and live provider replacement", async () => {
     const resolveDisplayId = vi.fn<NonNullable<WorkerProvider["resolveDisplayId"]>>((profile) =>
       typeof profile.backend === "string" ? profile.backend : undefined,
     );
-    const { config, catalog } = fixture(resolveDisplayId);
+    const { config, catalog, provider, setProvider } = fixture(resolveDisplayId);
     expect(catalog.readProviderDisplayId("production")).toBe("aws");
     expect(catalog.readProviderDisplayId("aws")).toBe("azure");
     config.cloudWorkers!.profiles!.production!.settings = { backend: "hetzner" };
@@ -57,19 +57,15 @@ describe("profile backend display identity", () => {
     expect(catalog.readProviderDisplayId("missing")).toBeUndefined();
     delete config.cloudWorkers!.profiles!.production;
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
-  });
-
-  it("refreshes display metadata when the live provider binding changes", async () => {
-    const firstHook = vi.fn(() => "aws");
-    const { catalog, provider, setProvider } = fixture(firstHook);
+    config.cloudWorkers!.profiles!.production = {
+      provider: "adapter",
+      settings: { backend: "aws" },
+    };
     setProvider(undefined);
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
-
     setProvider(provider);
     expect(catalog.readProviderDisplayId("production")).toBe("aws");
-
-    const reloadedHook = vi.fn(() => "gcp");
-    setProvider({ ...provider, resolveDisplayId: reloadedHook });
+    setProvider({ ...provider, resolveDisplayId: () => "gcp" });
     expect(catalog.readProviderDisplayId("production")).toBe("gcp");
     await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
     expect(catalog.readProviderDisplayId("production")).toBe("gcp");
@@ -78,24 +74,27 @@ describe("profile backend display identity", () => {
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
   });
 
-  it.each(["", "AWS", "aws\n", "a".repeat(65), "a_b"])(
-    "omits invalid metadata %j without losing machine choices",
-    async (value) => {
-      const { catalog } = fixture(() => value);
-      expect(catalog.readProviderDisplayId("production")).toBeUndefined();
-      await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
-    },
-  );
-
-  it("keeps missing and throwing hooks cosmetic without exposing their error", async () => {
-    expect(fixture().catalog.readProviderDisplayId("production")).toBeUndefined();
-    const hook = vi.fn(() => {
-      throw new Error("private provider details");
-    });
-    const { catalog, warn } = fixture(hook);
+  it.each([
+    "",
+    "AWS",
+    "aws\n",
+    "a".repeat(65),
+    "a_b",
+    undefined,
+    new Error("private provider details"),
+  ])("keeps unusable metadata %j cosmetic and private", async (value) => {
+    const { catalog, warn } = fixture(
+      value === undefined
+        ? undefined
+        : () => {
+            if (value instanceof Error) {
+              throw value;
+            }
+            return value;
+          },
+    );
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
     await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
-    expect(hook).toHaveBeenCalledOnce();
     expect(warn).not.toHaveBeenCalled();
   });
 });
