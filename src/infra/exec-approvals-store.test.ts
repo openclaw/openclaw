@@ -1,10 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   withAgentDeletion,
   type AgentDeletionOperation,
@@ -75,15 +75,8 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => ({
 
 type ExecApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-
-function createStateDir(): string {
-  const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "exec-approvals-db-")));
-  tempDirs.push(stateDir);
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  return stateDir;
-}
 
 function row() {
   return executeSqliteQueryTakeFirstSync(
@@ -185,7 +178,7 @@ async function pauseDeletion(agentId: string) {
 }
 
 beforeEach(() => {
-  createStateDir();
+  setTestEnvValue("OPENCLAW_STATE_DIR", tempDirs.make("exec-approvals-db-"));
   loggerWarn.mockReset();
   execApprovalsStoreTesting.reset();
 });
@@ -195,9 +188,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   execApprovalsStoreTesting.reset();
   envSnapshot.restore();
-  for (const directory of tempDirs.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 const readOnlyLoaders = [

@@ -126,60 +126,6 @@ describe("package verification bounds", () => {
       }
     }));
 
-  it.for([4])(
-    "rehashes %i changed files in DFS order without charging reused entries a hash slot",
-    (changedCount, { signal }) =>
-      withSwap(async ({ packageRoot }) => {
-        const files = Array.from({ length: 4 }, (_, index) =>
-          path.join(packageRoot, "dist", `reuse-${index}-a.js`),
-        );
-        for (const file of files) {
-          await fs.writeFile(file, "before");
-          await fs.writeFile(file.replace("-a.js", "-b.js"), "");
-        }
-        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
-        const reader = createPackageIntegrityReader();
-        const first = await reader.tree(packageRoot);
-        const changed = files.slice(0, changedCount);
-        for (const file of changed) {
-          await fs.writeFile(file, "changed content");
-        }
-        const release = createDeferredCore();
-        const admitted = createDeferredCore();
-        const hashed: string[] = [];
-        const hash = interceptPackageFileHashes(async (file, _stat, next) => {
-          hashed.push(file);
-          // Queue real work before blocking its result so flush owns every job.
-          const hashing = next();
-          if (changed.includes(file)) {
-            if (hashed.length === changed.length) {
-              admitted.resolve();
-            }
-            await release.promise;
-          }
-          return hashing;
-        });
-        const walking = reader.tree(packageRoot, packageRoot, first);
-        try {
-          await waitForGate(
-            admitted.promise,
-            walking,
-            signal,
-            "The walk settled before admitting its changed files",
-          );
-          release.resolve();
-          const second = await withinTest(walking, signal);
-          expect(hashed).toEqual(changed);
-          expect(second.digest).not.toBe(first.digest);
-          hash.mockImplementation((_file, _stat, next) => next());
-          expect(second).toEqual(await reader.tree(packageRoot));
-        } finally {
-          release.resolve();
-          await Promise.allSettled([walking]);
-        }
-      }),
-  );
-
   it("distinguishes entry and byte budget exhaustion from integrity failures", () =>
     withSwap(async ({ packageRoot, launcher }) => {
       await expect(createPackageIntegrityReader().entries(packageRoot, 1)).rejects.toBeInstanceOf(

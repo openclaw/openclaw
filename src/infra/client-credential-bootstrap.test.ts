@@ -16,7 +16,10 @@ import {
   openClientCredentialCustody,
   runClientCredentialOperation,
 } from "./client-credential-store.js";
-import { generateStoredDeviceIdentity } from "./device-identity-material.js";
+import {
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "./device-identity-material.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -36,17 +39,9 @@ function fixture(credentials = true) {
     OPENCLAW_STATE_DIR: root,
     OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
   };
-  const material = generateStoredDeviceIdentity(17);
-  const identity = {
-    identity_key: "primary",
-    device_id: material.deviceId,
-    public_key_pem: material.publicKeyPem,
-    private_key_pem: material.privateKeyPem,
-    created_at_ms: 17,
-    updated_at_ms: 19,
-  };
+  const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(17), 19);
   const token = {
-    device_id: material.deviceId,
+    device_id: identity.device_id,
     role: "operator",
     token: "synthetic-existing-operator-token",
     scopes_json: '["operator.read"]',
