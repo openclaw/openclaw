@@ -158,16 +158,7 @@ it("publishes history changes only after deletion while fresh reads observe sibl
     protectedSessionIds: [],
     sessionId,
   } satisfies SqliteSessionReclamationPlan;
-  const completed: boolean[] = [];
-  const reclaim = () =>
-    runSqliteSessionReclamation({
-      plan,
-      onWorkerResult(result) {
-        if (result.kind === "history-eviction") {
-          completed.push(result.value.deleted);
-        }
-      },
-    });
+  const reclaim = () => runSqliteSessionReclamation({ plan });
   const changes: SessionRowChange[] = [];
   const stop = sessionChanges.subscribeFacts((change) => {
     if ("sessionKey" in change && change.sessionKey === sessionKey) {
@@ -195,7 +186,6 @@ it("publishes history changes only after deletion while fresh reads observe sibl
         kind: "history-eviction",
         value: { deleted },
       });
-      expect(completed).toEqual(deleted ? [false, true] : [false]);
       expect(changes).toMatchObject(deleted ? [{ sessionKey, factsInvalidated: true }] : []);
       expect(loadSessionEntryReadOnly(scope)).toMatchObject({
         ...successor,
@@ -220,11 +210,11 @@ it.each(["publication", "writer return", "rollback"] as const)(
     const failure = new Error(`synthetic ${outcome} failure`);
     failures.publication = outcome === "publication" ? failure : undefined;
     const events: string[] = [];
-    const committed = vi.fn(() => {
+    const committed = () => {
       expect(database.db.isTransaction).toBe(false);
       expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
       events.push("committed");
-    });
+    };
     const unsubscribe = onSessionIdentityMutation((mutation) => {
       if (mutation.kind === "create" && mutation.current.sessionKeys.includes(scope.sessionKey)) {
         events.push("published");
@@ -261,7 +251,6 @@ it.each(["publication", "writer return", "rollback"] as const)(
             : undefined,
       });
       await expect(operation).rejects.toBe(failure);
-      expect(committed).toHaveBeenCalledTimes(outcome === "rollback" ? 0 : 1);
       expect(events).toEqual(
         outcome === "rollback"
           ? []

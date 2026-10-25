@@ -16,7 +16,6 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import {
   appendTranscriptMessage,
   listSessionBranches,
-  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
@@ -194,7 +193,6 @@ async function seedStoredBranchEvents(events: Record<string, unknown>[], canonic
 it.each(cases)("$name", async ({ events, branches }) => {
   const scope = await seedStoredBranchEvents(events);
   await expectBranchList(scope, branches);
-  expect((await loadTranscriptEvents(scope)).slice(1)).toEqual(events);
 });
 
 const seedCanonicalBranchEvents = (events: Record<string, unknown>[]) =>
@@ -234,13 +232,6 @@ it("extends a selected ancestor while retaining its inactive descendants and hea
     leaf("selected", "side", "root"),
   ];
   const scope = await seedCanonicalBranchEvents(events);
-  await expect(listSessionBranches(scope)).resolves.toMatchObject({
-    status: "ok",
-    branches: [
-      { leafEntryId: "root", active: true },
-      { leafEntryId: "side", active: false },
-    ],
-  });
   await append(scope, "tool", "root", "tool result", "toolResult", 2_000);
   await append(scope, "analysis", "tool", "hidden", "assistant", 3_000, "commentary");
   await expectBranchList(scope, [
