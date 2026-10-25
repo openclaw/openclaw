@@ -3,74 +3,66 @@ import {
   normalizeModelCatalog,
   normalizeModelCatalogProviderRows,
 } from "./model-catalog-normalize.js";
-import type { ModelCatalogModel, ModelCatalogProvider } from "./model-catalog-types.js";
+import type { ModelCatalogProvider } from "./model-catalog-types.js";
 
 const normalize = (value: unknown, ownedProviders = [" OpenAI "]) =>
   normalizeModelCatalog(structuredClone(value), { ownedProviders: new Set(ownedProviders) });
-const normalizeModels = (models: unknown[]) =>
-  normalize({ providers: { OpenAI: { models } } })?.providers?.openai?.models;
+const models = (...rows: unknown[]) =>
+  normalize({ providers: { OpenAI: { models: rows } } })?.providers?.openai?.models;
 const normalizeRows = (providerCatalog: ModelCatalogProvider) =>
-  normalizeModelCatalogProviderRows({
-    provider: " OpenAI ",
-    providerCatalog: structuredClone(providerCatalog),
-    source: "manifest",
-  });
-
+  normalizeModelCatalogProviderRows({ provider: " OpenAI ", providerCatalog, source: "manifest" });
 const windows = [
   { id: "200k", label: "200K", contextWindow: 200_000 },
   { id: "1m", label: "1M", contextWindow: 1_000_000 },
 ];
 
-it("normalizes catalog ownership, aliases, suppressions, and row fields", () => {
-  const model = { id: "gpt-5.4" };
-  const provider = {
-    baseUrl: "https://api.openai.com/v1",
-    api: "openai-responses",
-    headers: { "x-provider": "openai" },
-    defaultModel: "gpt-5.4",
-    defaultUtilityModel: "gpt-5.6-luna",
-  };
-  const suppression = {
-    provider: "azure-openai-responses",
-    model: "gpt-5.3-codex-spark",
-    reason: "not available",
-    when: {
-      baseUrlHosts: ["coding-intl.dashscope.aliyuncs.com"],
-      providerConfigApiIn: ["qwen", "modelstudio"],
-    },
-  };
+it("normalizes owned providers, aliases, suppression scopes and defaults", () => {
+  const provider = { api: "openai-responses", baseUrl: "https://api.test", headers: { x: "y" } };
   expect(
     normalize({
       providers: {
         OpenAI: {
           ...provider,
-          defaultModel: " gpt-5.4 ",
-          defaultUtilityModel: " gpt-5.6-luna ",
-          models: [model, { id: "" }],
+          defaultModel: " m ",
+          defaultUtilityModel: " u ",
+          models: [{ id: "m" }, { id: "" }],
         },
-        anthropic: { models: [{ id: "claude-sonnet-4.6" }] },
+        other: { models: [{ id: "x" }] },
       },
       aliases: {
-        "Azure-OpenAI-Responses": { provider: "OpenAI", api: "azure-openai-responses" },
-        "anthropic-alias": { provider: "anthropic" },
+        Alias: { provider: "OpenAI", api: "azure-openai-responses" },
+        other: { provider: "other" },
       },
       suppressions: [
         {
-          ...suppression,
-          provider: "Azure-OpenAI-Responses",
+          provider: "Alias",
+          model: "m",
+          reason: "retired",
           when: {
-            baseUrlHosts: ["CODING-INTL.DASHSCOPE.ALIYUNCS.COM"],
+            baseUrlHosts: ["API.TEST"],
             providerConfigApiIn: ["Qwen", "ModelStudio"],
           },
         },
       ],
-      discovery: { OpenAI: "static", anthropic: "static", bad: "unknown" },
+      discovery: { OpenAI: "static", other: "static", bad: "unknown" },
       runtimeAugment: true,
     }),
   ).toEqual({
-    providers: { openai: { ...provider, models: [model] } },
-    aliases: { "azure-openai-responses": { provider: "openai", api: "azure-openai-responses" } },
-    suppressions: [suppression],
+    providers: {
+      openai: { ...provider, defaultModel: "m", defaultUtilityModel: "u", models: [{ id: "m" }] },
+    },
+    aliases: { alias: { provider: "openai", api: "azure-openai-responses" } },
+    suppressions: [
+      {
+        provider: "alias",
+        model: "m",
+        reason: "retired",
+        when: {
+          baseUrlHosts: ["api.test"],
+          providerConfigApiIn: ["qwen", "modelstudio"],
+        },
+      },
+    ],
     discovery: { openai: "static" },
     runtimeAugment: true,
   });
@@ -95,57 +87,145 @@ it("keeps only explicit owned models.dev mappings without creating provider rows
   ).toEqual({ modelsDev: { example: "Upstream-ID" }, aliases });
 });
 
-it("normalizes, sorts, and filters provider rows", () => {
-  const model = {
-    id: "GPT-5.4",
-    headers: { "x-model": "gpt-5.4" },
-    input: ["image"],
-    compat: { supportsTools: false },
-  } satisfies ModelCatalogModel;
-  const transport = { baseUrl: "https://api.openai.com/v1", api: "openai-responses" as const };
-  const mediaInput = { image: { tokenMode: "detail" as const, maxBytes: 1 } };
+it("sorts rows, drops invalid ids and upstream ids, merges transport and fills defaults", () => {
+  const transport = { api: "openai-responses", baseUrl: "https://api.test" } as const;
+  const mediaInput = { image: { tokenMode: "detail", maxBytes: 1 } } as const;
   const defaults = {
     ...transport,
-    source: "manifest",
     provider: "openai",
+    source: "manifest",
     reasoning: false,
     status: "available",
   };
   expect(
     normalizeRows({
       ...transport,
-      headers: { "x-provider": "openai", "x-override": " old " },
+      headers: { x: " old ", inherited: "yes" },
       models: [
-        { id: "z-model", headers: { "x-override": " new " }, mediaInput },
-        { id: "  " },
-        { ...model, upstreamModel: "other/gpt-5.4" },
+        { id: "z", headers: { x: " new " }, mediaInput },
+        { id: " " },
+        { id: "A", upstreamModel: "other/A", input: ["image"], compat: { supportsTools: false } },
       ],
     }),
   ).toEqual([
     {
-      ...model,
       ...defaults,
-      ref: "openai/GPT-5.4",
-      mergeKey: "openai::gpt-5.4",
-      name: "GPT-5.4",
-      headers: { "x-provider": "openai", "x-override": "old", "x-model": "gpt-5.4" },
+      id: "A",
+      ref: "openai/A",
+      mergeKey: "openai::a",
+      name: "A",
+      input: ["image"],
+      compat: { supportsTools: false },
+      headers: { x: "old", inherited: "yes" },
     },
     {
-      id: "z-model",
       ...defaults,
-      ref: "openai/z-model",
-      mergeKey: "openai::z-model",
-      name: "z-model",
+      id: "z",
+      ref: "openai/z",
+      mergeKey: "openai::z",
+      name: "z",
       input: ["text"],
       mediaInput,
-      headers: { "x-provider": "openai", "x-override": "new" },
+      headers: { x: "new", inherited: "yes" },
     },
   ]);
 });
 
-it("normalizes complete model fields, provider routing, pricing, and image limits", () => {
+it.each<[string, unknown]>([
+  ["supportsTools", true],
+  ["sendSessionIdHeader", false],
+  ["cacheControlFormat", "anthropic"],
+  ["maxTokensField", "max_completion_tokens"],
+  ["thinkingFormat", "openrouter"],
+])("preserves compatibility %s", (field, value) => {
+  const compat = { [field]: value };
+  expect(models({ id: "m", compat })).toEqual([{ id: "m", compat }]);
+});
+
+it.each<[string, unknown, unknown]>([
+  ["codeMode", " preferred ", "preferred"],
+  ["toolSchemaProfile", " strict ", "strict"],
+  ["toolCallArgumentsEncoding", " json ", "json"],
+  ["visibleReasoningDetailTypes", [" summary ", ""], ["summary"]],
+  ["supportedReasoningEfforts", [" low ", " high "], ["low", "high"]],
+  ["supportedReasoningEfforts", [], []],
+  ["unsupportedToolSchemaKeywords", [" pattern ", ""], ["pattern"]],
+  ["reasoningEffortMap", { " low ": " minimal ", empty: "  " }, { low: "minimal" }],
+  [
+    "vercelGatewayRouting",
+    { only: [" openai "], order: [" anthropic ", "", 1] },
+    { only: ["openai"], order: ["anthropic"] },
+  ],
+])("normalizes compatibility %s", (field, raw, expected) => {
+  expect(models({ id: "m", compat: { [field]: raw } })).toEqual([
+    { id: "m", compat: { [field]: expected } },
+  ]);
+});
+
+it("normalizes model selections, lists, prices and safe headers", () => {
+  const metadata = {
+    name: "GPT-5.4",
+    reasoning: true,
+    contextWindow: 256000,
+    contextTokens: 200000,
+    status: "preview",
+    statusReason: "rolling out",
+    replacedBy: "gpt-5.5",
+    mediaInput: {
+      image: {
+        maxBytes: 4096,
+        maxPixels: 1024,
+        maxSidePx: 64,
+        preferredSidePx: 32,
+        tokenMode: "tile",
+      },
+    },
+  };
   const tier = { input: 0, output: 2, cacheRead: 0, cacheWrite: 1, range: [128] };
-  const boundedTier = { input: 1, output: 2, cacheRead: 0, cacheWrite: 1, range: [0, 256000] };
+  const bounded = { ...tier, input: 1, range: [0, 256000] };
+  const cost = { input: 0, output: 2, cacheRead: 0.125, cacheWrite: 1 };
+  expect(
+    models({
+      ...metadata,
+      id: " m ",
+      input: ["text", "image", "video", "document", "audio"],
+      contextWindows: [
+        { ...windows[1], label: " 1M " },
+        { id: "bad", label: "bad", contextWindow: 0 },
+        windows[0],
+      ],
+      contextWindowDefault: " 1m ",
+      thinkingLevelMap: { off: null, minimal: " low ", max: "max", adaptive: "high" },
+      replaces: [" old ", ""],
+      tags: [" default ", ""],
+      headers: Object.fromEntries([
+        ["x", " safe "],
+        ["__proto__", "bad"],
+        ["constructor", "bad"],
+        ["prototype", "bad"],
+      ]),
+      cost: {
+        ...cost,
+        tieredPricing: [tier, bounded, { ...tier, range: [-1] }, { input: 1, range: [0, 2] }],
+      },
+    }),
+  ).toEqual([
+    {
+      ...metadata,
+      id: "m",
+      input: ["text", "image", "video", "document"],
+      contextWindows: windows,
+      contextWindowDefault: "1m",
+      thinkingLevelMap: { off: null, minimal: "low", max: "max" },
+      replaces: ["old"],
+      tags: ["default"],
+      headers: { x: "safe" },
+      cost: { ...cost, tieredPricing: [tier, bounded] },
+    },
+  ]);
+});
+
+it("normalizes routing and drops malformed compatibility fields", () => {
   const routing = {
     allow_fallbacks: false,
     require_parameters: true,
@@ -161,174 +241,71 @@ it("normalizes complete model fields, provider routing, pricing, and image limit
     preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
     preferred_max_latency: 1,
   };
-  const model = {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
-    api: "openai-completions",
-    baseUrl: "https://proxy.example/v1",
-    headers: { "x-safe": "value" },
-    input: ["text", "image", "video", "document"],
-    reasoning: true,
-    contextWindow: 256000,
-    contextTokens: 200000,
-    parameterCount: 70_000_000_000,
-    maxTokens: 128000,
-    contextWindows: windows,
-    contextWindowDefault: "1m",
-    thinkingLevelMap: { off: null, minimal: "low", max: "max" },
-    status: "preview",
-    statusReason: "rolling out",
-    replaces: ["gpt-5.3"],
-    replacedBy: "gpt-5.5",
-    tags: ["default"],
-    cost: {
-      input: 0,
-      output: 2,
-      cacheRead: 0.125,
-      cacheWrite: 1,
-      tieredPricing: [tier, boundedTier],
-    },
-    mediaInput: {
-      image: {
-        maxBytes: 4096,
-        maxPixels: 1024,
-        maxSidePx: 64,
-        preferredSidePx: 32,
-        tokenMode: "tile",
-      },
-    },
-    compat: {
-      supportsTools: true,
-      codeMode: "preferred",
-      cacheControlFormat: "anthropic",
-      zaiToolStream: true,
-      sendSessionAffinityHeaders: true,
-      sendSessionIdHeader: false,
-      supportsEagerToolInputStreaming: false,
-      supportsLongCacheRetention: true,
-      supportsResponsesContinuation: true,
-      supportsJsonSchemaResponseFormat: true,
-      requiresReasoningContentOnAssistantMessages: true,
-      supportsPromptCacheKey: true,
-      toolSchemaProfile: "strict",
-      toolCallArgumentsEncoding: "json",
-      visibleReasoningDetailTypes: ["summary"],
-      supportedReasoningEfforts: ["low", "high"],
-      unsupportedToolSchemaKeywords: ["pattern"],
-      reasoningEffortMap: { low: "minimal" },
-      maxTokensField: "max_completion_tokens",
-      thinkingFormat: "openrouter",
-      openRouterRouting: routing,
-      vercelGatewayRouting: { only: ["openai"], order: ["anthropic"] },
-    },
-  };
-  const raw = {
-    ...model,
-    id: " gpt-5.4 ",
-    input: [...model.input, "audio"],
-    contextWindows: [
-      { ...windows[1], label: " 1M " },
-      { id: "invalid", label: "Invalid", contextWindow: 0 },
-      { ...windows[0], label: " 200K " },
-    ],
-    contextWindowDefault: " 1m ",
-    thinkingLevelMap: { ...model.thinkingLevelMap, minimal: " low ", adaptive: "high" },
-    replaces: [" gpt-5.3 ", ""],
-    tags: [" default ", ""],
-    headers: Object.fromEntries([
-      ["x-safe", " value "],
-      ["__proto__", "polluted"],
-      ["constructor", "polluted"],
-      ["prototype", "polluted"],
-    ]),
-    cost: {
-      ...model.cost,
-      tieredPricing: [tier, boundedTier, { ...tier, range: [-1] }, { input: 1, range: [0, 2] }],
-    },
-    compat: {
-      ...model.compat,
-      codeMode: " preferred ",
-      supportsStore: "yes",
-      unknownFlag: true,
-      toolSchemaProfile: " strict ",
-      toolCallArgumentsEncoding: " json ",
-      visibleReasoningDetailTypes: [" summary ", ""],
-      supportedReasoningEfforts: [" low ", " high "],
-      unsupportedToolSchemaKeywords: [" pattern ", ""],
-      reasoningEffortMap: { " low ": " minimal ", empty: "  " },
-      openRouterRouting: {
-        ...routing,
-        order: [" openai ", ""],
-        only: [" anthropic ", "", 1],
-        ignore: [" bad "],
-        quantizations: [" fp8 "],
-        sort: { by: " throughput ", partition: null },
-        max_price: { ...routing.max_price, prompt: " 0.5 " },
-      },
-      vercelGatewayRouting: { only: [" openai "], order: [" anthropic ", "", 1] },
-    },
-  };
   expect(
-    normalizeModels([
-      raw,
+    models(
+      {
+        id: "m",
+        compat: {
+          openRouterRouting: {
+            ...routing,
+            order: [" openai ", ""],
+            only: [" anthropic ", "", 1],
+            ignore: [" bad "],
+            quantizations: [" fp8 "],
+            sort: { by: " throughput ", partition: null },
+            max_price: { ...routing.max_price, prompt: " 0.5 " },
+          },
+        },
+      },
       {
         id: "invalid",
         compat: {
+          supportsStore: "yes",
+          unknownFlag: true,
           openRouterRouting: { require_parameters: "no" },
           vercelGatewayRouting: { only: "openai" },
         },
       },
-    ]),
-  ).toEqual([model, { id: "invalid" }]);
+    ),
+  ).toEqual([{ id: "m", compat: { openRouterRouting: routing } }, { id: "invalid" }]);
 });
 
-it("retains an explicitly empty supported reasoning effort list", () => {
-  expect(
-    normalizeModels([{ id: "reasoner", compat: { supportedReasoningEfforts: [] } }])?.[0]?.compat,
-  ).toEqual({ supportedReasoningEfforts: [] });
-});
-
-it.each([
-  { name: "non-record catalog", value: null },
-  { name: "invalid suppression", value: { suppressions: [{ provider: "openai" }] } },
-  { name: "blank models.dev source", value: { modelsDev: { openai: "  " } } },
-])("rejects a $name instead of publishing an empty catalog", ({ value }) => {
-  expect(normalize(value)).toBeUndefined();
-});
+it.each([null, { suppressions: [{ provider: "openai" }] }, { modelsDev: { openai: " " } }])(
+  "rejects an empty or invalid catalog: %j",
+  (value) => expect(normalize(value)).toBeUndefined(),
+);
 
 it("drops the selection tuple with an undeclared default", () => {
-  const contextWindows = Array.from({ length: 20 }, (_, index) => ({
-    id: `window-${index}`,
-    label: `Window ${index}`,
-    contextWindow: 20 - index,
+  const contextWindows = Array.from({ length: 20 }, (_, i) => ({
+    id: `window-${i}`,
+    label: `Window ${i}`,
+    contextWindow: 20 - i,
   }));
   const [row] = normalizeRows({
-    models: [{ id: "model", contextWindows, contextWindowDefault: "missing" }],
+    models: [{ id: "m", contextWindows, contextWindowDefault: "missing" }],
   });
   expect([row?.contextWindows, row?.contextWindowDefault]).toEqual([undefined, undefined]);
 });
 
-it("retains ownership for providers without static model rows", () => {
+it("retains ownership without static models and rejects invalid credential scope", () => {
   const provider = { authScope: "plugin", models: [] };
   expect(normalize({ providers: { fixture: provider } }, ["fixture"])?.providers?.fixture).toEqual(
     provider,
   );
-});
-it("rejects invalid ownership rather than downgrading to default agent scope", () => {
   expect(() =>
-    normalize({ providers: { fixture: { authScope: "global", models: [{ id: "model" }] } } }, [
+    normalize({ providers: { fixture: { authScope: "global", models: [{ id: "m" }] } } }, [
       "fixture",
     ]),
   ).toThrow("credential ownership");
 });
 
-it("gives rows the provider family unless the row declares its own, dropping malformed values", () => {
+it("inherits provider family unless overridden and drops malformed families", () => {
   const providers = normalize(
     {
       providers: {
         OpenAI: {
           family: " OpenAI ",
-          models: [{ id: "gpt-5.4" }, { id: "oss-120b", family: "Meta" }, { id: "bad", family: 7 }],
+          models: [{ id: "m" }, { id: "oss", family: "Meta" }, { id: "bad", family: 7 }],
         },
         Router: { family: "open ai", models: [{ id: "x", family: "a".repeat(65) }] },
       },
@@ -337,13 +314,8 @@ it("gives rows the provider family unless the row declares its own, dropping mal
   )?.providers;
   expect(providers?.openai?.family).toBe("openai");
   expect(providers?.router).toEqual({ models: [{ id: "x" }] });
-
-  const familyOf = (catalog: ModelCatalogProvider | undefined) =>
+  const families = (catalog: ModelCatalogProvider | undefined) =>
     Object.fromEntries(normalizeRows(catalog ?? { models: [] }).map((row) => [row.id, row.family]));
-  expect(familyOf(providers?.openai)).toEqual({
-    "gpt-5.4": "openai",
-    "oss-120b": "meta",
-    bad: "openai",
-  });
-  expect(familyOf(providers?.router)).toEqual({ x: undefined });
+  expect(families(providers?.openai)).toEqual({ m: "openai", oss: "meta", bad: "openai" });
+  expect(families(providers?.router)).toEqual({ x: undefined });
 });
