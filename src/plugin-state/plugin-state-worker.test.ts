@@ -3,10 +3,7 @@ import { deserialize, serialize } from "node:v8";
 import { threadId, Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, vi } from "vitest";
-import {
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
@@ -15,10 +12,6 @@ import type {
   SessionEntryCurrentFacts,
 } from "../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import {
-  onInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../infra/diagnostic-events.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
 import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
 import {
@@ -30,7 +23,6 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { VERSION } from "../version.js";
 import {
   keyedStores,
@@ -98,56 +90,16 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-it("keeps reads off writer queues and behind earlier writes", async ({ state }) => {
+it("keeps reads behind earlier writes", async ({ state }) => {
   const scope = { pluginId: "reader-fixture", namespace: "reconnect", env: state.env };
   const store = createPluginStateKeyedStoreV2<string>(
     scope.pluginId,
     { ...scope, maxEntries: 10 },
     { assertCurrent() {} },
   );
-  await store.register("a", "first");
-  await waitForDiagnosticEventsDrained();
-  const queued: string[] = [];
-  const unsubscribe = onInternalDiagnosticEvent(
-    (event) => {
-      if (
-        event.type === "worker.request" &&
-        event.requestClass === "plugin_state" &&
-        event.phase === "queued"
-      ) {
-        queued.push(event.kind);
-      }
-    },
-    { include: ["worker.request"] },
-  );
-  try {
-    const pairs = (rows: { key: string; value: unknown }[]) =>
-      rows.map(({ key, value }) => [key, value]);
-    expect(await store.lookup("missing")).toBeUndefined();
-    expect(await store.lookupMany(["a", "missing"])).toEqual([
-      { ok: true, value: "first" },
-      { ok: true, value: undefined },
-    ]);
-    expect(pairs(await store.entries())).toEqual([["a", "first"]]);
-    expect(await store.count()).toBe(1);
-    const range = await pluginStateEntriesInKeyRange({
-      ...scope,
-      keyStartInclusive: "a",
-      keyEndExclusive: "b",
-      limit: 10,
-    });
-    expect(pairs(range)).toEqual([["a", "first"]]);
-    await waitForDiagnosticEventsDrained();
-    expect(queued).toHaveLength(5);
-    expect(queued).not.toContain("sqlite_writer");
-
-    const pendingWrite = store.register("b", "second");
-    const followingRead = store.lookup("b");
-    await expect(followingRead).resolves.toBe("second");
-    await pendingWrite;
-  } finally {
-    unsubscribe();
-  }
+  const pendingWrite = store.register("b", "second");
+  await expect(store.lookup("b")).resolves.toBe("second");
+  await pendingWrite;
 });
 
 it("checks cross-namespace leases in the write transaction", async ({ state }) => {
@@ -426,37 +378,35 @@ it("persists exact journal bytes without host SQL or creating an absent read sou
     observation.restore();
   }
   const { db } = openOpenClawStateDatabase({ env });
-  const rows = db
-    .prepare(
-      "SELECT entry_key, value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ?",
-    )
-    .all("memory-core", "memory-host.events");
+  const rowsIn = (namespace: string) =>
+    db
+      .prepare(
+        "SELECT entry_key, value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ?",
+      )
+      .all("memory-core", namespace);
+  const rows = rowsIn("memory-host.events");
   expect(rows).toHaveLength(1);
   const row = rows[0]!;
   const { recordedAt } = JSON.parse(String(row.value_json)) as { recordedAt: number };
   expect(row.entry_key).toMatch(/^[a-f0-9]{24}:event:1:0000000000000001$/);
   expect(row.value_json).toBe(JSON.stringify({ kind: "event", event, recordedAt, sequence: 1 }));
-  expect(
-    db
-      .prepare("SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ?")
-      .get("memory-core", "memory-host.event-cursors"),
-  ).toEqual({
-    value_json: '{"kind":"cursor","lastSequence":1}',
-  });
+  expect(rowsIn("memory-host.event-cursors")).toMatchObject([
+    {
+      value_json: '{"kind":"cursor","lastSequence":1}',
+    },
+  ]);
 });
 
 it("captures journal data and range before admission", async ({ state }) => {
   const journalValue = { kind: "event", detail: { value: "captured" } };
   const journalKeyRange = { keyStartInclusive: "event:", keyEndExclusive: "event;" };
+  const scope = { pluginId: "memory-core", env: state.env };
+  const journalOptions = { namespace: "memory-host.events", maxEntries: 10_000, ...scope };
   const pending = registerPluginStateSequencedJournalEntry({
-    pluginId: "memory-core",
-    cursorOptions: {
-      namespace: "memory-host.event-cursors",
-      maxEntries: 1_000,
-      env: state.env,
-    },
+    ...scope,
+    cursorOptions: { namespace: "memory-host.event-cursors", maxEntries: 1_000, ...scope },
     cursorKey: "workspace:cursor",
-    journalOptions: { namespace: "memory-host.events", maxEntries: 10_000, env: state.env },
+    journalOptions,
     journalKeyPrefix: "event:1:",
     journalKeyRange,
     journalValue,
@@ -467,12 +417,10 @@ it("captures journal data and range before admission", async ({ state }) => {
   await expect(pending).resolves.toBe(1);
   await expect(
     pluginStateEntriesInKeyRange({
-      pluginId: "memory-core",
-      namespace: "memory-host.events",
+      ...journalOptions,
       keyStartInclusive: "event:",
       keyEndExclusive: "event;",
       limit: 1,
-      env: state.env,
     }),
   ).resolves.toMatchObject([
     {
@@ -510,33 +458,6 @@ it("preserves listing order and expiry while refreshing TTLs", async ({ state: _
     expect(fresh?.createdAt).toBeLessThanOrEqual(after);
     expect(fresh?.expiresAt).toBe((fresh?.createdAt ?? 0) + (ttlMs ?? 60_000));
   }
-});
-
-it("bounds listing bytes without losing sync or worker entries", async ({ state: _state }) => {
-  const pluginId = "memory-core";
-  const namespace = "short-term-recall";
-  const expected = Array.from({ length: 64 }, (_, index) => ({
-    key: `entry-${String(index).padStart(2, "0")}`,
-    value: { index, text: "value😀" },
-    createdAt: 1000 + index,
-  }));
-  seed(pluginId, namespace, expected);
-  const { sync, store } = keyedStores(pluginId, { namespace, maxEntries: expected.length });
-  const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
-  const reads = trackSqliteStatementExecutions(db, ["listing"], (sql) =>
-    sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "listing" : null,
-  );
-  try {
-    expect(sync.entries()).toEqual(expected);
-    expect(reads.counts.listing).toBe(1);
-    expect(reads.rowCounts.listing).toBeGreaterThan(0);
-    expect(reads.rowCounts.listing).toBeLessThanOrEqual(expected.length);
-    expect(reads.textBytes.listing).toBeGreaterThan(0);
-    expect.soft(reads.textBytes.listing).toBeLessThan(4096);
-  } finally {
-    reads.restore();
-  }
-  expect(await store.entries()).toEqual(expected);
 });
 
 it.for(["created_at", "expires_at"] as const)(

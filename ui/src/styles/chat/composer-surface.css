@@ -179,8 +179,8 @@
     var(--text-strong) 48%,
     var(--chat-composer-surface)
   );
-  --chat-composer-hover: color-mix(in srgb, var(--text-strong) 8%, transparent);
-  --chat-composer-group-hover: color-mix(in srgb, var(--text-strong) 6%, transparent);
+  --chat-composer-hover: var(--surface-hover);
+  --chat-composer-group-hover: var(--surface-hover);
   --chat-composer-popover-background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
   --chat-composer-popover-border: var(--overlay-border);
   --chat-composer-popover-radius: calc(14px * var(--openclaw-corner-radius-scale));

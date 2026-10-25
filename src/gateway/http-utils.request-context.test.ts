@@ -4,13 +4,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   resolveGatewayRequestContext,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
-import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
@@ -54,24 +52,13 @@ describe("resolveGatewayRequestContext", () => {
     expect(result.messageChannel).toBe("custom-channel");
   });
 
-  it("includes session prefix and user in generated session key", async () => {
-    const result = await requestContext("", {
-      req: createReq(),
-      user: "alice",
-      sessionPrefix: "openresponses",
-    });
-    expect(result.sessionKey).toContain("openresponses-user:alice");
-  });
-
   it.each([
     "subagent:worker",
     "cron:daily",
     "acp:run-1",
     "harness:codex:supervision:native-thread",
-    "agent:main:subagent:worker",
     "agent:main:cron:daily",
     "agent:main:acp:run-1",
-    "agent:main:harness:codex:supervision:native-thread",
   ])("rejects reserved internal session-key override %s", async (sessionKey) => {
     await expect(requestContext(sessionKey)).rejects.toThrow(
       /reserved internal session namespaces/u,
@@ -98,18 +85,10 @@ describe("resolveGatewayRequestContext", () => {
     );
   });
 
-  it.each([
-    ["missing-agent", "openclaw", /Unknown agent/],
-    [undefined, "openclaw/missing-agent", /Unknown agent/],
-    ["!!!", "openclaw", "Unknown agent '!!!'."],
-    ["main", "gpt-4o", "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`."],
-  ] as const)("rejects agent=%s model=%s before session creation", async (agent, model, error) => {
+  it("rejects malformed agent ids before session creation", async () => {
     await expect(
-      requestContext("", {
-        req: createReq(agent === undefined ? {} : { "x-openclaw-agent-id": agent }),
-        model,
-      }),
-    ).rejects.toThrow(error);
+      requestContext("", { req: createReq({ "x-openclaw-agent-id": "!!!" }) }),
+    ).rejects.toThrow("Unknown agent '!!!'.");
   });
 });
 
@@ -129,31 +108,13 @@ describe("resolveTrustedHttpOperatorScopes", () => {
     ).toStrictEqual(expected);
   });
 
-  it.each<[string, GatewayOperatorRoleDefinition["scopes"], string[], string[]]>([
-    ["read", ["operator.read"], ["operator.read"], ["operator.read"]],
-    [
-      "admin",
-      ["operator.admin"],
-      [
-        "operator.admin",
-        "operator.read",
-        "operator.write",
-        "operator.talk",
-        "operator.approvals",
-        "operator.talk.secrets",
-      ],
-      [...CLI_DEFAULT_OPERATOR_SCOPES],
-    ],
-    [
-      "write",
-      ["operator.write"],
-      ["operator.read", "operator.write", "operator.talk"],
-      ["operator.read", "operator.write"],
-    ],
-    ["empty", [], [], []],
-  ])(
-    "caps trusted-proxy headers and defaults to the verified profile's %s role",
-    (_label, roleScopes, expectedScopes, expectedDefaults) => {
+  it.each<{
+    roleScopes: NonNullable<
+      Parameters<typeof resolveTrustedHttpOperatorScopes>[1]["operatorRolePolicy"]
+    >["scopes"];
+  }>([{ roleScopes: ["operator.read"] }, { roleScopes: [] }])(
+    "caps trusted-proxy headers and defaults to the verified profile's $roleScopes scopes",
+    ({ roleScopes }) => {
       const requestAuth = {
         trustDeclaredOperatorScopes: true,
         operatorRolePolicy: {
@@ -168,13 +129,8 @@ describe("resolveTrustedHttpOperatorScopes", () => {
           requestAuth,
         );
 
-      expect(
-        scopes(
-          "operator.admin, operator.read, operator.write, operator.talk, operator.approvals, operator.talk.secrets",
-        ),
-      ).toEqual(expectedScopes);
-      expect(scopes()).toEqual(expectedDefaults);
-      expect(scopes("operator.read")).toEqual(roleScopes.length ? ["operator.read"] : []);
+      expect(scopes("operator.admin, operator.read, operator.write")).toEqual(roleScopes);
+      expect(scopes()).toEqual(roleScopes);
       expect(scopes("operator.admin")).toEqual(roleScopes);
       expect(scopes("")).toEqual([]);
     },

@@ -21,7 +21,7 @@ import { createConfigPage } from "./config-page-state.ts";
 import { defaultConfigSelection, type ConfigPageId } from "./config-sections.ts";
 import { memorySettingsSchema } from "./memory-schema.ts";
 import type { ConfigRouteData } from "./route-data.ts";
-import { extractQuickSettingsSecurity, Security } from "./security.tsx";
+import { extractQuickSettingsSecurity } from "./security-model.ts";
 import { preloadConfigSection } from "./view-lazy.ts";
 import { ConfigReadError, ConfigReadLoading } from "./view-readiness.tsx";
 import type { ConfigProps } from "./view-types.ts";
@@ -30,18 +30,19 @@ import { Config } from "./view.tsx";
 registerRouteSubtitlesEnglish();
 export type { ConfigPageId } from "./config-sections.ts";
 
+const Mcp = lazy(() => import("./mcp.tsx"), { export: "Mcp" });
 const MeetingCaptureSettings = lazy(() => import("./meeting-capture.tsx"), {
   export: "MeetingCaptureSettings",
 });
 const MemorySettingsPage = lazy(() => import("./memory-page.tsx"), {
   export: "MemorySettingsPage",
 });
+const Security = lazy(() => import("./security.tsx"), { export: "Security" });
 const SessionStorageSettings = lazy(() => import("./session-storage.tsx"), {
   export: "SessionStorageSettings",
 });
 const TalkSettingsPage = lazy(() => import("./talk-page.tsx"), { export: "TalkSettingsPage" });
 const UpdatesPage = lazy(() => import("./updates-page.tsx"), { export: "UpdatesPage" });
-const Mcp = lazy(() => import("./mcp.tsx"), { export: "Mcp" });
 
 export function preloadConfigPage(
   pageId: ConfigPageId,
@@ -59,6 +60,7 @@ export function preloadConfigPage(
   return Promise.all([
     preloadConfigSection(section),
     ...(pageId === "mcp" ? [Mcp.preload()] : []),
+    ...(pageId === "security" ? [Security.preload()] : []),
     ...(pageId === "communications" && section === "transcripts"
       ? [MeetingCaptureSettings.preload()]
       : []),

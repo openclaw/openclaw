@@ -296,6 +296,7 @@ src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
 src/agents/mcp-oauth-store-error.ts
 src/agents/model-auth-policy.ts
+src/agents/model-catalog-entry.ts
 src/agents/model-catalog-lookup.ts
 src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
@@ -309,6 +310,7 @@ src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection-warnings.ts
+src/agents/model-serving-context.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
 src/agents/owner-display.ts
@@ -1373,6 +1375,7 @@ src/logging/console.ts
 src/logging/diagnostic-cpu-profile.ts
 src/logging/diagnostic-heap-profile.ts
 src/logging/diagnostic-profile.ts
+src/logging/diagnostic-support-key-check.ts
 src/logging/diagnostic-support-redaction.ts
 src/logging/diagnostic-worker-gc-profile.ts
 src/logging/env-log-level.ts
@@ -1908,7 +1911,6 @@ src/state/openclaw-agent-db-metadata.ts
 src/state/openclaw-agent-db-migration-required.ts
 src/state/openclaw-agent-db-permissions.ts
 src/state/openclaw-agent-db-read-error.ts
-src/state/openclaw-agent-db-readonly-companion.ts
 src/state/openclaw-agent-db-readonly-open.ts
 src/state/openclaw-agent-db-readonly-scope.ts
 src/state/openclaw-agent-db-readonly.ts
@@ -2308,7 +2310,6 @@ src/config/sessions/session-transcript-projection-writer.ts
 src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts
 src/config/sessions/session-transcript-reconcile.ts
-src/config/sessions/session-transcript-worker-read-admission.ts
 src/config/sessions/session-transcript-worker-readers.ts
 src/config/sessions/session-transcript-worker-resources.ts
 src/config/sessions/session-transcript-worker-runtime.ts
@@ -2654,7 +2655,6 @@ src/config/sessions/session-lifecycle-worker-publication.ts
 src/config/sessions/session-native-binding.ts
 src/plugin-state/plugin-state-publication.ts
 src/config/sessions/transcript-recent-text.ts
-src/config/sessions/transcript-recent-window.ts
 src/state/state-domain-publication.ts
 src/state/user-model-account-authority.ts
 src/state/user-model-account-id.ts

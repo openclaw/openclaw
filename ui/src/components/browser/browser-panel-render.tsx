@@ -4,6 +4,7 @@ import { For, Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { observeResize } from "../../lib/reactive/observers.ts";
 import { createTabFocus } from "../../lib/tabs.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { LinkFaviconFetcher } from "../../pages/chat/link-favicon-cache.ts";
@@ -331,20 +332,19 @@ export function BrowserPanelChrome(
   onSettled(() => {
     const controller = props.controller;
     const viewport = controller.input.elements.viewport!;
-    const observer =
+    const stopResize =
       typeof ResizeObserver === "function"
-        ? new ResizeObserver(([entry]) => {
+        ? observeResize([viewport], ([entry]) => {
             if (entry) {
               controller.handleViewportResize(entry.contentRect.width, entry.contentRect.height);
             }
           })
         : undefined;
-    observer?.observe(viewport);
     // SAFETY: Native wheel events are WheelEvents; cancel local scrolling before they bubble.
     const handleWheel = (event: Event) => remoteInput()?.handleWheel(event as WheelEvent);
     const stopWheel = listen(viewport, "wheel", handleWheel, { passive: false });
     return () => {
-      observer?.disconnect();
+      stopResize?.();
       stopWheel();
     };
   });

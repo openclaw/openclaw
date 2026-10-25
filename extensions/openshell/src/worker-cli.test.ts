@@ -36,6 +36,10 @@ const sandboxArgv = ["openshell", "--gateway", "container", "--workspace", "work
 function configure(cfg: OpenClawConfig, ...args: string[]) {
   return invoke(cfg, "configure", "native-worker", "--worker-profile", "native", ...args);
 }
+const readConfig = async (file: string) => JSON.parse(await fs.readFile(file, "utf8"));
+function setFileTransfer(cfg: OpenClawConfig, settings: Record<string, unknown>) {
+  cfg.plugins!.entries!["file-transfer"] = { enabled: true, config: settings };
+}
 function withConfigHome(fn: (home: string, configPath: string) => Promise<void>) {
   return withTempHome((home) => fn(home, path.join(home, ".openclaw", "openclaw.json")), {
     env: {
@@ -74,7 +78,7 @@ describe("OpenShell standalone worker CLI", () => {
       }));
       vi.spyOn(process.stdout, "write").mockReturnValue(true);
       await configure(source, "--required", "--apply");
-      const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+      const saved = await readConfig(configPath);
       expect(saved.plugins.entries["file-transfer"].config.workspaces.main).toEqual({
         nodeId: deviceId,
         remoteRoot: "/agent/canonical",
@@ -85,16 +89,12 @@ describe("OpenShell standalone worker CLI", () => {
       const existingPolicy = { ask: "off", denyPaths: ["/**"], followSymlinks: false };
       for (const selector of ["*", "Operator-managed node"]) {
         const guarded = structuredClone(source);
-        guarded.plugins!.entries!["file-transfer"] = {
-          enabled: true,
-          config: { policyVersion: 2, nodes: { [selector]: existingPolicy } },
-        };
+        setFileTransfer(guarded, { policyVersion: 2, nodes: { [selector]: existingPolicy } });
         clearRuntimeConfigSnapshot();
         await fs.writeFile(configPath, JSON.stringify(guarded));
         await configure(guarded, "--apply");
         expect(
-          JSON.parse(await fs.readFile(configPath, "utf8")).plugins.entries["file-transfer"].config
-            .nodes,
+          (await readConfig(configPath)).plugins.entries["file-transfer"].config.nodes,
         ).toEqual({ [selector]: existingPolicy });
       }
       const restrictions: Array<[(cfg: OpenClawConfig) => void, RegExp]> = [
@@ -115,14 +115,11 @@ describe("OpenShell standalone worker CLI", () => {
           /existing Gateway node-command grants/,
         ],
         [
-          (cfg) => {
-            cfg.plugins!.entries!["file-transfer"] = {
-              config: {
-                policyVersion: 2,
-                workspaces: { main: { nodeId: "different-node", remoteRoot: "/agent/other" } },
-              },
-            };
-          },
+          (cfg) =>
+            setFileTransfer(cfg, {
+              policyVersion: 2,
+              workspaces: { main: { nodeId: "different-node", remoteRoot: "/agent/other" } },
+            }),
           /different canonical workspace binding/,
         ],
         [
@@ -227,9 +224,9 @@ describe("OpenShell standalone worker CLI", () => {
       run.mockResolvedValue({ code: 0, stdout: JSON.stringify({ deviceId }) });
       vi.spyOn(process.stdout, "write").mockReturnValue(true);
       await configure(source, "--device", deviceId, "--required");
-      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(source);
+      expect(await readConfig(configPath)).toEqual(source);
       await configure(source, "--device", deviceId, "--required", "--apply");
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
+      const persisted = await readConfig(configPath);
       expect(persisted.cloudWorkers).toMatchObject({
         desktop: true,
         requiredProfile: "native",
@@ -247,10 +244,9 @@ describe("OpenShell standalone worker CLI", () => {
       await expect(configure(source, "--device", "different-device", "--apply")).rejects.toThrow(
         "does not match",
       );
-      expect(
-        JSON.parse(await fs.readFile(configPath, "utf8")).cloudWorkers.profiles.native.settings
-          .device,
-      ).toBe(deviceId);
+      expect((await readConfig(configPath)).cloudWorkers.profiles.native.settings.device).toBe(
+        deviceId,
+      );
     });
   });
 });

@@ -113,6 +113,40 @@ for review. These are report-only measurements, not timing gates. Wall time is
 automation-to-assertion time, not INP. Keep failed attempts alongside successful
 captures and compare only runs with the same fixture, viewport, and collection mode.
 
+Heavy-content steps use `heavy-<fixture>-<action>` IDs. Fixtures are `code`
+(5,000 TypeScript lines), `auto-code` (5,000 language-free lines), `diff`
+(5,000 changed lines across ten files), `oversized-code` (the existing Markdown
+parse-limit fallback), `table` (300 rows × 12 columns), `tool-diff` (5,000 native
+input patch rows, existing 400-line preview cap), `tool-diff-error` (the same
+patch rejected with a complete error message and Raw selected initially),
+`terminal` (5,000 output lines), `json` (5,000 values, above the JSON formatter cap), `json-format` (1,900
+values, within that cap), and `images`
+(40 synthetic PNGs). Actions include `arrival`, `stream` (20 frame-separated
+updates), `expand`, `collapse`, `scroll`, `copy`, `output-open`, and JSON
+`raw-toggle` where those controls exist. These scenarios use an empty transcript
+to isolate content cost. Copy uses an instrumented clipboard boundary and checks
+the exact copied string; it does not measure operating-system clipboard latency.
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts \
+  --bundle-dir <baseline> --compare-bundle-dir <candidate> --pairs 10 \
+  --viewport desktop --thread-cpu-time --first-pair-screenshots \
+  --steps heavy-tool-diff-expand,heavy-tool-diff-error-expand,heavy-json-format-output-open,heavy-json-format-raw-toggle
+```
+
+Record a baseline/baseline control on a loaded host. Compare renderer CPU,
+long-task maximum, DOM/highlight counts, and heap-byte deltas alongside wall
+latency; heap deltas are transient allocation measurements, not retained-heap
+proof. The heavy-content targets are no arrival task above 100 ms and no scroll
+task above 50 ms. Review every median/p95 cell; a clean median regression is at
+most 5% with no worse p95 (or another ten pairs confirming the band). Any 20%
+regression blocks; a missed target does not invalidate a measured improvement.
+Run `--trace` separately for attribution, never mix traced and untraced timings.
+If the owned Chromium process crashes in the macOS display/compositor path,
+use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select the installed matching
+Playwright headless shell for both arms. The manifest records the executable;
+compare only against the same browser configuration.
+
 ## Control UI request waterfalls
 
 The production-bundle cold-load harness can record usable-screen readiness,
