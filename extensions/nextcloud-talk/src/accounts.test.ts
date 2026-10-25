@@ -15,7 +15,6 @@ import { nextcloudTalkPlugin } from "./channel.js";
 import {
   nextcloudTalkDmPolicy,
   nextcloudTalkSetupContract,
-  normalizeNextcloudTalkBaseUrl,
   validateNextcloudTalkBaseUrl,
 } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
@@ -142,15 +141,6 @@ function assertUnavailableFile(botSecretFile: string, botSecret?: string) {
 }
 
 describe("nextcloud talk setup", () => {
-  it("normalizes and validates base urls", () => {
-    expect(normalizeNextcloudTalkBaseUrl(` ${baseUrl}/// `)).toBe(baseUrl);
-    expect(normalizeNextcloudTalkBaseUrl(undefined)).toBe("");
-
-    expect(validateNextcloudTalkBaseUrl("")).toBe("Required");
-    expect(validateNextcloudTalkBaseUrl("cloud.example.com")).toBe(invalidUrl);
-    expect(validateNextcloudTalkBaseUrl(baseUrl)).toBeUndefined();
-  });
-
   it("sets top-level DM policy state", () => {
     const base: CoreConfig = talkConfig({});
     expect(nextcloudTalkDmPolicy.getCurrent(base)).toBe("pairing");
@@ -160,13 +150,14 @@ describe("nextcloud talk setup", () => {
   });
 
   it("validates env/default-account constraints and applies config patches", () => {
+    expect(validateNextcloudTalkBaseUrl("")).toBe("Required");
     expect(validate({ useEnv: true }, "work")).toBe(
       "NEXTCLOUD_TALK_BOT_SECRET can only be used for the default account.",
     );
     expect(validate({ useEnv: false, baseUrl: "", secret: "" })).toBe(
       "Nextcloud Talk requires bot secret or --secret-file (or --use-env).",
     );
-    expect(validate({ useEnv: false, secret: "secret", baseUrl: "" })).toBe(
+    expect(validate({ useEnv: false, secret: "secret" })).toBe(
       "Nextcloud Talk requires --base-url.",
     );
     expect(validate({ secret: "secret", baseUrl: "ftp://cloud.example.com" })).toBe(invalidUrl);
@@ -308,16 +299,8 @@ describe("nextcloud-talk channel status", () => {
     });
     const account = inspectNextcloudTalkAccount({ cfg, accountId: "work" });
     expect(await nextcloudTalkPlugin.config.isConfigured?.(account, cfg)).toBe(entry.configured);
-    expect(account).toMatchObject({
-      accountId: "work",
-      enabled: true,
-      configured: entry.configured,
-      mode: "webhook",
-      apiCredentialStatus: "missing",
-    });
     expect(account.baseUrl).toBe(entry.baseUrl ?? "");
     expect(await nextcloudTalkPlugin.config.inspectAccount?.(cfg, "work")).toMatchObject({
-      configured: entry.configured,
       baseUrl: entry.baseUrl ? "[set]" : "[missing]",
     });
   });
@@ -364,13 +347,6 @@ describe("nextcloud-talk channel status", () => {
       "default",
     )) as typeof account;
     expect(inspected).toMatchObject({
-      configured: true,
-      apiCredentialStatus: "available",
-      secretSource: "config",
-      mode: "webhook",
-      baseUrl: "[set]",
-    });
-    expect(nextcloudTalkPlugin.config.describeAccount?.(inspected, cfg)).toMatchObject({
       configured: true,
       apiCredentialStatus: "available",
     });

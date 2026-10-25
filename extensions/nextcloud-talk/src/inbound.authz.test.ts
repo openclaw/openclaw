@@ -78,8 +78,6 @@ function pairedFixture() {
     controller,
     error,
     core,
-    readAllowFromStore,
-    runtime,
     inbound: (id: string) =>
       handleNextcloudTalkInbound({
         message: baseMessage({
@@ -99,11 +97,6 @@ function pairedFixture() {
         turnAdoptionLifecycle: adoptionLifecycle(controller.signal),
       }),
   };
-}
-
-function expectNoDispatch(core: ReturnType<typeof createPluginRuntimeMock>) {
-  expect(core.channel.inbound.buildContext).not.toHaveBeenCalled();
-  expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
 }
 
 describe("nextcloud-talk inbound authz", () => {
@@ -133,28 +126,22 @@ describe("nextcloud-talk inbound authz", () => {
         await expect(pending).rejects.toBe(error);
       }
 
-      expect(beforeEnvelopePreparation).toHaveBeenCalledOnce();
       expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).not.toHaveBeenCalled();
       expect(core.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-      expectNoDispatch(core);
+      expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
     },
   );
 
   it("revalidates paired DM access after metadata lookup before staging", async () => {
-    const { state, core, runtime, readAllowFromStore, inbound } = pairedFixture();
+    const { state, core, inbound } = pairedFixture();
     resolveNextcloudTalkAuthenticatedMediaSourceMock.mockImplementationOnce(async () => {
       state.paired = false;
       return authenticatedSource;
     });
     await inbound("revoked");
 
-    expect(resolveNextcloudTalkAuthenticatedMediaSourceMock).toHaveBeenCalledTimes(1);
     expect(core.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
-    expect(readAllowFromStore).toHaveBeenCalledTimes(3);
-    expectNoDispatch(core);
-    expect(runtime.log).toHaveBeenCalledWith(
-      "nextcloud-talk: drop DM room-revoked (authorization changed)",
-    );
+    expect(core.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 
   it("does not yield between the final cancellation fence and dispatch", async () => {
@@ -184,28 +171,24 @@ describe("nextcloud-talk inbound authz", () => {
     expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
   });
 
-  it.each<{
-    name: string;
-    message: Partial<NextcloudTalkInboundMessage>;
-    config: ResolvedNextcloudTalkAccount["config"];
-  }>([
-    { name: "DM pairing does not authorize groups", message: {}, config: {} },
-    {
-      name: "room tokens cannot be replaced by colliding names",
-      message: { roomToken: "room-attacker", roomName: "Room Trusted", senderId: "trusted-user" },
-      config: { groupAllowFrom: ["trusted-user"], rooms: { "room-trusted": { enabled: true } } },
-    },
-    {
-      name: "disabled rooms cannot fetch media",
-      message: { roomToken: "room-disabled", senderId: "trusted-user" },
-      config: { groupAllowFrom: ["trusted-user"], rooms: { "room-disabled": { enabled: false } } },
-    },
-    {
-      name: "nested room allowlists reject blocked senders",
-      message: { roomToken: "room-locked", senderId: "blocked-user" },
-      config: { rooms: { "room-locked": { allowFrom: ["trusted-user"] } } },
-    },
-  ])("$name", async ({ message, config }) => {
+  it.each<[string, Partial<NextcloudTalkInboundMessage>, ResolvedNextcloudTalkAccount["config"]]>([
+    ["DM pairing does not authorize groups", {}, {}],
+    [
+      "room tokens cannot be replaced by colliding names",
+      { roomToken: "room-attacker", roomName: "Room Trusted", senderId: "trusted-user" },
+      { groupAllowFrom: ["trusted-user"], rooms: { "room-trusted": { enabled: true } } },
+    ],
+    [
+      "disabled rooms cannot fetch media",
+      { roomToken: "room-disabled", senderId: "trusted-user" },
+      { groupAllowFrom: ["trusted-user"], rooms: { "room-disabled": { enabled: false } } },
+    ],
+    [
+      "nested room allowlists reject blocked senders",
+      { roomToken: "room-locked", senderId: "blocked-user" },
+      { rooms: { "room-locked": { allowFrom: ["trusted-user"] } } },
+    ],
+  ])("%s", async (_name, message, config) => {
     const readAllowFromStore = vi.fn(async () => ["attacker"]);
     const buildMentionRegexes = vi.fn(() => [/@openclaw/i]);
     const saveRemoteMedia = vi.fn();

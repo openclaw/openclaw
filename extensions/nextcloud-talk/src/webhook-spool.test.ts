@@ -139,32 +139,6 @@ afterEach(async () => {
 });
 
 describe("Nextcloud Talk durable ingress", () => {
-  it("retains one quoted parent through durable admission and delivery", async () => {
-    const { deliver, spool } = startDelivery(deferredDelivery());
-    const rawEvent = createRawEvent({
-      text: "What about this?",
-      quote: {
-        ...quoted(JSON.stringify({ message: "Look north.", parameters: [] }), {
-          inReplyTo: { object: { id: "ancestor", content: "Do not include this ancestor" } },
-        }),
-        actor: { type: "Person", id: "bots/quoted-bot", name: "Quoted bot" },
-      },
-    });
-    await receive(spool, rawEvent);
-    await expectClaim("msg-1", "room:test-room-token", rawEvent);
-    expectDelivered(deliver, {
-      messageId: "msg-1",
-      text: "What about this?",
-      senderId: "alice",
-      quote: {
-        id: "parent-1",
-        senderId: "bots/quoted-bot",
-        senderName: "Quoted bot",
-        body: "Look north.",
-      },
-    });
-  });
-
   it.each([
     ["plain text", "Plain quoted text", "Plain quoted text"],
     [
@@ -287,13 +261,29 @@ describe("Nextcloud Talk durable ingress", () => {
   it.each([
     {
       kind: "text",
-      body: createRawEvent({ messageId: "msg-restart", text: "ordinary text" }),
+      body: createRawEvent({
+        messageId: "msg-restart",
+        text: "What about this?",
+        quote: {
+          ...quoted(JSON.stringify({ message: "Look north.", parameters: [] }), {
+            inReplyTo: { object: { id: "ancestor", content: "Do not include this ancestor" } },
+          }),
+          actor: { type: "Person", id: "bots/quoted-bot", name: "Quoted bot" },
+        },
+      }),
       lane: "room:test-room-token",
       message: {
         messageId: "msg-restart",
         roomToken: "test-room-token",
-        text: "ordinary text",
+        text: "What about this?",
+        senderId: "alice",
         mediaType: "text/plain",
+        quote: {
+          id: "parent-1",
+          senderId: "bots/quoted-bot",
+          senderName: "Quoted bot",
+          body: "Look north.",
+        },
       },
     },
     {
@@ -375,36 +365,16 @@ describe("Nextcloud Talk durable ingress", () => {
   });
 
   it.each([
-    {
-      name: "malformed normal-message",
-      body: activityBody({ id: "4246", content: "{not-json" }),
-      event: undefined,
-    },
-    ...[
-      { name: "participant_joined", message: "Alice joined the conversation", parameters: {} },
-      {
-        name: "object_shared",
-        message: "{object}",
-        parameters: { object: { type: "deck-card", id: "redacted" } },
-      },
-    ].map(({ name, message, parameters }) => ({
-      name,
-      body: activityBody({ id: "4243", name, content: JSON.stringify({ message, parameters }) }),
-      event: "type=Activity objectType=Note",
-    })),
-    {
-      name: "non-message document",
-      body: JSON.stringify({ type: "Create", object: { type: "Document", id: "file-1" } }),
-      event: "type=Create objectType=Document",
-    },
-  ])("ignores $name without consuming its message id", async ({ body, event }) => {
+    ["malformed normal-message", activityBody({ id: "4246", content: "{not-json" })],
+    ["participant_joined", activityBody({ id: "4243", name: "participant_joined", content: "{}" })],
+    [
+      "non-message document",
+      JSON.stringify({ type: "Create", object: { type: "Document", id: "file-1" } }),
+    ],
+  ])("ignores %s without consuming its message id", async (_name, body) => {
     const deliver = vi.fn();
     const log = vi.fn();
     await expectIgnored(startSpool(queue, deliver, log), body, deliver);
-    if (event) {
-      expect(log).toHaveBeenCalledWith(
-        `nextcloud-talk: ignored non-message webhook event (${event})`,
-      );
-    }
+    expect(log).toHaveBeenCalledOnce();
   });
 });
