@@ -4727,7 +4727,9 @@ try {
         ? ["--trace-gc-nvp"]
         : []),
       "--import",
-      "./scripts/tsx.mjs",
+      values["team-stress"]
+        ? new URL("./team-shape-stress-loader.mjs", import.meta.url).href
+        : "./scripts/tsx.mjs",
       ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
       ...(configCaptureSource ? ["--import", configCaptureSourcePreload] : []),
       ...(authoritySourcePreload ? ["--import", authoritySourcePreload.path] : []),

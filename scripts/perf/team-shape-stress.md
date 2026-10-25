@@ -7,6 +7,10 @@ connects to an existing Gateway, discovers credentials, or drives a real browser
 Both builds must support the database schemas written by the tooling checkout's
 fixture generator. A schema mismatch is a setup failure; the harness never
 downstamps databases or bypasses Gateway schema admission.
+The Gateway's instrumentation loader disables tsconfig aliases, so runtime
+package imports resolve through each build's own package exports. Keep each
+checkout's source, workspace package artifacts, and `dist` build consistent;
+rebasing source invalidates previously built artifacts.
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts \

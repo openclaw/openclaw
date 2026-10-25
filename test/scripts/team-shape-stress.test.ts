@@ -12,6 +12,38 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 const executeFile = promisify(execFile);
 
+it("loads each built entry's own package exports despite controller source aliases", async () => {
+  const root = temporary.make("team-stress-build-roots-");
+  fs.writeFileSync(path.join(root, "source.mjs"), 'export default "controller-source";');
+  fs.writeFileSync(
+    path.join(root, "tsconfig.json"),
+    JSON.stringify({ compilerOptions: { paths: { "stress-package": ["./source.mjs"] } } }),
+  );
+  const loader = new URL("../../scripts/perf/team-shape-stress-loader.mjs", import.meta.url);
+  for (const side of ["base", "candidate"]) {
+    const build = path.join(root, side);
+    const pkg = path.join(build, "node_modules", "stress-package");
+    fs.mkdirSync(pkg, { recursive: true });
+    fs.writeFileSync(
+      path.join(pkg, "package.json"),
+      JSON.stringify({ type: "module", exports: "./compiled.mjs" }),
+    );
+    fs.writeFileSync(path.join(pkg, "compiled.mjs"), `export default ${JSON.stringify(side)};`);
+    const entry = path.join(build, "entry.mjs");
+    fs.writeFileSync(entry, 'import owner from "stress-package"; console.log(owner);');
+    const { stdout } = await executeFile(
+      resolveTestNodeExecPath(),
+      ["--import", loader.href, entry],
+      {
+        cwd: root,
+        env: { ...process.env, TSX_TSCONFIG_PATH: path.join(root, "tsconfig.json") },
+        timeout: 15_000,
+      },
+    );
+    expect(stdout.trim()).toBe(side);
+  }
+});
+
 it("requires ten-minute evidence windows and marks explicit short runs as smoke", () => {
   const options = parseStressOptions(["--output", "/unused"]);
   expect(options).toMatchObject({
