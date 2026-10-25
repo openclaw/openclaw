@@ -12,17 +12,17 @@ title: "System"
 System-level helpers for the Gateway: enqueue system events, control migrated
 monitor jobs through legacy interfaces, and view presence.
 
-All `system` subcommands use Gateway RPC and accept the shared client flags:
+Most `system` subcommands use Gateway RPC and accept the shared client flags. `system heartbeat status` is local-only (no Gateway required) and does **not** accept `--url` / `--token` / other Gateway client flags:
 
-| Flag                    | Default                              | Description                                                                                                                                                                                            |
-| ----------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `--url <url>`           | `gateway.remote.url` when configured | Gateway WebSocket URL.                                                                                                                                                                                 |
-| `--port <port>`         | none                                 | Local Gateway port.                                                                                                                                                                                    |
-| `--token <token>`       | none                                 | Gateway token (if required).                                                                                                                                                                           |
-| `--password <password>` | none                                 | Gateway password (if required).                                                                                                                                                                        |
-| `--timeout <ms>`        | `30000`                              | RPC timeout in milliseconds.                                                                                                                                                                           |
-| `--expect-final`        | off                                  | Accepted as a shared client flag, but has no effect on system commands.                                                                                                                                |
-| `--json`                | off                                  | Output JSON. `heartbeat last/enable/disable` and `system presence` always print the raw RPC JSON payload regardless of this flag; `system event` uses it to switch between JSON and a plain `ok` line. |
+| Flag                    | Default                              | Description                                                                                                                                                                                                   |
+| ----------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--url <url>`           | `gateway.remote.url` when configured | Gateway WebSocket URL.                                                                                                                                                                                        |
+| `--port <port>`         | none                                 | Local Gateway port.                                                                                                                                                                                           |
+| `--token <token>`       | none                                 | Gateway token (if required).                                                                                                                                                                                  |
+| `--password <password>` | none                                 | Gateway password (if required).                                                                                                                                                                               |
+| `--timeout <ms>`        | `30000`                              | RPC timeout in milliseconds.                                                                                                                                                                                  |
+| `--expect-final`        | off                                  | Accepted as a shared client flag, but has no effect on system commands.                                                                                                                                       |
+| `--json`                | off                                  | Output JSON. `heartbeat last/enable/disable` and `system presence` always print the raw Gateway RPC JSON payload regardless of this flag; `heartbeat status` always prints local JSON (not an RPC payload); `system event` uses it to switch between JSON and a plain `ok` line. |
 
 ## Common commands
 
@@ -31,6 +31,7 @@ openclaw system event --text "Check for urgent follow-ups" --mode now
 openclaw system event --text "Check for urgent follow-ups" --url ws://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 openclaw system heartbeat enable
 openclaw system heartbeat last
+openclaw system heartbeat status
 openclaw system presence
 ```
 
@@ -83,6 +84,27 @@ These compatibility controls do not affect unrelated automations and do not
 recreate deleted jobs. If no converted/default job remains, use ordinary
 `openclaw automations` commands or run Doctor to finish a pending migration.
 
+## `system heartbeat status`
+
+Local (no Gateway RPC) view of the selected agent's surviving proactive /
+migrated Automation job: cadence, whether the current time is inside the job's
+`activeHours`, and a next-fire estimate from `job.state.nextRunAtMs` when present
+(otherwise a cadence estimate).
+
+```bash
+openclaw system heartbeat status
+openclaw system heartbeat status --json
+openclaw system heartbeat status --agent main --json
+```
+
+`nextFireAt` is set when the job is enabled and inside the active window
+(`nextFireSource: scheduled` or `cadence-estimate`). It is `null` when disabled
+or outside `activeHours`. Use `system heartbeat last` for Gateway-owned
+last-event facts, and `openclaw automations show` for the full job record.
+
+This subcommand registers only `--agent` and `--json`. Gateway flags such as
+`--url` are rejected as unknown options.
+
 ## `system presence`
 
 List the current system presence entries the Gateway knows about (nodes,
@@ -90,8 +112,8 @@ instances, and similar status lines).
 
 ## Notes
 
-- Requires a running Gateway reachable by your current config (local or
-  remote).
+- Gateway-backed subcommands require a running Gateway reachable by your current
+  config (local or remote). `system heartbeat status` does not.
 - System events are ephemeral and not persisted across restarts.
 
 ## Related

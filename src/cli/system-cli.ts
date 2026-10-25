@@ -113,4 +113,33 @@ export function registerSystemCli(program: Command) {
       );
     });
   }
+
+  heartbeat
+    .command("status")
+    .description(
+      "Show local Automation-backed heartbeat cadence, activeHours, and next-fire estimate (no Gateway required)",
+    )
+    .option("--agent <id>", "Agent id (required when multiple agents are configured without an ambient owner)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts: { agent?: string; json?: boolean }) => {
+      // Match heartbeat last/enable/disable: always emit JSON (Gateway-free local projection).
+      await runSystemGatewayCommand({ json: true }, async () => {
+        const { readConfigFileSnapshot } = await import("../config/config.js");
+        const { resolveHeartbeatCliStatus } = await import("../infra/heartbeat-cli-status.js");
+        const snapshot = await readConfigFileSnapshot({ observe: false });
+        if (!snapshot.exists) {
+          throw new Error(
+            `Config file not found: ${snapshot.path}. Create one with ${formatCliCommand("openclaw onboard")}.`,
+          );
+        }
+        if (!snapshot.valid) {
+          throw new Error(
+            `OpenClaw config is invalid: ${snapshot.path}. Run ${formatCliCommand("openclaw config validate")}.`,
+          );
+        }
+        return resolveHeartbeatCliStatus(snapshot.config, {
+          agentId: normalizeOptionalString(opts.agent),
+        });
+      });
+    });
 }

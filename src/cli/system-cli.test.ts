@@ -7,6 +7,20 @@ const callGatewayFromCli = vi.fn();
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
   createCliRuntimeCapture();
 
+const { readConfigFileSnapshot, resolveHeartbeatCliStatus } = vi.hoisted(() => ({
+  readConfigFileSnapshot: vi.fn(),
+  resolveHeartbeatCliStatus: vi.fn(),
+}));
+
+// mock-isolation: Local heartbeat status stubs snapshot + projection; real Automation
+// job reads stay in heartbeat-cli-status unit coverage.
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: (...args: unknown[]) => readConfigFileSnapshot(...args),
+}));
+vi.mock("../infra/heartbeat-cli-status.js", () => ({
+  resolveHeartbeatCliStatus: (...args: unknown[]) => resolveHeartbeatCliStatus(...args),
+}));
+
 // mock-isolation: Exercise command registration without opening a live Gateway connection.
 vi.mock("./gateway-rpc.js", () => ({
   addGatewayClientOptions: (command: Command) => command,
@@ -101,4 +115,68 @@ describe("system-cli", () => {
     expectGatewayCall(method, undefined);
     expect(runtimeLogs).toEqual([JSON.stringify({ method }, null, 2)]);
   });
+
+  it("prints local heartbeat status without calling the Gateway", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      valid: true,
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" }, userTimezone: "UTC" },
+          entries: { main: {} },
+        },
+      },
+      sourceConfig: {},
+      resolved: {},
+      runtimeConfig: {},
+      raw: "{}",
+      parsed: {},
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    resolveHeartbeatCliStatus.mockResolvedValueOnce({
+      agentId: "main",
+      jobId: "job-1",
+      enabled: true,
+      every: "1800000ms",
+      everyMs: 1_800_000,
+      withinActiveHours: false,
+      nextFireSource: "outside-active-hours",
+      nextFireAt: null,
+      nextFireInMs: null,
+      activeHours: { start: "12:00", end: "12:00", timezone: "UTC" },
+      prompt: "",
+      target: "owner",
+      ackMaxChars: 300,
+    });
+
+    await runCli(["system", "heartbeat", "status", "--json"]);
+
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshot).toHaveBeenCalled();
+    expect(resolveHeartbeatCliStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: expect.objectContaining({
+          ownership: "explicit",
+        }),
+      }),
+      expect.objectContaining({ agentId: undefined }),
+    );
+    const payload = defaultRuntime.writeJson.mock.calls.at(-1)?.[0] as {
+      every?: string;
+      withinActiveHours?: boolean;
+      nextFireSource?: string;
+      nextFireAt?: string | null;
+      jobId?: string | null;
+    };
+    expect(payload.every).toBe("1800000ms");
+    expect(payload.withinActiveHours).toBe(false);
+    expect(payload.nextFireSource).toBe("outside-active-hours");
+    expect(payload.nextFireAt).toBeNull();
+    expect(payload.jobId).toBe("job-1");
+  });
+
 });
