@@ -36,7 +36,7 @@ function mount(
   };
   const view = mountSolid(AvatarPicker, props);
   const text = () => view.container.textContent;
-  const query = <T extends Element = HTMLElement>(selector: string) =>
+  const query = <T extends Element = HTMLElement>(selector: string): T | null =>
     view.container.querySelector<T>(selector);
   const click = (label: string) => {
     const buttons = [...view.container.querySelectorAll("button")];

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { Chalk } from "chalk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
@@ -399,6 +400,7 @@ describe("model list terminal table", () => {
     });
     await list({});
     const [header, row] = runtime.log.mock.calls.map(([line]) => line as string);
+    assert(header !== undefined && row !== undefined);
     expect(stripAnsi(header)).toBe(
       "Model                                      Input      Ctx         Local Auth  Tags",
     );

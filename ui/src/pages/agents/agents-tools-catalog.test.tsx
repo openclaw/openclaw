@@ -95,7 +95,7 @@ async function mountTools(kind: Kind, read: () => Promise<Result>, panel: Agents
       agentId={page.read().selectedAgentId ?? "main"}
     />
   ));
-  const query = <T extends Element = HTMLElement>(selector: string) =>
+  const query = <T extends Element = HTMLElement>(selector: string): T | null =>
     mounted.container.querySelector<T>(selector);
   return {
     ...mounted,

@@ -542,7 +542,8 @@ describe("realtime voice agent consult runtime", () => {
       createdAt: forkedEntry.createdAt,
       updatedAt: forkedEntry.updatedAt,
     });
-    expectPositiveTimestamp(forkedEntry.updatedAt);
+    expect(forkedEntry.updatedAt).toEqual(expect.any(Number));
+    expect(forkedEntry.updatedAt).toBeGreaterThan(0);
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call.sessionId).toBe("forked-session");
     expectForkTarget(call, "forked-session");

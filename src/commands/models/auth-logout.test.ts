@@ -45,6 +45,7 @@ vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Config reads use the fixture rather than operator config files.
 vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
 
 vi.mock("./shared.js", async (importOriginal) => {

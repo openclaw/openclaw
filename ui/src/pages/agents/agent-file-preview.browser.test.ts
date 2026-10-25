@@ -56,7 +56,7 @@ function afterOwnTransition(
   });
 }
 
-function query<T extends Element = HTMLElement>(selector: string) {
+function query<T extends Element = HTMLElement>(selector: string): T | null {
   return container.querySelector<T>(selector);
 }
 

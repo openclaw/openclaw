@@ -27,6 +27,7 @@ const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   readPreparedModelCatalog: loadModelCatalogMock,
 }));
+// mock-isolation: Probe auth uses fixture credentials and never the operator's auth stores.
 vi.mock("../../agents/model-auth.js", async () => ({
   ...(await vi.importActual<typeof import("../../agents/model-auth-provider-config.js")>(
     "../../agents/model-auth-provider-config.js",
@@ -64,6 +65,7 @@ vi.mock("../../agents/provider-auth-aliases.js", () => ({
   resolveProviderIdForAuth: (provider: string) =>
     provider === "byteplus-plan" ? "byteplus" : provider,
 }));
+// mock-isolation: These parser fixtures avoid loading the runtime model-selection graph.
 vi.mock("../../agents/model-selection.js", () => ({
   normalizeProviderId,
   findNormalizedProviderValue,

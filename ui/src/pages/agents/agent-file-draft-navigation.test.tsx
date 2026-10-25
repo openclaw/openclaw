@@ -106,7 +106,7 @@ it.each([
     return <Agents {...props()} />;
   });
   const { container } = mounted;
-  const element = <T extends HTMLElement>(selector: string) => {
+  const element = <T extends HTMLElement>(selector: string): T => {
     const target = container.querySelector<T>(selector);
     expect(target).not.toBeNull();
     return target!;
