@@ -34,12 +34,6 @@ function findToolUse(input: Awaited<ReturnType<typeof captureCommandInput>>) {
     ?.toolUse;
 }
 
-function expectObjectToolUseInput(input: Awaited<ReturnType<typeof captureCommandInput>>): void {
-  const toolInput = findToolUse(input)?.input;
-  expect(toolInput).toEqual(expect.any(Object));
-  expect(Array.isArray(toolInput)).toBe(false);
-}
-
 const claudeModel = (id: string, overrides: Parameters<typeof bedrockModel>[0] = {}) =>
   bedrockModel({ id, name: id, contextWindow: 1_000_000, maxTokens: 128_000, ...overrides });
 const opaqueProfile =
@@ -143,7 +137,7 @@ describe("Bedrock tool-result replay", () => {
     expect(input.messages).toMatchObject([{ content: [{ text: "Safe visible response" }] }]);
   });
 
-  it("replays unsupported audio attachments as their canonical text placeholder", async () => {
+  it("coalesces tool results while replacing audio and dropping empty image husks", async () => {
     const input = await captureCommandInput(bedrockModel({ input: ["text", "image"] }), {
       messages: [
         toolResult(
@@ -151,24 +145,6 @@ describe("Bedrock tool-result replay", () => {
           [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
           "listen",
         ),
-      ],
-    } as never);
-    const messages = input.messages;
-
-    expect(messages).toHaveLength(1);
-    expect(messages?.[0]).toMatchObject(
-      wireUser({
-        toolResult: {
-          toolUseId: "call_audio",
-          content: [{ text: "(see attached audio)" }],
-        },
-      }),
-    );
-  });
-
-  it("drops payload-less image husks from consecutive tool results", async () => {
-    const input = await captureCommandInput(bedrockModel({ input: ["text", "image"] }), {
-      messages: [
         toolResult("call_husk", [{ type: "image", mimeType: "image/png", data: "" }], "screenshot"),
         toolResult("call_text", [{ type: "text", text: "actual tool output" }], "read"),
       ],
@@ -178,6 +154,7 @@ describe("Bedrock tool-result replay", () => {
     expect(messages).toHaveLength(1);
     expect(messages?.[0]).toMatchObject(
       wireUser(
+        { toolResult: { toolUseId: "call_audio", content: [{ text: "(see attached audio)" }] } },
         { toolResult: { toolUseId: "call_husk", content: [{ text: "(no output)" }] } },
         { toolResult: { toolUseId: "call_text", content: [{ text: "actual tool output" }] } },
       ),
@@ -201,7 +178,7 @@ it("normalizes invalid stored arguments at the Bedrock request boundary", async 
     ],
   } as never;
   const originalContext = JSON.stringify(context);
-  const input = await captureCommandInput(bedrockModel({}), context, {}, expectObjectToolUseInput);
+  const input = await captureCommandInput(bedrockModel({}), context);
   expect(findToolUse(input)?.input).toEqual({});
   expect(JSON.stringify(context)).toBe(originalContext);
 });
@@ -258,15 +235,19 @@ describe("Bedrock stop reasons", () => {
     },
   );
 
-  it("rejects malformed terminal tool JSON before completing any sibling call", async () => {
+  it.each([true, false])("rejects invalid tool arguments with sealed=%s", async (sealed) => {
     mockStream([
       startMessage,
-      toolStart(0, "call_valid"),
-      toolDelta(0, '{"path":"README.md"}'),
-      { contentBlockStop: { contentBlockIndex: 0 } },
+      ...(sealed
+        ? [
+            toolStart(0, "call_valid"),
+            toolDelta(0, '{"path":"README.md"}'),
+            { contentBlockStop: { contentBlockIndex: 0 } },
+          ]
+        : []),
       toolStart(1, "call_invalid"),
       toolDelta(1, '{"path":"SECRET.md"'),
-      { contentBlockStop: { contentBlockIndex: 1 } },
+      ...(sealed ? [{ contentBlockStop: { contentBlockIndex: 1 } }] : []),
       { messageStop: { stopReason: BedrockStopReason.TOOL_USE } },
     ]);
     const { eventTypes, result } = await collectStream(
@@ -275,25 +256,11 @@ describe("Bedrock stop reasons", () => {
 
     expect(result).toMatchObject({
       stopReason: "error",
-      errorMessage: "Provider completed tool call with malformed JSON arguments",
+      errorMessage: sealed
+        ? "Provider completed tool call with malformed JSON arguments"
+        : "Provider completed stream with an incomplete tool call",
     });
     expect(result.errorMessage).not.toContain("SECRET.md");
-    expect(eventTypes).not.toContain("toolcall_end");
-    expect(eventTypes).not.toContain("done");
-  });
-
-  it("rejects an active tool call that never receives contentBlockStop", async () => {
-    mockStream([
-      startMessage,
-      toolStart(0, "call_unsealed"),
-      toolDelta(0, '{"path":"README.md"'),
-      { messageStop: { stopReason: BedrockStopReason.TOOL_USE } },
-    ]);
-    const { eventTypes, result } = await collectStream(
-      streamBedrockForTest(bedrockModel({}), userContext("read")),
-    );
-
-    expect(result.stopReason).toBe("error");
     expect(eventTypes.at(-1)).toBe("error");
     expect(eventTypes).not.toContain("toolcall_end");
     expect(eventTypes).not.toContain("done");

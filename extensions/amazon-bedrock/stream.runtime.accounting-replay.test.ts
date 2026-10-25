@@ -491,84 +491,37 @@ async function readBedrockFrames(options: {
   return result.promise;
 }
 
-it("bounds full-buffer preview work without losing raw deltas, progress, or terminal arguments", async ({
-  signal,
-}) => {
-  const marker = "BEDROCK_PREVIEW_WORK:";
-  const body = marker + "x".repeat(65_536);
-  const expected = { body, tail: ["雪\n\\path", { ready: true }] };
-  const raw = JSON.stringify(expected);
-  const chunks: string[] = [];
-  for (let offset = 0; offset < raw.length; offset += 256) {
-    chunks.push(raw.slice(offset, offset + 256));
-  }
-  const acknowledgments = chunks.map(() => createDeferred<void>());
-  async function* frames(): AsyncGenerator<Frame> {
-    yield startMessage;
-    yield startTool(0);
-    for (const [index, chunk] of chunks.entries()) {
-      yield toolDelta(0, chunk);
-      // Observe the current preview before another delta mutates the same block.
-      await acknowledgments[index]!.promise;
-    }
-    yield stopTool(0);
-    yield stopMessage;
-  }
-  const probe = vi.spyOn(JSON, "parse");
-  let parsedChars = 0;
-  const collectWork = () => {
-    for (const [text] of probe.mock.calls) {
-      if (typeof text === "string" && text.startsWith(`{"body":"${marker}`)) {
-        parsedChars += text.length;
-      }
-    }
-    // The probe must not retain all historical argument prefixes itself.
-    probe.mockClear();
-  };
-  const received: string[] = [];
-  const previewLengths: number[] = [];
-  const terminal: unknown[] = [];
-  const result = await readBedrockFrames({
-    frames: frames(),
-    signal,
-    release: () => acknowledgments.forEach((ack) => ack.resolve()),
-    observe: (event) => {
-      if (event.type === "toolcall_delta") {
-        received.push(event.delta);
-        const block = event.partial.content[event.contentIndex];
-        previewLengths.push(
-          block?.type === "toolCall" && typeof block.arguments.body === "string"
-            ? block.arguments.body.length
-            : 0,
-        );
-        collectWork();
-        acknowledgments[received.length - 1]?.resolve();
-      } else if (event.type === "toolcall_end") {
-        terminal.push(event.toolCall.arguments);
-      }
-    },
-  });
-  collectWork();
-  expect(received).toEqual(chunks);
-  expect(Math.max(...previewLengths)).toBeGreaterThan(body.length / 2);
-  expect(terminal).toEqual([expected]);
-  expect(result.stopReason).toBe("toolUse");
-  expect(parsedChars).toBeLessThan(raw.length * 4);
-});
-
 it.for([false, true])(
-  "keeps interleaved calls independent with queued consumption=%s",
+  "bounds preview work and keeps interleaved calls independent with queued consumption=%s",
   async (queued, { signal }) => {
-    const first = { body: "first:" + "a".repeat(1100), tail: { escaped: '"\n雪' } };
+    const marker = "BEDROCK_PREVIEW_WORK:";
+    const first = {
+      body: marker + "a".repeat(65_536),
+      tail: ["雪\n\\path", { escaped: '"\n雪', ready: true }],
+    };
     const second = { body: "second:" + "b".repeat(550), id: "9007199254740993" };
     const firstRaw = JSON.stringify(first);
     const secondRaw = `{"body":${JSON.stringify(second.body)},"id":9007199254740993}`;
     const deltas = [
       { index: 3, input: firstRaw.slice(0, 1050) },
       { index: 8, input: secondRaw.slice(0, 530) },
-      { index: 3, input: firstRaw.slice(1050) },
       { index: 8, input: secondRaw.slice(530) },
+      ...Array.from({ length: Math.ceil((firstRaw.length - 1050) / 256) }, (_, index) => ({
+        index: 3,
+        input: firstRaw.slice(1050 + index * 256, 1050 + (index + 1) * 256),
+      })),
     ];
+    const probe = vi.spyOn(JSON, "parse");
+    let parsedChars = 0;
+    const collectWork = () => {
+      for (const [text] of probe.mock.calls) {
+        if (typeof text === "string" && text.startsWith(`{"body":"${marker}`)) {
+          parsedChars += text.length;
+        }
+      }
+      // Do not retain every historical argument prefix in the measuring spy.
+      probe.mockClear();
+    };
     const gates = deltas.map(() => createDeferred<void>());
     async function* frames(): AsyncGenerator<Frame> {
       yield startMessage;
@@ -603,6 +556,7 @@ it.for([false, true])(
           observedPreviews.push(
             typeof block.arguments.body === "string" ? block.arguments.body.length : 0,
           );
+          collectWork();
           gates[received.length - 1]?.resolve();
         } else if (event.type === "toolcall_end") {
           expect(event.toolCall).not.toHaveProperty("partialJson");
@@ -611,9 +565,12 @@ it.for([false, true])(
         }
       },
     });
+    collectWork();
     expect(received).toEqual(deltas);
     expect(observedPreviews[0]).toBeGreaterThan(1000);
     expect(observedPreviews[1]).toBeGreaterThan(500);
+    expect(Math.max(...observedPreviews)).toBeGreaterThan(first.body.length / 2);
+    expect(parsedChars).toBeLessThan(firstRaw.length * 4);
     expect(terminal).toEqual([
       { id: "call-8", arguments: second },
       { id: "call-3", arguments: first },
