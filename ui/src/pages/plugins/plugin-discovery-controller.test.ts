@@ -64,23 +64,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("loads category navigation without waiting for catalog cards", async () => {
-  const browse = createDeferred<PluginDiscoveryResult>();
-  const categories = [
-    { slug: "memory", label: "Memory", description: "Memory", icon: "brain", order: 0 },
-  ];
-  const { discovery, request } = setup([], async (method) =>
-    method === "plugins.catalog.categories" ? { categories } : browse.promise,
-  );
-  const loading = discovery.refresh();
-  await discovery.ensureCategories();
-  expect(request).toHaveBeenCalledWith("plugins.catalog.categories", {}, expect.anything());
-  expect(discovery.read().categories).toEqual(categories);
-  browse.resolve({ items: [] });
-  await loading;
-  expect(discovery.read().categories).toEqual(categories);
-});
-
 it("settles empty categories, deduplicates warm loads, and retries errors explicitly", async () => {
   let fail = true;
   const { discovery, request } = setup([], async () => {

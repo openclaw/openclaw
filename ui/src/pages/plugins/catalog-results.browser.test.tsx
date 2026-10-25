@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import type { PluginDiscoveryEntry } from "../../lib/plugins/index.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { baseProps } from "./catalog-results.test-support.ts";
 import {
   renderPluginCatalogResults as PluginCatalogResults,
   type PluginCatalogResultsProps,
@@ -77,34 +78,14 @@ afterEach(() => {
 });
 
 function catalogProps(): PluginCatalogResultsProps {
-  return {
-    connected: true,
+  return baseProps({
     result: { items: [entry] },
-    hasCurrentResult: true,
-    reads: { browse: null, categories: null, more: null },
-    error: null,
-    remoteError: null,
     categories: [],
-    categoriesError: null,
-    onRetryCategories: vi.fn(),
     featured: [],
     trending: [],
-    loadMoreError: null,
-    intent: "all",
-    category: null,
     query: "memory",
-    iconUrls: {},
-    pluginIconUrls: {},
-    canInstall: true,
     entryHref: () => "/plugins/long-title",
-    onIntentChange: vi.fn(),
-    onCategoryChange: vi.fn(),
-    onQueryChange: vi.fn(),
-    onOpenEntry: vi.fn(),
-    onInstall: vi.fn(),
-    onLoadMore: vi.fn(),
-    onRetry: vi.fn(),
-  };
+  });
 }
 
 async function renderCatalog(props: Partial<PluginCatalogResultsProps>) {

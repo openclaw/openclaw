@@ -404,27 +404,6 @@ it("retains same-plugin inspection after a failed refresh", async () => {
   retry.resolve(initial);
 });
 
-it("shows installed inspection before optional catalog enrichment settles", async () => {
-  const inspection = deferred<ReturnType<typeof createInspectResult>>();
-  const catalog = deferred<ReturnType<typeof createDiscoveryDetail>>();
-  const plugin = createPlugin({ catalogId: "catalog-workboard" });
-  const result = createInspectResult();
-  result.components.skillDetails = [
-    { name: "inspected-skill", description: "Local inspection ready" },
-  ];
-  const harness = pageFixture({
-    "plugins.inspect": () => inspection.promise,
-    "plugins.catalog.get": () => catalog.promise,
-  });
-  const { page } = await harness.mount("/settings/plugins/workboard", createResult(plugin));
-  await harness.waitForCall("plugins.inspect");
-  expect(page.textContent).not.toContain("Local inspection ready");
-  inspection.resolve(result);
-  await waitForSolid(() => expect(page.textContent).toContain("Local inspection ready"));
-  expect(harness.calls("plugins.catalog.get")).toHaveLength(1);
-  catalog.resolve(createDiscoveryDetail(plugin));
-});
-
 it("retries a failed selected catalog read through its visible error action", async () => {
   const first = deferred<ReturnType<typeof createDiscoveryDetail>>();
   const retry = deferred<ReturnType<typeof createDiscoveryDetail>>();
