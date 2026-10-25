@@ -47,34 +47,20 @@ function fixture(filename = ":memory:") {
   return { db, read, token };
 }
 
-it("reads writer receipts without SQL on first use or after row writes", () => {
-  const { db, read } = fixture();
-  const observation = observeSqliteReadSql(StatementSync.prototype);
-  try {
-    const initial = read();
-    expect(read()).toBe(initial);
-    db.exec("UPDATE session_nodes SET updated_at = 2");
-    const changed = read();
-    expect(changed).toBeGreaterThan(initial);
-    expect(read()).toBe(changed);
-    deferred(db, () => {
-      expect(read()).toBe(changed);
-      expect(read()).toBe(changed);
-    });
-    expect(read()).toBe(changed);
-    expect(observation.queries).toEqual([]);
-  } finally {
-    observation.restore();
-  }
-});
-
-it("invalidates entry and participant snapshots after writes and rollback", () => {
+it("reads stable receipts without SQL and invalidates them after writes and rollback", () => {
   const { db, read, token } = fixture();
+  const observation = observeSqliteReadSql(StatementSync.prototype);
+  using _ = { [Symbol.dispose]: observation.restore };
+  const initial = read();
+  expect(read()).toBe(initial);
   db.exec("UPDATE session_nodes SET updated_at = 2");
   const updated = read();
-  expect(updated).toBeGreaterThan(0);
+  expect(updated).toBeGreaterThan(initial);
+  expect(read()).toBe(updated);
   let committed = updated;
   deferred(db, () => {
+    expect(read()).toBe(updated);
+    expect(read()).toBe(updated);
     db.exec("SAVEPOINT revision_change");
     db.prepare(
       `INSERT INTO session_participants
@@ -97,6 +83,8 @@ it("invalidates entry and participant snapshots after writes and rollback", () =
   const rolledBack = read();
   expect(rolledBack).toBeGreaterThan(uncommitted);
   expect(read()).toBe(rolledBack);
+  expect(observation.queries).toEqual([]);
+  observation.restore();
   const beforeSchema = token();
   db.exec("ALTER TABLE session_nodes ADD COLUMN revision_probe TEXT");
   admitSqliteSchema(db);
