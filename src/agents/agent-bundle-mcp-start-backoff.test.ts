@@ -118,16 +118,24 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-function makeRuntime(url = "https://mcp.invalid/mcp", requesterScope?: SessionMcpRequesterScope) {
+const remoteServer = { url: "https://mcp.invalid/mcp" };
+function makeRuntime(
+  url = remoteServer.url,
+  requesterScope?: SessionMcpRequesterScope,
+  servers: NonNullable<OpenClawConfig["mcp"]>["servers"] = { remote: { url } },
+) {
   const runtime = createSessionMcpRuntime({
     sessionId: `run-${runtimes.length}`,
     workspaceDir: "/workspace",
     requesterScope,
-    cfg: { mcp: { servers: { remote: { url } } } },
+    cfg: { mcp: { servers } },
   });
   runtimes.push(runtime);
   return runtime;
 }
+
+const toolNames = (catalog: Awaited<ReturnType<SessionMcpRuntime["getCatalog"]>>) =>
+  catalog.tools.map((tool) => tool.toolName);
 
 async function discover(runtime: SessionMcpRuntime) {
   let settled = false;
@@ -191,7 +199,7 @@ it("keeps one catalog diagnostic per failure episode and publishes recovery next
   listing.resolve();
   await vi.advanceTimersByTimeAsync(0);
   const recovered = await runtime.getCatalog();
-  expect(recovered.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(toolNames(recovered)).toEqual(["probe"]);
   expect(recovered.diagnostics ?? []).toEqual([]);
   expect(turn.catalog.tools).toEqual([]);
 });
@@ -199,24 +207,12 @@ it("keeps one catalog diagnostic per failure episode and publishes recovery next
 it("retries failed listings in the background without stalling healthy siblings", async () => {
   reachable = true;
   invalidListing = true;
-  const runtime = createSessionMcpRuntime({
-    sessionId: "listing-retry",
-    workspaceDir: "/workspace",
-    cfg: {
-      mcp: {
-        servers: {
-          remote: { url: "https://mcp.invalid/mcp" },
-          healthy: { url: "https://healthy.invalid/mcp" },
-        },
-      },
-    },
+  const runtime = makeRuntime(undefined, undefined, {
+    remote: remoteServer,
+    healthy: { url: "https://healthy.invalid/mcp" },
   });
-  runtimes.push(runtime);
   const failed = await runtime.getCatalog();
-  expect(
-    failed.tools.map((tool) => tool.toolName),
-    JSON.stringify(failed.diagnostics),
-  ).toEqual(["healthy_tool"]);
+  expect(toolNames(failed), JSON.stringify(failed.diagnostics)).toEqual(["healthy_tool"]);
   expect(failed.diagnostics?.[0]?.serverName).toBe("remote");
 
   invalidListing = false;
@@ -225,11 +221,11 @@ it("retries failed listings in the background without stalling healthy siblings"
   await vi.advanceTimersByTimeAsync(5_000);
   const turn = await discover(runtime);
   expect(turn.waitedMs).toBe(0);
-  expect(turn.catalog.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool"]);
+  expect(toolNames(turn.catalog)).toEqual(["healthy_tool"]);
   listing.resolve();
   await vi.advanceTimersByTimeAsync(0);
   const recovered = await runtime.getCatalog();
-  expect(recovered.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool", "probe"]);
+  expect(toolNames(recovered)).toEqual(["healthy_tool", "probe"]);
   expect(recovered.diagnostics).toBeUndefined();
   expect(initializes).toBe(3);
 });
@@ -238,7 +234,7 @@ it("refreshes a connected session while a sibling with the same startup key is u
   reachable = true;
   const healthy = makeRuntime();
   const before = await healthy.getCatalog();
-  expect(before.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(toolNames(before)).toEqual(["probe"]);
   const transport = transports[0]!;
 
   reachable = false;
@@ -250,10 +246,10 @@ it("refreshes a connected session while a sibling with the same startup key is u
   transport.onmessage?.({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
   await vi.advanceTimersByTimeAsync(0);
   const refreshed = await healthy.getCatalog();
-  expect(refreshed.tools.map((tool) => tool.toolName)).toEqual(["replacement"]);
+  expect(toolNames(refreshed)).toEqual(["replacement"]);
   expect(refreshed.diagnostics).toBeUndefined();
   expect(initializes).toBe(2);
-  expect(before.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(toolNames(before)).toEqual(["probe"]);
 });
 
 it("clears inherited failure cooldowns when the live runtime is explicitly reloaded", async () => {
@@ -261,7 +257,7 @@ it("clears inherited failure cooldowns when the live runtime is explicitly reloa
   const params = {
     workspaceDir: "/workspace",
     agentDir: "/agent",
-    cfg: { mcp: { servers: { remote: { url: "https://mcp.invalid/mcp" } } } },
+    cfg: { mcp: { servers: { remote: remoteServer } } },
   };
   const first = await acquireSessionMcpRuntime({ ...params, sessionId: "first" });
   const second = await acquireSessionMcpRuntime({ ...params, sessionId: "second" });
@@ -271,7 +267,7 @@ it("clears inherited failure cooldowns when the live runtime is explicitly reloa
     reachable = true;
     await reloadSessionMcpRuntimes({ cfg: params.cfg });
     const reloaded = await second.runtime.getCatalog();
-    expect(reloaded.tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+    expect(toolNames(reloaded)).toEqual(["probe"]);
   } finally {
     first.releaseLease();
     second.releaseLease();
@@ -298,7 +294,7 @@ it("doubles background retry intervals to ten minutes and resets after recovery"
   reachable = true;
   expect((await discover(runtime)).waitedMs).toBe(0);
   await vi.advanceTimersByTimeAsync(0);
-  expect((await runtime.getCatalog()).tools.map((tool) => tool.toolName)).toEqual(["probe"]);
+  expect(toolNames(await runtime.getCatalog())).toEqual(["probe"]);
   reachable = false;
   const failedAgain = await discover(makeRuntime());
   expect(failedAgain.waitedMs).toBe(30_000);

@@ -45,6 +45,10 @@ function requireFailedDetails(
   return details;
 }
 
+function expectSpawn(input: Partial<SpawnInput>) {
+  expect(supervisorMock.spawn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(input));
+}
+
 function mockSpawn(exit: Partial<RunExit> = {}) {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
     activity: { resultSettled: true, lastOutputAtMs: Date.now() },
@@ -83,10 +87,8 @@ function createBackendSandboxTool(
       workdirValidation: "backend",
       validateWorkdir,
       buildExecSpec,
-      ...(params.finalizeExec ? { finalizeExec: params.finalizeExec } : {}),
-      ...(params.discardPreparedWorkdir
-        ? { discardPreparedWorkdir: params.discardPreparedWorkdir }
-        : {}),
+      finalizeExec: params.finalizeExec,
+      discardPreparedWorkdir: params.discardPreparedWorkdir,
     },
   });
   return {
@@ -162,8 +164,7 @@ describe("exec foreground failures", () => {
       host: "gateway",
     });
 
-    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-    expect(supervisorMock.spawn.mock.calls[0]?.[0]?.timeoutMs).toBe(1_000);
+    expectSpawn({ timeoutMs: 1_000 });
     const text = requireTextContent(result);
     expect(text).toMatch(/timed out/i);
     expect(text).toContain("external side effects may already have completed");
@@ -272,8 +273,7 @@ describe("exec foreground failures", () => {
       const result = await tool.execute("sandbox-pty", { command: "echo ok", pty });
 
       expect(result.details.status).toBe("completed");
-      expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-      expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe("child");
+      expectSpawn({ mode: "child" });
       const text = requireTextContent(result);
       if (pty) {
         expect(text).toContain("Warning: PTY is unavailable in sandbox mode");
@@ -297,8 +297,7 @@ describe("exec foreground failures", () => {
     expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
     expect(buildExecSpec).toHaveBeenCalledOnce();
     expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-    expect(finalizeExec).toHaveBeenCalledOnce();
-    expect(finalizeExec).toHaveBeenCalledWith({
+    expect(finalizeExec).toHaveBeenCalledExactlyOnceWith({
       status: "failed",
       exitCode: null,
       timedOut: false,
@@ -332,10 +331,10 @@ describe("exec foreground failures", () => {
     const result = await execute("echo ok", "src");
     expect(result.details).toMatchObject({ status: "completed", cwd: srcDir });
     expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/src");
-    expect(buildExecSpec).toHaveBeenCalledOnce();
-    expect(buildExecSpec.mock.calls[0]?.[0]?.workdir).toBe("/remote/workspace/src");
-    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-    expect(supervisorMock.spawn.mock.calls[0]?.[0]?.cwd).toBe(srcDir);
+    expect(buildExecSpec).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ workdir: "/remote/workspace/src" }),
+    );
+    expectSpawn({ cwd: srcDir });
   });
 
   it("fails backend-validated sandbox workdirs before launch when backend validation rejects", async () => {
