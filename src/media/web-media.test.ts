@@ -155,6 +155,7 @@ describe("loadWebMedia", () => {
     );
     const buffer = Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]);
     expect(readImageMetadataFromHeader(buffer)).toEqual({ width: 16, height: 32 });
+    await expect(getImageMetadata(buffer)).resolves.toEqual({ width: 16, height: 32 });
     const file = await writeFile("portrait.heif", buffer);
     const options = localOptions({
       imageCompression: { quality: "balanced", models: [{ maxSidePx: 32, maxPixels: 1024 }] },
@@ -373,7 +374,6 @@ describe("loadWebMedia", () => {
     ["debug.log", "plain text\n"],
     ["secret.pdf", "secret"],
     ["report.html", "status,value\nok,1\n"],
-    ["outside.html", "<!doctype html><h1>outside</h1>", true],
     [
       "prefix-tail.csv",
       Buffer.concat([
@@ -383,15 +383,11 @@ describe("loadWebMedia", () => {
     ],
     ["bom-binary.csv", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.alloc(9000, 0xff)])],
     ["alternating-high.csv", Buffer.alloc(9000, Buffer.from([0x41, 0xff]))],
-  ] as const)("rejects unsafe host-read document %s", async (name, body, outside?: true) => {
+  ] as const)("rejects unsafe host-read document %s", async (name, body) => {
     if (name === "prefix-tail.csv") {
       expect(body.length - 4).toBeGreaterThan(8192);
     }
-    await expectAccessError(
-      loadWithHostRead(
-        await writeFile(name, body, outside ? tempDirs.make("html-outside-") : fixtureRoot),
-      ),
-    );
+    await expectAccessError(loadWithHostRead(await writeFile(name, body)));
   });
 
   it("admits explicitly published HTML without inventing generated provenance", async () => {

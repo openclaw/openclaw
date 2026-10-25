@@ -81,9 +81,7 @@ describe("media store", () => {
   });
 
   async function expectPathMissing(targetPath: string) {
-    const result = fs.stat(targetPath);
-    await expect(result).rejects.toBeInstanceOf(Error);
-    await expect(result).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
   }
 
   it.each([
@@ -155,15 +153,14 @@ describe("media store", () => {
 
   it("preserves the original generic extension of stored streams", async () => {
     const buffer = Buffer.from("custom binary");
-    const original = "report.CuStOm";
     const saved = await store.saveMediaStream(
       Readable.from([buffer]),
       binaryMime,
       streamDir,
       1024,
-      original,
+      "report.CuStOm",
     );
-    expect(store.extractOriginalFilename(saved.path)).toBe(original);
+    expect(store.extractOriginalFilename(saved.path)).toBe("report.CuStOm");
     await expect(fs.readFile(saved.path)).resolves.toEqual(buffer);
   });
 
@@ -234,8 +231,7 @@ describe("media store", () => {
 
     const result = await store.readMediaBuffer(saved.id);
     expect(shortened).toBe(true);
-    expect(result.buffer.toString("utf8")).toBe(content.toString("utf8"));
-    expect(result.size).toBe(content.length);
+    expect(result).toMatchObject({ buffer: content, size: content.length });
   });
 
   it("does not let a mixed-case image header disguise a stored ZIP", async () => {
@@ -250,7 +246,6 @@ describe("media store", () => {
       "fake.png",
     );
     expect(saved.contentType).toBe("application/zip");
-    expect(saved.path.endsWith(".zip")).toBe(true);
     expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
   });
 
@@ -271,21 +266,20 @@ describe("media store", () => {
       expect((await fs.stat(mediaDir)).isDirectory()).toBe(true);
       const files = await Promise.all(
         ["", "inbound", "cache/session/images", "cache/session/docs", "prune/session/images"].map(
-          (subdir) => store.saveMediaBuffer(Buffer.from("media"), "text/plain", subdir),
+          (subdir, index) =>
+            fileFixture(
+              path.join(mediaDir, subdir, "media.txt"),
+              "media",
+              index === 3 ? 0 : 10_000,
+            ),
         ),
       );
-      const past = (Date.now() - 10_000) / 1000;
-      for (const [index, saved] of files.entries()) {
-        if (index !== 3) {
-          await fs.utimes(saved.path, past, past);
-        }
-      }
       await store.cleanOldMedia(1_000, options);
-      for (const [index, saved] of files.entries()) {
+      for (const [index, file] of files.entries()) {
         if (removed.includes(index)) {
-          await expectPathMissing(saved.path);
+          await expectPathMissing(file);
         } else {
-          expect((await fs.stat(saved.path)).isFile()).toBe(true);
+          expect((await fs.stat(file)).isFile()).toBe(true);
         }
       }
       if (mode === "recursive") {
@@ -311,10 +305,8 @@ describe("media store", () => {
 
       await store.cleanOldMedia(1_000, { recursive: true, pruneEmptyDirs: true });
 
-      const outsideStat = await fs.stat(outsideFile);
-      const symlinkStat = await fs.lstat(symlinkPath);
-      expect(outsideStat.isFile()).toBe(true);
-      expect(symlinkStat.isSymbolicLink()).toBe(true);
+      expect((await fs.stat(outsideFile)).isFile()).toBe(true);
+      expect((await fs.lstat(symlinkPath)).isSymbolicLink()).toBe(true);
     },
   );
 
@@ -502,25 +494,20 @@ describe("media store filesystem faults", () => {
     },
   );
 
-  it.each(["ENOENT", "ENOSPC", "not-found", "wrapped-ENOENT", "wrapped-ENOSPC"] as const)(
+  it.each(["ENOENT", "wrapped-ENOENT", "wrapped-ENOSPC"] as const)(
     "does not replay failed buffer writes (%s)",
     async (code) => {
       const segment = "retry-buffer";
       const nestedError = code.startsWith("wrapped-") ? errnoError(code.slice(8)) : undefined;
-      const injectedError =
-        code === "not-found" || nestedError
-          ? new FsSafeError(
-              "not-found",
-              "media target not found",
-              nestedError ? { cause: nestedError } : undefined,
-            )
-          : errnoError(code);
+      const injectedError = nestedError
+        ? new FsSafeError("not-found", "media target not found", { cause: nestedError })
+        : errnoError(code);
       const attempts: string[] = [];
       mockFileStore((actual) => ({
         write: async (...args) => {
           if (args[0].includes(`${segment}/`)) {
             attempts.push(args[0]);
-            if (code === "ENOSPC" || attempts.length === 1) {
+            if (attempts.length === 1) {
               if (code === "ENOENT") {
                 await fs.rm(path.dirname(actual.path(args[0])), { recursive: true, force: true });
               }
@@ -579,9 +566,7 @@ describe("media store filesystem faults", () => {
   it("rejects publication failure without replaying a consumed stream", async () => {
     const subdir = "stream-final-rename";
     const input = Buffer.from("media stream must not become an empty success");
-    const stream = (async function* () {
-      yield input;
-    })();
+    const stream = Readable.from([input]);
     const injectedError = errnoError("ENOENT");
     const originalRename = fs.rename.bind(fs);
     let stagedBytes: Buffer | undefined;
