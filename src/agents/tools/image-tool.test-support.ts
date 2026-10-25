@@ -21,14 +21,9 @@ import {
 import { createImageTool } from "./image-tool.js";
 import * as execution from "./image-tool.model-execution.js";
 
-export type ToolTextResult = {
-  content?: Array<{
-    type?: string;
-    text?: string;
-    image_url?: { url?: string };
-  }>;
-  details?: Record<string, unknown>;
-};
+export type ToolTextResult = Awaited<
+  ReturnType<NonNullable<ReturnType<typeof createImageTool>>["execute"]>
+>;
 
 export function expectToolText(result: unknown, text: string): void {
   const content = (result as ToolTextResult).content ?? [];
@@ -37,7 +32,6 @@ export function expectToolText(result: unknown, text: string): void {
 
 export function createRequiredImageTool(args: Parameters<typeof createImageTool>[0]) {
   const tool = createImageTool(args);
-  expect(typeof tool?.execute).toBe("function");
   if (!tool) {
     throw new Error("expected image tool");
   }

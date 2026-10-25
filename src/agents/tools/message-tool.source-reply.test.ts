@@ -18,35 +18,26 @@ import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createMessageTool } from "./message-tool-execution.js";
 import type { MessageToolOptions } from "./message-tool-execution.types.js";
 
-const actualRunMessageAction = messageActionRunner.runMessageAction;
-const send = vi.fn<typeof actualRunMessageAction>();
-const secrets = vi.fn(commandSecretGateway.resolveCommandSecretRefsViaGateway);
 const source = {
   sourceReplyOnly: true,
   sourceReplyDeliveryMode: "message_tool_only",
   currentThreadTs: "thread-1",
   currentMessageId: "message-1",
+  currentChannelProvider: "workspace",
+  currentChannelId: "SOURCE",
+  agentAccountId: "default",
 } satisfies Partial<MessageToolOptions>;
-
-function registerPlugins(plugin: ChannelPlugin) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
-}
 
 beforeEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
-  send.mockReset();
-  secrets.mockClear();
-  vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(send);
-  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(secrets);
+  vi.spyOn(messageActionRunner, "runMessageAction");
+  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway");
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -58,29 +49,37 @@ afterEach(() => {
 describe("completion source-reply authority", () => {
   const replyTag = "[[reply_to:message-2]]";
   const audioTag = "[[audio_as_voice]]";
-  function createRestrictedTool(overrides: Partial<MessageToolOptions> = {}) {
-    const config = overrides.config ?? {};
+  function createFixture(overrides: Partial<MessageToolOptions> = {}) {
+    const config = { ...workspaceConfig, tools: { fs: { workspaceOnly: true } } };
     setRuntimeConfigSnapshot(config);
-    registerPlugins({
-      ...createChannelTestPluginBase({
-        id: "discord",
-        config: { listAccountIds: () => ["source-account"] },
-      }),
+    const receipt = { channel: "workspace", messageId: "photo-1" };
+    const sendMedia = vi.fn(async (_ctx: ChannelOutboundContext) => receipt);
+    const plugin: ChannelPlugin = {
+      ...workspaceTestPlugin,
       actions: {
         describeMessageTool: () => ({ actions: ["send", "delete", "ban"] }),
         messageActionTargetAliases: {
           send: { aliases: ["destination"], deliveryTargetAliases: ["destination"] },
         },
       },
-    });
-    return createMessageTool({
+      outbound: {
+        ...directOutbound,
+        extractMarkdownImages: true,
+        sendMedia: async (ctx: ChannelOutboundContext) => {
+          if (ctx.mediaUrl && !ctx.mediaUrl.startsWith("https://")) {
+            await loadWebMedia(ctx.mediaUrl, buildOutboundMediaLoadOptions(ctx));
+          }
+          return sendMedia(ctx);
+        },
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+    const tool = createMessageTool({
       ...source,
       config,
-      currentChannelProvider: "discord",
-      currentChannelId: "channel:source",
-      agentAccountId: "source-account",
       ...overrides,
     });
+    return { tool, sendMedia };
   }
 
   it.each([
@@ -108,57 +107,25 @@ describe("completion source-reply authority", () => {
     },
     { message: "[[reply_<final>to:message-2]] stolen thread" },
   ])("rejects %j before resolving secrets or dispatching", async (args) => {
-    const tool = createRestrictedTool();
+    const { tool } = createFixture();
 
     await expect(
       tool.execute("restricted", {
         action: "send",
         message: "completion",
         media: "https://example.com/photo.png",
-        filename: "photo.png",
-        contentType: "image/png",
         ...args,
       }),
     ).rejects.toThrow(/Completion source replies/);
-    expect(secrets).not.toHaveBeenCalled();
-    expect(send).not.toHaveBeenCalled();
+    expect(commandSecretGateway.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+    expect(messageActionRunner.runMessageAction).not.toHaveBeenCalled();
   });
-
-  function createCompletionMediaTool() {
-    send.mockImplementation(actualRunMessageAction);
-    const config = { ...workspaceConfig, tools: { fs: { workspaceOnly: true } } };
-    setRuntimeConfigSnapshot(config);
-    const sendMedia = vi.fn(async (_ctx: ChannelOutboundContext) => ({
-      channel: "workspace",
-      messageId: "photo-1",
-    }));
-    registerPlugins({
-      ...workspaceTestPlugin,
-      outbound: {
-        ...directOutbound,
-        extractMarkdownImages: true,
-        sendMedia: async (ctx) => {
-          // This provider accepts remote URLs; local uploads use the shared media policy.
-          if (ctx.mediaUrl && !ctx.mediaUrl.startsWith("https://")) {
-            await loadWebMedia(ctx.mediaUrl, buildOutboundMediaLoadOptions(ctx));
-          }
-          return sendMedia(ctx);
-        },
-      },
-    });
-    const tool = createMessageTool({
-      ...source,
-      config,
-      agentSessionKey: "agent:main:workspace:group:SOURCE",
-      currentChannelProvider: "workspace",
-      currentChannelId: "SOURCE",
-    });
-    return { tool, sendMedia };
-  }
 
   it("delivers completion media and attachments to the current source through normal sends", async () => {
     await withOpenClawTestState({ layout: "state-only", prefix: "completion-media-" }, async () => {
-      const { tool, sendMedia } = createCompletionMediaTool();
+      const { tool, sendMedia } = createFixture({
+        agentSessionKey: "agent:main:workspace:group:SOURCE",
+      });
       const url = "https://example.com/photo.png";
       for (const args of [
         { media: url, message: "Replacement photo" },
@@ -195,7 +162,9 @@ describe("completion source-reply authority", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "completion-media-" },
       async ({ stateDir }) => {
-        const { tool, sendMedia } = createCompletionMediaTool();
+        const { tool, sendMedia } = createFixture({
+          agentSessionKey: "agent:main:workspace:group:SOURCE",
+        });
         // State files outside managed media/workspace roots must never become attachments.
         const outside = `${stateDir}/private.txt`;
         const directivePath = pathToFileURL(outside).href;
@@ -229,26 +198,25 @@ describe("completion source-reply authority", () => {
   });
 
   it("allows shared final controls and matched canonical source-thread text sends", async () => {
-    send.mockResolvedValue({
+    const send = vi.mocked(messageActionRunner.runMessageAction).mockResolvedValue({
       kind: "send",
       action: "send",
-      channel: "discord",
-      to: "channel:source",
+      channel: "workspace",
+      to: "SOURCE",
       handledBy: "plugin",
       payload: {},
       dryRun: true,
     });
-    const tool = createRestrictedTool();
-
+    const { tool } = createFixture();
     for (const args of [
       { message: "completion", final: true },
       { message: "NO_REPLY", final: true },
       { message: "See the MEDIA: section for details." },
       { message: "Example:\n```text\nMEDIA:./AGENTS.md\n```" },
       {
-        channel: "discord",
-        target: "channel:source",
-        accountId: "source-account",
+        channel: "workspace",
+        target: "SOURCE",
+        accountId: "default",
         threadId: "thread-1",
         replyTo: "message-1",
         message: "completion",
@@ -266,11 +234,11 @@ describe("completion source-reply authority", () => {
   });
 
   it("fails closed when the authoritative source target is missing", async () => {
-    const tool = createRestrictedTool({ currentChannelId: undefined });
+    const { tool } = createFixture({ currentChannelId: undefined });
 
     await expect(
       tool.execute("missing-source", { action: "send", message: "completion" }),
     ).rejects.toThrow("authoritative current conversation");
-    expect(secrets).not.toHaveBeenCalled();
+    expect(commandSecretGateway.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 });
