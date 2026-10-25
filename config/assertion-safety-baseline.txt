@@ -2164,7 +2164,6 @@ src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	1
 src/plugins/provider-model-compat.ts	3
 src/plugins/provider-openai-chatgpt-oauth.ts	1
-src/plugins/provider-policy-surface.ts	1
 src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
 src/plugins/registry-registrars-host.ts	1
