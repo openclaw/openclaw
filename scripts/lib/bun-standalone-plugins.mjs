@@ -7,6 +7,11 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "../../src/plugins/official-external-plugin-catalog.ts";
 import { listBuiltRuntimeEntryCandidates } from "../../src/plugins/package-entrypoints.ts";
+import {
+  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  getPackageManifestMetadata,
+  resolvePackageExtensionEntries,
+} from "../../src/plugins/package-manifest.ts";
 import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
 import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-plugin-excludes.mjs";
 
@@ -210,11 +215,25 @@ export function createStandalonePluginContract({ runtimeRoot, plugins, embeddedP
     if (typeof plugin.id !== "string" || !selected.delete(plugin.id)) {
       throw new Error(`Unexpected or duplicate bundled plugin ID: ${plugin.id}`);
     }
-    const pkg = readPluginContractManifest(runtimeRoot, `${root}/package.json`);
-    const metadata = pkg.openclaw;
-    const declared = metadata?.extensions;
-    if (!metadata || !Array.isArray(declared) || declared.length === 0) {
-      throw new Error(`Bundled plugin ${plugin.id} has no declared runtime entries`);
+    const pkg = fs.existsSync(path.join(runtimeRoot, root, "package.json"))
+      ? readPluginContractManifest(runtimeRoot, `${root}/package.json`)
+      : undefined;
+    const metadata = getPackageManifestMetadata(pkg);
+    const resolution = resolvePackageExtensionEntries(pkg);
+    if (resolution.status === "invalid" || resolution.status === "empty") {
+      throw new Error(
+        `Bundled plugin ${plugin.id}: ${resolution.status === "invalid" ? resolution.error : "package.json openclaw.extensions is empty"}`,
+      );
+    }
+    const fallback =
+      resolution.status === "missing"
+        ? DEFAULT_PLUGIN_ENTRY_CANDIDATES.find((candidate) =>
+            fs.existsSync(path.join(runtimeRoot, root, candidate)),
+          )
+        : undefined;
+    const declared = resolution.status === "ok" ? resolution.entries : fallback ? [fallback] : [];
+    if (declared.length === 0) {
+      throw new Error(`Bundled plugin ${plugin.id} has no runtime entry`);
     }
     /** @param {string} filename @returns {CompiledPluginEntry} */
     const entry = (filename) => {
@@ -241,7 +260,7 @@ export function createStandalonePluginContract({ runtimeRoot, plugins, embeddedP
     };
     compiledPlugins[plugin.id] = {
       runtime: declared.map(entry),
-      ...(metadata.setupEntry === undefined ? {} : { setup: entry(metadata.setupEntry) }),
+      ...(metadata?.setupEntry === undefined ? {} : { setup: entry(metadata.setupEntry) }),
     };
   }
   if (selected.size > 0) {
@@ -256,7 +275,8 @@ const STANDALONE_PLUGIN_LOADER_DIRECTORY = "node_modules/@openclaw/plugin-loader
 /**
  * Keep the dynamic loader, including Jiti's lazy transform, in one host-owned disk package.
  * @param {{runtimeRoot: string, outputRoot: string, build: (options: {
- *   entrypoints: string[], outdir: string, naming: string, target: "bun", format: "cjs"
+ *   entrypoints: string[], outdir: string, naming: string, target: "bun", format: "cjs",
+ *   minify: {whitespace: boolean, syntax: boolean, identifiers: boolean}
  * }) => Promise<{success: boolean, logs: Iterable<unknown>}>}} options
  */
 export async function stageStandalonePluginLoader({ runtimeRoot, outputRoot, build }) {
@@ -266,7 +286,10 @@ export async function stageStandalonePluginLoader({ runtimeRoot, outputRoot, bui
   const entrypoint = path.join(outputRoot, "plugin-loader-entry.cjs");
   fs.writeFileSync(
     entrypoint,
-    `exports.createJiti = require(${JSON.stringify(jiti)}).createJiti;\n`,
+    `const { createRequire } = require("node:module");
+exports.loadModule = (parent, specifier) => createRequire(parent)(specifier);
+exports.createJiti = (...args) => require(${JSON.stringify(jiti)}).createJiti(...args);
+`,
   );
   const directory = path.join(runtimeRoot, STANDALONE_PLUGIN_LOADER_DIRECTORY);
   fs.mkdirSync(directory, { recursive: true });
@@ -277,6 +300,8 @@ export async function stageStandalonePluginLoader({ runtimeRoot, outputRoot, bui
       naming: "index.cjs",
       target: "bun",
       format: "cjs",
+      // Generated source comments otherwise include the random staging directory.
+      minify: { whitespace: true, syntax: false, identifiers: false },
     });
     if (!result.success) {
       throw new AggregateError(result.logs, "Could not bundle the standalone plugin loader");

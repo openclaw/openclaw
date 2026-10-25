@@ -80,6 +80,23 @@ function tokenRpc(
 function sendRequest(ws: WebSocket, id: string, method: string, params: unknown) {
   ws.send(JSON.stringify({ type: "req", id, method, params }));
 }
+function observeResponses(ws: WebSocket) {
+  const frames: {
+    id: string;
+    ok: boolean;
+    payload?: { token?: string; tokenDelivery?: string };
+  }[] = [];
+  ws.on("message", (data) => {
+    const frame = JSON.parse(rawDataToString(data));
+    if (frame.type === "res") {
+      frames.push(frame);
+    }
+  });
+  const closed = new Promise<number>((resolve) => {
+    ws.once("close", resolve);
+  });
+  return { frames, closed };
+}
 function issueOperator(name: string, tokenScopes?: string[]) {
   return issueOperatorToken({
     name,
@@ -192,20 +209,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       const device = await issueOperator(`self-${method}`, scopes);
       const before = await getPairedDevice(device.deviceId);
       const ws = await openDevice(device, scopes);
-      const frames: {
-        id: string;
-        ok: boolean;
-        payload?: { token?: string; tokenDelivery?: string };
-      }[] = [];
-      ws.on("message", (data) => {
-        const frame = JSON.parse(rawDataToString(data));
-        if (frame.type === "res") {
-          frames.push(frame);
-        }
-      });
-      const closed = new Promise<number>((resolve) => {
-        ws.once("close", resolve);
-      });
+      const { frames, closed } = observeResponses(ws);
       sendRequest(ws, "mutation", method, {
         deviceId: device.deviceId,
         ...(method === "device.pair.remove" ? {} : { role: "operator" }),
@@ -259,16 +263,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
     const adminWs = await openWs();
     try {
       await connectOk(adminWs, { token: "secret" });
-      const responses: string[] = [];
-      ws.on("message", (data) => {
-        const frame = JSON.parse(rawDataToString(data));
-        if (frame.type === "res") {
-          responses.push(frame.id);
-        }
-      });
-      const closed = new Promise<number>((resolve) => {
-        ws.once("close", resolve);
-      });
+      const { frames, closed } = observeResponses(ws);
       sendRequest(ws, "stale-rotation", "device.token.rotate", {
         deviceId: device.deviceId,
         role: "operator",
@@ -280,7 +275,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       await finished.promise;
       await yieldMacrotask();
       await yieldMacrotask();
-      expect(responses).toEqual([]);
+      expect(frames.map(({ id }) => id)).toEqual([]);
       expect((await getPairedDevice(device.deviceId))?.tokens?.operator?.revokedAtMs).toBeTypeOf(
         "number",
       );

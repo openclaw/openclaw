@@ -5,7 +5,7 @@ import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { restoreChatModelRefreshFocus } from "./chat-model-picker-search.ts";
+import { restoreChatModelRefreshFocus } from "./chat-model-picker-search-view.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 

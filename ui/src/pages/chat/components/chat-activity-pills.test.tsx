@@ -2,6 +2,7 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSessionGoalFixture } from "../../../../../src/gateway/session-goal.test-support.js";
 import type { SessionGoal } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -10,17 +11,10 @@ import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import { ChatActivityPills } from "./chat-activity-pills.tsx";
 
-const goal: SessionGoal = {
-  schemaVersion: 1,
-  id: "release-goal",
-  objective: "Verify the release",
-  status: "active",
-  createdAt: 1,
+const goal: SessionGoal = createSessionGoalFixture("release-goal", "Verify the release", {
   updatedAt: 2,
-  tokenStart: 0,
   tokensUsed: 100,
-  continuationTurns: 0,
-};
+});
 const fontsDescriptor = Object.getOwnPropertyDescriptor(document, "fonts");
 
 beforeEach(async () => {

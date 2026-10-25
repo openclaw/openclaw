@@ -300,11 +300,13 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         : false,
     );
     assertCurrent();
+    let probed = false;
     const observed = await waitForGatewayHealthyRestart({
       ...probeParams,
       deadlineOutcome: "snapshot",
       timeoutMs: Math.max(1, remainingMs()),
       onObservation: (snapshot) => {
+        probed = true;
         health = snapshot;
         retainChannelTimeouts(snapshot);
         params.onProgress?.(
@@ -315,7 +317,8 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       requireRunningService: params.requireRunningService,
       supervisorKeepsAlive,
     });
-    health = observed;
+    // Expiry before the first observation returns a budget placeholder, not a probe result.
+    health = probed ? observed : { ...observed, probeError: undefined };
     assertCurrent();
     return observed;
   };
@@ -435,10 +438,13 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         healthy: false,
         waitOutcome,
         // Only the wait owner's interval may retain startup progress. A hung
-        // observation cannot inherit an earlier snapshot's startup phase.
+        // observation cannot inherit an earlier snapshot's startup phase, but the
+        // last probe error still explains why readiness never settled.
         startupPhase: interval ? health.startupPhase : `timed out during ${error.phase}`,
         elapsedMs: performance.now() - startedAtMs,
-        probeError: interval ? health.probeError : error.message,
+        probeError: interval
+          ? health.probeError
+          : `${error.message}${health.probeError ? ` Last health probe: ${health.probeError}` : ""}`,
       },
       readyz: false,
       http,

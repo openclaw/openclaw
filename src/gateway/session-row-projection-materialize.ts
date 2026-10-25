@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
-import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
@@ -14,6 +14,7 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
+import { materializeSessionRowIfChanged } from "./session-row-materialization.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
@@ -27,7 +28,7 @@ import {
   resolveGatewaySessionDisplayName,
   resolveGatewaySessionKind,
 } from "./session-utils-display.js";
-import { materializeSessionRow, readSessionRowInputs } from "./session-utils-row.js";
+import { readSessionRowInputs } from "./session-utils-row.js";
 import { parseGroupKey } from "./session-utils-store.js";
 
 /** Bind live projection state to the same prepared or resident source-read boundary. */
@@ -132,7 +133,6 @@ export function createSessionRowMaterializer(owner: {
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
   materialize: (
     row: records.Row,
-    agentIds: Set<string>,
     read: typeof readResidentSessionRow,
     facts?: records.PreparedSessionRowDatabaseFacts,
   ) => boolean;
@@ -146,7 +146,6 @@ export function createSessionRowMaterializer(owner: {
     const started = performance.now();
     const cfg = owner.prepare();
     withAgentRosterFactsBatch(cfg, () => {
-      const configuredAgentIds = new Set(listAgentIds(cfg));
       const activitySummaryEnabledByAgent = new Map<string, boolean>();
       const readRow: typeof readResidentSessionRow = (params) =>
         readResidentSessionRow(params, activitySummaryEnabledByAgent);
@@ -174,7 +173,7 @@ export function createSessionRowMaterializer(owner: {
           owner.forgetBackfill(id);
           continue;
         }
-        if (row && owner.materialize(row, configuredAgentIds, readRow, databaseFacts)) {
+        if (row && owner.materialize(row, readRow, databaseFacts)) {
           row.pendingDatabaseFacts = undefined;
           row.retainedDatabaseFacts = databaseFacts;
           owner.dirty.delete(id);
@@ -260,11 +259,12 @@ export function readResidentSessionRow(
     cfg: records.Inputs["cfg"];
     modelCatalog: records.Inputs["modelCatalog"];
     configuredAgentIds: ReadonlySet<string>;
+    revisions: { profileRevision: number; subagentRevision: number };
     context: SessionListRowContext;
     subagentInputs: SessionListRowContext["subagentRuns"]["inputs"];
     gatewayContext: Parameters<typeof readSessionRowFacts>[0]["context"];
     placementFactsReader?: Parameters<typeof readSessionRowFacts>[0]["placementFactsReader"];
-    links: SessionChildLink[];
+    links: readonly SessionChildLink[];
     readSourceEntry: (key: string) => records.Row["storedEntry"];
     databaseFacts?: records.PreparedSessionRowDatabaseFacts;
     repositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
@@ -322,14 +322,7 @@ export function readResidentSessionRow(
     (row.membership.size !== members.length || members.some((id) => !row.membership.has(id)))
       ? new Set(members)
       : row.membership;
-  const next = materializeSessionRow(inputs);
-  const materialized =
-    membership === row.membership &&
-    row.materialized?.source.entry === row.entry &&
-    row.materialized.source.cfg === cfg &&
-    isDeepStrictEqual(row.materialized, next)
-      ? row.materialized
-      : next;
+  const materialized = materializeSessionRowIfChanged(row, inputs, membership, params.revisions);
   // Row preparation may populate the metadata used by automatic utility policy.
   let activitySummaryEnabled: boolean | undefined;
   if (row.entry.sessionId && !row.entry.initializationPending) {
@@ -615,37 +608,33 @@ function findSessionRowById(
 
 export function lookupSessionRow(
   query: records.Lookup,
-  owner: {
-    assertCurrent: () => void;
-    cfg: records.Inputs["cfg"];
-    rows: ReadonlyMap<string, records.Row>;
-    byKey: ReadonlyMap<string, ReadonlySet<string>>;
-    scope: ReturnType<typeof prepareSessionRowScopes> | undefined;
-    stores: ReadonlyMap<string, records.SessionRowStore>;
-  },
+  cfg: records.Inputs["cfg"],
+  rows: ReadonlyMap<string, records.Row>,
+  byKey: ReadonlyMap<string, ReadonlySet<string>>,
+  scope: ReturnType<typeof prepareSessionRowScopes> | undefined,
+  stores: ReadonlyMap<string, records.SessionRowStore>,
+  assertCurrent: () => void,
 ) {
   const { agentId } = query;
   const paths = query.storePath
-    ? (owner.scope?.physicalPaths(query.storePath, agentId) ?? [query.storePath])
+    ? (scope?.physicalPaths(query.storePath, agentId) ?? [query.storePath])
     : undefined;
   let key = query.key;
   do {
-    const candidates = owner.byKey.get(records.logicalSessionRowIdentity(agentId, key));
+    const candidates = byKey.get(records.logicalSessionRowIdentity(agentId, key));
     if (candidates?.size === 1) {
-      const row = owner.rows.get(candidates.values().next().value!);
+      const row = rows.get(candidates.values().next().value!);
       if (
         row &&
-        (paths
-          ? paths.includes(row.storeTarget.storePath)
-          : owner.stores.has(row.storeTarget.storePath))
+        (paths ? paths.includes(row.storeTarget.storePath) : stores.has(row.storeTarget.storePath))
       ) {
         return row;
       }
     } else if (candidates) {
       // Physical duplicates (including sentinels) retain the topology's store precedence.
-      for (const storePath of paths ?? owner.stores.keys()) {
+      for (const storePath of paths ?? stores.keys()) {
         for (const id of candidates) {
-          const row = owner.rows.get(id);
+          const row = rows.get(id);
           if (row?.storeTarget.storePath === storePath) {
             return row;
           }
@@ -656,14 +645,14 @@ export function lookupSessionRow(
       break;
     }
     key = resolveStoredSessionKeyForAgentStore({
-      cfg: owner.cfg,
+      cfg,
       sessionKey: key,
       agentId,
     });
     if (isIncognitoSessionKey(key)) {
       return readIncognitoSessionRow({
-        assertCurrent: owner.assertCurrent,
-        cfg: owner.cfg,
+        assertCurrent,
+        cfg,
         key,
         agentId,
         storePath: query.storePath,

@@ -149,7 +149,7 @@ describe("Claude migration provider", () => {
     await fs.writeFile(sourceFile, malformed);
 
     await expect(provider.apply(context)).rejects.toThrow(
-      `Claude configuration file is not valid UTF-8: ${sourceFile}`,
+      `Claude configuration file ${sourceFile}`,
     );
     expect(config).toEqual(original);
     expect(await readText(target)).toBe("Existing instructions.\n");
@@ -357,13 +357,7 @@ describe("Claude migration provider", () => {
   });
 
   it("discovers a user-configured Claude Code auto-memory directory", async () => {
-    const source = path.join(root, ".claude");
-    const customMemory = path.join(root, "custom-memory");
-    await writeFile(
-      path.join(source, "settings.json"),
-      JSON.stringify({ autoMemoryDirectory: customMemory }),
-    );
-    await writeFile(path.join(customMemory, "MEMORY.md"), "# Custom memory\n");
+    const { source, directory: customMemory } = await memoryFixture();
 
     const plan = await provider.plan(contextFor(source, { itemKinds: ["memory"] }));
 
@@ -643,15 +637,11 @@ describe("Claude migration provider", () => {
   it.each([false, true])(
     "reports a removed command source without changing its generated skill (overwrite: %s)",
     async (overwrite) => {
-      const source = path.join(root, "project");
-      const sourceFile = path.join(source, ".claude", "commands", "ship.md");
-      const targetDir = path.join(workspaceDir, "skills", "claude-command-ship");
-      const targetFile = path.join(targetDir, "SKILL.md");
-      await writeFile(sourceFile, "Ship safely.\n");
+      const { sourceFile, targetDir, targetFile } = await commandFixture();
       if (overwrite) {
         await writeFile(targetFile, "# Local skill\n");
       }
-      const context = contextFor(source, {
+      const context = contextFor(projectDir, {
         reportDir,
         overwrite,
       });

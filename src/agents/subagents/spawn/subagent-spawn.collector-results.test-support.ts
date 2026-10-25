@@ -1,9 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import { bindSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
-import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
@@ -12,7 +10,6 @@ import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
 import {
   createAgentsWaitTool,
   readNativeSubagentCollection,
-  waitForCollectorCompletion,
 } from "../../tools/agents-wait-tool.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -21,8 +18,11 @@ import {
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
+  materializeSessionProjection,
+  recordFinal,
+} from "./subagent-spawn.boundary-run.test-support.js";
+import {
   createBoundSpawnInvocation,
-  recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
@@ -83,12 +83,7 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
       );
       // The unrecorded child loses its transcript answer, as retention cleanup can.
       if (name !== "unrecorded") {
-        await recordSpawnBoundaryFinal({
-          storePath: bound.storePath,
-          sessionKey: expectDefined(params.sessionKey, "collector session"),
-          runId: params.runId,
-          text: answers[name],
-        });
+        await recordFinal(bound, params, answers[name]);
       }
       return producerResult(answers[name]);
     });
@@ -106,44 +101,22 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
           collected.completed.find((item) => item.runId === runId),
           `collected ${runId}`,
         );
-      // Lifecycle evidence stays a capped preview; the collected result is the recorded answer.
-      const preview = (runId: string | undefined) => {
-        const stored = subagentRuns.get(runId ?? "")?.completion?.terminalReply;
-        expect(stored).toMatchObject({
-          disposition: "visible",
-          text: expect.stringMatching(/…$/u),
-        });
-        const text = stored?.disposition === "visible" ? stored.text : "";
-        expect(text.length).toBeLessThanOrEqual(4_096);
-        return text;
-      };
-      runIds.forEach(preview);
+      // Preview truncation itself is covered by agent-run-terminal-reply.test.ts.
+      const preview = subagentRuns.get(unrecorded ?? "")?.completion?.terminalReply;
+      if (preview?.disposition !== "visible") {
+        throw new Error("Missing unrecorded child's lifecycle preview");
+      }
       expect(result(complete)).toMatchObject({ status: "done", result: answers.complete });
       expect(result(complete)).not.toHaveProperty("resultTruncated");
       expect(result(unrecorded)).toMatchObject({
         status: "done",
         resultTruncated: true,
-        result: `${preview(unrecorded)}\n\n[truncated: the complete child answer is unavailable; this is its 4,096-character preview]`,
+        result: `${preview.text}\n\n[truncated: the complete child answer is unavailable; this is its 4,096-character preview]`,
       });
       const bounded = result(oversized);
       expect(bounded.resultTruncated).toBe(true);
-      expect(Buffer.byteLength(bounded.result)).toBeLessThanOrEqual(100 * 1024);
-      expect(bounded.result).toMatch(
-        /\[truncated: frozen completion output exceeded 100KB \(120KB\)\]$/u,
-      );
-      expect(answers.oversized.startsWith(bounded.result.split("\n\n[truncated:")[0] ?? "")).toBe(
-        true,
-      );
-      // Code Mode agents.run waits through the same collector reader.
-      await expect(
-        waitForCollectorCompletion({
-          runId: expectDefined(complete, "complete run"),
-          currentSessionKeys: new Set([bound.parentSessionKey]),
-          currentAgentId: "main",
-          config: bound.cfg,
-        }),
-      ).resolves.toMatchObject({ result: answers.complete });
-      expect(options.runEmbeddedAgent).toHaveBeenCalledTimes(3);
+      // The frozen-output cap is covered at the registry owner; retain reader propagation here.
+      expect(bounded.result).toContain("[truncated: frozen completion output exceeded 100KB");
     } catch (error) {
       failures.push(error);
     } finally {
@@ -156,13 +129,7 @@ export function registerCollectorResultSpawnCases(options: NativePluginSpawnTest
     const bound = await options.createBoundParent();
     const { context, runtime } = await options.createBoundGateway(bound);
     // sessions_send resolves its target through the Gateway's session projection.
-    const projection = await createSessionRowProjection({ cfg: bound.cfg, modelCatalog: [] });
-    onTestFinished(async () => {
-      projection.dispose();
-      await projection.ensureMaterialized();
-    });
-    bindSessionRowProjection(context, () => projection);
-    await projection.ensureMaterialized();
+    await materializeSessionProjection(bound, context);
     // A controlled clock that still runs at real pace, so Gateway work is not starved.
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout"],

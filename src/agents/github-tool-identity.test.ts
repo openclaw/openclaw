@@ -168,14 +168,11 @@ describe("GitHub tool identity", () => {
         login: isAgent ? "agent-user" : "system-user",
       });
     });
-    run.mockImplementation(async (argv: string[], options: { env?: NodeJS.ProcessEnv }) => {
+    run.mockImplementation(async (argv: string[]) => {
       if (argv[0] !== "git") {
         throw new Error("Managed status must not consult gh");
       }
-      const isAgent = options.env?.GH_CONFIG_DIR === agentProfileDir;
-      return commandResult(
-        `user.name\n${isAgent ? "Agent User" : "System User"}\0user.email\n${isAgent ? "agent" : "system"}@example.test\0`,
-      );
+      return commandResult();
     });
     const config = {
       tools: { github: { profileId: systemProfileId, kind: "oauth" as const } },

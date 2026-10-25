@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import * as processExec from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import * as databaseContexts from "./update-command-database-context.js";
 import { inspectGitDryRunTargetSchemaVersions } from "./update-command-git.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
@@ -96,14 +97,12 @@ it("recovers an incomplete remote advertisement without changing cached refs", a
       if (attempts === 1) {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         failed.resolve();
-        return Promise.resolve({
-          stdout: "",
-          stderr: "fatal: transfer closed with 187 bytes remaining to read",
-          termination: "exit",
-          code: 128,
-          signal: null,
-          killed: false,
-        });
+        return Promise.resolve(
+          createCommandResult({
+            code: 128,
+            stderr: "fatal: transfer closed with 187 bytes remaining to read",
+          }),
+        );
       }
       vi.useRealTimers();
     }

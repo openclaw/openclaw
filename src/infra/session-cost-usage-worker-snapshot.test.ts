@@ -9,6 +9,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
   createUsageCheckpoint,
+  createUsageRollupEntry,
   createUsageTranscriptEntry,
 } from "./session-cost-usage-fixtures.test-support.js";
 import { partitionUsageCostRollup } from "./session-cost-usage-partitions.js";
@@ -16,7 +17,6 @@ import {
   decodeUsageCostRollupEnvelope,
   encodeUsageCostRollup,
   USAGE_COST_ROLLUP_SCOPE,
-  USAGE_COST_ROLLUP_VERSION,
   type UsageCostRollupEntry,
 } from "./session-cost-usage-rollup-codec.js";
 import {
@@ -92,8 +92,7 @@ function reportEntry(file: UsageCostTranscriptFile, tokens: number): UsageCostRo
       totalCost: tokens / 10,
     },
   });
-  return {
-    version: USAGE_COST_ROLLUP_VERSION,
+  return createUsageRollupEntry(rollup, {
     pricingFingerprint,
     checkpoint: {
       ...createUsageCheckpoint(file.size, file.mtimeMs, file.inode ?? 0),
@@ -102,8 +101,14 @@ function reportEntry(file: UsageCostTranscriptFile, tokens: number): UsageCostRo
     scannedAt: timestamp,
     parsedRecords: 1,
     countedRecords: 1,
-    rollup,
-  };
+  });
+}
+
+function borrowDatabase(db: DatabaseSync) {
+  fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
+    found: true,
+    value: read({ db }),
+  }));
 }
 
 function execute(
@@ -158,10 +163,7 @@ it.for([
     ];
     fixture.selectedFiles.mockResolvedValue(requested);
     const db = cacheDatabase();
-    fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
-      found: true,
-      value: read({ db }),
-    }));
+    borrowDatabase(db);
     let now = 0;
     const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
     const written: string[] = [];
@@ -192,7 +194,6 @@ it.for([
           return { input: output, consumed() {} };
         },
       );
-      clock.mockRestore();
       expect(batches).toEqual(scanMs ? [1] : [2]);
       expect(written).toEqual((scanMs ? files.slice(0, 1) : files).map((file) => file.filePath));
       expect(result).toEqual({
@@ -288,10 +289,7 @@ it("ends the cache snapshot before projection awaits and preserves a concurrent 
   };
   write(db, 3);
   // Borrow one native connection so an independent job can use it while projection waits.
-  fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
-    found: true,
-    value: read({ db }),
-  }));
+  borrowDatabase(db);
   const projecting = createDeferredCore();
   const resume = createDeferredCore();
   fixture.inventory.mockImplementationOnce(async () => {

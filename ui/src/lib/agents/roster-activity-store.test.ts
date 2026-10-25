@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
@@ -57,12 +58,13 @@ function createStoreForRequest(request: ReturnType<typeof createGatewayRequestMo
     }),
   );
   const sessions = createTestSessionCapability(source.gateway);
-  const context = createContext(source.gateway, sessions, {
-    agents: [{ id: "main" }, { id: "ember" }],
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-  });
+  const context = createContext(
+    source.gateway,
+    sessions,
+    makeBootRoster({
+      agents: [{ id: "main" }, { id: "ember" }],
+    }),
+  );
   return {
     store: rosterActivityStore(context),
     context,

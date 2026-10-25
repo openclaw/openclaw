@@ -77,10 +77,14 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
       expect(get(borrowed, "SELECT 7::int AS value")).toEqual({ value: 7 });
       close(borrowed);
       vi.advanceTimersByTime(3 * 60_000);
-      const backend = await admin.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [
-        firstPid,
-      ]);
-      expect(backend.rows).toEqual([]);
+      // Pool expiry ends the client asynchronously after closing its port.
+      await expect
+        .poll(
+          async () =>
+            (await admin.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [firstPid])).rows,
+          { timeout: 10_000, interval: 50 },
+        )
+        .toEqual([]);
       const reopened = open();
       expect(pid(reopened)).not.toBe(firstPid);
     } finally {

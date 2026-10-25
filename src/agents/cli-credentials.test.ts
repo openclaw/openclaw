@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockClaudeManagedSettings } from "../../test/helpers/claude-managed-settings.js";
 
 const execSyncMock = vi.hoisted(() => vi.fn());
 
@@ -301,6 +302,7 @@ describe("cli credentials", () => {
 
   it("resolves a native login owner only for backends that own one", async () => {
     // A readable Claude login must not leak into other backends' history ownership.
+    mockClaudeManagedSettings(path.join(tempHome, "managed"));
     vi.stubEnv("HOME", tempHome);
     writeJson(path.join(tempHome, ".claude", ".credentials.json"), {
       claudeAiOauth: {

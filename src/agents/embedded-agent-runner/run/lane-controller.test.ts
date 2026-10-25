@@ -29,6 +29,7 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { detachActiveEmbeddedRun, attachActiveEmbeddedRun } from "../runs.js";
 import { createEmbeddedRunHandle } from "../runs.test-support.js";
+import { outsideExecutionCapacity } from "./execution-capacity.js";
 import { createLaneControllerFixture } from "./lane-controller.test-support.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS as GRACE_MS } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -118,6 +119,63 @@ async function tickAt(time: number, ...states: ReturnType<typeof create>[]) {
 }
 
 describe("controller-owned execution guard", () => {
+  it("keeps one admitted attempt while projection recovery releases global capacity", async () => {
+    setCommandLaneConcurrency(globalLane, 1);
+    const first = create("projection-wait");
+    const second = create("unrelated-turn", {
+      sessionKey: "agent:main:unrelated-turn",
+      sessionId: "unrelated-turn",
+    });
+    const recovering = createDeferred();
+    const recovered = createDeferred();
+    const readmissionQueued = createDeferred();
+    const execute = vi.fn(async () => {
+      const operation = first.getParams().replyOperation!;
+      operation.markWaitingForDeferredMaintenance();
+      try {
+        await outsideExecutionCapacity(async () => {
+          recovering.resolve();
+          await recovered.promise;
+        });
+      } finally {
+        operation.markDeferredMaintenanceWaitEnded();
+      }
+      expect(first.getParams().replyOperation).toBe(operation);
+      expect(getCommandLaneSnapshot(globalLane).activeCount).toBe(1);
+      return await result();
+    });
+    const run = first.controller.enqueueSession(() =>
+      first.controller.enqueueGlobal(execute, {
+        onQueued: readmissionQueued.resolve,
+      }),
+    );
+    const sibling = pauseGlobal(second);
+    let siblingRun: Promise<unknown> | undefined;
+    try {
+      await recovering.promise;
+      expect(getCommandLaneSnapshot(globalLane).activeCount).toBe(0);
+      await tickAt(3_600_000, first);
+      expect(first.controller.abortSignal.aborted).toBe(false);
+      siblingRun = second.controller.enqueueSession(sibling.task);
+      await sibling.entered;
+      recovered.resolve();
+      await readmissionQueued.promise;
+      expect(first.getParams().replyOperation!.watchdog.snapshot().waits).toContainEqual({
+        kind: "global_capacity",
+        deadlineAtMs: undefined,
+      });
+      await tickAt(7_200_000, first);
+      expect(first.controller.abortSignal.aborted).toBe(false);
+      sibling.raw.resolve();
+      await expect(run).resolves.toEqual({ meta: { durationMs: 1 } });
+      expect(execute).toHaveBeenCalledOnce();
+    } finally {
+      recovered.resolve();
+      sibling.raw.resolve();
+      await Promise.allSettled([run, ...(siblingRun ? [siblingRun] : [])]);
+    }
+  });
+
   it.each([
     ["same physical session", false, false, false, true],
     ["different session ID", true, false, false, false],

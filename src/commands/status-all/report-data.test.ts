@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -125,25 +126,15 @@ describe("statusAllCommand report data", () => {
       );
       mocks.buildStatusAllOverviewRows.mockImplementationOnce(rows.buildStatusAllOverviewRows);
       const failed = phase === "failed";
-      const completed: UpdateRunRecord = {
-        runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
-        createdAtMs: 1,
-        updatedAtMs: 2,
-        trigger: "cli",
-        phase: "finished",
-        status: failed ? "failed" : "succeeded",
-        reason: failed ? "post-update-failed" : null,
-        origin: {},
-        target: {},
-        before: { version: "2026.9.1" },
-        after: { version: "2026.9.2" },
-        steps: [],
-        verification: {},
-        repair: [],
-        confirmedAtMs: null,
-        finishedAtMs: 2,
-        downtimeMs: null,
-      };
+      const completed: UpdateRunRecord = createUpdateRunRecordFixture(
+        "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
+        {
+          status: failed ? "failed" : "succeeded",
+          reason: failed ? "post-update-failed" : null,
+          before: { version: "2026.9.1" },
+          after: { version: "2026.9.2" },
+        },
+      );
       if (phase) {
         mocks.history.mockResolvedValue({
           lastRun: completed,

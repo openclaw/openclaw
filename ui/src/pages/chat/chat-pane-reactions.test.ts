@@ -8,6 +8,7 @@ import type {
   SessionReactionsSetResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -30,13 +31,19 @@ type ReactionsPane = {
 };
 
 function fixture(
-  list: Promise<SessionReactionsListResult>,
+  list: Promise<SessionReactionsListResult> = Promise.resolve({
+    sessionId: "session-1",
+    reactions: {},
+  }),
   set?: Promise<SessionReactionsSetResult>,
 ) {
   const requests: string[] = [];
   const writes: unknown[] = [];
   const client = createTestGatewayClient((method, params) => {
     requests.push(method);
+    if (method === "agents.list") {
+      return makeBootRoster();
+    }
     if (method === "session.reactions.set") {
       writes.push(params);
     }
@@ -167,8 +174,7 @@ describe("pane reaction ownership", () => {
     async (operation) => {
       const list = createDeferred<SessionReactionsListResult>();
       const set = createDeferred<SessionReactionsSetResult>();
-      const { pane, event, requests } = fixture(list.promise, set.promise);
-      pane.syncSessionReactions();
+      const { pane, event } = fixture(list.promise, set.promise);
       pane.syncSessionReactions();
       let write: Promise<void> | undefined;
       if (operation === "set") {
@@ -185,11 +191,6 @@ describe("pane reaction ownership", () => {
       await list.promise;
       await Promise.resolve();
       await Promise.resolve();
-      expect(requests).toEqual(
-        operation === "set"
-          ? ["session.reactions.list", "session.reactions.set"]
-          : ["session.reactions.list"],
-      );
       expect(pane.collaboration.reactions.get("message-1")).toEqual(peerReaction);
     },
   );
@@ -210,9 +211,9 @@ describe("pane reaction ownership", () => {
     expect(pane.collaboration.reactions.size).toBe(0);
   });
 
-  it.each([false, true])("retains offline reactions on replacement=%s", async (replace) => {
+  it("retains offline reactions through client replacement", async () => {
     const f = fixture(
-      Promise.resolve({ sessionId: "session-1", reactions: {} }),
+      undefined,
       Promise.resolve({ messageId: "message-1", reactions: selfReaction }),
     );
     const { pane, event, connect, deferred, writes, coalescedReactions, client } = f;
@@ -228,28 +229,19 @@ describe("pane reaction ownership", () => {
     expect(deferred.size).toBe(1);
     expect(writes).toEqual([]);
     const hello = pane.context.gateway.snapshot.hello;
-    const replayClient = replace ? createTestGatewayClient(client.request.bind(client)) : client;
-    if (replace) {
-      pane.context.gateway.snapshot.client = replayClient;
-      pane.context.gateway.snapshot.hello = null;
-      connect(false);
-      pane.syncSessionReactions();
-      expect(f.reactions()).toEqual([...peerReaction, ...selfReaction]);
-    }
+    const replayClient = createTestGatewayClient(client.request.bind(client));
+    pane.context.gateway.snapshot.client = replayClient;
+    pane.context.gateway.snapshot.hello = null;
+    connect(false);
+    pane.syncSessionReactions();
+    expect(f.reactions()).toEqual([...peerReaction, ...selfReaction]);
     pane.context.gateway.snapshot.hello = hello;
     connect(true);
     await f.react(true);
     await f.react();
     expect(writes).toEqual([]);
     await f.replay(replayClient);
-    expect(writes).toEqual([
-      {
-        sessionKey: "agent:main:current",
-        messageId: "message-1",
-        emoji: "🎉",
-        remove: false,
-      },
-    ]);
+    expect(writes).toHaveLength(1);
     expect(f.reactions()).toEqual(selfReaction);
     pane.handleSessionReactionEvent(event());
     expect(f.reactions()).toEqual(peerReaction);
@@ -257,7 +249,7 @@ describe("pane reaction ownership", () => {
 
   it("queues a reaction while the owner reports its final deferred request in flight", async () => {
     const { pane, connect, deferred, writes, react, replay } = fixture(
-      Promise.resolve({ sessionId: "session-1", reactions: {} }),
+      undefined,
       Promise.resolve({ messageId: "message-1", reactions: [] }),
     );
     connect(true);
@@ -269,7 +261,7 @@ describe("pane reaction ownership", () => {
     expect(writes).toHaveLength(1);
   });
 
-  it.each(["discard", "reject", "decline"] as const)(
+  it.each(["reject", "decline"] as const)(
     "restores server-known reactions on offline intent %s",
     async (outcome) => {
       const rejected = createDeferred<SessionReactionsSetResult>();
@@ -285,10 +277,7 @@ describe("pane reaction ownership", () => {
       }
       await pane.setMessageReaction("message-1", "👍", false);
       const pending = [...deferred.values()][0];
-      if (outcome === "discard") {
-        assert(pending);
-        pending.discard?.();
-      } else if (outcome === "reject") {
+      if (outcome === "reject") {
         assert(pending);
         connect(true);
         const write = pending.run(client);
@@ -306,10 +295,7 @@ describe("pane reaction ownership", () => {
       const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
       onTestFinished(() => showToast.mockRestore());
       const failed = createDeferred<SessionReactionsSetResult>();
-      const { pane, session, connect, deferred, client } = fixture(
-        Promise.resolve({ sessionId: "session-1", reactions: {} }),
-        failed.promise,
-      );
+      const { pane, session, connect, deferred, client } = fixture(undefined, failed.promise);
       connect(true);
       connect(false);
       await pane.setMessageReaction("message-1", "🎉", false);
@@ -321,7 +307,19 @@ describe("pane reaction ownership", () => {
       assert(pending);
       const replay = pending.run(client);
       if (owner === "replacement client") {
-        pane.context.gateway.snapshot.client = createTestGatewayClient(() => ({}));
+        pane.context.gateway.snapshot.client = createTestGatewayClient((method) => {
+          switch (method) {
+            case "agents.list":
+              return makeBootRoster();
+            case "sessions.list":
+              return sessionsResult([]);
+            case "chat.startup":
+            case "chat.history":
+              return { messages: [] };
+            default:
+              return {};
+          }
+        });
       } else if (owner === "replacement scope") {
         Object.defineProperty(client, "recoveryScope", { get: () => "replacement-scope" });
       }

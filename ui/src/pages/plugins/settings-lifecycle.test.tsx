@@ -11,6 +11,7 @@ import {
   createDiscoveryDetail,
   createInspectResult,
   createPlugin,
+  createPluginSettingsDetailProps,
   createResult,
 } from "./plugins-page.test-support.ts";
 import { renderPluginSettingsDetail, type DetailProps } from "./settings-view.tsx";
@@ -26,47 +27,7 @@ function setting(container: ParentNode, key: string) {
 }
 
 function mount(overrides: Partial<DetailProps>, setup?: (props: DetailProps) => void) {
-  const props: DetailProps = {
-    connected: true,
-    loading: false,
-    result: createResult(),
-    error: null,
-    busy: {},
-    messages: {},
-    iconUrls: {},
-    canMutate: true,
-    mutationBlockedReason: null,
-    configBusy: false,
-    configSchemaLoading: false,
-    configRead: undefined,
-    configSchemaRead: undefined,
-    configError: null,
-    canEditConfig: true,
-    configValue: {},
-    configHints: {},
-    configUnsupportedPaths: [],
-    pluginId: "workboard",
-    inspection: null,
-    inspectionRead: { receipt: () => null, value: () => null },
-    configSchema: null,
-    hostControlsSchema: null,
-    backHref: "/settings/plugins",
-    backLabel: "Plugins",
-    tab: "readme",
-    onBack: vi.fn(),
-    onRetryInspection: vi.fn(),
-    onTabChange: vi.fn(),
-    onIconError: vi.fn(),
-    onSetEnabled: vi.fn(),
-    onUninstall: vi.fn(),
-    onConfigPatch: vi.fn(),
-    onConfigRemove: vi.fn(),
-    onConfigReload: vi.fn(),
-    onConfigReadRetry: vi.fn(),
-    onConfigWriteRetry: vi.fn(),
-    onRefresh: vi.fn(),
-    ...overrides,
-  };
+  const props: DetailProps = createPluginSettingsDetailProps(createResult(), overrides);
   const { container } = mountSolid(() => {
     setup?.(props);
     return renderPluginSettingsDetail(props);

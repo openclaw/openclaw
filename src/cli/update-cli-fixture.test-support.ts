@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import { gatewayHealthResponse } from "../gateway/health-response.test-support.js";
+import { createStatfsFixture } from "../infra/disk-space.test-support.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -433,20 +434,7 @@ export function createUpdateCliFixture() {
       return { updatedRoot, updatedEntrypoint };
     },
     setupUpdatedRootRefresh,
-    statfsFixture: (params: {
-      bavail: number;
-      bsize?: number;
-      blocks?: number;
-    }): ReturnType<typeof fsSync.statfsSync> => ({
-      type: 0,
-      bsize: params.bsize ?? 1024,
-      blocks: params.blocks ?? 2_000_000,
-      bfree: params.bavail,
-      bavail: params.bavail,
-      files: 0,
-      frsize: params.bsize ?? 1024,
-      ffree: 0,
-    }),
+    statfsFixture: createStatfsFixture,
     tempDirs,
     tempDirsToCleanup,
     useNativeScheduledTaskControl: async () => {

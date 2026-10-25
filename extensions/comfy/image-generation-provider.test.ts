@@ -1,6 +1,7 @@
 import type { LookupAddress } from "node:dns";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { jsonResponse } from "openclaw/plugin-sdk/test-env";
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildComfyConfig,
@@ -446,36 +447,17 @@ describe("comfy image-generation provider", () => {
   });
 
   it("bounds oversized local workflow submit responses and releases the request", async () => {
-    const chunk = new Uint8Array(1024 * 1024);
-    const totalBytes = 32 * chunk.length;
-    let bytesPulled = 0;
-    let canceled = false;
+    const chunkSize = 1024 * 1024;
+    const totalBytes = 32 * chunkSize;
     const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            if (bytesPulled >= totalBytes) {
-              controller.close();
-              return;
-            }
-            bytesPulled += chunk.length;
-            controller.enqueue(chunk);
-          },
-          cancel() {
-            canceled = true;
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      ),
-      release,
-    });
+    const streamed = oversizedJsonResponse({ chunkCount: 32, chunkSize });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({ response: streamed.response, release });
 
     await expect(generateImage()).rejects.toThrow(
       "Comfy workflow submit failed: JSON response exceeds 16777216 bytes",
     );
-    expect(canceled).toBe(true);
-    expect(bytesPulled).toBeLessThan(totalBytes);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(streamed.getReadCount() * chunkSize).toBeLessThan(totalBytes);
     expect(release).toHaveBeenCalledTimes(1);
   });
 
