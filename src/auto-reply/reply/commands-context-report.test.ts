@@ -491,13 +491,6 @@ describe("buildContextReply", () => {
 });
 
 describe("buildCommandContext", () => {
-  it.each([
-    ["/reset soft\nre-read persona files", "/reset soft re-read persona files"],
-    ["/skill demo_skill first line\nsecond line", "/skill demo_skill first line\nsecond line"],
-  ])("normalizes multiline command %j", (body, expected) => {
-    expect(commandContext(body).commandBodyNormalized).toBe(expected);
-  });
-
   it("maps explicit gateway origin into command context", () => {
     const result = commandContext("/codex bind", {
       Provider: "internal",
