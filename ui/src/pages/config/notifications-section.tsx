@@ -126,9 +126,7 @@ function NativeNotificationSection(props: {
 }) {
   const status = () => nativeNotificationsStatus(props.native.permission);
   const testAnnouncement = () =>
-    props.native.test?.state === "sent"
-      ? (props.native.test.message ?? t("configView.notifications.testQueued"))
-      : "";
+    props.native.test?.state === "sent" ? t("configView.notifications.testQueued") : "";
   const [sending, setSending] = createOptimistic(false);
   const testPending = () => sending() || props.native.test?.state === "pending";
   const presentTest = action(function* (pending: Promise<unknown> | void, retired: Promise<void>) {
