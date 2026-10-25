@@ -807,7 +807,9 @@ describe("tsdown config", () => {
       fs.renameSync(outDir, path.join(installed, "dist"));
       const require = createRequire(import.meta.url);
       if (worker) {
-        const files = bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName));
+        const files = bundles
+          .flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))
+          .filter((file) => !file.startsWith(".source-module-urls/"));
         expect(files).toContain(`${entry}.mjs`);
         expect(files.length).toBeGreaterThan(1);
         expect(
@@ -990,7 +992,11 @@ console.log("relocated session card renders with bundled fonts");
         });
         try {
           files.push(
-            ...bundles.flatMap((bundle) => bundle.chunks.map((chunk) => `dist/${chunk.fileName}`)),
+            ...bundles.flatMap((bundle) =>
+              bundle.chunks
+                .filter((chunk) => !chunk.fileName.startsWith(".source-module-urls/"))
+                .map((chunk) => `dist/${chunk.fileName}`),
+            ),
           );
         } finally {
           for (const bundle of bundles) {
@@ -1608,7 +1614,9 @@ console.log("relocated session card renders with bundled fonts");
     }
     for (const config of [receiverConfig, relayConfig, anchorConfig]) {
       expect(config?.alias).toBeUndefined();
-      expect(config?.plugins).toBeUndefined();
+      expect(config?.plugins).toEqual([
+        expect.objectContaining({ name: "openclaw:standalone-source-module-urls" }),
+      ]);
       expect(config?.outputOptions).toEqual({ codeSplitting: false });
     }
 

@@ -37,7 +37,7 @@ import { requestChatSend } from "./chat-send-request.ts";
 import { startupAdmissionResponse } from "./chat-startup-response.test-support.ts";
 import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {

@@ -8,6 +8,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
+import { chatHistoryRequests } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
@@ -121,6 +122,40 @@ describe("stored chat snapshot hydration", () => {
     );
     await writer.flush();
   }
+
+  it("holds ready cached rows until connect dispatch and adopts them once", async () => {
+    const connect = createDeferred<boolean>();
+    const client = createGatewayBrowserClientFixture();
+    Object.defineProperty(client, "connectSent", { get: () => connect.promise });
+    const pane = createMountedPane("agent:main:connecting", new Map(), client);
+    pane.context.gateway.snapshot.phase = "connecting";
+    const snapshot = {
+      messages: [nativeHistoryMessage(1, "saved transcript")],
+      sessionId: "saved-session",
+      pagination: { hasMore: false as const },
+      deltaCursor: "saved-cursor",
+    };
+    pane.sessionSnapshotStore = { read: async () => snapshot } as never;
+    try {
+      const state = startPane(pane);
+      const hydration = expectDefined(
+        chatHistoryRequests(state).initialSnapshotHydration,
+        "pending snapshot hydration",
+      );
+      await Promise.resolve();
+      expect(state.chatMessages).toEqual([]);
+      expect(hydration.adoptReadySnapshot).toBeTypeOf("function");
+      connect.resolve(true);
+      // The subscription reads its cursor synchronously after this adoption.
+      hydration.adoptReadySnapshot?.();
+      expect(state.chatMessages).toEqual(snapshot.messages);
+      expect(hydration.adoptReadySnapshot).toBeUndefined();
+      await hydration.promise;
+      expect(state.chatMessages).toEqual(snapshot.messages);
+    } finally {
+      pane.disconnectedCallback();
+    }
+  });
 
   it.each(
     ["memory", "stored"].flatMap((cacheMode) =>

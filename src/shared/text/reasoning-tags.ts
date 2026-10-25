@@ -2,7 +2,7 @@ import {
   REASONING_TAG_NAMES,
   scanReasoningTags,
   stripReasoningTagsFromMarkdown,
-} from "../../../packages/markdown-core/src/reasoning-tags.js";
+} from "../../../packages/markdown-core/src/reasoning-tags-batch.js";
 import { escapeRegExp } from "../regexp.js";
 // Reasoning tag helpers find and remove model reasoning tag blocks from text.
 import { FINAL_TAG_NAME, findFinalTagMatches, stripFinalTags } from "./final-tags.js";

@@ -2,6 +2,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import type {
   ProviderAuthProfile,
   ProviderAuthResult,
@@ -315,13 +316,7 @@ beforeEach(() => {
   mocks.isRemoteEnvironment.mockReturnValue(false);
   mocks.isCliProvider.mockReturnValue(false);
   mocks.resolvePluginSetupProviderCore.mockReturnValue(undefined);
-  mocks.resolvePluginSetupRegistry.mockReturnValue({
-    providers: [],
-    cliBackends: [],
-    configMigrations: [],
-    autoEnableProbes: [],
-    diagnostics: [],
-  });
+  mocks.resolvePluginSetupRegistry.mockReturnValue(createEmptyPluginSetupRegistry());
   mocks.loadValidConfigSnapshotOrThrow.mockImplementation(async () => ({
     sourceConfig: structuredClone(currentConfig),
     runtimeConfig: structuredClone(currentConfig),

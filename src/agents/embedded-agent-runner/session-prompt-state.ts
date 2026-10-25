@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
@@ -409,10 +410,12 @@ export function recordToolResultPromptProjection(
     cacheTtl,
     content: cacheTtl
       ? message.content
-      : message.content.flatMap((block) =>
-          isRecord(block) && block.type === "text" && typeof block.text === "string"
-            ? [{ type: "text" as const, text: block.text }]
-            : [],
+      : freezeJsonSnapshot(
+          message.content.flatMap((block) =>
+            isRecord(block) && block.type === "text" && typeof block.text === "string"
+              ? [{ type: "text" as const, text: block.text }]
+              : [],
+          ),
         ),
   });
 }

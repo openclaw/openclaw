@@ -105,6 +105,9 @@ afterEach(async () => {
 it("targets the control delegation without consuming transcript context or cancelling the task", async () => {
   const { controller, socket, runAgentConsult, result } = pendingHarness({
     handleDelegationInput: (text, respond) => {
+      if (text === "cancel") {
+        return "control";
+      }
       if (text !== "status") {
         return "consult";
       }
@@ -114,6 +117,9 @@ it("targets the control delegation without consuming transcript context or cance
     },
   });
   delegate(controller, "task-A", "Original task");
+  expect(parseSent(socket)[0]).toMatchObject(
+    contextAppend(expect.stringContaining('Status: "I’ll check that request."')),
+  );
   controller.handleEvent({ kind: "transcript-done", role: "user", text: "history only" });
   const beforeControl = socket.sent.length;
   delegate(controller, "control-C", "status");
@@ -125,6 +131,9 @@ it("targets the control delegation without consuming transcript context or cance
   result.resolve({ text: "Original result" });
   await waitForAppend(socket, "task-A", "Original result");
   await nextEventLoopTurn();
+  delegate(controller, "late-cancel", "cancel");
+  expect(runAgentConsult).toHaveBeenCalledOnce();
+  expect(socket.sent).toHaveLength(3);
   delegate(controller, "task-B", "Another task");
   await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledTimes(2));
   expect(runAgentConsult.mock.calls[1]?.[0].prompt).toContain("history only");
@@ -249,20 +258,6 @@ it("bounds and chunks delegation output before sideband sends", async () => {
   expect(content.flat().every(({ text }) => Buffer.byteLength(text, "utf8") <= 500)).toBe(true);
 });
 
-it("does not start a late control after the active consultation settles", async () => {
-  const { controller, socket, runAgentConsult } = createDelegationHarness({
-    handleDelegationInput: (text) => (text === "cancel" ? "control" : "consult"),
-  });
-  delegate(controller, "finished-task", "first task");
-  await waitForAppend(socket, "finished-task", "Done");
-  delegate(controller, "late-cancel", "cancel");
-  expect(runAgentConsult).toHaveBeenCalledOnce();
-  expect(socket.sent).toHaveLength(2);
-  expect(parseSent(socket)[0]).toMatchObject(
-    contextAppend(expect.stringContaining('Status: "I’ll check that request."')),
-  );
-});
-
 it("consumes bounded transcript context once and in event order", async () => {
   const runAgentConsult = vi.fn<ConsultRunner>(async () => ({ text: "Done" }));
   const { controller, socket } = createDelegationHarness({ runAgentConsult });
@@ -373,51 +368,44 @@ it("drops queued work when steering fails", async () => {
   expect(appendFinal(runAgentConsult, 0, "late stale result")).toBe(false);
 });
 
-it("rejects a revoked completion before provider output", async () => {
-  const claimAppend = vi.fn(() => false);
-  const revokeRequesterFinal = vi.fn();
-  const runAgentConsult = vi.fn<ConsultRunner>().mockResolvedValue({ text: "stale result" });
-  const { controller, socket } = createDelegationHarness({
-    claimAppend,
-    revokeRequesterFinal,
-    runAgentConsult,
-  });
-
-  delegate(controller, "delegation-stale", "stale task");
-
-  await vi.waitFor(() => expect(claimAppend).toHaveBeenCalledOnce());
-  expect(revokeRequesterFinal).toHaveBeenCalledOnce();
-  expect(appendFinal(runAgentConsult, 0, "late stale result")).toBe(false);
-  expect(socket.sent).toEqual([]);
-});
-
-it("preserves successful completion for a plain consult runner", async () => {
+it.each([
+  ["success", "revoked"],
+  ["success", "plain"],
+  ["success", "unavailable"],
+  ["failure", "revoked"],
+  ["failure", "unavailable"],
+] as const)("settles %s with %s completion ownership", async (outcome, ownership) => {
+  const claim = vi.fn(() => false),
+    revoke = vi.fn();
+  const runner = vi.fn<ConsultRunner>();
+  const failed = outcome === "failure",
+    plain = ownership === "plain";
+  if (failed) {
+    runner.mockRejectedValue(new Error("startup failed"));
+  } else {
+    runner.mockResolvedValue({ text: "result" });
+  }
+  const runAgentConsult =
+    failed || ownership === "unavailable"
+      ? Object.assign(runner, { adoptCompletionClaims: vi.fn() })
+      : runner;
   const { controller, onFatalError, socket } = createDelegationHarness({
-    claimAppend: null,
-    claimFailureAppend: null,
-    runAgentConsult: vi.fn(async () => ({ text: "plain result" })),
-  });
-
-  delegate(controller, "delegation-plain", "plain task");
-
-  await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
-  expect(onFatalError).not.toHaveBeenCalled();
-});
-
-it("fails visibly when completion ownership is unavailable", async () => {
-  const runAgentConsult = Object.assign(
-    vi.fn(async () => ({ text: "unowned result" })),
-    { adoptCompletionClaims: vi.fn() },
-  );
-  const { controller, onFatalError, socket } = createDelegationHarness({
-    claimAppend: null,
     runAgentConsult,
+    claimAppend: failed || ownership === "revoked" ? claim : null,
+    ...(failed ? { claimFailureAppend: ownership === "revoked" ? () => false : null } : {}),
+    ...(plain ? { claimFailureAppend: null } : {}),
+    ...(!failed && ownership === "revoked" ? { revokeRequesterFinal: revoke } : {}),
   });
-
-  delegate(controller, "delegation-unowned", "unowned task");
-
-  await vi.waitFor(() => expect(onFatalError).toHaveBeenCalledOnce());
-  expect(socket.sent).toEqual([]);
+  delegate(controller, "settlement", "do work");
+  await vi.waitFor(() => expect(runner).toHaveBeenCalledOnce());
+  await nextEventLoopTurn();
+  expect(socket.sent).toHaveLength(plain ? 1 : 0);
+  expect(onFatalError).toHaveBeenCalledTimes(ownership === "unavailable" ? 1 : 0);
+  if (!failed && ownership === "revoked") {
+    expect(claim).toHaveBeenCalledOnce();
+    expect(revoke).toHaveBeenCalledOnce();
+    expect(appendFinal(runner, 0, "late stale result")).toBe(false);
+  }
 });
 
 it("drops pending receipts and late results when detached before settlement", async () => {
@@ -458,32 +446,6 @@ it("returns a speakable failure for a delegated Unicode failure", async () => {
   expect(logger.warn).toHaveBeenCalledWith(
     `OpenAI GPT-Live delegation consult failed: ${expectedReason}`,
   );
-});
-
-it.each([
-  { state: "revoked", claimFailureAppend: () => false },
-  { state: "unavailable", claimFailureAppend: null },
-])("does not append a startup failure when ownership is $state", async ({ claimFailureAppend }) => {
-  const runAgentConsult = Object.assign(
-    vi.fn<ConsultRunner>().mockRejectedValue(new Error("startup failed")),
-    { adoptCompletionClaims: vi.fn() },
-  );
-  const { controller, onFatalError, socket } = createDelegationHarness({
-    claimAppend: () => false,
-    claimFailureAppend,
-    runAgentConsult,
-  });
-
-  delegate(controller, "delegation-startup-rejected", "do work");
-
-  await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
-  await nextEventLoopTurn();
-  expect(socket.sent).toEqual([]);
-  if (claimFailureAppend === null) {
-    expect(onFatalError).toHaveBeenCalledOnce();
-  } else {
-    expect(onFatalError).not.toHaveBeenCalled();
-  }
 });
 
 it("redacts the opaque model from sideband errors before logging or callbacks", () => {

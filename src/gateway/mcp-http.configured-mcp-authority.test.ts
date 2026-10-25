@@ -1,5 +1,4 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import fs from "node:fs/promises";
 import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -27,6 +26,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
@@ -481,7 +481,10 @@ it.for([
       content: "---\nname: sandbox-probe\ndescription: Probe\n---\n\n1. Run it.\n",
     };
     const snapshot = async () =>
-      (await fs.readdir(state.workspaceDir, { recursive: true })).map(String).toSorted();
+      (await listDirectoryTreeStrict(state.workspaceDir))
+        .map((walkEntry) => walkEntry.relativePath)
+        .map(String)
+        .toSorted();
     const before = await snapshot();
     const name = "workshop-" + agentId;
     const humanDefinition = await workshopDefinition(
