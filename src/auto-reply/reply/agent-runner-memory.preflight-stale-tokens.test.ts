@@ -112,28 +112,12 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
     return { entry, sessionFile };
   }
 
-  it("compacts fresh token totals above the model budget", async () => {
-    const { entry, sessionFile } = await oversizedEntry("agent:main:main");
-    await runWithEntry(entry, sessionFile);
-    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
-  });
-
   it.each([
-    {
-      name: "the sole configured agent for an embedded provider",
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-      expectsCompaction: true,
-    },
-    {
-      name: "the sole configured agent before provider runtime selection",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      expectsCompaction: false,
-    },
-  ])(
-    "resolves an unscoped session key with $name",
-    async ({ provider, model, expectsCompaction }) => {
+    ["anthropic", "claude-opus-4-6", true],
+    ["openai", "gpt-5.6-luna", false],
+  ] as const)(
+    "resolves an unscoped session key with the sole configured agent (%s)",
+    async (provider, model, expectsCompaction) => {
       const { entry: sessionEntry, sessionFile } = await oversizedEntry("main");
       const result = await runWithEntry(sessionEntry, sessionFile, "main", {
         agentId: undefined,

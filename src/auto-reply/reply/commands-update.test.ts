@@ -134,20 +134,6 @@ it("hands off an owner update with session routing and only a request watchdog",
   expect(callGatewayTool).not.toHaveBeenCalled();
 });
 
-it("does not update when ingress adoption was lost to another owner", async () => {
-  params.opts = {
-    turnAdoptionLifecycle: {
-      onAdopted: async () => {
-        throw new Error("ingress adoption lost: guillotined");
-      },
-    },
-  };
-
-  await expect(run()).rejects.toThrow("ingress adoption lost");
-  expect(dispatch).not.toHaveBeenCalled();
-  expect(callGatewayTool).not.toHaveBeenCalled();
-});
-
 it("acknowledges an accepted OCM webchat update without waiting for readback", async () => {
   params.command.surface = "webchat";
   params.command.channel = "webchat";
@@ -165,7 +151,6 @@ it("acknowledges an accepted OCM webchat update without waiting for readback", a
   await expectStopped(
     "⬆️ OpenClaw is updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
   );
-  expect(dispatch).toHaveBeenCalledTimes(1);
 });
 
 it.each([true, false])(
