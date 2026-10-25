@@ -50,37 +50,44 @@ const expectError = (frame: unknown, text: string) =>
   expect(frame).toMatchObject({ type: "error", message: expect.stringContaining(text) });
 const ownershipError = "Another debugger is already attached";
 
-async function fixture(initiallyAttached = false) {
-  const h = await loadConfiguredBackground(
-    "all",
-    [{ id: tabId, url: "https://example.com/live", incognito: false }],
-    { deferSocketClose: true },
-  );
-  const attached = new Map<number, { runtimeEnabled: boolean }>();
-  h.debuggerAttach.mockImplementation(async ({ tabId: id }) => {
-    if (attached.has(id)) {
-      throw new Error(`Another debugger is already attached to the tab with id: ${id}.`);
+type Background = Awaited<ReturnType<typeof loadBackground>>;
+function nativeDebugger(h: Background, targetIdFor: (tab: number) => string) {
+  // Tab lookup and native client ownership have independent lifetimes.
+  const tabs = new Map<number, string>();
+  const clients = new Map<string, { runtimeEnabled: boolean }>();
+  const seed = (tab: number, runtimeEnabled = false) => {
+    const id = targetIdFor(tab);
+    tabs.set(tab, id);
+    clients.set(id, { runtimeEnabled });
+    return id;
+  };
+  const resolve = (source: { tabId?: number; targetId?: string }) => {
+    const id = source.targetId ?? (source.tabId === undefined ? undefined : tabs.get(source.tabId));
+    if (!id) {
+      throw new Error(`No tab with given id ${source.tabId}.`);
     }
-    attached.set(id, { runtimeEnabled: false });
+    if (!clients.has(id)) {
+      throw new Error(`Debugger is not attached to the target with id: ${id}.`);
+    }
+    return id;
+  };
+  h.debuggerAttach.mockImplementation(async ({ tabId: tab }) => {
+    if (clients.has(tabs.get(tab)!)) {
+      throw new Error("Another debugger is already attached");
+    }
+    seed(tab);
   });
   h.debuggerDetach.mockImplementation(async (source) => {
-    const id = source.tabId ?? Number(source.targetId?.slice("target-".length));
-    if (!attached.delete(id)) {
-      throw new Error(`Debugger is not attached to the target with id: target-${id}.`);
-    }
-    // Native programmatic detach does not emit the user onDetach event.
+    clients.delete(resolve(source));
   });
-  h.debuggerGetTargetInfo.mockImplementation(async ({ tabId: id }) => {
-    if (!attached.has(id)) {
-      throw new Error("Debugger is not attached");
-    }
-    return { targetInfo: { targetId: `target-${id}` } };
-  });
+  h.debuggerGetTargets.mockImplementation(async () =>
+    [...tabs].map(([tab, id]) => ({ tabId: tab, id, attached: clients.has(id) })),
+  );
+  h.debuggerGetTargetInfo.mockImplementation(async (source) => ({
+    targetInfo: { targetId: resolve(source) },
+  }));
   h.debuggerSendCommand.mockImplementation(async (source, method) => {
-    const session = attached.get(source.tabId);
-    if (!session) {
-      throw new Error("Debugger is not attached");
-    }
+    const session = clients.get(resolve(source))!;
     if (method === "Runtime.enable" && !session.runtimeEnabled) {
       session.runtimeEnabled = true;
       h.debuggerEventListener?.(source, "Runtime.executionContextCreated", {
@@ -89,22 +96,33 @@ async function fixture(initiallyAttached = false) {
     }
     return {};
   });
+  return { tabs, clients, seed, resolve };
+}
+
+async function replacementSocket(h: Background) {
+  h.alarmListener({ name: "openclaw-relay-watchdog" });
+  await vi.waitFor(() => expect(h.relaySockets).toHaveLength(2));
+  const socket = h.relaySockets[1]!;
+  await h.authenticate(socket);
+  return socket;
+}
+
+async function fixture(initiallyAttached = false) {
+  const h = await loadConfiguredBackground(
+    "all",
+    [{ id: tabId, url: "https://example.com/live", incognito: false }],
+    { deferSocketClose: true },
+  );
+  const native = nativeDebugger(h, (tab) => `target-${tab}`);
   const old = h.relaySockets[0]!;
   await h.authenticate(old);
-  async function replacement() {
-    h.alarmListener({ name: "openclaw-relay-watchdog" });
-    await vi.waitFor(() => expect(h.relaySockets).toHaveLength(2));
-    const socket = h.relaySockets[1]!;
-    await h.authenticate(socket);
-    return socket;
-  }
   async function attach(socket: FakeWebSocket, seq = 1) {
     expectResult(await reply(socket, seq, { type: "attach", tabId }), { targetId: "target-7" });
   }
   if (initiallyAttached) {
     await attach(old);
   }
-  return { h, old, attached, replacement, attach };
+  return { h, old, ...native, replacement: () => replacementSocket(h), attach };
 }
 const { deferred, releaseAll } = deferredScope();
 function heldAccess(h: Awaited<ReturnType<typeof loadBackground>>) {
@@ -133,7 +151,7 @@ describe("authenticated relay debugger lifetime", () => {
   it("starts a fresh Runtime after authentication failure without changing grants", async () => {
     const f = await fixture(true);
     await enable(f.old, 2);
-    f.attached.set(99, { runtimeEnabled: true });
+    f.seed(99, true);
     f.old.receive({ type: "auth.invalid" });
     await waitCalled(f.old.close);
     const next = await f.replacement();
@@ -308,13 +326,13 @@ describe("authenticated relay debugger lifetime", () => {
   });
   it("does not adopt or retire an attachment when Chrome rejects ownership", async () => {
     const f = await fixture();
-    f.attached.set(tabId, { runtimeEnabled: true });
+    f.seed(tabId, true);
     expectError(await reply(f.old, 1, { type: "attach", tabId }), ownershipError);
     f.old.finishClose();
     const next = await f.replacement();
     expectError(await reply(next, 1, { type: "attach", tabId }), ownershipError);
     expectUnused(f.h.debuggerDetach);
-    expect(f.attached.get(tabId)).toEqual({ runtimeEnabled: true });
+    expect(f.clients.get(`target-${tabId}`)).toEqual({ runtimeEnabled: true });
   });
 });
 
@@ -387,10 +405,10 @@ describe("native attachment retirement ordering", () => {
       evaluate(f.old, 60);
       await waitCalled(f.h.tabsGet);
       if (ending === "native detach") {
-        f.attached.delete(tabId);
+        f.clients.delete(`target-${tabId}`);
         f.h.debuggerDetachListener?.({ tabId }, "target_closed");
       } else if (ending === "removal") {
-        f.attached.delete(tabId);
+        f.clients.delete(`target-${tabId}`);
         f.h.tabsRemovedListener?.(tabId);
       } else {
         f.h.updateTab(tabId, { url: "chrome://settings" });
@@ -441,37 +459,8 @@ async function nativeFixture() {
     "all",
     [7, 8, 9].map((id) => ({ id, url: `https://example.com/${id}` })),
   );
-  // Chrome's tab lookup and its extension client registry have different lifetimes.
-  const tabs = new Map<number, string>();
-  const clients = new Set<string>();
   let ordinal = 0;
-  const resolve = (source: { tabId?: number; targetId?: string }) => {
-    const id = source.targetId ?? (source.tabId === undefined ? undefined : tabs.get(source.tabId));
-    if (!id) {
-      throw new Error(`No tab with given id ${source.tabId}.`);
-    }
-    if (!clients.has(id)) {
-      throw new Error(`Debugger is not attached to the target with id: ${id}.`);
-    }
-    return id;
-  };
-  h.debuggerAttach.mockImplementation(async ({ tabId: tab }) => {
-    if (tabs.has(tab) && clients.has(tabs.get(tab)!)) {
-      throw new Error("Another debugger is already attached");
-    }
-    const id = `native-${++ordinal}`;
-    tabs.set(tab, id);
-    clients.add(id);
-  });
-  h.debuggerDetach.mockImplementation(async (source) => {
-    clients.delete(resolve(source));
-  });
-  h.debuggerGetTargets.mockImplementation(async () =>
-    [...tabs].map(([tab, id]) => ({ tabId: tab, id, attached: clients.has(id) })),
-  );
-  h.debuggerGetTargetInfo.mockImplementation(async (source) => ({
-    targetInfo: { targetId: resolve(source) },
-  }));
+  const { tabs, clients, resolve } = nativeDebugger(h, () => `native-${++ordinal}`);
   const socket = h.relaySockets[0]!;
   await h.authenticate(socket);
   let seq = 0;
@@ -484,11 +473,7 @@ async function nativeFixture() {
   };
   const reconnect = async () => {
     socket.close();
-    h.alarmListener({ name: "openclaw-relay-watchdog" });
-    await vi.waitFor(() => expect(h.relaySockets).toHaveLength(2));
-    const next = h.relaySockets[1]!;
-    await h.authenticate(next);
-    return next;
+    return await replacementSocket(h);
   };
   const holdDetach = (tab: number) => {
     const gate = deferred<void>(undefined);
@@ -562,7 +547,7 @@ describe("native debugger cleanup debt", () => {
       throw new Error("No tab with given id 7.");
     });
     expectType(await f.command("attach", 7), "error");
-    const old = [...f.clients][0]!;
+    const old = [...f.clients.keys()][0]!;
     expect(f.clients.has(old)).toBe(true);
     expectType(await f.command("attach", 7), "error");
     await f.attach(8);
