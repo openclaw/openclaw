@@ -175,6 +175,12 @@ describe("matrix harness runtime", () => {
     );
     await withStartedMatrixHarness(async ({ outputDir, result }) => {
       expect(result).toMatchObject({ baseUrl: "http://127.0.0.1:49152/" });
+      expect(io.fetchHealthUrl).toHaveBeenCalledWith(
+        "http://127.0.0.1:49152/_matrix/client/versions",
+        {
+          signal: expect.any(AbortSignal),
+        },
+      );
       expect(calls).toContain(
         `docker compose -f ${outputDir}/docker-compose.matrix-qa.yml port matrix-qa-homeserver 8008 @/repo/openclaw`,
       );
@@ -192,13 +198,6 @@ describe("matrix harness runtime", () => {
         "health setup failed",
       );
       expect(calls.filter((call) => call.includes("down --remove-orphans"))).toHaveLength(2);
-    });
-  });
-
-  it("probes Matrix versions with a bounded request", async () => {
-    await expect(isMatrixVersionsReachable(host)).resolves.toBe(true);
-    expect(io.fetchHealthUrl).toHaveBeenCalledWith(`${host}_matrix/client/versions`, {
-      signal: expect.any(AbortSignal),
     });
   });
 

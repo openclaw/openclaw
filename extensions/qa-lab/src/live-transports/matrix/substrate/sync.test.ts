@@ -141,17 +141,14 @@ describe("matrix sync helpers", () => {
     const observer = makeObserver(fetchImpl, [], "token");
 
     const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(1);
-    try {
-      await expect(
-        observer.waitForOptionalRoomEvent({
-          predicate: (event) => event.sender === "@sut:matrix-qa.test",
-          roomId: "!secondary:matrix-qa.test",
-          timeoutMs: 1,
-        }),
-      ).resolves.toEqual({ matched: false, since: "next-batch-2" });
-    } finally {
-      nowSpy.mockRestore();
-    }
+    await expect(
+      observer.waitForOptionalRoomEvent({
+        predicate: (event) => event.sender === "@sut:matrix-qa.test",
+        roomId: "!secondary:matrix-qa.test",
+        timeoutMs: 1,
+      }),
+    ).resolves.toEqual({ matched: false, since: "next-batch-2" });
+    nowSpy.mockRestore();
 
     await expect(
       observer.waitForRoomEvent(eventWait("$main-reply", "!main:matrix-qa.test")),

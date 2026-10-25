@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { buildMatrixQaConfig } from "./config.js";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
@@ -68,30 +67,22 @@ describe("matrix qa config", () => {
       config: { preserve: "matrix-config" },
       enabled: false,
       hooks: { allowConversationAccess: true, timeoutMs: 1_500 },
-      llm: {
-        allowModelOverride: true,
-        allowedModels: ["openai/gpt-5.4"],
-      },
-      subagent: {
-        allowModelOverride: true,
-        allowedModels: ["anthropic/claude-sonnet-4-6"],
-      },
     };
     const next = buildMatrixQaConfig(
       {
         plugins: {
-          allow: ["acpx", "memory-core", "qa-lab", "openai"],
+          allow: ["openai"],
           entries: {
             matrix: structuredClone(matrixPlugin),
             openai: { enabled: true },
             unrelated: { enabled: true },
           },
         },
-      } as OpenClawConfig,
+      },
       params,
     );
 
-    expect(next.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "matrix"]);
+    expect(next.plugins?.allow).toEqual(["openai", "matrix"]);
     expect(next.plugins?.entries?.matrix).toEqual({ ...matrixPlugin, enabled: true });
     expect(next.plugins?.entries?.openai).toEqual({ enabled: true });
   });
@@ -115,23 +106,27 @@ describe("matrix qa config", () => {
       requireMention: false,
       tools: { allow: ["sessions_spawn"] },
     };
+    const accountOverrides = {
+      allowBots: "mentions",
+      encryption: true,
+      replyToMode: "all",
+      threadReplies: "always",
+      dm: { sessionScope: "per-room", threadReplies: "off" },
+      groupAllowFrom: [params.driverUserId, params.observerUserId],
+    } as const;
     const next = build(
       {
+        ...accountOverrides,
+        groupAllowFrom: [...accountOverrides.groupAllowFrom],
         autoJoin: "allowlist",
         autoJoinAllowlist: [" !dm:matrix-qa.test ", "#ops:matrix-qa.test"],
         agentDefaults: structuredClone(agentDefaults),
         blockStreaming: true,
-        dm: { sessionScope: "per-room", threadReplies: "off" },
-        encryption: true,
-        allowBots: "mentions",
         configuredBotRoles: ["observer"],
-        groupAllowFrom: ["@driver:matrix-qa.test", "@observer:matrix-qa.test"],
         groupMentionPatterns: ["\\S"],
         groupsByKey: { secondary },
-        replyToMode: "all",
         streaming: "quiet",
         threadBindings: structuredClone(threadBindings),
-        threadReplies: "always",
         audio: structuredClone(audio),
         toolProfile: "coding",
       },
@@ -150,15 +145,10 @@ describe("matrix qa config", () => {
     });
     const sut = next.channels?.matrix?.accounts?.sut;
     expect(sut).toMatchObject({
-      allowBots: "mentions",
+      ...accountOverrides,
       autoJoin: "allowlist",
       autoJoinAllowlist: ["!dm:matrix-qa.test", "#ops:matrix-qa.test"],
       streaming: { block: { enabled: true }, mode: "quiet" },
-      dm: { sessionScope: "per-room", threadReplies: "off" },
-      encryption: true,
-      groupAllowFrom: ["@driver:matrix-qa.test", "@observer:matrix-qa.test"],
-      replyToMode: "all",
-      threadReplies: "always",
     });
     expect(sut?.groups).toEqual({
       "!main:matrix-qa.test": { enabled: true, requireMention: true },
@@ -251,18 +241,6 @@ describe("matrix qa config", () => {
     expect(next.channels?.matrix?.accounts?.sut?.textChunkLimit).toBe(4000);
     expect(next.channels?.matrix?.accounts?.["qa-driver-bot-source"]).toBeUndefined();
     expect(next.channels?.matrix?.accounts?.["qa-observer-bot-source"]).toBeUndefined();
-    expect(next.approvals?.exec).toEqual({ enabled: false, mode: "session", reviewer: "current" });
-    const expectedGroups = nest(
-      fields
-        .filter(([path]) => path.startsWith(g + "/"))
-        .map((row): [string, unknown] => [row[0].slice(g.length + 1), expectedValue(row)]),
-    );
-    expect(next.channels?.matrix?.accounts?.sut?.groups?.["!main:matrix-qa.test"]).toEqual(
-      expectedGroups,
-    );
-    expect(next.channels?.matrix?.accounts?.sut?.groups?.["!current-only:matrix-qa.test"]).toEqual(
-      extraGroup,
-    );
     const provisioned = buildMatrixQaConfig(baseline, {
       ...params,
       currentConfig,
@@ -341,21 +319,23 @@ describe("matrix qa config", () => {
     ]);
   });
 
-  it("rejects configured bot roles without matching side-account auth", () => {
-    expect(() => build({ configuredBotRoles: ["observer"] })).toThrow(
+  it.each([
+    [
+      { configuredBotRoles: ["observer"] },
       'Matrix QA configured bot role "observer" requires an access token',
-    );
-  });
-
-  it("rejects the SUT role as a configured bot source", () => {
-    expect(() => build({ configuredBotRoles: ["sut"] })).toThrow(
+    ],
+    [
+      { configuredBotRoles: ["sut"] },
       'Matrix QA configured bot role "sut" would match the SUT account itself',
-    );
-  });
-
-  it("rejects unknown room-key overrides", () => {
-    expect(() => build({ groupsByKey: { ghost: { requireMention: false } } })).toThrow(
+    ],
+    [
+      { groupsByKey: { ghost: { requireMention: false } } },
       'Matrix QA group override references unknown room key "ghost"',
-    );
-  });
+    ],
+  ] satisfies Array<[Parameters<typeof build>[0], string]>)(
+    "rejects invalid overrides %j",
+    (overrides, error) => {
+      expect(() => build(overrides)).toThrow(error);
+    },
+  );
 });

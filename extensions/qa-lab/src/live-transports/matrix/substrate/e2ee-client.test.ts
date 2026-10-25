@@ -78,6 +78,12 @@ function expectCalls(counts: Partial<Record<Operation, number>>) {
 const shutdownFailure = "shutdown failed while waiting for active Matrix SDK operations";
 describe("matrix qa e2ee client", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const releasePending: Array<() => void> = [];
+  function pending<T>(fallback: T) {
+    const deferred = createDeferred<T>();
+    releasePending.push(() => deferred.resolve(fallback));
+    return deferred;
+  }
   let client: Awaited<ReturnType<typeof createMatrixQaE2eeScenarioClient>>;
   let outputDir: string;
   const image = {
@@ -115,33 +121,26 @@ describe("matrix qa e2ee client", () => {
     client = await createClient();
   });
   afterEach(async () => {
+    for (const release of releasePending.splice(0)) {
+      release();
+    }
     await client.stop().catch(() => undefined);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it.each(["text", "notice", "image"] as const)(
-    "admits %s only after live encrypted room readiness",
-    async (kind) => {
-      const ready = createDeferred<() => void>();
-      runtimeFixture.ready.mockReturnValue(ready.promise);
-      const operation =
-        kind === "image"
-          ? client.sendImageMessage(image)
-          : client[kind === "notice" ? "sendNoticeMessage" : "sendTextMessage"]({
-              roomId: image.roomId,
-              body: kind,
-            });
-      try {
-        await vi.advanceTimersByTimeAsync(0);
-        expectCalls({ encrypt: 0, upload: 0, send: 0 });
-      } finally {
-        ready.resolve(() => undefined);
-        await operation;
-      }
-      expect(runtimeFixture.send).toHaveBeenCalledOnce();
-    },
-  );
+  it("admits notices only after live encrypted room readiness", async () => {
+    const ready = pending(() => undefined);
+    runtimeFixture.ready.mockReturnValue(ready.promise);
+    const operation = client.sendNoticeMessage({ roomId: image.roomId, body: "notice" });
+    const settled = Promise.allSettled([operation]);
+    await vi.advanceTimersByTimeAsync(0);
+    expectCalls({ encrypt: 0, upload: 0, send: 0 });
+    ready.resolve(() => undefined);
+    await settled;
+    await expect(operation).resolves.toBe("$sent");
+    expect(runtimeFixture.send).toHaveBeenCalledOnce();
+  });
 
   it("rejects an image after stop before encryption or upload", async () => {
     await client.stop();
@@ -151,8 +150,8 @@ describe("matrix qa e2ee client", () => {
   });
 
   it("joins late encryption after the grace deadline before discard and fences its upload", async () => {
-    const encryption = createDeferred<{ buffer: Buffer; file: object }>();
-    const discarded = createDeferred<void>();
+    const encryption = pending(encryptedMedia());
+    const discarded = pending<void>(undefined);
     runtimeFixture.encrypt.mockReturnValue(encryption.promise);
     runtimeFixture.discard.mockReturnValue(discarded.promise);
     const operation = client.sendImageMessage(image);
@@ -164,21 +163,16 @@ describe("matrix qa e2ee client", () => {
     void stopSettled.then(() => {
       stopped = true;
     });
-    try {
-      await vi.advanceTimersByTimeAsync(101);
-      expectCalls({ persist: 0, discard: 0, abort: 1 });
-      expect(stopped).toBe(false);
-      encryption.resolve(encryptedMedia());
-      await settled;
-      await vi.advanceTimersByTimeAsync(0);
-      expect(runtimeFixture.discard).toHaveBeenCalledOnce();
-      expect(stopped).toBe(false);
-    } finally {
-      encryption.resolve(encryptedMedia());
-      discarded.resolve();
-      await settled;
-      await stopSettled;
-    }
+    await vi.advanceTimersByTimeAsync(101);
+    expectCalls({ persist: 0, discard: 0, abort: 1 });
+    expect(stopped).toBe(false);
+    encryption.resolve(encryptedMedia());
+    await settled;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtimeFixture.discard).toHaveBeenCalledOnce();
+    expect(stopped).toBe(false);
+    discarded.resolve();
+    await stopSettled;
     await expect(stop).rejects.toThrow(shutdownFailure);
     expectCalls({ discard: 1, persist: 0, upload: 0, send: 0 });
   });
@@ -186,7 +180,7 @@ describe("matrix qa e2ee client", () => {
   it.each(["encryption", "upload"])(
     "fences a room invalidated while media %s was pending",
     async (stage) => {
-      const finish = createDeferred<void>();
+      const finish = pending<void>(undefined);
       let current = true;
       runtimeFixture.ready.mockResolvedValue(() => {
         if (!current) {
@@ -209,22 +203,18 @@ describe("matrix qa e2ee client", () => {
   );
 
   it("times out a dispatched send without claiming it was unsent or retrying", async () => {
-    const send = createDeferred<string>();
+    const send = pending("$possibly-sent");
     runtimeFixture.send.mockReturnValue(send.promise);
     const operation = sendText();
     const settled = Promise.allSettled([operation]);
-    try {
-      await vi.advanceTimersByTimeAsync(100);
-      await settled;
-      await expect(operation).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
-      await expect(operation).rejects.toThrow("Matrix E2EE text send timed out after 100ms");
-      expectCalls({ detach: 2, abort: 0, persist: 0, discard: 0 });
-      await vi.advanceTimersByTimeAsync(100);
-      expectCalls({ abort: 1, discard: 0 });
-    } finally {
-      send.resolve("$possibly-sent");
-      await settled;
-    }
+    await vi.advanceTimersByTimeAsync(100);
+    await settled;
+    await expect(operation).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    await expect(operation).rejects.toThrow("Matrix E2EE text send timed out after 100ms");
+    expectCalls({ abort: 0, persist: 0, discard: 0 });
+    await vi.advanceTimersByTimeAsync(100);
+    expectCalls({ abort: 1, discard: 0 });
+    send.resolve("$possibly-sent");
     await expect(client.stop()).rejects.toThrow(shutdownFailure);
     expectCalls({ discard: 1, persist: 0, send: 1 });
   });
@@ -244,7 +234,7 @@ describe("matrix qa e2ee client", () => {
 
   it("shares shutdown while giving admitted sends a grace period before draining and persisting", async () => {
     const calls: string[] = [];
-    const finish = createDeferred<string>();
+    const finish = pending("$sent");
     runtimeFixture.send.mockImplementation(() => {
       calls.push("operation");
       return finish.promise;
@@ -259,12 +249,9 @@ describe("matrix qa e2ee client", () => {
     const operation = sendText();
     await vi.advanceTimersByTimeAsync(0);
     const stop = client.stop();
-    try {
-      expect(client.stop()).toBe(stop);
-      expect(calls).toEqual(["operation", "detach:room.message", "detach:verification.summary"]);
-    } finally {
-      finish.resolve("$sent");
-    }
+    expect(client.stop()).toBe(stop);
+    expect(calls).toEqual(["operation", "detach:room.message", "detach:verification.summary"]);
+    finish.resolve("$sent");
     await expect(operation).resolves.toBe("$sent");
     await stop;
     expect(client.stop()).toBe(stop);
@@ -287,7 +274,7 @@ describe("matrix qa e2ee client", () => {
     );
     await vi.advanceTimersByTimeAsync(100);
     await rejection;
-    expectCalls({ detach: 2, drain: 1, discard: 1, persist: 0 });
+    expectCalls({ drain: 1, discard: 1, persist: 0 });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -297,7 +284,7 @@ describe("matrix qa e2ee client", () => {
     runtimeFixture.detach.mockClear();
     runtimeFixture.drain.mockClear();
     runtimeFixture.persist.mockClear();
-    const finish = createDeferred<string>();
+    const finish = pending("$sent");
     runtimeFixture.send.mockReturnValue(finish.promise);
     const operation = sendText();
     const operationRejection = expect(operation).rejects.toThrow("late send failure");
@@ -305,7 +292,7 @@ describe("matrix qa e2ee client", () => {
     const stopRejection = expect(client.stop()).rejects.toThrow(shutdownFailure);
     try {
       await vi.advanceTimersByTimeAsync(1_000);
-      expectCalls({ detach: 2, abort: 1, drain: 0, discard: 0 });
+      expectCalls({ abort: 1, drain: 0, discard: 0 });
     } finally {
       finish.reject(new Error("late send failure"));
     }

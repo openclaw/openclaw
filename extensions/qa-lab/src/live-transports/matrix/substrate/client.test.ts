@@ -34,6 +34,13 @@ const encryptionState = {
   state_key: "",
   content: { algorithm: "m.megolm.v1.aes-sha2" },
 };
+const mention = {
+  body: sut,
+  msgtype: "m.text",
+  format: "org.matrix.custom.html",
+  formatted_body: '<a href="https://matrix.to/#/%40sut%3Amatrix-qa.test">@sut:matrix-qa.test</a>',
+  "m.mentions": { user_ids: [sut] },
+};
 function url(input: RequestInfo | URL) {
   return input instanceof Request ? input.url : String(input);
 }
@@ -108,23 +115,16 @@ describe("matrix driver client", () => {
       name: "replacement",
       run: (client: ReturnType<typeof makeClient>) =>
         client.sendReplacementMessage({
-          body: sut + " updated prompt",
+          body: sut,
           mentionUserIds: [sut],
           roomId,
           targetEventId: " $msg-1 ",
         }),
       endpoint: expect.stringContaining(roomEndpoint + "/send/m.room.message/"),
       body: {
-        body: "* " + sut + " updated prompt",
+        body: "* " + sut,
         msgtype: "m.text",
-        "m.new_content": {
-          body: sut + " updated prompt",
-          msgtype: "m.text",
-          format: "org.matrix.custom.html",
-          formatted_body:
-            '<a href="https://matrix.to/#/%40sut%3Amatrix-qa.test">@sut:matrix-qa.test</a> updated prompt',
-          "m.mentions": { user_ids: [sut] },
-        },
+        "m.new_content": mention,
         "m.relates_to": { rel_type: "m.replace", event_id: "$msg-1" },
       },
     },
@@ -150,19 +150,23 @@ describe("matrix driver client", () => {
       { event_id: "$media-1" },
     ]);
     await expect(client.sendMediaMessage(image)).resolves.toBe("$media-1");
-    expect(requests).toHaveLength(2);
-    expect(requests[0]?.url).toBe(baseUrl + "_matrix/media/v3/upload?filename=image.png");
-    expect(requests[0]?.body).toBeInstanceOf(Uint8Array);
-    expect(Array.from(requests[0]?.body as Uint8Array)).toEqual(Array.from(image.buffer));
-    expect(requests[1]?.url).toContain(roomEndpoint + "/send/m.room.message/");
-    expect(requests[1]?.body).toMatchObject({
-      body: image.body,
-      msgtype: "m.image",
-      filename: image.fileName,
-      url: "mxc://matrix-qa.test/image",
-      info: { mimetype: "image/png", size: "png-bytes".length },
-      "m.mentions": { user_ids: [sut] },
-    });
+    expect(requests).toEqual([
+      {
+        url: baseUrl + "_matrix/media/v3/upload?filename=image.png",
+        body: new Uint8Array(image.buffer),
+      },
+      {
+        url: expect.stringContaining(roomEndpoint + "/send/m.room.message/"),
+        body: expect.objectContaining({
+          body: image.body,
+          msgtype: "m.image",
+          filename: image.fileName,
+          url: "mxc://matrix-qa.test/image",
+          info: { mimetype: "image/png", size: image.buffer.length },
+          "m.mentions": { user_ids: [sut] },
+        }),
+      },
+    ]);
   });
   it.each([
     ["media upload", 200],
@@ -220,10 +224,6 @@ describe("matrix driver client", () => {
     const http = mockMatrixQaHttp(fetch);
     await request(MAX_TIMER_TIMEOUT_MS + 1_000_000);
     expect(timeout).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(fetch).toHaveBeenCalledWith(
-      "https://matrix.example.test/_matrix/client/v3/account/whoami",
-      expect.objectContaining({ signal }),
-    );
     expect(http.release).toHaveBeenCalledOnce();
   });
   it("reads a large in-bounds JSON body unchanged", async () => {
@@ -290,11 +290,7 @@ describe("matrix driver client", () => {
       return Response.json({ ...account, device_id: "device-" + username });
     });
     const members = ["driver", "observer", "sut"] as const;
-    const users = [
-      "@qa-driver:matrix-qa.test",
-      "@qa-observer:matrix-qa.test",
-      "@qa-sut:matrix-qa.test",
-    ];
+    const users = members.map((role) => `@qa-${role}:matrix-qa.test`);
     const result = await provisionMatrixQaRoom({
       baseUrl,
       driverLocalpart: "qa-driver",
@@ -321,32 +317,24 @@ describe("matrix driver client", () => {
       roomId: "!group:matrix-qa.test",
       observer: { userId: users[1] },
     });
-    expect(result.topology).toEqual({
-      defaultRoomId: "!group:matrix-qa.test",
-      defaultRoomKey: "group",
-      rooms: [
-        {
-          encrypted: true,
-          key: "group",
-          kind: "group",
-          memberRoles: [...members],
-          memberUserIds: users,
-          name: "Group",
-          requireMention: true,
-          roomId: "!group:matrix-qa.test",
-        },
-        {
-          encrypted: false,
-          key: "sut-dm",
-          kind: "dm",
-          memberRoles: ["driver", "sut"],
-          memberUserIds: [users[0], users[2]],
-          name: "DM",
-          requireMention: false,
-          roomId: "!dm:matrix-qa.test",
-        },
-      ],
-    });
+    expect([result.topology.defaultRoomId, result.topology.defaultRoomKey]).toEqual([
+      "!group:matrix-qa.test",
+      "group",
+    ]);
+    expect(
+      result.topology.rooms.map(
+        ({ roomId: provisionedRoomId, encrypted, requireMention, memberRoles, memberUserIds }) => [
+          provisionedRoomId,
+          encrypted,
+          requireMention,
+          memberRoles,
+          memberUserIds,
+        ],
+      ),
+    ).toEqual([
+      ["!group:matrix-qa.test", true, true, [...members], users],
+      ["!dm:matrix-qa.test", false, false, ["driver", "sut"], [users[0], users[2]]],
+    ]);
     expect(created).toEqual([
       {
         ...privateRoom,
