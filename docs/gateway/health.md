@@ -315,7 +315,7 @@ with a code-owned task label where available. On Node 26, a bounded CPU flight
 recorder writes one additional bounded `main-thread stall profile` line with a
 trailing window's top inclusive frames, sample count, and truncation status.
 Several callbacks can finish before a sample, so this window is not assigned to
-an individual task. It samples every 10 ms and rotates five-second windows without
+an individual task. It samples every 25 ms and rotates five-second windows without
 stopping the sampler. At most two windows are retained; no profile files are
 written. Symbols and locations use the same redaction policy as on-demand
 diagnostic profiles. Inclusive counts overlap when a sampled stack contains

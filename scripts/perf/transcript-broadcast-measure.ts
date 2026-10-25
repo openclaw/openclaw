@@ -1,4 +1,6 @@
 // Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
+// --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
+// result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -116,6 +118,7 @@ const { values } = parseArgs({
     "startup-temperature": { type: "string", default: "warm" },
     "startup-targets": { type: "string" },
     "startup-source-preload": { type: "string" },
+    "gateway-preload": { type: "string" },
     revision: { type: "string" },
     operations: { type: "string" },
     "warmup-operations": { type: "string" },
@@ -259,6 +262,12 @@ const startupSourcePreload = values["startup-source-preload"]
       sha256: createHash("sha256")
         .update(readFileSync(values["startup-source-preload"]))
         .digest("hex"),
+    }
+  : undefined;
+const gatewayPreload = values["gateway-preload"]
+  ? {
+      path: realpathSync(path.resolve(values["gateway-preload"])),
+      sha256: createHash("sha256").update(readFileSync(values["gateway-preload"])).digest("hex"),
     }
   : undefined;
 const retentionScenario = scenario === "attempt-retention";
@@ -533,6 +542,9 @@ if (
 const chunkCount = integer(values.chunks, "--chunks");
 const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-ms", 0);
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
+if (soakScenario && values["list-filter-churn"] && !listIntervalMs) {
+  throw new Error("memory-soak --list-filter-churn requires --list-interval-ms");
+}
 if (connectionScenario && listIntervalMs) {
   throw new Error("connection scenarios use their own sidebar refresh; omit --list-interval-ms");
 }
@@ -4360,6 +4372,7 @@ try {
         : []),
       "--import",
       "./scripts/tsx.mjs",
+      ...(gatewayPreload ? ["--import", gatewayPreload.path] : []),
       ...(configCaptureSource ? ["--import", configCaptureSourcePreload] : []),
       ...(authoritySourcePreload ? ["--import", authoritySourcePreload.path] : []),
       ...(startupSourcePreload ? ["--import", startupSourcePreload.path] : []),
@@ -5456,18 +5469,19 @@ try {
                       target.worktree,
                     );
                   } else {
+                    const listFilter = values["list-filter-churn"]
+                      ? listFilterShapes[
+                          (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
+                            listFilterShapes.length
+                        ]
+                      : undefined;
                     const page = await rpc(
                       client,
                       method,
                       {
                         rowMode,
                         limit,
-                        ...(values["list-filter-churn"]
-                          ? listFilterShapes[
-                              (round + clientIndex + Math.floor(poll / mixedRpcMethods.length)) %
-                                listFilterShapes.length
-                            ]
-                          : { archived: "all" }),
+                        ...(listFilter ?? { archived: "all" }),
                         ...(values["list-profile-reference"]
                           ? { involvingProfileId: values["list-profile-reference"] }
                           : {}),
@@ -5480,7 +5494,9 @@ try {
                       page.count !== Math.min(limit, page.totalCount) ||
                       !Array.isArray(page.sessions) ||
                       page.sessions.length !== page.count ||
-                      (page.count === 0 && !values["list-profile-reference"])
+                      (page.count === 0 &&
+                        !values["list-profile-reference"] &&
+                        (!listFilter || Object.keys(listFilter).length === 0))
                     ) {
                       throw new Error("concurrent sessions.list did not return the requested page");
                     }
@@ -6266,6 +6282,7 @@ try {
   }
   const result = {
     output,
+    gatewayPreload,
     gatewayReadyMs,
     syntheticPlugins: Math.max(pluginCount, reloadPluginId || scopePluginId ? 1 : 0),
     ...(values["plugin-update"]
