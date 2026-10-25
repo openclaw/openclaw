@@ -28,6 +28,20 @@ import { beginLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 const activeRuns = new Map<string, EmbeddedAgentQueueHandle>();
 
+function expectSuspensionWireShape(snapshot: ReturnType<typeof createGatewayActiveWorkSnapshot>) {
+  expect(
+    Value.Check(GatewaySuspendPrepareResultSchema, {
+      status: "draining",
+      suspensionId: "held-owner",
+      expiresAtMs: 120_000,
+      retryAfterMs: 20_000,
+      activeCount: snapshot.counts.totalActive,
+      blockers: snapshot.blockers,
+      writeCustody: snapshot.writeCustody,
+    }),
+  ).toBe(true);
+}
+
 afterEach(() => {
   for (const [sessionId, handle] of activeRuns) {
     clearActiveEmbeddedRun(sessionId, handle);
@@ -160,16 +174,7 @@ describe("waitForGatewayActiveWork", () => {
         totalActive: 2,
       });
       expect(snapshot.blockers.map((blocker) => blocker.kind)).toEqual(["background-exec", kind]);
-      expect(
-        Value.Check(GatewaySuspendPrepareResultSchema, {
-          status: "draining",
-          suspensionId: "held-owner",
-          expiresAtMs: 120_000,
-          retryAfterMs: 20_000,
-          activeCount: snapshot.counts.totalActive,
-          blockers: snapshot.blockers,
-        }),
-      ).toBe(true);
+      expectSuspensionWireShape(snapshot);
     },
   );
 
@@ -188,26 +193,6 @@ describe("waitForGatewayActiveWork", () => {
       count: 1,
       message: "1 active embedded run(s)",
     });
-  });
-
-  it("names active root request holders in deterministic order", async () => {
-    const first = tryBeginGatewayRootWorkAdmission("ws:sessions.subscribe");
-    const second = tryBeginGatewayRootWorkAdmission("cron:timer-tick");
-    const third = tryBeginGatewayRootWorkAdmission("ws:sessions.subscribe");
-
-    try {
-      const result = await waitForGatewayActiveWork(0);
-
-      expect(result.snapshot.blockers).toContainEqual({
-        kind: "root-request",
-        count: 3,
-        message: "3 active gateway request(s): cron:timer-tick, ws:sessions.subscribe (2)",
-      });
-    } finally {
-      first?.release();
-      second?.release();
-      third?.release();
-    }
   });
 
   it("names the command lane holding queued work", async () => {
@@ -245,54 +230,51 @@ describe("waitForGatewayActiveWork", () => {
         { phase: "terminal-persistence", count: 1 },
       ]);
       expect(snapshot.counts).toMatchObject({ rootRequests: 2, cronRuns: 3, lifecycleWrites: 1 });
-      expect(
-        Value.Check(GatewaySuspendPrepareResultSchema, {
-          status: "draining",
-          suspensionId: "owned",
-          expiresAtMs: 120_000,
-          retryAfterMs: 20_000,
-          activeCount: snapshot.counts.totalActive,
-          blockers: snapshot.blockers,
-          writeCustody: snapshot.writeCustody,
-        }),
-      ).toBe(true);
+      expectSuspensionWireShape(snapshot);
     } finally {
       release();
     }
     expect(createGatewayActiveWorkSnapshot().writeCustody).toEqual([]);
   });
 
-  it("bounds holder details without dropping blocker counts", () => {
-    const admissions = Array.from({ length: 10 }, (_, index) =>
-      tryBeginGatewayRootWorkAdmission(`request-${index}`),
-    );
+  it.each([
+    {
+      label: "names active root request holders in deterministic order",
+      holders: ["ws:sessions.subscribe", "cron:timer-tick", "ws:sessions.subscribe"],
+      override: false,
+      count: 3,
+      message: "3 active gateway request(s): cron:timer-tick, ws:sessions.subscribe (2)",
+    },
+    {
+      label: "bounds holder details without dropping blocker counts",
+      holders: Array.from({ length: 10 }, (_, index) => `request-${index}`),
+      override: false,
+      count: 10,
+      message:
+        "10 active gateway request(s): request-0, request-1, request-2, request-3, request-4, request-5, request-6, request-7, +2 more",
+    },
+    {
+      label: "does not mix default holders into an overridden root count",
+      holders: ["ws:agent"],
+      override: true,
+      count: 1,
+      message: "1 active gateway request(s)",
+    },
+  ])("$label", async ({ holders, override, count, message }) => {
+    const admissions = holders.map((holder) => tryBeginGatewayRootWorkAdmission(holder));
     try {
-      const snapshot = createGatewayActiveWorkSnapshot();
+      const snapshot = override
+        ? createGatewayActiveWorkSnapshot({ getRootRequests: () => 1 })
+        : (await waitForGatewayActiveWork(0)).snapshot;
       expect(snapshot.blockers).toContainEqual({
         kind: "root-request",
-        count: 10,
-        message:
-          "10 active gateway request(s): request-0, request-1, request-2, request-3, request-4, request-5, request-6, request-7, +2 more",
+        count,
+        message,
       });
     } finally {
       for (const admission of admissions) {
         admission?.release();
       }
-    }
-  });
-
-  it("does not mix default holders into an overridden root count", () => {
-    const admission = tryBeginGatewayRootWorkAdmission("ws:agent");
-    try {
-      const snapshot = createGatewayActiveWorkSnapshot({ getRootRequests: () => 1 });
-
-      expect(snapshot.blockers).toContainEqual({
-        kind: "root-request",
-        count: 1,
-        message: "1 active gateway request(s)",
-      });
-    } finally {
-      admission?.release();
     }
   });
 });

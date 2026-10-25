@@ -29,6 +29,24 @@ function accounts(accountIds: Record<string, string[]>, configuredChannelIds: st
   return { configuredChannelIds, resolveAccounts: () => ({ accountIds }) };
 }
 
+function runWithLaterRepair(run: () => ReturnType<typeof migrateLegacyChannelPairingState>) {
+  const laterRepair = vi.fn(() => ({ changes: ["Later repair completed"], warnings: [] }));
+  return {
+    laterRepair,
+    result: runLegacyStateMigrationSteps(
+      [run, laterRepair].map((step, index) => ({
+        id: index === 0 ? "channel-pairing" : "later-repair",
+        run: step,
+        phase: "final" as const,
+        source: [],
+        target: [],
+        requiredness: "required" as const,
+        reversibility: "checkpoint-required" as const,
+      })),
+    ),
+  };
+}
+
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
@@ -91,22 +109,12 @@ it.each([
       accounts({ "custom-channel": ["active"] }, ["custom-channel"]),
     );
     const source = path.join(state.sourceDir, filename);
-    const laterRepair = vi.fn(() => ({ changes: ["Later repair completed"], warnings: [] }));
-    const result = await runLegacyStateMigrationSteps(
-      [state.migrate, laterRepair].map((run, index) => ({
-        id: index === 0 ? "channel-pairing" : "later-repair",
-        run,
-        phase: "final" as const,
-        source: [],
-        target: [],
-        requiredness: "required" as const,
-        reversibility: "checkpoint-required" as const,
-      })),
-    );
+    const run = runWithLaterRepair(state.migrate);
+    const result = await run.result;
     expect(result.receipts.map((receipt) => receipt.outcome)).toEqual(
       configuredMalformed ? ["refused", "refused"] : ["warning", "completed"],
     );
-    expect(laterRepair).toHaveBeenCalledTimes(configuredMalformed ? 0 : 1);
+    expect(run.laterRepair).toHaveBeenCalledTimes(configuredMalformed ? 0 : 1);
     const warnings = result.receipts[0]?.warnings.join("\n");
     expect(warnings).toContain(source);
     expect(warnings).toContain(`${source}.migrated.2`);
@@ -222,22 +230,12 @@ it.each(["pairing", "allowFrom"] as const)(
     );
     fs.writeFileSync(path.join(state.sourceDir, filename), bytes);
 
-    const laterRepair = vi.fn(() => ({ changes: ["Later repair completed"], warnings: [] }));
-    const result = await runLegacyStateMigrationSteps(
-      [state.migrate, laterRepair].map((run, index) => ({
-        id: index === 0 ? "channel-pairing" : "later-repair",
-        run,
-        phase: "final" as const,
-        source: [],
-        target: [],
-        requiredness: "required" as const,
-        reversibility: "checkpoint-required" as const,
-      })),
-    );
+    const run = runWithLaterRepair(state.migrate);
+    const result = await run.result;
 
     expect(result.haltedBy).toBeUndefined();
     expect(result.receipts.map((receipt) => receipt.outcome)).toEqual(["warning", "completed"]);
-    expect(laterRepair).toHaveBeenCalledOnce();
+    expect(run.laterRepair).toHaveBeenCalledOnce();
     expect(result.sources[0]?.warnings).toEqual([
       expect.stringContaining("unreadable; left in place"),
     ]);

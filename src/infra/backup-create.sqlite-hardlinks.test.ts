@@ -144,49 +144,36 @@ describe.skipIf(process.platform === "win32")("backup SQLite hardlinks", () => {
     }, true),
   );
 
-  it.runIf(process.platform === "linux").each(["singleton", "hardlink pair"] as const)(
-    "preserves a live writer's main-file POSIX lock when backing up a declared plugin %s",
-    hardlinkCase(async ({ state, ownerPath, aliasPath }, layout: string) => {
-      if (layout === "singleton") {
-        await fs.unlink(aliasPath);
-      }
-      const locksBefore = readMainDatabasePosixLocks(ownerPath);
-      expect(locksBefore).toEqual([
-        { length: 510, pid: process.pid, start: 1073741826, type: "read" },
-      ]);
+  it.runIf(process.platform === "linux").each([
+    ["singleton", "alpha.sqlite"],
+    ["hardlink pair", "alpha.sqlite"],
+    ["singleton", "alpha.db"],
+    ["hardlink pair", "alpha.db"],
+  ])(
+    "preserves a live writer's POSIX lock for a declared plugin %s named %s",
+    async (layout, ownerName) => {
+      await hardlinkCase(
+        async ({ state, ownerPath, aliasPath }) => {
+          if (layout === "singleton") {
+            await fs.unlink(aliasPath);
+          }
+          const locksBefore = readMainDatabasePosixLocks(ownerPath);
+          expect(locksBefore).toEqual([
+            { length: 510, pid: process.pid, start: 1073741826, type: "read" },
+          ]);
 
-      const archive = await createArchive(state);
+          const archive = await createArchive(state);
 
-      expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
-      expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
-    }),
-  );
-
-  it.runIf(process.platform === "linux").each(["singleton", "hardlink pair"] as const)(
-    "preserves a live writer's main-file POSIX lock when header-probing a declared plugin %s named .db",
-    hardlinkCase(
-      async ({ state, ownerPath, aliasPath }, layout: string) => {
-        if (layout === "singleton") {
-          await fs.unlink(aliasPath);
-        }
-        const locksBefore = readMainDatabasePosixLocks(ownerPath);
-        expect(locksBefore).toEqual([
-          { length: 510, pid: process.pid, start: 1073741826, type: "read" },
-        ]);
-
-        const archive = await createArchive(state);
-
-        // The header probe must run outside this process: closing a raw
-        // descriptor here would drop the live writer's POSIX locks above.
-        expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
-        // Verified snapshots (not opaque copies) prove the probe classified
-        // the .db names as SQLite databases.
-        expect(archive.warnings ?? []).toEqual([]);
-        expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
-      },
-      false,
-      "alpha.db",
-    ),
+          // Closing an in-process header probe would drop the writer's POSIX locks.
+          expect(readMainDatabasePosixLocks(ownerPath)).toEqual(locksBefore);
+          // No opaque-copy warning: .db names were classified as SQLite too.
+          expect(archive.warnings ?? []).toEqual([]);
+          expect((await fs.stat(archive.archivePath)).size).toBeGreaterThan(0);
+        },
+        false,
+        ownerName,
+      )();
+    },
   );
 
   it.each([
