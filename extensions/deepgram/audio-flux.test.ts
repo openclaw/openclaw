@@ -12,6 +12,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
+import { commandResult } from "../test-support/command-result.test-support.js";
 import { isDeepgramFluxModel } from "./audio-flux.js";
 import plugin from "./index.js";
 
@@ -106,11 +107,9 @@ function turn(transcript?: unknown): string {
 async function writeDecodedPcm(argv: string[], pcm: Buffer) {
   await writeFile(expectDefined(argv.at(-1), "decoder output path"), pcm);
   return {
+    ...commandResult(),
     stdout: Buffer.alloc(0),
     stderr: Buffer.alloc(0),
-    code: 0,
-    signal: null,
-    killed: false,
     termination: "exit" as const,
   };
 }

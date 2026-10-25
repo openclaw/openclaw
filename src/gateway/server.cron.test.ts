@@ -25,6 +25,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
+import type { GatewayCronState } from "./server-cron-contract.js";
 import {
   cleanupCronTestRun,
   expectEnqueuedRunPayload,
@@ -33,7 +34,6 @@ import {
   runCronJobAndWaitForFinished,
   waitForCronEvent,
 } from "./server-cron.events.test-support.js";
-import type { GatewayCronState } from "./server-cron.js";
 import { registerCronRepairCases } from "./server.cron-repair.cases.js";
 import { expectCronJobIdFromResponse } from "./server.cron.assertions.test-support.js";
 import {

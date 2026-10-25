@@ -31,6 +31,10 @@ export type StreamGroupPart = Extract<
 >;
 
 export type StreamGroupOptions = MessageRenderOptions & {
+  /** Only the mounted streaming bubble observes text-only publications. */
+  resolveLiveStream?: (
+    part: Extract<ChatItem, { kind: "stream" }>,
+  ) => Extract<ChatItem, { kind: "stream" }>;
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   bubbleMode?: boolean;
@@ -160,7 +164,10 @@ function StreamingMessage(props: {
   part: () => Extract<StreamGroupPart, { kind: "stream" }> | undefined;
   options: StreamGroupOptions;
 }) {
-  const part = () => props.part()!;
+  const part = () => {
+    const current = props.part()!;
+    return props.options.resolveLiveStream?.(current) ?? current;
+  };
   const prepared = createMemo(() => prepareChatStreamRender(part()));
   const actions = createMemo(() =>
     resolveMessageActionDetails(prepared(), {

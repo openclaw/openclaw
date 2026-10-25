@@ -8,7 +8,7 @@ import type {
   SessionEventTarget,
 } from "../../auto-reply/reply/session-event-contract.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DeferredHookWake } from "../../cron/service/wake.js";
+import type { DeferredHookWake } from "../../cron/wake-contract.js";
 import {
   claimSystemEventTurn,
   drainSystemEvents,

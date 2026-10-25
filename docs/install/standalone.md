@@ -133,6 +133,14 @@ artifact has `mode: "jit"` and `build.flavor: "support"`; the AOT artifact has
 `openclaw.commit`, `build.pluginSetSha256`, and `build.moduleGraphSha256` before
 reproducing an issue. Matching a version string alone is insufficient.
 
+The build identity is derived from compiled modules, retained resources, compiler,
+target, and compilation options. Independent builds of identical prepared inputs
+share that identity; changing compiled code or native resources invalidates it.
+For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
+`pnpm build` in each checkout. Local cache freshness stamps are omitted from the
+standalone runtime. Compare executable hashes before timestamped signing;
+a matching build identity alone does not prove byte-identical executables.
+
 For breakpoints, the companion also retains the selected input runtime, its
 source maps, and a copy of the matching ordinary Bun executable under `debug/`.
 These are recorded separately in `debug.runtime` and `debug.executable`; compiled

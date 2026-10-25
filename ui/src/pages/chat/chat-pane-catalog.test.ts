@@ -41,20 +41,21 @@ const catalogSession: SessionCatalogSession = {
   canArchive: true,
 };
 
-function createCatalogPane(request: ReturnType<typeof vi.fn>, key = catalogKey) {
+function createCatalogPane(request: ReturnType<typeof vi.fn>, key = catalogKey, connected = false) {
   const client = { request } as unknown as GatewayBrowserClient;
   const sessions = {} as SessionCapability;
   const fixture = createTestChatPane({ client, sessions });
   const { pane } = fixture;
   Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   pane.sessionKey = buildCatalogSessionKey(key, "main");
+  fixture.state.sessionKey = pane.sessionKey;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: connected });
   return { ...fixture, client, key, sessions };
 }
 
 function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
-  const fixture = createCatalogPane(request);
+  const fixture = createCatalogPane(request, catalogKey, true);
   const { pane, state } = fixture;
-  state.sessionKey = pane.sessionKey;
   state.chatMessage = "Continue the original catalog conversation";
   state.handleChatDraftChange = vi.fn((draft: string) => {
     state.chatMessage = draft;
@@ -62,7 +63,6 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   state.handleSendChat = vi.fn(async () => undefined);
   pane.history.catalogSession = { ...catalogSession };
   pane.onPaneSessionChange = vi.fn();
-  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   return fixture;
 }
 
@@ -86,14 +86,11 @@ function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogCo
 }
 
 describe("chat pane catalog", () => {
-  it("reuses unchanged catalog history while admitting an older page", async () => {
+  it("reuses catalog history while admitting an older page", async () => {
     installTranscriptDomMocks();
     onTestFinished(resetTranscriptTestDom);
     const { pane, state, context } = createRefreshChatPane(createGatewayBrowserClientFixture());
-    const sessionKey = buildCatalogSessionKey(
-      { catalogId: "fixture", hostId: "gateway:local", threadId: "history" },
-      "main",
-    );
+    const sessionKey = buildCatalogSessionKey(catalogKey, "main");
     Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.sessionKey = state.sessionKey = sessionKey;
     Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
@@ -219,10 +216,8 @@ describe("chat pane catalog", () => {
         }),
       )
       .mockImplementationOnce(() => read.promise);
-    const { pane, state } = createCatalogPane(request);
-    state.sessionKey = pane.sessionKey;
+    const { pane, state } = createCatalogPane(request, key, true);
     state.assistantAgentId = "main";
-    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
 
     const pending = pane.loadCatalogSession(key, false);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
@@ -268,19 +263,16 @@ describe("chat pane catalog", () => {
 
   it("keeps paging when an advancing older page renders nothing new", async () => {
     const readPage: SessionsCatalogReadResult = {
-      hostId: "gateway:local",
-      threadId: "thread-1",
+      ...catalogKey,
       items: [{ id: "x1", type: "other" }],
       nextCursor: "cursor-2",
     };
-    const key = { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" };
-    const { pane, state } = createCatalogPane(
+    const { pane, key } = createCatalogPane(
       vi.fn(async () => readPage),
-      key,
+      catalogKey,
+      true,
     );
-    state.sessionKey = pane.sessionKey;
     pane.history.catalogCursor = "cursor-1";
-    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
     expect(await pane.loadCatalogSession(key, true)).toBe(true);
     expect(pane.history.catalogCursor).toBe("cursor-2");
     expect(pane.history.catalogMessages).toHaveLength(0);

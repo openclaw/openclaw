@@ -4,6 +4,7 @@ import path from "node:path";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { assert, expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { createAutoReviewTool } from "./tool.js";
 
 // mock-isolation: Exercise tool admission without starting host child processes.
@@ -88,17 +89,12 @@ function fixture(
       expect(options).toMatchObject({ killProcessTree: true, killGraceMs: 5_000 });
       cwd = options.cwd;
       expect(await fs.readdir(cwd!)).toEqual([]);
-      return {
+      return commandResult({
         stdout: "complete",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
         cleanup: "normal",
         noOutputTimedOut: false,
         ...overrides.result,
-      };
+      });
     });
   const admitted = vi.fn<(selection: { model: string | null; explicit: boolean }) => void>();
   const context: OpenClawPluginToolContext<2> = {

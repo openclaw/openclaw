@@ -38,7 +38,8 @@ it("preserves readable code and node state across lazy highlighting", async () =
         { role: "assistant", isStreaming: false },
         {},
       )
-        .parts.map(markdownContentHtml)
+        .parts()
+        .map(markdownContentHtml)
         .join("");
     });
     const streamed = createMemo(() => {

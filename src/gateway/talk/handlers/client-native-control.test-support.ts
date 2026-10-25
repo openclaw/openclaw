@@ -76,9 +76,8 @@ const nativeUpstream = await vi.hoisted(async () => {
 vi.mock("../../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: nativeUpstream.runEmbeddedAgent,
 }));
-vi.mock("ws", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("ws")>()),
-  default: nativeUpstream.NativeSocket,
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
   WebSocket: nativeUpstream.NativeSocket,
 }));
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({

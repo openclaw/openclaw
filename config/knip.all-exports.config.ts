@@ -62,6 +62,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/control-ui-locale-provider.fixture.mjs!",
   // The state-reader build test launches this native dependency fixture by path.
   "test/scripts/state-read-worker-dependency.test-support.mts!",
+  // The relay artifact test launches this emitted-source fixture by path.
+  "test/scripts/service-relay-artifact.test-support.mjs!",
   // tsgo:test:root checks these compile-only contracts without runtime imports.
   "test/type-contracts/**/*.ts!",
   // The module-generation test launches this Bun regression directly from its source path.

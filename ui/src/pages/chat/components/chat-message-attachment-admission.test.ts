@@ -26,18 +26,29 @@ beforeEach(() => {
   vi.stubGlobal(
     "IntersectionObserver",
     class {
+      private readonly targets = new Set<Element>();
       constructor(private readonly callback: IntersectionObserverCallback) {}
       observe(element: Element) {
+        this.targets.add(element);
         observations.push({
           element,
-          show: () =>
+          show: () => {
+            if (!this.targets.has(element)) {
+              return;
+            }
             this.callback(
               [{ target: element, isIntersecting: true } as IntersectionObserverEntry],
               this as unknown as IntersectionObserver,
-            ),
+            );
+          },
         });
       }
-      disconnect() {}
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     },
   );
 });

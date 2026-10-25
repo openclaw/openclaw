@@ -420,6 +420,41 @@ it.each([
   },
 );
 
+it("preflights activation backup separately from candidate copy capacity", async () => {
+  const f = await fixture(0, ["main", "second"], false);
+  // Admission measures family lengths; sparse tails avoid writing payloads this check never reads.
+  for (const file of f.files) {
+    await fs.truncate(file, 8 * 1024 ** 2);
+  }
+  const backupDirectory = path.join(f.root, "backup");
+  let freeMiB: number | null = 100;
+  capacity((target) =>
+    target === backupDirectory ? (freeMiB === null ? null : freeMiB * 1024 ** 2) : 140 * 1024 ** 2,
+  );
+  const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
+  for (freeMiB of [100, 140, null]) {
+    const result = await assessInitialUpdateSnapshotCapacity({
+      config: {},
+      stateDir: f.stateDir,
+      env: {},
+      backupDirectory,
+    });
+    expect(result.exitCode, result.stderrTail ?? undefined).toBe(freeMiB === 100 ? 1 : 0);
+    if (freeMiB === 100) {
+      expect(result.stderrTail).toContain("Update database backup");
+      expect(result.stderrTail).toContain("125829120 bytes");
+      expect(result.stderrTail).toContain("104857600 bytes");
+      for (const file of f.files) {
+        expect(result.stderrTail).toContain(file);
+      }
+    }
+  }
+  await expect(fs.stat(backupDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  for (const [index, file] of f.files.entries()) {
+    expect((await fs.readFile(file)).equals(before[index]!)).toBe(true);
+  }
+});
+
 it("copies and verifies both databases within capacity despite a sub-floor caller timeout", async () => {
   const f = await capacityFixture(100, true);
   let copiedState = "";
