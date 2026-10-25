@@ -7,6 +7,7 @@ import {
   captureGatewayDeviceRevocation,
   retainGatewayDeviceRevocation,
 } from "../device-revocation.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
 import {
   hoisted,
@@ -51,7 +52,11 @@ it.each(["completion", "list"] as const)(
     try {
       for (let index = 0; index < 1_000; index++) {
         const connection = new AbortController();
-        const client = { connId: `reconnect-${index}`, connectionSignal: connection.signal };
+        const client = {
+          connId: `reconnect-${index}`,
+          connect: { ...gatewayConnect([]), scopes: [] },
+          connectionSignal: connection.signal,
+        } satisfies GatewayClient;
         const pending = startCall("sessions.catalog.list", {}, config, client, {
           requestEntryLifetime: { signal: gateway.signal },
         });
@@ -65,7 +70,7 @@ it.each(["completion", "list"] as const)(
           config,
           catalogRegistrationSnapshot(),
           gateway.signal,
-          client as GatewayClient,
+          client,
         );
         retainedProviders = Math.max(retainedProviders, operations.providers.size);
         retainedPages = Math.max(retainedPages, operations.pages.size);
