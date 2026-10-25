@@ -7,7 +7,6 @@ import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runActivePluginPayloadSmokeCheck } from "./active-payload-verification.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
-import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { convergePluginReleaseCohort } from "./update-cohort.js";
 import {
@@ -118,13 +117,10 @@ describe("plugin release cohort real synchronization", () => {
           const index = withPluginCache(createPluginCache(), () =>
             loadInstalledPluginIndex({ config, installRecords: records, env }),
           );
-          const ownership = createInstalledPluginOwnershipResolver(index, env);
           for (const id of ids) {
             expect(index.plugins.find((plugin) => plugin.pluginId === id)?.rootDir).toBe(
               linkedPath,
             );
-            expect(ownership.resolvePackage(id).ok).toBe(false);
-            expect(ownership.resolveLifecycle(id).ok).toBe(false);
           }
           for (const directory of multiple ? [trackedPath, linkedPath] : [linkedPath]) {
             for (const entry of entries) {

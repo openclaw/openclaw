@@ -263,16 +263,10 @@ it("marks a capture unprepared after dependency link creation fails", async () =
     }
     symlink(destination, filename, type);
   });
-
-  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(
-    /Cannot prepare dependency dependency for plugin/,
-  );
-  expect(() => artifact.assertModuleAvailable(link)).toThrowError(
-    /Cannot prepare dependency dependency for plugin/,
-  );
+  const error = /Cannot prepare dependency dependency for plugin/;
+  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(error);
+  expect(() => artifact.assertModuleAvailable(link)).toThrowError(error);
   failure.mockRestore();
-  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(
-    /Cannot prepare dependency dependency for plugin/,
-  );
+  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(error);
   expect(fs.readdirSync(path.dirname(link))).toEqual(["dependency"]);
 });

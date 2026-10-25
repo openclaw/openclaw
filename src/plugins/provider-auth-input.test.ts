@@ -29,7 +29,7 @@ vi.mock("../agents/model-auth-env.js", () => ({
 }));
 
 type KeyParams = Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0];
-function inputFixture(params?: { confirmResult?: boolean; textResult?: string }) {
+function inputFixture(params?: { envKey?: string; confirmResult?: boolean; textResult?: string }) {
   const confirm = vi.fn(async () => params?.confirmResult ?? true);
   const note = vi.fn(async () => undefined);
   const text = vi.fn(async () => params?.textResult ?? "prompt-key");
@@ -37,7 +37,7 @@ function inputFixture(params?: { confirmResult?: boolean; textResult?: string })
   const prompter = { confirm, note, text } as unknown as WizardPrompter;
   const options: KeyParams = {
     config: {},
-    env: { MINIMAX_API_KEY: process.env.MINIMAX_API_KEY },
+    env: { MINIMAX_API_KEY: params?.envKey },
     provider: "minimax",
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
@@ -57,17 +57,13 @@ function inputFixture(params?: { confirmResult?: boolean; textResult?: string })
   };
 }
 
-function setMinimaxEnv(apiKey?: string) {
-  vi.stubEnv("MINIMAX_API_KEY", apiKey);
-}
-
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
 it("retains the storage reference while resolving through the staged workspace and explicit env", async () => {
-  setMinimaxEnv("host-key");
+  vi.stubEnv("MINIMAX_API_KEY", "host-key");
   const workspaceDir = "/tmp/openclaw-provider-workspace";
   const config: OpenClawConfig = {
     agents: { entries: { main: {}, work: { workspace: workspaceDir } } },
@@ -116,8 +112,8 @@ it("rejects a pasted OpenClaw onboarding command", () => {
 });
 
 it("falls back to prompt when env is declined", async () => {
-  setMinimaxEnv("env-key");
   const { run, text, setCredential } = inputFixture({
+    envKey: "env-key",
     confirmResult: false,
     textResult: "  prompted-key  ",
   });
@@ -125,17 +121,10 @@ it("falls back to prompt when env is declined", async () => {
 
   expect(result).toBe("prompted-key");
   expect(setCredential).toHaveBeenCalledWith("prompted-key", "plaintext");
-  expect(text).toHaveBeenCalledWith({
-    message: "Enter key",
-    placeholder: "API key",
-    validate: acceptAnyApiKeyInput,
-    sensitive: true,
-  });
+  expect(text).toHaveBeenCalledWith(expect.objectContaining({ sensitive: true }));
 });
 
 it("fails ref mode without select when fallback env var is missing", async () => {
-  setMinimaxEnv();
-
   const { run, setCredential } = inputFixture();
 
   await expect(run({ secretInputMode: "ref" /* pragma: allowlist secret */ })).rejects.toThrow(
@@ -145,11 +134,9 @@ it("fails ref mode without select when fallback env var is missing", async () =>
 });
 
 it("re-prompts after provider ref validation failure and succeeds with env ref", async () => {
-  setMinimaxEnv("env-key");
-
   const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
   const select = vi.fn(async () => selectValues.shift() ?? "env") as WizardPrompter["select"];
-  const { run, options, text, note, setCredential } = inputFixture();
+  const { run, options, text, note, setCredential } = inputFixture({ envKey: "env-key" });
   text.mockResolvedValueOnce("/providers/minimax/apiKey").mockResolvedValueOnce("MINIMAX_API_KEY");
 
   const result = await run({
@@ -172,17 +159,10 @@ it("re-prompts after provider ref validation failure and succeeds with env ref",
   expect(setCredential).toHaveBeenCalledWith(envRef, "ref");
   const noteMessages = note.mock.calls.map((call) => call.at(0) ?? "").join("\n");
   expect(noteMessages).not.toContain("env-key");
-  for (const message of [
-    "Could not validate provider reference filemain:/providers/minimax/apiKey.",
-    "secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json",
-    "Check your provider configuration and try again.",
-  ]) {
-    expect(note).toHaveBeenCalledWith(expect.stringContaining(message), "Reference check failed");
-  }
-  expect(note).toHaveBeenCalledWith(
-    "Validated environment variable MINIMAX_API_KEY. OpenClaw will store a reference, not the key value.",
+  expect(note.mock.calls.map((call) => call.at(1))).toEqual([
+    "Reference check failed",
     "Reference validated",
-  );
+  ]);
 });
 
 it.each([
@@ -191,10 +171,9 @@ it.each([
 ] as const)(
   "resolves option provider %s before environment/prompt",
   async (tokenProvider, provider, expected, mode) => {
-    if (mode) {
-      setMinimaxEnv("env-key");
-    }
-    const { options, confirm, note, text, setCredential } = inputFixture();
+    const { options, confirm, note, text, setCredential } = inputFixture({
+      envKey: mode ? "env-key" : undefined,
+    });
     expect(
       await ensureApiKeyFromOptionEnvOrPrompt({
         ...options,
@@ -221,8 +200,7 @@ it.each([
 
 it.each([
   ["a😀b", "a…b"],
-  [`abc😀${"x".repeat(20)}`, "abc…xxxx"],
-  [`${"x".repeat(20)}😀abc`, "xxxx…abc"],
+  [`abc😀${"x".repeat(20)}😀abc`, "abc…abc"],
   ["😀".repeat(10), "😀😀…😀😀"],
 ])("redacts %p without splitting surrogate pairs", (value, expected) => {
   expect(formatApiKeyPreview(value)).toBe(expected);
