@@ -218,7 +218,14 @@ function cancellableProbes() {
 
 function awaitAbort(signal: AbortSignal) {
   return new Promise<void>((_resolve, reject) => {
-    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    signal.addEventListener(
+      "abort",
+      () => {
+        const reason: unknown = signal.reason;
+        reject(reason instanceof Error ? reason : new Error(String(reason)));
+      },
+      { once: true },
+    );
   });
 }
 

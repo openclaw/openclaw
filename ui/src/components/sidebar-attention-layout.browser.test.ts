@@ -28,8 +28,7 @@ import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import layoutCss from "../styles/layout.css?inline";
 import floatingCss from "../styles/sidebar-attention-floating.css?inline";
 
-const query = <T extends HTMLElement = HTMLElement>(root: ParentNode, selector: string) =>
-  root.querySelector<T>(selector)!;
+const query = (root: ParentNode, selector: string) => root.querySelector<HTMLElement>(selector)!;
 const part = (root: ParentNode, name: string) => query(root, `.sidebar-issues-panel__${name}`);
 const bounds = (target: Element | Range) => target.getBoundingClientRect();
 const style = (target: Element) => getComputedStyle(target);
@@ -166,7 +165,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
       setSelectedTab("approvals");
       flush();
-      const placeholder = query<HTMLButtonElement>(shell, ".sidebar-issues-panel__dismiss-shown");
+      const placeholder = shell.querySelector<HTMLButtonElement>(
+        ".sidebar-issues-panel__dismiss-shown",
+      )!;
       expect(placeholder.disabled).toBe(true);
       expect(placeholder.getAttribute("aria-hidden")).toBe("true");
       expect(style(placeholder).visibility).toBe("hidden");
@@ -214,7 +215,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(part(shell, "empty")).toBeNull();
     const error = query(shell, '.sidebar-issues-panel__mentions-note[role="status"]');
     expect(error.textContent).toContain("Connection interrupted");
-    const refresh = query<HTMLButtonElement>(error, "button");
+    const refresh = error.querySelector<HTMLButtonElement>("button")!;
     expect(refresh.textContent?.trim()).toBe("Refresh mentions");
     refresh.click();
     expect(params.mentions.refresh).toHaveBeenCalledOnce();
