@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type {
   SessionEventOptions,
   SessionEventOutcome,
@@ -49,9 +48,7 @@ vi.mock("./scratch-read.js", () => ({ readCronScratchSnapshot: async () => undef
 beforeEach(() => {
   vi.resetAllMocks();
   fixture.capture.mockResolvedValue({
-    sessionId: "target-session",
-    sessionKey: "agent:main:scheduled",
-    lifecycleRevision: "target-revision",
+    ...target,
     generation: "target-generation",
   });
   const deliveryPlan = { mode: "none" as const, source: "delivery" as const, requested: false };
@@ -70,16 +67,38 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
+
+const target = {
+  sessionId: "target-session",
+  sessionKey: "agent:main:scheduled",
+  lifecycleRevision: "target-revision",
+};
+const receipt = (
+  settled: Promise<SessionEventOutcome>,
+  accepted = Promise.resolve({ ok: true as const }),
+) => ({ id: "event", cancel: () => false, accepted, settled });
+
+function captureSession(
+  accepted?: Promise<{ ok: true }>,
+  onEnqueue?: (options: SessionEventOptions) => void,
+) {
+  const terminal = createDeferred<SessionEventOutcome>();
+  const enqueued = createDeferred<SessionEventOptions>();
+  fixture.enqueue.mockImplementation((_text, options) => {
+    onEnqueue?.(options);
+    enqueued.resolve(options);
+    return receipt(terminal.promise, accepted);
+  });
+  return { terminal, enqueued };
+}
 
 function input(): Parameters<typeof runCronSessionTurn>[0] {
   return {
     occurrence: TEST_SCHEDULED_OCCURRENCE,
     cfg: fixture.config,
     agentId: "main",
-    sessionKey: "agent:main:scheduled",
+    sessionKey: target.sessionKey,
     admissionSource: "requester-schedule",
     deliveryAttemptFence: null,
     text: "Check the report.",
@@ -93,9 +112,7 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
         source: {
           version: 1,
           agentId: "main",
-          sessionKey: "agent:main:scheduled",
-          sessionId: "target-session",
-          lifecycleRevision: "target-revision",
+          ...target,
           sourceRunId: "original-request",
           snapshot: {
             profileId: "requester",
@@ -123,13 +140,12 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
 }
 
 function restoredSource(): RestoredGatewayOperatorAuthority {
-  const authority: AdmittedRunOperatorAuthority = {
-    profileId: "requester",
-    scopes: ["operator.read"],
-    assertCurrent: vi.fn(() => {}),
-  };
   return {
-    authority,
+    authority: {
+      profileId: "requester",
+      scopes: ["operator.read"],
+      assertCurrent: vi.fn(() => {}),
+    },
     assertPolicyCurrent: vi.fn(),
     authenticatedUserProfile: {
       profileId: "requester",
@@ -147,17 +163,7 @@ async function prepareLivePrompt(
   params: Parameters<typeof runCronSessionTurn>[0],
   beforePrepare?: () => void,
 ) {
-  const terminal = createDeferred<SessionEventOutcome>();
-  const enqueued = createDeferred<SessionEventOptions>();
-  fixture.enqueue.mockImplementation((_text, options) => {
-    enqueued.resolve(options);
-    return {
-      id: "event",
-      cancel: () => false,
-      accepted: Promise.resolve({ ok: true }),
-      settled: terminal.promise,
-    };
-  });
+  const { terminal, enqueued } = captureSession();
   const run = runCronSessionTurn(params);
   try {
     const options = await awaitGateBeforeSettlement(
@@ -177,12 +183,9 @@ describe("scheduled session prompts", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-20T16:00:00Z"));
-    fixture.enqueue.mockReturnValue({
-      id: "event",
-      cancel: () => false,
-      accepted: Promise.resolve({ ok: true }),
-      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-    });
+    fixture.enqueue.mockReturnValue(
+      receipt(Promise.resolve({ status: "completed", executionStarted: true, delivered: false })),
+    );
   });
 
   it("submits the job identity and localized current time with the scheduled instructions", async () => {
@@ -293,17 +296,8 @@ describe("scheduled session prompts", () => {
 describe("scheduled session execution custody", () => {
   it("times out adopted preparation without spending the setup budget in the queue", async () => {
     vi.useFakeTimers();
-    const terminal = createDeferred<SessionEventOutcome>();
-    const enqueued = createDeferred<SessionEventOptions>();
-    fixture.enqueue.mockImplementation((_text, options) => {
+    const { terminal, enqueued } = captureSession(undefined, (options) => {
       options.scheduledAutomation?.onLaneWait?.({ waiting: true });
-      enqueued.resolve(options);
-      return {
-        id: "event",
-        cancel: () => false,
-        accepted: Promise.resolve({ ok: true }),
-        settled: terminal.promise,
-      };
     });
     const triggerTimeout = vi.fn();
     const watchdog = createCronAgentWatchdog({
@@ -350,17 +344,7 @@ describe("scheduled session execution custody", () => {
     const source = restoredSource();
     fixture.restore.mockResolvedValue(source);
     const accepted = createDeferred<{ ok: true }>();
-    const terminal = createDeferred<SessionEventOutcome>();
-    const enqueued = createDeferred<SessionEventOptions>();
-    fixture.enqueue.mockImplementation((_text, options) => {
-      enqueued.resolve(options);
-      return {
-        id: "event",
-        cancel: () => false,
-        accepted: accepted.promise,
-        settled: terminal.promise,
-      };
-    });
+    const { terminal, enqueued } = captureSession(accepted.promise);
     const onExecutionStarted = vi.fn();
     const run = runCronSessionTurn({ ...input(), onExecutionStarted });
     const options = await awaitGateBeforeSettlement(
@@ -402,12 +386,9 @@ describe("scheduled session execution custody", () => {
     async (status) => {
       const source = restoredSource();
       fixture.restore.mockResolvedValue(source);
-      fixture.enqueue.mockReturnValue({
-        id: "event",
-        cancel: () => false,
-        accepted: Promise.resolve({ ok: true }),
-        settled: Promise.resolve({ status, executionStarted: false, delivered: false }),
-      });
+      fixture.enqueue.mockReturnValue(
+        receipt(Promise.resolve({ status, executionStarted: false, delivered: false })),
+      );
       await expect(runCronSessionTurn(input())).resolves.toMatchObject({ status: "error" });
       expect(source.release).toHaveBeenCalledOnce();
     },

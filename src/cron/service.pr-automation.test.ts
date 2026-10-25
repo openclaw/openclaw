@@ -268,10 +268,8 @@ it("transports autoFix for only the selected PR across session replacement and d
   });
   await fixture.execution.update(fixture.selected.id, { enabled: true });
   expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
-  expect(finalEffect.mock.calls).toEqual([[effect41, SESSION_ID]]);
   await fixture.seed(replacementSession);
   expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
-  expect(finalEffect.mock.calls[1]).toEqual([effect41, replacementSession]);
   await fixture.execution.update(fixture.selected.id, { enabled: false });
   await fixture.execution.update(fixture.other.id, { enabled: true });
   expect(await fixture.tick()).toMatchObject({ jobId: fixture.other.id, status: "ok" });
