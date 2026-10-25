@@ -20,10 +20,6 @@ import { createVisibleActiveSessionRunProjector } from "./server-methods/session
 import { resolveGatewayModelSelectionPolicy } from "./server-methods/session-model-selection-policy.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
-import {
-  addSessionOwnerFacetIdentity,
-  sortSessionOwnerFacet,
-} from "./session-identity-projection.js";
 import { getSessionListBaseMiss, retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
 import {
@@ -34,6 +30,7 @@ import {
   type SessionListFilteredEntries,
 } from "./session-list-filters.js";
 import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
+import { filterSessionPartitions } from "./session-list-partitions.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -50,7 +47,6 @@ import {
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
-import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
@@ -74,52 +70,17 @@ export function selectSessionEntries(
     params.retained &&
     !params.opts.includePeople &&
     !params.opts.involvingProfileId &&
-    !params.opts.includeOwnerSessionCounts;
+    !params.opts.includeOwnerSessionCounts &&
+    params.opts.activeMinutes === undefined;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
-    const entries: SessionEntryPair[] = [];
-    const ownerEntries: SessionEntryPair[] = [];
-    const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
-    let totalCount = 0;
-    let activityExpiresAt = Infinity;
-    const pageEnd =
-      limit === undefined ? undefined : Math.min(offset + limit, Number.MAX_SAFE_INTEGER);
-    for (const partition of params.partitions!) {
-      if (!partition.entries.size) {
-        continue;
-      }
-      let part = params.retained!.get(partition.revision);
-      if (!part) {
-        part = filterSessionEntries({
-          ...params,
-          entries: (archived) =>
-            Array.from(partition.entries.values()).filter(([, entry]) =>
-              matchesSessionArchiveFilter(entry, archived),
-            ),
-        });
-        part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
-        part.ownerEntries = sortAndLimitSessionEntries(
-          part.ownerEntries,
-          ownerLimit,
-          params.opts.sortBy,
-        );
-        params.retained!.set(partition.revision, part);
-      }
-      entries.push(...part.entries);
-      ownerEntries.push(...part.ownerEntries);
-      totalCount += part.totalCount;
-      activityExpiresAt = Math.min(activityExpiresAt, part.activityExpiresAt ?? Infinity);
-      for (const owner of part.ownerFacet) {
-        addSessionOwnerFacetIdentity(owners, owner);
-      }
-    }
-    filteredResult = {
-      entries,
-      ownerEntries,
-      totalCount,
-      ownerFacet: sortSessionOwnerFacet(owners),
-      ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
-    };
+    filteredResult = filterSessionPartitions({
+      ...params,
+      partitions: params.partitions!,
+      retained: params.retained!,
+      pageEnd: limit === undefined ? undefined : Math.min(offset + limit, Number.MAX_SAFE_INTEGER),
+      ownerLimit,
+    });
   } else {
     filteredResult = filterSessionEntries(
       params,
