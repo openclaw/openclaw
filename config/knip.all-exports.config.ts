@@ -184,12 +184,26 @@ const workspaces = Object.fromEntries(
           ? [
               ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
               ...ROOT_TEST_ENTRY_GLOBS,
+              // Tests spawn these fixtures through computed source and emitted paths.
+              "src/infra/database-engine/state-read-admission-publication.worker.test-support.ts!",
+              "test/scripts/state-read-worker-stream.test-support.ts!",
             ]
           : [
               TEST_ENTRY_GLOB,
+              // Realtime codec tests spawn these fixtures by basename.
+              ...(workspace === "extensions/openai"
+                ? [
+                    "test-support/realtime-dtls-codecs.mjs!",
+                    "test-support/realtime-numeric-codecs.mjs!",
+                  ]
+                : []),
               // The plugin README documents this standalone fixture benchmark command.
               ...(workspace === "extensions/team-reports"
-                ? ["src/report-run.benchmark.test-support.ts!"]
+                ? [
+                    "src/report-run.benchmark.test-support.ts!",
+                    // Collection tests load this transport fixture through a module specifier.
+                    "src/run-worker.collection-fixtures.test-support.ts!",
+                  ]
                 : []),
               // extensions/diagnostics-prometheus/benchmarks/README.md invokes this Node benchmark by path.
               ...(workspace === "extensions/diagnostics-prometheus"

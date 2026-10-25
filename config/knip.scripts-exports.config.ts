@@ -52,8 +52,9 @@ const config = {
   ignore: [
     "scripts/**/*.d.{mts,cts,ts}",
     "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}",
-    // Generated declaration companion; application scans own its executable validator.
+    // Generated declaration companions; application scans own their executable validators.
     "packages/gateway-protocol/src/compiled/sender-identity.d.ts",
+    "packages/gateway-protocol/src/compiled/protocol.generated/*.d.ts",
   ],
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
   // checked by the application scans; this pass owns only scripts/** exports.
