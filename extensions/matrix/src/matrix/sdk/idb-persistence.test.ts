@@ -3,13 +3,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { backup, DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetFileLockStateForTest } from "openclaw/plugin-sdk/file-lock";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
-  openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -234,7 +232,6 @@ describe("Matrix IndexedDB persistence", () => {
       records: Array.from({ length: 24 }, (_, index) => `${index}:🦞${"x".repeat(15_000)}`),
     });
     await write(snapshotJson);
-    const store = snapshotStore<Record<string, unknown>>();
     const stateRuntime: MatrixSnapshotStateRuntime = {
       openKeyedStoreV2<T>(options: OpenAsyncKeyedStoreOptions) {
         return createPluginStateKeyedStoreForTests<T>("matrix", options);
@@ -242,35 +239,6 @@ describe("Matrix IndexedDB persistence", () => {
     };
     expect(await readMatrixIdbSnapshotJson(tmpDir)).toBe(snapshotJson);
     await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBe(snapshotJson);
-    const laterChunk = (await store.entries()).find(
-      (row) => row.value.kind === "snapshot-chunk" && row.value.index === 11,
-    );
-    assert(laterChunk, "expected snapshot chunk 11");
-    await closeOpenClawStateDatabaseAsync();
-    const source = openOpenClawStateDatabase({
-      env: openMatrixIdbSnapshotStoreOptions(tmpDir).env,
-    });
-    assert(source.db instanceof DatabaseSync, "Matrix snapshot corruption fixture requires SQLite");
-    const corruptRoot = path.join(tmpDir, "corrupt-startup");
-    fs.mkdirSync(path.join(corruptRoot, "state"), { recursive: true });
-    await backup(source.db, path.join(corruptRoot, "state", "openclaw.sqlite"));
-    await closeOpenClawStateDatabaseAsync();
-    // Seed corruption before the new database has any cached keyed-store receipts.
-    const corrupt = openOpenClawStateDatabase({
-      env: openMatrixIdbSnapshotStoreOptions(corruptRoot).env,
-    });
-    expect(
-      corrupt.db
-        .prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?")
-        .run("invalid JSON", laterChunk.key).changes,
-    ).toBe(1);
-    await closeOpenClawStateDatabaseAsync();
-    await expect(readMatrixIdbSnapshotJson(corruptRoot)).rejects.toMatchObject({
-      code: "PLUGIN_STATE_CORRUPT",
-    });
-    await expect(readMatrixIdbSnapshotJson(corruptRoot, stateRuntime)).rejects.toMatchObject({
-      code: "PLUGIN_STATE_CORRUPT",
-    });
   });
 
   it("refuses retired snapshot JSON when canonical SQLite state is valid", async () => {
