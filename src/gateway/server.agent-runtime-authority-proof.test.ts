@@ -82,6 +82,18 @@ describe("agent RPC real delegated-authority effects", () => {
     expect(retry.error).toEqual(response.error);
     expect(retry.payload).toEqual(response.payload);
   }
+  function expectRunStatus(response: Response, status: string, runId?: string, cached = false) {
+    expect(response).toMatchObject({
+      ok: true,
+      ...(cached ? { meta: { cached: true } } : {}),
+      payload: { status, ...(runId ? { runId } : {}) },
+    });
+  }
+  async function expectUnchanged(f: Fixture, events = f.before) {
+    expect(await pendingCount(f)).toBe(0);
+    expect(transcript(f)).toEqual(events);
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  }
   async function expectReset(f: Fixture, before: SessionEntry | undefined) {
     const committed = await readEntry(f);
     expect(committed?.sessionId).toBe(f.sessionId);
@@ -232,11 +244,9 @@ describe("agent RPC real delegated-authority effects", () => {
           expectInactive(result, "is no longer active");
           expect(inputRecorded).toBe(false);
           expect(execution.observer).not.toHaveBeenCalled();
-          expect(await pendingCount(f)).toBe(0);
-          expect(transcript(f)).toEqual(beforeInput);
-          expect(agentCommandMock).not.toHaveBeenCalled();
+          await expectUnchanged(f, beforeInput);
         } else {
-          expect(result).toMatchObject({ ok: true, payload: { status: "accepted" } });
+          expectRunStatus(result, "accepted");
           const prepared = await execution.entered;
           expect(await listSessionPendingInputs(f.scope)).toMatchObject({
             total: 1,
@@ -260,11 +270,7 @@ describe("agent RPC real delegated-authority effects", () => {
             params,
             mode === "ordinary raw input" ? null : await f.freshCaller(),
           );
-          expect(retry).toMatchObject({
-            ok: true,
-            meta: { cached: true },
-            payload: { runId: f.runId, status: "in_flight" },
-          });
+          expectRunStatus(retry, "in_flight", f.runId, true);
           expect(execution.observer).toHaveBeenCalledOnce();
           if (mode === "accepted custody") {
             expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
@@ -276,11 +282,7 @@ describe("agent RPC real delegated-authority effects", () => {
             params,
             mode === "ordinary raw input" ? null : await f.freshCaller(),
           );
-          expect(completed).toMatchObject({
-            ok: true,
-            meta: { cached: true },
-            payload: { runId: f.runId, status: "ok" },
-          });
+          expectRunStatus(completed, "ok", f.runId, true);
         }
       } finally {
         await finish([writer, request], [observer], replacement, mode === "accepted custody");
@@ -325,12 +327,10 @@ describe("agent RPC real delegated-authority effects", () => {
         if (mode === "revoked") {
           expectInactive(result);
           await expectAbsent(image.path);
-          expect(await pendingCount(f)).toBe(0);
-          expect(transcript(f)).toEqual(f.before);
+          await expectUnchanged(f);
           expect(execution.observer).not.toHaveBeenCalled();
-          expect(agentCommandMock).not.toHaveBeenCalled();
         } else {
-          expect(result).toMatchObject({ ok: true, payload: { status: "accepted" } });
+          expectRunStatus(result, "accepted");
           const prepared = await execution.entered;
           const recorder = prepared.userTurn.recorder!;
           const persisted = await recorder.withPendingInput!(() => recorder.persistApproved());
@@ -388,11 +388,7 @@ describe("agent RPC real delegated-authority effects", () => {
 
         if (mode === "stopped" || mode === "replaced") {
           expect(f.context.dedupe.get(`agent:${f.runId}`)).toBe(retained);
-          expect(retry).toMatchObject({
-            ok: true,
-            meta: { cached: true },
-            payload: { status: mode === "stopped" ? "timeout" : "in_flight" },
-          });
+          expectRunStatus(retry, mode === "stopped" ? "timeout" : "in_flight", undefined, true);
         } else {
           expectCached(retry, result);
         }
