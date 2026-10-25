@@ -111,6 +111,13 @@ async function backupFixture(name = "repository") {
     ...repo,
     create: (extra: Partial<Parameters<typeof createGitBackup>[0]> = {}) =>
       createGitBackup({ ...repo.options, databases: [state.database], ...extra }),
+    command: (runtime = createTestRuntime()) =>
+      backupGitCreateCommand(runtime, {
+        repository: repo.repositoryPath,
+        global: true,
+        push: true,
+        excludeSecrets: true,
+      }),
   };
 }
 
@@ -133,18 +140,19 @@ async function agentFixture(stateDir: string, agentId: string, agentDir: string)
   return { agentDir };
 }
 
-async function formatFixture() {
-  const root = tempRoot();
-  const source = path.join(root, "source.sqlite");
+function codecFixture(root = tempRoot(), source = path.join(root, "source.sqlite")) {
   const dump = path.join(root, "dump");
   const restoredPath = path.join(root, "restored.sqlite");
-  await createFormatFixture(source);
-  const options = { snapshotPath: source, outputPath: dump, identity: { role: "global" as const } };
   return {
     source,
     dump,
     restoredPath,
-    dumpDatabase: (excludeSecrets = true) => dumpGitBackupDatabase({ ...options, excludeSecrets }),
+    read: (name: string) => fs.readFile(path.join(dump, name), "utf8"),
+    dumpDatabase: (
+      excludeSecrets = true,
+      identity: Parameters<typeof dumpGitBackupDatabase>[0]["identity"] = { role: "global" },
+    ) =>
+      dumpGitBackupDatabase({ snapshotPath: source, outputPath: dump, identity, excludeSecrets }),
     restore: (expectedIdentity?: { role: "global" }) =>
       restoreGitBackupDirectory({
         sourcePath: dump,
@@ -152,6 +160,12 @@ async function formatFixture() {
         expectedIdentity,
       }),
   };
+}
+
+async function formatFixture() {
+  const fixture = codecFixture();
+  await createFormatFixture(fixture.source);
+  return fixture;
 }
 
 function expectText(text: string | undefined, present: string[], absent: string[] = []) {
@@ -407,24 +421,19 @@ it("uses a commit-scoped fallback identity when Git has no configured email", as
 });
 
 it("redacts and durably preserves credential-bearing push diagnostics", async () => {
-  const { stateDir, repositoryPath, configureIdentity } = await backupFixture("push-repository");
+  const { stateDir, init, command, configureIdentity } = await backupFixture("push-repository");
   const remote = authenticatedUrl("repository?access_token");
   mocks.pushDiagnostic = gitDiagnostic(
     remote,
     `stderr-tail-🦞 fatal: unable to access '${remote}'`,
     `stdout-tail-🐚 remote: rejected '${remote}'`,
   );
-  await initializeGitBackupRepository({ repositoryPath, stateDir, remote });
+  await init(remote);
   await configureIdentity();
 
   await withBackupStateEnv({ OPENCLAW_STATE_DIR: stateDir }, async () => {
     const runtime = createTestRuntime();
-    const result = await backupGitCreateCommand(runtime, {
-      repository: repositoryPath,
-      global: true,
-      push: true,
-      excludeSecrets: true,
-    });
+    const result = await command(runtime);
 
     expectDiagnostics(
       result.pushWarning,
@@ -548,7 +557,7 @@ it.each(["missing object", "non-branch ref"])(
 it.each([false, true])(
   "pushes only backup ancestry and records local degradation (adopted=%s)",
   async (adopted) => {
-    const { root, stateDir, repositoryPath, init, create, git, write, commit, configureIdentity } =
+    const { root, stateDir, init, create, command, git, write, commit, configureIdentity } =
       await backupFixture();
     const remotePath = path.join(root, "remote.git");
     await requireGit(root, ["init", "--bare", remotePath]);
@@ -570,12 +579,7 @@ it.each([false, true])(
     const warning =
       "repository history contains non-backup commits; use a dedicated backup repository";
     await withBackupStateEnv({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const result = await backupGitCreateCommand(createTestRuntime(), {
-        repository: repositoryPath,
-        global: true,
-        push: true,
-        excludeSecrets: true,
-      });
+      const result = await command();
 
       expect(result).toMatchObject({ noChanges: false, pushed: false, pushWarning: warning });
       expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
@@ -604,17 +608,10 @@ it("redacts credential-bearing origins in conflict errors", async () => {
 it.each([false, true])(
   "redacts catalog credentials only for secret-excluded backups (exclude=%s)",
   async (excludeSecrets) => {
-    const root = tempRoot();
-    const source = path.join(root, "source.sqlite");
-    const dump = path.join(root, "dump");
+    const { source, read, dumpDatabase } = codecFixture();
     const { catalog, malformedHeaders, unusableCatalogs, scopes } = createCatalogFixture(source);
-    const manifest = await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: dump,
-      identity: { role: "agent", agentId: "main" },
-      excludeSecrets,
-    });
-    const rows = (await fs.readFile(path.join(dump, "tables", "cache_entries.jsonl"), "utf8"))
+    const manifest = await dumpDatabase(excludeSecrets, { role: "agent", agentId: "main" });
+    const rows = (await read("tables/cache_entries.jsonl"))
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
@@ -660,14 +657,14 @@ it.each([false, true])(
 );
 
 it("omits secret tables and reports the restore gap", async () => {
-  const { dump, dumpDatabase, restore } = await formatFixture();
+  const { dump, read, dumpDatabase, restore } = await formatFixture();
   const manifest = await dumpDatabase();
   const secretTables = [
     "device_auth_tokens",
     "channel_pairing_requests",
     "device_pairing_join_codes",
   ];
-  const schema = await fs.readFile(path.join(dump, "schema.sql"), "utf8");
+  const schema = await read("schema.sql");
   for (const table of secretTables) {
     expect(manifest.excludedTables).toContain(table);
     expect(manifest.tables).not.toHaveProperty(table);
@@ -700,6 +697,7 @@ it("omits secret tables and reports the restore gap", async () => {
 it("redacts secret machine-state keys while retaining ordinary machine state", async () => {
   const root = tempRoot();
   const { stateDir, database } = createStateDatabaseFixture(root);
+  const { read, dumpDatabase, restore } = codecFixture(root, database.path);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const nodeSecret = "synthetic-node-host-gateway-secret";
   const pushSecret = "synthetic-web-push-private-key";
@@ -712,18 +710,9 @@ it("redacts secret machine-state keys while retaining ordinary machine state", a
   writeConfigMachineState("sidebar.sectionOrder", ["first", "second"], { env });
   closeOpenClawStateDatabaseForTest();
 
-  const outputPath = path.join(root, "dump");
-  const manifest = await dumpGitBackupDatabase({
-    snapshotPath: database.path,
-    outputPath,
-    identity: { role: "global" },
-    excludeSecrets: true,
-  });
-  const rows = await fs.readFile(
-    path.join(outputPath, "tables", "config_machine_state.jsonl"),
-    "utf8",
-  );
-  const manifestJson = await fs.readFile(path.join(outputPath, "manifest.json"), "utf8");
+  const manifest = await dumpDatabase();
+  const rows = await read("tables/config_machine_state.jsonl");
+  const manifestJson = await read("manifest.json");
 
   expect(manifest).toMatchObject({
     excludedConfigStateKeyPrefixes: ["authProfiles.", "nodeHost.", "webPush.vapidKeys"],
@@ -737,12 +726,7 @@ it("redacts secret machine-state keys while retaining ordinary machine state", a
   );
   expectText(manifestJson, [], secrets);
 
-  const restoredPath = path.join(root, "restored.sqlite");
-  const restored = await restoreGitBackupDirectory({
-    sourcePath: outputPath,
-    targetPath: restoredPath,
-    expectedIdentity: { role: "global" },
-  });
+  const restored = await restore({ role: "global" });
   expect(restored.excludedConfigStateKeyPrefixes).toEqual([
     "authProfiles.",
     "nodeHost.",
