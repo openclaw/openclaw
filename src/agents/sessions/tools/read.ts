@@ -1,5 +1,4 @@
-import { constants } from "node:fs";
-import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
+import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import * as os from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import {
@@ -117,7 +116,6 @@ async function assertLocalReadableFile(filePath: string): Promise<void> {
   if (!stat.isFile()) {
     throw new Error(`Read only supports regular files; no read was attempted: ${filePath}`);
   }
-  await fsAccess(filePath, constants.R_OK);
 }
 
 async function suggestLocalReadPaths(filePath: string): Promise<string[]> {
