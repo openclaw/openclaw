@@ -85,23 +85,34 @@ async function withBlockedLifecycle(
 }
 
 describe("package lifecycle completion", () => {
-  it("runs preinstall and postinstall once before releasing concurrent callers", async () => {
-    await withBlockedLifecycle("preinstall", async ({ entered, release, start, runScript }) => {
-      const first = start();
-      await entered;
-      const waitForContention = observeLifecycleContention();
-      const second = start();
-      await waitForContention(second);
-      expect(runScript.mock.calls.map(([script]) => script.name)).toEqual(["preinstall"]);
-      release();
-      await Promise.all([first, second]);
-      await start();
-      expect(runScript.mock.calls.map(([script]) => [script.name, script.relativePath])).toEqual([
-        ["preinstall", path.join("scripts", "preinstall-package-manager-warning.mjs")],
-        ["postinstall", path.join("scripts", "postinstall-bundled-plugins.mjs")],
-      ]);
-    });
-  });
+  it.each(["preinstall", "postinstall"] as const)(
+    "holds concurrent callers until %s settles, including after marker removal",
+    async (stage) => {
+      await withBlockedLifecycle(stage, async ({ entered, release, start, runScript }) => {
+        const first = start();
+        await entered;
+        const waitForContention = observeLifecycleContention();
+        const contenderScript = vi.fn();
+        const returned = vi.fn();
+        const second = start(contenderScript);
+        void second.then(returned, returned);
+        await waitForContention(second);
+        expect(returned).not.toHaveBeenCalled();
+        expect(contenderScript).not.toHaveBeenCalled();
+        expect(runScript.mock.calls.map(([script]) => script.name)).toEqual(
+          stage === "preinstall" ? ["preinstall"] : ["preinstall", "postinstall"],
+        );
+        release();
+        await Promise.all([first, second]);
+        await start();
+        expect(contenderScript).not.toHaveBeenCalled();
+        expect(runScript.mock.calls.map(([script]) => [script.name, script.relativePath])).toEqual([
+          ["preinstall", path.join("scripts", "preinstall-package-manager-warning.mjs")],
+          ["postinstall", path.join("scripts", "postinstall-bundled-plugins.mjs")],
+        ]);
+      });
+    },
+  );
 
   it.each(["throws", "leaves the marker"])(
     "retains pending state when modern postinstall %s",
@@ -127,23 +138,6 @@ describe("package lifecycle completion", () => {
       });
     },
   );
-
-  it("waits for a held invocation after postinstall clears its pending marker", async () => {
-    await withBlockedLifecycle("postinstall", async ({ entered, release, start }) => {
-      const owner = start();
-      const returned = vi.fn();
-      const contenderScript = vi.fn();
-      await entered;
-      const waitForContention = observeLifecycleContention();
-      const contender = start(contenderScript);
-      void contender.then(returned, returned);
-      await waitForContention(contender);
-      expect(returned).not.toHaveBeenCalled();
-      expect(contenderScript).not.toHaveBeenCalled();
-      release();
-      await Promise.all([owner, contender]);
-    });
-  });
 
   it.each(["none", "preinstall", "postinstall"])(
     "completes the shipped dist guard after %s interruption",
