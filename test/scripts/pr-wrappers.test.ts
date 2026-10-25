@@ -821,7 +821,7 @@ exit "$status"
   ])(
     "routes mismatched $command through the trusted wrapper (parked=$parked)",
     ({ command, parked }) => {
-      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+      const fixture = makeMismatchedWrapperRepo();
       seedReadyReview(fixture);
       if (parked) {
         parkCanonicalOffAnchor(fixture);
