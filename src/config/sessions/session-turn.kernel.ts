@@ -21,8 +21,14 @@ import {
   readTranscriptEventMessage,
 } from "./session-accessor.sqlite-read.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
-import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
+import {
+  appendTranscriptMessageInTransaction,
+  appendFreshLinearTranscriptMessagesInTransaction,
+} from "./session-accessor.sqlite-transcript-message-append.js";
+import {
+  rememberCommittedTranscriptMessageSequencesInTransaction,
+  installCommittedTranscriptMessageSequences,
+} from "./session-accessor.sqlite-transcript-sequences.js";
 import type {
   SessionTranscriptTurnMessageAppend,
   TranscriptMessageAppendResult,
@@ -118,7 +124,26 @@ export function createSessionTranscriptTurnKernel(
       }
       const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
       let postimage: TranscriptAppendPostimage | undefined;
-      for (const append of messages) {
+      const batch =
+        !mutation && !options.assertCurrent
+          ? appendFreshLinearTranscriptMessagesInTransaction(
+              transactionDb,
+              resolved,
+              messages.map((append) => ({
+                ...append,
+                cwd: append.cwd ?? options.cwd,
+                config: append.config ?? options.config,
+              })),
+              projection,
+            )
+          : undefined;
+      if (batch) {
+        for (const appended of batch.commits) {
+          appendedMessages.push(appended.result);
+          postimage = readTranscriptAppendPostimage(appended);
+        }
+      }
+      for (const append of batch ? [] : messages) {
         const { shouldAppend: _shouldAppend, shouldAppendInTransaction, ...appendOptions } = append;
         if (shouldAppendInTransaction) {
           if (
@@ -186,16 +211,38 @@ export function createSessionTranscriptTurnKernel(
 
       // Later explicit parents can abandon earlier rows. Capture every cursor
       // from the final active projection before this atomic transaction commits.
-      rememberCommittedTranscriptMessageSequencesInTransaction(
-        transactionDb,
-        resolved.sessionId,
-        appendedMessages,
-        postimage,
-      );
+      if (batch) {
+        installCommittedTranscriptMessageSequences(appendedMessages, batch.sequences);
+      } else {
+        rememberCommittedTranscriptMessageSequencesInTransaction(
+          transactionDb,
+          resolved.sessionId,
+          appendedMessages,
+          postimage,
+        );
+      }
 
       // Append-owned metadata (including history coverage) is part of this same
       // transaction. Do not overwrite it with the pre-append entry snapshot.
-      const appended = readEntry(transactionDb, true);
+      const appended =
+        batch?.version && fresh?.row.window
+          ? {
+              entry: fresh.entry,
+              row: {
+                ...fresh.row,
+                window: {
+                  ...fresh.row.window,
+                  updated_at: batch.windowUpdatedAt ?? fresh.row.window.updated_at,
+                  transcript_updated_at: batch.version.updatedAt,
+                },
+                transcriptWatermark: {
+                  sessionId: resolved.sessionId,
+                  generation: batch.version.generation,
+                  maxSeq: batch.version.rawSeq,
+                },
+              },
+            }
+          : readEntry(transactionDb, true);
       const appendedEntry = appended?.entry ?? currentEntry;
       const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
         appendedMessages,
