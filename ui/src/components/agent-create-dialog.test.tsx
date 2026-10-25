@@ -75,48 +75,48 @@ function dialogContext(): ApplicationContext {
   return { gateway, agents: { state: { agentsList: null } } } as ApplicationContext;
 }
 
-it("requires a display name and submits the selected Blobster identity", () => {
-  const onCancel = vi.fn();
-  const onCreate = vi.fn();
+function mountDialog() {
+  const onCancel = vi.fn(),
+    onCreate = vi.fn();
   const view = mountSolid(AgentCreateDialog, { context: dialogContext(), onCancel, onCreate });
   document.body.append(view.container);
+  const query = <T extends Element = HTMLElement>(selector: string) =>
+    view.container.querySelector<T>(selector);
+  const name = query<HTMLInputElement>('input[name="name"]')!;
+  const create = query<HTMLButtonElement>('button[type="submit"]')!;
+  const setName = (value: string) => {
+    name.value = value;
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  return { ...view, query, name, create, setName, onCancel, onCreate };
+}
 
-  const name = view.container.querySelector<HTMLInputElement>('input[name="name"]')!;
-  const create = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-  expect(view.container.querySelector("h2")?.textContent).toBe("Create new agent");
+it("requires a display name and submits the selected Blobster identity", () => {
+  const { query, name, create, setName, onCreate, onCancel, dispose } = mountDialog();
+  expect(query("h2")?.textContent).toBe("Create new agent");
   expect(name.placeholder).toBe("Name your agent");
-  expect(
-    view.container.querySelector(".agent-create-dialog__ghost .lobster-pet__svg"),
-  ).not.toBeNull();
+  expect(query(".agent-create-dialog__ghost .lobster-pet__svg")).not.toBeNull();
   expect(create.disabled).toBe(true);
-  name.value = "  Scout  ";
-  name.dispatchEvent(new Event("input", { bubbles: true }));
+  setName("  Scout  ");
   flush();
   expect(create.disabled).toBe(false);
   picker.select!(selectedAvatar);
   flush();
-  expect(view.container.querySelector(".agent-create-dialog__ghost")).toBeNull();
-  expect(
-    view.container.querySelector(".agent-create-dialog__preview .identity-avatar--agent"),
-  ).not.toBeNull();
+  expect(query(".agent-create-dialog__ghost")).toBeNull();
+  expect(query(".agent-create-dialog__preview .identity-avatar--agent")).not.toBeNull();
   create.click();
 
   expect(onCreate).toHaveBeenCalledExactlyOnceWith({ name: "Scout", avatar: selectedAvatar });
   expect(onCancel).not.toHaveBeenCalled();
-  view.dispose();
+  dispose();
 });
 
 it("cancels without creating an agent", () => {
-  const onCancel = vi.fn();
-  const onCreate = vi.fn();
-  const view = mountSolid(AgentCreateDialog, { context: dialogContext(), onCancel, onCreate });
-  document.body.append(view.container);
-
-  view.container.querySelector<HTMLButtonElement>('[data-action="cancel"]')!.click();
-
+  const { query, onCancel, onCreate, dispose } = mountDialog();
+  query<HTMLButtonElement>('[data-action="cancel"]')!.click();
   expect(onCancel).toHaveBeenCalledOnce();
   expect(onCreate).not.toHaveBeenCalled();
-  view.dispose();
+  dispose();
 });
 
 it.each(["too-detailed", "unusable", "rejected conversion"] as const)(
@@ -128,22 +128,12 @@ it.each(["too-detailed", "unusable", "rejected conversion"] as const)(
       .mockReset()
       .mockReturnValueOnce(pending.promise)
       .mockReturnValueOnce(retry.promise);
-    const onCreate = vi.fn();
-    const view = mountSolid(AgentCreateDialog, {
-      context: dialogContext(),
-      onCancel: vi.fn(),
-      onCreate,
-    });
-    document.body.append(view.container);
-    const name = view.container.querySelector<HTMLInputElement>('input[name="name"]')!;
-    const create = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    name.value = "Scout";
-    name.dispatchEvent(new Event("input", { bubbles: true }));
+    const { query, name, create, setName, onCreate, dispose } = mountDialog();
+    setName("Scout");
     picker.select!(selectedAvatar);
     flush();
-    const preview = view.container.querySelector(
-      ".agent-create-dialog__preview .identity-avatar--agent",
-    );
+    const avatar = () => query(".agent-create-dialog__preview .identity-avatar--agent");
+    const preview = avatar();
     expect(create.disabled).toBe(false);
 
     const file = new File(["avatar"], "avatar.png", { type: "image/png" });
@@ -158,7 +148,7 @@ it.each(["too-detailed", "unusable", "rejected conversion"] as const)(
       pending.resolve({ ok: false, reason: failure });
     }
     await waitForSolid(() => {
-      expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+      expect(query('[role="alert"]')?.textContent).toContain(
         failure === "rejected conversion"
           ? "Image conversion failed"
           : failure === "too-detailed"
@@ -166,46 +156,35 @@ it.each(["too-detailed", "unusable", "rejected conversion"] as const)(
             : "That image can't be used",
       );
       expect(create.disabled).toBe(false);
-      expect(view.container.querySelector('input[name="name"]')).toBe(name);
+      expect(query('input[name="name"]')).toBe(name);
       expect(name.value).toBe("Scout");
-      expect(
-        view.container.querySelector(".agent-create-dialog__preview .identity-avatar--agent"),
-      ).toBe(preview);
+      expect(avatar()).toBe(preview);
     });
 
     picker.upload(file);
     flush();
-    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+    expect(query('[role="alert"]')).toBeNull();
     expect(create.disabled).toBe(true);
     const uploadedAvatar = "data:image/webp;base64,dXBsb2Fk";
     retry.resolve({ ok: true, dataUrl: uploadedAvatar });
     await waitForSolid(() => {
-      expect(view.container.querySelector('[role="alert"]')).toBeNull();
+      expect(query('[role="alert"]')).toBeNull();
       expect(create.disabled).toBe(false);
-      expect(view.container.querySelector(".agent-create-dialog__ghost")).toBeNull();
+      expect(query(".agent-create-dialog__ghost")).toBeNull();
     });
     create.click();
     expect(onCreate).toHaveBeenCalledExactlyOnceWith({ name: "Scout", avatar: uploadedAvatar });
-    view.dispose();
+    dispose();
   },
 );
 
 it("generates first, then saves the named agent with the generated avatar", () => {
   picker.generate.mockClear();
-  const onCreate = vi.fn();
-  const view = mountSolid(AgentCreateDialog, {
-    context: dialogContext(),
-    onCancel: vi.fn(),
-    onCreate,
-  });
-  document.body.append(view.container);
-  const name = view.container.querySelector<HTMLInputElement>('input[name="name"]')!;
-  name.value = "Sky helper";
-  name.dispatchEvent(new Event("input", { bubbles: true }));
+  const { create: action, setName, onCreate, dispose } = mountDialog();
+  setName("Sky helper");
   picker.footerChange!({ mode: "generate", canGenerate: true, generated: false });
   flush();
 
-  const action = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
   expect(action.textContent?.trim()).toBe("Generate");
   picker.footerChange!({ busy: true });
   flush();
@@ -223,5 +202,5 @@ it("generates first, then saves the named agent with the generated avatar", () =
   expect(action.textContent?.trim()).toBe("Save");
   action.click();
   expect(onCreate).toHaveBeenCalledExactlyOnceWith({ name: "Sky helper", avatar: selectedAvatar });
-  view.dispose();
+  dispose();
 });
