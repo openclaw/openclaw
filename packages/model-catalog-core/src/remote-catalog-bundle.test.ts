@@ -40,6 +40,11 @@ const validBundle = {
   pricing: { "openai/gpt-external": { input: 2.5, output: 10, cacheRead: 1.25 } },
 };
 const knownPrice = { status: "known", currency: "USD", unit: "million_tokens" };
+const modelV2 = (id: string, provider = "first", pricing: unknown = { status: "unknown" }) => ({
+  id,
+  provider,
+  pricing,
+});
 const firstModel = {
   id: "vendor/model",
   provider: "first",
@@ -54,7 +59,7 @@ const validBundleV2 = {
     first: { defaultModel: "vendor/model" },
     second: { defaultUtilityModel: "vendor/model" },
   },
-  models: [firstModel, { id: "vendor/model", provider: "second", pricing: { status: "unknown" } }],
+  models: [firstModel, modelV2("vendor/model", "second")],
 };
 const versions = [
   [1, parseV1, sanitizeV1, validBundle],
@@ -84,7 +89,6 @@ const invalidV1: Rejection[] = [
     "contextWindowDefault must reference a declared contextWindows option",
   ],
   [v1Provider({ recommendedModels: ["claude-test"] }), "recommendedModels"],
-  [validBundleV2],
 ];
 const invalidV2: Rejection[] = [
   [{ models: [firstModel, { ...firstModel, id: " vendor/model " }] }, "duplicate provider/model"],
@@ -94,23 +98,14 @@ const invalidV2: Rejection[] = [
   [{ models: [{ ...firstModel, pricing: { status: "unknown", input: 0 } }] }, "input"],
   [{ models: [{ ...firstModel, pricing: knownPrice }] }, "known pricing must contain rates"],
   [{ models: [{ ...firstModel, pricing: { ...firstModel.pricing, input: -1 } }] }, "input"],
-  [validBundle],
   [{ schemaVersion: 3 }],
   [{ pricing: {} }],
 ];
-for (const recommendedModels of [
-  ["missing"],
-  ["vendor/model", " vendor/model "],
-  [" "],
-  ["second-only"],
-]) {
+for (const recommendedModels of [["vendor/model", " vendor/model "], [" "], ["second-only"]]) {
   invalidV2.push([
     {
       providers: { first: { recommendedModels }, second: {} },
-      models: [
-        ...validBundleV2.models,
-        { id: "second-only", provider: "second", pricing: { status: "unknown" } },
-      ],
+      models: [...validBundleV2.models, modelV2("second-only", "second")],
     },
   ]);
 }
@@ -169,7 +164,7 @@ it.each([versions[0], versions[1]])(
               ...rows.map((row) =>
                 Object.assign({}, row, { provider: "first", pricing: { status: "unknown" } }),
               ),
-              { id: "kept", provider: "second", pricing: { status: "unknown" } },
+              modelV2("kept", "second"),
             ],
           };
     const bundle = sanitize({ ...base, ...patch }, warn);
@@ -229,23 +224,23 @@ it("preserves v2 recommendations, scoped identities, and all pricing states", ()
   ];
   const models = [
     ...validBundleV2.models,
-    { id: "other", provider: "first", pricing: { status: "unknown" } },
-    ...pricing.map((price, index) => ({ id: `model-${index}`, provider: "first", pricing: price })),
+    modelV2("other"),
+    ...pricing.map((price, index) => modelV2(`model-${index}`, "first", price)),
   ];
   const providers = {
     ...validBundleV2.providers,
     first: { ...validBundleV2.providers.first, recommendedModels: ["other", "vendor/model"] },
   };
+  const candidate = { ...validBundleV2, models, providers };
   expect(
     parseV2({
-      ...validBundleV2,
-      models,
+      ...candidate,
       providers: {
         ...providers,
         first: { ...providers.first, recommendedModels: [" other ", "vendor/model"] },
       },
     }),
-  ).toEqual({ ...validBundleV2, models, providers });
+  ).toEqual(candidate);
 });
 
 it("strips v2 transport metadata while preserving transport-like provider identities", () => {

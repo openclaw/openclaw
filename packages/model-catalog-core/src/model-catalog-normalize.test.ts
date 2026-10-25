@@ -339,18 +339,11 @@ it("gives rows the provider family unless the row declares its own, dropping mal
   expect(providers?.router).toEqual({ models: [{ id: "x" }] });
 
   const familyOf = (catalog: ModelCatalogProvider | undefined) =>
-    Object.fromEntries(
-      normalizeModelCatalogProviderRows({
-        provider: "openai",
-        providerCatalog: catalog ?? { models: [] },
-        source: "manifest",
-      }).map((row) => [row.id, row.family]),
-    );
+    Object.fromEntries(normalizeRows(catalog ?? { models: [] }).map((row) => [row.id, row.family]));
   expect(familyOf(providers?.openai)).toEqual({
     "gpt-5.4": "openai",
     "oss-120b": "meta",
     bad: "openai",
   });
-  // A provider without a declaration leaves undeclared rows unknown.
   expect(familyOf(providers?.router)).toEqual({ x: undefined });
 });
