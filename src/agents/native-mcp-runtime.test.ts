@@ -85,11 +85,6 @@ const completed = <T extends object>(result: T) => ({
 });
 const notificationMatching = (method: string) =>
   expect.objectContaining({ notification: expect.objectContaining({ method }) });
-const releaseViews = (...views: NativeMcpServerView[]) => ({
-  async [Symbol.asyncDispose]() {
-    await Promise.all(views.map((view) => view.release()));
-  },
-});
 async function continuation(view: NativeMcpServerView, signal: AbortSignal) {
   const response = await callTool(view, "probe", signal);
   if (response.kind !== "input-required") {
@@ -105,8 +100,6 @@ describe("private MCP projection operations at the session owner", () => {
     const { acquire } = await fixture();
     const caller = context();
     const view = await acquire(caller);
-    await using cleanup = releaseViews(view);
-    void cleanup;
     expect(view.getProtocolEra()).toBe("legacy");
     expect(view.getProtocolVersion()).toBe("2025-11-25");
     expect(view.getServerInfo()).toEqual({ name: "typed-fixture", version: "1.0.0" });
@@ -169,8 +162,6 @@ describe("private MCP projection operations at the session owner", () => {
       const { runtime, file, acquire } = await fixture();
       const caller = context();
       const view = await acquire(caller);
-      await using cleanup = releaseViews(view);
-      void cleanup;
       if (reason === "changed") {
         await view.rootsChanged(options(signal));
         await withinTest(receipts.waitFor(file, "recv notifications/roots/list_changed"), signal);
@@ -199,8 +190,6 @@ describe("private MCP projection operations at the session owner", () => {
     const other = await acquire(context("file:///workspace/b", sharedContext));
     const noRoots = await acquire({ ...context(undefined, sharedContext), capabilities: {} });
     const secondRequester = await acquire(context(undefined, sharedContext), create("second"));
-    await using cleanup = releaseViews(first, same, sameRoots, other, noRoots, secondRequester);
-    void cleanup;
     const inspect = async (view: typeof first) => toolPayload(view, "probe", signal);
     const original = await inspect(first);
     expect(await inspect(same)).toEqual(original);
@@ -376,16 +365,12 @@ describe("private MCP projection operations at the session owner", () => {
       await first.release();
       await callTool(second, "notify", signal);
       const refreshed = await acquire(secondContext);
-      await using refreshedCleanup = releaseViews(refreshed);
-      void refreshedCleanup;
       expect(refreshed.runtime.peekCatalog()?.diagnostics ?? []).toEqual([]);
       await withinTest(receipts.waitFor(file, "listed sample second-sample"), signal);
       const previousPid = processId(await toolPayload(refreshed, "probe", signal));
       await expect(callTool(refreshed, "crash", signal)).rejects.toThrow();
       await withinTest(receipts.waitForExit(file + ":" + previousPid), signal);
       const reconnected = await acquire(secondContext);
-      await using reconnectedCleanup = releaseViews(reconnected);
-      void reconnectedCleanup;
       expect(processId(await toolPayload(reconnected, "probe", signal))).not.toBe(previousPid);
       await withinTest(receipts.waitFor(file, "listed sample second-sample", 2), signal);
     } finally {
@@ -455,8 +440,6 @@ describe("private MCP projection operations at the session owner", () => {
     await expect(acquire(refused)).rejects.toThrow();
     await withinTest(receipts.waitFor(file, "initialize refused capabilities"), signal);
     const healthy = await acquire();
-    await using cleanup = releaseViews(healthy);
-    void cleanup;
     expect(await toolPayload(healthy, "probe", signal)).toMatchObject({
       roots: context().roots,
       capabilities: { roots: { listChanged: true } },
@@ -559,8 +542,6 @@ describe("private MCP projection operations at the session owner", () => {
     };
     const first = await acquire(caller);
     const second = await acquire({ ...caller, assertCurrent() {} });
-    await using cleanup = releaseViews(first, second);
-    void cleanup;
     expect(first.getProtocolEra()).toBe("modern");
     expect(first.getProtocolVersion()).toBe("2026-07-28");
     const pending = await continuation(first, signal);

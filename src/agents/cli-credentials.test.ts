@@ -180,37 +180,26 @@ describe("cli credentials", () => {
     });
   });
 
-  it("prefers active Codex OAuth over a stale file API key", () => {
-    vi.stubGlobal("process", { ...process, platform: "darwin" });
-    writeJson(path.join(tempHome, "auth.json"), {
-      auth_mode: "apikey",
-      OPENAI_API_KEY: "stale-file-api-key",
-    });
-    execSyncMock.mockReturnValue("Logged in using ChatGPT");
-
-    expect(credentials.readCodexCliActiveApiKey({ codexHome: tempHome })).toBeNull();
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses the API key that Codex reports active instead of a stale Keychain record", () => {
-    vi.stubGlobal("process", { ...process, platform: "darwin" });
-    writeJson(path.join(tempHome, "auth.json"), {
-      auth_mode: "apikey",
-      OPENAI_API_KEY: "active-file-api-key",
-    });
-    execSyncMock.mockImplementation((command: unknown) =>
-      String(command).includes("codex login status")
+  it.each([false, true])(
+    "selects only the credential reported active by Codex (API key: %s)",
+    (apiKey) => {
+      vi.stubGlobal("process", { ...process, platform: "darwin" });
+      const key = "active-file-api-key";
+      writeJson(path.join(tempHome, "auth.json"), { auth_mode: "apikey", OPENAI_API_KEY: key });
+      const loginStatus = apiKey
         ? "Logged in using an API key - active-f***i-key"
-        : JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "stale-keychain-api-key" }),
-    );
-
-    expect(credentials.readCodexCliActiveApiKey({ codexHome: tempHome })).toEqual({
-      type: "api_key",
-      provider: "openai",
-      key: "active-file-api-key",
-    });
-    expect(execSyncMock).toHaveBeenCalledTimes(2);
-  });
+        : "Logged in using ChatGPT";
+      execSyncMock.mockImplementation((command: unknown) =>
+        !apiKey || String(command).includes("codex login status")
+          ? loginStatus
+          : JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "stale-keychain-api-key" }),
+      );
+      expect(credentials.readCodexCliActiveApiKey({ codexHome: tempHome })).toEqual(
+        apiKey ? { type: "api_key", provider: "openai", key } : null,
+      );
+      expect(execSyncMock).toHaveBeenCalledTimes(apiKey ? 2 : 1);
+    },
+  );
 
   it("treats an empty Codex auth.json API-key field as API-key mode", () => {
     writeJson(path.join(tempHome, "auth.json"), {

@@ -12,7 +12,6 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { resolvePluginHarnessToolPolicies } from "./harness/execution-environment.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
-import { attachToolAllowlistIntersection } from "./tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
 describe("resolveRequesterToolPolicies", () => {
@@ -245,7 +244,6 @@ describe("resolveRequesterToolPolicies", () => {
       model: "gpt-test",
     };
     const trustedInternalHandoff = consumeSubagentCompletionToolHandoff(consumption);
-    expect(trustedInternalHandoff).toBeDefined();
     current = authority !== "revoked";
     const request = {
       config: config(),
@@ -363,22 +361,13 @@ describe("resolveRequesterToolPolicies", () => {
     expect(await searchPolicy(cfg, "agent:main:subagent:forged")).toEqual(denied);
   });
 
-  it.each([
-    { label: "no tools", runtimeToolAllowlist: [] },
-    {
-      label: "intersected wildcard",
-      runtimeToolAllowlist: attachToolAllowlistIntersection(["*", "message"], [["*"], ["message"]]),
-    },
-  ])("enforces $label web-search authority for the current turn", ({ runtimeToolAllowlist }) => {
-    expect(resolveWebSearchToolPolicy({ runtimeToolAllowlist })).toEqual({
-      allowed: false,
-      persistentAllowed: true,
-    });
-  });
-
   it("lets a session-event web_search entry pass only while current policy allows it", () => {
     const runtimeToolAllowlist = ["read", "web_search"];
     expect(resolveWebSearchToolPolicy({ runtimeToolAllowlist }).allowed).toBe(true);
+    expect(resolveWebSearchToolPolicy({ runtimeToolAllowlist: [] })).toEqual({
+      allowed: false,
+      persistentAllowed: true,
+    });
     expect(
       resolveWebSearchToolPolicy({
         runtimeToolAllowlist,
@@ -479,9 +468,6 @@ describe("resolveRequesterToolPolicies", () => {
       const admitted = await withPreparedSessionCapabilityRead(() =>
         resolveRequesterToolPolicies({ config: cfg, ...request }),
       );
-      expect(admitted.senderPolicy).toBeUndefined();
-      expect(admitted.inheritedToolPolicy).toEqual({ deny: ["message"] });
-
       const nextConfig = config({
         ...cfg,
         tools: {

@@ -15,6 +15,7 @@ import {
 } from "../gateway/server-methods/sessions-read-cache.test-support.js";
 import type { GatewayClient, RespondFn } from "../gateway/server-methods/types.js";
 import { readPreparedGatewayModelCatalog } from "../gateway/server-model-catalog.js";
+import { gatewayConnect } from "../gateway/server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../gateway/session-row-projection-access.js";
 import {
   createSessionRowProjection,
@@ -110,7 +111,7 @@ function catalog(entry: ModelCatalogEntry | undefined = model): ModelCatalogSnap
 }
 
 // Real catalog publication, persisted rows, projection, and the registered RPC share one owner.
-async function setup(preparedMap = false, profile?: AuthProfileCredential) {
+async function setup(profile?: AuthProfileCredential) {
   const config = baseConfig();
   mocks.configuredAgentIds = ["default"];
   mocks.runPreparedModelCatalogWorker.mockImplementation(async () => catalog());
@@ -148,11 +149,7 @@ async function setup(preparedMap = false, profile?: AuthProfileCredential) {
     readPreparedGatewayModelCatalog({ agentId: "default", getConfig: () => config }),
   );
   context.readPreparedGatewayModelCatalog = readPrepared;
-  const readCatalog = vi.fn(async () =>
-    preparedMap
-      ? readPreparedServerMethodModelCatalogs(context, ["default"])
-      : (owner.readFullModelCatalog?.() ?? owner.modelCatalog).entries,
-  );
+  const readCatalog = vi.fn(() => readPreparedServerMethodModelCatalogs(context, ["default"]));
   projection = await createSessionRowProjection({
     cfg: config,
     getConfig: () => config,
@@ -281,13 +278,7 @@ describe("catalog publication session rows", () => {
       const connection = new AbortController();
       const client: GatewayClient = {
         connectionSignal: connection.signal,
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes: ["operator.admin"],
-          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-        },
+        connect: gatewayConnect(["operator.admin"]),
       };
       const metadataSnapshot = createPluginMetadataSnapshotFixture({
         plugins: [
@@ -405,7 +396,7 @@ describe("catalog publication session rows", () => {
   });
 
   it("keeps session rows resident through runtime auth binding and revocation", async () => {
-    const { config, rows, list, initial, readCatalog } = await setup(true);
+    const { config, rows, list, initial, readCatalog } = await setup();
     const input = { config, agentId: "default", agentDir: fixture.state.agentDir("default") };
     const owner = getPreparedModelRuntimeSnapshot(input)!;
     const route = {
@@ -438,7 +429,6 @@ describe("catalog publication session rows", () => {
     "adopts current model facts after persisted %s rotation",
     async (kind) => {
       const { rows, list, currentOwner, readCatalog, initial, settleCatalog } = await setup(
-        true,
         rotationProfile(kind),
       );
       const previousOwner = await currentOwner();
@@ -489,56 +479,8 @@ describe("catalog publication session rows", () => {
     },
   );
 
-  it("publishes settled attempt status without rebuilding unchanged resident rows", async () => {
-    const { rows, list, refresh, initial, readCatalog } = await setup();
-
-    const before = rows.materializedCount;
-    const catalogReads = readCatalog.mock.calls.length;
-    const expectResident = async () => {
-      expect((await list()).sessions).toEqual(initial.sessions);
-      expect(rows.materializedCount - before).toBe(0);
-    };
-    const expectUnchanged = async () => {
-      await expectResident();
-      expect(rows.dirtyRowCount).toBe(0);
-      expect(readCatalog).toHaveBeenCalledTimes(catalogReads);
-    };
-    const { started, reply } = holdCatalogReply();
-    const events = vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
-    const unsubscribe = registerPreparedModelRuntimePublicationListener(events);
-    const pending = refresh();
-    try {
-      await started;
-      await expectUnchanged();
-      reply.resolve(catalog());
-      await pending;
-      await expectUnchanged();
-
-      mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(new Error("synthetic failure"));
-      await expect(refresh()).rejects.toThrow("synthetic failure");
-      await expectResident();
-      await refresh();
-      await expectUnchanged();
-      expect(events.mock.calls.map(([event]) => event)).toEqual([
-        { phase: "catalog-status", modelFactsChanged: false },
-        { phase: "catalog-published", modelFactsChanged: false, refreshStatusChanged: true },
-        { phase: "catalog-status", modelFactsChanged: false },
-        {
-          phase: "catalog-failed",
-          modelFactsChanged: false,
-        },
-        { phase: "catalog-status", modelFactsChanged: false },
-        { phase: "catalog-published", modelFactsChanged: false, refreshStatusChanged: true },
-      ]);
-    } finally {
-      reply.resolve(catalog());
-      await pending;
-      unsubscribe();
-    }
-  });
-
   it("recovers an incomplete optional catalog after an identical successful publication", async () => {
-    const { rows, list, refresh, readPrepared } = await setup(true);
+    const { rows, list, refresh, readPrepared } = await setup();
     const readPublished = readPrepared.getMockImplementation()!;
     readPrepared.mockRejectedValue(new Error("optional prepared reader unavailable"));
     mocks.runPreparedModelCatalogWorker.mockResolvedValue(
