@@ -139,9 +139,7 @@ describe("Telegram registered action authority and input contracts", () => {
               details: { ok: false, reason: "error", hint: "Reaction failed. Do not retry." },
             });
           } else {
-            await expect(pending).rejects.toThrow(
-              "Telegram action owner retired",
-            );
+            await expect(pending).rejects.toThrow("Telegram action owner retired");
           }
           expect(requests.map(({ method }) => method)).toEqual(["getChat"]);
         }
