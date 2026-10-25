@@ -119,7 +119,7 @@ async function withWebchatTool(
         const respond = await callCron(context, method, params, { client });
         const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
         if (!ok) {
-          throw new Error(String(error.message));
+          throw new Error(String(expectDefined(error, "cron error response").message));
         }
         return result;
       });

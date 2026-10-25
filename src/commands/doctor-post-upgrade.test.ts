@@ -135,7 +135,7 @@ it("accepts bundled runtime entries compiled into the standalone image", async (
   await writePluginFixture({
     id: "embedded",
     location: "extensions",
-    origin: "bundled",
+    record: { origin: "bundled" },
     packageJson: packageManifest("embedded", "./index.js"),
   });
 
@@ -151,7 +151,7 @@ it("rejects embedded runtime entries outside the plugin package", async () => {
   await writePluginFixture({
     id: "embedded",
     location: "extensions",
-    origin: "bundled",
+    record: { origin: "bundled" },
     packageJson: packageManifest("embedded", "../other.js"),
   });
 

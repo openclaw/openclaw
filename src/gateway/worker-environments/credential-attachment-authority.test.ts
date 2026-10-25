@@ -38,7 +38,9 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
 function caller(id: string) {
   const controller = new AbortController();
   const authority = claimAgentRunDelegatedAuthority({ instanceId: id, runId: id });
-  const close = () => releaseAgentRunDelegatedAuthority(authority);
+  const close = () => {
+    releaseAgentRunDelegatedAuthority(authority);
+  };
   support.testState.releaseTurnOwners.push(close);
   return {
     signal: controller.signal,

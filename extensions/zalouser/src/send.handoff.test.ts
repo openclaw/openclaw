@@ -48,9 +48,13 @@ describe("Zalouser registered send handoff", () => {
       const preparation = harness.gate();
       const response = harness.gate();
       const caller = new AbortController();
-      effectGate.prepare = preparation.wait;
+      effectGate.prepare = async () => {
+        preparation.entered.resolve();
+        await preparation.release.promise;
+      };
       harness.response = async () => {
-        await response.wait();
+        response.entered.resolve();
+        await response.release.promise;
         return encryptResponse({ msgId: "prepared-send" });
       };
       const sending = harness.send("message.text", { signal: caller.signal }).then(
@@ -106,7 +110,13 @@ describe("Zalouser registered send handoff", () => {
             throw new Error("caller retired");
           }
         },
-        onPlatformSendDispatch: stage === "dispatch notification" ? wait.wait : undefined,
+        onPlatformSendDispatch:
+          stage === "dispatch notification"
+            ? async () => {
+                wait.entered.resolve();
+                await wait.release.promise;
+              }
+            : undefined,
       });
       await wait.entered.promise;
       current = false;
@@ -138,7 +148,8 @@ describe("Zalouser registered send handoff", () => {
       signal: caller.signal,
       onDeliveryResult: async (result) => {
         ids.push(result.messageId);
-        await progress.wait();
+        progress.entered.resolve();
+        await progress.release.promise;
       },
     });
     await progress.entered.promise;
@@ -249,7 +260,8 @@ describe("Zalouser registered send handoff", () => {
           if (
             stage === "image upload" ? request.path.endsWith("/upload") : request.method === "HEAD"
           ) {
-            await wait.wait();
+            wait.entered.resolve();
+            await wait.release.promise;
           }
           return harness.respond(request);
         };
