@@ -7,6 +7,8 @@
  *   node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-equivalence.ts compare .local/buf28/equivalence
  * Both sides use the same immutable files, so filesystem identities and compressed
  * mutations compare exactly. Each side owns separate synthetic SQLite state.
+ * Includes contained and escaping symlinks, and repeats scans after acceptance
+ * to exercise persisted file-identity reuse.
  * Behavioral equivalence is expected to pass on both versions; the companion
  * measurement script supplies the performance regression evidence.
  */
@@ -40,28 +42,39 @@ type Fixture = {
   after: Files;
   hostOnly?: Files;
   hostUntracked?: Files;
+  beforeLinks?: Files;
+  afterLinks?: Files;
+  escapingLinks?: Files;
 };
 const digest = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const byPath = <T extends { path: string }>(a: T, b: T) =>
   a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 const filesFor = (fixture: Fixture, target: "canonical" | "projection") =>
   path.join(scratch, "files", fixture.name, target);
-function document(files: Files) {
+function document(files: Files, links: Files = {}) {
   const directories = new Set<string>();
-  const entries = Object.entries(files).map(([entryPath, content]) => {
-    let parent = path.posix.dirname(entryPath);
-    while (parent !== ".") {
-      directories.add(parent);
-      parent = path.posix.dirname(parent);
-    }
-    return {
+  const entries = [
+    ...Object.entries(files).map(([entryPath, content]) => ({
       path: entryPath,
       type: "file" as const,
       mode: 0o644,
       size: Buffer.byteLength(content),
       sha256: digest(content),
-    };
-  });
+    })),
+    ...Object.entries(links).map(([entryPath, target]) => ({
+      path: entryPath,
+      type: "symlink" as const,
+      mode: 0o777,
+      target,
+    })),
+  ];
+  for (const entry of entries) {
+    let parent = path.posix.dirname(entry.path);
+    while (parent !== ".") {
+      directories.add(parent);
+      parent = path.posix.dirname(parent);
+    }
+  }
   // Independent expected wire bytes: directories have mode 0700, files 0644,
   // and canonical JSON uses path order with directories in the entries array.
   return JSON.stringify({
@@ -124,6 +137,18 @@ const fixtures: Fixture[] = [
     hostOnly: { "admitted.txt": "host-index input\n" },
     hostUntracked: { "private.txt": "host-only untracked\n" },
   },
+  {
+    name: "symlinks",
+    before: initial,
+    after: initial,
+    beforeLinks: { link: "delete.txt" },
+    afterLinks: {
+      link: "source.txt",
+      "nested/up": "../source.txt",
+      dangling: "missing.txt",
+    },
+    escapingLinks: { escape: "../outside.txt" },
+  },
 ];
 
 if (mode === "prepare") {
@@ -145,6 +170,12 @@ if (mode === "prepare") {
         await fs.mkdir(path.dirname(filename), { recursive: true });
         await fs.writeFile(filename, content, { mode: 0o644 });
       }
+      const links = { ...fixture.afterLinks, ...fixture.escapingLinks };
+      for (const [entryPath, destination] of Object.entries(links)) {
+        const filename = path.join(root, entryPath);
+        await fs.mkdir(path.dirname(filename), { recursive: true });
+        await fs.symlink(destination, filename);
+      }
       if (target === "canonical") {
         execFileSync("git", ["init", "--quiet", root]);
         execFileSync("git", [
@@ -153,7 +184,7 @@ if (mode === "prepare") {
           "add",
           "--force",
           "--",
-          ...Object.keys({ ...fixture.after, ...fixture.hostOnly }),
+          ...Object.keys({ ...fixture.after, ...fixture.hostOnly, ...links }),
         ]);
       }
     }
@@ -167,7 +198,13 @@ if (mode === "prepare") {
     JSON.stringify({
       equivalent: true,
       cases: candidate.length,
-      actionsPerCase: ["scan", "materialize", "replace", "materialize after replace"],
+      actionsPerCase: [
+        "scan",
+        "materialize",
+        "scan with accepted identities",
+        "replace",
+        "materialize after replace",
+      ],
     }),
   );
 } else {
@@ -216,9 +253,10 @@ if (mode === "prepare") {
                 ...fixture.after,
                 ...fixture.hostOnly,
               },
+          fixture.afterLinks,
         );
         const result = await withLocalWorkspaceStore({ worktreeId: id, env }, async (store) => {
-          const rawManifest = document(fixture.before);
+          const rawManifest = document(fixture.before, fixture.beforeLinks);
           const baseline = {
             rawManifest,
             manifestRef: `sha256:${digest(rawManifest)}`,
@@ -232,7 +270,9 @@ if (mode === "prepare") {
             lifecycle_revision: null,
             projection_path: filesFor(fixture, "projection"),
             base_commit: baseCommit,
-            source_paths_json: JSON.stringify(Object.keys(fixture.before)),
+            source_paths_json: JSON.stringify(
+              Object.keys({ ...fixture.before, ...fixture.beforeLinks }),
+            ),
             baseline_json: null,
             baseline_ref: null,
             checkpoint_json: null,
@@ -258,6 +298,16 @@ if (mode === "prepare") {
           assert.ok(accepted.kind === "materialize");
           assert.equal(accepted.rawManifest, expectedRaw, `${id}: accepted file inventory differs`);
           assert.equal(accepted.manifestRef, `sha256:${digest(expectedRaw)}`);
+          const reused = await store.manifest(store.get()!, {
+            kind: "scan",
+            target,
+            canonicalRoot: filesFor(fixture, "canonical"),
+          });
+          assert.ok(reused.kind === "scan");
+          assert.equal(reused.resultingRoot, scanned.resultingRoot, `${id}: repeat root differs`);
+          assert.deepEqual(reused.records, [], `${id}: repeat scan changes records`);
+          assert.deepEqual(reused.removed, [], `${id}: repeat scan removes records`);
+          assert.equal(reused.observation, undefined, `${id}: repeat scan changes identities`);
           const replacement = await store.manifest(store.get()!, {
             kind: "replace",
             rawManifest: accepted.rawManifest,
@@ -282,6 +332,7 @@ if (mode === "prepare") {
           return {
             id,
             scan: scanForComparison(scanned),
+            reusedScan: scanForComparison(reused),
             accepted,
             replacement: {
               ...replacement.update,

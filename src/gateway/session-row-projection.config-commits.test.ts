@@ -28,8 +28,8 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => ({
   hasPluginLifecycleLease: () => false,
   withPluginLifecycleLease: async (
     _options: unknown,
-    run: (lease: { assertOwned: () => void }) => Promise<unknown>,
-  ) => run({ assertOwned() {} }),
+    run: (lease: { assertCurrent: () => void; assertOwned: () => void }) => Promise<unknown>,
+  ) => run({ assertCurrent() {}, assertOwned() {} }),
 }));
 
 it("retains resident rows across projection-neutral commits and unchanged admission", async () => {
