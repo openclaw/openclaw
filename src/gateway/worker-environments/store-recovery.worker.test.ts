@@ -11,16 +11,19 @@ import { createWorkerEnvironmentStore } from "./store.js";
 import { workerReadyPatch } from "./store.test-support.js";
 
 const delivery = vi.hoisted(() => ({
-  loseIntentResult: false,
-  hideReceipt: false,
-  hideSettlement: false,
-  loseRevocationResult: undefined as "receipt" | "settlement" | "unknown" | undefined,
-  loseRevocationFailure: false,
+  pending: undefined as "intent" | "rollback" | "receipt" | "settlement" | "unknown" | undefined,
+  confirmation: "both" as "both" | "settlement" | "none",
   failReadback: false,
   intentWrites: 0,
   revocationWrites: 0,
   resultFailure: new Error("synthetic result delivery failure"),
   readFailure: new Error("synthetic inventory readback failure"),
+  loseResult(): never {
+    this.confirmation =
+      this.pending === "receipt" ? "both" : this.pending === "settlement" ? "settlement" : "none";
+    this.pending = undefined;
+    throw this.resultFailure;
+  },
 }));
 vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOriginal) => {
   const actual =
@@ -32,8 +35,8 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
       const original = actual.createSqliteWorkerOperationAdmission(...args);
       const proxy = new Proxy(original, {
         get(target, key, receiver) {
-          return (key === "committed" && delivery.hideReceipt) ||
-            (key === "settlement" && delivery.hideSettlement)
+          return (key === "committed" && delivery.confirmation !== "both") ||
+            (key === "settlement" && delivery.confirmation === "none")
             ? undefined
             : Reflect.get(target, key, receiver);
         },
@@ -43,7 +46,7 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
     },
     observeSqliteWorkerCommittedFacts: (admission, observer) =>
       actual.observeSqliteWorkerCommittedFacts(originals.get(admission) ?? admission, (receipt) => {
-        if (!delivery.loseIntentResult && !delivery.loseRevocationResult) {
+        if (!delivery.pending || delivery.pending === "rollback") {
           observer(receipt);
         }
       }),
@@ -64,26 +67,17 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
       delivery.revocationWrites += 1;
     }
     const result = await scope.execute(command, executeOptions).catch((error: unknown) => {
-      if (revoking && delivery.loseRevocationFailure) {
-        delivery.loseRevocationFailure = false;
-        delivery.hideReceipt = true;
-        delivery.hideSettlement = true;
-        throw delivery.resultFailure;
+      if (revoking && delivery.pending === "rollback") {
+        delivery.loseResult();
       }
       throw error;
     });
-    if (creating && delivery.loseIntentResult) {
-      delivery.loseIntentResult = false;
-      delivery.hideReceipt = true;
-      delivery.hideSettlement = true;
-      throw delivery.resultFailure;
-    }
-    if (revoking && delivery.loseRevocationResult) {
-      const recovery = delivery.loseRevocationResult;
-      delivery.loseRevocationResult = undefined;
-      delivery.hideReceipt = recovery !== "receipt";
-      delivery.hideSettlement = recovery === "unknown";
-      throw delivery.resultFailure;
+    const lostRevocation =
+      delivery.pending === "receipt" ||
+      delivery.pending === "settlement" ||
+      delivery.pending === "unknown";
+    if ((creating && delivery.pending === "intent") || (revoking && lostRevocation)) {
+      delivery.loseResult();
     }
     return result;
   });
@@ -105,11 +99,8 @@ vi.mock("../../state/openclaw-state-db-readonly.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    delivery.hideReceipt = false;
-    delivery.hideSettlement = false;
-    delivery.loseRevocationResult = undefined;
-    delivery.loseRevocationFailure = false;
-    delivery.loseIntentResult = false;
+    delivery.confirmation = "both";
+    delivery.pending = undefined;
     delivery.failReadback = false;
     delivery.intentWrites = 0;
     delivery.revocationWrites = 0;
@@ -138,8 +129,7 @@ const createIntent = (environmentId: string) =>
     provisionOperationId: `provision:${environmentId}`,
   });
 const showNativeConfirmation = () => {
-  delivery.hideReceipt = false;
-  delivery.hideSettlement = false;
+  delivery.confirmation = "both";
 };
 beforeEach(async () => {
   database = openOpenClawStateDatabase({
@@ -150,7 +140,7 @@ beforeEach(async () => {
 });
 
 it("reloads the durable write in a new inventory after failed readback closes the old one", async () => {
-  delivery.loseIntentResult = true;
+  delivery.pending = "intent";
   delivery.failReadback = true;
   await expect(createIntent("worker-recovery")).rejects.toBe(delivery.resultFailure);
   expect(() => survivor.get("worker-recovery")).toThrow("inventory has closed");
@@ -201,7 +191,7 @@ it("publishes permanent revocation once across committed, rolled-back and unknow
   expect(survivor.getCredential(environmentId)).toBeDefined();
 
   // Lost rollback confirmation is unknown; a still-present credential forbids a fence event.
-  delivery.loseRevocationFailure = true;
+  delivery.pending = "rollback";
   await expect(revoke()).rejects.toBe(delivery.resultFailure);
   expect(survivor.getCredential(environmentId)).toBeDefined();
   expect(survivorNotifications).toEqual([]);
@@ -212,7 +202,7 @@ it("publishes permanent revocation once across committed, rolled-back and unknow
 
   // Committed no-ops still carry explicit permanent transfer-fencing requests.
   for (const [index, outcome] of (["settlement", "receipt", "unknown"] as const).entries()) {
-    delivery.loseRevocationResult = outcome;
+    delivery.pending = outcome;
     await expect(revoke()).rejects.toBe(delivery.resultFailure);
     expect(survivor.getCredential(environmentId)).toBeUndefined();
     expect(survivorNotifications).toEqual(Array.from({ length: index + 1 }, () => environmentId));

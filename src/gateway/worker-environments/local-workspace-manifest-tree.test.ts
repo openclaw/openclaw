@@ -46,30 +46,11 @@ function materialize(
 }
 
 describe("local workspace manifest tree", () => {
-  it("has deterministic roots regardless of insertion order, with base commit identity", () => {
-    const nodes = [
-      file("z-last"),
-      directory("src"),
-      file("src/first"),
-      file("src/second"),
+  it("builds deterministic roots with bounded hashing and base commit identity", () => {
+    const nodes: LocalWorkspaceManifestNode[] = [
       directory("empty"),
-      { path: "link", type: "symlink" as const, mode: 0o777, target: "src/first" },
+      { path: "link", type: "symlink", mode: 0o777, target: "dir-0/nested/file-0" },
     ];
-    const forward = createTree(nodes);
-    const incremental = createTree([]);
-    for (const node of [nodes[4]!, nodes[1]!, nodes[3]!, nodes[2]!, nodes[5]!, nodes[0]!]) {
-      updateTree(incremental, [{ path: node.path, node }]);
-    }
-    expect(materialize(forward)).toEqual(
-      nodes.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
-    );
-    expect(materialize(incremental)).toEqual(materialize(forward));
-    expect(rootRef(incremental)).toBe(rootRef(forward));
-    expect(rootReference(forward, "1".repeat(40))).not.toBe(rootRef(forward));
-  });
-
-  it("hashes a full baseline only a bounded number of times per path", () => {
-    const nodes: LocalWorkspaceManifestNode[] = [];
     for (let index = 0; index < 32; index++) {
       const parent = `dir-${index}`;
       nodes.push(directory(parent), directory(`${parent}/nested`));
@@ -78,8 +59,18 @@ describe("local workspace manifest tree", () => {
       }
     }
     vi.mocked(createHash).mockClear();
-    createTree(nodes.toReversed());
+    const forward = createTree(nodes.toReversed());
     expect(vi.mocked(createHash).mock.calls.length).toBeLessThanOrEqual(4 * (nodes.length + 1));
+    const incremental = createTree([]);
+    for (const node of nodes) {
+      updateTree(incremental, [{ path: node.path, node }]);
+    }
+    expect(materialize(forward)).toEqual(
+      nodes.toSorted((left, right) => (left.path < right.path ? -1 : 1)),
+    );
+    expect(materialize(incremental)).toEqual(materialize(forward));
+    expect(rootRef(incremental)).toBe(rootRef(forward));
+    expect(rootReference(forward, "1".repeat(40))).not.toBe(rootRef(forward));
   });
 
   it("persists edits, deletes, renames, modes, symlinks, empty directories and type changes", () => {

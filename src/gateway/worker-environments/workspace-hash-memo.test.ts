@@ -55,44 +55,11 @@ async function replace(target: string) {
   await fs.rename(replacement, target);
 }
 
-it("reuses content hashes only within one reconcile stat identity", async () => {
-  const root = await fs.realpath(tempDirs.make("openclaw-workspace-hash-memo-"));
-  const target = path.join(root, "same-size.txt");
-  await fs.writeFile(target, "alpha");
-  const memo = new Map<string, string>();
-  const metrics = hashMetrics();
-  const capture = () => captureWorkspaceManifest({ root, baseCommit: null });
-  const replacedManifestRef = await withWorkspaceHashMemo(
-    memo,
-    async () => {
-      const first = await capture();
-      const unchanged = await withWorkspaceHashMemo(memo, capture);
-      expect(unchanged.manifestRef).toBe(first.manifestRef);
-      expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 1 });
-
-      let previous = first;
-      for (const [index, mutate] of [rewrite, replace].entries()) {
-        await mutate(target);
-        const changed = await capture();
-        expect(changed.manifestRef).not.toBe(previous.manifestRef);
-        expect(metrics.contentHashCount).toBe(index + 2);
-        previous = changed;
-      }
-      return previous.manifestRef;
-    },
-    metrics,
-  );
-
-  const nextReconcileMetrics = hashMetrics();
-  const nextReconcile = await withWorkspaceHashMemo(new Map(), capture, nextReconcileMetrics);
-  expect(nextReconcile.manifestRef).toBe(replacedManifestRef);
-  expect(nextReconcileMetrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
-});
-
-it("reuses local workspace nodes within one preflight but not across fences", async () => {
+it("reuses local preflight hashes only within matching stat identities and fences", async () => {
   const root = await fs.realpath(tempDirs.make("openclaw-workspace-preflight-memo-"));
-  await fs.writeFile(path.join(root, "parent"), "base");
-  const base = { ...workspaceManifest({ parent: "base" }), directories: [] };
+  const target = path.join(root, "parent");
+  await fs.writeFile(target, "alpha");
+  const base = { ...workspaceManifest({ parent: "alpha" }), directories: [] };
   const current = {
     ...workspaceManifest({ "parent/child.txt": "worker", "parent/sibling.txt": "worker" }),
     directories: ["parent"],
@@ -100,21 +67,33 @@ it("reuses local workspace nodes within one preflight but not across fences", as
   const metrics = hashMetrics();
   const prepared = prepareWorkspaceReconciliation(base, current).preflight;
   const preflight = () => preflightWorkspaceApply({ root, ...prepared });
-  const first = await withWorkspaceHashMemo(new Map(), preflight, metrics);
-  expect([...first.applyPaths].toSorted()).toEqual([
-    "parent",
-    "parent/child.txt",
-    "parent/sibling.txt",
-  ]);
-  expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
-
-  await withWorkspaceHashMemo(new Map(), preflight, metrics);
-  expect(metrics).toMatchObject({ contentHashCount: 2, memoHitCount: 0 });
-
-  await fs.writeFile(path.join(root, "parent"), "local replacement");
-  const conflict = await withWorkspaceHashMemo(new Map(), preflight, metrics);
-  expect([...conflict.applyPaths]).toEqual([]);
-  expect(conflict.conflictPaths).toEqual(["parent"]);
+  const memo = new Map<string, string>();
+  await withWorkspaceHashMemo(
+    memo,
+    async () => {
+      const first = await preflight();
+      expect([...first.applyPaths].toSorted()).toEqual([
+        "parent",
+        "parent/child.txt",
+        "parent/sibling.txt",
+      ]);
+      expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
+      expect(await withWorkspaceHashMemo(memo, preflight)).toEqual(first);
+      expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 1 });
+      for (const [index, mutate] of [rewrite, replace].entries()) {
+        await mutate(target);
+        const conflict = await preflight();
+        expect([...conflict.applyPaths]).toEqual([]);
+        expect(conflict.conflictPaths).toEqual(["parent"]);
+        expect(metrics.contentHashCount).toBe(index + 2);
+      }
+    },
+    metrics,
+  );
+  const nextMetrics = hashMetrics();
+  const next = await withWorkspaceHashMemo(new Map(), preflight, nextMetrics);
+  expect(next.conflictPaths).toEqual(["parent"]);
+  expect(nextMetrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
 });
 
 it("bounds a maximum-entry memo envelope", () => {

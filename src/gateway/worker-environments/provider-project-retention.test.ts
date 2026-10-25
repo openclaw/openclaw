@@ -68,25 +68,22 @@ describe("prepared project retention compatibility", () => {
   it("uses repository admission and fences a changed source owner before allocation", async () => {
     const { owner, project } = await setup();
     let current = true;
-    sourceAdmission.mockImplementation(async (request) => {
-      request.assertCurrent();
-      return {
-        project,
-        setupRecipe: "e".repeat(40),
-        recipe: {
-          source: "script",
-          identity: "e".repeat(40),
-          inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
-          env: {},
-          onCreate: ["./.openclaw/worktree-setup.sh"],
-        },
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Repository owner changed");
-          }
-        },
-        revalidate: async () => {},
-      };
+    sourceAdmission.mockResolvedValue({
+      project,
+      setupRecipe: "e".repeat(40),
+      recipe: {
+        source: "script",
+        identity: "e".repeat(40),
+        inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
+        env: {},
+        onCreate: ["./.openclaw/worktree-setup.sh"],
+      },
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Repository owner changed");
+        }
+      },
+      revalidate: async () => {},
     });
     const intent = await owner.prepareIntent("development", {
       executionMode: "worker-turn",
