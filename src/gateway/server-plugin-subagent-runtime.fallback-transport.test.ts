@@ -16,7 +16,6 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -37,15 +36,7 @@ import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 const HOST_PLUGIN_ID = "test-completion";
 const PINNED_KEY = "sk-pinned-primary";
 
-type RecordedHit = {
-  authorization: string | undefined;
-};
-
-function providerModel(id: string): ModelDefinitionConfig {
-  return modelDefinition(id, { reasoning: false, contextWindow: 8192, maxTokens: 1024 });
-}
-
-const waitForHit = (arrival: Promise<void>, work: Promise<unknown>, label: string) =>
+const waitForHit = (arrival: Promise<ServerResponse>, work: Promise<unknown>, label: string) =>
   awaitGateBeforeSettlement(arrival, work, `${label} settled before the provider request`);
 
 function writeAuthFailure(response: ServerResponse) {
@@ -85,9 +76,8 @@ describe("plugin background completion transport", () => {
   async function withLocalCompletion(
     run: (params: {
       complete: () => Promise<{ text: string }>;
-      hits: RecordedHit[];
-      arrivals: Deferred[];
-      respond: (index: number, write: (response: ServerResponse) => void) => void;
+      hits: Array<string | undefined>;
+      arrivals: Deferred<ServerResponse>[];
     }) => Promise<void>,
   ) {
     const roots = createSyncSuiteTempRootTracker("plugin-complete-transport");
@@ -107,23 +97,14 @@ describe("plugin background completion transport", () => {
         });
       } };`,
     );
-    const hits: RecordedHit[] = [];
-    const pending = new Map<number, ServerResponse>();
-    const arrivals = [createDeferred(), createDeferred(), createDeferred()];
+    const hits: Array<string | undefined> = [];
+    const arrivals = [createDeferred<ServerResponse>(), createDeferred<ServerResponse>()];
     const server = createServer((request, response) => {
       request.resume();
       const index = hits.length;
-      hits.push({ authorization: request.headers.authorization });
-      pending.set(index, response);
-      arrivals[index]?.resolve();
+      hits.push(request.headers.authorization);
+      arrivals[index]?.resolve(response);
     });
-    const respond = (index: number, write: (response: ServerResponse) => void) => {
-      const response = pending.get(index);
-      if (!response) {
-        throw new Error(`missing provider response ${index}`);
-      }
-      write(response);
-    };
     try {
       const origin = await listenLoopback(server);
       const cfg: OpenClawConfig = {
@@ -145,7 +126,9 @@ describe("plugin background completion transport", () => {
               apiKey: PINNED_KEY,
               baseUrl: `${origin}/v1`,
               request: { allowPrivateNetwork: true },
-              models: [providerModel("primary-model"), providerModel("fallback-model")],
+              models: ["primary-model", "fallback-model"].map((id) =>
+                modelDefinition(id, { reasoning: false, contextWindow: 8192, maxTokens: 1024 }),
+              ),
             },
           },
         },
@@ -180,54 +163,51 @@ describe("plugin background completion transport", () => {
             all_proxy: undefined,
             NO_PROXY: "127.0.0.1,localhost,::1",
           },
-          async () => await run({ complete, hits, arrivals, respond }),
+          async () => await run({ complete, hits, arrivals }),
         );
       } finally {
         lifetime.abort();
       }
     } finally {
-      for (const response of pending.values()) {
-        if (!response.destroyed && !response.writableEnded) {
-          response.destroy();
-        }
-      }
       await closeHttpServer(server);
       roots.cleanup();
     }
   }
 
-  it("recovers through isolated inference without substituting another account for the pinned primary", async () => {
-    await withLocalCompletion(async ({ complete, hits, arrivals, respond }) => {
-      const recovered = complete();
-      await waitForHit(arrivals[0]!.promise, recovered, "primary recovery");
-      expect(hits[0]?.authorization).toBe(`Bearer ${PINNED_KEY}`);
-      respond(0, writeAuthFailure);
-      await waitForHit(arrivals[1]!.promise, recovered, "fallback recovery");
-      respond(1, (response) => writeCompletion(response, "fallback-ok"));
-      await expect(recovered).resolves.toEqual({ text: "fallback-ok" });
-      expect(hits).toHaveLength(2);
-    });
-  });
-
-  it("rejects expired caller authority before the fallback request", async () => {
-    await withLocalCompletion(async ({ complete, hits, arrivals, respond }) => {
-      const profile = ensureProfileForEmail("completion-transport@example.com");
-      let pending: Promise<{ text: string }> | undefined;
-      await inProcessDispatch.withOperatorToolGatewayAuthority(
-        {
-          authenticatedUserProfile: gatewayProfile(profile.id, "Completion operator"),
-          scopes: ["operator.write"],
-        },
-        async () => {
+  it.each([false, true])(
+    "fallback respects pinned credentials and expired authority=%s",
+    async (expired) => {
+      await withLocalCompletion(async ({ complete, hits, arrivals }) => {
+        let pending!: Promise<{ text: string }>;
+        let primary!: ServerResponse;
+        const start = async () => {
           pending = complete();
-          await waitForHit(arrivals[0]!.promise, pending, "expired-authority primary");
-        },
-      );
-      expect(hits).toHaveLength(1);
-      expect(hits[0]?.authorization).toBe(`Bearer ${PINNED_KEY}`);
-      respond(0, writeAuthFailure);
-      await expect(pending).rejects.toThrow(/operator tool invocation authority expired/i);
-      expect(hits).toHaveLength(1);
-    });
-  });
+          primary = await waitForHit(arrivals[0]!.promise, pending, "primary");
+        };
+        if (expired) {
+          const profile = ensureProfileForEmail("completion-transport@example.com");
+          await inProcessDispatch.withOperatorToolGatewayAuthority(
+            {
+              authenticatedUserProfile: gatewayProfile(profile.id, "Completion operator"),
+              scopes: ["operator.write"],
+            },
+            start,
+          );
+        } else {
+          await start();
+        }
+        expect(hits).toEqual([`Bearer ${PINNED_KEY}`]);
+        writeAuthFailure(primary);
+        if (expired) {
+          await expect(pending).rejects.toThrow(/operator tool invocation authority expired/i);
+          expect(hits).toHaveLength(1);
+        } else {
+          const fallback = await waitForHit(arrivals[1]!.promise, pending, "fallback recovery");
+          writeCompletion(fallback, "fallback-ok");
+          await expect(pending).resolves.toEqual({ text: "fallback-ok" });
+          expect(hits).toHaveLength(2);
+        }
+      });
+    },
+  );
 });

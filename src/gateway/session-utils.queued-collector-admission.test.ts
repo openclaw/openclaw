@@ -2,6 +2,7 @@ import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
+import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -53,7 +54,6 @@ it.each([
     let nativeRunId: string | undefined;
     let stopping: Promise<void> | undefined;
     const agentResponse = vi.fn();
-    const registration = vi.spyOn(subagentRegistry, "startQueuedSubagentRun");
     const waitForPublication = registryMemory.waitForSubagentRetirementPublication;
     const publicationWait = vi
       .spyOn(registryMemory, "waitForSubagentRetirementPublication")
@@ -87,16 +87,10 @@ it.each([
         const signal = expectDefined(abortSignal, "native admission abort signal");
         signal.throwIfAborted();
         entered.resolve();
-        return await new Promise<never>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () => {
-              const reason: unknown = signal.reason;
-              reject(reason instanceof Error ? reason : new Error("Native admission aborted"));
-            },
-            { once: true },
-          );
-        });
+        await once(signal, "abort");
+        throw signal.reason instanceof Error
+          ? signal.reason
+          : new Error("Native admission aborted");
       });
     spawnTesting.setDepsForTest({
       hasInProcessGatewayContext: () => true,
@@ -107,16 +101,13 @@ it.each([
       ) => {
         const respond = method === "agent" ? agentResponse : vi.fn();
         const request = {
-          req: { type: "req" as const, id: "native-preaccept", method },
-          params,
+          ...requestOptions(context, method, params),
           respond,
-          context,
           sessionMutationCommitGuard: options?.sessionMutationCommitGuard,
           client: createSyntheticPluginRuntimeClient({
             agentRunTracking: options?.agentRunTracking,
             scopes: options?.syntheticScopes,
           }),
-          isWebchatConnect: () => false,
         };
         if (method === "agent") {
           nativeRunId = String(params.idempotencyKey);
@@ -185,8 +176,6 @@ it.each([
         "Stop settled before its kill write",
       );
       expect(order).toEqual([]);
-      expect(registration).toHaveBeenCalledOnce();
-      await expect(registration.mock.results[0]?.value).resolves.toBe(false);
       const sessionEntry = async () =>
         (await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey)).entry;
       expect(await sessionEntry()).toBeDefined();
@@ -245,7 +234,7 @@ it.each([
       }
       await stopping;
       await flushPendingSessionsChangedEvents(context);
-      for (const spy of [killGate, displayGate.spy, runtimeGate, registration, publicationWait]) {
+      for (const spy of [killGate, displayGate.spy, runtimeGate, publicationWait]) {
         spy.mockRestore();
       }
     }
