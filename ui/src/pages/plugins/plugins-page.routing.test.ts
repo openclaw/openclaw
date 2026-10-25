@@ -726,7 +726,7 @@ it("keeps settings navigation available during a held schema retry", async () =>
   const alert = () => harness.page.querySelector('[role="alert"]');
   expect(alert()?.textContent).toContain("Schema temporarily unavailable");
   alert()?.querySelector<HTMLButtonElement>("button")?.click();
-  await waitForSolid(() => {
+  await waitFor(() => {
     expect(attempts).toBe(2);
     expect(alert()).toBeNull();
     expect(harness.page.querySelector<HTMLButtonElement>('[aria-label="Reload"]')?.disabled).toBe(
