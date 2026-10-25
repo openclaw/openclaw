@@ -240,28 +240,51 @@ describe("memory-wiki Doctor state compatibility", () => {
         source === "source-sync"
           ? wikiPath("source-sync.json")
           : wikiPath("import-runs/chatgpt-alpha.json");
-      if (source === "source-sync") {
-        await seedJulySourceSyncRow(params, otherVault);
-      } else {
+      const legacyValue =
+        source === "source-sync"
+          ? {
+              version: 1,
+              entries: { alpha: await seedJulySourceSyncRow(params, otherVault) },
+            }
+          : {
+              version: 1,
+              runId: "chatgpt-alpha",
+              importType: "chatgpt",
+              exportPath: "/tmp/chatgpt",
+              sourcePath: "/tmp/chatgpt/conversations.json",
+              appliedAt: "2026-06-01T12:00:00.000Z",
+              conversationCount: 1,
+              createdCount: 1,
+              updatedCount: 0,
+              skippedCount: 0,
+              createdPaths: ["sources/legacy.md"],
+              updatedPaths: [],
+            };
+      if (source === "import-runs") {
         await seedJulyImportRun(params, otherVault, "chatgpt-alpha");
       }
       const migration = requireStateMigration(`memory-wiki-${source}-json-to-plugin-state`);
-      const bytes = "retired malformed JSON must survive unchanged\n";
-      await writeFiles({ [legacyPath]: bytes });
       const warning = expect.stringContaining(`JSON state are no longer migrated (${legacyPath})`);
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        await expectMigration(migration, [], [warning]);
+      for (const bytes of [
+        JSON.stringify(legacyValue),
+        "retired malformed JSON must survive unchanged\n",
+      ]) {
+        await writeFiles({ [legacyPath]: bytes });
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          await expectMigration(migration, [], [warning]);
+        }
+        await expectRetained(legacyPath, bytes);
+        await expect(sourceStore().read(vaultRoot)).resolves.toEqual({ version: 1, entries: {} });
+        await expect(importStore().list(vaultRoot)).resolves.toEqual([]);
       }
-      await expectRetained(legacyPath, bytes);
-      await expect(sourceStore().read(vaultRoot)).resolves.toEqual({ version: 1, entries: {} });
-      await expect(importStore().list(vaultRoot)).resolves.toEqual([]);
     },
   );
 
   it("preserves July source rows and diagnoses empty agent stores without borrowing state", async () => {
     const agents = ["support", "marketing"];
     params = migrationParams({ stateDir, vaultRoot, agentIds: agents });
-    const [support, marketing] = agents.map((id) => path.join(vaultRoot, id));
+    const support = path.join(vaultRoot, "support");
+    const marketing = path.join(vaultRoot, "marketing");
     const legacyPaths = agents.map((id) =>
       path.join(vaultRoot, id, ".openclaw-wiki/source-sync.json"),
     );

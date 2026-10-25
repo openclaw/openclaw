@@ -34,11 +34,15 @@ import {
   matrixCredentialsStoreKey,
   type MatrixCredentialStateRecord,
 } from "./src/matrix/credentials-state.js";
-import { writeMatrixIdbSnapshotJson } from "./src/matrix/crypto-state-store.js";
+import {
+  MATRIX_IDB_SNAPSHOT_FILENAME,
+  writeMatrixIdbSnapshotJson,
+} from "./src/matrix/crypto-state-store.js";
 import { importInboundDedupeMarkersToIngress } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { installMatrixTestRuntime } from "./src/test-runtime.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
+const CRYPTO = "matrix-crypto-unsafe-state";
 const SYNC = "matrix-sync-cache-json-to-plugin-state";
 const DEDUPE = "matrix-inbound-dedupe-to-claimable-dedupe";
 const CREDENTIALS = "matrix-credentials-json-to-plugin-state";
@@ -144,6 +148,20 @@ describe("matrix doctor contract state migrations", () => {
       }
     },
   );
+
+  it("reports crypto refusal in Doctor without auto-clearing it", async () => {
+    const storageRootDir = accountStorageRoot(stateDir);
+    fs.mkdirSync(storageRootDir, { recursive: true });
+    const markerPath = path.join(storageRootDir, `${MATRIX_IDB_SNAPSHOT_FILENAME}.owner.poisoned`);
+    fs.writeFileSync(markerPath, "unsafe\n");
+    expect((await detect(CRYPTO))?.preview).toEqual([
+      expect.stringContaining("recovery is never automatic"),
+    ]);
+    const result = await migrate(CRYPTO);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("remains blocked")]);
+    expect(fs.existsSync(markerPath)).toBe(true);
+  });
 
   it.each(["sync-cache", "inbound-dedupe"] as const)(
     "migrates %s for archive-like account IDs without opening archives",

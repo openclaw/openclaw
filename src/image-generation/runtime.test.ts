@@ -165,6 +165,41 @@ describe("image-generation runtime", () => {
     }
   });
 
+  it("skips candidates whose model-specific reference limit is too low", async () => {
+    const attemptedModels: string[] = [];
+    useProvider("fal", {
+      capabilities: {
+        generate: {},
+        edit: {
+          enabled: true,
+          maxInputImages: 1,
+          maxInputImagesByModel: {
+            "xai/grok-imagine-image": 3,
+            "google/nano-banana-2-lite": 14,
+          },
+        },
+      },
+      async generateImage(req) {
+        attemptedModels.push(req.model);
+        return { images: imageResult.images };
+      },
+    });
+    const result = await runGenerateImage({
+      cfg: imageConfig("fal/xai/grok-imagine-image", ["fal/google/nano-banana-2-lite"]),
+      prompt: "combine references",
+      inputImages: Array.from({ length: 14 }, () => referenceImage),
+    });
+    expect(result.model).toBe("google/nano-banana-2-lite");
+    expect(attemptedModels).toEqual(["google/nano-banana-2-lite"]);
+    expect(result.attempts).toEqual([
+      {
+        provider: "fal",
+        model: "xai/grok-imagine-image",
+        error: "fal/xai/grok-imagine-image supports at most 3 reference images, 14 requested",
+      },
+    ]);
+  });
+
   it.each([
     ["family/pro/edit", 12],
     ["family/pro/v2", 10],

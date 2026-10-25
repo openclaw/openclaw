@@ -89,12 +89,19 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
       })),
     );
     const unavailable = pages.find((page) => page.content.includes("# keep me"))!;
+    const available = pages.find((page) => page.content.includes("# delete me"))!;
     const unavailablePath = path.join(vaultDir, unavailable.page);
+    const availablePath = path.join(vaultDir, available.page);
     await addNotes(unavailablePath, "remember this");
+    const humanNotes = "Durable unsafe-local annotation";
+    await addNotes(availablePath, humanNotes);
     await fs.rename(unavailableDir, unavailableDir + ".offline");
     await fs.rm(path.join(availableDir, "delete.md"));
     expect(await sync(config)).toMatchObject({ artifactCount: 0, removedCount: 1 });
     await expect(read(unavailablePath)).resolves.toContain("remember this");
+    await expect(fs.stat(availablePath)).rejects.toHaveProperty("code", "ENOENT");
+    const salvagePath = available.page.replace(/\//g, "_") + ".notes.md";
+    await expect(read(path.join(vaultDir, ".salvage", salvagePath))).resolves.toContain(humanNotes);
     await fs.rename(unavailableDir + ".offline", unavailableDir);
     expect(await sync(config)).toMatchObject({ skippedCount: 1, removedCount: 0 });
     await expect(read(unavailablePath)).resolves.toContain("remember this");

@@ -87,16 +87,29 @@ export function writeSource(file: string, contents: string | Uint8Array): string
 export function archiveScanRoots(stateDir: string) {
   const matrixRoot = path.join(stateDir, "matrix");
   const tokenParent = path.dirname(accountStorageRoot(stateDir, "ops"));
+  const archivedAccount = path.relative(
+    matrixRoot,
+    accountStorageRoot(stateDir, "ops", "fedcba9876543210"),
+  );
   return {
     activeRoots: [
       path.join(matrixRoot, "accounts", "legacy"),
       accountStorageRoot(stateDir, "sync-cache-backup"),
     ],
     excludedRoots: [
-      path.join(tokenParent, "0123456789abcdef.migrated"),
-      path.join(tokenParent, "sync-cache-backup"),
-      path.join(matrixRoot, "operator-copy", "accounts", "ops"),
-    ],
+      "0123456789abcdef.apr24-cutover-20260424",
+      "fedcba9876543210.reset-20260720",
+      "0123456789abcdef.pre-stable-token-20260716",
+      "fedcba9876543210.migrated",
+      "sync-cache-backup",
+      "_archive",
+    ]
+      .map((name) => path.join(tokenParent, name))
+      .concat(
+        ["crypto-backup-20260720", ".apr24-cutover-20260424", "operator-copy"].map((name) =>
+          path.join(matrixRoot, name, archivedAccount),
+        ),
+      ),
   };
 }
 
