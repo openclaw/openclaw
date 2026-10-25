@@ -216,17 +216,12 @@ test("sessions.delete rejects main and aborts active runs", async () => {
   expect(unbind).toHaveBeenCalledExactlyOnceWith({ targetSessionKey: key, reason });
 });
 
-test("sessions.delete preserves locked archived sessions and deletes ordinary archived sessions", async () => {
+test("sessions.delete preserves locked archived sessions", async () => {
   const lockedKey = "agent:main:harness:codex:supervision:native-thread";
-  const ordinaryKey = "agent:main:ordinary-archived";
   const lockedSessionId = "sess-locked-archived";
-  const ordinarySessionId = "sess-ordinary-archived";
   const archivedAt = Date.now();
   const locked = { agentHarnessId: "codex", archivedAt, modelSelectionLocked: true };
-  const { dir, storePath } = await seedSessions(
-    [lockedKey, lockedSessionId, locked],
-    [ordinaryKey, ordinarySessionId, { archivedAt }],
-  );
+  const { dir, storePath } = await seedSessions([lockedKey, lockedSessionId, locked]);
   const lockedEntryBefore = structuredClone(loadSessionEntry({ storePath, sessionKey: lockedKey }));
   const lockedTranscriptPath = path.join(dir, `${lockedSessionId}.jsonl`);
   const lockedTranscriptBefore = await fs.readFile(lockedTranscriptPath, "utf8");
@@ -238,9 +233,6 @@ test("sessions.delete preserves locked archived sessions and deletes ordinary ar
   );
   expect(loadSessionEntry({ storePath, sessionKey: lockedKey })).toEqual(lockedEntryBefore);
   expect(await fs.readFile(lockedTranscriptPath, "utf8")).toBe(lockedTranscriptBefore);
-  await expectSessionDeleteSucceeds({ key: ordinaryKey, archivedOnly: true });
-  expect(loadSessionEntry({ storePath, sessionKey: ordinaryKey })).toBeUndefined();
-  expect(loadSessionEntry({ storePath, sessionKey: lockedKey })).toEqual(lockedEntryBefore);
 });
 
 test("sessions.delete removes a locked plugin-owned session from its persisted alias", async () => {

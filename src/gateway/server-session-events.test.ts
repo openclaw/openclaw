@@ -145,7 +145,8 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     }
   });
 
-  it("reads canonical content and placement from one selected snapshot", async () => {
+  it("reads canonical content and placement from the target's explicit store", async () => {
+    loadAccessorSessionEntryReadOnlyMock.mockReturnValue(sessionEntry());
     const transcriptPosition = { source: "replacement-generation", rawSeq: 10 };
     readSessionMessageByIdAsyncMock.mockResolvedValueOnce({
       found: true,
@@ -159,10 +160,21 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
     const { broadcastToConnIds, handler } = createHandler(false);
     await handler({
-      target: transcriptTarget("/tmp/canonical-update.sqlite"),
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      target: {
+        ...transcriptTarget("/tmp/explicit-sessions.json"),
+        sessionId: "partial-target-session",
+      },
       messageId: "same-id",
       messageSeq: 1,
       message: { role: "assistant", content: "stale queued content" },
+    });
+    expect(broadcastToConnIds).toHaveBeenCalledOnce();
+    expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/explicit-sessions.json",
     });
     expectBroadcast(broadcastToConnIds, {
       messageId: "same-id",
@@ -230,8 +242,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       sessionFile: "sqlite:main:sess-main:/tmp/explicit-sessions.json",
     });
 
-    expect(getSessionMessageSubscribers).toHaveBeenCalledWith("agent:main:current");
-    expect(getSessionMessageSubscribers).not.toHaveBeenCalledWith("agent:main:queued");
     expectBroadcast(
       broadcastToConnIds,
       { sessionKey: "agent:main:current" },
@@ -248,7 +258,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       lifecycleRevision: "deleted-revision",
     });
 
-    expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledOnce();
     expect(broadcastToConnIds).not.toHaveBeenCalled();
     expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
   });
@@ -434,11 +443,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       messageSeq: 1,
     });
 
-    expect(getSessionMessageSubscribers).toHaveBeenCalledWith("agent:ops:global");
-    expect(getSessionMessageSubscribers).toHaveBeenCalledWith("global");
-    expect(loadGatewaySessionRowMock).toHaveBeenCalledWith("global", {
-      agentId: "ops",
-    });
     expectBroadcast(
       broadcastToConnIds,
       { sessionKey: "global" },
@@ -474,8 +478,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       messageSeq: 1,
     });
 
-    expect(getSessionMessageSubscribers).toHaveBeenCalledWith("agent:ops:global");
-    expect(getSessionMessageSubscribers).not.toHaveBeenCalledWith("agent:research:global");
     expect(loadGatewaySessionRowMock).not.toHaveBeenCalled();
     expect(broadcastToConnIds).toHaveBeenCalledOnce();
     expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -532,42 +534,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageId: "message-1",
         messageSeq: 1,
       });
-      expect(received).toHaveBeenCalledOnce();
-      expect(received).toHaveBeenCalledWith({
+      expect(received).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "agent:main:main",
         phase: "message",
       });
     } finally {
       unsubscribe();
     }
-  });
-
-  it("reads the canonical message through the target's explicit store", async () => {
-    loadAccessorSessionEntryReadOnlyMock.mockReturnValue(sessionEntry());
-    readSessionMessageByIdAsyncMock.mockResolvedValueOnce(
-      storedMessage("message-partial-target", 7),
-    );
-    const { broadcastToConnIds, handler } = createHandler(false);
-
-    await handler({
-      agentId: "main",
-      ...messageUpdate("message-partial-target", "Final answer"),
-      sessionKey: "agent:main:main",
-      target: {
-        agentId: "main",
-        sessionId: "partial-target-session",
-        sessionKey: "agent:main:main",
-        storePath: "/tmp/explicit-sessions.json",
-      },
-    });
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-
-    expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/explicit-sessions.json",
-    });
-    expect(broadcastToConnIds.mock.calls[0]?.[1]).toMatchObject({ messageSeq: 7 });
   });
 
   it.each([

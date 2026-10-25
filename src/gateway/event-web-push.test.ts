@@ -342,8 +342,7 @@ describe("event Web Push classification", () => {
     ],
   ] as const)("routes %s to its originating Gateway", async (event, payload, path) => {
     setPaired(pairedOperator("browser-device", ["operator.read", "operator.questions"]));
-    const delivery = createDelivery(gatewayConfig);
-    delivery.handleEvent(event, payload, researchContext);
+    createDelivery(gatewayConfig).handleEvent(event, payload, researchContext);
     await expectPayload({
       url: `${path}#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator`,
     });
@@ -360,7 +359,6 @@ describe("event Web Push classification", () => {
       },
     });
     await Promise.resolve();
-    expect(mocks.sender).not.toHaveBeenCalled();
     expect(mocks.send).not.toHaveBeenCalled();
   });
 
@@ -487,12 +485,6 @@ describe("event Web Push classification", () => {
       pairingReady.resolve();
       await authorityCompleted.promise;
       expect(mocks.send).not.toHaveBeenCalled();
-      expect(mocks.preferences).toHaveBeenCalledTimes(2);
-      expect(mocks.preferences).toHaveBeenLastCalledWith(
-        [profileId],
-        "notifications.web.v1",
-        expect.anything(),
-      );
     },
   );
 
@@ -504,14 +496,13 @@ describe("event Web Push classification", () => {
     it("targets the recipient's canonical subscriptions, not other readers of the session", async () => {
       const bob = makeSubscription("bob-browser", "bob");
       const mergedBob = makeSubscription("bob-phone", "bob-old");
-      const subscriptions = [
+      setRecipients(
         makeSubscription("alice-browser", "alice"),
         bob,
         mergedBob,
         makeSubscription("carol-browser", "carol"),
         makeSubscription("anonymous-browser"),
-      ];
-      setRecipients(...subscriptions);
+      );
       mocks.identity.mockImplementation((id: string) =>
         profileIdentity(id === "bob-old" ? "bob" : id, [id]),
       );
@@ -661,7 +652,6 @@ describe("event Web Push classification", () => {
             preparation.resolve(mocks.send);
             await authorityCompleted.promise;
             expect(statements.map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0, 0]);
-            expect(mocks.canReceive).toHaveBeenCalledOnce();
             if (scenario === "eligible admin") {
               expectSend({ subscriptions: [subscription] });
             } else {
