@@ -9,10 +9,9 @@ import { resolveExecutablePath } from "../infra/executable-path.js";
 import { pathLooksMutableForShellPayloadSync } from "../infra/system-run-mutable-file-policy.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
-import { createRunExit } from "./bash-tools.exec-runtime.test-support.js";
+import { runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 const spawn = vi.hoisted(() => vi.fn<ProcessSupervisor["spawn"]>());
@@ -26,28 +25,19 @@ vi.mock("./tools/gateway.js", () => ({
 }));
 
 describe.skipIf(process.platform === "win32")("gateway dispatch executable binding", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
   let root: string;
   let binDir: string;
 
   beforeEach(() => {
-    envSnapshot = captureEnv([
-      "HOME",
-      "USERPROFILE",
-      "OPENCLAW_HOME",
-      "OPENCLAW_STATE_DIR",
-      "PATH",
-      "SHELL",
-    ]);
     root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-dispatch-binding-"));
     binDir = path.join(root, "bin");
     fs.mkdirSync(binDir);
     for (const name of ["HOME", "USERPROFILE", "OPENCLAW_HOME"]) {
-      setTestEnvValue(name, root);
+      vi.stubEnv(name, root);
     }
-    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    setTestEnvValue("PATH", `${binDir}:/usr/bin:/bin`);
-    setTestEnvValue("SHELL", "/bin/sh");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("PATH", `${binDir}:/usr/bin:/bin`);
+    vi.stubEnv("SHELL", "/bin/sh");
     resetProcessRegistryForTests();
     saveExecApprovals({
       version: 1,
@@ -61,19 +51,13 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
       rationale: "list fixture files",
     });
     // Substitution cases never dispatch fixture files, including on the unfixed code.
-    spawn.mockReset().mockImplementation(async () => ({
-      activity: { resultSettled: true, lastOutputAtMs: Date.now() },
-      runId: "recorded-spawn",
-      startedAtMs: Date.now(),
-      cancel: () => {},
-      wait: async () => createRunExit({ durationMs: 0 }),
-    }));
+    spawn.mockReset().mockImplementation(async (input) => runtimeManagedRun(input));
   });
 
   afterEach(() => {
     resetProcessRegistryForTests();
     closeOpenClawStateDatabaseForTest();
-    envSnapshot.restore();
+    vi.unstubAllEnvs();
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   });
 
@@ -107,15 +91,17 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
         expect(pathLooksMutableForShellPayloadSync(resolved ?? "")).toBe(false);
       }
       const replacement = path.join(binDir, executable);
-      const substitute = () => fs.writeFileSync(replacement, "", { mode: 0o755 });
       let approved = false;
+      const substitute = () => {
+        approved = true;
+        fs.writeFileSync(replacement, "", { mode: 0o755 });
+      };
       const unsubscribe = onAgentEvent((event) => {
         if (
           approval === "auto" &&
           event.runId === "dispatch-binding-run" &&
           event.data.approvalReviewOutcome === "approved"
         ) {
-          approved = true;
           substitute();
         }
       });
@@ -124,37 +110,33 @@ describe.skipIf(process.platform === "win32")("gateway dispatch executable bindi
           return { status: "accepted", id: "dispatch-binding-approval" };
         }
         if (method === "exec.approval.waitDecision") {
-          approved = true;
           substitute();
           return { decision: "allow-once" };
         }
         return { ok: true };
       });
-      const tool = makeTool(approval === "auto" ? "auto" : "ask");
-      try {
-        const result = await tool.execute("dispatch-binding-call", { command });
-        expect(approved).toBe(true);
-        expect(resolveExecutablePath(executable, { env: process.env, useCache: false })).toBe(
-          replacement,
+      const result = await makeTool(approval === "auto" ? "auto" : "ask")
+        .execute("dispatch-binding-call", { command })
+        .finally(unsubscribe);
+      expect(approved).toBe(true);
+      expect(resolveExecutablePath(executable, { env: process.env, useCache: false })).toBe(
+        replacement,
+      );
+      expect(spawn.mock.calls.length).toBe(0);
+      expect(result.details.status).toBe("failed");
+      expect(result.content[0]).toMatchObject({
+        text: expect.stringContaining("approval script operand changed before execution"),
+      });
+      if (approval === "auto") {
+        expect(autoReviewer).toHaveBeenCalledOnce();
+        expect(callGatewayTool).not.toHaveBeenCalled();
+      } else {
+        expect(autoReviewer).not.toHaveBeenCalled();
+        expect(callGatewayTool).toHaveBeenCalledWith(
+          "exec.approval.waitDecision",
+          expect.anything(),
+          expect.objectContaining({ id: expect.any(String) }),
         );
-        expect(spawn.mock.calls.length).toBe(0);
-        expect(result.details.status).toBe("failed");
-        expect(result.content[0]).toMatchObject({
-          text: expect.stringContaining("approval script operand changed before execution"),
-        });
-        if (approval === "auto") {
-          expect(autoReviewer).toHaveBeenCalledOnce();
-          expect(callGatewayTool).not.toHaveBeenCalled();
-        } else {
-          expect(autoReviewer).not.toHaveBeenCalled();
-          expect(callGatewayTool).toHaveBeenCalledWith(
-            "exec.approval.waitDecision",
-            expect.anything(),
-            expect.objectContaining({ id: expect.any(String) }),
-          );
-        }
-      } finally {
-        unsubscribe();
       }
     },
   );

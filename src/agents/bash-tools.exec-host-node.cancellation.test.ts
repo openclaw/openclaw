@@ -1,20 +1,9 @@
 import fs from "node:fs/promises";
-import {
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  resolveExecApprovalsFromFile,
-  type ExecAsk,
-  type ExecSecurity,
-} from "../infra/exec-approvals.js";
+import { resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
+import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { PreparedRunExecPolicy } from "../infra/system-run-approval-context.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
@@ -47,13 +36,11 @@ vi.mock("./tools/nodes-utils.js", () => ({
 }));
 
 function createPolicy(security: ExecSecurity, ask: ExecAsk): NodeApprovalPolicy {
+  nodePolicy = { security, ask };
+  const defaults = { ...nodePolicy, askFallback: "deny" as const, autoAllowSkills: false };
   return {
     approvals: resolveExecApprovalsFromFile({
-      file: {
-        version: 1,
-        defaults: { security, ask, askFallback: "deny", autoAllowSkills: false },
-        agents: {},
-      },
+      file: { version: 1, defaults, agents: {} },
       agentId: "main",
     }),
     hostSecurity: security,
@@ -132,9 +119,7 @@ describe("node-host dispatch cancellation", () => {
     });
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   it.each([
     ["full", "off", false],
@@ -144,7 +129,6 @@ describe("node-host dispatch cancellation", () => {
     async (security, ask, autoReview) => {
       const reason = new Error("cancelled during final node dispatch policy");
       const policy = createPolicy(security, ask);
-      nodePolicy = { security, ask };
       const checkpoint = createDeferred<NodeApprovalPolicy>();
       const policyEntered = createDeferred();
       policySpy.mockResolvedValueOnce(policy).mockImplementationOnce(() => {
@@ -179,7 +163,6 @@ describe("node-host dispatch cancellation", () => {
 
   it("forwards cancellation without removing auto-reviewed execution scopes", async () => {
     policySpy.mockResolvedValue(createPolicy("allowlist", "on-miss"));
-    nodePolicy = { security: "allowlist", ask: "on-miss" };
 
     const result = await executeNodeHostCommand(
       createRequest({ security: "allowlist", ask: "on-miss", autoReview: true }),

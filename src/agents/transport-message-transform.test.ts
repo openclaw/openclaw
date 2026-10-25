@@ -1,9 +1,13 @@
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { Api, Context } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
-import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import {
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "./test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 const EXPECTED_FAILURE_MARKER =
@@ -14,11 +18,8 @@ const makeModel = (api: Api, provider: string, id: string) =>
 
 type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;
 type AssistantMessage = Extract<Context["messages"][number], { role: "assistant" }>;
-const userMessage = (content: string, timestamp = Date.now()) => ({
-  role: "user" as const,
-  content,
-  timestamp,
-});
+const userMessage = (content: string, timestamp = 0) =>
+  makeAgentUserMessage({ content, timestamp });
 const text = (value: string) => ({ type: "text" as const, text: value });
 const openai = makeModel("openai-responses", "openai", "gpt-5.4");
 const anthropic = makeModel("anthropic-messages", "anthropic", "claude-opus-4-6");
@@ -30,14 +31,7 @@ function toolResult(
   toolName = "read",
   isError = false,
 ): ToolResultMessage {
-  return {
-    role: "toolResult",
-    toolCallId,
-    toolName,
-    content: [text(output)],
-    isError,
-    timestamp: Date.now(),
-  };
+  return { ...textToolResult(toolCallId, toolName, output, { isError }), timestamp: 0 };
 }
 const thinking = { type: "thinking" as const, thinking: "reasoning", thinkingSignature: "sig" };
 const assistant = (overrides: Partial<AssistantMessage> & Pick<AssistantMessage, "content">) =>

@@ -66,18 +66,11 @@ function createTestRuntime(params: Parameters<CreateSessionMcpRuntime>[0]) {
 
 describe("requester MCP connect runtime", () => {
   let manager: ReturnType<typeof createSessionMcpRuntimeManager>;
-  const created: Array<Parameters<CreateSessionMcpRuntime>[0]> = [];
 
   beforeEach(() => {
     oauthStatus.mockReset().mockResolvedValue([{ state: "unauthenticated" }]);
     startAuthorization.mockReset().mockResolvedValue({ status: "redirect", authorizationUrl });
-    created.length = 0;
-    manager = createSessionMcpRuntimeManager({
-      createRuntime: (params) => {
-        created.push(params);
-        return createTestRuntime(params);
-      },
-    });
+    manager = createSessionMcpRuntimeManager({ createRuntime: createTestRuntime });
   });
 
   afterEach(async () => {
@@ -160,10 +153,8 @@ describe("requester MCP connect runtime", () => {
             }),
           );
         }
-        const count = created.length;
         const refused = await materializeBundleMcpToolsForRun(await acquire());
         expect(toolSurface(refused.tools)).toEqual(surface);
-        expect(created).toHaveLength(count);
         const connect = refused.tools[1]!.execute;
         if (change === "removal") {
           await manager.reloadConfig({

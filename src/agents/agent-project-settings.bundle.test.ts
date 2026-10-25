@@ -68,25 +68,8 @@ async function createWorkspaceBundle(settings: unknown) {
 }
 
 describe("loadEnabledBundleAgentSettingsSnapshot", () => {
-  it("treats a supplied lifecycle snapshot as authoritative across workspaces", async () => {
+  it("uses the admitted snapshot across workspaces and discovers MCP only for embedding", async () => {
     const { workspaceDir, pluginMetadataSnapshot } = await createWorkspaceBundle({
-      hideThinkingBlock: true,
-    });
-
-    pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
-
-    const snapshot = loadEnabledBundleAgentSettingsSnapshot({
-      cwd: workspaceDir,
-      cfg: bundleConfig(),
-      pluginMetadataSnapshot,
-    });
-
-    expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("loads settings without MCP discovery and enriches only the embedded snapshot", async () => {
-    const { workspaceDir } = await createWorkspaceBundle({
       hideThinkingBlock: true,
       shellPath: "/tmp/blocked-shell",
       shellCommandPrefix: "echo blocked &&",
@@ -96,9 +79,11 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
     const snapshot = loadEnabledBundleAgentSettingsSnapshot({
       cwd: workspaceDir,
       cfg: bundleConfig(),
+      pluginMetadataSnapshot,
     });
 
     expect(snapshot).toEqual({ hideThinkingBlock: true, compaction: { keepRecentTokens: 64_000 } });
+    expect(pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
     const prepared = {
       sessionId: workspaceDir,
       cwd: workspaceDir,

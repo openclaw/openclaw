@@ -20,6 +20,16 @@ const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstra
 
 const QUOTED_HEARTBEAT_EXAMPLE =
   "`Check STATUS.md if it exists. Follow it strictly. Do not repeat old tasks from prior chats. If nothing needs attention, reply STATUS_OK.`";
+const policy = "Never commit secrets without validation.";
+const scoped = "Must read scoped AGENTS.md before subtree work.";
+const frame = "Example policy:";
+const fittingFrame = "Example " + "x".repeat(51);
+const oversizedFrame = fittingFrame + "x";
+const early = "- Early normal ".padEnd(20, "a");
+const long = "- Normal payload ".padEnd(70, "b");
+const urgent = "- 嚴禁共用登入帳號 ".padEnd(140, "字");
+const late = "- Late normal ".padEnd(20, "d");
+const omitted = "[...1 more policy lines omitted...]";
 
 function renderFile(
   file: Partial<WorkspaceBootstrapFile>,
@@ -112,56 +122,32 @@ describe("buildBootstrapContextFiles", () => {
       );
     },
   );
-  it.each([
-    { padding: 51, fits: true },
-    { padding: 52, fits: false },
-  ])("selects the whole framed unit when fits=$fits", ({ padding, fits }) => {
-    const frame = "Example " + "x".repeat(padding);
-    const content = renderMiddle([frame, QUOTED_HEARTBEAT_EXAMPLE], 600);
-
-    if (fits) {
-      expect(content).toContain([frame, QUOTED_HEARTBEAT_EXAMPLE].join("\n"));
-      expect(content).not.toContain("more policy lines omitted");
-    } else {
-      expect(content).not.toContain(frame);
-      expect(content).not.toContain(QUOTED_HEARTBEAT_EXAMPLE);
-      expect(content).toContain("[...1 more policy lines omitted...]");
-    }
-    expect(content?.length).toBeLessThanOrEqual(600);
-  });
-
-  it("clears framing at a backtick closing boundary", () => {
-    const candidate = "Never commit secrets without validation.";
-    const content = renderMiddle(["```", "Example policy:", "```", candidate], 2000);
-    expect(content).toContain(candidate);
-    expect(content).not.toContain("Example policy:");
-    expect(content).not.toContain("```");
-    expect(content).not.toContain("~~~");
-    expect(content?.length).toBeLessThanOrEqual(2000);
-  });
-
-  it("keeps repeated frames local and ordered", () => {
-    const first = "Never commit secrets without validation.";
-    const middle = "Must read scoped AGENTS.md before subtree work.";
-    const frame = "Example policy:";
-    const result = renderMiddle([frame, first, "", middle, "", frame, first], 2000);
-    expect(result).toContain([frame, first, middle, frame, first].join("\n"));
-    expect(result?.split(frame)).toHaveLength(3);
-    expect(result?.length).toBeLessThanOrEqual(2000);
-  });
-
-  it("prioritizes Traditional Chinese mandatory bullets", () => {
-    const earlyShort = "- Early normal ".padEnd(20, "a");
-    const earlyLong = "- Normal payload ".padEnd(70, "b");
-    const urgent = "- 嚴禁共用登入帳號 ".padEnd(140, "字");
-    const lateShort = "- Late normal ".padEnd(20, "d");
-    const content = renderMiddle([earlyShort, "", earlyLong, "", urgent, "", lateShort], 600);
-
-    expect(content).toContain([earlyShort, urgent, lateShort].join("\n"));
-    expect(content).not.toContain(earlyLong);
-    expect(content).toContain("[...1 more policy lines omitted...]");
-    expect(content?.length).toBeLessThanOrEqual(600);
-  });
+  it.each<{
+    name: string;
+    lines: string[];
+    maxChars: number;
+    included: string[];
+    excluded: string[];
+    frames?: number;
+  }>`
+    name                          | lines                                             | maxChars | included                                                 | excluded                                      | frames
+    ${"fitting frame"}            | ${[fittingFrame, QUOTED_HEARTBEAT_EXAMPLE]}       | ${600}   | ${[[fittingFrame, QUOTED_HEARTBEAT_EXAMPLE].join("\n")]} | ${["more policy lines omitted"]}              | ${undefined}
+    ${"oversized frame"}          | ${[oversizedFrame, QUOTED_HEARTBEAT_EXAMPLE]}     | ${600}   | ${[omitted]}                                             | ${[oversizedFrame, QUOTED_HEARTBEAT_EXAMPLE]} | ${undefined}
+    ${"fence boundary"}           | ${["```", frame, "```", policy]}                  | ${2000}  | ${[policy]}                                              | ${[frame, "```", "~~~"]}                      | ${undefined}
+    ${"repeated frames"}          | ${[frame, policy, "", scoped, "", frame, policy]} | ${2000}  | ${[[frame, policy, scoped, frame, policy].join("\n")]}   | ${[]}                                         | ${3}
+    ${"mandatory Chinese bullet"} | ${[early, "", long, "", urgent, "", late]}        | ${600}   | ${[[early, urgent, late].join("\n"), omitted]}           | ${[long]}                                     | ${undefined}
+  `(
+    "keeps policy digest semantics for $name",
+    ({ lines, maxChars, included, excluded, frames }) => {
+      const result = renderMiddle(lines, maxChars);
+      included.forEach((text) => expect(result).toContain(text));
+      excluded.forEach((text) => expect(result).not.toContain(text));
+      if (frames) {
+        expect(result?.split(frame)).toHaveLength(frames);
+      }
+      expect(result?.length).toBeLessThanOrEqual(maxChars);
+    },
+  );
   it("keeps source bytes with compact markers at budget 22", () => {
     const result = renderFile(
       { name: "USER.md", content: `HEAD-${"a".repeat(1_000)}-TAIL` },

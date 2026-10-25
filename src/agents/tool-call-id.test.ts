@@ -1,25 +1,25 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
-import { sparseAssistant } from "./test-helpers/sparse-transcript.test-support.js";
+import { sparseAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 import { sanitizeToolCallIdsForCloudCodeAssist as sanitize } from "./tool-call-id.js";
 
 type Mode = "strict" | "strict9";
-const call = (id: string, name = "read") => ({
+const call = (id: string) => ({
   type: "toolCall" as const,
   id,
-  name,
+  name: "read",
   arguments: {},
 });
-const result = (toolCallId: string, text = "ok", aliases = false, toolName = "read") => ({
-  role: "toolResult" as const,
-  toolCallId,
+const result = (toolCallId: string, text = "ok", aliases = false) => ({
+  ...textToolResult(toolCallId, "read", text),
   ...(aliases ? { toolUseId: toolCallId } : {}),
-  toolName,
-  content: [{ type: "text" as const, text }],
 });
-const transcript = (...ids: string[]) =>
-  castAgentMessages([sparseAssistant(ids.map((id) => call(id))), ...ids.map((id) => result(id))]);
+const transcript = (ids: readonly string[], aliases = false) =>
+  castAgentMessages([
+    sparseAssistant(ids.map(call)),
+    ...ids.map((id) => result(id, "ok", aliases)),
+  ]);
 const signed = (signature: string, id: string) => ({
   role: "assistant" as const,
   content: [
@@ -36,7 +36,7 @@ function idAt(out: AgentMessage[], message = 0, block = 0): string {
   }
   return id;
 }
-const sanitizeId = (id: string, mode: Mode = "strict") => idAt(sanitize(transcript(id), mode));
+const sanitizeId = (id: string, mode: Mode = "strict") => idAt(sanitize(transcript([id]), mode));
 
 function expectPair(out: AgentMessage[], mode: Mode, aliases = false) {
   const ids = [idAt(out, 0, 0), idAt(out, 0, 1)];
@@ -61,12 +61,12 @@ function expectRewrite(input: AgentMessage[], expectedId: string, mode: Mode) {
 
 describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   it.each<Mode>(["strict", "strict9"])("preserves valid IDs in %s mode", (mode) => {
-    const input = transcript(mode === "strict" ? "call1" : "abc123XYZ");
+    const input = transcript([mode === "strict" ? "call1" : "abc123XYZ"]);
     expect(sanitize(input, mode)).toBe(input);
   });
 
   it("strips non-alphanumeric characters", () => {
-    expectRewrite(transcript("call_|item:123-"), "callitem123", "strict");
+    expectRewrite(transcript(["call_|item:123-"]), "callitem123", "strict");
   });
 
   it.each([
@@ -76,12 +76,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
     ["punctuation collisions", ["call_a|b", "call_a:b"], "strict", false],
     ["9-character collisions", ["call_abc|item:123", "call_abc|item:456"], "strict9", false],
   ] as const)("pairs %s (%j, %s mode)", (_name, ids, mode, aliases) => {
-    const input = castAgentMessages([
-      sparseAssistant(ids.map((id) => call(id, "edit"))),
-      ...ids.map((id, i) => result(id, String(i), aliases, "edit")),
-    ]);
-    const out = sanitize(input, mode);
-    expectPair(out, mode, aliases);
+    expectPair(sanitize(transcript(ids, aliases), mode), mode, aliases);
   });
 
   it("preserves native Anthropic IDs while sanitizing mixed-provider IDs", () => {
@@ -127,7 +122,6 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       const second = idAt(out, 2, 1);
       expect(firstSigned ? first : second).toBe("call1");
       expect(firstSigned ? second : first).not.toBe("call1");
-      expect(first).not.toBe(second);
       expect(out[1]).toMatchObject({ toolCallId: first });
       expect(out[3]).toMatchObject({ toolCallId: second });
     },
@@ -159,7 +153,7 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   );
 
   it("preserves native Kimi IDs alongside non-Kimi siblings", () => {
-    const input = transcript("functions.read:0", "call_a|b");
+    const input = transcript(["functions.read:0", "call_a|b"]);
     const out = sanitize(input);
     expect([idAt(out), idAt(out, 0, 1)]).toEqual(["functions.read:0", "callab"]);
     expect(out[1]).toMatchObject({ toolCallId: "functions.read:0" });
@@ -194,6 +188,6 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
   });
 
   it("rewrites native Kimi IDs in strict9 mode", () => {
-    expectRewrite(transcript("functions.read:0"), "functions", "strict9");
+    expectRewrite(transcript(["functions.read:0"]), "functions", "strict9");
   });
 });
