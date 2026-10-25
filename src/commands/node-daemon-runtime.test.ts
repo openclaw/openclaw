@@ -88,6 +88,15 @@ beforeEach(() => {
     throw new Error("ENOENT");
   });
   stat.mockResolvedValue({ isFile: () => true });
+  runExec.mockResolvedValue({
+    stdout: JSON.stringify({
+      nodeVersion: "26.12.1",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    }),
+    stderr: "",
+  });
   loadNodeHostConfig.mockResolvedValue(null);
   loadDeviceIdentityIfPresentAsync.mockResolvedValue(null);
   loadDeviceAuthTokenReadOnly.mockResolvedValue(null);
@@ -117,28 +126,15 @@ async function install(env: Record<string, string | undefined> = {}, authFromEnv
   return args;
 }
 
+const nodeArguments = ["node", "run", "--host", "gateway.example", "--port", "18789", "--no-tls"];
+
 describe.skipIf(process.platform === "win32")("node-host runtime install boundary", () => {
   it("accepts a Node 26 system runtime with safe embedded SQLite", async () => {
-    runExec.mockResolvedValue({
-      stdout: JSON.stringify({
-        nodeVersion: "26.12.1",
-        sqliteVersion: "3.53.4",
-        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-        nodeSharedSqlite: false,
-      }),
-      stderr: "",
-    });
     const plan = await install();
     expect(plan.programArguments).toEqual([
       "/usr/bin/node",
       "/opt/openclaw/openclaw.mjs",
-      "node",
-      "run",
-      "--host",
-      "gateway.example",
-      "--port",
-      "18789",
-      "--no-tls",
+      ...nodeArguments,
     ]);
   });
 
@@ -178,16 +174,7 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
   it("uses OPENCLAW_WRAPPER even when native runtime probes cannot execute", async () => {
     runExec.mockRejectedValue(new Error("spawn EACCES"));
     const plan = await install({ OPENCLAW_WRAPPER: "/opt/openclaw-wrapper" });
-    expect(plan.programArguments).toEqual([
-      "/opt/openclaw-wrapper",
-      "node",
-      "run",
-      "--host",
-      "gateway.example",
-      "--port",
-      "18789",
-      "--no-tls",
-    ]);
+    expect(plan.programArguments).toEqual(["/opt/openclaw-wrapper", ...nodeArguments]);
   });
 
   it("rejects a node-host wrapper without execute permission", async () => {
