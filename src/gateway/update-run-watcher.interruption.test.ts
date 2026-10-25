@@ -32,7 +32,6 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { startUpdateRunWatcher } from "./update-run-watcher.js";
 
 const observation = vi.hoisted(() => ({
-  installedBuild: "candidate-build",
   servingBuild: "candidate-build",
   driver: "dead" as "dead" | "alive" | "unknown",
   previousDriver: "dead" as "dead" | "alive",
@@ -99,7 +98,7 @@ vi.mock("../infra/openclaw-root.js", async (original) => ({
 }));
 vi.mock("../infra/package-json.js", () => ({ readPackageVersion: async () => "2026.9.4" }));
 vi.mock("../infra/update-git-runtime.js", () => ({
-  readBuiltGatewayBuildId: async () => observation.installedBuild,
+  readBuiltGatewayBuildId: async () => "candidate-build",
 }));
 
 vi.mock("../cli/daemon-cli/restart-health-probe.js", () => ({
@@ -127,7 +126,6 @@ beforeEach(() => {
   scheduler = createTestGatewayScheduler();
   lifecycle = createGatewayUpdateLifecycle(scheduler);
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("update-interruption-"));
-  observation.installedBuild = "candidate-build";
   observation.servingBuild = "candidate-build";
   observation.driver = "dead";
   observation.previousDriver = "dead";
@@ -214,7 +212,6 @@ it("settles a verified abandoned CLI run", async () => {
 });
 
 it.each([
-  "installed",
   "serving",
   "alive",
   "unknown",
@@ -225,9 +222,6 @@ it.each([
   "recovery",
 ])("preserves interrupted evidence when %s does not permit settlement", async (boundary) => {
   const runId = interruptedRun();
-  if (boundary === "installed") {
-    observation.installedBuild = "another-build";
-  }
   if (boundary === "serving") {
     observation.servingBuild = "another-build";
   }

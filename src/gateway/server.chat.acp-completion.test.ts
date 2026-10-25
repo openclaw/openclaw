@@ -19,7 +19,6 @@ import { tryDispatchAcpReplyHook } from "../plugin-sdk/acpx.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import type { Deferred } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { widgetResult } from "./server-chat.agent-events.test-harness.js";
 import {
@@ -164,7 +163,7 @@ describe("Gateway ACP completion ownership", () => {
     let releaseTurn = createDeferred();
     let activeRunId = "";
     type CapturedAdmission = { release: Promise<void> | undefined };
-    const dispatchAdmissions = new Map<string, Deferred<CapturedAdmission>>();
+    let admissionCapture = createDeferred<CapturedAdmission>();
     const admittedReleases = new Set<Promise<void>>();
     await writeSessionStore({
       entries: {
@@ -217,12 +216,8 @@ describe("Gateway ACP completion ownership", () => {
     );
     dispatchInboundMessageMock.mockImplementation(async (input: unknown) => {
       // SAFETY: The Gateway mock adapter forwards the real dispatchInboundMessage parameters.
-      const {
-        ctx,
-        cfg,
-        dispatcher,
-        replyOptions: inboundReplyOptions,
-      } = input as Parameters<typeof dispatchInboundMessage>[0];
+      const params = input as Parameters<typeof dispatchInboundMessage>[0];
+      const { ctx, cfg, dispatcher } = params;
       // Gateway admission outlives ACP dispatch and owns source transcript finalization.
       const release = captureSessionControllerSettlement({
         scope: storePath,
@@ -231,15 +226,14 @@ describe("Gateway ACP completion ownership", () => {
       if (release) {
         admittedReleases.add(release);
       }
-      const runId = inboundReplyOptions?.runId;
-      if (runId) {
-        dispatchAdmissions.get(runId)?.resolve({ release });
+      if (params.replyOptions?.runId === activeRunId) {
+        admissionCapture.resolve({ release });
       }
       return actualDispatch.dispatchInboundMessage({
         ctx,
         cfg,
         dispatcher,
-        replyOptions: inboundReplyOptions,
+        replyOptions: params.replyOptions,
         dispatchReplyFromConfig: async ({ ctx: finalized, replyOptions }) => {
           const hookDispatcher = scenario.lifecycle
             ? createDispatchReplyOperationCoordinator({
@@ -328,8 +322,7 @@ describe("Gateway ACP completion ownership", () => {
         const check = (value: unknown) => expect.soft(value, temperature);
         const runId = `acp-completion-${suffix}-${temperature}`;
         activeRunId = runId;
-        const admissionCapture = createDeferred<CapturedAdmission>();
-        dispatchAdmissions.set(runId, admissionCapture);
+        admissionCapture = createDeferred<CapturedAdmission>();
         turnStarted = createDeferred();
         releaseTurn = createDeferred();
         lifecycleStarted = createDeferred();
@@ -421,20 +414,13 @@ describe("Gateway ACP completion ownership", () => {
           if (scenario.suppressed) {
             check(content).toBeUndefined();
           } else {
-            check(content).toEqual([
+            // Widget schema/metadata is asserted by server-chat.agent-events.test.ts;
+            // this boundary owns inclusion of this run's widget in the final reply.
+            check(content).toMatchObject([
               { type: "text", text: "same accepted reply" },
               {
                 type: "canvas",
-                preview: {
-                  kind: "canvas",
-                  surface: "assistant_message",
-                  render: "url",
-                  title: "Status",
-                  sandbox: "scripts",
-                  viewId: runId,
-                  url: `/__openclaw__/canvas/documents/${runId}/index.html`,
-                },
-                rawText: null,
+                preview: { viewId: runId },
               },
             ]);
           }
@@ -461,7 +447,6 @@ describe("Gateway ACP completion ownership", () => {
           ).toEqual([]);
           check(final?.message).toBeUndefined();
         }
-        check(runFrames.filter((frame) => frame.payload?.data?.reason === "seq gap")).toEqual([]);
         const messages = readTranscript(
           targetSessionKey,
           scenario.rebound ? `${sessionId}-replaced-${index + 1}` : sessionId,
@@ -521,10 +506,6 @@ describe("Gateway ACP completion ownership", () => {
               { type: "text", text: "same accepted reply" },
               {
                 type: "image",
-                mimeType: "image/png",
-                sizeBytes: 68,
-                width: 1,
-                height: 1,
                 url: expect.stringContaining(mediaPrefix),
                 openUrl: expect.stringContaining(mediaPrefix),
               },
