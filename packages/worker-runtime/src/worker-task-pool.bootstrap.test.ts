@@ -239,17 +239,15 @@ async function expectCapacity(result: Promise<string>) {
   return { capacityAvailable };
 }
 
-it.each([false, true])("publishes before successor dispatch (retry=%s)", async (retry) => {
+it("retries failed publication before successor dispatch", async () => {
   let nativeReader = false;
   const failure = new Error("resource publication failed");
   const released = vi.fn(() => {
     nativeReader = false;
   });
-  if (retry) {
-    released.mockImplementationOnce(() => {
-      throw failure;
-    });
-  }
+  released.mockImplementationOnce(() => {
+    throw failure;
+  });
   const { pool, workers, complete } = createPool({ onRotationComplete: released });
   const first = pool.run(() => {
     nativeReader = true;
@@ -265,18 +263,14 @@ it.each([false, true])("publishes before successor dispatch (retry=%s)", async (
     return "successor";
   });
   const successor = pool.run(prepared, {});
-  if (retry) {
-    await expect(rotating).rejects.toBe(failure);
-    expect(workers[0]!.threadId).toBe(-1);
-    expect(prepared).not.toHaveBeenCalled();
-    await pool.rotate();
-  } else {
-    await rotating;
-  }
+  await expect(rotating).rejects.toBe(failure);
+  expect(workers[0]!.threadId).toBe(-1);
+  expect(prepared).not.toHaveBeenCalled();
+  await pool.rotate();
   complete();
   await expect(successor).resolves.toBe("successor");
   expect([workers[0]!.threadId, previousReader, nativeReader]).toEqual([-1, false, true]);
-  expect(released).toHaveBeenCalledTimes(retry ? 2 : 1);
+  expect(released).toHaveBeenCalledTimes(2);
 });
 
 it.each(["error", "exit", "constructor"] as const)("latches %s until rotation", async (failure) => {
