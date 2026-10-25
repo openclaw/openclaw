@@ -1,0 +1,395 @@
+{
+  "language": "ru",
+  "tabs": [
+    {
+      "tab": "Начало работы",
+      "groups": [
+        {
+          "group": "Обзор",
+          "pages": [
+            "ru/index"
+          ]
+        },
+        {
+          "group": "Первые шаги",
+          "pages": [
+            "ru/start/getting-started"
+          ]
+        },
+        {
+          "group": "Руководства по настройке и справка",
+          "pages": [
+            "ru/start/openclaw"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Установка",
+      "groups": [
+        {
+          "group": "Обзор установки",
+          "pages": [
+            "ru/install/index"
+          ]
+        },
+        {
+          "group": "Среды выполнения",
+          "pages": [
+            "ru/install/node"
+          ]
+        },
+        {
+          "group": "Обслуживание",
+          "pages": [
+            "ru/install/backups"
+          ]
+        },
+        {
+          "group": "Контейнеры",
+          "pages": [
+            "ru/install/docker"
+          ]
+        },
+        {
+          "group": "Хостинг",
+          "pages": [
+            "ru/vps"
+          ]
+        },
+        {
+          "group": "Продвинутая настройка",
+          "pages": [
+            "ru/start/setup"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Каналы",
+      "groups": [
+        {
+          "group": "Обзор",
+          "pages": [
+            "ru/channels/index"
+          ]
+        },
+        {
+          "group": "Популярные мессенджеры",
+          "pages": [
+            "ru/channels/discord"
+          ]
+        },
+        {
+          "group": "Для разработчиков и self-hosted",
+          "pages": [
+            "ru/channels/a2a"
+          ]
+        },
+        {
+          "group": "Региональные платформы",
+          "pages": [
+            "ru/channels/feishu"
+          ]
+        },
+        {
+          "group": "Настройка",
+          "pages": [
+            "ru/channels/pairing"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Агенты",
+      "groups": [
+        {
+          "group": "Среда выполнения агента",
+          "pages": [
+            "ru/concepts/architecture"
+          ]
+        },
+        {
+          "group": "Рабочее пространство агента",
+          "pages": [
+            "ru/concepts/agent-workspace"
+          ]
+        },
+        {
+          "group": "Сессии и память",
+          "pages": [
+            "ru/concepts/main-session"
+          ]
+        },
+        {
+          "group": "Мультиагентность",
+          "pages": [
+            "ru/concepts/multi-agent"
+          ]
+        },
+        {
+          "group": "Сообщения и доставка",
+          "pages": [
+            "ru/concepts/messages"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Возможности",
+      "groups": [
+        {
+          "group": "Обзор",
+          "pages": [
+            "ru/tools/index"
+          ]
+        },
+        {
+          "group": "Плагины",
+          "pages": [
+            "ru/tools/plugin"
+          ]
+        },
+        {
+          "group": "Руководства по плагинам",
+          "pages": [
+            "ru/plugins/agent-guidance"
+          ]
+        },
+        {
+          "group": "Разработка плагинов",
+          "pages": [
+            "ru/plugins/building-plugins"
+          ]
+        },
+        {
+          "group": "Скиллы",
+          "pages": [
+            "ru/tools/skills"
+          ]
+        },
+        {
+          "group": "Автоматизация",
+          "pages": [
+            "ru/automation/index"
+          ]
+        },
+        {
+          "group": "Инструменты",
+          "pages": [
+            "ru/tools/apply-patch"
+          ]
+        },
+        {
+          "group": "Координация агентов",
+          "pages": [
+            "ru/tools/agent-send"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Модели",
+      "groups": [
+        {
+          "group": "Обзор",
+          "pages": [
+            "ru/providers/index"
+          ]
+        },
+        {
+          "group": "Концепции и настройка",
+          "pages": [
+            "ru/concepts/models"
+          ]
+        },
+        {
+          "group": "Провайдеры",
+          "pages": [
+            "ru/providers/alibaba"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Платформы",
+      "groups": [
+        {
+          "group": "Обзор платформ",
+          "pages": [
+            "ru/platforms/index"
+          ]
+        },
+        {
+          "group": "Приложение для macOS",
+          "pages": [
+            "ru/platforms/mac/dev-setup"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Шлюз и эксплуатация",
+      "groups": [
+        {
+          "group": "Шлюз",
+          "pages": [
+            "ru/gateway/index"
+          ]
+        },
+        {
+          "group": "Удалённый доступ",
+          "pages": [
+            "ru/gateway/remote"
+          ]
+        },
+        {
+          "group": "Безопасность",
+          "pages": [
+            "ru/security/network-proxy"
+          ]
+        },
+        {
+          "group": "Ноды и медиа",
+          "pages": [
+            "ru/nodes/index"
+          ]
+        },
+        {
+          "group": "Веб-интерфейсы",
+          "pages": [
+            "ru/web/index"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Справочник",
+      "groups": [
+        {
+          "group": "Команды CLI",
+          "pages": [
+            "ru/cli/index"
+          ]
+        },
+        {
+          "group": "RPC и API",
+          "pages": [
+            "ru/reference/rpc"
+          ]
+        },
+        {
+          "group": "Справочник по среде Codex",
+          "pages": [
+            "ru/plugins/codex-harness-reference"
+          ]
+        },
+        {
+          "group": "Справочник по плагинам",
+          "pages": [
+            "ru/plugins/plugin-inventory"
+          ]
+        },
+        {
+          "group": "Справочник по SDK плагинов",
+          "pages": [
+            "ru/plugins/sdk-overview"
+          ]
+        },
+        {
+          "group": "Устройство плагинов",
+          "pages": [
+            "ru/plugins/architecture"
+          ]
+        },
+        {
+          "group": "Шаблоны",
+          "pages": [
+            "ru/reference/AGENTS.default"
+          ]
+        },
+        {
+          "group": "Технический справочник",
+          "pages": [
+            "ru/agent-runtime-architecture"
+          ]
+        },
+        {
+          "group": "Схемы и форматирование",
+          "pages": [
+            "ru/concepts/typebox"
+          ]
+        },
+        {
+          "group": "Проект и участие",
+          "pages": [
+            "ru/reference/credits"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Релизы",
+      "groups": [
+        {
+          "group": "Заметки о выпусках",
+          "pages": [
+            "ru/releases/index"
+          ]
+        },
+        {
+          "group": "Процесс выпуска",
+          "pages": [
+            "ru/reference/RELEASING"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Участие в разработке",
+      "groups": [
+        {
+          "group": "Зрелость",
+          "pages": [
+            "ru/maturity/scorecard"
+          ]
+        },
+        {
+          "group": "Тестирование и CI",
+          "pages": [
+            "ru/reference/test"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Помощь",
+      "groups": [
+        {
+          "group": "Начните здесь",
+          "pages": [
+            "ru/help/index"
+          ]
+        },
+        {
+          "group": "Частые вопросы",
+          "pages": [
+            "ru/help/faq"
+          ]
+        },
+        {
+          "group": "Диагностика",
+          "pages": [
+            "ru/help/environment"
+          ]
+        },
+        {
+          "group": "Сообщество и мета",
+          "pages": [
+            "ru/start/lore"
+          ]
+        }
+      ]
+    }
+  ]
+}
