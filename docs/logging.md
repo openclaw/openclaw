@@ -1190,6 +1190,21 @@ For shorter delays, [profiler flags](/diagnostics/flags#profiler-flags) lower th
 warning thresholds. They are not required to diagnose a multi-second startup
 stall.
 
+`main-thread stall` warnings include `stallStartMs`, `stallEndMs`, and
+`reportedAtMs` as Unix timestamps in milliseconds. Scoped callbacks have measured
+start and end times. Unattributed active-loop stalls use the observed gap between
+20 ms heartbeats; these bounds describe a blocked-loop observation, not an exact
+JavaScript callback lifetime. Idle monitoring uses the missed wake deadline and
+the resumed wake instead, without adding idle heartbeats.
+
+On supported Node runtimes, `main-thread stall profile` selects samples only
+inside the longest reported stall's saved interval. `windowStartMs` and
+`windowEndMs` identify that interval; `reportedAtMs` identifies profile emission.
+The recorder keeps its 25 ms sample interval and bounded profile buffers. Later
+work outside the interval is excluded, even when reporting is delayed. Sample
+counts include idle samples whose frames are omitted from `inclusive`, so a
+single listed stack does not mean that stack occupied the whole interval.
+
 ### Model call size and timing
 
 Model-call diagnostics record bounded request/response measurements without

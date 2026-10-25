@@ -1,3 +1,4 @@
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
@@ -22,6 +23,7 @@ import {
   touchTranscriptMutationInTransaction,
   touchTranscriptWindowRecency,
 } from "./session-accessor.sqlite-transcript-state.js";
+import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import type { TranscriptMutationAdvance } from "./session-transcript-mutation-projection.js";
 import { scheduleTranscriptProjectionReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
@@ -68,8 +70,8 @@ export function createTranscriptAppendBatch(
       }
     }
   }
-  const cursor: TranscriptAppendCursor = { deferWrites: true, batch };
-  const flushRows = () =>
+  const cursor: TranscriptAppendCursor & { batch: typeof batch } = { deferWrites: true, batch };
+  const flushRows = (flushProjectionRows: boolean) =>
     withSqliteDatabaseWriteScope(
       database.db,
       [scope.sessionKey, sqliteSessionIdWriteScope(scope.sessionId)],
@@ -83,7 +85,9 @@ export function createTranscriptAppendBatch(
             cursor.insertEvent?.batch(batch.events);
             cursor.insertIdentity?.batch(identities);
           }
-          cursor.appendToIndex?.flushRows();
+          if (flushProjectionRows) {
+            cursor.appendToIndex?.flushRows();
+          }
           batch.events.length = 0;
           batch.identities.clear();
           batch.bytes = 0;
@@ -97,7 +101,7 @@ export function createTranscriptAppendBatch(
     cursor,
     flushFullChunk() {
       if (batch.events.length >= TRANSCRIPT_INSERT_BATCH_SIZE || batch.bytes >= 1024 * 1024) {
-        flushRows();
+        flushRows(true);
       }
     },
     settle(
@@ -109,16 +113,29 @@ export function createTranscriptAppendBatch(
       // A caller may catch an iterator error and commit the accepted prefix.
       // Settle its index and attempt recency without advancing the mutation fence.
       preserveSessionEntryCacheAcrossWrite(database, () => {
-        flushRows();
-        cursor.appendToIndex?.flush();
+        flushRows(false);
+        const flushProjectionWithMutation =
+          completed &&
+          appended > 0 &&
+          options.touchMutation !== false &&
+          !projectionNeedsRebuild &&
+          isPostgresSqlConnection(database.db) &&
+          readSessionActorTransactionState(database, scope)?.window
+            ? cursor.appendToIndex?.flush
+            : undefined;
+        if (!flushProjectionWithMutation) {
+          cursor.appendToIndex?.flush();
+        }
         if (completed && appended > 0 && options.touchMutation !== false) {
           touchTranscriptMutationInTransaction(
             database,
             scope.sessionId,
-            cursor.windowUpdatedAt,
-            projectionNeedsRebuild ? undefined : cursor.rowTranscript,
-            undefined,
-            undefined,
+            {
+              windowUpdatedAt: cursor.windowUpdatedAt,
+              rowTranscript: projectionNeedsRebuild ? undefined : cursor.rowTranscript,
+              projectionReady: !projectionNeedsRebuild,
+              writeActorMutation: flushProjectionWithMutation,
+            },
             logicalAdvance,
           );
         } else if (cursor.windowUpdatedAt !== undefined) {

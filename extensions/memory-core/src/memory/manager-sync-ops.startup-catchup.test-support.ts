@@ -69,8 +69,11 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   readonly syncCalls: MemorySyncParams[] = [];
   readonly indexedPaths: string[] = [];
   readonly indexedContents: string[] = [];
-  readonly deletedSources: Array<{ path: string; source: MemorySource; expectedHash?: string }> =
-    [];
+  readonly deletedSources: Array<{
+    path: string;
+    source: MemorySource;
+    expectedHash?: string | null;
+  }> = [];
   corpusListCalls = 0;
   private afterNextCorpusList: (() => Promise<void>) | null = null;
   private corpusListWork: Promise<void> = Promise.resolve();
@@ -216,7 +219,7 @@ export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected override async deleteIndexedFile(
     pathname: string,
     source: MemorySource,
-    expectedHash?: string,
+    expectedHash?: string | null,
   ): Promise<void> {
     // This harness tests corpus selection. File-owned publication,
     // workspace locking and conditional deletion have separate integration tests.

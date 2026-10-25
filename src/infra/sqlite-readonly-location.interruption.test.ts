@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi } from "../logging/logger.test-support.js";
+import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess as prepareSnapshot } from "./sqlite-readonly-location.js";
@@ -29,7 +30,7 @@ function fixture(sql: string) {
   return { root, source, cache, before: fs.readFileSync(source) };
 }
 const entries = (directory: string) =>
-  fs.readdirSync(directory, { recursive: true, withFileTypes: true });
+  listDirectoryTreeStrictSync(directory).map((walkEntry) => walkEntry.dirent);
 const entryPath = (entry: fs.Dirent) => path.join(entry.parentPath, entry.name);
 
 it.skipIf(process.platform === "win32").each([

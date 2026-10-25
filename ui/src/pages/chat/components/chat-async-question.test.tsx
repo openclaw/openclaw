@@ -8,11 +8,11 @@ import { projectSource } from "../../../lib/reactive/projection.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
+import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import {
   createAsyncQuestionPresentation,
   createAsyncQuestionPanelProps as panelProps,
-  readAsyncQuestions,
   subscribeAsyncQuestionState,
 } from "./chat-async-question.ts";
 import type {

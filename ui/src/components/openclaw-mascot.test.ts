@@ -146,14 +146,22 @@ it("draws while hidden and retains the same canvas when motion first starts and 
   );
   vi.stubGlobal("Path2D", vi.fn());
   let intersect: IntersectionObserverCallback | undefined;
+  const targets = new Set<Element>();
   vi.stubGlobal(
     "IntersectionObserver",
     class {
       constructor(callback: IntersectionObserverCallback) {
         intersect = callback;
       }
-      observe() {}
-      disconnect() {}
+      observe(target: Element) {
+        targets.add(target);
+      }
+      unobserve(target: Element) {
+        targets.delete(target);
+      }
+      disconnect() {
+        targets.clear();
+      }
     },
   );
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
@@ -172,8 +180,11 @@ it("draws while hidden and retains the same canvas when motion first starts and 
   expect(draw).toHaveBeenCalled();
   expect(draw.mock.lastCall?.[3]).toBe(48);
   const setVisible = (isIntersecting: boolean) => {
-    // SAFETY: The callback reads only the entry's intersection state.
-    intersect!([{ isIntersecting } as IntersectionObserverEntry], {} as IntersectionObserver);
+    // SAFETY: The callback reads only the target and its intersection state.
+    intersect!(
+      [...targets].map((target) => ({ target, isIntersecting }) as IntersectionObserverEntry),
+      {} as IntersectionObserver,
+    );
   };
   setVisible(true);
   await waitForSolid(() => expect(requestFrame).toHaveBeenCalledOnce());

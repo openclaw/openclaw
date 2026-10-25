@@ -167,7 +167,7 @@ export function identifyError(error: Error) {
     return { type: "state-owner-contention" as const, databasePath: error.databasePath };
   }
   if (error instanceof OpenClawStateLeaseError) {
-    return { type: "state-lease" as const, leaseCode: error.code };
+    return { type: "state-lease" as const, leaseCode: error.code, leaseLoss: error.loss };
   }
   if (error instanceof OpenClawStateOwnershipMetadataError) {
     return { type: "ownership-metadata" as const, databasePath: error.databasePath };
@@ -265,7 +265,10 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
         ...(node.path === undefined ? {} : { path: node.path }),
       });
     case "state-lease":
-      return new OpenClawStateLeaseError(node.message, { code: node.leaseCode });
+      return new OpenClawStateLeaseError(node.message, {
+        code: node.leaseCode,
+        loss: node.leaseLoss,
+      });
     case "maintenance":
       return new StartupMaintenanceRequiredError(node.kind, node.message);
     case "state-migration":

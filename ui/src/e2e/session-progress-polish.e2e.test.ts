@@ -92,9 +92,8 @@ suite.define(() => {
                 const icon = marker.getBoundingClientRect();
                 const bounds = text.getBoundingClientRect();
                 const line = Number.parseFloat(getComputedStyle(text).lineHeight);
-                const markerLine = row.closest("[data-desktop-details]") ? bounds.height : line;
                 return {
-                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + markerLine / 2)),
+                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
                   lines: bounds.height / line,
                 };
               }),

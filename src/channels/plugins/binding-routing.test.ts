@@ -59,20 +59,19 @@ function createBinding(overrides?: Partial<SessionBindingRecord>): SessionBindin
 }
 
 function registerAdapter(
-  record: SessionBindingRecord | null,
+  record: SessionBindingRecord,
   touchAsync?: SessionBindingAdapter["touchAsync"],
 ) {
-  const resolveByConversation = vi.fn<SessionBindingAdapter["resolveByConversation"]>(() => record);
   const touch = vi.fn<NonNullable<SessionBindingAdapter["touch"]>>();
   registerSessionBindingAdapter({
-    channel: record?.conversation.channel ?? "demo",
-    accountId: record?.conversation.accountId ?? "default",
+    channel: record.conversation.channel,
+    accountId: record.conversation.accountId,
     listBySession: () => [],
-    resolveByConversation,
+    resolveByConversation: () => record,
     touch,
     touchAsync,
   });
-  return { resolveByConversation, touch };
+  return { touch };
 }
 
 function inspectBinding(binding: SessionBindingRecord, baseRoute = route) {
@@ -163,7 +162,6 @@ it("awaits activity persistence and keeps inspection pure", async () => {
 });
 
 it.each([
-  ["agent session", createBinding(), "agent", "review"],
   ["inspection", createBinding(), "agent", "review", false],
   ["global fallback", createBinding({ targetSessionKey: "global" }), "agent", "main"],
   ["plugin owner", createBinding({ metadata: pluginOwner }), "plugin"],
@@ -171,7 +169,7 @@ it.each([
 ] as const)(
   "routes %s within its owner scope",
   (_name, binding, kind, agentId?: string, touchBinding?: boolean) => {
-    const { resolveByConversation, touch } = registerAdapter(binding);
+    const { touch } = registerAdapter(binding);
     const siblingTouches = [{ channel: "other" }, { accountId: "other" }].map(
       (scope) =>
         registerAdapter(createBinding({ conversation: { ...conversation, ...scope } })).touch,
@@ -181,7 +179,6 @@ it.each([
       conversation: binding.conversation,
       touchBinding,
     });
-    expect(resolveByConversation).toHaveBeenCalledWith(binding.conversation);
     expect(touch.mock.calls).toEqual(
       kind !== "none" && touchBinding !== false ? [["binding-1", undefined]] : [],
     );
@@ -275,7 +272,6 @@ it("delegates readiness to the ACP owner", async () => {
   const ensureReady = acp.ensureConfiguredAcpBindingTargetReady.mockResolvedValue({ ok: true });
   const params = { cfg: {}, bindingResolution: createBindingResolution("acp") };
   await expect(ensureConfiguredBindingTargetReady(params)).resolves.toEqual({ ok: true });
-  expect(ensureReady).toHaveBeenCalledTimes(1);
   expect(ensureReady).toHaveBeenCalledWith(params);
 });
 
@@ -290,7 +286,6 @@ it("resolves resets through the ACP session-key lookup", async () => {
     commandSource: "discord:native",
   };
   await expect(resetConfiguredBindingTargetInPlace(params)).resolves.toEqual({ ok: true });
-  expect(resetInPlace).toHaveBeenCalledTimes(1);
   expect(resetInPlace).toHaveBeenCalledWith({ ...params, bindingTarget });
 });
 

@@ -1,10 +1,11 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { readSubagentRunAnnounceResultUsing } from "../../agents/subagents/announce/subagent-announce-result.js";
 import { readSessionMessageByIdAsync } from "../../gateway/session-transcript-readers.js";
-import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
@@ -14,6 +15,7 @@ import {
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.js";
 import { findSessionTranscriptArchiveEventReadOnly } from "./session-accessor.sqlite-history.js";
+import { historyActivity } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
@@ -39,7 +41,7 @@ function assistant(id: string, runId: string, message: Record<string, unknown> =
 }
 
 function transcriptScope(state: OpenClawTestState, sessionId: string, incognito = false) {
-  const scope = {
+  return {
     agentId: "main",
     env: state.env,
     sessionId,
@@ -50,9 +52,6 @@ function transcriptScope(state: OpenClawTestState, sessionId: string, incognito 
       ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
       : path.join(state.stateDir, "transcript.sqlite"),
   };
-  expect(scope.storePath.startsWith(state.root)).toBe(true);
-  expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-  return scope;
 }
 
 const canvasDetails = (id: string) => ({
@@ -60,6 +59,11 @@ const canvasDetails = (id: string) => ({
   view: { id },
   presentation: { target: "assistant_message" },
 });
+const expectMatch = async (
+  scope: Parameters<typeof findTranscriptEvent>[0],
+  match: SessionTranscriptEventMatch,
+  event?: unknown,
+) => expect(await findTranscriptEvent(scope, match)).toEqual(event ? { event } : undefined);
 
 it("keeps incognito matching and raw reads in their memory owner without creating disk state", () =>
   withOpenClawTestState({ label: "transcript-incognito-matching" }, async (state) => {
@@ -68,9 +72,9 @@ it("keeps incognito matching and raw reads in their memory owner without creatin
       await expect(
         findSessionTranscriptArchiveEventReadOnly(scope, "private-run"),
       ).resolves.toBeUndefined();
-      await expect(fs.readdir(state.stateDir, { recursive: true })).resolves.toEqual([]);
+      expect(await listDirectoryTreeStrict(state.stateDir)).toEqual([]);
     };
-    await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
+    await expectMatch(scope, { kind: "latest" });
     const answer = assistant("private-final", "private-run", {
       content: "private complete answer",
     });
@@ -81,17 +85,13 @@ it("keeps incognito matching and raw reads in their memory owner without creatin
       transcriptEvents: [answer, unrelated],
     }));
 
-    await expect(
-      findTranscriptEvent(scope, { kind: "visible-final", runId: "private-run" }),
-    ).resolves.toEqual({ event: answer });
-    await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toEqual({
-      event: unrelated,
-    });
+    await expectMatch(scope, { kind: "visible-final", runId: "private-run" }, answer);
+    await expectMatch(scope, { kind: "latest" }, unrelated);
     await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([answer, unrelated]);
     await expectNoArchiveOrDisk();
 
     memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
-    await expect(findTranscriptEvent(scope, { kind: "latest" })).resolves.toBeUndefined();
+    await expectMatch(scope, { kind: "latest" });
     await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([]);
     await expectNoArchiveOrDisk();
   }));
@@ -123,30 +123,23 @@ it("recovers the exact complete child answer without preventing host event progr
       })),
     });
     const read = async (runId: string) => {
-      const child = {
+      const child = createSubagentRunRecord({
         runId,
-        childSessionKey: sessionKey,
-        requesterSessionKey: "agent:main:requester",
-        requesterDisplayKey: "main",
-        task: "Read the matching transcript result",
-        cleanup: "keep" as const,
         createdAt: 1,
+        childSessionKey: sessionKey,
         execution: {
-          status: "terminal" as const,
-          outcome: { status: "ok" as const },
+          status: "terminal",
+          outcome: { status: "ok" },
           transcriptTarget: target,
         },
         completion: {
           required: true,
-          terminalReply: { disposition: "visible" as const, text: "bounded evidence" },
+          terminalReply: { disposition: "visible", text: "bounded evidence" },
         },
-      };
+      });
       let hostEventObserved = false;
-      const hostEvent = new Promise<void>((resolve) => {
-        setImmediate(() => {
-          hostEventObserved = true;
-          resolve();
-        });
+      const hostEvent = yieldToEventLoop().then(() => {
+        hostEventObserved = true;
       });
       try {
         const prepared = await readSubagentRunAnnounceResultUsing(child, {
@@ -171,12 +164,9 @@ it("recovers the exact complete child answer without preventing host event progr
     expect(latest.prepared.text).toBe("newest unrelated answer");
     const hostSql = observeHostDataSql();
     const old = await read("completed-run").finally(() => hostSql.restore());
-    for (const call of hostSql.calls) {
-      expect(call).not.toHaveBeenCalled();
-    }
-    expect(old.prepared.text).toBe(fullAnswer);
+    expect(hostSql.queries).toEqual([]);
+    expect(old).toMatchObject({ prepared: { text: fullAnswer }, hostProgressBeforeResult: true });
     expect(old.prepared.isCurrent()).toBe(true);
-    expect(old.hostProgressBeforeResult).toBe(true);
   }));
 
 it("keeps match filters and active anchors authoritative across worker payload encodings", () =>
@@ -202,14 +192,13 @@ it("keeps match filters and active anchors authoritative across worker payload e
           final: true,
         },
       });
-      const deliveryMirror = encodedAssistant("delivery-mirror", "delivery-run", {
-        idempotencyKey: "shared-key",
+      const keyed = (id: string, extra: Record<string, unknown> = {}) =>
+        encodedAssistant(id, "delivery-run", { idempotencyKey: "shared-key", ...extra });
+      const deliveryMirror = keyed("delivery-mirror", {
         provider: "openclaw",
         model: "delivery-mirror",
       });
-      const ordinary = encodedAssistant("ordinary", "delivery-run", {
-        idempotencyKey: "shared-key",
-      });
+      const ordinary = keyed("ordinary");
       const user = encodedAssistant("user", "other-run", {
         role: "user",
         idempotencyKey: "shared-key",
@@ -224,21 +213,14 @@ it("keeps match filters and active anchors authoritative across worker payload e
         ...encodedAssistant(
           "nested-widget",
           "widget-run",
-          createNestedToolActivity({
+          historyActivity({
             runId: "widget-run",
             scopeId: "widget-scope",
             afterEntryId: "widget",
             startOrder: 0,
             toolCallId: "nested-call",
             toolName: "show_widget",
-            input: {},
-            result: {
-              content: [],
-              details: canvasDetails("cv_nested"),
-            },
-            isError: false,
-            startedAt: 1,
-            timestamp: 2,
+            result: { content: [], details: canvasDetails("cv_nested") },
           }),
         ),
         parentId: "widget",
@@ -300,9 +282,7 @@ it("keeps match filters and active anchors authoritative across worker payload e
       const hostSql = observeHostDataSql();
       try {
         for (const [match, event] of cases) {
-          await expect(findTranscriptEvent(scope, match)).resolves.toEqual(
-            event ? { event } : undefined,
-          );
+          await expectMatch(scope, match, event);
         }
         expect(hostSql.queries).toEqual([]);
       } finally {

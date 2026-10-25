@@ -335,47 +335,44 @@ describe("messageCommand", () => {
     expect(readOnlyMessageActionCall().agentId).toBe("ops");
   });
 
-  it.each([false])(
-    "guides an ownerless explicit fleet to a system owner (dryRun=%s)",
-    async (dryRun) => {
-      const ownerlessConfig = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: { ops: {}, research: {} },
-        },
-      };
-      mockResolvedCommandConfig({
-        rawConfig: {},
-        resolvedConfig: ownerlessConfig,
-        diagnostics: [],
-      });
+  it("guides an ownerless explicit fleet to a system owner", async () => {
+    const ownerlessConfig = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { ops: {}, research: {} },
+      },
+    };
+    mockResolvedCommandConfig({
+      rawConfig: {},
+      resolvedConfig: ownerlessConfig,
+      diagnostics: [],
+    });
 
-      const failedRun = runMessageCommand({ dryRun });
-      await expect(failedRun).rejects.toMatchObject({
-        code: "AGENT_SELECTION_REQUIRED",
-        hint: expect.stringContaining("agents.defaults.systemAgent.agentId"),
-      });
-      await expect(failedRun).rejects.not.toThrow("--agent");
-      expect(runMessageActionMock).not.toHaveBeenCalled();
+    const failedRun = runMessageCommand({ dryRun: false });
+    await expect(failedRun).rejects.toMatchObject({
+      code: "AGENT_SELECTION_REQUIRED",
+      hint: expect.stringContaining("agents.defaults.systemAgent.agentId"),
+    });
+    await expect(failedRun).rejects.not.toThrow("--agent");
+    expect(runMessageActionMock).not.toHaveBeenCalled();
 
-      const effectiveConfig = {
-        agents: {
-          ...ownerlessConfig.agents,
-          defaults: { systemAgent: { agentId: "ops" } },
-        },
-      };
-      mockResolvedCommandConfig({
-        rawConfig: {},
-        resolvedConfig: effectiveConfig,
-        diagnostics: [],
-      });
+    const effectiveConfig = {
+      agents: {
+        ...ownerlessConfig.agents,
+        defaults: { systemAgent: { agentId: "ops" } },
+      },
+    };
+    mockResolvedCommandConfig({
+      rawConfig: {},
+      resolvedConfig: effectiveConfig,
+      diagnostics: [],
+    });
 
-      await runMessageCommand({ dryRun });
+    await runMessageCommand({ dryRun: false });
 
-      expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
-      expect(readOnlyMessageActionCall().agentId).toBe("ops");
-    },
-  );
+    expect(readOnlyMessageActionCall().cfg).toBe(effectiveConfig);
+    expect(readOnlyMessageActionCall().agentId).toBe("ops");
+  });
 
   it("normalizes poll actions and sender ownership before dispatch", async () => {
     await runMessageCommand({

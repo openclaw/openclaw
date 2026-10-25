@@ -182,7 +182,10 @@ function directoryState(directory: string): DirectoryState {
     presence: new Map(),
     dirty: false,
     publishChange: gatewayFileChangePublisher ?? captureFileChangePublisher(),
-    observation: observeOwnedDirectory(directory, (filename) => {
+    observation: observeOwnedDirectory(directory, (filename, event) => {
+      if (event === "change" && filename !== undefined) {
+        return;
+      }
       if (
         filename === undefined ||
         legacyNames.has(filename) ||

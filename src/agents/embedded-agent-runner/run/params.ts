@@ -293,6 +293,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "forceMessageTool"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
+  | "extraSystemPromptTurnContext"
   | "gitCoauthorPrompt"
   | "silentReplyPromptMode"
   | "ownerNumbers"

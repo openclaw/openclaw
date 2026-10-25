@@ -1,4 +1,5 @@
 import { requireTranscriptEventAppendSnapshot } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
+import type { TranscriptAppendCursor } from "../../config/sessions/session-accessor.sqlite-transcript-append.types.js";
 import type { PreparedTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
 import {
@@ -55,11 +56,13 @@ export function applySessionMetadataAppendInTransaction(
   beforeFreshMessageCommit: () => void,
   preparation?: PreparedSessionManagerAppend,
   persistActorMutation = true,
+  cursor?: TranscriptAppendCursor,
 ): SessionMetadataOperations["session.metadata.append"]["output"] {
   const event = preparation?.event ?? decodeMetadataAppendEvent(input);
   let projectionNeedsReconcile = false;
   const projection = {
     persistActorMutation,
+    cursor,
     scheduleProjectionReconcile: false,
     onProjectionReconcileNeeded: () => {
       projectionNeedsReconcile = true;

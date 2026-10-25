@@ -285,15 +285,18 @@ export function createConfigFileAdapter(opts: {
     }
     watcher = undefined;
     const retirement = retire(source);
-    opts.onChange();
-    void retirement.catch((failure: unknown) => {
-      status = "disabled";
-      clearTimeout(retryTimer);
-      opts.log.error(`config watcher close failed; hot-reload disabled: ${String(failure)}`);
-    });
-    if (stopped) {
-      return;
-    }
+    void retirement
+      .catch((failure: unknown) => {
+        status = "disabled";
+        clearTimeout(retryTimer);
+        opts.log.error(`config watcher close failed; hot-reload disabled: ${String(failure)}`);
+      })
+      .then(() => {
+        // Recovery notifies from its initial scan; terminal failure gets one final read.
+        if (!stopped && status === "disabled") {
+          opts.onChange();
+        }
+      });
     let backoff = WATCHER_RECREATE_BACKOFF_MS[retries];
     if (backoff === undefined) {
       // Explicit legacy overrides retain their bounded retry policy, while

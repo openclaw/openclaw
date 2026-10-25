@@ -43,6 +43,20 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Runtime script generation and proof builds
+
+`pnpm runtime:scripts:gen` bundles embedded programs and their materializer.
+Whitespace minification removes esbuild's source-path comments, so generated
+bytes stay identical when dependencies move between pnpm virtual stores.
+`pnpm runtime:scripts:check` still requires an exact byte match; source-run build
+stamps still hash the complete generated files.
+
+Use `pnpm build qaRuntime` for reusable runtime test artifacts. Controllers that
+also verify `dist/build-info.json` against a source commit should use
+`pnpm build sourcePerformance`, which adds that identity metadata without a UI
+or declaration build. Keep generated files unchanged after either build so
+equivalent-input admission can certify the same source bytes.
+
 ## Exact memory search benchmark
 
 Use `scripts/bench-memory-search.mjs` against a disposable PostgreSQL database
@@ -98,6 +112,94 @@ profiling and report median, p95, and min–max; every cell over 20% worse is ma
 for review. These are report-only measurements, not timing gates. Wall time is
 automation-to-assertion time, not INP. Keep failed attempts alongside successful
 captures and compare only runs with the same fixture, viewport, and collection mode.
+
+Heavy-content steps use `heavy-<fixture>-<action>` IDs. Fixtures are `code`
+(5,000 TypeScript lines), `auto-code` (5,000 language-free lines), `diff`
+(5,000 changed lines across ten files), `oversized-code` (the existing Markdown
+parse-limit fallback), `table` (300 rows × 12 columns), `tool-diff` (5,000 native
+input patch rows, existing 400-line preview cap), `tool-diff-error` (the same
+patch rejected with a complete error message and Raw selected initially),
+`terminal` (5,000 short output lines), `terminal-dense` (5,000 distinct lines,
+220,000 characters), `json` (5,000 values, above the JSON formatter cap),
+`json-format` (1,900 values, within that cap), `json-nested-dense` (800 nested
+records with multiline stdout, 214,083 characters), `images` (40 repeated tiny
+inline PNGs), and
+`large-images` (40 distinct 1,024 × 1,024 native PNG attachments, about 4 MB
+encoded). The large-image arrival waits for all 40 images to load with their
+intrinsic dimensions; this does not force offscreen bitmap decoding. Native cards publish
+with the final message, while inline Markdown images also stream.
+Actions include `arrival`, `stream` (20 frame-separated
+updates), `expand`, `collapse`, `scroll`, `copy`, `output-open`, and JSON
+`raw-toggle` where those controls exist. These scenarios use an empty transcript
+to isolate content cost. Copy uses an instrumented clipboard boundary and checks
+the exact copied string; it does not measure operating-system clipboard latency.
+Dense tool expansion checks the existing exact 8,000-character preview; full
+output checks the real `chat.message.get` loader's 2,000,000-character read cap,
+complete display, and original response bytes. `output-scroll` traverses every
+viewport band of the complete dense sidebar output and verifies its bottom.
+`heavy-input-{card,sidebar}-{closed,first-open,reopen}` covers a 5,000-line,
+150,000-character Tool Input and records hidden DOM ownership while preserving
+its full source. `heavy-input-nested-{small,large}` compares 25 and 5,000 nested
+rows with the same exact 400-character argument preview.
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts \
+  --bundle-dir <baseline> --compare-bundle-dir <candidate> --pairs 10 \
+  --viewport desktop --thread-cpu-time --first-pair-screenshots \
+  --steps heavy-tool-diff-expand,heavy-tool-diff-error-expand,heavy-json-format-output-open,heavy-json-format-raw-toggle
+```
+
+Record a baseline/baseline control on a loaded host. Compare renderer CPU,
+long-task maximum, DOM/highlight counts, and heap-byte deltas alongside wall
+latency; heap deltas are transient allocation measurements, not retained-heap
+proof. The heavy-content targets are no arrival task above 100 ms and no scroll
+task above 50 ms. Review every median/p95 cell; a clean median regression is at
+most 5% with no worse p95 (or another ten pairs confirming the band). Any 20%
+regression blocks; a missed target does not invalidate a measured improvement.
+Run `--trace` separately for attribution, never mix traced and untraced timings.
+For deferred highlighting, `raw-arrival`/`raw-stream` stop when every source
+character is readable; ordinary `arrival`/`stream` also wait for the seven-line
+syntax preview. `full-arrival`/`full-stream` expand immediately and wait for all
+5,000 TypeScript keywords or 5,030 diff spans. `expand` and `scroll` also wait for
+complete syntax before ending or starting their respective interval. The
+`unsupported-code` SQL-comment fixture checks the plaintext path, and
+`heavy-code-sequential` finishes three distinct blocks in succession. A
+benchmark-only Worker wrapper records highlighter starts, replies, errors,
+termination and live count; no-op completion uses these events rather than an
+assumed delay.
+
+`heavy-table-copy` verifies independent expected TSV; code/diff and tool copy
+steps verify every original text character. Native scrolling uses overlapping
+viewport bands and verifies the actual bottom. Large-image evidence reports
+binary PNG bytes separately from encoded data-URL characters.
+`heavy-managed-image-copy` drives Copy image with distinct thumbnail/original
+assets, then verifies the original PNG bytes and dimensions in a native
+`ClipboardItem` intercepted at the page-local clipboard boundary. Its separate
+`copyReadyMs` is one exploratory action-to-blob interval; the OS clipboard is
+untouched. `heavy-code-retirement-gc` is a separate
+diagnostic: replace and clear one canonical message ten times, require zero live
+workers after each clear, and explicitly collect garbage before each heap
+snapshot. Its first two rounds warm both alternating sources; report the later
+heap points and renderer RSS endpoints, not its forced-GC CPU or latency. Each
+replacement arrives through a committed-message event and the real history
+refresh path, with the synthetic Gateway supplying the next canonical snapshot.
+
+Use `--counterbalance` to alternate AB and BA order across pairs.
+`--asset-latency-ms 100` adds the same 100 ms response delay to both bundles'
+HTTP asset requests, including dedicated-worker module imports. It simulates
+asset RTT without bandwidth shaping or Gateway/provider latency. Compare this
+with a separate zero-delay run. `--renderer-process-metrics` records CDP CPU for
+the owned renderer processes (including dedicated-worker threads) and `ps` RSS
+before/after the interval. Those RSS endpoints include renderer allocations and
+decoded image memory, but do not prove retained-heap bounds or GPU memory.
+Process churn invalidates that sample's process metric instead of treating a
+missing process as free work. Main-thread script/task CPU and JS heap snapshots
+remain separate metrics; a worker shift is not a total-CPU reduction by itself.
+
+If the owned Chromium process crashes in the macOS display/compositor path,
+use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to select the installed matching
+Playwright headless shell for both arms. The manifest records the executable;
+compare only against the same browser configuration.
 
 ## Control UI request waterfalls
 

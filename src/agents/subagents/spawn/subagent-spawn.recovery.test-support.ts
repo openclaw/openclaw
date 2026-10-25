@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import {
   loadSessionEntry,
@@ -7,8 +7,6 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { createOperatorRecoveryFixture } from "../../../gateway/operator-run-recovery.test-support.js";
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
-import { bindSessionRowProjection } from "../../../gateway/session-row-projection-access.js";
-import { createSessionRowProjection } from "../../../gateway/session-row-projection.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { peekSystemEventEntries } from "../../../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -19,7 +17,6 @@ import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spaw
 import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
-  resolvePreparedRunAdmission,
 } from "../../admitted-run-context.js";
 import { runEmbeddedAgent as runActualEmbeddedAgent } from "../../embedded-agent-runner/run.js";
 import { makeAttemptResult } from "../../embedded-agent-runner/run.overflow-compaction.fixture.js";
@@ -35,11 +32,13 @@ import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
-import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import {
-  recordSpawnBoundaryFinal,
-  type NativePluginSpawnTestOptions,
-} from "./subagent-spawn.production-boundary.test-support.js";
+  admitEmbeddedRun,
+  materializeSessionProjection,
+  recordFinal,
+} from "./subagent-spawn.boundary-run.test-support.js";
+import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
+import type { NativePluginSpawnTestOptions } from "./subagent-spawn.production-boundary.test-support.js";
 
 export function registerRecoverySpawnCases(
   options: NativePluginSpawnTestOptions & { stateDir: () => string },
@@ -127,13 +126,7 @@ export function registerRecoverySpawnCases(
             spawnDepth: 1,
           },
         );
-        const projection = await createSessionRowProjection({ cfg: bound.cfg, modelCatalog: [] });
-        onTestFinished(async () => {
-          projection.dispose();
-          await projection.ensureMaterialized();
-        });
-        bindSessionRowProjection(context, () => projection);
-        await projection.ensureMaterialized();
+        await materializeSessionProjection(bound, context);
       }
       const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
         // Stop may retire the registry row after publishing its terminal outcome.
@@ -147,12 +140,7 @@ export function registerRecoverySpawnCases(
       });
       const failures: unknown[] = [];
       runEmbeddedAgent.mockImplementation(async (params) => {
-        const admitted = await resolvePreparedRunAdmission({
-          runId: params.runId,
-          runtimeKind: "embedded",
-          admittedRunContext: params.admittedRunContext,
-          preparedRunAdmission: params.preparedRunAdmission,
-        });
+        const admitted = await admitEmbeddedRun(params);
         await params.onExecutionStarted?.();
         if (params.sessionKey === fixture.target.sessionKey) {
           const caller = createAdmittedGatewayToolCallerIdentity({
@@ -220,12 +208,7 @@ export function registerRecoverySpawnCases(
             });
             attempt.mockImplementationOnce(async () => {
               expect(createSessionsCreateTool()).not.toBeNull();
-              await recordSpawnBoundaryFinal({
-                storePath: bound.storePath,
-                sessionKey: expectDefined(params.sessionKey, "child session"),
-                runId: params.runId,
-                text: "Recovered task complete.",
-              });
+              await recordFinal(bound, params, "Recovered task complete.");
               return makeAttemptResult({
                 sessionIdUsed: params.sessionId,
                 assistantTexts: ["Recovered task complete."],
@@ -272,12 +255,7 @@ export function registerRecoverySpawnCases(
             signal.removeEventListener("abort", onAbort);
           }
         }
-        await recordSpawnBoundaryFinal({
-          storePath: bound.storePath,
-          sessionKey: expectDefined(params.sessionKey, "admitted session"),
-          runId: params.runId,
-          text: "Recovered task complete.",
-        });
+        await recordFinal(bound, params, "Recovered task complete.");
         if (params.sessionKey !== fixture.target.sessionKey) {
           childFinished.resolve();
         }

@@ -258,6 +258,8 @@ merging a nested value such as voice settings.
     `overflowUrl` provides delivery only when the body exceeds that cap; malformed
     media and transport errors still fail. The caller owns response cleanup.
     `downloadGeneratedVideoAsset` also owns fetching, deadlines, and cleanup.
+    Its optional `dispatcherPolicy` preserves configured result transport while
+    keeping strict target checks. Do not pass task headers or private-network trust.
 
   </Tab>
   <Tab title="Web fetch and search">

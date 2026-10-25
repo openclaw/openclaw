@@ -28,15 +28,7 @@ import {
   readLocalClaudeTranscriptPage as readPage,
 } from "./session-catalog.js";
 
-type OwnerMethod = "list" | "read" | "continueSession" | "openTerminal";
-type OwnerMethods = Pick<RegisteredSessionCatalogProvider, OwnerMethod>;
-type SessionCatalogProvider = Omit<RegisteredSessionCatalogProvider, OwnerMethod> & {
-  [K in keyof OwnerMethods]: NonNullable<RegisteredSessionCatalogProvider[K]> extends (
-    params: infer P,
-  ) => infer R
-    ? (params: Omit<P, "agentId"> & { agentId?: string }) => R
-    : never;
-};
+type SessionCatalogProvider = RegisteredSessionCatalogProvider;
 
 function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
   return {

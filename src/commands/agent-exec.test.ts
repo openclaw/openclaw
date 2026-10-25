@@ -74,6 +74,12 @@ async function runSuccessfulExec(
   return result;
 }
 
+function throwFromRun(error: unknown) {
+  return runExec({ json: true }, async () => {
+    throw error;
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
@@ -238,23 +244,17 @@ describe("agent exec command composition", () => {
 
   it("maps embedded terminal-outcome timeouts to exit code 2", async () => {
     const message = "attempt aborted before prompt submission";
-    const timeout = new AgentRunTerminalOutcomeError(new Error(message), {
-      reason: "hard_timeout",
-      status: "timeout",
-      timeoutPhase: "provider",
-      providerStarted: true,
-    });
-
-    const result = await runExec({ json: true }, async () => {
-      throw timeout;
-    });
-
+    const result = await throwFromRun(
+      new AgentRunTerminalOutcomeError(new Error(message), {
+        reason: "hard_timeout",
+        status: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    );
     expect(result).toMatchObject({
       exitCode: 2,
-      envelope: {
-        status: "timeout",
-        error: { kind: "timeout", message },
-      },
+      envelope: { status: "timeout", error: { kind: "timeout", message } },
     });
   });
 
@@ -273,10 +273,7 @@ describe("agent exec command composition", () => {
   ] as const)(
     "classifies structured execution errors %j with exit code %s",
     async (error, code) => {
-      const result = await runExec({ json: true }, async () => {
-        throw error;
-      });
-      expect(result).toMatchObject({
+      expect(await throwFromRun(error)).toMatchObject({
         exitCode: code,
         envelope: { status: code === 2 ? "timeout" : "error" },
       });

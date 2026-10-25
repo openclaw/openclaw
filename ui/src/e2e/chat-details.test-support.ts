@@ -130,9 +130,12 @@ export async function openChatPublication(page: Page | Locator): Promise<Locator
     return review;
   }
   const environment = details.locator('[data-details-group="environment"]');
-  if ((await environment.getAttribute("open")) === null) {
-    await environment.locator(":scope > summary").click();
+  const summary = environment.locator(":scope > summary");
+  // Native open stays set during closing motion and is restored after initial layout.
+  if ((await summary.getAttribute("aria-expanded")) !== "true") {
+    await summary.click();
   }
+  await expect.poll(() => summary.getAttribute("aria-expanded")).toBe("true");
   const branch = environment.locator(".chat-environment__branch");
   await branch.waitFor();
   await branch.locator(".chat-pr__publication-actions").waitFor();

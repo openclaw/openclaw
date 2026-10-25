@@ -32,6 +32,8 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     33: [],
     // PostgreSQL-only index ordering; SQLite advances metadata only.
     34: [],
+    // PostgreSQL-only partial-index ordering; SQLite advances metadata only.
+    35: [],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [
@@ -57,5 +59,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     ],
     // PostgreSQL-only index ordering; SQLite advances metadata only.
     32: [],
+    // PostgreSQL-only partial-index ordering; SQLite advances metadata only.
+    33: [],
   },
 };

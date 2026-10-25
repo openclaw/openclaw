@@ -12,6 +12,7 @@ import {
   listSessionEntriesCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { hasErrnoCode } from "../../../infra/errno.js";
 import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
@@ -70,16 +71,12 @@ export function useSubagentRestartRecoveryFixture(
   options: { reuseDatabaseWorkers?: boolean } = {},
 ) {
   const dispatchAgent = vi.fn();
-  const gatewayRuntime: GatewayRecoveryRuntime = {
-    prepareRestartRecovery: () => undefined,
-    dispatchSessionMethod: vi.fn(),
+  const gatewayRuntime = createMockGatewayRecoveryRuntime({
     dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: vi.fn(async () => ({
       status: "pending",
     })) as GatewayRecoveryRuntime["waitForAgent"],
-    sendRecoveryNotice: vi.fn(),
-    resumeChatInput: vi.fn(),
-  };
+  });
   const activateGatewayRuntime = async () => {
     const gatewayContext = {
       recoveryRuntime: gatewayRuntime,

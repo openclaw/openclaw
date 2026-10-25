@@ -123,10 +123,12 @@ The supported PostgreSQL families are:
   retained registry paths and explicit session or agent directories. Older SQLite
   schemas migrate only in the port's private copy. Compressed transcript events
   become plain JSON on PostgreSQL; transcript search is rebuilt before publication.
-  Rebuildable memory indexes are omitted; canonical memory origins, tombstones,
-  and the embedding cache remain intact. After publication and port-owner release,
+  Rebuildable memory search projections are omitted; canonical memory origins,
+  tombstones, the embedding cache, and stored chunk vectors with their identity metadata
+  remain intact in the verified copy. After publication and port-owner release,
   the selected memory plugin rebuilds ported agents under fresh offline ownership.
-  Unchanged cached chunks reuse their embeddings. Output and `--json` report
+  Unchanged chunks reuse cached or stored embeddings only when provider, model,
+  provider settings, input format, hash, and dimensions match. Output and `--json` report
   per-agent results; a failure leaves the port successful and warns to retry
   `openclaw memory index --agent <id>` before starting the Gateway. Retained stores
   need their original agent configuration to rebuild.
@@ -546,6 +548,12 @@ Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
 All destination stores are privately migrated and verified before publication.
+After committing a PostgreSQL bulk copy, port and backup restore run `ANALYZE`
+only on tables in the destination namespace. Agent ports refresh statistics again
+after the memory index rebuild. The port report records the result. Statistics
+refresh uses a 10-second statement timeout and a 1-second lock timeout; a failure
+is a warning and preserves the verified data for autovacuum to analyze later.
+
 Agent and shared-state columns normally created on a feature's first use are
 completed in the private copy when absent, preserving existing rows with `NULL`
 values and leaving the original SQLite store unchanged. Unknown columns still

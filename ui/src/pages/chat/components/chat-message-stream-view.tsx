@@ -78,11 +78,6 @@ export function StreamGroupParts(props: {
   );
 }
 
-/** A streaming answer already ends its turn: reserve its footer row before the footer content exists. */
-export function renderSolidEmptyGroupFooter() {
-  return <div class="chat-group-footer" aria-hidden="true" />;
-}
-
 export function UnplacedSubagentWait(props: {
   sessionKey: string;
   wait: ChatSubagentWait;

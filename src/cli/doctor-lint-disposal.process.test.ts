@@ -74,13 +74,7 @@ module.exports = { id: "disposal-proof", register(api) {
             fixture: {
               api: "openai-completions",
               baseUrl: "http://127.0.0.1:1/v1",
-              models: [
-                createTestModelDefinition("local", {
-                  name: "Synthetic local model",
-                  contextWindow: 128000,
-                  maxTokens: 8192,
-                }),
-              ],
+              models: [createTestModelDefinition("local")],
             },
           },
         },

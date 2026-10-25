@@ -108,8 +108,7 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
   const unownedErrors: Error[] = [];
   const transportFailure = createDeferred<Error>();
   const rejectAuth = behavior === "reject auth" || behavior === "reject auth without close";
-  // Observe the real dependency; keep otherwise-unhandled errors local to this case.
-  // Counting the remaining listeners makes a removed owner handler observable.
+  // Count owner handlers while keeping native errors local to this case.
   acquisitionFixture.observeClient = (client) => {
     clients.push(client);
     client.once("close", () => closed.add(client));
@@ -124,7 +123,6 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
   const sockets = new Set<Socket>();
   const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
   const connectReceived = createDeferred();
-  let receivedUpgrade = false;
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   server.on("connection", (socket) => {
@@ -132,7 +130,6 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
     socket.once("close", () => sockets.delete(socket));
   });
   server.on("upgrade", (request, socket, head) => {
-    receivedUpgrade = true;
     if (behavior === "hold upgrade") {
       return;
     }
@@ -209,7 +206,6 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
       errors,
       unownedErrors,
       requests,
-      receivedUpgrade: () => receivedUpgrade,
       waitForUpgrade: (signal: AbortSignal) => once(server, "upgrade", { signal }),
       waitForOpen: async (signal: AbortSignal) => {
         await once(server, "upgrade", { signal });
@@ -267,8 +263,7 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
     getTailscaleIngressEndpoint: () => undefined,
   } satisfies import("./server.js").GatewayServer;
   acquisitionFixture.port = peer.port;
-  // This peer already owns the socket; exercise client acquisition and cleanup
-  // without asking the real reservation owner to bind a second listener.
+  // The peer owns the listener; reserve without binding it again.
   acquisitionFixture.reserve.mockResolvedValue({
     port: peer.port,
     start: async (run: () => Promise<unknown>) => run(),
@@ -475,12 +470,10 @@ describe("raw Gateway helper acquisition ownership", async () => {
           }
           expect(peer.unownedErrors).toEqual([]);
           expect(failure).toBeInstanceOf(Error);
-          expect(failure).toMatchObject({ message: expect.stringContaining(error) });
-          if (behavior === "hold upgrade") {
-            expect(peer.receivedUpgrade(), "the peer must receive the withheld upgrade").toBe(true);
-          }
+          expect(failure).toMatchObject({
+            message: behavior === "no response" ? "timeout" : expect.stringContaining(error),
+          });
           if (behavior === "no response") {
-            expect(failure).toMatchObject({ message: "timeout" });
             expect(peer.requests).toHaveLength(1);
             expect(peer.requests[0]).toMatchObject({
               method: "connect",

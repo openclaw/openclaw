@@ -12,7 +12,7 @@ import {
   listPluginDoctorStateMigrationEntries,
 } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
-import { writeDoctorFiles } from "./doctor-contract.test-support.js";
+import { writeArtifacts as writeDoctorFiles } from "./public-surface.test-support.js";
 
 const tempDirs = createTempDirTracker();
 

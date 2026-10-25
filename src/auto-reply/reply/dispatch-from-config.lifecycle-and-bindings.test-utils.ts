@@ -36,6 +36,7 @@ import {
   mockPluginBinding,
   mockPluginBindingClaim,
   mocks,
+  mockSessionStorePath,
   runtimePluginMocks,
   sessionBindingMocks,
   sessionStoreMocks,
@@ -980,7 +981,7 @@ describe("dispatchReplyFromConfig", () => {
               sessionKey,
               sessionId,
               expectedSessionId: sessionId,
-              storePath: "/tmp/mock-sessions.json",
+              storePath: mockSessionStorePath,
               kind: "visible",
               resetTriggered: false,
             })
@@ -1046,9 +1047,9 @@ describe("dispatchReplyFromConfig", () => {
         expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledOnce();
         const operation = dispatchHarness.getSessionControllerOperation(sessionKey);
         expect(operation).toBeDefined();
-        expect(
-          isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-        ).toBe(true);
+        expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+          true,
+        );
         if (existingOperation) {
           expect(operation).toBe(existingOperation);
           existingOperation.complete();
@@ -1057,7 +1058,7 @@ describe("dispatchReplyFromConfig", () => {
         abort.abort(cancellation);
         mutation = externalLifecycleRequest.runInAsyncScope(async () =>
           runSessionMutation({
-            scope: "/tmp/mock-sessions.json",
+            scope: mockSessionStorePath,
             identities: [sessionKey, sessionId],
             kind: "reset",
             policy: "preempt",
@@ -1081,9 +1082,9 @@ describe("dispatchReplyFromConfig", () => {
         });
         expect(cleanupFinished).toBe(false);
         expect(mutationRan).toBe(false);
-        expect(
-          hasSessionControllerQueuedWork("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-        ).toBe(true);
+        expect(hasSessionControllerQueuedWork(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+          true,
+        );
         expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBe(
           existingOperation ? undefined : operation,
         );
@@ -1097,9 +1098,9 @@ describe("dispatchReplyFromConfig", () => {
         await dispatchSettled;
         expect(cleanupFinished).toBe(true);
         expect(mutationRan).toBe(true);
-        expect(
-          isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-        ).toBe(false);
+        expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+          false,
+        );
         expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeUndefined();
         expect(dispatchResult).toHaveBeenCalledOnce();
         expect(dispatchFailure).not.toHaveBeenCalled();
@@ -1151,19 +1152,17 @@ describe("dispatchReplyFromConfig", () => {
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
     });
     expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeDefined();
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-      true,
-    );
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(true);
 
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           prepare: async () => {
             await interruptSessionControllerEffects({
-              scope: "/tmp/mock-sessions.json",
+              scope: mockSessionStorePath,
               identities: [sessionKey, sessionId],
             });
           },
@@ -1207,7 +1206,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       kind: "visible",
       resetTriggered: false,
     });
@@ -1237,9 +1236,7 @@ describe("dispatchReplyFromConfig", () => {
     await vi.waitFor(() => {
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
     });
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-      true,
-    );
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(true);
 
     existingOperation.complete();
     expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeUndefined();
@@ -1249,7 +1246,7 @@ describe("dispatchReplyFromConfig", () => {
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           kind: "reset",
           policy: "preempt",
@@ -1298,7 +1295,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       kind: "visible",
       resetTriggered: false,
     });
@@ -1329,11 +1326,11 @@ describe("dispatchReplyFromConfig", () => {
     let mutationRan = false;
     const mutation = runWithReplyOperationLifecycleAdmission(ownerOperation, async () =>
       runSessionMutation({
-        scope: "/tmp/mock-sessions.json",
+        scope: mockSessionStorePath,
         identities: [sessionKey, sessionId],
         prepare: async () => {
           await interruptSessionControllerEffects({
-            scope: "/tmp/mock-sessions.json",
+            scope: mockSessionStorePath,
             identities: [sessionKey, sessionId],
           });
         },
@@ -1416,11 +1413,11 @@ describe("dispatchReplyFromConfig", () => {
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           prepare: async () => {
             await interruptSessionControllerEffects({
-              scope: "/tmp/mock-sessions.json",
+              scope: mockSessionStorePath,
               identities: [sessionKey, sessionId],
             });
           },

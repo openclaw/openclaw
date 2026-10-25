@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { hasErrnoCode } from "../../../infra/errno.js";
+import { createMacosAppInstallOwner } from "../../test-runtime-config-helpers.js";
 import { writePluginJson } from "./missing-configured-plugin-install.fixtures.test-support.js";
 import {
   collectStalePluginRuntimeSymlinkHealthFindings,
@@ -90,12 +91,7 @@ it.each([
     const liveLink = path.join(scopeRoot, "bolt");
 
     if (hostOwned) {
-      writePluginJson(packageRoot, "openclaw-install-owner.json", {
-        schemaVersion: 1,
-        owner: "macos-app",
-        displayName: "OpenClaw.app",
-        updateHint: "Update OpenClaw.app to update this Gateway.",
-      });
+      writePluginJson(packageRoot, "openclaw-install-owner.json", createMacosAppInstallOwner());
     }
     await fs.mkdir(scopeRoot, { recursive: true });
     await writePackage(liveTarget, '{"name":"live-runtime"}\n');

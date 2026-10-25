@@ -83,13 +83,15 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     : undefined;
   let nativeModelAdmission: CodexStartOrResumeThreadParams["nativeModelAdmission"];
   try {
-    nativeModelAdmission = modelAdmissionSource
-      ? modelAdmissionSource.modelPolicyRequired !== false
-        ? "required"
-        : options.nativeHookRelay?.enabled === false
-          ? "disabled"
-          : "optional"
-      : undefined;
+    // Private completions keep the owner's optional hook configuration without its source grant.
+    nativeModelAdmission =
+      runtime.nativeToolSurfaceEnabled && params.hostCapabilities.retainSourceAuthority
+        ? modelAdmissionSource && modelAdmissionSource.modelPolicyRequired !== false
+          ? "required"
+          : options.nativeHookRelay?.enabled === false
+            ? "disabled"
+            : "optional"
+        : undefined;
   } finally {
     modelAdmissionSource?.release();
   }

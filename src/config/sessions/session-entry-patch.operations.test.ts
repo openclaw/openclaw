@@ -222,6 +222,64 @@ it("acknowledges no-result patches without transferring the entry and keeps fina
   });
 });
 
+it("reuses unchanged resident entry fields across patches without losing result isolation or newer writes", async () => {
+  await withFixture(async (f) => {
+    const prompt = "synthetic retained instructions ".repeat(4096);
+    const skills = [{ name: "synthetic-skill", requiredEnv: ["SYNTHETIC_REQUIRED"] }];
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      skillsSnapshot: { prompt, skills },
+      pinnedAt: 20,
+    });
+    await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "warm" } },
+      { result: "none", skipMaintenance: true },
+    );
+    const deliveredBytes: number[] = [];
+    const collect = transfer.createSqliteWorkerTransferCollector;
+    vi.spyOn(transfer, "createSqliteWorkerTransferCollector").mockImplementation((kind, consume) =>
+      collect(kind, (value) => {
+        deliveredBytes.push(serialize(value).byteLength);
+        consume(value);
+      }),
+    );
+    const result = await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "changed", pinnedAt: undefined } },
+      { skipMaintenance: true },
+    );
+    expect(result).toMatchObject({ label: "changed", skillsSnapshot: { prompt, skills } });
+    expect(result?.pinnedAt).toBeUndefined();
+    expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
+    result!.skillsSnapshot!.prompt = "caller-owned";
+    result!.skillsSnapshot!.skills[0]!.name = "caller-mutated";
+    result!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ADDED");
+    result!.skillsSnapshot!.skills.push({ name: "caller-added" });
+    const next = await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "next" } },
+      { skipMaintenance: true },
+    );
+    expect(next?.skillsSnapshot).toMatchObject({ prompt, skills });
+    expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
+    delivery.beforeCommit = () => {
+      delivery.beforeCommit = undefined;
+      replaceSessionEntrySync(f.scope, {
+        ...f.read()!,
+        skillsSnapshot: { prompt: "newer persisted instructions", skills: [] },
+      });
+    };
+    const latest = await applySessionEntryOperation(
+      f.scope,
+      { kind: "fields", patch: { label: "after concurrent write" } },
+      { skipMaintenance: true },
+    );
+    expect(latest?.skillsSnapshot?.prompt).toBe("newer persisted instructions");
+    expect(f.read()).toEqual(latest);
+  });
+});
+
 it("commits cron state in one request while preserving concurrent metadata and cleared policy", async () => {
   await withFixture(async (f) => {
     const initial: SessionEntry = {

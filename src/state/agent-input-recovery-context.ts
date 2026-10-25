@@ -1,32 +1,9 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-
-export type AgentInputRecoveryAdmission = {
-  isPending: (agentId: string) => boolean;
-  waitForAgentInputRecovery: (
-    agentId: string,
-    options?: { signal?: AbortSignal },
-  ) => Promise<void> | undefined;
-};
-
-type AgentInputRecoveryContext = {
-  context?: { inputRecovery?: AgentInputRecoveryAdmission };
-  resolveGatewayContext?: () => { inputRecovery?: AgentInputRecoveryAdmission } | undefined;
-};
-
-const recovery = new AsyncLocalStorage<AgentInputRecoveryContext>();
-
-export function getAgentInputRecoveryContext(): AgentInputRecoveryContext | undefined {
-  return recovery.getStore();
-}
-
-/** Install inside the Gateway's async resource, which restores both scopes together. */
-export function enterAgentInputRecoveryContext(context: AgentInputRecoveryContext): void {
-  recovery.enterWith(context);
-}
+import type { AgentInputRecoveryAdmission } from "./agent-input-recovery.types.js";
 
 function resolveOwner(): AgentInputRecoveryAdmission | undefined {
-  const scope = recovery.getStore();
+  const scope = getPluginExecutionFrame()?.inputRecoveryContext;
   return (scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context)
     ?.inputRecovery;
 }

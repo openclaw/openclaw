@@ -15,6 +15,7 @@ export type ExecApprovalRequestPayload = {
   scope?: ApprovalScope | null;
   cwd?: string | null;
   host?: string | null;
+  nodeId?: string | null;
   security?: string | null;
   ask?: string | null;
   agentId?: string | null;
@@ -191,6 +192,7 @@ function parseApprovalRequested(
             streamProposal: parseStreamProposal(request.streamProposal),
             cwd: readStringValue(request.cwd) ?? null,
             host: readStringValue(request.host) ?? null,
+            nodeId: readStringValue(request.nodeId) ?? null,
             security: readStringValue(request.security) ?? null,
             ask: readStringValue(request.ask) ?? null,
             resolvedPath: readStringValue(request.resolvedPath) ?? null,
