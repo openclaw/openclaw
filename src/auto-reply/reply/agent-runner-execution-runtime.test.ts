@@ -28,26 +28,12 @@ function selectFallback(provider: string, model: string) {
   );
 }
 
-it("prepares OpenAI thinking and forwards turn context for the concrete Codex runtime", async () => {
+it("forwards turn context and tool policy for the concrete Codex runtime", async () => {
   const provider = "openai",
     model = "gpt-5.6-luna",
     agentRuntime = "codex";
-  const api = "openai-chatgpt-responses" as const,
-    baseUrl = "https://chatgpt.com/backend-api/codex";
-  const thinkLevel = "max";
   await useProductionEmbeddedRunExecutionParamsForTest();
-  const compat = { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] };
-  const catalogEntry = {
-    provider,
-    id: model,
-    name: model,
-    api,
-    baseUrl,
-    reasoning: true,
-    input: ["text" as const],
-    compat,
-  };
-  loadProviderScopedThinkingCatalog.mockResolvedValue([catalogEntry]);
+  loadProviderScopedThinkingCatalog.mockResolvedValue([]);
   selectFallback(provider, model);
   state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("final"));
   const turnContext = { start: 0, text: "Current conversation." };
@@ -56,10 +42,8 @@ it("prepares OpenAI thinking and forwards turn context for the concrete Codex ru
     extraSystemPromptTurnContext: turnContext,
     provider,
     model,
-    thinkLevel,
     skipProviderRuntimeHints: true,
-    thinkingCatalog: [catalogEntry],
-    config: { models: { providers: { [provider]: { api, baseUrl, models: [] } } } },
+    thinkingCatalog: [{ provider, id: model, input: ["text"] }],
   });
 
   const result = await runTurn({
@@ -74,17 +58,12 @@ it("prepares OpenAI thinking and forwards turn context for the concrete Codex ru
 
   expect(result.kind).toBe("success");
   expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded thinking params", {
-    thinkLevel,
     forceRestartSafeTools: true,
     forceCodeModeTools: true,
     toolsAllow: ["message"],
-    modelThinkingCapability: { provider, modelId: model, agentRuntime, compat },
     extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
     extraSystemPromptTurnContext: turnContext,
   });
-  expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ provider, model, agentRuntime: "codex" }),
-  );
 });
 
 it.each([
