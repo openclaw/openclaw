@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import {
   request as httpRequest,
@@ -63,13 +64,9 @@ function readCaptureEvents(sessionId: string, limit: number) {
 }
 
 async function listenOrigin(server: Server, path = "") {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  const listening = once(server, "listening");
+  server.listen(0, "127.0.0.1");
+  await listening;
   const stop = () =>
     new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
@@ -88,11 +85,7 @@ async function startLargeBodyOrigin(responseBody: string) {
       receivedBody += chunk;
     });
     req.on("end", () => {
-      res.writeHead(200, {
-        "content-length": Buffer.byteLength(responseBody),
-        "content-type": "text/plain; charset=utf-8",
-      });
-      res.end(responseBody);
+      respond(res, responseBody);
     });
   });
   return {
@@ -100,6 +93,14 @@ async function startLargeBodyOrigin(responseBody: string) {
     receivedRequestBody: () => receivedBody,
     responseBody,
   };
+}
+
+function respond(res: ServerResponse, body: string) {
+  res.writeHead(200, {
+    "content-length": Buffer.byteLength(body),
+    "content-type": "text/plain; charset=utf-8",
+  });
+  res.end(body);
 }
 
 async function startResponseErrorOrigin() {
@@ -115,11 +116,7 @@ async function startResponseErrorOrigin() {
       setTimeout(() => res.socket?.destroy(), 50);
       return;
     }
-    res.writeHead(200, {
-      "content-length": 2,
-      "content-type": "text/plain; charset=utf-8",
-    });
-    res.end("ok");
+    respond(res, "ok");
   });
   return listenOrigin(server);
 }
@@ -253,11 +250,7 @@ async function startStreamingProxyOrigin(responseBodyBytes: number) {
   const server = createHttpServer((req, res) => {
     req.resume();
     if (req.url === "/healthy") {
-      res.writeHead(200, {
-        "content-length": 2,
-        "content-type": "text/plain; charset=utf-8",
-      });
-      res.end("ok");
+      respond(res, "ok");
       return;
     }
 
@@ -320,13 +313,9 @@ async function startConnectProxy(connectTarget: string) {
     socket.destroy();
   });
   socket.on("error", () => {});
-  await new Promise<void>((resolve, reject) => {
-    socket.once("error", reject);
-    socket.connect(Number(address.port), address.hostname, () => {
-      socket.off("error", reject);
-      resolve();
-    });
-  });
+  const opened = once(socket, "connect");
+  socket.connect(Number(address.port), address.hostname);
+  await opened;
   socket.write(`CONNECT ${connectTarget} HTTP/1.1\r\nHost: ${connectTarget}\r\n\r\n`);
   return {
     settings,
@@ -623,14 +612,11 @@ async function requestRawThroughProxy(proxyUrl: string, request: string): Promis
   socket.on("data", (chunk) => {
     data += chunk.toString();
   });
-  await new Promise<void>((resolve, reject) => {
-    socket.once("error", reject);
-    socket.connect(Number(proxy.port), proxy.hostname, resolve);
-  });
+  const opened = once(socket, "connect");
+  socket.connect(Number(proxy.port), proxy.hostname);
+  await opened;
   socket.write(request);
-  await new Promise<void>((resolve) => {
-    socket.once("end", resolve);
-  });
+  await once(socket, "end");
   socket.destroy();
   return data;
 }
@@ -668,23 +654,18 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     expect(origin.requestCount()).toBe(1);
   });
 
-  it("rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active", async () => {
-    process.env["OPENCLAW_PROXY_ACTIVE"] = "true";
-    const server = await startManagedProxy();
-    const response = await connectThroughProxy(server.proxyUrl);
-    expect(response).toContain("403 Forbidden");
-    expect(response).toContain("Connection: close");
-    expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
-  });
-
-  it("accepts bracketed IPv6 CONNECT targets before applying upstream policy", async () => {
-    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
-    const server = await startManagedProxy();
-    const response = await connectThroughProxy(server.proxyUrl, "[::1]:8443");
-
-    expect(response).toContain("403 Forbidden");
-    expect(response).not.toContain("400 Bad Request");
-  });
+  it.each(["example.com:443", "[::1]:8443"])(
+    "rejects CONNECT to %s under managed proxy policy after parsing the target",
+    async (target) => {
+      process.env["OPENCLAW_PROXY_ACTIVE"] = "true";
+      const server = await startManagedProxy();
+      const response = await connectThroughProxy(server.proxyUrl, target);
+      expect(response).toContain("403 Forbidden");
+      expect(response).toContain("Connection: close");
+      expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
+      expect(response).not.toContain("400 Bad Request");
+    },
+  );
 
   it.each(["[::1]:99999", "api.openai.com:1e3", "api.openai.com:0x50"])(
     "rejects invalid CONNECT target %s",
