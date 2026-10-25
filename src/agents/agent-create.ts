@@ -35,6 +35,7 @@ import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
+import { admitRetainedPostgresAgentStores } from "./agent-create-retained-postgres.js";
 import { normalizeAgentDirRegistryPath } from "./agent-dir-registry.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
 import { listAgentRoles, loadAgentRole } from "./agent-roles.js";
@@ -337,10 +338,8 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       emoji: params.emoji,
       avatar: params.avatar,
     }) ?? { name: safeName };
-  const requestedWorkspace = params.entry?.workspace ?? params.workspace;
-  const explicitWorkspace = requestedWorkspace?.trim()
-    ? resolveUserPath(requestedWorkspace.trim())
-    : undefined;
+  const requestedWorkspace = (params.entry?.workspace ?? params.workspace)?.trim();
+  const explicitWorkspace = requestedWorkspace ? resolveUserPath(requestedWorkspace) : undefined;
   const requestedAgentDir = params.entry?.agentDir ?? params.agentDir;
   const explicitAgentDir = requestedAgentDir?.trim()
     ? resolveUserPath(requestedAgentDir.trim())
@@ -560,6 +559,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             ? applyAgentBindings(nextConfig, bindingParse.bindings)
             : undefined;
           nextConfig = bindingResult?.config ?? nextConfig;
+
+          if (recoveryPaths.length === 0) {
+            await admitRetainedPostgresAgentStores({
+              config: nextConfig,
+              agentId,
+              assertCurrent: beforePersistentApply,
+            });
+          }
 
           // The outer lock makes this result-bearing transform single-attempt: setup
           // finishes before the final entry becomes visible to readers or delete flows.

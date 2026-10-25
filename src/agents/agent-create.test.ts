@@ -1,8 +1,10 @@
 import { statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { LegacyMainSessionMigrationResult } from "../config/sessions/legacy-main-session-migration.contract.js";
 import { FsSafeError, type ReadResult } from "../infra/fs-safe.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 
 const identityStat = statSync(new URL(import.meta.url));
 
@@ -18,6 +20,12 @@ function identityReadResult(content: string): ReadResult {
 
 const mocks = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
+  postgresAgent: false,
+  configuredTargets: vi.fn(),
+  inspectExistingSchema: vi.fn(),
+  closeSchemaInspection: vi.fn(),
+  admitExistingDatabase: vi.fn(),
+  releaseExistingDatabase: vi.fn(),
   persisted: {} as Record<string, unknown>,
   transformConfigFileWithRetry: vi.fn(),
   withConfigMutationExclusive: vi.fn(),
@@ -78,6 +86,31 @@ vi.mock("../cron/default-proactive-job.js", async (importOriginal) => ({
 // mock-isolation: Workspace/config unit cases do not own a real SQLite worker or creation store.
 vi.mock("../state/openclaw-agent-execution.js", () => ({
   prepareOpenClawAgentDatabaseExecution: async () => {},
+  captureOpenClawAgentDatabaseExecution: () => ({
+    runExisting: mocks.admitExistingDatabase,
+    release: mocks.releaseExistingDatabase,
+  }),
+}));
+
+vi.mock("../infra/database-engine/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/database-engine/context.js")>()),
+  getDatabaseEngineInput: () =>
+    mocks.postgresAgent
+      ? { connection: "postgresql://synthetic.invalid/fixture", schemaPrefix: "fixture" }
+      : undefined,
+}));
+
+vi.mock("../config/sessions/targets.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/targets.js")>()),
+  resolveConfiguredAgentDatabaseTargets: mocks.configuredTargets,
+}));
+
+// mock-isolation: Creation ordering fixes external retained-store inspection to synthetic facts.
+vi.mock("../state/openclaw-agent-schema-inspection-worker.js", () => ({
+  createAgentSchemaInspectionWorker: () => ({
+    inspect: mocks.inspectExistingSchema,
+    [Symbol.asyncDispose]: mocks.closeSchemaInspection,
+  }),
 }));
 
 vi.mock("../config/sessions/legacy-main-session-migration.js", () => ({
@@ -160,6 +193,19 @@ describe("createAgent", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.config = roster();
+    mocks.postgresAgent = false;
+    mocks.configuredTargets.mockReturnValue([]);
+    mocks.inspectExistingSchema.mockResolvedValue({
+      version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      agentSchemaMeta: {
+        agentId: "researcher",
+        role: "agent",
+        schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      },
+    });
+    mocks.closeSchemaInspection.mockResolvedValue(undefined);
+    mocks.admitExistingDatabase.mockResolvedValue(true);
+    mocks.releaseExistingDatabase.mockResolvedValue(undefined);
     mocks.persisted = {};
     mocks.readAgentDeletionJournal.mockReturnValue(undefined);
     mocks.claimCompletedAgentDeletion.mockReturnValue(true);
@@ -187,6 +233,88 @@ describe("createAgent", () => {
       },
     );
   });
+
+  it.each(["reason", "failure"] as const)(
+    "refuses retained PostgreSQL admission %s before workspace or config effects",
+    async (mode) => {
+      mocks.postgresAgent = true;
+      mocks.configuredTargets.mockReturnValue([
+        { agentId: "researcher", path: fileURLToPath(import.meta.url) },
+      ]);
+      const failure = new Error("retained PostgreSQL namespace is missing");
+      mocks.inspectExistingSchema.mockResolvedValue(
+        mode === "reason" ? { version: 0, reason: failure.message } : { version: 0, failure },
+      );
+
+      await expect(createAgent({ name: "researcher" })).rejects.toThrow(failure.message);
+
+      expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(mocks.rootWrite).not.toHaveBeenCalled();
+      expect(mocks.mkdir).not.toHaveBeenCalled();
+      expect(mocks.persisted).toEqual({});
+      expect(mocks.admitExistingDatabase).not.toHaveBeenCalled();
+      expect(mocks.closeSchemaInspection).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("preserves a retained PostgreSQL store belonging to another agent", async () => {
+    mocks.postgresAgent = true;
+    mocks.configuredTargets.mockReturnValue([
+      { agentId: "researcher", path: fileURLToPath(import.meta.url) },
+    ]);
+    mocks.inspectExistingSchema.mockResolvedValue({
+      version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      agentSchemaMeta: {
+        agentId: "another-agent",
+        role: "agent",
+        schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      },
+    });
+
+    await expectError("already-exists");
+
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.persisted).toEqual({});
+    expect(mocks.admitExistingDatabase).not.toHaveBeenCalled();
+  });
+
+  it("requires existing-only admission before registering a retained PostgreSQL store", async () => {
+    mocks.postgresAgent = true;
+    mocks.configuredTargets.mockReturnValue([
+      { agentId: "researcher", path: fileURLToPath(import.meta.url) },
+    ]);
+    mocks.admitExistingDatabase.mockResolvedValue(undefined);
+
+    await expectError("already-exists");
+
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.persisted).toEqual({});
+    expect(mocks.releaseExistingDatabase).toHaveBeenCalledOnce();
+  });
+
+  it.each(["absent", "unanchored", "valid"] as const)(
+    "allows ordinary agent creation with a %s PostgreSQL-target file",
+    async (kind) => {
+      mocks.postgresAgent = true;
+      mocks.configuredTargets.mockReturnValue([
+        {
+          agentId: "researcher",
+          path:
+            kind === "absent"
+              ? `${fileURLToPath(import.meta.url)}.missing`
+              : fileURLToPath(import.meta.url),
+        },
+      ]);
+      if (kind === "unanchored") {
+        mocks.inspectExistingSchema.mockResolvedValue(null);
+      }
+      if (kind !== "valid") {
+        mocks.admitExistingDatabase.mockResolvedValue(undefined);
+      }
+
+      await expectCreation({ name: "researcher" }, { status: "created", agentId: "researcher" });
+    },
+  );
 
   it("returns validation errors before mutation", async () => {
     await expectError("invalid-name", "  ");
