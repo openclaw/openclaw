@@ -408,11 +408,16 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       return requestForSession(input);
     },
 
-    async resumeSessionRequests(isStopping?: () => boolean): Promise<void> {
+    async resumeSessionRequests(
+      isStopping?: () => boolean,
+      isPendingEmpty?: () => boolean,
+    ): Promise<void> {
       if (isStopping?.()) {
         return;
       }
-      const rows = await listSharedGitHubPublicationsAsync({ claimNull: true, pending: true });
+      const rows = isPendingEmpty?.()
+        ? []
+        : await listSharedGitHubPublicationsAsync({ claimNull: true, pending: true });
       params.recovery?.shared.retain(rows.map((row) => row.request_id));
       params.assertCurrent();
       if (isStopping?.()) {

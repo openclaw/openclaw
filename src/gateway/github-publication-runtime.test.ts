@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import {
+  mixedAgentConnection,
+  useMixedAgentPair,
+} from "../infra/database-engine/mixed-agent.conformance.test-support.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { repositoryRow } from "../state/github-publication.worker.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -24,12 +29,11 @@ import {
 import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-installGitHubPublicationTestHarness();
-afterEach(() => vi.restoreAllMocks());
-
 function createRecoveryRuntime(warn = vi.fn()) {
   return createTestGitHubPublicationRuntime({
-    placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
+    placements: withEngineStoreAdmission(() =>
+      createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
+    ),
     loadSessionRuntime: async () => {
       throw new Error("transcript reporting unavailable");
     },
@@ -45,14 +49,20 @@ function createRuntime() {
   return { runtime, recovery, reports };
 }
 
-describe("GitHub publication idle recovery", () => {
+function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
+  useMixedAgentPair(engine, engine);
+  installGitHubPublicationTestHarness();
+  afterEach(() => vi.restoreAllMocks());
+
   it("backs off an unconfirmed publication after base materialization fails", async () => {
     let now = performance.now();
     vi.spyOn(performance, "now").mockImplementation(() => now);
-    seedLocalPublication(openOpenClawStateDatabase(), {
-      requestId: "base-fetch-unconfirmed",
-      status: "publishing",
-    });
+    withEngineStoreAdmission(() =>
+      seedLocalPublication(openOpenClawStateDatabase(), {
+        requestId: "base-fetch-unconfirmed",
+        status: "publishing",
+      }),
+    );
     const transport = githubPublicationTestMocks().runCommand;
     const original = transport.getMockImplementation()!;
     transport.mockImplementation(async (argv: string[], ...args: unknown[]) =>
@@ -111,7 +121,9 @@ describe("GitHub publication idle recovery", () => {
 
   it("recovers the original publication after a transient fetch failure without another push or PR", async () => {
     const requestId = "transient-fetch";
-    seedLocalPublication(openOpenClawStateDatabase(), { requestId, status: "publishing" });
+    withEngineStoreAdmission(() =>
+      seedLocalPublication(openOpenClawStateDatabase(), { requestId, status: "publishing" }),
+    );
     let now = performance.now();
     vi.spyOn(performance, "now").mockImplementation(() => now);
     let unavailable = true;
@@ -151,7 +163,9 @@ describe("GitHub publication idle recovery", () => {
     await runtime.reconcilePublications();
     unavailable = false;
     await runtime.reconcilePublications();
-    expect(await runtime.coordinator.readAsync(requestId)).toMatchObject({ status: "publishing" });
+    expect(await runtime.coordinator.readAsync(requestId)).toMatchObject({
+      status: "publishing",
+    });
     now += 60_000;
     await runtime.reconcilePublications();
     expect(await runtime.coordinator.readAsync(requestId)).toMatchObject({
@@ -168,24 +182,28 @@ describe("GitHub publication idle recovery", () => {
     ).toEqual([]);
   });
 
-  it("reads pending repository requests once during empty startup and still reads unreported results", async () => {
+  it("reads each pending queue once during empty startup and still reads unreported results", async () => {
     const runtime = createRecoveryRuntime();
     const repositoryReads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
+    const sharedReads = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
     await runtime.reconcilePublications();
     expect(repositoryReads.mock.calls.map(([input]) => input)).toEqual([
       { ownerProfileId: null, pending: true },
       { pending: false, unreported: true },
     ]);
+    expect(sharedReads.mock.calls.map(([input]) => input)).toEqual([
+      { pending: true },
+      { pending: false, unreported: true },
+    ]);
   });
 
-  it.each([
-    ["load", "insert"],
-    ["defer", "insert"],
-    ["resume", "insert"],
-    ["load", "unknown"],
-    ["defer", "unknown"],
-    ["resume", "unknown"],
-  ] as const)("invalidates the empty fact after %s receives %s", async (boundary, change) => {
+  it.each(
+    (["repository", "shared"] as const).flatMap((kind) =>
+      (["load", "defer", "resume"] as const).flatMap((boundary) =>
+        (["insert", "unknown"] as const).map((change) => [kind, boundary, change] as const),
+      ),
+    ),
+  )("invalidates %s emptiness after %s receives %s", async (kind, boundary, change) => {
     let notify: Parameters<typeof githubPublicationReceipts.subscribeFacts>[0] = () => {
       throw new Error("runtime did not subscribe");
     };
@@ -202,20 +220,39 @@ describe("GitHub publication idle recovery", () => {
       }
       changed = true;
       if (change === "insert") {
-        insertRepositoryGitHubPublicationFixture(repositoryRow("startup-insert"), () => {});
+        if (kind === "shared") {
+          withEngineStoreAdmission(() => insertSharedWorktreeReceipt("startup-insert"));
+        } else {
+          withEngineStoreAdmission(() =>
+            insertRepositoryGitHubPublicationFixture(repositoryRow("startup-insert"), () => {}),
+          );
+        }
       } else {
         notify(
-          { kind: "unknown", identity: captureOpenClawStateWorkerContext().admission.identity.key },
+          {
+            kind: "unknown",
+            identity: captureOpenClawStateWorkerContext().admission.identity.key,
+          },
           false,
         );
       }
     };
     const listRepository = publicationStore.listRepositoryGitHubPublicationsAsync;
-    const reads = vi
+    const repositoryReads = vi
       .spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync")
       .mockImplementation(async (input) => {
         const rows = await listRepository(input);
-        if (boundary === "load") {
+        if (kind === "repository" && boundary === "load") {
+          invalidate();
+        }
+        return rows;
+      });
+    const listShared = publicationStore.listSharedGitHubPublicationsAsync;
+    const sharedReads = vi
+      .spyOn(publicationStore, "listSharedGitHubPublicationsAsync")
+      .mockImplementation(async (input) => {
+        const rows = await listShared(input);
+        if (kind === "shared" && boundary === "load" && input?.pending && !input.claimNull) {
           invalidate();
         }
         return rows;
@@ -229,44 +266,63 @@ describe("GitHub publication idle recovery", () => {
         }
       },
     );
-    const listShared = publicationStore.listSharedGitHubPublicationsAsync;
-    vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync").mockImplementation(
-      async (input) => {
-        const rows = await listShared(input);
-        if (boundary === "resume" && input?.claimNull) {
-          invalidate();
-        }
-        return rows;
-      },
-    );
+    const resume = runtime.coordinator.resumeSessionRequests;
+    vi.spyOn(runtime.coordinator, "resumeSessionRequests").mockImplementation(async (...args) => {
+      if (boundary === "resume") {
+        await Promise.resolve();
+        invalidate();
+      }
+      return resume(...args);
+    });
 
     await runtime.reconcilePublications();
     expect(changed).toBe(true);
-    expect(reads).toHaveBeenCalledTimes(boundary === "resume" ? 3 : 4);
-    if (change === "insert") {
-      // The real recovery path retires the receipt whose synthetic workspace no longer exists.
-      expect(readRepositoryGitHubPublicationFixture("startup-insert")?.status).toBe("failed");
+    if (kind === "repository") {
+      expect(repositoryReads).toHaveBeenCalledTimes(boundary === "resume" ? 3 : 4);
     } else {
+      expect(sharedReads.mock.calls.map(([input]) => input)).toEqual([
+        { pending: true },
+        { claimNull: true, pending: true },
+        { pending: false, unreported: true },
+      ]);
+    }
+    if (change === "insert") {
+      if (kind === "repository") {
+        // The real recovery path retires the receipt whose synthetic workspace no longer exists.
+        expect(
+          withEngineStoreAdmission(() => readRepositoryGitHubPublicationFixture("startup-insert"))
+            ?.status,
+        ).toBe("failed");
+      } else {
+        // Recovery settles the receipt even though the synthetic checkout cannot publish.
+        expect(await runtime.coordinator.readAsync("startup-insert")).toMatchObject({
+          status: "failed",
+        });
+      }
+    } else {
+      const reads = kind === "shared" ? sharedReads : repositoryReads;
       const previousReads = reads.mock.calls.length;
       await runtime.reconcilePublications();
+      const pending =
+        kind === "shared" ? { pending: true } : { ownerProfileId: null, pending: true };
       expect(reads.mock.calls.slice(previousReads).map(([input]) => input)).toEqual(
-        boundary === "load"
-          ? [{ ownerProfileId: null, pending: true }]
-          : [
-              { ownerProfileId: null, pending: true },
-              { pending: false, unreported: true },
-            ],
+        boundary === "load" ? [pending] : [pending, { pending: false, unreported: true }],
       );
     }
   });
 
   it("keeps fresh recovery reads for a nonempty startup snapshot", async () => {
-    insertRepositoryGitHubPublicationFixture(repositoryRow("startup-existing"), () => {});
+    withEngineStoreAdmission(() =>
+      insertRepositoryGitHubPublicationFixture(repositoryRow("startup-existing"), () => {}),
+    );
     const runtime = createRecoveryRuntime();
     const reads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
     await runtime.reconcilePublications();
     expect(reads).toHaveBeenCalledTimes(4);
-    expect(readRepositoryGitHubPublicationFixture("startup-existing")?.status).toBe("failed");
+    expect(
+      withEngineStoreAdmission(() => readRepositoryGitHubPublicationFixture("startup-existing"))
+        ?.status,
+    ).toBe("failed");
   });
 
   it.each(["stop", "failure"] as const)(
@@ -298,19 +354,23 @@ describe("GitHub publication idle recovery", () => {
     await runtime.reconcilePublications();
     expect(recovery).toHaveBeenCalledTimes(1);
 
-    insertSharedWorktreeReceipt("idle-recovery-request");
+    withEngineStoreAdmission(() => insertSharedWorktreeReceipt("idle-recovery-request"));
     await runtime.reconcilePublications();
     await runtime.reconcilePublications();
     expect(recovery).toHaveBeenCalledTimes(3);
 
-    const claimed = claimGitHubPublicationExecutionFixture("idle-recovery-request", "instance");
-    createGitHubPublicationExecutionStoreFixture("instance").complete(claimed, {
-      requestId: claimed.request_id,
-      status: "failed",
-      code: "unavailable",
-      message: "Publication unavailable",
-      nextAction: "Retry publication",
-    });
+    const claimed = withEngineStoreAdmission(() =>
+      claimGitHubPublicationExecutionFixture("idle-recovery-request", "instance"),
+    );
+    withEngineStoreAdmission(() =>
+      createGitHubPublicationExecutionStoreFixture("instance").complete(claimed, {
+        requestId: claimed.request_id,
+        status: "failed",
+        code: "unavailable",
+        message: "Publication unavailable",
+        nextAction: "Retry publication",
+      }),
+    );
     // Unreported terminal outcomes still need recovery even after execution ends.
     await runtime.reconcilePublications();
     await runtime.reconcilePublications();
@@ -323,10 +383,12 @@ describe("GitHub publication idle recovery", () => {
   });
 
   it("loads pending requests from before the runtime subscribed", async () => {
-    seedLocalPublication(openOpenClawStateDatabase(), {
-      requestId: "pending-before-runtime",
-      status: "requested",
-    });
+    withEngineStoreAdmission(() =>
+      seedLocalPublication(openOpenClawStateDatabase(), {
+        requestId: "pending-before-runtime",
+        status: "requested",
+      }),
+    );
     const { runtime, recovery } = createRuntime();
     await runtime.reconcilePublications();
     await runtime.reconcilePublications();
@@ -354,4 +416,11 @@ describe("GitHub publication idle recovery", () => {
     await runtime.reconcilePublications();
     expect(recovery).toHaveBeenCalledTimes(2);
   });
-});
+}
+
+for (const engine of ["sqlite", "postgres"] as const) {
+  describe.skipIf(engine === "postgres" && !mixedAgentConnection)(
+    `${engine} GitHub publication idle recovery`,
+    () => installPublicationRecoveryTests(engine),
+  );
+}
