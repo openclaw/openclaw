@@ -10,6 +10,12 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 
 type Props = Parameters<typeof ChatModelControls>[0];
+const modelEntry = (id: string, name = id) => ({
+  id,
+  name,
+  provider: "example",
+  supportsFastMode: true,
+});
 
 async function controls(overrides: Partial<Props>) {
   installModelPickerLayout();
@@ -36,12 +42,7 @@ async function controls(overrides: Partial<Props>) {
     sending: false,
     stream: null,
     sessionKey: "main",
-    modelCatalog: ["primary", "other"].map((id) => ({
-      id,
-      name: id,
-      provider: "example",
-      supportsFastMode: true,
-    })),
+    modelCatalog: ["primary", "other"].map((id) => modelEntry(id)),
     selectedSession,
     thinkingSession: selectedSession,
     sessionsResult: sessions,
@@ -52,6 +53,10 @@ async function controls(overrides: Partial<Props>) {
   };
   const [current, setCurrent] = createSignal(props);
   const { container } = mountSolid(() => <ChatModelControls {...current()} />);
+  const query = <T extends HTMLElement = HTMLElement>(selector: string) =>
+    container.querySelector<T>(selector);
+  const required = <T extends HTMLElement = HTMLElement>(selector: string) =>
+    expectDefined(query<T>(selector), selector);
   const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
   picker.open = true;
   picker.dispatchEvent(new Event("toggle"));
@@ -69,23 +74,12 @@ async function controls(overrides: Partial<Props>) {
     onModelSelect,
     onThinkingSelect,
     onFastModeSelect,
-    model: expectDefined(container.querySelector<HTMLElement>("[data-chat-model-select]"), "model"),
-    option: expectDefined(
-      container.querySelector<HTMLButtonElement>('[data-chat-model-option="example/other"]'),
-      "model option",
-    ),
-    effort: expectDefined(
-      container.querySelector<HTMLElement>("[data-chat-thinking-select]"),
-      "effort",
-    ),
-    slider: expectDefined(
-      container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]"),
-      "slider",
-    ),
-    speed: expectDefined(
-      container.querySelector<HTMLButtonElement>("[data-chat-speed-option=on]"),
-      "speed",
-    ),
+    query,
+    model: required("[data-chat-model-select]"),
+    option: required<HTMLButtonElement>('[data-chat-model-option="example/other"]'),
+    effort: required("[data-chat-thinking-select]"),
+    slider: required<HTMLInputElement>("[data-chat-thinking-slider]"),
+    speed: required<HTMLButtonElement>("[data-chat-speed-option=on]"),
   };
 }
 
@@ -94,27 +88,18 @@ it.each([
   { name: "preparing", activeRunId: "active-run" },
   { name: "streaming", stream: "A reply in progress" },
 ])("edits model, reasoning, and speed preferences while $name", async (busy) => {
-  const {
-    model,
-    option,
-    effort,
-    slider,
-    speed,
-    onModelSelect,
-    onThinkingSelect,
-    onFastModeSelect,
-  } = await controls(busy);
-  expect(model.getAttribute("aria-disabled")).toBe("false");
-  expect(effort.getAttribute("aria-disabled")).toBe("false");
-  option.click();
-  expect(onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
-  expect(slider.disabled).toBe(false);
-  slider.value = "0";
-  slider.dispatchEvent(new Event("change", { bubbles: true }));
-  expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
-  expect(speed.disabled).toBe(false);
-  speed.click();
-  expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
+  const view = await controls(busy);
+  expect(view.model.getAttribute("aria-disabled")).toBe("false");
+  expect(view.effort.getAttribute("aria-disabled")).toBe("false");
+  view.option.click();
+  expect(view.onModelSelect).toHaveBeenCalledWith("example/other", "main", undefined);
+  expect(view.slider.disabled).toBe(false);
+  view.slider.value = "0";
+  view.slider.dispatchEvent(new Event("change", { bubbles: true }));
+  expect(view.onThinkingSelect).toHaveBeenCalledWith("low", "main");
+  expect(view.speed.disabled).toBe(false);
+  view.speed.click();
+  expect(view.onFastModeSelect).toHaveBeenCalledWith("on", "main");
 });
 
 it.each([
@@ -154,21 +139,19 @@ it("retires and restores an unavailable context-window control with its access g
     contextWindowTarget,
     contextWindowMutationDisabledReason: "Admin only",
   });
-  expect(
-    view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
-  ).toBe(true);
+  const disabled = () =>
+    view.query<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled;
+  expect(disabled()).toBe(true);
   view.update({ contextWindowTarget: { contextWindows: [] } });
   expect(view.container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
   view.update({ contextWindowTarget });
-  expect(
-    view.container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]")?.disabled,
-  ).toBe(true);
+  expect(disabled()).toBe(true);
 });
 
 it("updates model selection against a retained and replaced catalog", async () => {
   const view = await controls({});
   const option = (id: string) =>
-    view.container.querySelector<HTMLButtonElement>(`[data-chat-model-option="example/${id}"]`);
+    view.query<HTMLButtonElement>(`[data-chat-model-option="example/${id}"]`);
   const selectSession = (model: string) => {
     const sessions = createSessionsListResult({
       model,
@@ -186,8 +169,8 @@ it("updates model selection against a retained and replaced catalog", async () =
 
   view.update({
     modelCatalog: [
-      { id: "other", name: "Other refreshed", provider: "example", supportsFastMode: true },
-      { id: "replacement", name: "Replacement", provider: "example", supportsFastMode: true },
+      modelEntry("other", "Other refreshed"),
+      modelEntry("replacement", "Replacement"),
     ],
   });
   await waitForSolid(() => {
