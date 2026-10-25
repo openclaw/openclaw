@@ -193,11 +193,11 @@ it("shares a workspace catalog across configured and implicit agent reads", asyn
   });
   expect(provider.staticCatalog.run).toHaveBeenCalledOnce();
   expect(materialized).toMatchObject(
-    models.map((model) => ({
+    models.map((row) => ({
       provider: providerId,
-      modelId: model.id,
+      modelId: row.id,
       model: {
-        ...model,
+        ...row,
         provider: providerId,
         api: providerConfig.api,
         baseUrl: providerConfig.baseUrl,
