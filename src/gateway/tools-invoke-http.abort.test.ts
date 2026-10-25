@@ -147,6 +147,25 @@ function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
   });
 }
 
+async function disconnectDuring<T>(
+  started: Promise<T>,
+  release: () => void,
+  checkDisconnected: (value: T) => Promise<void>,
+) {
+  const controller = new AbortController();
+  const response = invokeAbortProbe(controller.signal);
+  try {
+    const value = await started;
+    controller.abort();
+    await expect(response).rejects.toThrow();
+    await checkDisconnected(value);
+  } finally {
+    release();
+    controller.abort();
+    await response.catch(() => undefined);
+  }
+}
+
 describe("POST /tools/invoke request cancellation", () => {
   it("rejects a tool when policy authority changes during its awaited hook", async () => {
     const hookStarted = createDeferred();
@@ -194,18 +213,11 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("does not start a tool after the client disconnects during authorization", async () => {
-    let reportAuthorizationStarted: ((req: IncomingMessage) => void) | undefined;
-    let releaseAuthorization: (() => void) | undefined;
-    const authorizationStarted = new Promise<IncomingMessage>((resolve) => {
-      reportAuthorizationStarted = resolve;
-    });
-    const authorizationReleased = new Promise<void>((resolve) => {
-      releaseAuthorization = resolve;
-    });
-
+    const started = createDeferred<IncomingMessage>();
+    const released = createDeferred();
     lifecycle.authorize.mockImplementationOnce(async ({ req }) => {
-      reportAuthorizationStarted?.(req);
-      await authorizationReleased;
+      started.resolve(req);
+      await released.promise;
       return {
         cfg: {},
         requestAuth: authorizedRequest(),
@@ -213,23 +225,12 @@ describe("POST /tools/invoke request cancellation", () => {
       };
     });
 
-    const requestController = new AbortController();
-    const response = invokeAbortProbe(requestController.signal);
-
-    try {
-      const serverRequest = await authorizationStarted;
-      requestController.abort();
-      await expect(response).rejects.toThrow();
+    await disconnectDuring(started.promise, released.resolve, async (serverRequest) => {
       await expect.poll(() => serverRequest.socket.destroyed).toBe(true);
-
-      releaseAuthorization?.();
+      released.resolve();
       await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
       expect(lifecycle.execute).not.toHaveBeenCalled();
-    } finally {
-      releaseAuthorization?.();
-      requestController.abort();
-      await response.catch(() => undefined);
-    }
+    });
   });
 
   it("revokes the tool signal after a successful request and releases its disconnect watcher", async () => {
@@ -374,72 +375,34 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("aborts the running tool when its HTTP client disconnects", async () => {
-    let reportStarted: ((signal: AbortSignal | undefined) => void) | undefined;
-    let releaseExecution: (() => void) | undefined;
-    const executionStarted = new Promise<AbortSignal | undefined>((resolve) => {
-      reportStarted = resolve;
-    });
-
+    const started = createDeferred<AbortSignal | undefined>();
+    const released = createDeferred();
     lifecycle.execute.mockImplementation(async (_toolCallId, _args, signal) => {
-      reportStarted?.(signal);
-      await new Promise<void>((resolve) => {
-        releaseExecution = resolve;
-        signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
+      started.resolve(signal);
+      signal?.addEventListener("abort", () => released.resolve(), { once: true });
+      await released.promise;
       return { ok: true };
     });
-
-    const requestController = new AbortController();
-    const response = invokeAbortProbe(requestController.signal);
-
-    try {
-      const toolSignal = await executionStarted;
+    await disconnectDuring(started.promise, released.resolve, async (toolSignal) => {
       expect(toolSignal).toBeInstanceOf(AbortSignal);
-
-      requestController.abort();
-      await expect(response).rejects.toThrow();
       await expect.poll(() => toolSignal?.aborted).toBe(true);
-    } finally {
-      requestController.abort();
-      releaseExecution?.();
-      await response.catch(() => undefined);
-    }
+    });
   });
 
   it("does not start a tool after the client disconnects during its policy hook", async () => {
-    let reportHookStarted: ((signal: AbortSignal | undefined) => void) | undefined;
-    let releaseHook: (() => void) | undefined;
-    const hookStarted = new Promise<AbortSignal | undefined>((resolve) => {
-      reportHookStarted = resolve;
-    });
-    const hookReleased = new Promise<void>((resolve) => {
-      releaseHook = resolve;
-    });
-
+    const started = createDeferred<AbortSignal | undefined>();
+    const released = createDeferred();
     lifecycle.beforeHook.mockImplementationOnce(async ({ params, signal }) => {
-      reportHookStarted?.(signal);
-      await hookReleased;
+      started.resolve(signal);
+      await released.promise;
       return { blocked: false as const, params };
     });
-
-    const requestController = new AbortController();
-    const response = invokeAbortProbe(requestController.signal);
-
-    try {
-      const hookSignal = await hookStarted;
+    await disconnectDuring(started.promise, released.resolve, async (hookSignal) => {
       expect(hookSignal).toBeInstanceOf(AbortSignal);
-
-      requestController.abort();
-      await expect(response).rejects.toThrow();
       await expect.poll(() => hookSignal?.aborted).toBe(true);
-
-      releaseHook?.();
+      released.resolve();
       await expect.poll(() => lifecycle.handled.mock.calls.length).toBe(1);
       expect(lifecycle.execute).not.toHaveBeenCalled();
-    } finally {
-      releaseHook?.();
-      requestController.abort();
-      await response.catch(() => undefined);
-    }
+    });
   });
 });

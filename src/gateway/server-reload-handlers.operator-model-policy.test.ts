@@ -71,6 +71,59 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
+function createReloader(
+  initialConfig: OpenClawConfig,
+  context: ReturnType<typeof createGatewayTestContext>,
+  clock: ReturnType<typeof createGatewaySchedulerClock>,
+  clients: ReturnType<typeof createOperatorWsClient>[],
+  overrides: Partial<Parameters<typeof createManagedReloadTestParams>[0]> = {},
+) {
+  const fixture = createDirectConfigWriteFixture(initialConfig);
+  const channelManager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
+    getRuntimeConfig: () => initialConfig,
+    getPluginRegistry: () => registry,
+    channelLogs: {},
+    channelRuntimeEnvs: {},
+  });
+  const reloader = startManagedGatewayConfigReloader(
+    createManagedReloadTestParams({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      getPluginRegistry: () => registry,
+      initialConfig,
+      channelManager,
+      startChannel: channelManager.startChannel,
+      stopChannel: channelManager.stopChannel,
+      reloadPlugins: async () => {
+        throw new Error("Unexpected plugin reload for role policy");
+      },
+      clients,
+      readSnapshot: fixture.readSnapshot,
+      subscribeToWrites: fixture.subscribeToWrites,
+      resolveGatewayContext: () => context,
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
+        makePreparedSecretsSnapshot(config),
+      ),
+      ...overrides,
+    }),
+  );
+  const write = (candidate: OpenClawConfig, revision: number) => {
+    const listener = fixture.ref.current;
+    assert(listener);
+    return publishConfigWrite(
+      listener,
+      createConfigWriteNotification(
+        candidate,
+        `roles-${revision}`,
+        revision,
+        `runtime-${revision}`,
+        `source-${revision}`,
+      ),
+    );
+  };
+  return { reloader, write };
+}
+
 it("commits model-only role changes without retiring permitted models or original source work", async () => {
   const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
   await withOpenClawTestState(profileState, async () => {
@@ -100,7 +153,6 @@ it("commits model-only role changes without retiring permitted models or origina
     const candidate = structuredClone(initialConfig);
     candidate.gateway!.roles!.definitions[roleName]!.modelPolicy = { deny: ["fixture/a"] };
     setRuntimeConfigSnapshot(initialConfig);
-    const fixture = createDirectConfigWriteFixture(initialConfig);
     const context = createGatewayTestContext();
     const connection = new AbortController();
     const close = vi.fn(() => connection.abort());
@@ -117,41 +169,19 @@ it("commits model-only role changes without retiring permitted models or origina
     const advance = vi.spyOn(preparedModelRuntime, "advancePreparedModelRuntimeConfig");
     const invalidate = vi.spyOn(preparedModelRuntime, "markPreparedModelRuntimeSnapshotsStale");
     const rebuild = vi.spyOn(preparedModelRuntime, "refreshPreparedModelRuntimeSnapshots");
-    const channelManager = createChannelManager({
-      scheduler: createTestGatewayScheduler(),
-      getRuntimeConfig: () => initialConfig,
-      getPluginRegistry: () => registry,
-      channelLogs: {},
-      channelRuntimeEnvs: {},
-    });
-    const reloader = startManagedGatewayConfigReloader(
-      createManagedReloadTestParams({
-        scheduler: createTestGatewayScheduler(clock.clock),
-        getPluginRegistry: () => registry,
-        initialConfig,
-        channelManager,
-        startChannel: channelManager.startChannel,
-        stopChannel: channelManager.stopChannel,
-        reloadPlugins: async () => {
-          throw new Error("Unexpected plugin reload for model policy");
-        },
-        clients: [client],
-        reconcileRuntimePolicy: (config) =>
-          disconnectDisallowedGatewayPolicyClients([client], config),
-        readSnapshot: fixture.readSnapshot,
-        subscribeToWrites: fixture.subscribeToWrites,
-        resolveGatewayContext: () => context,
-        activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
-          entered.resolve();
-          await releasePreparation.promise;
-          if (rejectCandidate) {
-            throw new Error("candidate preparation rejected");
-          }
-          return makePreparedSecretsSnapshot(config);
-        }),
-        requestRecoveryRestart,
+    const { reloader, write } = createReloader(initialConfig, context, clock, [client], {
+      reconcileRuntimePolicy: (config) =>
+        disconnectDisallowedGatewayPolicyClients([client], config),
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
+        entered.resolve();
+        await releasePreparation.promise;
+        if (rejectCandidate) {
+          throw new Error("candidate preparation rejected");
+        }
+        return makePreparedSecretsSnapshot(config);
       }),
-    );
+      requestRecoveryRestart,
+    });
     let original: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     let modelA: ReturnType<typeof bindOperatorModelExecution>;
     let modelB: ReturnType<typeof bindOperatorModelExecution>;
@@ -193,20 +223,7 @@ it("commits model-only role changes without retiring permitted models or origina
       });
       assert(modelA && modelB);
       vi.spyOn(sessionQueries, "getActiveSessionRunCount").mockReturnValue(2);
-      const listener = fixture.ref.current;
-      assert(listener);
-      const write = (revision: number) =>
-        publishConfigWrite(
-          listener,
-          createConfigWriteNotification(
-            candidate,
-            `roles-${revision}`,
-            revision,
-            `runtime-${revision}`,
-            `source-${revision}`,
-          ),
-        );
-      const rejected = write(1);
+      const rejected = write(candidate, 1);
       const rejectedReload = clock.wake();
       await Promise.race([
         entered.promise,
@@ -229,7 +246,7 @@ it("commits model-only role changes without retiring permitted models or origina
       expect(close).not.toHaveBeenCalled();
 
       rejectCandidate = false;
-      const accepted = write(2);
+      const accepted = write(candidate, 2);
       await clock.wake();
       await expect(accepted).resolves.toBe("applied");
       expect(getCommittedRuntimeConfig()).toEqual(candidate);
@@ -306,39 +323,13 @@ it.each(["scopes", "access policy"] as const)(
           },
         );
       });
-      const fixture = createDirectConfigWriteFixture(initialConfig);
-      const channelManager = createChannelManager({
-        scheduler: createTestGatewayScheduler(),
-        getRuntimeConfig: () => initialConfig,
-        getPluginRegistry: () => registry,
-        channelLogs: {},
-        channelRuntimeEnvs: {},
+      const { reloader, write } = createReloader(initialConfig, context, clock, clients, {
+        reconcileRuntimePolicy: (config, phase) => {
+          if (phase === "committed") {
+            disconnectDisallowedGatewayPolicyClients(clients, config);
+          }
+        },
       });
-      const reloader = startManagedGatewayConfigReloader(
-        createManagedReloadTestParams({
-          scheduler: createTestGatewayScheduler(clock.clock),
-          getPluginRegistry: () => registry,
-          initialConfig,
-          channelManager,
-          startChannel: channelManager.startChannel,
-          stopChannel: channelManager.stopChannel,
-          reloadPlugins: async () => {
-            throw new Error("Unexpected plugin reload for role scopes");
-          },
-          clients,
-          reconcileRuntimePolicy: (config, phase) => {
-            if (phase === "committed") {
-              disconnectDisallowedGatewayPolicyClients(clients, config);
-            }
-          },
-          readSnapshot: fixture.readSnapshot,
-          subscribeToWrites: fixture.subscribeToWrites,
-          resolveGatewayContext: () => context,
-          activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
-            makePreparedSecretsSnapshot(config),
-          ),
-        }),
-      );
       const accepted: NonNullable<
         Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
       >[] = [];
@@ -384,18 +375,7 @@ it.each(["scopes", "access policy"] as const)(
           candidate.gateway!.roles!.definitions.contributor!.scopes = scopes;
           candidate.gateway!.roles!.definitions.contributor!.accessPolicyPlugin =
             accessPolicyPlugin;
-          const listener = fixture.ref.current;
-          assert(listener);
-          const applied = publishConfigWrite(
-            listener,
-            createConfigWriteNotification(
-              candidate,
-              `role-${revision}`,
-              revision,
-              `runtime-${revision}`,
-              `source-${revision}`,
-            ),
-          );
+          const applied = write(candidate, revision);
           await clock.wake();
           await expect(applied).resolves.toBe("applied");
         };
