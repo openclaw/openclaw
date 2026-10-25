@@ -19,7 +19,6 @@ import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js"
 import type { ExporterHealthUpdate } from "./service-exporter-health.js";
 import { createDiagnosticsOtelService } from "./service.js";
 
-const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
 export const OTEL_TEST_ENDPOINT = "http://otel-collector:4318";
 export const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
 export const SPAN_ID = "00f067aa0ba902b7";
@@ -38,10 +37,13 @@ const emit = (event: Parameters<typeof emitTrustedDiagnosticEventWithPrivateData
 export async function emitRealSdkSignals(generation = "1") {
   // Private providers require the real diagnostic recorders, not global APIs.
   const traceContext = createDiagnosticTraceContext();
-  const modelTraceContext = createChildDiagnosticTraceContext(traceContext);
-  const run = { ...RUN_FIXTURE, runId: `run-${generation}` };
-  emit({ type: "run.started", ...run, trace: traceContext });
-  const call = { ...run, callId: `call-${generation}`, trace: modelTraceContext };
+  const run = { ...RUN_FIXTURE, runId: `run-${generation}`, trace: traceContext };
+  emit({ type: "run.started", ...run });
+  const call = {
+    ...run,
+    callId: `call-${generation}`,
+    trace: createChildDiagnosticTraceContext(traceContext),
+  };
   emit({ type: "model.call.started", ...call });
   emit({
     type: "model.call.completed",
@@ -55,13 +57,7 @@ export async function emitRealSdkSignals(generation = "1") {
     message: `OTLP routing test ${generation}`,
     trace: traceContext,
   });
-  emit({
-    type: "run.completed",
-    ...run,
-    outcome: "completed",
-    durationMs: 25,
-    trace: traceContext,
-  });
+  emit({ type: "run.completed", ...run, outcome: "completed", durationMs: 25 });
   await waitForDiagnosticEventsDrained();
   return traceContext;
 }
@@ -77,15 +73,7 @@ type StartOtelServiceOptions = OtelContextFlags & {
   endpoint?: string;
   configure?: (ctx: OpenClawPluginServiceContext) => void;
 };
-type InternalDiagnosticListener = Parameters<
-  NonNullable<OpenClawPluginServiceContext["internalDiagnostics"]>["onEvent"]
->[0];
 export type ReportedExporterHealth = Omit<ExporterHealthUpdate, "exporter">;
-type TrustedExporterInternalDiagnostics = NonNullable<
-  OpenClawPluginServiceContext["internalDiagnostics"]
-> & {
-  reportExporterHealth?: (update: ReportedExporterHealth) => void;
-};
 type ModelUsageEventInput = Omit<
   Extract<DiagnosticEventPayload, { type: "model.usage" }>,
   "seq" | "ts"
@@ -104,29 +92,25 @@ export function createOtelContext(
   flags: OtelContextFlags = {},
 ): OpenClawPluginServiceContext {
   const reports: ReportedExporterHealth[] = [];
-  const internalDiagnostics: TrustedExporterInternalDiagnostics = {
+  const internalDiagnostics = {
     emit: emitTrustedDiagnosticEventWithPrivateData,
     onEvent: onTrustedInternalDiagnosticEvent,
     registerTracePropagationBridge: registerDiagnosticTracePropagationBridge,
-    reportExporterHealth: (update) => reports.push(update),
+    reportExporterHealth: (update: ReportedExporterHealth) => reports.push(update),
+  };
+  const otel: OtelConfig = {
+    enabled: true,
+    endpoint,
+    ...flags,
+    protocol: flags.protocol ?? "http/protobuf",
+    traces: flags.traces ?? false,
+    metrics: flags.metrics ?? false,
+    logs: flags.logs ?? false,
   };
   const ctx: OpenClawPluginServiceContext = {
-    config: {
-      diagnostics: {
-        enabled: true,
-        otel: {
-          enabled: true,
-          endpoint,
-          ...flags,
-          protocol: flags.protocol ?? "http/protobuf",
-          traces: flags.traces ?? false,
-          metrics: flags.metrics ?? false,
-          logs: flags.logs ?? false,
-        },
-      },
-    },
+    config: { diagnostics: { enabled: true, otel } },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    stateDir: OTEL_TEST_STATE_DIR,
+    stateDir: "/tmp/openclaw-diagnostics-otel-test",
     internalDiagnostics,
   };
   exporterHealthReports.set(ctx, reports);
@@ -170,7 +154,7 @@ export async function startOtelServiceWithHostUsage() {
     emitHostPluginUsage(event: ModelUsageEventInput, hostPluginId: string) {
       listener({ ...event, seq: 1, ts: Date.now() }, { trusted: true, internal: true }, {
         hostPluginId,
-      } as Parameters<InternalDiagnosticListener>[2] & {
+      } as Parameters<typeof listener>[2] & {
         hostPluginId: string;
       });
     },
@@ -237,17 +221,13 @@ type OtelGlobals = {
   trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
 };
 
-export function registeredOtelGlobals(): OtelGlobals | undefined {
-  return (globalThis as unknown as Record<symbol, OtelGlobals | undefined>)[
+export const registeredOtelGlobals = (): OtelGlobals | undefined =>
+  (globalThis as unknown as Record<symbol, OtelGlobals | undefined>)[
     Symbol.for("opentelemetry.js.api.1")
   ];
-}
 
-export function registeredOtelLogs(): unknown {
-  return (globalThis as unknown as Record<symbol, unknown>)[
-    Symbol.for("io.opentelemetry.js.api.logs")
-  ];
-}
+export const registeredOtelLogs = (): unknown =>
+  (globalThis as unknown as Record<symbol, unknown>)[Symbol.for("io.opentelemetry.js.api.logs")];
 
 export function clearOtelGlobals() {
   context.disable();

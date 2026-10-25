@@ -1,4 +1,4 @@
-import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { context, propagation, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
@@ -8,14 +8,12 @@ import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { expect, test, vi } from "vitest";
-import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
+import { expect, onTestFinished, test, vi } from "vitest";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import {
   emitRealSdkSignals,
   getReportedExporterHealth,
   type ReportedExporterHealth,
-  type StartedService,
   startOtelService,
   startOtlpReceiver,
   TRACE_ID,
@@ -50,59 +48,55 @@ async function propagate(incoming: Record<string, string>, baggage?: string) {
   return { extracted, outgoing };
 }
 
-test("disables every OpenClaw route while preserving W3C propagation", async () => {
-  const receiver = startLocalOtlpReceiver();
-  const port = await receiver.listen();
-  const stdoutWrites: string[] = [];
-  const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-    stdoutWrites.push(String(chunk));
-    return true;
-  });
-  process.env.OTEL_SDK_DISABLED = " TrUe ";
-  const { service, ctx } = await startOtelService({
-    endpoint: `http://127.0.0.1:${port}`,
-    traces: true,
-    metrics: true,
-    logs: true,
-    logsExporter: "both",
-  });
+test.each([false, true])(
+  "disables exports while preserving external W3C ownership=%s",
+  async (external) => {
+    if (external) {
+      expect(context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())).toBe(
+        true,
+      );
+      expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
+    }
+    const receiver = await startOtlpReceiver();
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    process.env.OTEL_SDK_DISABLED = " TrUe ";
+    const { service, ctx } = await startOtelService({
+      endpoint: receiver.endpoint,
+      traces: true,
+      metrics: true,
+      logs: true,
+      logsExporter: "both",
+    });
 
-  try {
-    await emitRealSdkSignals();
-    const incoming = { baggage: "tenant=example", ...W3C_CARRIER };
-    const { extracted, outgoing } = await propagate(incoming, "example");
-    expect(outgoing).toEqual(incoming);
-    expect(getReportedExporterHealth(ctx)).toEqual([]);
+    try {
+      await emitRealSdkSignals();
+      const incoming = { ...W3C_CARRIER, ...(!external ? { baggage: "tenant=example" } : {}) };
+      const { extracted, outgoing } = await propagate(incoming, external ? undefined : "example");
+      expect(outgoing).toEqual(incoming);
+      expect(getReportedExporterHealth(ctx)).toEqual([]);
 
-    ctx.config.diagnostics!.enabled = false;
-    await service.start(ctx);
-    expect(context.with(extracted, () => trace.getSpanContext(context.active()))).toBeUndefined();
-    expect(propagation.fields()).toEqual([]);
-    expect(receiver.capturedRequests).toEqual([]);
-  } finally {
-    stdoutWrite.mockRestore();
-    await service.stop?.(ctx);
-    await receiver.close();
-  }
-  expect(stdoutWrites).toEqual([]);
-}, 30_000);
-
-test("preserves externally owned context and propagation globals while disabled", async () => {
-  const externalContextManager = new AsyncLocalStorageContextManager().enable();
-  expect(context.setGlobalContextManager(externalContextManager)).toBe(true);
-  expect(propagation.setGlobalPropagator(new W3CTraceContextPropagator())).toBe(true);
-  process.env.OTEL_SDK_DISABLED = "true";
-  const { service, ctx } = await startOtelService();
-  const extracted = propagation.extract(ROOT_CONTEXT, W3C_CARRIER);
-
-  await service.stop?.(ctx);
-
-  expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
-  await context.with(extracted, async () => {
-    await nextTurn();
-    expect(trace.getSpanContext(context.active())?.traceId).toBe(TRACE_ID);
-  });
-});
+      if (external) {
+        await service.stop?.(ctx);
+        expect(propagation.fields()).toEqual(["traceparent", "tracestate"]);
+        expect((await propagate(incoming)).outgoing).toEqual(incoming);
+      } else {
+        ctx.config.diagnostics!.enabled = false;
+        await service.start(ctx);
+        expect(
+          context.with(extracted, () => trace.getSpanContext(context.active())),
+        ).toBeUndefined();
+        expect(propagation.fields()).toEqual([]);
+      }
+      expect(receiver.requests).toEqual([]);
+      expect(stdoutWrite).not.toHaveBeenCalled();
+    } finally {
+      stdoutWrite.mockRestore();
+      await service.stop?.(ctx);
+      await receiver.close();
+    }
+  },
+  30_000,
+);
 
 test.each<{
   value: string;
@@ -163,14 +157,12 @@ async function waitForExporterStatus(
   events: Array<Pick<ReportedExporterHealth, "status">>,
   status: ReportedExporterHealth["status"],
 ) {
-  const deadline = Date.now() + 4_000;
-  while (Date.now() < deadline) {
-    if (events.some((event) => event.status === status)) {
-      return;
-    }
-    await sleep(20);
-  }
-  throw new Error(`timed out waiting for exporter status ${status}`);
+  await vi.waitFor(
+    () => {
+      expect(events.some((event) => event.status === status)).toBe(true);
+    },
+    { timeout: 4_000, interval: 20 },
+  );
 }
 
 function emitExporterHealthSpan(name: string) {
@@ -183,20 +175,13 @@ function emitExporterHealthSpan(name: string) {
       provider: "openai",
       model: "gpt-5.4",
       durationMs: 10,
-      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
     },
     {},
   );
 }
 
-async function withExporterHealth(
+async function startExporterHealth(
   statusForRequest: (count: number) => number,
-  run: (
-    fixture: StartedService & {
-      receiver: Awaited<ReturnType<typeof startOtlpReceiver>>;
-      events: ExporterEvent[];
-    },
-  ) => Promise<void>,
   flushIntervalMs?: number,
 ) {
   const receiver = await startOtlpReceiver(statusForRequest);
@@ -212,68 +197,53 @@ async function withExporterHealth(
     traces: true,
     flushIntervalMs,
   });
-  try {
-    await run({ receiver, events, ...started });
-  } finally {
+  onTestFinished(async () => {
     unsubscribe();
     await started.service.stop?.(started.ctx);
     await receiver.close();
-  }
+  });
+  return { receiver, events, ...started };
 }
 
 test.each(["retry-success", "non-retryable"] as const)(
   "reports real OTLP %s",
   async (mode) => {
     const retry = mode === "retry-success";
-    await withExporterHealth(
-      (count) => (retry ? (count === 1 ? 503 : 200) : 400),
-      async ({ receiver, events, service, ctx }) => {
-        emitExporterHealthSpan(mode);
-        await waitForDiagnosticEventsDrained();
-        const stopped = Promise.resolve(service.stop?.(ctx));
-        await (retry ? stopped : stopped.catch(() => {}));
-        await waitForDiagnosticEventsDrained();
-        expect(receiver.requests).toHaveLength(retry ? 2 : 1);
-        const health = getReportedExporterHealth(ctx);
-        if (retry) {
-          expect(events.some((event) => event.status === "failure")).toBe(false);
-          expect(health.some((event) => ["failure", "recovered"].includes(event.status))).toBe(
-            false,
-          );
-        } else {
-          expect(
-            events.filter((event) => event.status === "failure" && event.reason === "emit_failed"),
-          ).toHaveLength(1);
-          expect(
-            health.filter(
-              (event) => event.status === "failure" && event.reason === "export_failed",
-            ),
-          ).toHaveLength(1);
-        }
-      },
+    const { receiver, events, service, ctx } = await startExporterHealth((count) =>
+      retry ? (count === 1 ? 503 : 200) : 400,
     );
+    emitExporterHealthSpan(mode);
+    await waitForDiagnosticEventsDrained();
+    const stopped = Promise.resolve(service.stop?.(ctx));
+    await (retry ? stopped : stopped.catch(() => {}));
+    await waitForDiagnosticEventsDrained();
+    expect(receiver.requests).toHaveLength(retry ? 2 : 1);
+    const health = getReportedExporterHealth(ctx);
+    expect(
+      events.filter((event) => event.status === "failure").map((event) => event.reason),
+    ).toEqual(retry ? [] : ["emit_failed"]);
+    expect(
+      health
+        .filter((event) => ["failure", "recovered"].includes(event.status))
+        .map((event) => [event.status, event.reason]),
+    ).toEqual(retry ? [] : [["failure", "export_failed"]]);
   },
   15_000,
 );
 
 test("records recovery after a later real OTLP export succeeds", async () => {
   let failExports = true;
-  await withExporterHealth(
-    () => (failExports ? 503 : 200),
-    async ({ events, ctx }) => {
-      const health = getReportedExporterHealth(ctx);
-      emitExporterHealthSpan("failure-before-recovery");
-      await waitForDiagnosticEventsDrained();
-      await waitForExporterStatus(health, "failure");
-      failExports = false;
-      emitExporterHealthSpan("successful-recovery");
-      await waitForDiagnosticEventsDrained();
-      await waitForExporterStatus(health, "recovered");
-      expect(
-        health.filter((event) => event.reason === "export_failed").map((event) => event.status),
-      ).toEqual(["failure", "recovered"]);
-      expect(events.map((event) => event.status)).not.toContain("recovered");
-    },
-    1000,
-  );
+  const { events, ctx } = await startExporterHealth(() => (failExports ? 503 : 200), 1000);
+  const health = getReportedExporterHealth(ctx);
+  emitExporterHealthSpan("failure-before-recovery");
+  await waitForDiagnosticEventsDrained();
+  await waitForExporterStatus(health, "failure");
+  failExports = false;
+  emitExporterHealthSpan("successful-recovery");
+  await waitForDiagnosticEventsDrained();
+  await waitForExporterStatus(health, "recovered");
+  expect(
+    health.filter((event) => event.reason === "export_failed").map((event) => event.status),
+  ).toEqual(["failure", "recovered"]);
+  expect(events.map((event) => event.status)).not.toContain("recovered");
 }, 15_000);
