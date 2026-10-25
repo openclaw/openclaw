@@ -322,6 +322,7 @@ export async function writeRootBoundJsonFile(params: {
           env: params.env,
           configPath: params.configPath,
           expectedPending: params.deferredPluginMigrations,
+          phase: "config include publication",
         },
         publish,
       );

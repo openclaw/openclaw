@@ -13,7 +13,7 @@ import {
 import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  DeferredPluginMigrationConflictError,
+  DeferredPluginMigrationConflictError as ConflictError,
   readDeferredPluginMigrations,
   withDeferredPluginMigrationsCurrent,
   type DeferredPluginMigration,
@@ -388,7 +388,7 @@ export async function runDoctorSessionSqlite(
           }
         }
         retainDeferredSources();
-        throw new DeferredPluginMigrationConflictError(conflict);
+        throw ConflictError.withContext(conflict, pendingPlugins, "session archive publication");
       }
     };
     retainDeferredSources();
@@ -521,7 +521,7 @@ export async function settleRetainedDoctorSessionSources(
       },
     );
     if (conflict) {
-      throw new DeferredPluginMigrationConflictError(conflict);
+      throw ConflictError.withContext(conflict, expectedPending, "session source retirement");
     }
   };
   const verifyImports = () => {
@@ -1350,7 +1350,7 @@ async function archiveLegacyArtifacts(
         ).push(move.archivePath);
       }
     } catch (error) {
-      if (error instanceof DeferredPluginMigrationConflictError && error.pending.length > 0) {
+      if (error instanceof ConflictError && error.pending.length > 0) {
         break;
       }
       for (const owner of referencingOwners.keys()) {
