@@ -248,8 +248,6 @@ const repositoryScriptEntries = [
   "scripts/perf/session-polling-fixture.ts!",
   "scripts/perf/sqlite-reply-census-preload.mjs!",
   "scripts/perf/worker-retained-heap-preload.ts!",
-  "src/infra/database-engine/state-read-admission-publication.worker.test-support.ts!",
-  "test/scripts/state-read-worker-stream.test-support.ts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
@@ -1452,9 +1450,6 @@ const config = {
         "openai-provider.ts!",
         "prompt-overlay.ts!",
         "realtime-provider-shared.ts!",
-        // Realtime codec tests spawn these fixtures by basename.
-        "test-support/realtime-dtls-codecs.mjs!",
-        "test-support/realtime-numeric-codecs.mjs!",
         "tts.ts!",
         "usage.ts!",
       ]),
@@ -1507,10 +1502,6 @@ const config = {
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tavily`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/tencent`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/team-reports`]: bundledPluginWorkspace([
-      // Collection tests load this transport fixture through a module specifier.
-      "src/run-worker.collection-fixtures.test-support.ts!",
-    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/vllm`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/vault`]: bundledPluginWorkspace([
       // Shipped resolver child process declared as a static plugin artifact.
