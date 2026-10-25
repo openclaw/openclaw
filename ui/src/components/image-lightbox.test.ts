@@ -24,6 +24,7 @@ vi.mock("@panzoom/panzoom", () => ({
 
 import "../lib/toast-host.tsx";
 import "./image-lightbox.tsx";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 
 type Lightbox = HTMLElementTagNameMap["openclaw-image-lightbox"];
 const button = (modal: Lightbox, selector: string) =>
@@ -66,6 +67,7 @@ function attachLightbox(props: Partial<Lightbox>) {
   return modal;
 }
 
+const animateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
 let createObjectUrl: ReturnType<typeof vi.fn<(object: Blob | MediaSource) => string>>;
@@ -88,6 +90,10 @@ async function renderLightbox(props: Partial<ImageLightboxProps> = {}, target = 
 
 beforeEach(() => {
   restoreDialogPolyfill = installDialogPolyfill();
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ finished: Promise.resolve(), cancel: vi.fn() }),
+  });
   createObjectUrl = vi.fn(() => "blob:lightbox-original");
   revokeObjectUrl = vi.fn();
   fetchImage = vi.fn(async () => ({
@@ -115,6 +121,7 @@ afterEach(async () => {
     vi.useRealTimers();
   }
   restoreDialogPolyfill();
+  restorePropertyDescriptor(Element.prototype, "animate", animateDescriptor);
   vi.unstubAllGlobals();
 });
 
@@ -160,6 +167,8 @@ it.each([false, true])(
     if (gallery) {
       expect(pendingLink?.getAttribute("aria-disabled")).toBe("true");
       expect(pendingLink?.hasAttribute("href")).toBe(false);
+      expect(pendingLink?.tabIndex).toBe(-1);
+      expectFocusCycle(button(modal, ".close"), button(modal, ".next"), { composed: true });
     } else {
       expect(pendingLink).toBeNull();
     }
@@ -177,6 +186,7 @@ it.each([false, true])(
       const link = modal.querySelector<HTMLAnchorElement>(".open-original");
       expect(link?.getAttribute("href")).toBe("blob:lightbox-original");
       expect(link?.getAttribute("aria-disabled")).toBe("false");
+      expectFocusCycle(button(modal, ".close"), link!, { composed: true });
     });
     modal.remove();
     await Promise.resolve();
@@ -646,11 +656,7 @@ it.each(["document", "shadow"] as const)(
     const image = modal.querySelector<HTMLImageElement>(".image");
     const elementFromPoint = Object.getOwnPropertyDescriptor(hitTestRoot, "elementFromPoint");
     onTestFinished(() => {
-      if (elementFromPoint) {
-        Object.defineProperty(hitTestRoot, "elementFromPoint", elementFromPoint);
-      } else {
-        Reflect.deleteProperty(hitTestRoot, "elementFromPoint");
-      }
+      restorePropertyDescriptor(hitTestRoot, "elementFromPoint", elementFromPoint);
     });
     Object.defineProperty(hitTestRoot, "elementFromPoint", {
       configurable: true,

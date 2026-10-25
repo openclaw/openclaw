@@ -152,7 +152,11 @@ function scheduleNativeTextareaOverflow(el: HTMLTextAreaElement) {
   }
   state.overflowFrame = requestAnimationFrame(() => {
     state.overflowFrame = null;
-    if (el.isConnected && composerTextareaResizeObservers.get(el) === state) {
+    if (
+      el.isConnected &&
+      !el.closest("[inert], [hidden]") &&
+      composerTextareaResizeObservers.get(el) === state
+    ) {
       updateTextareaOverflow(el, false);
     }
   });
@@ -386,7 +390,13 @@ export function handleTextareaOverflowInteraction(event: TextareaEvent) {
     // scrolling can move an ancestor. This signal performs no layout reads.
     invalidateNativeTextareaLayout(el, state);
   }
-  updateTextareaOverflow(el);
+  // Navigation can blur the field while hiding its retained route. Its fades
+  // need no synchronous layout; a reveal's resize observation restores them.
+  if (event.type === "blur") {
+    scheduleNativeTextareaOverflow(el);
+  } else {
+    updateTextareaOverflow(el);
+  }
 }
 
 export function handleTextareaOverflowScroll(event: TextareaEvent) {

@@ -100,10 +100,6 @@ export type RuntimeConfigExternalMutationOptions<T = unknown> = {
   configWriteAck?: (value: T) => ConfigPatchAck;
 };
 
-type RuntimeConfigDispatchOptions = {
-  canDispatch?: () => boolean;
-};
-
 export type ConfigMethod =
   | "config.set"
   | "config.apply"
@@ -122,7 +118,7 @@ export type ConfigWriteCoordinator = {
   setWritesSuspended: (suspended: boolean, refreshAdmission?: () => Promise<void>) => void;
   waitForPendingWrites: () => Promise<void>;
   flushFormChanges: () => Promise<boolean>;
-  save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
+  save: (options?: { canDispatch?: () => boolean }) => Promise<boolean>;
   retry: () => Promise<boolean>;
   apply: () => Promise<boolean>;
   stageDefaultAgent: (agentId: string) => boolean;

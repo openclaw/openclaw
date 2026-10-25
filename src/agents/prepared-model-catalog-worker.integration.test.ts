@@ -23,6 +23,7 @@ import { isPendingOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { createPreparedModelCatalogWorker } from "./prepared-model-catalog-worker.js";
+import { stubCatalogEnv } from "./prepared-model-catalog-worker.shared.test-support.js";
 import {
   DISCOVERED_HARNESS_ID,
   PROVIDER_ID,
@@ -38,7 +39,6 @@ import {
   DURABLE_AUTH_PROVIDER_ID,
   DURABLE_AUTH_KEY,
   EXTERNAL_AUTH_PROFILE_ID,
-  EXTERNAL_AUTH_PATH_ENV,
   createCatalogFixture,
   catalogEntry,
   makeCatalogAgentFacts,
@@ -205,16 +205,7 @@ describe("prepared model catalog worker boundary", () => {
       { receiptBroadcastName: receipts.broadcastName },
     );
     // Configured publication reads the parent environment, unlike explicit fixture builds.
-    for (const name of [
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_WORKER_CATALOG_MARKER",
-      EXTERNAL_AUTH_PATH_ENV,
-      REF_ONLY_API_ENV,
-      REF_ONLY_TOKEN_ENV,
-    ] as const) {
-      vi.stubEnv(name, fixture.env[name]);
-    }
+    stubCatalogEnv(fixture.env);
     const siblingDir = path.join(fixture.root, "sibling-agent");
     const configWithSiblingPolicy = (ask: "off" | "always") =>
       ({

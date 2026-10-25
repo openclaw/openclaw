@@ -19,7 +19,6 @@ import {
   verifyOneWayDrainRecovery,
   verifyReversibleFenceRecovery,
 } from "./server-plugin-reload.suspension.test-support.js";
-import { startGatewayPluginServices } from "./server-startup-plugin-services.js";
 
 export function registerPluginServiceRecoveryTests(createRecoveryFixture: RecoveryFixtureFactory) {
   describe("Gateway plugin service recovery ownership", () => {
@@ -36,17 +35,13 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
             return;
           }
           startupPending = false;
-          await startGatewayPluginServices({
+          const { startPluginServices } = await import("../plugins/services.js");
+          await startPluginServices({
             scheduler: fixture.runtime.scheduler,
-            cfg: fixture.getConfig(),
-            pluginRegistry: fixture.previousRegistry,
-            defaultWorkspaceDir: "",
-            onPluginServices: fixture.owner.setServices,
-            log: {
-              warn: (message) => {
-                throw new Error(message);
-              },
-            },
+            config: fixture.getConfig(),
+            registry: fixture.previousRegistry,
+            workspaceDir: "",
+            onHandle: fixture.owner.setServices,
           });
           expect(fixture.firstStart).toHaveBeenCalledTimes(2);
           expect(fixture.siblingStart).toHaveBeenCalledTimes(2);

@@ -97,8 +97,9 @@ function buildWorkspaceSkillCommandSpecs(
   });
 }
 
+// mock-isolation: Skill discovery uses an empty built-in registry to isolate skill filtering and naming.
 vi.mock("../../auto-reply/commands-registry.data.js", () => ({
-  getChatCommands: () => [],
+  listReservedChatSlashCommandNames: () => new Set<string>(),
 }));
 
 vi.mock("./command-specs.js", () => ({

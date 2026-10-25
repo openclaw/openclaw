@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import { runtimeProcessDeployEntryFileName } from "../infra/runtime-process-manifest.ts";
 
 export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
 export const WORKER_BUNDLE_ARTIFACT_MODE = 0o700;
-export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";
+export const WORKER_BUNDLE_ENTRY_PATH = runtimeProcessDeployEntryFileName("worker");
 export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";
 export const WORKER_BUNDLE_IMAGE_PROCESSOR_PATH = "image-processor.worker.mjs";
 export const WORKER_BUNDLE_FILE_TOOL_PLANNING_PATH = "file-tool-planning.worker.mjs";

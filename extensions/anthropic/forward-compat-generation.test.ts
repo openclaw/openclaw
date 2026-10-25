@@ -59,6 +59,8 @@ it("clones released snapshot ids from their dateless manifest template", () => {
     makeModel("claude-haiku-4-5-20251001", {
       mediaInput: { image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" } },
       compat: { codeMode: "capable" },
+      // The Anthropic catalog declares one developer for every model it serves.
+      family: "anthropic",
     }),
   );
   expect(resolveModel("claude-haiku-4-9-20251001")).toBeUndefined();

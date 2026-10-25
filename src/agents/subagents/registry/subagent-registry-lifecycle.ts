@@ -383,13 +383,13 @@ export class SubagentLifecycleController {
   };
   runRequesterSettleWake = (
     entry: SubagentRunRecord,
-    run: () => Promise<unknown>,
+    run: (releasePreparation: () => void) => Promise<unknown>,
     isCurrent: () => boolean,
   ): Promise<unknown> => {
     this.trackRun(entry);
-    const runCurrent = async () => {
+    const runCurrent = async (releasePreparation: () => void) => {
       try {
-        return isCurrent() ? await run() : undefined;
+        return isCurrent() ? await run(releasePreparation) : undefined;
       } finally {
         this.pruneRetiredRuns([entry.runId]);
       }
@@ -399,15 +399,18 @@ export class SubagentLifecycleController {
     return withoutGatewayToolCallerIdentity(() =>
       runWithGatewayDetachedWorkContinuation(() => {
         if (!this.restoredRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
-          return runCurrent();
+          return runCurrent(() => {});
         }
         return this.runBackgroundWork(entry, runCurrent);
       }, "subagents:lifecycle-wake"),
     );
   };
 
-  /** Detached callers retain their Gateway root before queueing and check authority on dispatch. */
-  runBackgroundWork = <T>(entry: SubagentRunRecord, run: () => Promise<T>): Promise<T> => {
+  /** Delivery releases preparation capacity on admission; its lifecycle still owns settlement. */
+  runBackgroundWork = <T>(
+    entry: SubagentRunRecord,
+    run: (releasePreparation: () => void) => Promise<T>,
+  ): Promise<T> => {
     const resolve = getGatewayContextResolver(entry);
     // Native caller wrappers share a Gateway budget; retired owners cannot consume its replacement's.
     const owner = (resolve && getCanonicalGatewayContextResolver(resolve)) ?? resolve ?? this;
@@ -416,7 +419,14 @@ export class SubagentLifecycleController {
       limit = pLimit(BACKGROUND_LIFECYCLE_CONCURRENCY);
       this.backgroundWorkLimits.set(owner, limit);
     }
-    return limit(run);
+    const result = createDeferredCore<T>();
+    const released = createDeferredCore();
+    void limit(async () => {
+      const work = run(() => released.resolve());
+      void work.then(result.resolve, result.reject);
+      await Promise.race([work.catch(() => {}), released.promise]);
+    }).catch(result.reject);
+    return result.promise;
   };
 
   completeSubagentRun = async (completeParams: SubagentCompletionRequest) => {

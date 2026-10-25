@@ -409,7 +409,13 @@
 
 /* Menu-item check only. The branches trigger is a .chat-icon-btn in the header
    row, so it keeps the shared 18px action glyph from .btn--icon svg. */
-.chat-pane__branch-active svg {
+.chat-pane__branch-active svg,
+.chat-pane__versions-info svg,
+.chat-pane__branch-more svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-trigger svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-option svg,
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-back svg {
   width: 16px;
   height: 16px;
 }
@@ -434,11 +440,6 @@
   min-width: var(--versions-icon-column);
   height: 28px;
   padding: 6px;
-}
-
-.chat-pane__versions-info svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-pane__versions-help {
@@ -511,11 +512,6 @@
 /* Management remains deferred; this glyph does not introduce another action. */
 .chat-pane__branch-more {
   color: var(--muted);
-}
-
-.chat-pane__branch-more svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-pane__workspace-chip:hover,
@@ -677,11 +673,6 @@
   font-size: 12px;
 }
 
-.chat-pane__sharing-member > .oc-menu-item__icon {
-  display: flex;
-  align-items: center;
-}
-
 .chat-pane__sharing-member-icon {
   display: inline-flex;
   width: 20px;
@@ -801,11 +792,6 @@
   gap: 6px;
 }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger svg {
-  width: 16px;
-  height: 16px;
-}
-
 /* Preserve the button geometry while keeping the disclosure glyph secondary. */
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-trigger .chat-pane__sharing-chevron {
   opacity: 0.8;
@@ -909,13 +895,6 @@
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-access-option[aria-checked="true"] {
   background: var(--menu-selected);
-}
-
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-trigger svg,
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-access-option svg,
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-back svg {
-  width: 16px;
-  height: 16px;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-back {
@@ -1129,13 +1108,8 @@
   cursor: default;
 }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-person:hover:not(:disabled) {
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-person:hover {
   background: var(--bg-hover);
-}
-
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-person--creator:disabled {
-  opacity: 1;
-  cursor: default;
 }
 
 .chat-pane__sharing-menu--desktop
@@ -1144,26 +1118,28 @@
   filter: saturate(0.65);
 }
 
+.chat-pane__sharing-permission .oc-menu-item__submenu-icon {
+  color: var(--muted);
+  transform: rotate(90deg);
+}
+
+.chat-pane__sharing-permission[aria-expanded="true"] .oc-menu-item__submenu-icon {
+  transform: rotate(-90deg);
+}
+
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-permission {
   color: var(--muted);
   font-size: 11px;
 }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-member-check {
-  display: grid;
-  place-items: center;
-  color: var(--accent);
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-permission-control {
+  grid-column: 3 / 5;
 }
 
-.chat-pane__sharing-menu--desktop .chat-pane__sharing-member-check svg {
-  width: 14px;
-  height: 14px;
-}
-
-.chat-pane__sharing-menu--desktop
-  .chat-pane__sharing-person--creator
-  .chat-pane__sharing-member-check {
-  color: var(--muted);
+.chat-pane__sharing-menu--desktop .chat-pane__sharing-permission-control .oc-menu-item--submenu {
+  min-height: 24px;
+  padding: 0;
+  gap: 8px;
 }
 
 .chat-pane__sharing-menu--desktop .chat-pane__sharing-empty {

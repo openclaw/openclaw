@@ -3,6 +3,7 @@ import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-erro
 import { diagnosticErrorFailureKind } from "../infra/diagnostic-error-metadata.js";
 import { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { decodePostgresError } from "../infra/postgres-sync/protocol.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import {
@@ -617,6 +618,25 @@ describe("buildFailoverRemediationHint", () => {
 });
 
 describe("isNonProviderRuntimeCoordinationError", () => {
+  it("keeps native PostgreSQL cancellation out of provider fallback after actor projection", () => {
+    const native = decodePostgresError({
+      name: "error",
+      code: "57014",
+      message: "Synthetic statement timeout",
+    });
+    const projected = Object.assign(new Error(native.message), { name: native.name });
+    for (const error of [native, projected, new Error("Synthetic wrapper", { cause: projected })]) {
+      expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+      expect(coerceToFailoverError(error)).toBeNull();
+    }
+    const provider = new FailoverError("Synthetic rate limit", {
+      reason: "rate_limit",
+      code: "57014",
+    });
+    expect(isNonProviderRuntimeCoordinationError(provider)).toBe(false);
+    expect(coerceToFailoverError(provider)).toBe(provider);
+  });
+
   it("returns true for stale gateway lifecycle ownership loss", () => {
     const staleLifecycle = createAgentRunStaleLifecycleError();
     expect(isNonProviderRuntimeCoordinationError(staleLifecycle)).toBe(true);

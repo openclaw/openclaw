@@ -2,6 +2,7 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resetContextWindowCacheForTest } from "../agents/context.test-support.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { createModelProviderRouteOverrideResolver } from "../config/model-provider-config.js";
 import {
@@ -61,15 +62,12 @@ function configPair(
   name = "Luna",
   extraModel?: { id: string; contextWindow: number },
 ) {
-  const model: ModelDefinitionConfig = {
-    id: "gpt-5.6-luna",
+  const model: ModelDefinitionConfig = modelDefinition("gpt-5.6-luna", {
     name,
-    reasoning: true,
     input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     maxTokens: 4096,
     ...(contextWindow === undefined ? {} : { contextWindow }),
-  };
+  });
   const source = {
     agents: { defaults: { models: { "openai/gpt-5.6-luna": { agentRuntime: { id: runtime } } } } },
     models: {

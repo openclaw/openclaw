@@ -190,7 +190,7 @@ const WINDOWS_USAGE_TEMPLATE_SCOPE_RE =
 const WINDOWS_MEDIA_UNDERSTANDING_FILE_URL_SCOPE_RE =
   /^src\/media-understanding\/attachments\.(?:cache(?:\.test)?|file-url\.windows\.test|normalize(?:\.test)?)\.ts$/;
 const WINDOWS_HOME_DISPLAY_SCOPE_RE =
-  /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths|sessions\/tools\/render-utils)(?:\.test)?)|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
+  /^(?:src\/(?:utils(?:\.test)?|infra\/(?:home-display|path-guards)|commands\/agents\.commands\.list(?:\.test)?|cli\/daemon-cli\/status\.print(?:\.test)?|agents\/(?:sandbox\/fs-paths(?:\.test)?|sessions\/tools\/(?:read|render-utils\.test)))|packages\/terminal-core\/src\/display-string(?:\.test)?)\.ts$/;
 const WINDOWS_CHILD_ENV_SCOPE_RE =
   /^src\/(?:agents\/provider-local-service(?:-process|\.(?:env-case|shutdown|settlement)\.test)?|cli\/mcp-cli(?:\.path-case\.windows)?\.test|cli\/mcp-cli|infra\/process-env(?:\.test)?)\.ts$/;
 const WINDOWS_SOURCE_CLI_SCOPE_RE =

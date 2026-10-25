@@ -38,6 +38,38 @@ it.each([
     url: "/chat",
     expected: "agent:other:conversation",
   },
+  { key: "agent:other:conversation", url: "/settings", expected: null },
+  {
+    key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/dashboard/main/mission-control",
+    expected: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+  },
+  {
+    key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/dashboard/main/~key/mission-control",
+    expected: "agent:main:mission-control",
+  },
+  {
+    key: "agent:other:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/dashboard/main/mission-control",
+    expected: "agent:main:mission-control",
+  },
+  {
+    key: "agent:main:dashboard:12345678-90ab-4def-8234-567890abcdef",
+    url: "/chat/main/new-topic",
+    expected: "agent:main:new-topic",
+  },
+  { key: "agent:other:conversation", url: "/chat/main", expected: "agent:main:main" },
+  {
+    key: "agent:other:conversation",
+    url: "/chat/main/new-topic",
+    expected: "agent:main:new-topic",
+  },
+  {
+    key: "agent:other:conversation",
+    url: "/chat/main/1234567890abcdef1234567890abcdef",
+    expected: null,
+  },
   {
     key: "agent:main:main",
     url: "/chat?gatewayUrl=ws%3A%2F%2Fanother.example",

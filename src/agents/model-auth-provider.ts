@@ -87,16 +87,12 @@ function shouldDeferSyntheticProfileAuth(params: {
 
 /** @deprecated Use resolveScopedAuthProfileStoreAsync to read through the auth owner worker. */
 export function resolveScopedAuthProfileStore(params: {
-  agentDir?: string;
   cfg?: OpenClawConfig;
   provider: string;
-  profileId?: string;
-  preferredProfile?: string;
 }): AuthProfileStore {
-  return ensureAuthProfileStore(params.agentDir, {
+  return ensureAuthProfileStore(undefined, {
     migrationProvider: params.provider,
     config: params.cfg,
-    profileId: params.profileId,
     externalCli: externalCliDiscoveryForProviderAuth(params),
   });
 }

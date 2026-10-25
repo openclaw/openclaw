@@ -8,6 +8,8 @@ export function resolveRuntimeWorkerUrl(params: {
   currentModuleUrl: string;
   sourceWorkerName: string;
   distWorkerPath: string;
+  /** Explicit source language for generated entries whose owner has a different extension. */
+  sourceExtension?: ".ts" | ".mts" | ".mjs";
   root?: string;
   /** Package-local output when the nearest dist belongs to this package. */
   package?: { name: string; distWorkerPath: string };
@@ -40,7 +42,7 @@ export function resolveRuntimeWorkerUrl(params: {
     }
     return pathToFileURL(path.join(distRoot, workerPath));
   }
-  const extension = path.extname(currentPath) || ".js";
+  const extension = params.sourceExtension ?? (path.extname(currentPath) || ".js");
   return new URL(`./${params.sourceWorkerName}${extension}`, params.currentModuleUrl);
 }
 

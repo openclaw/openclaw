@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, it, vi, type TestContext } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
+import {
+  configureEventState,
+  runEventFixture,
+  startEmbeddedTurn,
+} from "../../auto-reply/reply/session-event.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -12,7 +17,6 @@ import {
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
@@ -30,12 +34,8 @@ import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   prepareSystemAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
@@ -44,7 +44,6 @@ import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "../embedded-agent-runner/run/attempt-sessions-yield.js";
 import { buildEmbeddedAttemptToolRunContext } from "../embedded-agent-runner/run/attempt-tool-run-context.js";
 import { hasYieldContinuationEvidence } from "../embedded-agent-runner/run/incomplete-turn-resolution.js";
-import type { RunEmbeddedAgentParams } from "../embedded-agent-runner/run/params.js";
 import { isAsyncStartedToolResult } from "../embedded-agent-tool-results.js";
 import { runEmbeddedAgent } from "../embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
@@ -297,53 +296,7 @@ it("refuses an unsupported caller without pretending to schedule a reload", asyn
   await expect(createPluginsTool().execute("unsupported", request)).rejects.toThrow(callerRequired);
 });
 
-async function configureEventState(
-  state: OpenClawTestState,
-  overrides: Partial<OpenClawConfig> = {},
-) {
-  const config: OpenClawConfig = {
-    agents: {
-      entries: { main: { workspace: state.workspaceDir } },
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
-    },
-    plugins: { enabled: false },
-    skills: { load: { watch: false } },
-    ...overrides,
-  };
-  setRuntimeConfigSnapshot(config);
-  await state.writeConfig(config);
-  openOpenClawStateDatabase();
-  return config;
-}
-
-async function startEmbeddedTurn(params: RunEmbeddedAgentParams, label: string) {
-  const admission = expectDefined(params.preparedRunAdmission, label);
-  const context = await admission.admit("gateway", params.runId);
-  params.onExecutionPhase?.({ phase: "model_call_started" });
-  await params.onExecutionStarted?.();
-  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-  return context;
-}
-
 type EventReceipt = ReturnType<typeof events.enqueueSessionEventForHost>;
-
-function runEventFixture(
-  label: string,
-  onTestFinished: TestContext["onTestFinished"],
-  run: (state: OpenClawTestState) => Promise<void>,
-) {
-  const work = withOpenClawTestState({ label, env: { OPENCLAW_TEST_FAST: "0" } }, run);
-  // Cancellation must settle the state owner even when the test body times out.
-  onTestFinished(async () => {
-    await Promise.allSettled([work]);
-  });
-  return work;
-}
 
 it.for([
   "success",

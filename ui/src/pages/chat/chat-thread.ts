@@ -125,6 +125,7 @@ const CHAT_ITEM_FIELDS = {
     "boundaryId",
     "timestamp",
     "systemEvent",
+    "repeatCount",
   ],
   divider: [
     "compaction",

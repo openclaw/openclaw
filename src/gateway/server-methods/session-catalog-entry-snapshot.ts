@@ -16,9 +16,14 @@ import type {
   SessionCatalogEntrySnapshot,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { projectSessionActor } from "../session-identity-projection.js";
+import type { SessionEntryPair } from "../session-list-order.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
@@ -42,9 +47,14 @@ type SessionCatalogRequestEntrySnapshot = {
   ) => SessionCatalogHost;
 };
 
+type CapturedAgentEntries = {
+  pairs: readonly SessionEntryPair[];
+  summaries?: readonly SessionEntrySummary[];
+};
+
 type PlanningEntries = {
   revision: object;
-  entriesByAgentId: Map<string, readonly SessionEntrySummary[]>;
+  entriesByAgentId: Map<string, CapturedAgentEntries>;
   entryIndexByAgentId: Map<string, ReadonlyMap<string, SessionEntry>>;
   catalogEntries: ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>;
 };
@@ -94,7 +104,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
           ?.get(params.fallbackAgentId)
       : undefined;
   const entriesByAgentId =
-    cachedPlanning?.entriesByAgentId ?? new Map<string, readonly SessionEntrySummary[]>();
+    cachedPlanning?.entriesByAgentId ?? new Map<string, CapturedAgentEntries>();
   const entryIndexByAgentId =
     cachedPlanning?.entryIndexByAgentId ?? new Map<string, ReadonlyMap<string, SessionEntry>>();
   const actorBySessionKey = new Map<string, SessionCatalogSession["createdActor"]>();
@@ -104,18 +114,23 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   let catalogEntries:
     | ReturnType<NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]>>
     | undefined = cachedPlanning?.catalogEntries;
-  const entryAgentId = (sessionKey: string) =>
-    resolveAgentIdFromSessionKey(
+  const entryAgentId = (sessionKey: string) => {
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (parsed?.agentId) {
+      return normalizeAgentId(parsed.agentId);
+    }
+    return resolveAgentIdFromSessionKey(
       sessionKey,
       tryResolveSessionCompatibilityOwnerAgentId(params.cfg, sessionKey) ?? params.fallbackAgentId,
     );
+  };
   let selectedKeysByAgentId: Map<string, Set<string>> | undefined;
 
-  const entriesForAgent = (rawAgentId: string): readonly SessionEntrySummary[] => {
+  const captureAgentEntries = (rawAgentId: string): CapturedAgentEntries | undefined => {
     const agentId = normalizeAgentId(rawAgentId);
     if (!entriesByAgentId.has(agentId)) {
       if (frozen) {
-        return [];
+        return undefined;
       }
       if (params.sessionKeys && !selectedKeysByAgentId) {
         selectedKeysByAgentId = new Map();
@@ -143,12 +158,19 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
             : undefined,
         },
       ).entries("all");
-      entriesByAgentId.set(
-        agentId,
-        Object.freeze(entries.map(([sessionKey, entry]) => Object.freeze({ sessionKey, entry }))),
-      );
+      entriesByAgentId.set(agentId, { pairs: entries });
     }
-    return entriesByAgentId.get(agentId) ?? [];
+    return entriesByAgentId.get(agentId);
+  };
+
+  const entriesForAgent = (agentId: string): readonly SessionEntrySummary[] => {
+    const captured = captureAgentEntries(agentId);
+    if (!captured) {
+      return [];
+    }
+    return (captured.summaries ??= Object.freeze(
+      captured.pairs.map(([sessionKey, entry]) => Object.freeze({ sessionKey, entry })),
+    ));
   };
 
   const entriesForCatalog: NonNullable<SessionCatalogEntrySnapshot["entriesForCatalog"]> = () => {
@@ -160,7 +182,9 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       ...listAgentIds(params.cfg).filter((agentId) => agentId !== params.fallbackAgentId),
     ];
     catalogEntries = agentIds.flatMap((agentId) =>
-      entriesForAgent(agentId).map((entry) => Object.freeze({ ...entry, agentId })),
+      (captureAgentEntries(agentId)?.pairs ?? []).map(([sessionKey, entry]) =>
+        Object.freeze({ sessionKey, entry, agentId }),
+      ),
     );
     Object.freeze(catalogEntries);
     return catalogEntries;
@@ -172,9 +196,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
     if (cached) {
       return cached;
     }
-    const index = new Map(
-      entriesForAgent(normalizedAgentId).map(({ sessionKey, entry }) => [sessionKey, entry]),
-    );
+    const index = new Map(captureAgentEntries(normalizedAgentId)?.pairs);
     entryIndexByAgentId.set(normalizedAgentId, index);
     return index;
   };

@@ -15,6 +15,7 @@ import {
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
@@ -152,6 +153,8 @@ function ActivityGroupBody(props: {
   const overrides = () => props.state.toolCardOverrides;
   const soleStep = () => state().soleStep && !props.options.bubbleMode;
   const compact = () => Boolean(props.options.bubbleMode);
+  const liveBubble = () =>
+    compact() && props.groups.some((group) => group.key === props.options.bubbleActivityGroupKey);
   return (
     <div
       class={[
@@ -159,6 +162,7 @@ function ActivityGroupBody(props: {
         {
           "chat-activity-group--step": soleStep(),
           "chat-activity-group--bubble": compact(),
+          "chat-activity-group--working": liveBubble(),
           "is-open": !soleStep() && state().activityExpanded,
         },
       ]}
@@ -170,6 +174,9 @@ function ActivityGroupBody(props: {
           type="button"
           aria-expanded={state().activityExpanded ? "true" : "false"}
           aria-controls={state().activityBodyId}
+          aria-label={
+            liveBubble() && !state().headline?.title ? t("chat.view.workingDetails") : undefined
+          }
           onPointerEnter={syncOverflow}
           onFocus={syncOverflow}
           onClick={() =>
@@ -180,6 +187,7 @@ function ActivityGroupBody(props: {
           }
         >
           <ChatActivityHeadline
+            bubbleMode={liveBubble()}
             contentRef={(element) => (disclosureContent = element)}
             scope={JSON.stringify([
               props.options.sessionKey,

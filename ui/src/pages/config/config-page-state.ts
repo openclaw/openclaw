@@ -23,6 +23,7 @@ import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
+import { configRawForDisplay } from "../../lib/config/config-draft-model.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -312,15 +313,9 @@ export function createConfigPage(
     }
     const config = runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading && !currentConfigRead(config)) {
-      void runtimeConfig
-        .ensureLoaded()
-        .then(() =>
-          runtimeConfigSource === runtimeConfig && pageId !== "updates" && !runtimeConfig.schemaRead
-            ? runtimeConfig.ensureSchemaLoaded()
-            : undefined,
-        )
-        .catch(() => undefined);
-    } else if (pageId !== "updates" && !config.configSchema && !runtimeConfig.schemaRead) {
+      void runtimeConfig.ensureLoaded().catch(() => undefined);
+    }
+    if (pageId !== "updates" && !config.configSchema && !runtimeConfig.schemaRead) {
       void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
     }
   }
@@ -364,7 +359,10 @@ export function createConfigPage(
       };
     return {
       ...preferences.read(),
-      raw: configState.configRaw,
+      raw:
+        presentation.formModes[pageId] === "raw"
+          ? configRawForDisplay(configState)
+          : configState.configRaw,
       originalRaw: configState.configRawOriginal,
       valid: configState.configValid,
       issues: configState.configIssues,

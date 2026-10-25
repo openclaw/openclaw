@@ -4,32 +4,21 @@ import { recoverAfterTransportDrop } from "../../../../src/agents/embedded-agent
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
-
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sseState = vi.hoisted(() => ({
   outcomes: [] as SdkResponse[],
   signal: undefined as AbortSignal | undefined,
 }));
 
-vi.mock("openai", () => {
-  class MockOpenAI {
-    responses = {
-      create: (_params: unknown, options?: { signal?: AbortSignal }) => {
-        sseState.signal = options?.signal;
-        return {
-          withResponse: async () => {
-            const outcome = sseState.outcomes.shift();
-            if (!outcome) {
-              throw new Error("Unexpected SSE request");
-            }
-            return outcome;
-          },
-        };
-      },
-    };
-  }
-  return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock(sseState, {
+    dequeueOnResponse: true,
+    onCreate: (_provider, signal) => {
+      sseState.signal = signal;
+    },
+  });
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({

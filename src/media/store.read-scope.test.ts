@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -129,6 +129,23 @@ describe("read-owned media publication", () => {
     await expect(withRead(() => f.saveSource(source))).rejects.toBe(error);
     expect(await f.entries()).toEqual([]);
     expect(await fs.readFile(source)).toEqual(bytes);
+  });
+
+  it("preserves the existing media when publication collides", async () => {
+    const f = await mediaFixture(state, "inbound", true);
+    const uuid = "00000000-0000-4000-8000-000000000001";
+    const id = `${uuid}.pdf`;
+    const existing = path.join(f.dir, id);
+    await fs.writeFile(existing, "previous attachment");
+
+    await expect(
+      withRead(() => {
+        vi.spyOn(crypto, "randomUUID").mockReturnValueOnce(uuid);
+        return f.buffer();
+      }),
+    ).rejects.toMatchObject({ code: "already-exists" });
+    expect(await fs.readFile(existing, "utf8")).toBe("previous attachment");
+    expect(await f.entries()).toEqual([id]);
   });
 
   it.skipIf(process.platform === "win32").each([

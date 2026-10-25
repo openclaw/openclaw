@@ -111,12 +111,34 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    { state: "failed", actionLabel: "Check failure", retry: true, discard: false },
-    { state: "unconfirmed", actionLabel: undefined, retry: true, discard: true },
-    { state: "waiting-reconnect", actionLabel: undefined, retry: false, discard: true },
+    {
+      state: "failed",
+      label: "Not sent",
+      actionLabel: "Check failure",
+      retry: true,
+      discard: false,
+    },
+    { state: "held", label: "Needs review", actionLabel: undefined, retry: true, discard: true },
+    {
+      state: "waiting-reconnect",
+      label: "Waiting for reconnect",
+      actionLabel: undefined,
+      retry: false,
+      discard: true,
+    },
+    { state: "submitting", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    { state: "sending", label: "Queued", actionLabel: undefined, retry: false, discard: true },
+    {
+      state: "waiting-model",
+      label: "Queued",
+      actionLabel: undefined,
+      retry: false,
+      discard: true,
+    },
+    { state: "waiting-idle", label: "Queued", actionLabel: undefined, retry: false, discard: true },
   ] as const)(
     "shows a $state footer with its diagnostic and recovery actions ($actionLabel)",
-    ({ state, actionLabel, retry: canRetry, discard: canDiscard }) => {
+    ({ state, label, actionLabel, retry: canRetry, discard: canDiscard }) => {
       const onRetryQueuedMessage = vi.fn();
       const onDiscardQueuedMessage = vi.fn();
       renderGroupedMessage(
@@ -141,6 +163,8 @@ describe("grouped chat rendering", () => {
       const status = element(".chat-send-status");
       expect(status).not.toBeNull();
       expect(status?.title).toBe("Delivery diagnostic");
+      expect(status?.textContent).toContain(label);
+      expect(status?.textContent).not.toContain("unconfirmed");
       const retry = status?.querySelector<HTMLButtonElement>(".chat-send-status__retry");
       expect(Boolean(retry)).toBe(canRetry);
       retry?.click();

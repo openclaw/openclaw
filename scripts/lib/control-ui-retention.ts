@@ -136,7 +136,7 @@ export function summarizeRetentionHeap(heap: HeapSnapshot) {
       entry.bytes += bytes;
     }
     const end = edge + heap.nodes[node + edgesAt]! * edgeFields.length;
-    // Solid rc.16's production owner literals share these slots. Count roots,
+    // Solid rc.18's production owner literals share these slots. Count roots,
     // memos and effects; exclude transaction/reveal objects that also have _parent.
     let parent = false;
     let children = false;

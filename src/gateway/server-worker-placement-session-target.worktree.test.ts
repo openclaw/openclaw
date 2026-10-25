@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -71,6 +71,26 @@ function withEmptyTargetState(name: string, run: () => Promise<void>) {
     return run();
   });
 }
+
+test("skips registry reads without a worktree binding and observes a newly attached worktree", () =>
+  withEmptyTargetState("unbound-placement-", async () => {
+    const fixture = targetFixture("agent:main:unbound-placement");
+    await fixture.write({});
+    const findLiveByOwner = vi.fn((...args: Parameters<typeof managedWorktrees.findLiveByOwner>) =>
+      managedWorktrees.findLiveByOwner(...args),
+    );
+    const runtime = sessionRuntime(findLiveByOwner);
+    for (let sweep = 0; sweep < 3; sweep++) {
+      await expect(fixture.select(runtime)).rejects.toThrow("placement source changed");
+    }
+    expect(findLiveByOwner).not.toHaveBeenCalled();
+
+    const worktree = await createWorktree("newly-attached", fixture.identity.sessionKey);
+    await fixture.write({ worktree: worktreeEntry(worktree) });
+    using resolved = await fixture.select(runtime);
+    expect(resolved.workspace).toEqual({ kind: "local", path: worktree.path });
+    expect(() => resolved.assertCurrent()).not.toThrow();
+  }));
 
 test("prepares concurrent empty workspaces while another session registers its checkout", () =>
   withEmptyTargetState("concurrent-empty-placement-", async () => {

@@ -377,7 +377,9 @@ export async function resolveWorkerPlacementSessionTarget(params: {
         : undefined,
     );
     const worktree =
-      initialIdentity.repositoryWorkspaceId || initialIdentity.deviceFolder
+      initialIdentity.repositoryWorkspaceId ||
+      initialIdentity.deviceFolder ||
+      !initialIdentity.worktreeId
         ? undefined
         : await params.sessionRuntime.managedWorktrees.findLiveByOwner(
             "session",

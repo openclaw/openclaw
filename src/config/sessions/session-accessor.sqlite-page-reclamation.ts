@@ -89,6 +89,7 @@ export async function withSqliteSessionPageReclamation<T>(
     databaseOptions: ReclamationDatabaseOptions,
     archives: SessionArchivePruningOperations,
   ) => Promise<T>,
+  assertCallerCurrent?: () => void,
 ): Promise<T> {
   if (
     captureSessionActorStorageOwner(
@@ -105,7 +106,12 @@ export async function withSqliteSessionPageReclamation<T>(
   if (physical && !physical.key.startsWith("file:")) {
     throw new Error("SQLite archive pruning requires its existing database");
   }
-  return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent, signal }) => {
+  return withSqliteMutationWorkerLifetime(options, async (lifetime) => {
+    const { signal } = lifetime;
+    const assertCurrent = () => {
+      lifetime.assertCurrent();
+      assertCallerCurrent?.();
+    };
     const withArchiveWriter = <Value>(
       databaseOptions: ReclamationDatabaseOptions,
       assertWriterCurrent: () => void,
@@ -173,11 +179,11 @@ export async function withSqliteSessionPageReclamation<T>(
               },
               assertNativeCurrent,
             ),
-          readRetentionCandidates: async () =>
+          readRetentionCandidates: async (offset = 0) =>
             withSqliteSessionDatabase(
               databaseOptions,
               (database) =>
-                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE)
+                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE, offset)
                   .archives,
               assertNativeCurrent,
             ),
@@ -312,12 +318,13 @@ export async function withSqliteSessionPageReclamation<T>(
                 assertPruningCurrent();
                 return result.archives[0] ?? null;
               },
-              readRetentionCandidates: async () => {
+              readRetentionCandidates: async (offset = 0) => {
                 assertPruningCurrent();
                 const result = await reader.readArchivePruning({
                   env: databaseOptions.env,
                   expectedIdentity,
                   limit: ARCHIVE_RETENTION_BATCH_SIZE,
+                  offset,
                 });
                 assertPruningCurrent();
                 return result.archives;

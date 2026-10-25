@@ -3,6 +3,7 @@ import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import { i18n, t } from "../../../i18n/index.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSidebarRegionCallbackMocks } from "../../../test-helpers/sidebar-region-callbacks.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat/startup-layout.css";
@@ -221,16 +222,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         <DesktopFrameControls
           layout={openSlot({ columns: [] }, "subagents")}
           panelDefinitions={sidebarPanelDefinitions()}
-          callbacks={{
-            activatePanel: vi.fn(),
-            togglePanelExpanded,
-            setDock,
-            closeSlot: vi.fn(),
-            openSlot: vi.fn(),
-            reorderPanel: vi.fn(),
-            resizePanel: vi.fn(),
-            setOpen: vi.fn(),
-          }}
+          callbacks={createSidebarRegionCallbackMocks({ togglePanelExpanded, setDock })}
           onCloseAll={() => Promise.resolve()}
           closing={false}
           closable={false}
@@ -583,6 +575,7 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           const layout = container.querySelector<HTMLButtonElement>(
             ".chat-header-session-menu__trigger",
           )!;
+          const closePane = container.querySelector<HTMLButtonElement>(".chat-pane__close")!;
           for (const width of [320, 693]) {
             container.style.width = `${width}px`;
             expect(trigger.checkVisibility()).toBe(true);
@@ -594,14 +587,18 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
             expect(branchBounds.right).toBeLessThanOrEqual(bounds.right);
             expect(closeBounds.right).toBeLessThanOrEqual(bounds.right);
             expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
+            const closePaneBounds = closePane.getBoundingClientRect();
+            expect(closePane.checkVisibility()).toBe(true);
+            expect(closePaneBounds.width).toBe(32);
+            expect(closePaneBounds.height).toBe(32);
+            expect(closePaneBounds.left).toBeGreaterThanOrEqual(branchBounds.right);
+            expect(closePaneBounds.right).toBeLessThanOrEqual(bounds.right);
             vi.mocked(props.onBranchSelect).mockClear();
             await page.elementLocator(trigger).click();
             await page.getByRole("menuitem", { name: /Earlier idea/ }).click();
             expect(props.onBranchSelect).toHaveBeenCalledExactlyOnceWith("other");
           }
-          await page.elementLocator(layout).click();
-          await page.getByRole("menuitem", { name: "View", exact: true }).click();
-          await page.getByRole("menuitem", { name: "Close pane", exact: true }).click();
+          await page.elementLocator(closePane).click();
           expect(props.onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
         }
       },

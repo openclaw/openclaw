@@ -19,6 +19,7 @@ import * as pluginModuleLoader from "../../../plugins/plugin-module-loader-cache
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { withDoctorConfigPreflightHome } from "../../doctor-config-preflight.test-support.js";
+import { createTestConfigSnapshot } from "../../test-runtime-config-helpers.js";
 import {
   commitAutomaticConfigRepair,
   planAutomaticConfigRepair,
@@ -31,18 +32,12 @@ function invalidSnapshot(
   includedPaths: string[] = [],
 ): ConfigFileSnapshot {
   return {
-    path: "/tmp/openclaw.json",
+    ...createTestConfigSnapshot(config),
     includedPaths,
-    exists: true,
     raw: JSON.stringify(config),
     parsed: config,
-    sourceConfig: config,
-    resolved: config,
     valid: false,
-    runtimeConfig: config,
-    config,
     issues: issuePaths.map((issuePath) => ({ path: issuePath, message: "retired" })),
-    warnings: [],
     legacyIssues: [{ path: "", message: "retired" }],
   };
 }

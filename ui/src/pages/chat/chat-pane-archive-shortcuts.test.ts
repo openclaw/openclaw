@@ -43,7 +43,10 @@ function fixture(guard = "") {
   pane.active = true;
   state.sessionKey = row.key;
   state.sessionsResult = guard === "missing-row" ? null : result;
-  state.connected = guard !== "offline";
+  state.connected = guard !== "stopped";
+  if (guard === "stopped") {
+    pane.context.gateway.snapshot.phase = "stopped";
+  }
   pane.onboarding = guard === "onboarding";
   state.chatMessage = "Keep the unsent foreground draft";
   pane.onPaneSessionChange = vi.fn();
@@ -115,7 +118,7 @@ it.each([
   ["non-durable", false],
   ["modal", false],
   ["onboarding", false],
-  ["offline", false],
+  ["stopped", false],
   ["read-only", false],
   ["unavailable", false],
   ["missing-row", false],

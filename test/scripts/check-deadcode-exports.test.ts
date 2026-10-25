@@ -8,6 +8,7 @@ import {
   checkExportScan,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
+import { readUpdateCompatibilityInventory } from "../../scripts/lib/update-compat-chunks.mts";
 import { vitestWorkerBuildEntries } from "../../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 
@@ -32,6 +33,9 @@ describe("check-deadcode-exports", () => {
       "config/knip.config.ts!",
       "config/knip.all-exports.config.ts!",
       "config/knip.scripts-exports.config.ts!",
+      "scripts/generate-runtime-script-assets.mjs!",
+      "scripts/generate-static-validators.mts!",
+      "tsdown.config.ts!",
     ]);
     expect(knipConfig.workspaces["."].project).toContain("config/**/*.{ts,mts,cts}!");
     expectEntries(fullRootWorkspace.entry, [
@@ -95,6 +99,20 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(scriptExportsKnipConfig.ignoreIssues).toHaveProperty(
       "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
     );
+    expect(scriptRootWorkspace.vitest).toEqual({
+      config: [
+        "scripts/control-ui-parity/vitest.config.ts",
+        "scripts/control-ui-retention/vitest.config.ts",
+      ],
+    });
+    expect(knipConfig.workspaces["."].vitest).toEqual({
+      config: [
+        "vitest.config.{js,mjs,ts,cjs,mts,cts}",
+        "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
+        "scripts/control-ui-parity/vitest.config.ts",
+        "scripts/control-ui-retention/vitest.config.ts",
+      ],
+    });
   });
 
   it.each([
@@ -174,6 +192,128 @@ const catalog = module.loadControlUiSourceCatalog();`;
     vi.mocked(fs.readFileSync).mockReturnValue(withoutStartup);
     expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
       "loadControlUiStartupCatalog",
+    );
+  });
+
+  it("models ordinary UI Vite imports into the script workspace", () => {
+    const source = `import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";`;
+    vi.spyOn(fs, "readFileSync").mockReturnValue(source);
+    const compile = knipConfig.compilers.mjs;
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).toContain(
+      'import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";',
+    );
+    vi.mocked(fs.readFileSync).mockReturnValue("const config = {};");
+    expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
+      "isControlUiOptionalAsset",
+    );
+  });
+
+  it("models exact generated and module-hook named consumers", () => {
+    expect(knipConfig.workspaces["."].project).toContain("config/knip-dynamic-consumers.mjs!");
+    const compile = knipConfig.compilers.mjs;
+    const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(compiled).toContain(
+      'import { runtimeProcessDeployManifest as __dynamic0_0, runtimeProcessHelperManifest as __dynamic0_1, runtimeProcessWorkerDependencies as __dynamic0_2 } from "../src/infra/runtime-process-manifest.ts";',
+    );
+    expect(compiled).toContain(
+      'import { gatewayBenchTaskOperation as __dynamic1_0 } from "../scripts/lib/gateway-bench-worker-messages.ts";',
+    );
+    expect(compiled).toContain(
+      'import { fetchWithSsrFGuard as __dynamic2_0 } from "../extensions/team-reports/src/report-run.benchmark-fixtures.test-support.ts";',
+    );
+
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      if (path.resolve(String(file)) === path.resolve("tsdown.config.ts")) {
+        return String(source).replace(
+          `import {
+  runtimeProcessDeployManifest,
+  runtimeProcessHelperManifest,
+  runtimeProcessWorkerDependencies,
+} from "./src/infra/runtime-process-manifest.ts";`,
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("scripts/lib/gateway-bench-worker-messages.ts")
+      ) {
+        return String(source).replace(
+          "import { gatewayBenchTaskOperation as benchmarkTaskOperation } from ${JSON.stringify(import.meta.url)};",
+          "",
+        );
+      }
+      if (
+        path.resolve(String(file)) === path.resolve("extensions/team-reports/src/sources/http.ts")
+      ) {
+        return String(source).replace(
+          'import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";',
+          "",
+        );
+      }
+      return source;
+    });
+    const withoutConsumers = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
+    expect(withoutConsumers).not.toContain("runtimeProcessDeployManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessHelperManifest");
+    expect(withoutConsumers).not.toContain("runtimeProcessWorkerDependencies");
+    expect(withoutConsumers).not.toContain("gatewayBenchTaskOperation");
+    expect(withoutConsumers).not.toContain("fetchWithSsrFGuard");
+  });
+
+  it("models retained updater named exports without fabricating private imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const compile = knipConfig.compilers.json;
+    const compiled = compile(manifest, "package.json");
+    expect(compiled).toMatch(
+      /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
+    );
+    for (const [module, symbol] of [
+      ["src/cli/update-cli/update-command-package.ts", "readPackageUpdateIdentity"],
+      [
+        "src/infra/update-managed-service-handoff.ts",
+        "isCurrentManagedServiceUpdateHandoffProcess",
+      ],
+      ["src/infra/update-runner-git-target.ts", "readGitTargetSchemaVersions"],
+    ]) {
+      expect(
+        compiled
+          .split("\n")
+          .some(
+            (line) =>
+              line.startsWith(`import { ${symbol} as `) && line.endsWith(` from "./${module}";`),
+          ),
+      ).toBe(false);
+      expect(compiled).toContain(`from "./${module}";`);
+    }
+    const finishAliases = [
+      ...compiled.matchAll(
+        /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,
+      ),
+    ].map((match) => match[1]);
+    expect(finishAliases).toHaveLength(2);
+    expect(new Set(finishAliases).size).toBe(2);
+  });
+
+  it("rejects retained updater bindings that are neither exports nor real imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const inventoryPath = path.resolve("scripts/lib/update-compat-inventory.json");
+    const inventory = structuredClone(readUpdateCompatibilityInventory(inventoryPath));
+    inventory.releases[0]!.chunks[0]!.exports.push({
+      exported: "missingUpdaterConsumer",
+      origin: {
+        module: "src/cli/update-cli/update-command-service-recovery.ts",
+        symbol: "missingUpdaterConsumer",
+      },
+    });
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      return path.resolve(String(file)) === inventoryPath
+        ? JSON.stringify(inventory)
+        : readFileSync(file, options);
+    });
+    expect(() => knipConfig.compilers.json(manifest, "package.json")).toThrow(
+      "Recorded updater binding src/cli/update-cli/update-command-service-recovery.ts:missingUpdaterConsumer is neither a named export nor an imported named binding",
     );
   });
 

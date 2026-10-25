@@ -682,7 +682,6 @@ export class TranscriptsStore {
           sessionDir,
           metadataPath: path.join(sessionDir, "metadata.json"),
           transcriptPath: path.join(sessionDir, "transcript.jsonl"),
-          summaryJsonPath: path.join(sessionDir, "summary.json"),
           summaryPath: path.join(sessionDir, "summary.md"),
           hasSummary: storedSummary.summary !== undefined || storedSummary.markdown !== undefined,
         };

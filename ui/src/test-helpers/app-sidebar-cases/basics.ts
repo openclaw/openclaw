@@ -439,7 +439,7 @@ it("keeps main-session activity on its agent header without duplicate main or su
   expect(findAll('[data-agent-id="main"][href="/chat/main"]')).toHaveLength(1);
   expect(find(`[data-session-key="${key}"]`)).toBeNull();
   expect(find(`[data-child-session-toggle="${key}"]`)).toBeNull();
-  expect(find("[data-session-key=CHILD]")).toBeNull();
+  expect(find(`[data-session-key="${CHILD}"]`)).toBeNull();
   expect(find(`${header} .session-glyph__ring[aria-label="Active run"]`)).not.toBeNull();
 
   const result = harness.sessions.state.result!;

@@ -816,11 +816,15 @@ suite.define(() => {
     }
   });
   it.each(
-    (["dark", "light"] as const).flatMap((mode) =>
-      (["no-preference", "reduce"] as const).flatMap((motion) =>
-        [1280, 390].flatMap((width) =>
-          (["markdown", "json"] as const).map((content) => ({ mode, motion, width, content })),
-        ),
+    (["no-preference", "reduce"] as const).flatMap((motion) =>
+      [1280, 390].flatMap((width) =>
+        // Theme does not change submission recovery; keep both across content variants.
+        (["markdown", "json"] as const).map((content) => ({
+          mode: content === "markdown" ? ("dark" as const) : ("light" as const),
+          motion,
+          width,
+          content,
+        })),
       ),
     ),
   )(

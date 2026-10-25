@@ -1,6 +1,7 @@
-import { EventEmitter, once } from "node:events";
+import { EventEmitter } from "node:events";
 import { createServer, type Server, type Socket } from "node:net";
 import { authenticate } from "mailauth";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createGatewaySchedulerClock,
@@ -9,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { resolveImapConfig, type ImapAccountConfig } from "./config.js";
 import { createImapAuthResult, createImapTestRuntime } from "./imap-test-support.js";
 import type { ImapCursor } from "./state.js";
@@ -44,13 +46,7 @@ export class ScriptedImapServer {
   }
 
   async listen(): Promise<number> {
-    this.server.listen(0, "127.0.0.1");
-    await once(this.server, "listening");
-    const address = this.server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("scripted IMAP server did not bind a TCP port");
-    }
-    return address.port;
+    return await listenOnLoopback(this.server);
   }
 
   async waitForCommand(match: (command: string) => boolean): Promise<string> {
@@ -270,14 +266,8 @@ export async function startWatcher(
     withTimeout(waitForAccountCursor("inbox", { uidValidity, lastSeenUid }), timeoutMs, {
       message: `IMAP inbox cursor did not reach UIDVALIDITY ${uidValidity}, UID ${lastSeenUid}`,
     });
-  let resolveStartup!: () => void;
-  const startup = new Promise<void>((resolve) => {
-    resolveStartup = resolve;
-  });
-  let resolveFailure!: (error: unknown) => void;
-  const connectionFailure = new Promise<unknown>((resolve) => {
-    resolveFailure = resolve;
-  });
+  const { promise: startup, resolve: resolveStartup } = createDeferred<void>();
+  const { promise: connectionFailure, resolve: resolveFailure } = createDeferred<unknown>();
   const context: OpenClawPluginServiceContextV2 = {
     scheduler: createTestPluginServiceScheduler(
       options.clock ? createTestGatewayScheduler(options.clock.clock) : undefined,

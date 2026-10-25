@@ -24,6 +24,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
+import { rejectOnNextAbort } from "../test-helpers/abort-signal.js";
 import { requireGit } from "../worktrees/git.js";
 import { insertRegistryWorktree } from "../worktrees/registry.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
@@ -451,18 +452,7 @@ it.each(["caller", "retirement"] as const)(
       f.preparation.start.mockImplementationOnce(async (admit) => {
         await admit();
         entered.resolve();
-        await new Promise<void>((_resolve, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("START observation aborted"),
-              ),
-            { once: true },
-          );
-        });
+        await rejectOnNextAbort(signal, "START observation aborted");
       });
       return f.preparation;
     });

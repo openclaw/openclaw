@@ -17,7 +17,10 @@ import {
   readCodexNativeSubagentRunId,
   type NativeSubagentAssignment,
 } from "./native-subagent-assignment.js";
-import { captureNativeCancellationSelection } from "./native-subagent-cancellation-selection.js";
+import {
+  captureNativeCancellationChildren,
+  captureNativeCancellationSelection,
+} from "./native-subagent-cancellation-selection.js";
 import { waitForNativeCancellationWork } from "./native-subagent-cancellation-wait.js";
 import {
   CodexNativeSubagentCloseOwner,
@@ -536,13 +539,10 @@ class Monitor {
   ): Promise<T> {
     params.assertCurrent();
     params.assertBindingCurrent?.();
-    const parent = this.parentStates.get(params.parentThreadId);
-    if (!parent) {
-      return run(async () => ({ killed: 0, cancelledRequesters: [] }));
-    }
     const { matchesOwner, matches, states } = captureNativeCancellationSelection(
-      parent,
+      this.parentStates.get(params.parentThreadId),
       this.parentStates.values(),
+      this.childStates.values(),
       params,
     );
     const assertCustodyCurrent = () => {
@@ -596,12 +596,11 @@ class Monitor {
             ),
           ),
         );
-        const selected = [...this.childStates.values()].filter(
-          (child) =>
-            child.historyOwner?.sessionId === params.sessionId &&
-            child.historyOwner?.lifecycleRevision === params.lifecycleRevision &&
-            states.some((state) => state.parentThreadId === child.parentThreadId) &&
-            params.acceptsRequest(child.requestCustody),
+        const { matches: matchesChild, selected } = captureNativeCancellationChildren(
+          this.childStates.values(),
+          states,
+          params,
+          matchesOwner,
         );
         const owners = new Set(
           states.flatMap((state) => [
@@ -609,15 +608,16 @@ class Monitor {
             ...(state.pendingRegistrations ?? []),
           ]),
         );
+        const addOwner = (owner: ParentOwner | undefined) => {
+          if (owner) {
+            owners.add(owner);
+          }
+        };
         for (const known of this.knownChildren.values()) {
           if (states.includes(known.parent)) {
             for (const pending of known.pendingTurns) {
-              if (pending.admittedOwner) {
-                owners.add(pending.admittedOwner);
-              }
-              if (pending.modelSource) {
-                owners.add(pending.modelSource.owner);
-              }
+              addOwner(pending.admittedOwner);
+              addOwner(pending.modelSource?.owner);
             }
           }
         }
@@ -627,25 +627,15 @@ class Monitor {
               evidence.kind === "interaction" &&
               states.some((state) => state.parentThreadId === evidence.parentThreadId)
             ) {
-              if (evidence.owner) {
-                owners.add(evidence.owner);
-              }
-              if (evidence.modelOwner) {
-                owners.add(evidence.modelOwner);
-              }
-              if (evidence.modelSource) {
-                owners.add(evidence.modelSource.owner);
-              }
+              addOwner(evidence.owner);
+              addOwner(evidence.modelOwner);
+              addOwner(evidence.modelSource?.owner);
             }
           }
         }
         for (const child of selected) {
-          if (child.modelExecution) {
-            owners.add(child.modelExecution.owner);
-          }
-          if (child.directOwner) {
-            owners.add(child.directOwner);
-          }
+          addOwner(child.modelExecution?.owner);
+          addOwner(child.directOwner);
         }
         for (const owner of owners) {
           if (matchesOwner(owner)) {
@@ -672,8 +662,7 @@ class Monitor {
                 child.requesterTurnRunId !== requesterTurnRunId ||
                 child.requestCustody !== requestCustody ||
                 !params.acceptsRequest(requestCustody) ||
-                child.historyOwner?.sessionId !== params.sessionId ||
-                child.historyOwner?.lifecycleRevision !== params.lifecycleRevision ||
+                !matchesChild(child) ||
                 (child.completionCustody && !child.completionCustody.isCurrent())
               ) {
                 throw new Error("Codex descendant assignment changed before cancellation");
@@ -758,8 +747,7 @@ class Monitor {
             if (
               child.requesterTurnRunId !== requesterTurnRunId ||
               child.requestCustody !== requestCustody ||
-              child.historyOwner?.sessionId !== params.sessionId ||
-              child.historyOwner?.lifecycleRevision !== params.lifecycleRevision
+              !matchesChild(child)
             ) {
               throw new Error("Codex descendant requester changed during settlement");
             }

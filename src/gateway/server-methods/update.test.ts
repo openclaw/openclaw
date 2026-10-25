@@ -225,6 +225,8 @@ describe("update.run acknowledgement", () => {
   it("merges explicit route fields and refuses a second prepared updater after acknowledgement", async () => {
     startHandoff.mockResolvedValueOnce({
       status: "joined",
+      message:
+        "Update blocked by cancelled update custody: owner previous-update; run openclaw update repair.",
       command: "openclaw update --yes",
       logPath: "/tmp/fixture.log",
     });
@@ -237,7 +239,13 @@ describe("update.run acknowledgement", () => {
       ackDelivered: true,
       ok: false,
       result: { reason: "managed-service-handoff-already-running" },
+      handoff: {
+        message: expect.stringContaining("cancelled update custody: owner previous-update"),
+      },
     });
+    expect(getUpdateRun(response!.runId)?.origin.nextAction).toContain(
+      "cancelled update custody: owner previous-update",
+    );
     expect(scheduleRestart).not.toHaveBeenCalled();
     expect(transferHandoff).not.toHaveBeenCalled();
     expect(recordSentinel).not.toHaveBeenCalled();

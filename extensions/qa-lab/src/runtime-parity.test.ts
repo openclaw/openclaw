@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -7,6 +6,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { stableHash } from "./parity-shared.js";
 import type { RuntimeId } from "./runtime-id.js";
 import {
@@ -143,13 +143,10 @@ async function captureRuntimeParityWithMockRequests(params: {
     response.setHeader("Content-Type", "application/json");
     response.end(JSON.stringify(requests));
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   try {
     return await captureCell("openclaw", tempRoot, {
-      mockBaseUrl: `http://127.0.0.1:${address.port}`,
+      mockBaseUrl: `http://127.0.0.1:${port}`,
       scenarioResult: params.scenarioResult ?? { status: "pass" },
     });
   } finally {

@@ -396,6 +396,10 @@ export function useSessionMenuAppearance(
     setMode("grid");
     setCustomValue("");
   };
+  const selectAppearance = (event: Event, action: AppearanceAction) => {
+    event.stopPropagation();
+    runAction(action);
+  };
   const showIconGrid = (event?: Event) => {
     event?.stopPropagation();
     prepare();
@@ -420,21 +424,12 @@ export function useSessionMenuAppearance(
         currentColor={readState().session.color}
         colorDisabled={actionDisabled("set-color")}
         colorDisabledReason={readState().actionDisabledReasons["set-color"]}
-        onSelectColor={(event, color) => {
-          event.stopPropagation();
-          runAction({ kind: "set-color", color });
-        }}
-        onReset={(event) => {
-          event.stopPropagation();
-          runAction({ kind: "reset-appearance" });
-        }}
+        onSelectColor={(event, color) => selectAppearance(event, { kind: "set-color", color })}
+        onReset={(event) => selectAppearance(event, { kind: "reset-appearance" })}
         customIconValue={customValue()}
         disabled={actionDisabled("set-icon")}
         disabledReason={readState().actionDisabledReasons["set-icon"]}
-        onSelect={(event, icon) => {
-          event.stopPropagation();
-          runAction({ kind: "set-icon", icon });
-        }}
+        onSelect={(event, icon) => selectAppearance(event, { kind: "set-icon", icon })}
         onShowCustom={(event) => {
           event.stopPropagation();
           setMode("custom");

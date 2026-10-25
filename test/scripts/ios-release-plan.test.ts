@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import {
   cutIosReleaseChangelog,
-  decodeIosAppStoreVersion,
   resolveIosReleasePlan,
   type IosReleasePlanInput,
 } from "../../scripts/lib/ios-release-plan.ts";
@@ -25,7 +24,7 @@ const upload = (buildNumber: string, shortVersion: string, state: string) => ({
   state,
 });
 const legacy = version("legacy", "READY_FOR_DISTRIBUTION", "2026.7.2");
-const editable = version("editable", "PREPARE_FOR_SUBMISSION");
+const editable = version("editable", "READY_FOR_REVIEW");
 const store = (...appStoreVersions: ReturnType<typeof version>[]) => ({ appStoreVersions });
 type PlanCase = [Partial<IosReleasePlanInput>, Partial<ReturnType<typeof resolveIosReleasePlan>>];
 type InvalidPlanCase = [Partial<IosReleasePlanInput>, string | RegExp];
@@ -49,15 +48,6 @@ it.each<PlanCase>([
   ],
   [store(legacy), newRevision],
   [{ buildUploads: [upload("4", "2026.7.2", "COMPLETE")] }, newRevision],
-  [
-    store(editable),
-    {
-      appStoreRevision: 1,
-      appStoreVersionId: "editable",
-      appStoreVersionState: "PREPARE_FOR_SUBMISSION",
-      decision: "resume-editable",
-    },
-  ],
   [
     {
       destination: "testflight",
@@ -93,19 +83,12 @@ it.each<PlanCase>([
       decision: "retry-upload",
     },
   ],
-  ...["FAILED", "AWAITING_UPLOAD"].map<PlanCase>((state) => [
-    {
-      appStoreVersions: [legacy],
-      buildUploads: [upload("1", "2026.7.21", state)],
-    },
-    { appStoreRevision: 1, buildNumber: 2, decision: "retry-upload" },
-  ]),
   [
     {
-      appStoreVersions: [version("editable", "READY_FOR_REVIEW")],
-      buildUploads: [upload("7", "2026.7.21", "FAILED"), upload("3", "2026.7.21", "COMPLETE")],
+      appStoreVersions: [legacy],
+      buildUploads: [upload("1", "2026.7.21", "FAILED")],
     },
-    { buildNumber: 8 },
+    { appStoreRevision: 1, buildNumber: 2, decision: "retry-upload" },
   ],
   [
     {
@@ -117,11 +100,15 @@ it.each<PlanCase>([
   [
     {
       ...store(legacy, editable),
-      buildUploads: [upload("19", "2026.7.21", "COMPLETE")],
+      buildUploads: [upload("19", "2026.7.21", "FAILED"), upload("3", "2026.7.21", "COMPLETE")],
       releaseNotesBaselines: [{ audience: "ios", version: "2026.7.2", build: "3" }],
     },
     {
       buildNumber: 20,
+      appStoreRevision: 1,
+      appStoreVersionId: "editable",
+      appStoreVersionState: "READY_FOR_REVIEW",
+      decision: "resume-editable",
       releaseNotesBaselines: [{ audience: "ios", version: "2026.7.2", build: "3" }],
     },
   ],
@@ -152,6 +139,10 @@ it.each<InvalidPlanCase>([
   [store(version("locked", "IN_REVIEW")), "locked in state IN_REVIEW"],
   [
     store(version("other", "PREPARE_FOR_SUBMISSION", "2026.7.30")),
+    "does not belong to gateway 2026.7.2",
+  ],
+  [
+    store(version("invalid-revision", "PREPARE_FOR_SUBMISSION", "2026.7.201")),
     "does not belong to gateway 2026.7.2",
   ],
   ...(["app-store", "testflight"] as const).map((destination): InvalidPlanCase => [
@@ -191,22 +182,6 @@ it.each<InvalidPlanCase>([
   expect(() => resolveIosReleasePlan(input(overrides))).toThrow(error);
 });
 
-it("decodes only legacy or single-digit revision versions for the selected gateway", () => {
-  const cases: Array<[string, string, ReturnType<typeof decodeIosAppStoreVersion>]> = [
-    ["2026.7.2", "2026.7.2", { legacy: true, revision: 0 }],
-    ["2026.7.2", "2026.7.20", { legacy: false, revision: 0 }],
-    ["2026.7.2", "2026.7.21", { legacy: false, revision: 1 }],
-    ["2026.7.2", "2026.7.29", { legacy: false, revision: 9 }],
-    ["2026.7.2", "2026.7.201", null],
-    ["2026.7.2", "2026.7.30", null],
-    ["2026.7.3", "2026.7.3", null],
-    ["2026.7.21", "2026.7.21", null],
-    ["2026.7.21", "2026.7.210", { legacy: false, revision: 0 }],
-  ];
-  for (const [gateway, candidate, expected] of cases) {
-    expect(decodeIosAppStoreVersion(gateway, candidate)).toEqual(expected);
-  }
-});
 it.each([
   ["2026.7.2", ["## Unreleased\n\n## 2026.7.21\n\nNew notes.", "## 2026.7.2\n\nOld notes."]],
   ["2026.7.21", ["## 2026.7.21\n\nNew notes.\n\nOld notes."]],

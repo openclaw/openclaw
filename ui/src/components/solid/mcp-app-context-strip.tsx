@@ -3,14 +3,12 @@ import {
   createMemo,
   createOptimisticStore,
   createSignal,
-  Errored,
   For,
   onSettled,
   Show,
 } from "solid-js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import {
   readMcpAppContexts,
   publishMcpAppContext,
@@ -25,6 +23,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { Icon } from "./icon.tsx";
+import { McpAppOperationError } from "./mcp-app-operation-error.tsx";
 import "../../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
@@ -250,14 +249,7 @@ export function McpAppContextStrip(props: McpAppContextStripProps) {
             )}
           </For>
           <Show when={currentRemoval()} keyed>
-            {(admitted) => {
-              const outcome = createMemo(() => admitted.result, { loadingValue: null });
-              return (
-                <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
-                  {outcome()}
-                </Errored>
-              );
-            }}
+            {(admitted) => <McpAppOperationError result={admitted.result} />}
           </Show>
         </section>
       </Show>

@@ -1,10 +1,12 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo, onCleanup, refresh } from "solid-js";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import "./chat-audio-player.tsx";
 import "./chat-svg-attachment.tsx";
 import "./chat-video-player.tsx";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
@@ -17,7 +19,11 @@ import {
 } from "./chat-message-attachment-admission-model.ts";
 import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
 import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
-import { resolveAttachmentSource, readAttachmentSource } from "./chat-message-attachment-source.ts";
+import {
+  resolveAttachmentSource,
+  resolveAttachmentSidebarSource,
+  readAttachmentSource,
+} from "./chat-message-attachment-source.ts";
 import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
@@ -36,8 +42,12 @@ import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatPastedText } from "./chat-pasted-text.tsx";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import { SentCommentAttachments } from "./chat-sent-comments.tsx";
-import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { videoLightboxItem } from "./chat-video-lightbox-source.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 type CustomElementProps<T extends HTMLElement> = SolidJSX.HTMLAttributes<T> & {
   [K in keyof T as `prop:${Extract<K, string>}`]?: T[K];
@@ -294,26 +304,12 @@ function prepareAttachment(
             voiceNote: attachment.isVoiceNote === true,
             ...(hasLiveSidebarSource
               ? {
-                  resolveSource: (sidebarUpdate, runtime): AttachmentSidebarState => {
-                    const next = resolveAttachmentSource(attachment, {
+                  resolveSource: (onMediaChange, runtime) =>
+                    resolveAttachmentSidebarSource(attachment, {
                       ...runtime,
                       messageId: options.messageId,
-                      onMediaChange: sidebarUpdate,
-                    });
-                    if (next.status === "available") {
-                      return { status: "ready", ...next.source };
-                    }
-                    if (next.status === "checking") {
-                      return { status: "pending" };
-                    }
-                    return next.error
-                      ? {
-                          status: "error",
-                          reason: next.reason ?? t("chat.attachments.unavailable"),
-                          onRetry: next.onRetry,
-                        }
-                      : { status: "unavailable", onRetry: next.onRetry };
-                  },
+                      onMediaChange,
+                    }),
                 }
               : {}),
           })

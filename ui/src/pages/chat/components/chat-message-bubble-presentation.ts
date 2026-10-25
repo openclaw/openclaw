@@ -36,17 +36,21 @@ function messageVideoSlots(
   );
 }
 
-function imageMessageIdentity(message: unknown, sessionKey: string | undefined) {
+function messageMediaIdentity(message: unknown, sessionKey: string | undefined) {
   const identity = readSessionMessageIdentity(message);
   if (identity?.role !== "user" || identity.isImported) {
     return { localSubmission: false };
   }
+  const messageSendId = identity.sendId ?? undefined;
   if (!identity.id || isPendingSendMessage(message)) {
-    return { localSubmission: Boolean(identity.sendId) };
+    return { localSubmission: Boolean(messageSendId), messageSendId };
   }
   return identity.id.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
-    ? {}
-    : { canonicalMessageKey: JSON.stringify([sessionKey, identity.id, identity.sequence]) };
+    ? { messageSendId }
+    : {
+        canonicalMessageKey: JSON.stringify([sessionKey, identity.id, identity.sequence]),
+        messageSendId,
+      };
 }
 
 export type MessageMediaOptions = Pick<
@@ -58,6 +62,7 @@ export type MessageMediaOptions = Pick<
   | "resourceBasePath"
   | "assistantAttachmentAuthToken"
   | "mediaOwner"
+  | "mediaReadAllowed"
   | "onRequestOpenImage"
   | "onOpenImage"
   | "resolveArtifactDownload"
@@ -113,11 +118,12 @@ export function createMessageMediaOptions(
     messageId,
     agentId: opts.agentId,
     policyKey: opts.mediaPolicyKey,
-    ...(images.length ? imageMessageIdentity(message, opts.sessionKey) : {}),
+    ...messageMediaIdentity(message, opts.sessionKey),
     connectionEpoch: opts.connectionEpoch,
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
     mediaOwner: opts.mediaOwner,
+    mediaReadAllowed: opts.mediaReadAllowed,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
     resolveArtifactDownload: opts.resolveArtifactDownload,
@@ -179,9 +185,13 @@ export function prepareGroupedMessage(
   const actionText = opts.messageActions?.markdown ?? displayMarkdown;
   const omittedMedia = normalizedMessage.content.filter((item) => item.type === "omitted_media");
   const assistantViewBlocks = normalizedMessage.content.filter((item) => item.type === "canvas");
+  const inlineViewBlocks = normalizedMessage.content.filter((item) => item.type === "plugin_view");
   const hasImagesOrNotices = hasImages || expiredPairingQrCount !== 0 || omittedMedia.length !== 0;
   const hasMediaContent =
-    hasImagesOrNotices || visibleAttachments.length !== 0 || assistantViewBlocks.length !== 0;
+    hasImagesOrNotices ||
+    visibleAttachments.length !== 0 ||
+    assistantViewBlocks.length !== 0 ||
+    inlineViewBlocks.length !== 0;
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
@@ -318,6 +328,7 @@ export function prepareGroupedMessage(
     actionText,
     omittedMedia,
     assistantViewBlocks,
+    inlineViewBlocks,
     clawHubCards,
     reasoningMarkdown,
     markdown,

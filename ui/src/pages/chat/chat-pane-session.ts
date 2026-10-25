@@ -11,6 +11,7 @@ import type {
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session-parent.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -52,6 +53,8 @@ import {
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
+registerChatSessionEnglish();
+
 const NO_PULL_REQUESTS: ControlUiSessionPullRequest[] = [];
 
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
@@ -76,7 +79,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return this.readPullRequestSnapshot()?.status ?? "ready";
   }
 
-  private deferredSessionHydration: { resume?: () => void } | null = null;
+  deferredSessionHydration: { resume?: () => void } | null = null;
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
   private readonly hiddenRunReadRequests = new Map<
     string,

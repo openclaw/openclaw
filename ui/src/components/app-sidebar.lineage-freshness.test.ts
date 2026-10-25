@@ -6,6 +6,7 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
@@ -26,12 +27,7 @@ import {
 } from "./app-sidebar-freshness.test-support.ts";
 import "./app-sidebar.tsx";
 
-const mainAgents: AgentsListResult = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
-  agents: [{ id: "main" }],
-};
+const mainAgents: AgentsListResult = makeBootRoster();
 const ada = human("ada", "Ada");
 const bob = human("bob", "Bob");
 type Params = NonNullable<ReturnType<typeof asOptionalRecord>>;

@@ -52,6 +52,7 @@
         "baseUrl": "https://api.openai.com/v1",
         "api": "openai-responses",
         "defaultUtilityModel": "gpt-5.6-luna",
+        "family": "openai",
         "models": [
           {
             "id": "gpt-daybreak-blue-latest",

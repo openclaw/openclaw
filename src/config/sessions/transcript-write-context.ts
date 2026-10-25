@@ -1,11 +1,11 @@
 // Transcript write contexts carry the admitted run fence and teardown tracking
 // through nested session-manager callbacks.
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import type {
   ModelChangeEntry,
   ThinkingLevelChangeEntry,
 } from "../../agents/sessions/session-manager-types.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -114,9 +114,9 @@ type TranscriptSourcePublication = {
   publish?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
 };
 
-const ownedTranscriptWriteContext = new AsyncLocalStorage<
+const ownedTranscriptWriteContext = new AsyncContext<
   OwnedSessionTranscriptWriteContext & { sourcePublication?: TranscriptSourcePublication }
->();
+>(Symbol("ownedTranscriptWriteContext"));
 
 /** Bind an initiating write's acknowledged source before fallible publication observers. */
 export async function withSessionTranscriptSourcePublication<T>(

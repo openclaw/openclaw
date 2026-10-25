@@ -49,6 +49,8 @@ type CronRuntimeState = Pick<
   | "autoDisabled"
   | "lastError"
   | "lastDurationMs"
+  | "lastMeaningfulResult"
+  | "lastTriggerEvalAtMs"
 >;
 
 export type CronJobsPageOptions = { append?: boolean; tableFilters?: boolean; event?: unknown };
@@ -92,6 +94,9 @@ const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
       lastRunStatus: lastRunStatus ?? lastStatus ?? null,
       runningAtMs,
       autoDisabled,
+      lastDurationMs: runtime.lastDurationMs,
+      lastMeaningfulResult: runtime.lastMeaningfulResult,
+      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
       ...(finished ? { lastRunError: runtime.lastError ?? null } : {}),
     });
     return true;
@@ -150,6 +155,9 @@ function applyCronJobsEvent<Row extends CronInventoryJob>(
       lastStatus,
       runningAtMs,
       autoDisabled,
+      lastDurationMs: runtime.lastDurationMs,
+      lastMeaningfulResult: runtime.lastMeaningfulResult,
+      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
       ...(finished
         ? {
             lastError: typeof payload.error === "string" ? payload.error : undefined,

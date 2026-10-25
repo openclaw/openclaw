@@ -7,6 +7,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { board } from "./chat-layout-fixtures.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,12 +17,7 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:dashboard";
-const boardSnapshot = {
-  sessionKey,
-  revision: 1,
-  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [],
-};
+const boardSnapshot = board(sessionKey);
 
 suite.define(() => {
   it("uses Panels for the main Dashboard conversation without replacing its content", async () => {
@@ -77,7 +73,12 @@ suite.define(() => {
             ],
             timestamp: 1700000000000 + index,
           })),
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.companion.state",
+          ],
           methodResponses: {
             "board.get": {
               ...boardSnapshot,
@@ -197,7 +198,7 @@ suite.define(() => {
           .getByRole("button", { name: "Close", exact: true })
           .click();
         await mobileHost.waitFor({ state: "hidden" });
-        await openChatPanels(page);
+        await openChatPanels(page, "mobile");
         await mobileHost.waitFor();
         expect(await composer.inputValue()).toBe(draft);
         await page.setViewportSize({ width: 1440, height: 900 });
@@ -237,7 +238,12 @@ suite.define(() => {
               boardPresentation: "split",
             },
           ],
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.companion.state",
+          ],
           methodResponses: {
             "board.get": boardSnapshot,
             "sessions.companion.state": {

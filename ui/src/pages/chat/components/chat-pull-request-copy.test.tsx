@@ -44,6 +44,7 @@ it.each(["desktop", "mobile"] as const)(
             disabled={false}
             presented
             onDismiss={() => {}}
+            url={pr().url}
             pullRequest={pr()}
             owner={{ pullRequests: [pr()], status: "ready", onDismiss: () => {} }}
           />

@@ -340,10 +340,11 @@ restarting the Gateway so it picks up canonical config and migrated state. Check
 `openclaw update status` for unfinished plugin upgrades and their repair commands.
 Normal CLI commands and Gateway startup do not apply deferred plugin migrations.
 
-On Windows, the published OpenClaw 2026.9.3 updater can exhaust its fixed
-30-second baseline package-fingerprint budget before replacing any files. It
-then reports `Package rollback verification timed out` and
-`retained package tree changed` even when the installed tree is unchanged.
+On any platform, the published OpenClaw 2026.9.3 and 2026.9.4 updaters can exhaust
+their fixed 30-second baseline package-fingerprint budget before replacing any
+files. They then report `Installation recovery is unverified`,
+`Package rollback verification timed out`, or `retained package tree changed`
+even when the installed tree is unchanged.
 A newer candidate cannot repair the updater already running. After creating a
 [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup),
 stop the Gateway and use its existing package manager to install the target

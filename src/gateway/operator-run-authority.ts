@@ -234,8 +234,10 @@ export function captureChannelOperatorRunAuthority(input: {
     assertCurrent: revocation.assertCurrent,
     signal: revocation.signal,
     retain: revocation.retain,
-    readCurrentRoleAssignment: () => params.assignedRole,
-    readCurrentGithubLogin: () => params.githubLogin ?? null,
+    readCurrentRoleFacts: () => ({
+      assignedRole: params.assignedRole,
+      githubLogin: params.githubLogin ?? null,
+    }),
     get modelPolicy() {
       return modelPolicy.readCurrent();
     },
@@ -579,8 +581,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       ...admission,
       recoverySnapshot,
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
-      readCurrentRoleAssignment: () => assertProfileCurrent().assignedRole,
-      readCurrentGithubLogin: () => assertProfileCurrent().githubLogin ?? null,
+      readCurrentRoleFacts: assertProfileCurrent,
       source: source.token,
       signal: revocation.signal,
       retain: () => {

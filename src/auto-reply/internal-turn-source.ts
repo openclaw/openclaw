@@ -1,11 +1,6 @@
 import { isStringOption } from "../utils/string-readers.js";
 import type { MsgContext } from "./templating.js";
 
-type InternalTurnContext = Pick<
-  MsgContext,
-  "InternalTurnSource" | "Provider" | "Surface" | "OriginatingChannel"
->;
-
 const LEGACY_INTERNAL_TURN_SOURCES = new Map<string, MsgContext["InternalTurnSource"]>([
   ["heartbeat", "heartbeat"],
   ["cron-event", "cron"],
@@ -17,7 +12,9 @@ function legacyInternalTurnSource(value: string | undefined): MsgContext["Intern
 }
 
 /** Fold shipped SDK source labels at ingress; runtime channels describe transport only. */
-export function normalizeInternalTurnContext(ctx: InternalTurnContext): void {
+export function normalizeInternalTurnContext(
+  ctx: Pick<MsgContext, "InternalTurnSource" | "Provider" | "Surface" | "OriginatingChannel">,
+): void {
   const source = isStringOption(ctx.InternalTurnSource, [
     "heartbeat",
     "cron",

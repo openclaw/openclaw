@@ -50,6 +50,60 @@ function dependencies(overrides: Record<string, unknown>) {
   };
 }
 
+it("starts and retires the detached watchdog without runtime function source", () => {
+  const root = tempDirs.make("workspace-quiescence-built-watchdog-");
+  let watchdogSource = "";
+  let leasePath = "";
+  let watchdogNonce = "";
+  const requireRemote = (name: string) => {
+    if (name === "node:os") {
+      return { homedir: () => root };
+    }
+    if (name === "node:child_process") {
+      return {
+        execFileSync: () => "synthetic start",
+        spawn: (_executable: string, args: string[]) => {
+          [, watchdogSource = "", leasePath = "", watchdogNonce = ""] = args;
+          return { pid: 222, unref() {} };
+        },
+      };
+    }
+    return require(name);
+  };
+  const command = workspaceQuiescenceArgv(
+    root,
+    { action: "acquire", nonce, timeoutMs: 10_000 },
+    "shared-host",
+  );
+  command[2] =
+    'Function.prototype.toString = () => { throw Error("function source unavailable"); };\n' +
+    command[2];
+  runScript(command, {
+    process: {
+      platform: "linux",
+      pid: 111,
+      execPath: process.execPath,
+      getuid: () => 1000,
+      stdout: { write() {} },
+      stderr: { write() {} },
+    },
+    require: requireRemote,
+  });
+  const lease = JSON.parse(nativeFs.readFileSync(leasePath, "utf8"));
+  nativeFs.writeFileSync(leasePath, JSON.stringify({ ...lease, expiresAtMs: Date.now() - 1 }));
+  runInNewContext(watchdogSource, {
+    process: {
+      argv: [process.execPath, leasePath, watchdogNonce],
+      pid: 222,
+      stderr: { write() {} },
+    },
+    require: requireRemote,
+    performance,
+    setTimeout: vi.fn(),
+  });
+  expect(nativeFs.existsSync(leasePath)).toBe(false);
+});
+
 it("renews and releases an initialized Windows lease without repeating DDL", () => {
   const root = nativeFs.realpathSync(tempDirs.make("workspace-quiescence-warm-schema-"));
   const directory = path.join(root, ".openclaw-worker", "quiescence");

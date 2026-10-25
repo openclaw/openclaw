@@ -32,7 +32,7 @@ import {
   readWithCanonicalSessionAdmission,
 } from "./session-canonical-key.js";
 import { validateCanonicalSessionRowEntry } from "./session-canonical-row.js";
-import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
+import { parseCanonicalSqliteSessionEntry } from "./session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
   type SessionEntryProjection,
@@ -55,7 +55,7 @@ export function parseReadableSessionEntryData(
 ): SessionEntry | null {
   const parsed: SessionEntry | null =
     projection === "delivery"
-      ? parseSqliteSessionEntryRecord(row)
+      ? parseCanonicalSqliteSessionEntry(row)
       : parseSessionEntryRow(row, projection);
   if (row.retained_window_id !== undefined) {
     // The guard and decoded entry share one statement snapshot, including cold handles.

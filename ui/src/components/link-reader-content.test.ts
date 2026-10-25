@@ -194,6 +194,23 @@ describe("link reader document content", () => {
     expect(container.querySelector(".lr-checks")?.textContent).toContain(
       "Some checks could not be shown",
     );
+    update(container, {
+      ...detail("Description"),
+      checks: {
+        state: "failure",
+        summary: "Partial checks",
+        total: 4,
+        truncated: true,
+        items: [],
+        url: url + "/checks",
+      },
+    });
+    const source = container.querySelector<HTMLAnchorElement>(".lr-checks .lr-note a")!;
+    expect(source).not.toBeNull();
+    expect(source.textContent).toBe("View all checks on GitHub");
+    expect(source.href).toBe(url + "/checks");
+    expect(source.target).toBe("_blank");
+    expect(source.hasAttribute("data-link-reader-external")).toBe(true);
   });
 
   it("hides HTML comment metadata while preserving visible prose and literal code examples", () => {

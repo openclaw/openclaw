@@ -66,7 +66,7 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
       model: props.config.sessionObserverUtilityModel,
       resolved: props.config.sessionObserverResolvedModel,
     }));
-    const [saving, setSaving] = createOptimistic(false);
+    const [saving, setSaving] = createOptimistic<"enabled" | "model" | null>(null);
     return { retired, values, setValues, saving, setSaving };
   });
   const [completion, setCompletion] = createSignal<Promise<void> | null>(null);
@@ -85,7 +85,7 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
   ) {
     try {
       if (current(view)) {
-        view.setSaving(true);
+        view.setSaving("enabled" in edit ? "enabled" : "model");
         view.setValues((draft) => {
           if ("enabled" in edit) {
             draft.enabled = edit.enabled;
@@ -128,7 +128,8 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
     // Admission publishes owner facts before the optimistic transition joins this tick.
     void setCompletion(Promise.resolve().then(() => present(view, pending, retired, edit)));
   }
-  const disabled = () => presentation().saving() || props.config.sessionObserverDisabled === true;
+  const disabled = () =>
+    presentation().saving() !== null || props.config.sessionObserverDisabled === true;
   return (
     <>
       <div class="settings-section__header settings-section__header--subsection">
@@ -140,7 +141,10 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
           title={t("configView.sessionObserver.toggle")}
           description={t("configView.sessionObserver.toggleHint")}
           checked={presentation().values.enabled}
-          disabled={disabled()}
+          disabled={
+            props.config.sessionObserverDisabled === true || presentation().saving() === "model"
+          }
+          saving={presentation().saving() === "enabled"}
           onChange={(enabled) => submit({ enabled })}
         />
         <Loading>

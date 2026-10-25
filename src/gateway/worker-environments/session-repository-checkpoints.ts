@@ -11,6 +11,11 @@ import {
 } from "../../state/session-repository-workspaces.js";
 import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import { readGitHubRepositoryPublicationMetadata } from "../github-repository-publication-snapshot.js";
+import {
+  stageRepositoryGitHistory,
+  withRepositoryGitHistory,
+  type RepositoryGitHistory,
+} from "./session-repository-history.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { parseWorkspaceManifestPair } from "./workspace-manifest-worker.js";
 import {
@@ -32,11 +37,12 @@ import {
 type CheckpointOwner = { workspaceId: string; store?: SessionRepositoryWorkspaceStore };
 type CheckpointSource = CheckpointOwner & { checkpointRef?: string };
 type CheckpointSnapshot = Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>>;
-export type SessionRepositoryCheckpointPayload = CheckpointSnapshot & {
-  stagingRoot: string;
-  publicationStagingRoot?: string;
-  publicationDigest?: string;
-};
+export type SessionRepositoryCheckpointPayload = CheckpointSnapshot &
+  RepositoryGitHistory & {
+    stagingRoot: string;
+    publicationStagingRoot?: string;
+    publicationDigest?: string;
+  };
 const publicationRef = (ref: string) =>
   workerWorkspaceResultRef(`publication-${createHash("sha256").update(ref).digest("hex")}`);
 const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
@@ -146,48 +152,57 @@ export async function withSessionRepositoryCheckpoint<T>(
 ): Promise<T> {
   const { workspace, root } = await owner(params);
   const ref = checkpointRef(workspace, params.checkpointRef);
-  return await withStagedWorkerWorkspaceResult({ root, stagedResultRef: ref }, async (snapshot) => {
-    assertBase(workspace, snapshot);
-    if (ref === workspace.checkpointRef && snapshot.currentManifestRef !== workspace.manifestHash) {
-      throw new Error("Repository checkpoint differs from its accepted manifest");
-    }
-    let useStarted = false;
-    try {
-      const companion = publicationRef(ref);
-      if (!(await refObjects(root, [companion])).get(companion)) {
-        useStarted = true;
-        return await use(snapshot);
-      }
-      return await withStagedWorkerWorkspaceResult(
-        { root, stagedResultRef: companion },
-        async (publication) => {
-          const binding = await publicationBinding(
-            publication.stagingRoot,
-            snapshot.currentManifestRef,
-          );
-          if (binding.snapshot.baseCommit !== workspace.baseCommit) {
-            throw new Error("Repository publication checkpoint base changed");
+  return await withStagedWorkerWorkspaceResult({ root, stagedResultRef: ref }, async (files) =>
+    withRepositoryGitHistory(
+      { root, checkpointRef: ref, baseCommit: assertBase(workspace, files) },
+      async (history) => {
+        const snapshot = { ...files, ...history };
+        assertBase(workspace, snapshot);
+        if (
+          ref === workspace.checkpointRef &&
+          snapshot.currentManifestRef !== workspace.manifestHash
+        ) {
+          throw new Error("Repository checkpoint differs from its accepted manifest");
+        }
+        let useStarted = false;
+        try {
+          const companion = publicationRef(ref);
+          if (!(await refObjects(root, [companion])).get(companion)) {
+            useStarted = true;
+            return await use(snapshot);
           }
-          useStarted = true;
-          return await use({
-            ...snapshot,
-            publicationStagingRoot: publication.stagingRoot,
-            publicationDigest: binding.publicationDigest,
-          });
-        },
-      );
-    } catch (error) {
-      // Optional publication corruption cannot discard verified recovery bytes.
-      // Once the consumer starts, its failures and effects must propagate unchanged.
-      if (useStarted) {
-        throw error;
-      }
-      workspaceLog.warn(
-        `Repository publication checkpoint unavailable: ${boundedWorkerError(error)}`,
-      );
-      return await use(snapshot);
-    }
-  });
+          return await withStagedWorkerWorkspaceResult(
+            { root, stagedResultRef: companion },
+            async (publication) => {
+              const binding = await publicationBinding(
+                publication.stagingRoot,
+                snapshot.currentManifestRef,
+              );
+              if (binding.snapshot.baseCommit !== workspace.baseCommit) {
+                throw new Error("Repository publication checkpoint base changed");
+              }
+              useStarted = true;
+              return await use({
+                ...snapshot,
+                publicationStagingRoot: publication.stagingRoot,
+                publicationDigest: binding.publicationDigest,
+              });
+            },
+          );
+        } catch (error) {
+          // Optional publication corruption cannot discard verified recovery bytes.
+          // Once the consumer starts, its failures and effects must propagate unchanged.
+          if (useStarted) {
+            throw error;
+          }
+          workspaceLog.warn(
+            `Repository publication checkpoint unavailable: ${boundedWorkerError(error)}`,
+          );
+          return await use(snapshot);
+        }
+      },
+    ),
+  );
 }
 
 export async function recoverSessionRepositoryCheckpoint(
@@ -217,18 +232,19 @@ export async function recoverSessionRepositoryCheckpoint(
 }
 
 export async function stageSessionRepositoryCheckpoint(
-  params: CheckpointOwner & {
-    expectedRevision: number;
-    checkpointRef?: string;
-    stagingRoot: string;
-    baseManifestRaw: string;
-    currentManifestRaw: string;
-    baseManifestRef: string;
-    currentManifestRef: string;
-    publicationStagingRoot?: string;
-    publicationDigest?: string;
-    assertCurrent: () => void;
-  },
+  params: CheckpointOwner &
+    RepositoryGitHistory & {
+      expectedRevision: number;
+      checkpointRef?: string;
+      stagingRoot: string;
+      baseManifestRaw: string;
+      currentManifestRaw: string;
+      baseManifestRef: string;
+      currentManifestRef: string;
+      publicationStagingRoot?: string;
+      publicationDigest?: string;
+      assertCurrent: () => void;
+    },
 ) {
   const { store, workspace, current: currentWorkspace, root } = await owner(params);
   params.assertCurrent();
@@ -267,6 +283,15 @@ export async function stageSessionRepositoryCheckpoint(
   assertRevision();
   await requireWorkspaceResultGit(root, workspaceResultCheckpointInitArgs());
   assertRevision();
+  const history = await stageRepositoryGitHistory({
+    ...params,
+    root,
+    baseCommit,
+    assertCurrent: assertRevision,
+  });
+  if (history.gitHistoryNote) {
+    workspaceLog.info(history.gitHistoryNote);
+  }
   let discardPromise: Promise<void> | undefined;
   const discard = () => {
     // These candidates are never recreated after preparation. Share completed
@@ -284,6 +309,9 @@ export async function stageSessionRepositoryCheckpoint(
     const objectId = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
       ...params,
       root,
+      gitHistory: undefined,
+      gitPackPath: undefined,
+      parentCommit: history.parentCommit,
       stagedResultRef: candidateRef,
       assertCurrent: assertRevision,
     });

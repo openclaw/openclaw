@@ -173,7 +173,8 @@ function Toolbar(props: { view: WorkshopView }) {
                 mode="buttons"
                 ariaLabel={t("skillWorkshop.mode.aria")}
                 value={mode()}
-                disabled={props.view().modeBusy || !props.view().access.canSetMode}
+                disabled={!props.view().access.canSetMode}
+                saving={props.view().modeBusy}
                 options={MODES.map((value) => ({ value, label: t(`skillWorkshop.mode.${value}`) }))}
                 onChange={(nextMode) => props.view().onModeChange(nextMode)}
               />

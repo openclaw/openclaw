@@ -27,6 +27,9 @@ const BLOCK_BREAK_TAGS = new Set([
   "tr",
   "ul",
   "ol",
+  "dl",
+  "dt",
+  "dd",
 ]);
 // Keep malformed nested markup from making end-of-document context unwind quadratic.
 // web_fetch favors bounded, auditable text over preserving deep broken HTML structure.
@@ -324,33 +327,52 @@ function readBacktickRunEnd(value: string, start: number): number {
 export function markdownToText(markdown: string): string {
   const codeBlocks: string[] = [];
   let text = "";
+  const opener = /`{3,}|(?:^|\n) {0,3}(~{3,})/g;
   let pos = 0;
   while (pos < markdown.length) {
-    const open = markdown.indexOf("```", pos);
-    if (open === -1) {
+    opener.lastIndex = pos;
+    const opening = opener.exec(markdown);
+    if (!opening) {
       text += markdown.slice(pos).replaceAll("\0", "\0\0");
       break;
     }
+    const isTilde = opening[1] !== undefined;
+    const open = opening.index + (isTilde && opening[0].startsWith("\n") ? 1 : 0);
     text += markdown.slice(pos, open).replaceAll("\0", "\0\0");
-    const afterOpen = readBacktickRunEnd(markdown, open);
-    const fenceLength = afterOpen - open;
-    let closingStart = afterOpen;
+    const afterOpen = opening.index + opening[0].length;
+    const fenceLength = opening[1]?.length ?? afterOpen - open;
     let close: { start: number; end: number } | undefined;
-    while (closingStart < markdown.length) {
-      const start = markdown.indexOf("`", closingStart);
-      if (start === -1) {
-        break;
+    if (isTilde) {
+      // Tilde blocks require a line-owning close; retain the existing inline backtick behavior.
+      const closing = /(?:^|\n) {0,3}(~{3,})[ \t]*\r?(?=\n|$)/g;
+      closing.lastIndex = afterOpen;
+      for (let match = closing.exec(markdown); match; match = closing.exec(markdown)) {
+        if (match[1]!.length >= fenceLength) {
+          close = {
+            start: match.index + (match[0].startsWith("\n") ? 1 : 0),
+            end: match.index + match[0].length,
+          };
+          break;
+        }
       }
-      const end = readBacktickRunEnd(markdown, start);
-      if (end - start >= fenceLength) {
-        // Consume only the matching run, preserving adjacent blocks.
-        close = { start, end: start + fenceLength };
-        break;
+    } else {
+      let closingStart = afterOpen;
+      while (closingStart < markdown.length) {
+        const start = markdown.indexOf("`", closingStart);
+        if (start === -1) {
+          break;
+        }
+        const end = readBacktickRunEnd(markdown, start);
+        if (end - start >= fenceLength) {
+          // Consume only the matching run, preserving adjacent blocks.
+          close = { start, end: start + fenceLength };
+          break;
+        }
+        closingStart = end;
       }
-      closingStart = end;
     }
     const firstLineEnd = markdown.indexOf("\n", afterOpen);
-    if (!close) {
+    if (!close && !isTilde) {
       const lineStart = markdown.lastIndexOf("\n", open) + 1;
       if (firstLineEnd === -1 || !/^[ \t]*$/.test(markdown.slice(lineStart, open))) {
         text += markdown.slice(open).replaceAll("\0", "\0\0");
@@ -359,7 +381,11 @@ export function markdownToText(markdown: string): string {
     }
     const contentEnd = close?.start ?? markdown.length;
     const contentStart =
-      firstLineEnd === -1 || firstLineEnd > contentEnd ? afterOpen : firstLineEnd + 1;
+      isTilde && firstLineEnd === -1
+        ? markdown.length
+        : firstLineEnd === -1 || firstLineEnd > contentEnd
+          ? afterOpen
+          : firstLineEnd + 1;
     const code = markdown.slice(contentStart, contentEnd);
     // Keep the surrounding prose connected without interpreting the code as Markdown.
     // Preserve its final line boundary for heading/list markers after the closing fence.

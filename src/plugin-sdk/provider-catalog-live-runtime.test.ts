@@ -16,20 +16,8 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "./provider-catalog-live-runtime.js";
 import type { ProviderCatalogContext } from "./provider-catalog-shared.js";
-import type { ModelDefinitionConfig } from "./provider-model-shared.js";
+import { buildCatalogModel as buildModel } from "./provider-catalog.test-support.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
-
-function buildModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
-}
 
 function buildFetchGuard(body: unknown): {
   fetchGuard: LiveModelCatalogFetchGuard;

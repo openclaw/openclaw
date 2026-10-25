@@ -3,6 +3,115 @@
     <channel>
         <title>OpenClaw</title>
         <item>
+            <title>2026.10.7</title>
+            <pubDate>Sat, 24 Oct 2026 20:01:12 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-x86_64.xml</link>
+            <sparkle:version>2610000790</sparkle:version>
+            <sparkle:shortVersionString>2026.10.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>OpenClaw 2026.10.7</h2>
+<h3>Highlights</h3>
+<ul>
+<li><strong>Replay-safe session recovery:</strong> interrupted sessions now retain recovery provenance and unfinished tool outcomes, stopped conversations retire terminal recovery residue before accepting the next message, rejected Claude CLI drafts stay out of final replies, large child-completion batches stay within requester context, and Codex previews no longer block replies after a context refresh. (#153728, #168764, #172068, #177716, #176682, #176783, #176675, #159715, #181801) Thanks @zhangguiping-xydt, @ruel225, @Oliver4Spot, @jjjhenriksen, @enki, @PennyVibe, @mbelinky, @RomneyDa, and @krjcolby-svg.</li>
+<li><strong>Safer update activation and recovery:</strong> verified activations remain successful through later maintenance or ledger errors, interrupted package updates resume safely, post-activation Doctor waits are bounded, stale receipts cannot veto a valid repair, and Windows deep or 8.3 state paths no longer abort onboarding or migration. (#181166, #181307, #173862, #167459, #172768, #172769, #181389) Thanks @najef1979-code, @agroman1993, @shanselman, @RomneyDa, @dor-sr, @wangmiao0668000666, and @brucemccurdy.</li>
+<li><strong>Database and worker continuity:</strong> maintenance refusals preserve peer readers and borrowers, incompatible retained agent databases stay isolated, empty transcript deletions skip unnecessary archive materialization, Bun admission deadlines remain thread-local, and worker shutdown completes after inventory retirement. (#175987, #179320, #170122, #171372, #172756, #168862) Thanks @LifeViwer, @Captain69G, @RomneyDa, @shanselman, @dor-sr, @wangmiao0668000666, and @brucemccurdy.</li>
+<li><strong>Backup and state durability:</strong> snapshots retain supported legacy exec-approval policies, interrupted R2 verification and restores resume safely, config observation keeps the last-known-good snapshot during truncated writes, failed multi-file patches preserve earlier files, and Memory Wiki re-imports preserve human-authored notes. (#164297, #171292, #152565, #160409, #175707) Thanks @wangmiao0668000666, @davidcittadini, @LiuwqGit, @yetval, @masatohoshino, @YangManBOBO, @RomneyDa, @shanselman, @dor-sr, @cristianoc, and @brucemccurdy.</li>
+<li><strong>Operator control continuity:</strong> native computer control recovers after session expiry, late-attached GitHub operators can publish PRs, synchronous node output is not duplicated as a completion wake, cron announcements preserve CLI chats, and history maintenance reads identities before payloads. (#169385, #169400, #164511, #176218, #174530) Thanks @stackingrockss, @Gigaxel, @holgergruenhagen, @eliavb43, @wangmiao0668000666, @asikorskiy, and @RomneyDa.</li>
+<li><strong>Provider and plugin continuity:</strong> model refresh, configured-account readiness, GPT-5.6 tool turns, OpenRouter onboarding, incremental plugin loading, and faster external TypeScript plugin startup retain current state instead of rejecting valid setup or discarding providers. (#176709, #178522, #173366, #173292, #162226, #161267, #168391) Thanks @ericcaiwx-star, @eduardonunesfreire-rgb, @chandraveshchaudhari, @netcrazed, @obviyus, @jakeaadams, and @RomneyDa.</li>
+<li><strong>Managed integration reliability:</strong> saved Linux Gateway dashboards preserve pairing across restarts, slow macOS Talk runs retain their replies, app upgrades converge official plugins, Copilot setup verifies SDK-backed agents correctly, Claude CLI cache prefixes stay stable after child completion and retain context when caller-only tools appear or disappear, and passkey prompts no longer block headless browser clicks. (#158908, #164485, #174257, #163578, #172026, #178955, #170857) Thanks @dor-sr, @PollyBot13, @kazuyuki-eguchi, @lifuyue, @Marvinthebored, @VACInc, @trukhinyuri, @Peetiegonzalez, @RomneyDa, @shanselman, @wangmiao0668000666, @brucemccurdy, and @rsaeks.</li>
+<li><strong>Cross-platform app-managed upgrades:</strong> native state repair, recovery snapshots, Gateway runtime admission, and post-upgrade service recovery now converge without losing agent access across macOS and Windows. (#171508, #174297, #175007, #176174, #178155, #178779, #180010, #180576, #180769) Thanks @tjarrau-dev, @DonnieFi, @jayzhou2309, @lostsock1, @sglion777, @Almost-Certified-ops, @billpang1-sketch, and @RomneyDa.</li>
+</ul>
+<h3>Changes</h3>
+<ul>
+<li><strong>Google models:</strong> add Gemini 4 Argon support. (#171852) Thanks @RomneyDa.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li><strong>Update guidance:</strong> avoid irrelevant database-repair advice when a package manager is missing, and remove superseded warnings after a successful update. (#173293, #173395) Thanks @DonnieFi, @RomneyDa, @wangmiao0668000666, @sunlit-deng, and @bhedanikhilkumar-code.</li>
+<li><strong>macOS onboarding:</strong> allow fresh profiles to start the Gateway and complete automatic setup. (#173246) Thanks @RomneyDa.</li>
+<li><strong>Gateway logging:</strong> prevent a deleted or stale temporary log directory from wedging the Gateway at full CPU during date rollover. (#160433) Fixes #130807 Thanks @masatohoshino, @WadeOwenWatts, and @RomneyDa.</li>
+<li><strong>Control UI queue state:</strong> clear slash-steer chips after the queued command is consumed. (#180024) Thanks @RomneyDa.</li>
+</ul>
+<h3>Complete contribution record</h3>
+This audited record covers the complete v2026.10.6..5c4a797362e0d9c94ce82ed0b6be2c9827ad9c45 history: 49 in-range PRs + 21 retained seed-only PRs = 70 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+<h4>Pull requests</h4>
+<ul>
+<li><strong>PR #181867</strong> Backports #181801. Thanks @RomneyDa.</li>
+<li><strong>PR #181487</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #181801</strong> Related #181770. Thanks @najef1979-code and @RomneyDa.</li>
+<li><strong>PR #173293</strong> Related #173084. Thanks @DonnieFi and @RomneyDa and @wangmiao0668000666 and @sunlit-deng.</li>
+<li><strong>PR #173395</strong> Related #173089. Thanks @DonnieFi and @RomneyDa and @bhedanikhilkumar-code.</li>
+<li><strong>PR #178155</strong> Related #177697. Thanks @DonnieFi and @RomneyDa.</li>
+<li><strong>PR #175707</strong> Related #175700. Thanks @YangManBOBO and @RomneyDa.</li>
+<li><strong>PR #180024</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180010</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #178779</strong> Related #167385. Thanks @jayzhou2309 and @RomneyDa and @lostsock1.</li>
+<li><strong>PR #180576</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #176675</strong> Thanks @enki and @RomneyDa.</li>
+<li><strong>PR #176682</strong> Thanks @RomneyDa and @enki.</li>
+<li><strong>PR #172026</strong> Thanks @Marvinthebored and @VACInc and @RomneyDa and @Peetiegonzalez.</li>
+<li><strong>PR #170122</strong></li>
+<li><strong>PR #178955</strong> Thanks @Marvinthebored.</li>
+<li><strong>PR #179933</strong></li>
+<li><strong>PR #179951</strong></li>
+<li><strong>PR #182030</strong></li>
+<li><strong>PR #176892</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #159715</strong> Thanks @mbelinky and @RomneyDa.</li>
+<li><strong>PR #162226</strong> Thanks @netcrazed and @RomneyDa.</li>
+<li><strong>PR #161267</strong> Thanks @obviyus and @RomneyDa.</li>
+<li><strong>PR #171852</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #176709</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180769</strong> Related #180636, #180701, #180707. Thanks @RomneyDa and @sglion777 and @Almost-Certified-ops and @billpang1-sketch.</li>
+<li><strong>PR #178522</strong> Related #178502. Thanks @ericcaiwx-star and @RomneyDa and @eduardonunesfreire-rgb.</li>
+<li><strong>PR #152565</strong> Related #152509. Thanks @LiuwqGit and @RomneyDa and @yetval.</li>
+<li><strong>PR #160409</strong> Thanks @masatohoshino and @RomneyDa.</li>
+<li><strong>PR #163578</strong> Thanks @lifuyue and @RomneyDa.</li>
+<li><strong>PR #180482</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #180989</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #164297</strong> Related #164146, #156945. Thanks @wangmiao0668000666 and @RomneyDa and @shanselman and @dor-sr and @cristianoc and @brucemccurdy.</li>
+<li><strong>PR #158908</strong> Related #156945. Thanks @dor-sr and @RomneyDa and @shanselman and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #175987</strong> Related #156945. Thanks @RomneyDa and @shanselman and @dor-sr and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #179320</strong> Related #156945. Thanks @RomneyDa and @shanselman and @dor-sr and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #181389</strong> Related #156945. Thanks @shanselman and @RomneyDa and @dor-sr and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #167459</strong> Related #167441, #156945. Thanks @RomneyDa and @shanselman and @dor-sr and @wangmiao0668000666 and @brucemccurdy.</li>
+<li><strong>PR #153728</strong> Related #144842. Thanks @zhangguiping-xydt and @RomneyDa and @krjcolby-svg.</li>
+<li><strong>PR #164485</strong> Related #153145. Thanks @PollyBot13 and @RomneyDa and @rsaeks.</li>
+<li><strong>PR #168391</strong> Related #168130. Thanks @RomneyDa and @jakeaadams.</li>
+<li><strong>PR #168629</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #168764</strong> Related #168676. Thanks @ruel225 and @RomneyDa and @Oliver4Spot.</li>
+<li><strong>PR #168862</strong> Related #158126. Thanks @RomneyDa and @Captain69G.</li>
+<li><strong>PR #169385</strong> Related #169353. Thanks @stackingrockss and @RomneyDa.</li>
+<li><strong>PR #169400</strong> Related #169377. Thanks @Gigaxel and @RomneyDa.</li>
+<li><strong>PR #171292</strong> Related #171165. Thanks @RomneyDa and @davidcittadini.</li>
+<li><strong>PR #171372</strong> Related #171348. Thanks @RomneyDa and @LifeViwer.</li>
+<li><strong>PR #172068</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #164511</strong> Thanks @holgergruenhagen and @RomneyDa.</li>
+<li><strong>PR #172756</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #172768</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #172769</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #173862</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #176218</strong> Related #176208. Thanks @eliavb43 and @RomneyDa.</li>
+<li><strong>PR #177716</strong> Thanks @jjjhenriksen and @RomneyDa.</li>
+<li><strong>PR #174530</strong> Related #174078. Thanks @wangmiao0668000666 and @RomneyDa and @asikorskiy.</li>
+<li><strong>PR #181166</strong> Related #181020. Thanks @najef1979-code.</li>
+<li><strong>PR #181307</strong> Related #181235. Thanks @RomneyDa and @agroman1993.</li>
+<li><strong>PR #176783</strong> Related #176669. Thanks @RomneyDa and @PennyVibe.</li>
+<li><strong>PR #173366</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #173292</strong> Thanks @chandraveshchaudhari and @RomneyDa.</li>
+<li><strong>PR #174257</strong> Related #174120. Thanks @RomneyDa and @kazuyuki-eguchi.</li>
+<li><strong>PR #170857</strong> Thanks @trukhinyuri and @RomneyDa.</li>
+<li><strong>PR #171508</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #174297</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #175007</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #176174</strong> Related #176163. Thanks @RomneyDa and @tjarrau-dev.</li>
+<li><strong>PR #173246</strong> Thanks @RomneyDa.</li>
+<li><strong>PR #160433</strong> Related #130807. Thanks @masatohoshino and @RomneyDa and @WadeOwenWatts.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.10.7/OpenClaw-2026.10.7-x86_64.zip" length="333994680" type="application/octet-stream" sparkle:edSignature="Bu9R0nvprJeeprLKYE3Ppjrq04PAXWxq2lEXGY3OCbUw/wVsT7CM3kAoxGOAs6CqXAOd3InCobSsJpk135cmDA=="/>
+        </item>
+        <item>
             <title>2026.10.6</title>
             <pubDate>Thu, 22 Oct 2026 21:03:25 +0000</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-x86_64.xml</link>
@@ -2560,125 +2669,6 @@ Shipped baseline exclusions: v2026.10.4 (374 PRs: #42, #88247, #108851, #109291,
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.10.5/OpenClaw-2026.10.5-x86_64.zip" length="333421850" type="application/octet-stream" sparkle:edSignature="jA0aOlL4K4AWpJl27Ha8GGOuUaGsxjqwbooju3mIcdDeT+gsqDCXvSg5/aQAdHKicUBCnU9FAXHE0fuSklWRBw=="/>
-        </item>
-        <item>
-            <title>2026.10.4</title>
-            <pubDate>Fri, 16 Oct 2026 01:56:20 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast-x86_64.xml</link>
-            <sparkle:version>2610000490</sparkle:version>
-            <sparkle:shortVersionString>2026.10.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.10.4</h2>
-<h3>Highlights</h3>
-<ul>
-<li>The Gateway keeps running after the computer sleeps or the system clock jumps, instead of restarting itself because its ownership heartbeat looked stale. (#170790) Thanks @AnvinaLI, @sgh6688, @waynegault, and @RomneyDa.</li>
-<li>Gateway shutdown and restart no longer hang on a stalled transcript worker or in-flight session lifecycle events. (#170493, #170555) Thanks @Oldrich333.</li>
-<li>Tlon group DMs no longer treat other participants as the owner, closing an owner-impersonation path. (#165801) Thanks @eleqtrizit.</li>
-<li>Headless browser pages keep responding to clicks while a site waits for a passkey. (#170857) Thanks @trukhinyuri.</li>
-<li>Manual <code>/compact</code> settles the active run before compacting instead of aborting it and dropping the pending request. (#166163) Thanks @holny and @alexph-dev.</li>
-</ul>
-<h3>Changes</h3>
-<ul>
-<li>Stability patch for 2026.10.3 with no new features or configuration changes. Thanks @RomneyDa.</li>
-</ul>
-<h3>Fixes</h3>
-<ul>
-<li>Gateway: stays responsive during long reply-tagged streams, and long replies that quote tool-call XML no longer re-parse Markdown on every token. (#166782, #171573) Thanks @boeingchoco.</li>
-<li>Gateway: blocked durable context-engine turns are logged once instead of on every run. (#167595) Thanks @jalehman.</li>
-<li>Control UI: delayed application heartbeats no longer force a reconnect. (#171253)</li>
-<li>Gateway: recover state ownership after sleep and wall-clock changes, and allow <code>openclaw gateway restart</code> from verified external macOS terminals. (#170790, #170354) Thanks @AnvinaLI, @sgh6688, @waynegault, and @RomneyDa.</li>
-<li>Gateway: bound transcript-worker shutdown waits and wait for session lifecycle publication during shutdown. (#170493, #170555) Thanks @Oldrich333.</li>
-<li>Gateway: start enabled standalone plugin files with the Gateway, and keep worker heap limits enforced when the managed service sets a process-wide heap flag. (#171330, #166581) Thanks @holgergruenhagen, @valkyriweb, @xydigitLybnnnn, @goslingmanagment, @waynegault, and @obviyus.</li>
-<li>Agents: launched plugin turns no longer fail with writer-claim errors, and Claude CLI sessions no longer fork history across message routes. (#170077, #167241) Thanks @cmatrx0.</li>
-<li>Agents: manual compaction settles the active run instead of aborting it. (#166163) Thanks @holny and @alexph-dev.</li>
-<li>OpenAI: tool turns for reasoning models on api.openai.com Completions routes no longer fail with a 400. (#166182) Thanks @obviyus and @AsTutoAI.</li>
-<li>Updates: agent databases are no longer flagged as changed during snapshot capture, the success summary stops repeating settled plugin data/settings upgrades as pending, and metadata inventory keeps running under progress-output backpressure. (#170351, #170413, #168493) Thanks @DonnieFi, @RomneyDa, and @vincentkoc.</li>
-<li>Updates: slow host admission no longer holds the database writer and disrupts Gateway work, progress keeps reporting through temporary Doctor maintenance, snapshot failures get an accurate headline and recovery advice, and Linux updates can clean up abandoned runtime directories under protected systemd user managers. (#171493, #171454, #171457, #171488, #170783, #166335) Thanks @RomneyDa, @DonnieFi, and @vincentkoc.</li>
-<li>Updates: candidate validation no longer amplifies private SQLite snapshots on live installs, older drivers stop reading candidate-migrated state and stale restart verdicts clear, and optional cron inspection or snapshot cleanup failures no longer stall updates. (#167451, #170130, #170754) Thanks @angeliti999 and @RomneyDa.</li>
-<li>Updates: <code>openclaw update repair</code> turns no longer time out before running tools on slower hosts; nested authority checks reuse the current state snapshot instead of copying the database again. (#166847)</li>
-<li>Doctor: updates no longer refuse unreferenced retired OAuth sidecars, and offline state repair works for app-owned Gateways. (#165420, #170768) Thanks @obviyus and @RomneyDa.</li>
-<li>Tailscale: an interrupted start stops its serve process, local access stays available when the tailnet denies Serve, and Doctor checks configured Tailscale startup prerequisites. (#167514, #171509, #166947) Thanks @pandysp and @RomneyDa.</li>
-<li>macOS: app recovery keeps compatible newer Gateways instead of downgrading them, and repair accepts a verified LaunchAgent bootstrap that is already in progress. (#170766, #170740) Thanks @RomneyDa.</li>
-<li>Sessions: equivalent POSIX path aliases such as <code>/tmp</code> and <code>/private/tmp</code> no longer restart channels. (#166462) Thanks @ericcaiwx-star.</li>
-<li>MCP: OAuth login completes when the authorization server registers loopback redirect URIs without a port. (#170876) Thanks @9fw2pq8sgb-art.</li>
-<li>Browser: headless pages accept clicks while a site waits for a passkey. (#170857) Thanks @trukhinyuri.</li>
-<li>Control UI: updated chats recover through the serving document. (#168941)</li>
-<li>Tlon: never treat group DM authors as the owner. (#165801) Thanks @eleqtrizit.</li>
-<li>Telegram: polling workers resolve in both source and package builds. (#154286) Thanks @xydt-juyaohui and @markfietje.</li>
-<li>Discord: agent consults keep working after voice changes. (#171029) Thanks @ericcaiwx-star and @brainmonger.</li>
-<li>Feishu: config hot-reload no longer orphans conversation bindings. (#169226) Thanks @ruel225, @junniar, and @obviyus.</li>
-<li>IRC: long non-ASCII replies are no longer lost when the server relays them. (#159730) Thanks @rodricksz4h5.</li>
-<li>Release: plugin npm publish tolerates repeated artifact pagination entries, Linux builds trigger after automatic requests with hosted-runner credentials, and ratchet checks read large Git baselines. (#171044, #167087, #167237, #164743) Thanks @RomneyDa and @shakkernerd.</li>
-</ul>
-<h3>Complete contribution record</h3>
-This audited record covers the complete v2026.10.3..d58dd3ceef67f10eab31d93387d2c90866b3ec93 history: 61 in-range PRs + 0 retained seed-only PRs = 61 unique PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
-<h4>Pull requests</h4>
-<ul>
-<li><strong>PR #166581</strong> Related #157575, #157630. Thanks @valkyriweb and @xydigitLybnnnn and @goslingmanagment and @waynegault.</li>
-<li><strong>PR #164743</strong> Related #164741. Thanks @shakkernerd.</li>
-<li><strong>PR #166163</strong> Related #166038. Thanks @holny and @alexph-dev.</li>
-<li><strong>PR #166182</strong> Related #166125. Thanks @obviyus and @AsTutoAI.</li>
-<li><strong>PR #167087</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #167241</strong> Related #167077. Thanks @cmatrx0.</li>
-<li><strong>PR #168493</strong> Thanks @vincentkoc.</li>
-<li><strong>PR #168941</strong></li>
-<li><strong>PR #169226</strong> Related #169190. Thanks @ruel225 and @obviyus and @junniar.</li>
-<li><strong>PR #170351</strong> Thanks @DonnieFi and @RomneyDa.</li>
-<li><strong>PR #171029</strong> Related #171013. Thanks @ericcaiwx-star and @brainmonger.</li>
-<li><strong>PR #171044</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #171330</strong> Thanks @holgergruenhagen and @obviyus.</li>
-<li><strong>PR #166462</strong> Related #166456. Thanks @ericcaiwx-star.</li>
-<li><strong>PR #170857</strong> Thanks @trukhinyuri.</li>
-<li><strong>PR #170413</strong> Related #170334. Thanks @RomneyDa and @DonnieFi.</li>
-<li><strong>PR #170702</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #170790</strong> Related #169829, #170525, #170597. Thanks @AnvinaLI and @sgh6688 and @waynegault.</li>
-<li><strong>PR #170354</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #165801</strong> Thanks @eleqtrizit.</li>
-<li><strong>PR #170876</strong> Related #170848. Thanks @9fw2pq8sgb-art.</li>
-<li><strong>PR #159730</strong> Thanks @rodricksz4h5.</li>
-<li><strong>PR #154286</strong> Related #154180. Thanks @xydt-juyaohui and @markfietje.</li>
-<li><strong>PR #170077</strong></li>
-<li><strong>PR #170493</strong> Related #169777. Thanks @Oldrich333.</li>
-<li><strong>PR #170555</strong></li>
-<li><strong>PR #167237</strong></li>
-<li><strong>PR #171493</strong> Related #169260. Thanks @RomneyDa and @DonnieFi.</li>
-<li><strong>PR #171457</strong> Related #171408. Thanks @RomneyDa and @DonnieFi.</li>
-<li><strong>PR #170783</strong></li>
-<li><strong>PR #171454</strong> Related #171409. Thanks @RomneyDa and @DonnieFi.</li>
-<li><strong>PR #166335</strong> Thanks @vincentkoc.</li>
-<li><strong>PR #171488</strong> Related #171410. Thanks @RomneyDa and @DonnieFi.</li>
-<li><strong>PR #170766</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #170740</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #167514</strong> Related #167436. Thanks @pandysp.</li>
-<li><strong>PR #171509</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #166947</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #167451</strong></li>
-<li><strong>PR #170130</strong> Related #169422. Thanks @angeliti999.</li>
-<li><strong>PR #170754</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #165420</strong> Thanks @obviyus.</li>
-<li><strong>PR #170768</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #160056</strong> Related #159926, #159927. Thanks @oscarsixsecllc.</li>
-<li><strong>PR #171715</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #171747</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #163177</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #171928</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #166847</strong></li>
-<li><strong>PR #166782</strong> Related #166781. Thanks @boeingchoco.</li>
-<li><strong>PR #171573</strong> Related #171363. Thanks @boeingchoco.</li>
-<li><strong>PR #167595</strong> Thanks @jalehman.</li>
-<li><strong>PR #171253</strong></li>
-<li><strong>PR #172666</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #166218</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #161543</strong></li>
-<li><strong>PR #168922</strong></li>
-<li><strong>PR #172038</strong> Thanks @vincentkoc.</li>
-<li><strong>PR #172596</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #171952</strong> Thanks @RomneyDa.</li>
-<li><strong>PR #172786</strong> Thanks @RomneyDa.</li>
-</ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.10.4/OpenClaw-2026.10.4-x86_64.zip" length="328526139" type="application/octet-stream" sparkle:edSignature="7oYP5pWoEg0D2GszVtiEl8QHo4Br/bs4Fph5HgYcpqiYvv4Iu6IEwkwXvDoDP1Qucnb1An6ww7wG4q8zRq6lDw=="/>
         </item>
     </channel>
 </rss>

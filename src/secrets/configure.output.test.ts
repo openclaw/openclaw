@@ -64,7 +64,7 @@ it.each(["plaintext", "references", "missing"])(
         await expect(
           runSecretsCommand(
             true,
-            () => runSecretsConfigureInteractive({ env: state.env, skipProviderSetup: true }),
+            () => runSecretsConfigureInteractive({ skipProviderSetup: true }),
             () => expect.fail("JSON failures must not use the human renderer."),
             1,
           ),

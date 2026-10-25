@@ -79,12 +79,16 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   private detailsOutputsBinding?: DetailsOutputsBinding;
 
+  protected retireDetailsOutputs(): void {
+    this.detailsOutputsBinding?.stop();
+    this.detailsOutputsBinding = undefined;
+  }
+
   /** The Details host consumes this binding; native workspace/board projections already subscribe the pane. */
-  protected captureDetailsOutputs() {
+  protected captureDetailsOutputs(): ReturnType<typeof projectDetailsOutputs> {
     const state = this.state;
     if (!state || !this.presented || !this.isConnected) {
-      this.detailsOutputsBinding?.stop();
-      this.detailsOutputsBinding = undefined;
+      this.retireDetailsOutputs();
       return {};
     }
     const workspace = getSessionWorkspace(state);
@@ -121,12 +125,18 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         boardReady,
       );
     }
-    return projectDetailsOutputs(binding, workspace, board);
+    return {
+      ...projectDetailsOutputs(binding, workspace, board),
+      // Artifacts can load alongside the Details module once the transcript paints.
+      // A failed history read also settles hydration; Outputs has independent recovery.
+      retainOutputs: this.secondarySessionReadsReady(this.sessionPresentation === "mobile")
+        ? binding.retain
+        : undefined,
+    };
   }
 
   override dispose(): void {
-    this.detailsOutputsBinding?.stop();
-    this.detailsOutputsBinding = undefined;
+    this.retireDetailsOutputs();
     super.dispose();
   }
 
@@ -549,8 +559,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (!presented) {
       // The hidden frame is parked; retire feedback without releasing its admitted publication.
       this.publication.binding?.sync(null);
-      this.detailsOutputsBinding?.stop();
-      this.detailsOutputsBinding = undefined;
+      this.retireDetailsOutputs();
       this.retireHeaderSessionMutations();
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;

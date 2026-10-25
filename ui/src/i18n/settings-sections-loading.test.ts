@@ -1,35 +1,15 @@
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
-import {
-  captureI18nStateForTesting,
-  createI18nManagerForTesting,
-} from "./lib/translate.test-support.ts";
-import { en } from "./locales/en.ts";
+import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
-vi.hoisted(() => vi.resetModules());
-
-const startupSections = structuredClone(en.configForm.sections);
-let restoreI18n: () => Promise<void>;
-
-beforeEach(() => {
-  restoreI18n = captureI18nStateForTesting();
-});
-afterEach(async () => {
-  en.configForm.sections = structuredClone(startupSections);
-  await restoreI18n();
-});
-afterAll(async () => {
-  // Cached consumers must retain their copy for later tests in the shared worker.
-  const { registerSettingsEnglish } = await import("./locales/en-settings.ts");
-  registerSettingsEnglish();
-});
+const loadI18n = useLazyEnglishTest();
 
 it.each([
   { surface: "config form", load: () => import("../components/config-form.render.tsx") },
   { surface: "Setup", load: () => import("../pages/config/setup.tsx") },
   { surface: "Settings search", load: () => import("../pages/config/settings-search.ts") },
 ])("loads Settings section fallback copy before $surface uses it", async ({ load }) => {
-  const manager = createI18nManagerForTesting(async () => ({ common: { health: "Gesundheit" } }));
+  const { manager, en } = await loadI18n();
   const configForm = en.configForm;
   const sections = configForm.sections;
   const fieldOrder = Object.keys(configForm);

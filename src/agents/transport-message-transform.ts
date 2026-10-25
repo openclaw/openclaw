@@ -3,6 +3,7 @@
  * unsafe failed turns, maps tool-call ids across model boundaries, and fills
  * strict provider tool-result gaps when supported.
  */
+import type { AiTransformTransportMessages } from "@openclaw/ai";
 import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
@@ -16,7 +17,7 @@ import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import type { Api, Context, Model } from "../llm/types.js";
+import type { Context } from "../llm/types.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -30,18 +31,10 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
 
 // Responses-family APIs retain their inherited "aborted" synthetic-result convention.
 export function transformTransportMessages(
-  messages: Context["messages"],
-  model: Model,
-  normalizeToolCallId?: (
-    id: string,
-    targetModel: Model,
-    source: { provider: string; api: Api; model: string },
-  ) => string,
-  options?: {
-    normalizeSameModelToolCallIds?: boolean;
-    preserveCrossModelToolCallThoughtSignature?: boolean;
-    preserveUnframedToolResults?: boolean;
-  },
+  messages: Parameters<AiTransformTransportMessages>[0],
+  model: Parameters<AiTransformTransportMessages>[1],
+  normalizeToolCallId?: Parameters<AiTransformTransportMessages>[2],
+  options?: Parameters<AiTransformTransportMessages>[3],
 ): Context["messages"] {
   const syntheticToolResultText = OPENAI_RESPONSES_APIS.has(model.api)
     ? "aborted"

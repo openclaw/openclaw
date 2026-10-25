@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { OpenClawPluginApi, ProviderPlugin } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { commandResult } from "../test-support/command-result.test-support.js";
 import { makeModel } from "./model-contract-cases.test-support.js";
 import { registerAnthropicPlugin } from "./register.runtime.js";
 import { resolveClaudeTerminalExecutable } from "./session-catalog-executable.js";
@@ -34,22 +35,10 @@ const context = {
 const oauthOptions = { apiKey: "sk-ant-oat01-synthetic", headers: { "x-test": "preserved" } };
 const executionContext = { workspaceDir: "/synthetic", provider: "claude-cli", modelId: model.id };
 
-function versionResult(stdout: string, overrides: Partial<CommandResult> = {}): CommandResult {
-  return {
-    stdout,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
 function register(
   runCommandWithTimeout = vi
     .fn<CommandRunner>()
-    .mockResolvedValue(versionResult("2.1.400 (Claude Code)")),
+    .mockResolvedValue(commandResult({ stdout: "2.1.400 (Claude Code)" })),
 ) {
   const registerProvider = vi.fn<OpenClawPluginApi["registerProvider"]>();
   const registerCliBackend = vi.fn<OpenClawPluginApi["registerCliBackend"]>();
@@ -135,7 +124,7 @@ it.each([
   const runner = vi
     .fn<CommandRunner>()
     .mockResolvedValue(
-      versionResult(stdout ?? "", { outputLimitExceeded: mode === "output-limit" }),
+      commandResult({ stdout: stdout ?? "", outputLimitExceeded: mode === "output-limit" }),
     );
   if (mode === "missing") {
     vi.mocked(resolveClaudeTerminalExecutable).mockReturnValue(undefined);
@@ -207,7 +196,7 @@ it("shares lazy CLI discovery across native execution and both OAuth wrappers", 
   expect(normal.base).not.toHaveBeenCalled();
   expect(simple.base).not.toHaveBeenCalled();
   expect(prepared).not.toHaveBeenCalled();
-  pending.resolve(versionResult("2.1.400 (Claude Code)"));
+  pending.resolve(commandResult({ stdout: "2.1.400 (Claude Code)" }));
   await Promise.all(executions);
   expect(prepared).toHaveBeenCalledTimes(2);
   expect(normal.headers()).toEqual({
@@ -239,7 +228,7 @@ it("bounds requests even while process cleanup is pending and caches the fallbac
   });
   await request.run();
   expect(runner).toHaveBeenCalledOnce();
-  pending.resolve(versionResult("2.1.400 (Claude Code)"));
+  pending.resolve(commandResult({ stdout: "2.1.400 (Claude Code)" }));
   await request.run();
   expect(request.headers(2)).toEqual(oauthOptions.headers);
 });

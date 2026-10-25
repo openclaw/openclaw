@@ -101,6 +101,21 @@ describe("models-config merge", () => {
     });
   });
 
+  it("keeps a catalog model's family only while the configured route matches", () => {
+    const catalog = provider({ models: [model({ family: "meta" })] });
+    const familyFor = (configured: ProviderOverrides) =>
+      merge.mergeProviderModels(catalog, provider({ models: [model()], ...configured })).models[0]
+        ?.family;
+    expect(familyFor({})).toBe("meta");
+    // Another endpoint may serve a different model under the same id.
+    expect(familyFor({ baseUrl: "http://127.0.0.1:9000/v1" })).toBeUndefined();
+    expect(familyFor({ api: "openai-completions" })).toBeUndefined();
+    // Rows the configuration does not mention keep the catalog's own declaration.
+    expect(merge.mergeProviderModels(catalog, provider({ models: [] })).models).toEqual(
+      catalog.models,
+    );
+  });
+
   it("replaces a stale baseUrl when the model API surface changes", () => {
     const merged = mergeCustom(
       { api: undefined, models: [model({ api: "openai-responses" })] },

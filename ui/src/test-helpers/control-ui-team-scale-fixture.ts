@@ -467,17 +467,25 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         })),
       },
       "progressCard.get": {
-        card: {
-          sessionKey: selectedSessionKey,
-          revision: 1,
-          updatedAt: now,
-          markdown: "Synthetic project verification is in progress.",
-          steps: [
-            { step: "Review fixture inventory", status: "completed" },
-            { step: "Validate cold-load rendering", status: "in_progress" },
-            { step: "Record performance evidence", status: "pending" },
-          ],
-        },
+        cases: [
+          {
+            match: { sessionKey: selectedSessionKey },
+            response: {
+              card: {
+                sessionKey: selectedSessionKey,
+                revision: 1,
+                updatedAt: now,
+                markdown: "Synthetic project verification is in progress.",
+                steps: [
+                  { step: "Review fixture inventory", status: "completed" },
+                  { step: "Validate cold-load rendering", status: "in_progress" },
+                  { step: "Record performance evidence", status: "pending" },
+                ],
+              },
+            },
+          },
+          { response: { card: null } },
+        ],
       },
     },
   });

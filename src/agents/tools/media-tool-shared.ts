@@ -124,7 +124,6 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
 }): boolean {
   const provider =
     params.provider ??
@@ -154,7 +153,6 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    authProfileStoreSource: params.authProfileStoreSource,
   });
 }
 
@@ -214,7 +212,6 @@ async function resolveCapabilityModelCandidatesForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   providers: readonly CapabilityProvider[];
 }): Promise<string[]> {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
@@ -261,7 +258,6 @@ export async function resolveCapabilityModelConfigForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   modelOverride?: string;
   providers: CapabilityProviderSource;
@@ -288,7 +284,6 @@ export function hasGenerationToolAvailability(params: {
   agentDir?: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProviderSource;
   providerKey: GenerationCapabilityProviderKey;
@@ -335,7 +330,6 @@ export function hasGenerationToolAvailability(params: {
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       authStore: params.authStore,
-      authProfileStoreSource: params.authProfileStoreSource,
       capability: capabilityAuthOperation(params.providerKey),
     }),
   );

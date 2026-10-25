@@ -223,6 +223,29 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     expect(isVisibleProvider("acme-cli")).toBe(true);
   });
 
+  it("recognizes runtime providers without loading unrelated setup backends", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        claudeBinding,
+        { id: "standalone-cli", pluginId: "standalone", config: { command: "standalone" } },
+      ],
+      resolvePluginSetupRegistry: unexpectedMetadata,
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "acme-cli"
+          ? {
+              pluginId: "acme",
+              backend: { id: "acme-cli", modelProvider: "acme", config: { command: "acme" } },
+            }
+          : undefined,
+    });
+
+    expect(isCliRuntimeProvider(" Claude-CLI ", { config: {} })).toBe(true);
+    expect(isCliRuntimeProvider(" Acme-CLI ", { config: {} })).toBe(true);
+    expect(isCliRuntimeProvider("anthropic", { config: {} })).toBe(false);
+    expect(isCliRuntimeProvider("standalone-cli", { config: {} })).toBe(false);
+    expect(isCliRuntimeProvider("acme-cli")).toBe(false);
+  });
+
   it("collapses CLI runtime rows only into a canonical row config pins to that runtime", () => {
     const models = {
       "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },

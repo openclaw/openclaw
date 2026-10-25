@@ -31,33 +31,19 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
   if (existing) {
     return existing;
   }
-  const {
-    key,
-    kind,
-    label,
-    displayName,
-    derivedTitle,
-    classification,
-    participants,
-    expandedParticipants,
-    owner,
-    lastRunId,
-    status,
-    runtimeMs,
-  } = row;
   const metadata = {
-    key,
-    kind,
-    label,
-    displayName,
-    derivedTitle,
-    classification,
-    participants,
-    expandedParticipants,
-    owner,
-    lastRunId,
-    status,
-    runtimeMs,
+    key: row.key,
+    kind: row.kind,
+    label: row.label,
+    displayName: row.displayName,
+    derivedTitle: row.derivedTitle,
+    classification: row.classification,
+    participants: row.participants,
+    expandedParticipants: row.expandedParticipants,
+    owner: row.owner,
+    lastRunId: row.lastRunId,
+    status: row.status,
+    runtimeMs: row.runtimeMs,
   };
   transcriptMetadata.set(row, metadata);
   return metadata;

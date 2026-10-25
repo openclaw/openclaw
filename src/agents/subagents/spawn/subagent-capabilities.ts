@@ -78,7 +78,7 @@ function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
-function resolveSessionCapabilityEntry(params: {
+export function resolveSessionCapabilityEntry(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
   store?: SessionCapabilityStore;

@@ -3,6 +3,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../config/io.runtime.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type {
   NativeSubagentAccepted,
@@ -10,7 +11,6 @@ import type {
   NativeSubagentSelection,
 } from "../plugins/runtime/types-native-subagent.js";
 import type { PluginCommandScheduledTurns } from "../plugins/runtime/types-scheduled-turns.js";
-import { captureNativeSubagentProfile } from "../plugins/subagent-profile-runtime.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import type { AdmittedRunContext } from "./admitted-run-context.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
@@ -44,6 +44,26 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+
+/** Resolve only in the admitted request's registry; no global or cross-plugin fallback. */
+function captureNativeSubagentProfile(pluginId: string, id: string) {
+  const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const record = registry?.plugins.find((entry) => entry.id === pluginId);
+  const profile = registry?.subagentProfiles.find(
+    (entry) => entry.pluginId === pluginId && entry.id === id,
+  );
+  if (!registry || !record?.contracts?.subagentProfiles?.includes(id) || !profile) {
+    throw new Error(`Unknown or undeclared subagent profile for this plugin: ${id}`);
+  }
+  const isCurrent = capturePluginLifecycleAuthority(registry, record, { scopedRuntime: true });
+  const assertCurrent = () => {
+    if (!isCurrent?.()) {
+      throw new Error("Subagent profile plugin is no longer active.");
+    }
+  };
+  assertCurrent();
+  return { profile, assertCurrent };
+}
 
 /** Adapt the existing authorized native tool surface; do not create a second spawn owner. */
 export function createRequestNativeSubagentRuntime(

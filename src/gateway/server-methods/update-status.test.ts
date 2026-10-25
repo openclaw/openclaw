@@ -33,7 +33,9 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { startUpdateRunWatcher } from "../update-run-watcher.js";
 import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -114,7 +116,7 @@ async function read(method: UpdateReadMethod, params: Record<string, unknown> = 
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(updateStatusHandlers[method], method);
   await handler({
-    req: { type: "req", id: method, method, params },
+    req: gatewayRequest(method, method, params),
     params,
     client: null,
     isWebchatConnect: () => false,
@@ -285,22 +287,11 @@ it.each(["accepting", "suspension"] as const)(
     });
     const respond = vi.fn<RespondFn>();
     const request = handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "read-after-rollback",
-        method: "update.runs.get",
-        params: { runId: randomUUID() },
-      },
+      req: gatewayRequest("read-after-rollback", "update.runs.get", { runId: randomUUID() }),
       respond,
       client: {
         connId: "read-after-rollback",
-        connect: {
-          role: "operator",
-          scopes: ["operator.admin"],
-          client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
-          minProtocol: 1,
-          maxProtocol: 1,
-        },
+        connect: gatewayConnect(["operator.admin"], { id: "cli", platform: "linux", mode: "cli" }),
       },
       isWebchatConnect: () => false,
       context: { logGateway } as GatewayRequestContext,

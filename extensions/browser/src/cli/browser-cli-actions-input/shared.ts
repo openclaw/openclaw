@@ -79,9 +79,7 @@ export async function runBrowserAction(params: {
 export function requireRef(ref: string | undefined) {
   const refValue = typeof ref === "string" ? ref.trim() : "";
   if (!refValue) {
-    defaultRuntime.error(danger("ref is required"));
-    defaultRuntime.exit(1);
-    return null;
+    throw new Error("ref is required");
   }
   return refValue;
 }

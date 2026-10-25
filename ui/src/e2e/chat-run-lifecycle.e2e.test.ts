@@ -1,8 +1,11 @@
 // Control UI E2E tests cover chat run lifecycle behavior through the Gateway WebSocket.
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -279,6 +282,14 @@ suite.define(() => {
       sessionId: `session:${sessionKey}`,
       sessionInfo: completedSession,
     });
+    await gateway.emitGatewayEvent("agent", {
+      stream: "usage",
+      runId,
+      seq: 1,
+      sessionKey,
+      data: { outputTokens: 42 },
+      ts: completedSession.endedAt,
+    });
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
     await gateway.emitGatewayEvent("sessions.changed", {
       ...completedSession,
@@ -302,6 +313,36 @@ suite.define(() => {
     await operationLabel.waitFor();
     await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
     expect(await stopButton(page).count()).toBe(0);
+
+    const successorSession = {
+      ...completedSession,
+      lastRunId: "background-successor",
+      runtimeMs: 27_000,
+      updatedAt: completedSession.updatedAt + 30_000,
+    };
+    await gateway.setSessionsListResponse({ sessions: [successorSession] });
+    await gateway.emitGatewayEvent("sessions.changed", {
+      sessionKey,
+      reason: "lifecycle",
+      session: successorSession,
+    });
+    await evaluateControlUiContext(page, async (application) => {
+      await application.sessions.refresh({ agentId: "main", force: true });
+    });
+    const screenshot = await takeControlUiScreenshotFrame(
+      page,
+      page.locator(".chat-thread"),
+      [operationLabel, replyBody],
+      { animations: "disabled" },
+    );
+    await writeFile(join(suite.artifactDir, "worked-duration.png"), screenshot.png);
+    console.log("WORKED_DURATION_PROOF", suite.artifactDir);
+    await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13 seconds");
+    expect(await page.locator(".chat-turn-recap").allTextContents()).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("Done in")]),
+    );
+    expect(await page.locator(".chat-turn-recap").textContent()).toBe("42 output tokens");
+    await gateway.setSessionsListResponse({ sessions: [completedSession] });
 
     await page.reload();
     await gateway.waitForRequest("chat.startup");

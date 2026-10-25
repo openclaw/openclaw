@@ -8,6 +8,7 @@ import {
   resolveCronScheduledToolPolicy,
   type CronScheduledToolPolicy,
 } from "../scheduled-tool-policy.js";
+import { isCronOperatorSourceParent } from "../session-target.js";
 import {
   normalizeCronToolsAllowProvenance,
   resolveCronAuthenticatedCallerOrigin,
@@ -129,7 +130,7 @@ export function reconcileCronOperatorSource(params: {
     job.owner?.sessionKey === source.sessionKey &&
     job.scheduledToolPolicy.ownerSessionKey === source.sessionKey &&
     job.agentId === source.agentId &&
-    job.sessionTarget === `session:${source.sessionKey}`
+    isCronOperatorSourceParent(job, source.sessionKey)
   ) {
     job.operatorSource = { source, executionRevision };
   } else {

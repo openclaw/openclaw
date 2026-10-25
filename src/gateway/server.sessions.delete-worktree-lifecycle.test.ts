@@ -35,6 +35,7 @@ import {
   prepareGatewayLocalUserIngress,
 } from "./local-user-ingress.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -305,12 +306,7 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
   const creatorProfileId = ensureProfileForEmail("delete-worktree-successor@example.test").id;
   const adminClient = {
     connect: { scopes: ["operator.admin"] },
-    authenticatedUserProfile: {
-      profileId: creatorProfileId,
-      displayName: "Delete Worktree Test",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: gatewayProfile(creatorProfileId, "Delete Worktree Test"),
   } as never;
   attachGatewayLocalUserIngress(
     adminClient,

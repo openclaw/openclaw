@@ -6,6 +6,7 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayComputerService } from "../desktop/computer-service.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { computerHandlers } from "./computer.js";
 import type {
   GatewayClient,
@@ -27,13 +28,7 @@ function computerService(methods: ComputerMethods): GatewayComputerService {
 function createClient(identity?: AgentRuntimeIdentity): GatewayClient {
   return {
     connId: "computer-operator",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.write"],
-      client: { id: GATEWAY_CLIENT_IDS.CLI, version: "test", platform: "test", mode: "cli" },
-    },
+    connect: gatewayConnect(["operator.write"], { id: GATEWAY_CLIENT_IDS.CLI, mode: "cli" }),
     ...(identity ? { internal: { syntheticClient: true, agentRuntimeIdentity: identity } } : {}),
   };
 }

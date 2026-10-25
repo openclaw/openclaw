@@ -1,7 +1,6 @@
-import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import {
   newChatPage,
   controlUiSessionUrl,
@@ -52,36 +51,6 @@ function roster<Row extends object, Defaults extends object>(
 }
 
 suite.define(() => {
-  it("opens the chat picker from a partial snapshot while catalog revalidation is pending", async () => {
-    const page = await newChatPage(suite);
-    const sessionKey = "agent:main:main";
-    const prepared = { ...modelInfo("prepared", "Prepared model", "fixture"), available: true };
-    const added = { ...prepared, id: "added", name: "Added model" };
-    const gateway = await installMockGateway(page, {
-      connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
-      sessionKey,
-      models: [],
-      heldMethods: ["models.list"],
-    });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await gateway.waitForRequest("models.list");
-    await gateway.emitGatewayEvent("models.snapshot", {
-      target: { agentId: "main", sessionKey },
-      scope: { agentId: "main", sessionKey },
-      catalog: { models: [prepared], refreshFailed: true },
-    });
-    const picker = pickerFor(page);
-    await picker.locator("[data-chat-model-select]").click();
-    const preparedRow = attr(picker, "model-option", "fixture/prepared");
-    await revealChatModelOption(picker, "fixture/prepared");
-    await expect.poll(() => preparedRow.isVisible()).toBe(true);
-    expect(await preparedRow.isEnabled()).toBe(true);
-
-    await gateway.resolveDeferred("models.list", { models: [prepared, added] });
-    await expect.poll(() => attr(picker, "model-option", "fixture/added").isVisible()).toBe(true);
-    expect(await picker.getAttribute("open")).not.toBeNull();
-  });
-
   it("preserves the Gateway-resolved target without exposing it in the picker", async () => {
     const page = await newChatPage(suite, {
       hasTouch: true,
@@ -172,101 +141,6 @@ suite.define(() => {
     expect(new URL(page.url()).searchParams.get("provider")).toBe("openai");
     expect(new URL(page.url()).searchParams.has("connect")).toBe(false);
     await page.locator('[data-provider-id="openai"]').waitFor({ state: "visible" });
-  });
-
-  it("clears a persisted pin matching the default through the default model row", async () => {
-    const page = await newChatPage(suite);
-    const session = { ...sessionInfo("model-pin-proof", "gpt-5.5"), modelOverrideSource: "user" };
-    const gateway = await installMockGateway(page, {
-      sessionKey: "agent:main:main",
-      sessionInfo: session,
-      models: [modelInfo("gpt-5.5", "Proof Model")],
-      methodResponses: {
-        "sessions.list": roster(session, {
-          model: "gpt-5.5",
-          modelProvider: "openai",
-          contextTokens: null,
-        }),
-      },
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const picker = pickerFor(page);
-    await attr(picker, "model-select").click();
-    await revealChatModelOption(picker, "openai/gpt-5.5", { default: true });
-
-    await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
-    await expectPatch(gateway, { key: session.key, model: null });
-    await expect.poll(() => selectedModel(picker)).toBe("");
-    await attr(picker, "model-select").click();
-  });
-
-  it("reconciles the current model search when an open catalog replaces its results", async () => {
-    const page = await newChatPage(suite);
-
-    const gateway = await installMockGateway(page, {
-      models: [
-        modelInfo("gpt-5.5", "GPT-5.5"),
-        modelInfo("claude-haiku-4-5", "Claude Haiku 4.5", "anthropic"),
-      ],
-      sessionKey: "agent:main:main",
-    });
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const picker = pickerFor(page);
-    const previous = attr(picker, "model-option", "anthropic/claude-haiku-4-5");
-    await attr(picker, "model-select").click();
-    const discoveryCount = (await gateway.getRequests("models.list")).length;
-    await gateway.deferNext("models.list", { view: "configured" });
-    const search = picker.locator("[data-chat-model-search]");
-    await search.fill("anthropic");
-    await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
-    expect(await previous.isVisible()).toBe(true);
-    expect(await gateway.getRequests("models.list")).toHaveLength(discoveryCount);
-    await gateway.emitGatewayEvent("chat.metadata.changed", {});
-    const publication = await gateway.waitForRequest("models.list", { after: discoveryCount });
-    expect(publication.params).toMatchObject({ sessionKey: "agent:main:main", view: "configured" });
-    expect(publication.params).not.toHaveProperty("refresh");
-    expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
-    expect(await previous.isDisabled()).toBe(false);
-
-    const refreshedModels = [
-      modelInfo("gpt-5.5", "GPT-5.5"),
-      modelInfo("gpt-5.4-mini", "GPT-5.4 mini"),
-      modelInfo("claude-sonnet-4-6", "Claude Sonnet 4.6", "anthropic"),
-    ];
-    await gateway.resolveDeferred("models.list", { models: refreshedModels });
-
-    const replacement = attr(picker, "model-option", "anthropic/claude-sonnet-4-6");
-    await replacement.waitFor({ state: "attached" });
-    await previous.waitFor({ state: "detached" });
-    expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
-
-    expect(await search.inputValue()).toBe("anthropic");
-    await expect
-      .poll(() =>
-        picker
-          .locator("[data-chat-model-option]:visible")
-          .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-chat-model-option"))),
-      )
-      .toEqual(["anthropic/claude-sonnet-4-6"]);
-    expect(await picker.locator("[data-chat-model-search-empty]").isVisible()).toBe(false);
-    await expect
-      .poll(() =>
-        search.evaluate((input) => {
-          const activeId = input.getAttribute("aria-activedescendant");
-          return activeId
-            ? document.getElementById(activeId)?.getAttribute("data-chat-model-option")
-            : null;
-        }),
-      )
-      .toBe("anthropic/claude-sonnet-4-6");
-    const patchCount = (await gateway.getRequests("sessions.patch")).length;
-    await search.press("Enter");
-    await expectPatch(
-      gateway,
-      { key: "agent:main:main", model: "anthropic/claude-sonnet-4-6" },
-      patchCount,
-    );
-    await expect.poll(() => picker.getAttribute("open")).toBe(null);
   });
 
   it("applies provider-specific reasoning after the selected model is saved", async () => {

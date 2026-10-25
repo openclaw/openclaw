@@ -1,7 +1,7 @@
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
 import { intersectSessionEventToolsAllow } from "../../auto-reply/reply/session-event-target.js";
-import { captureReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
+import { captureReplyMessageJoinObservation } from "../../sessions/session-controller.message-join-observation.js";
 import { readSessionControllerOperationState } from "../../sessions/session-controller.state.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -20,37 +20,41 @@ function prepareCliReplyToolAuthority(
   params: RunCliAgentParams,
   workspace: { agentId: string; workspaceDir: string; cwd: string },
 ) {
-  return prepareReplyToolAuthority({
-    executionSelection: captureReplyExecutionSelection({
+  return prepareReplyToolAuthority(
+    {
+      originatingChannel: normalizeMessageChannel(params.messageChannel),
+      toolsAllow: params.toolsAllow,
+      disableTools: params.disableTools,
+      operatorAuthority:
+        readAdmittedRunOperatorAuthority(params.admittedRunContext) ??
+        readPreparedRunOperatorAuthority(params.preparedRunAdmission),
+      run: {
+        ...params,
+        agentId: workspace.agentId,
+        chatType: params.chatType ?? params.sessionEntry?.chatType,
+        provider: params.modelProvider ?? params.provider,
+        model: params.model ?? "default",
+        workspaceDir: workspace.workspaceDir,
+        cwd: workspace.cwd,
+        permissionMode: params.sessionEntry?.permissionMode,
+        toolOverrides: params.toolOverrides ?? params.sessionEntry?.toolOverrides,
+        senderId: params.senderId ?? undefined,
+        senderName: params.senderName ?? undefined,
+        senderUsername: params.senderUsername ?? undefined,
+        senderE164: params.senderE164 ?? undefined,
+        groupId: params.groupId ?? undefined,
+        groupChannel: params.groupChannel ?? undefined,
+        groupSpace: params.groupSpace ?? undefined,
+        spawnedBy: params.spawnedBy ?? undefined,
+      },
+    },
+    undefined,
+    undefined,
+    captureReplyMessageJoinObservation({
       run: { ...params, ...workspace },
       sessionEntry: params.sessionEntry,
     }),
-    originatingChannel: normalizeMessageChannel(params.messageChannel),
-    toolsAllow: params.toolsAllow,
-    disableTools: params.disableTools,
-    operatorAuthority:
-      readAdmittedRunOperatorAuthority(params.admittedRunContext) ??
-      readPreparedRunOperatorAuthority(params.preparedRunAdmission),
-    run: {
-      ...params,
-      agentId: workspace.agentId,
-      chatType: params.chatType ?? params.sessionEntry?.chatType,
-      provider: params.modelProvider ?? params.provider,
-      model: params.model ?? "default",
-      workspaceDir: workspace.workspaceDir,
-      cwd: workspace.cwd,
-      permissionMode: params.sessionEntry?.permissionMode,
-      toolOverrides: params.toolOverrides ?? params.sessionEntry?.toolOverrides,
-      senderId: params.senderId ?? undefined,
-      senderName: params.senderName ?? undefined,
-      senderUsername: params.senderUsername ?? undefined,
-      senderE164: params.senderE164 ?? undefined,
-      groupId: params.groupId ?? undefined,
-      groupChannel: params.groupChannel ?? undefined,
-      groupSpace: params.groupSpace ?? undefined,
-      spawnedBy: params.spawnedBy ?? undefined,
-    },
-  });
+  );
 }
 
 /** Keep creator facts together while backend preparation translates the run's tool policy. */

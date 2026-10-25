@@ -1,5 +1,3 @@
-// Ambient trusted caller context for model-mediated Gateway tool calls.
-import { AsyncLocalStorage } from "node:async_hooks";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
@@ -25,6 +23,8 @@ import {
 } from "../../plugins/runtime/gateway-context-binding.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import type { SessionControllerWatchdogAttempt } from "../../sessions/session-controller.watchdog.js";
+// Ambient trusted caller context for model-mediated Gateway tool calls.
+import { AsyncContext } from "../../shared/async-context.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import {
   captureAdmittedRunActiveAssertion,
@@ -131,11 +131,13 @@ type GatewayToolCallerSource = {
   agentThreadId?: string | number;
 };
 
-const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
+const gatewayToolCallerStorage = new AsyncContext<GatewayToolCallerIdentity>(
+  Symbol("gatewayToolCaller"),
+);
 
-const receiptAdmissionStorage = new AsyncLocalStorage<
+const receiptAdmissionStorage = new AsyncContext<
   ReadonlyMap<GatewayToolCallerReceiptAdmission, () => boolean>
->();
+>(Symbol("gatewayToolReceiptAdmission"));
 
 export function evaluateGatewayToolCallerReceiptAdmission(
   admission: GatewayToolCallerReceiptAdmission,
@@ -379,10 +381,7 @@ export function withGatewayToolOperatorContinuation<T>(
 
 export function resolveGatewayPersonalToolParticipant(
   runtimeIdentity?: AgentRuntimeIdentity,
-  options?: {
-    requireSingleParticipant?: boolean;
-    allowMissingRegistry?: boolean;
-  },
+  options?: { requireSingleParticipant?: boolean },
 ) {
   const caller = getGatewayToolCallerIdentity();
   if (caller?.personalToolParticipants) {
@@ -394,7 +393,7 @@ export function resolveGatewayPersonalToolParticipant(
     throw new Error("Selecting user requires an active personal-tool turn.");
   }
   if (runtimeIdentity) {
-    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity, options);
+    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity);
     if (!registered) {
       return undefined;
     }
@@ -433,7 +432,10 @@ export function captureGatewayToolCallerAssertion(
   const assertCurrent = composeSessionSourceAssertion(
     [
       selection?.assertCurrent,
-      caller.operatorAuthority?.assertCurrent,
+      // Selection already checks its exact operator source in this synchronous guard.
+      selection?.operatorAuthority === caller.operatorAuthority
+        ? undefined
+        : caller.operatorAuthority?.assertCurrent,
       composeSessionSourceAssertion(
         isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
         (assertReceipt) => {

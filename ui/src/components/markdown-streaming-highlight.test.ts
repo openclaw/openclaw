@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { htmlFragment } from "./markdown.test-support.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { htmlFragment, toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 beforeAll(async () => {
   await waitForSolid(() =>

@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import {
@@ -36,7 +37,7 @@ async function setup() {
     if (method === "config.schema") {
       return { schema: { type: "object", properties: {} }, uiHints: {} };
     }
-    return { config, raw: JSON.stringify(config), hash: "original", valid: true, issues: [] };
+    return configSnapshot(config, "original", JSON.stringify(config));
   });
   const client = createTestGatewayClient(request);
   const { gateway } = createGatewayHarness(client);
@@ -119,6 +120,7 @@ describe("Session Observer actions", () => {
           expect(page.request).toHaveBeenCalledWith("config.patch", expect.anything());
           expect(page.outlet.textContent).toContain("Saving…");
           expect(toggle.getAttribute("aria-disabled")).toBe("true");
+          expect(toggle.disabled).toBe(false);
           expect(toggle.checked).toBe(false);
         });
         expect(page.observerToggle()).toBe(toggle);
@@ -185,6 +187,7 @@ describe("Session Observer actions", () => {
       await choosePickerValue(page.picker(), "");
       await waitForSolid(() => expect(page.outlet.textContent).toContain("Saving…"));
       expect(page.picker().textContent).toContain("Disabled");
+      expect(page.observerToggle().disabled).toBe(true);
       const patch = page.request.mock.calls.find(([method]) => method === "config.patch");
       expect(patch?.[1]).toMatchObject({
         raw: JSON.stringify({
@@ -201,6 +204,7 @@ describe("Session Observer actions", () => {
       });
       await waitForSolid(() => expect(page.outlet.textContent).not.toContain("Saving…"));
       expect(page.picker().textContent).toContain("Disabled");
+      expect(page.observerToggle().disabled).toBe(false);
     } finally {
       await page.dispose();
     }

@@ -674,10 +674,7 @@ describe("memory manager agent database lifecycle", () => {
   });
 
   it("does not replay a committed prune batch after its native reply fails", async () => {
-    const cfg = createConfig({
-      cacheEnabled: true,
-      sources: ["memory"],
-    });
+    const cfg = createConfig({ cacheEnabled: true, sources: ["memory"] });
     const db = requireNativeSqliteDatabase(
       sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" }).db,
     );
@@ -843,10 +840,7 @@ describe("memory manager agent database lifecycle", () => {
     const sessionId = "admission-without-host-reads";
     const sessionKey = `agent:main:chat:${sessionId}`;
     const manager = await fixture.getFreshManager(
-      createConfig({
-        sources: ["sessions"],
-        sessionMemory: true,
-      }),
+      createConfig({ sources: ["sessions"], sessionMemory: true }),
       "cli",
     );
     await manager.sync({ reason: "index-empty-corpus", force: true });

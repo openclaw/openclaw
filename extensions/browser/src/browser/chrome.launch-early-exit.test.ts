@@ -80,6 +80,7 @@ vi.mock("./chrome.profile-lifecycle-lock.js", async (importOriginal) => ({
 }));
 
 import { launchOpenClawChrome, ManagedChromeCleanupError } from "./chrome.js";
+import { prepareOpenClawProfile } from "./chrome.profile-decoration.js";
 
 function makeProc() {
   const proc = Object.assign(new EventEmitter(), {
@@ -136,6 +137,21 @@ afterEach(() => {
 });
 
 describe("managed Chrome early child exit", () => {
+  it("does not spawn after cancellation while preparing the profile", async () => {
+    const preparation = Promise.withResolvers<void>();
+    vi.mocked(prepareOpenClawProfile).mockReturnValueOnce(preparation.promise);
+    const controller = new AbortController();
+    const reason = new Error("synthetic profile preparation cancellation");
+    const outcome = launchOpenClawChrome(resolved, profile, { signal: controller.signal }).catch(
+      (error: unknown) => error,
+    );
+    await vi.waitFor(() => expect(prepareOpenClawProfile).toHaveBeenCalledOnce());
+    controller.abort(reason);
+    preparation.resolve();
+    expect(await outcome).toBe(reason);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("cancels the bounded stderr drain without retaining listeners", async () => {
     const proc = makeProc();
     proc.exitCode = 23;

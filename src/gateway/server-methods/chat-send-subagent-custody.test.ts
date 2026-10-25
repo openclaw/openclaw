@@ -11,7 +11,11 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
+import { resolveGatewayOperatorAccessAuthority } from "../operator-access-policy.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { loadRealChatDispatch } from "./chat-send-authority.test-support.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
@@ -35,6 +39,24 @@ it("retains native child custody before a human continuation executes", async ({
   await using fixture = await createFixture({ active: false, preserveContent: true, sessionKey });
   const runId = "human-child-continuation";
   const task = "Verify the retained result.";
+  const operator = createOperatorClient({
+    profileName: "retained-child-followup",
+    scopes: fixture.client.connect.scopes ?? [],
+  });
+  fixture.context.resolveGatewayContext = () => fixture.context;
+  fixture.client.authenticatedUserId = operator.authenticatedUserId;
+  fixture.client.authenticatedUserProfile = operator.authenticatedUserProfile;
+  fixture.client.internal = {
+    authenticatedOperator: true,
+    operatorAccessAuthority: resolveGatewayOperatorAccessAuthority(
+      operator.authenticatedUserProfile!.profileId,
+      fixture.context.getRuntimeConfig(),
+    ),
+  };
+  fixture.client.authPolicy = captureGatewayAuthPolicy(fixture.context.getRuntimeConfig(), {
+    role: "operator",
+    authMethod: "token",
+  });
   const entry = {
     sessionId: fixture.scope.sessionId,
     lifecycleRevision: "retained-child-revision",
@@ -83,7 +105,9 @@ it("retains native child custody before a human continuation executes", async ({
   });
   dispatchInboundMessageMock.mockImplementation(await loadRealChatDispatch());
   try {
-    const ack = await fixture.send();
+    const ack = await fixture.send(undefined, {
+      expectedProfileId: operator.authenticatedUserProfile!.profileId,
+    });
     expect(ack).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ runId, status: "started" }),
@@ -91,8 +115,25 @@ it("retains native child custody before a human continuation executes", async ({
       expect.anything(),
     );
     await withinTest(entered.promise, signal);
+    expect(
+      dispatchInboundMessageMock.mock.calls.at(-1)?.[0].replyOptions?.operatorAuthority
+        ?.recoverySnapshot,
+    ).toEqual(expect.objectContaining({ profileId: operator.authenticatedUserProfile!.profileId }));
     expect([subagentRuns.get(runId), subagentRuns.get(completed.runId)]).toMatchObject([
-      { runId, childSessionKey: sessionKey, task, execution: { status: "running" } },
+      {
+        runId,
+        childSessionKey: sessionKey,
+        task,
+        execution: { status: "running" },
+        operatorRecoverySource: {
+          agentId: "main",
+          sessionKey,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          sourceRunId: runId,
+          snapshot: { profileId: operator.authenticatedUserProfile!.profileId },
+        },
+      },
       {
         task: "Original completed task",
         execution: { status: "terminal", outcome: { status: "ok" } },
@@ -222,12 +263,7 @@ it.for([
       } else {
         const respond = vi.fn<Parameters<typeof handleGatewayRequest>[0]["respond"]>();
         await handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "recover-interrupted-child",
-            method: "sessions.recover",
-            params: { key: sessionKey },
-          },
+          req: gatewayRequest("recover-interrupted-child", "sessions.recover", { key: sessionKey }),
           client: fixture.client,
           context: fixture.context,
           isWebchatConnect: () => true,

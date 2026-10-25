@@ -1,6 +1,7 @@
 // Prove Stop, deletion, and yield of kept children through real Gateway tools.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
@@ -9,7 +10,6 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as announceOutput from "../agents/subagents/announce/subagent-announce-output.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "../agents/subagents/registry/subagent-registry-helpers.js";
-import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import * as sweepKill from "../agents/subagents/registry/subagent-registry-sweep-kill.js";
 import {
@@ -20,7 +20,6 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import * as sessionReconciliation from "../agents/subagents/registry/subagent-session-reconciliation.js";
 import { sessionControllerMailboxes } from "../sessions/session-controller.mailbox.js";
-import { readProviderBody } from "./gateway-provider-fixture.test-support.js";
 import {
   createSubagentStopFixture,
   findSubagentRecords,
@@ -65,7 +64,7 @@ async function startScriptedModel(handle: ModelHandler) {
     bindError: "Expected subagent model server address",
     onRequest: async (request, response) => {
       try {
-        const body = await readProviderBody(request);
+        const body = await readRequestText(request);
         responseSequence += 1;
         if (!(await handle(body, request, response, responseSequence))) {
           writeOpenAiResponsesText(response, {
@@ -426,6 +425,17 @@ async function waitForRun(
 const waitForRunOrRemoval = (runId: string, matches: (row: SubagentRunRecord) => boolean) =>
   waitForRun(runId, matches, true);
 
+/** Drive fallback confirmation without rewriting a live kill owner's row. */
+async function sweepPastKillReconciliation() {
+  const sweepAt = Date.now() + PROVISIONAL_KILL_RECONCILIATION_MS;
+  const clock = vi.spyOn(Date, "now").mockReturnValue(sweepAt);
+  try {
+    await subagentRegistryTesting.sweepOnceForTests();
+  } finally {
+    clock.mockRestore();
+  }
+}
+
 type ProofClient = Awaited<ReturnType<typeof startProofGateway>>["client"];
 const waitForAgent = (client: ProofClient, runId: string) =>
   expect(client.request("agent.wait", { runId, timeoutMs: 30_000 })).resolves.toMatchObject({
@@ -608,16 +618,9 @@ it.each([
       } else {
         // A requester-wide Stop: the parent already knows, so its children report nothing.
         await client.request("sessions.abort", { key: parentSessionKey });
-        // The Stop's own kill owner publishes the termination; the sweeper confirms it after
-        // the reconciliation window. Age the kill past that window and drive one sweep, so the
-        // confirmation decides delivery inside this test.
-        await waitForRun(child.runId, (row) => row.killReconciliation !== undefined);
-        await mutateSubagentRuns([child.runId], (rows) => {
-          const row = structuredClone(rows.get(child.runId)!);
-          row.killReconciliation!.killedAt -= PROVISIONAL_KILL_RECONCILIATION_MS;
-          return { value: undefined, postimages: new Map([[row.runId, row]]) };
-        });
-        await subagentRegistryTesting.sweepOnceForTests();
+        // Wait for published termination, not the provisional kill that live settlement clears.
+        await waitForRunOrRemoval(child.runId, (row) => row.execution.status === "terminal");
+        await sweepPastKillReconciliation();
       }
       // Settled means the kill is confirmed and its cleanup finished, not just published.
       await waitForRunOrRemoval(
@@ -698,13 +701,7 @@ it("confirms a stopped child's kill without losing either of two overlapping con
       await readHeld.promise;
       // The sweeper confirms the same kill once it ages past the reconciliation window. Sweep
       // at that later time rather than rewriting the kill record the held confirmation owns.
-      const sweepAt = Date.now() + PROVISIONAL_KILL_RECONCILIATION_MS;
-      const clock = vi.spyOn(Date, "now").mockReturnValue(sweepAt);
-      try {
-        await subagentRegistryTesting.sweepOnceForTests();
-      } finally {
-        clock.mockRestore();
-      }
+      await sweepPastKillReconciliation();
       releaseRead.resolve();
       for (const child of children) {
         await waitForRunOrRemoval(

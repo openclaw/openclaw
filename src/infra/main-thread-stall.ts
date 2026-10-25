@@ -5,7 +5,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 const STALL_MS = 250;
 const MAX_PENDING_STALLS = 8;
 
-type Stall = { elapsedMs: number; task: string; taskMs: number };
 type TaskObserver = {
   run<T>(name: string, run: () => T, phase?: string): T;
   currentName(): string | undefined;
@@ -35,7 +34,7 @@ export function runWithMainThreadTask<T>(name: string, run: () => T, phase?: str
 /** Measure explicit synchronous scopes; unscoped stalls rely on best-effort loop sampling. */
 export function createMainThreadStallMonitor(now: () => number = () => performance.now()) {
   taskState.observer?.stop();
-  const pending: Stall[] = [];
+  const pending: { elapsedMs: number; task: string; taskMs: number }[] = [];
   let stopped = false;
   let dropped = 0;
   let delayMaxMs = 0;

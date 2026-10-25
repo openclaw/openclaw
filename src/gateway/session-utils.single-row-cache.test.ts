@@ -10,6 +10,7 @@ import * as sessions from "../config/sessions/session-accessor.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { loadSessionEntryAsync as loadEntry } from "./session-entry-load.test-support.js";
+import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
 import { createResidentSessionRowReader } from "./session-row-projection.test-support.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnlyAsync as loadGatewayEntry } from "./session-utils.js";
@@ -109,7 +110,9 @@ async function control(childSessionKey: string, controllerSessionKey: string, cr
     createdAt,
     startedAt: createdAt,
   });
+  const execution = holdSubagentExecution(childSessionKey, childSessionKey);
   subagentRuns.commitOwnership(subagentRuns.get(childSessionKey)!);
+  return execution;
 }
 
 afterEach(async () => {
@@ -291,9 +294,10 @@ test(
       [navigation]: session("navigation", now),
       [child]: { ...session("child", now, navigation), spawnedBy: oldParent },
     });
-    await control(child, oldParent, now);
+    using oldControl = await control(child, oldParent, now);
     expect(await children(navigation, now)).toEqual([child]);
-    await control(child, newParent, now + 25);
+    oldControl[Symbol.dispose]();
+    using _ = await control(child, newParent, now + 25);
     expect(await children(navigation, now + 50)).toEqual([child]);
     expect(await children(oldParent, now + 50)).toBeUndefined();
     expect(await children(newParent, now + 50)).toEqual([child]);
@@ -318,7 +322,7 @@ test.each([false, true])(
         ...session("child", now),
         ...retainedDetails(now, childPrompt),
       });
-      await control(childKey, parentKey, now);
+      using childControl = await control(childKey, parentKey, now);
       await withParseSpy(async (parse) => {
         const sql = observeHostDataSql();
         using _ = { [Symbol.dispose]: sql.restore };
@@ -344,5 +348,6 @@ test.each([false, true])(
       });
       expect((await loadChildren(parentKey)).store[childKey]).toBeUndefined();
       expect(await children(parentKey, now)).toBeUndefined();
+      childControl[Symbol.dispose]();
     })(),
 );

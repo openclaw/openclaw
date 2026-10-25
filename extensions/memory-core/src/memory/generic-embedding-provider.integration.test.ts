@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
+import { text as readText } from "node:stream/consumers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearEmbeddingProviders,
@@ -21,6 +22,7 @@ type CapturedRequest = {
   url: string | undefined;
   headers: IncomingMessage["headers"];
   body: Record<string, unknown>;
+  rawBody: string;
 };
 
 type TestServer = {
@@ -32,14 +34,6 @@ type TestServer = {
 const servers: TestServer[] = [];
 let registeredEmbeddingProvidersSnapshot: ReturnType<typeof listRegisteredEmbeddingProviders>;
 
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-}
-
 async function startEmbeddingServer(options?: {
   reject?: (inputCount: number) => { status: number; body: string } | undefined;
   authorization?: string;
@@ -48,12 +42,14 @@ async function startEmbeddingServer(options?: {
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       try {
-        const body = await readJsonBody(req);
+        const rawBody = await readText(req);
+        const body = JSON.parse(rawBody) as Record<string, unknown>;
         requests.push({
           method: req.method,
           url: req.url,
           headers: req.headers,
           body,
+          rawBody,
         });
         if (options?.authorization && req.headers.authorization !== options.authorization) {
           res.writeHead(401, { "content-type": "application/json" });
@@ -265,6 +261,9 @@ function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration
     settings: { sync: {} },
     markLocalEmbeddingProviderDegraded: () => {},
   }) as {
+    settings: { sync: object; queryInstruction?: string };
+    embedQueryWithRetry: (text: string) => Promise<number[]>;
+    embedBatchWithRetry: (texts: string[]) => Promise<number[][]>;
     embedChunksInBatches: (
       candidates: Array<MemoryIndexWorkItem & { chunk: IndexedMemoryChunk }>,
       generation: MemorySemanticProviderGeneration,
@@ -331,6 +330,42 @@ function distinctCandidates(
     source: "memory",
   }));
 }
+
+describe("memory query instructions over real transport", () => {
+  it("changes generic query bytes and vectors while preserving document requests", async () => {
+    const server = await startEmbeddingServer();
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, database, {
+        model: "generic-embedding-alias",
+      });
+      const documents = await owner.embedBatchWithRetry(["remember this"]);
+      const bare = await owner.embedQueryWithRetry("find this");
+      owner.settings.queryInstruction = "search_query: ";
+      const instructed = await owner.embedQueryWithRetry("find this");
+      expect(instructed).toEqual([23, 0.5, 3]);
+      expect(bare).toEqual([9, 0.5, 3]);
+      expect(await owner.embedBatchWithRetry(["remember this"])).toEqual(documents);
+      owner.settings.queryInstruction = "";
+      expect(await owner.embedQueryWithRetry("find this")).toEqual(bare);
+      expect(server.requests[0]?.rawBody).toBe(server.requests[3]?.rawBody);
+      expect(server.requests[1]?.rawBody).toBe(server.requests[4]?.rawBody);
+      expect(server.requests.map(({ body }) => body.input)).toEqual([
+        ["remember this"],
+        ["find this"],
+        ["search_query: find this"],
+        ["remember this"],
+        ["find this"],
+      ]);
+      expect(server.requests[2]?.body).toEqual({
+        ...server.requests[1]?.body,
+        input: ["search_query: find this"],
+      });
+    } finally {
+      database.close();
+    }
+  });
+});
 
 describe("memory-core embedding batch recovery over real transport", () => {
   it.each([

@@ -49,6 +49,7 @@ export function createSessionActorCommittedOutcome<
   payloads?: ReadonlyMap<number, { event: unknown; serializedBytes: number }>;
   transcriptAuthority?: SessionActorReceipt["transcript"]["authorityReceipts"];
   conversationPublication?: SessionActorReceipt["conversationPublication"];
+  entryMetadata?: SessionActorReceipt["entryMetadata"];
   applied: {
     value: Value;
     pendingInputMutationReceipt?: PendingInputMutationReceipt;
@@ -100,6 +101,7 @@ export function createSessionActorCommittedOutcome<
           Boolean(value && "projectionNeedsReconcile" in value && value.projectionNeedsReconcile),
       },
       conversationPublication: params.conversationPublication,
+      entryMetadata: params.entryMetadata,
       pendingInputReceipt: turn?.custody ?? append?.value.pendingInputReceipt,
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
       reducers: applied.reducers,

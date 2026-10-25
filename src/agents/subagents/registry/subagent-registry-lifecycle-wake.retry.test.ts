@@ -1,8 +1,6 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
-import { admitReplyTurn } from "../../../auto-reply/reply/reply-turn-admission.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
@@ -28,6 +26,7 @@ import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
+import { admitRequesterTurnForTest } from "./subagent-requester-turn-liveness.test-support.js";
 
 // mock-isolation: The retry driver owns its registry lifecycle; importing the global registry would install a competing owner.
 vi.mock("./subagent-registry.js", () => ({ resumeSubagentRun: vi.fn() }));
@@ -60,25 +59,10 @@ describe("requester settle retry lifetime", () => {
           store === "unbound" ? undefined : physicalStore + (store === "other" ? ".other" : "");
         seedSubagentCompletionOwner({ subagent: input.subagent, databaseOptions: { database } });
         const driver = requesterWakeDriver([input]);
-        await replaceSessionEntry(
-          {
-            agentId: "main",
-            sessionKey: input.subagent.requesterSessionKey,
-            storePath: logicalStore,
-          },
-          { sessionId: "requester-session", updatedAt: 1 },
+        const admitted = await admitRequesterTurnForTest(
+          input.subagent.requesterSessionKey,
+          logicalStore,
         );
-        const admitted = await admitReplyTurn({
-          agentId: "main",
-          sessionKey: input.subagent.requesterSessionKey,
-          sessionId: "requester-session",
-          storePath: logicalStore,
-          kind: "visible",
-          resetTriggered: false,
-        });
-        if (admitted.status !== "owned") {
-          throw new Error("Requester did not acquire its turn");
-        }
         try {
           await withSessionControllerOwner(admitted.operation, () =>
             driver.controller.retireSubagentObligations(currentCompletionRun(input), () => {}),

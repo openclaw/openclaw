@@ -6,14 +6,12 @@ import { ChatPaneView } from "../chat/chat-pane.tsx";
 
 const DiscoveryStatus = lazy(() => import("../../components/mcp-app-discovery-status.tsx"));
 
-type AppsConversationProps = {
+// Load the conversation and its styles while discovery resolves the app URL.
+export default function AppsConversation(props: {
   launch: McpAppOpenDetail | undefined;
   connectionRevision: number;
   request: { promise: Promise<void> } | undefined;
-};
-
-// Load the conversation and its styles while discovery resolves the app URL.
-export default function AppsConversation(props: AppsConversationProps) {
+}) {
   const paneKey = () =>
     props.launch ? JSON.stringify([props.launch.sessionKey, props.connectionRevision]) : "";
   return (

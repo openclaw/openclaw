@@ -200,7 +200,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
   };
 }
 
-function readLocalSkillCardSync(
+export function readLocalSkillCardSync(
   skillDir: string,
   includeContent = false,
 ): LocalSkillCardRead | undefined {
@@ -240,12 +240,6 @@ function readLocalSkillCardSync(
       }
     }
   }
-}
-
-export function resolveLocalSkillCardStatusSync(
-  skillDir: string,
-): LocalSkillCardStatus | undefined {
-  return readLocalSkillCardSync(skillDir);
 }
 
 export function readLocalSkillCardContentSync(skillDir: string): string | undefined {

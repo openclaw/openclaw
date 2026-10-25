@@ -452,7 +452,8 @@ export function buildScheduledExecutionContext(
                 ...(liveRow.worktree ? { worktreePath: liveRow.worktree.path } : {}),
               }
             : { source: "run-session" },
-        fileScope: detached ? "root" : "session",
+        // Only an in-session run uses its session's file scope; child runs stay at root.
+        fileScope: placement === "in-session" ? "session" : "root",
         bootstrap: detached ? "cron-allowlist" : "default",
         sandbox: { required: sandboxBasis.length > 0, basis: sandboxBasis },
         ...(job.toolsAllowExecTarget ? { execHost: job.toolsAllowExecTarget } : {}),

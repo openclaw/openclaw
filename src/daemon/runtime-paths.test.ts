@@ -12,16 +12,8 @@ const fsMocks = vi.hoisted(() => ({
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      access: fsMocks.access,
-      realpath: fsMocks.realpath,
-    },
-    access: fsMocks.access,
-    realpath: fsMocks.realpath,
-  };
+  const mocked = { ...actual, ...fsMocks };
+  return { ...mocked, default: mocked };
 });
 
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
@@ -111,9 +103,9 @@ describe.each(["node", "bun"] as const)("%s probe failures", (runtime) => {
       )
       .mockRejectedValue(new Error("EACCES"));
     const resolve = runtime === "node" ? resolvePreferredNodePath : resolvePreferredBunPath;
-    await expect(
-      resolve({ env: {}, runtime, platform: "linux", execPath: "/fixture/other" }),
-    ).rejects.toThrow(/check failed.*EACCES/s);
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "execPath", "get").mockReturnValue("/fixture/other");
+    await expect(resolve({ env: {}, runtime })).rejects.toThrow(/check failed.*EACCES/s);
   });
 });
 
@@ -299,11 +291,11 @@ describe("resolvePreferredBunPath", () => {
   it("returns undefined without probing missing Bun candidates", async () => {
     fsMocks.access.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     const execFile = vi.spyOn(processExec, "runExec").mockRejectedValue(new Error("spawn EACCES"));
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "execPath", "get").mockReturnValue("/fixture/other");
     const result = resolvePreferredBunPath({
       env: {},
       runtime: "bun",
-      platform: "linux",
-      execPath: "/fixture/other",
     });
     await expect(result).resolves.toBeUndefined();
     expect(execFile).not.toHaveBeenCalled();
@@ -313,11 +305,11 @@ describe("resolvePreferredBunPath", () => {
     const bunPath = "/home/test/.bun/bin/bun";
     const execFile = vi.spyOn(processExec, "runExec").mockResolvedValue(bunRuntime("1.4.3"));
 
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "execPath", "get").mockReturnValue("/usr/bin/node");
     const result = await resolvePreferredBunPath({
       env: { BUN_INSTALL: "/home/test/.bun", HOME: "/home/test" },
       runtime: "bun",
-      platform: "linux",
-      execPath: "/usr/bin/node",
     });
 
     expect(result).toBe(bunPath);
@@ -332,11 +324,11 @@ describe("resolvePreferredBunPath", () => {
     const bunPath = "C:\\Users\\test\\.bun\\bin\\bun.exe";
     vi.spyOn(processExec, "runExec").mockResolvedValue(bunRuntime("1.4.3"));
 
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(process, "execPath", "get").mockReturnValue("C:\\Program Files\\nodejs\\node.exe");
     const result = await resolvePreferredBunPath({
       env: { USERPROFILE: "C:\\Users\\test" },
       runtime: "bun",
-      platform: "win32",
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
     });
 
     expect(result).toBe(bunPath);
@@ -346,11 +338,11 @@ describe("resolvePreferredBunPath", () => {
     const bunPath = "/opt/custom/bun";
     vi.spyOn(processExec, "runExec").mockResolvedValue(bunRuntime("2.0.0"));
 
+    vi.spyOn(process, "platform", "get").mockReturnValue("freebsd");
+    vi.spyOn(process, "execPath", "get").mockReturnValue(bunPath);
     const result = await resolvePreferredBunPath({
       env: {},
       runtime: "bun",
-      platform: "freebsd",
-      execPath: bunPath,
     });
 
     expect(result).toBe(bunPath);
@@ -451,12 +443,12 @@ describe("resolvePreferredBunPath", () => {
       bunRuntime("1.4.3", true, null, INVALID_SQLITE_OVERRIDE),
     );
 
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.spyOn(process, "execPath", "get").mockReturnValue("/fixture/other");
     await expect(
       resolvePreferredBunPath({
         env: { PATH: "/opt/homebrew/bin:/usr/local/bin" },
         runtime: "bun",
-        platform: "darwin",
-        execPath: "/fixture/other",
       }),
     ).rejects.toThrow(INVALID_SQLITE_OVERRIDE);
   });

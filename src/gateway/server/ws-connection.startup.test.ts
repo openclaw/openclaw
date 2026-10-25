@@ -63,6 +63,7 @@ import {
   createGatewayAuthRateLimiter,
 } from "../auth-rate-limit.js";
 import * as gatewayAuth from "../auth.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../server-constants.js";
 import { createWorkerNodeEnrollmentManager } from "../worker-environments/node-enrollment.js";
@@ -277,11 +278,8 @@ async function attachStartupNodeConnect(params: {
   socket.emit(
     "message",
     Buffer.from(
-      JSON.stringify({
-        type: "req",
-        id: "startup-node-connect",
-        method: "connect",
-        params: {
+      JSON.stringify(
+        gatewayRequest("startup-node-connect", "connect", {
           minProtocol: PROTOCOL_VERSION,
           maxProtocol: PROTOCOL_VERSION,
           client: {
@@ -305,8 +303,8 @@ async function attachStartupNodeConnect(params: {
             signedAt,
             nonce,
           },
-        },
-      }),
+        }),
+      ),
     ),
   );
   return {
@@ -411,11 +409,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         },
       });
       const connectFrame = (id: string) =>
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "connect",
-          params: {
+        JSON.stringify(
+          gatewayRequest(id, "connect", {
             minProtocol: PROTOCOL_VERSION,
             maxProtocol: PROTOCOL_VERSION,
             client: {
@@ -428,8 +423,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
             scopes: [],
             caps: [],
             auth: { token: "test-token" },
-          },
-        });
+          }),
+        );
 
       socket.emit("message", Buffer.from(connectFrame("connect-1")));
       socket.emit("message", Buffer.from(connectFrame("connect-2")));
@@ -495,11 +490,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       socket.emit(
         "message",
         Buffer.from(
-          JSON.stringify({
-            type: "req",
-            id: "connect-1",
-            method: "connect",
-            params: {
+          JSON.stringify(
+            gatewayRequest("connect-1", "connect", {
               minProtocol: PROTOCOL_VERSION,
               maxProtocol: PROTOCOL_VERSION,
               client: {
@@ -511,8 +503,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
               role: "operator",
               scopes: ["operator.read"],
               caps: [],
-            },
-          }),
+            }),
+          ),
         ),
       );
 

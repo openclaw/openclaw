@@ -8,7 +8,7 @@ import {
   signCatalogEnvelope,
   legacyCatalogEnvelope,
 } from "./official-external-catalog-signing.test-support.js";
-import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
+import * as snapshotStores from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   getOfficialExternalPluginCatalogManifest as manifest,
   resolveOfficialExternalPluginInstall as install,
@@ -30,9 +30,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+const realStore = snapshotStores.createSqliteHostedOfficialExternalPluginCatalogSnapshotStore;
 
 function sqliteStore() {
-  return createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+  return realStore({
     stateDir: tempDirs.make("openclaw-catalog-"),
   });
 }
@@ -42,15 +43,21 @@ const originalFetch = globalThis.fetch;
 
 type LoadParams = NonNullable<Parameters<typeof loadHostedCatalogImpl>[0]> & {
   fetchImpl?: typeof globalThis.fetch;
+  snapshotStore?: ReturnType<typeof memoryStore> | null;
 };
 type CatalogConfig = NonNullable<LoadParams["catalogConfig"]>;
 type LoadResult = Awaited<ReturnType<typeof loadHostedCatalog>>;
 
 afterEach(() => vi.unstubAllGlobals());
 
-function loadHostedCatalog({ fetchImpl, ...params }: LoadParams = {}) {
+async function loadHostedCatalog({ fetchImpl, snapshotStore, ...params }: LoadParams = {}) {
   vi.stubGlobal("fetch", fetchImpl ?? originalFetch);
-  return loadHostedCatalogImpl(params);
+  using _ = vi
+    .spyOn(snapshotStores, "createSqliteHostedOfficialExternalPluginCatalogSnapshotStore")
+    .mockImplementation((options) =>
+      snapshotStore === undefined ? realStore(options) : (snapshotStore ?? memoryStore()),
+    );
+  return await loadHostedCatalogImpl(params);
 }
 
 function expectSource<Source extends LoadResult["source"]>(

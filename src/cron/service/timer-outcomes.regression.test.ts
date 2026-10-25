@@ -22,6 +22,33 @@ import { onTimer, runMissedJobs } from "./timer.test-support.js";
 const timerRegressionFixtures = setupCronRegressionFixtures({ prefix: "cron-outcomes-" });
 const startedAt = Date.parse("2026-10-05T00:00:00.000Z");
 
+it("retains the last meaningful result across quiet checks and execution failures", () => {
+  const { job, apply } = outcomeFixture(startedAt);
+  apply({ status: "ok", result: { outcome: "progress", summary: "First report ready." } });
+  expect(job.state.lastMeaningfulResult).toEqual({
+    outcome: "progress",
+    summary: "First report ready.",
+    atMs: startedAt + 10,
+  });
+  for (const outcome of [
+    { status: "ok", result: { outcome: "no_change" } },
+    {
+      status: "error",
+      error: "Run failed",
+      result: { outcome: "done", summary: "Premature result." },
+    },
+  ] as const) {
+    apply({ ...outcome, startedAt: startedAt + 100, endedAt: startedAt + 120 });
+    expect(job.state.lastRunAtMs).toBe(startedAt + 100);
+    expect(job.state.lastDurationMs).toBe(20);
+    expect(job.state.lastMeaningfulResult).toEqual({
+      outcome: "progress",
+      summary: "First report ready.",
+      atMs: startedAt + 10,
+    });
+  }
+});
+
 function outcomeFixture(
   runAt: number,
   overrides: Partial<CronJob> = {},

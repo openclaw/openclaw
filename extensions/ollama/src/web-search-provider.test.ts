@@ -99,8 +99,8 @@ async function runOllamaWebSearch(
   return await createSearchTool(config).execute({ query });
 }
 
-function createSearchTool(config = createOllamaConfig()) {
-  const tool = createOllamaWebSearchProvider().createTool({ config });
+function createSearchTool(config = createOllamaConfig(), searchConfig?: Record<string, unknown>) {
+  const tool = createOllamaWebSearchProvider().createTool({ config, searchConfig });
   if (!tool) {
     throw new Error("Expected Ollama web search tool");
   }
@@ -176,6 +176,20 @@ describe("ollama web search provider", () => {
 
     expect(fetchRequest().signal).toBe(controller.signal);
     expect(fetchRequest().init?.signal).toBeUndefined();
+  });
+
+  it("uses tools.web.search maxResults and timeoutSeconds; an explicit count wins", async () => {
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce(guardedResponse({ results: [] }))
+      .mockResolvedValueOnce(guardedResponse({ results: [] }));
+    const tool = createSearchTool(createOllamaConfig(), { maxResults: 2, timeoutSeconds: 2 });
+
+    await tool.execute({ query: "openclaw" });
+    await tool.execute({ query: "openclaw", count: 7 });
+
+    expect(fetchRequest(0).init?.body).toBe(JSON.stringify({ query: "openclaw", max_results: 2 }));
+    expect(fetchRequest(0).timeoutMs).toBe(2_000);
+    expect(fetchRequest(1).init?.body).toBe(JSON.stringify({ query: "openclaw", max_results: 7 }));
   });
 
   // Between attempts, the first response finishes and the next response stays

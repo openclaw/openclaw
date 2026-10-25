@@ -6,6 +6,7 @@ import {
   type AiProviderRequestCapabilities,
   type AiProviderRequestPolicyInput,
 } from "../host.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import type { Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { encodedModelRequestBodyStream } from "./model-request-body.js";
@@ -111,19 +112,11 @@ configureAiTransportHost({
 
 export function makeCompletionsModel(overrides: Partial<CompletionsModel> = {}): CompletionsModel {
   const id = overrides.id ?? "test-model";
-  return {
-    id,
-    name: overrides.name ?? id,
-    api: "openai-completions",
-    provider: "openai",
+  return makeProviderModel("openai-completions", "openai", id, {
     baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
-    maxTokens: 8192,
     ...overrides,
-  };
+  });
 }
 function modelFixture(id: string, overrides: Partial<CompletionsModel> = {}) {
   return makeCompletionsModel({ ...overrides, id, name: id });

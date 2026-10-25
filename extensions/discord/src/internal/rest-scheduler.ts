@@ -152,7 +152,7 @@ export class RestScheduler<TData> {
     if (response.status !== 429) {
       return;
     }
-    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response, 1) * 1000);
+    const retryAfterMs = Math.max(0, readRetryAfter(parsed, response) * 1000);
     const retryAt = resolveRateLimitResetAt(retryAfterMs);
     if (retryAt === undefined) {
       return;
@@ -186,7 +186,7 @@ export class RestScheduler<TData> {
       },
       resolveTimerTimeoutMs(delayMs, 0, 0),
     );
-    this.drainTimer.unref?.();
+    this.drainTimer.unref();
   }
 
   private drainQueues(): void {

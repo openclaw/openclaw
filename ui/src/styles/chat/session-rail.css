@@ -107,3 +107,7 @@ openclaw-chat-session-rail {
   min-width: 0;
   flex: 1 1 auto;
 }
+
+.chat-session-rail__thread:has(> openclaw-panel-empty-state) {
+  padding: 0;
+}

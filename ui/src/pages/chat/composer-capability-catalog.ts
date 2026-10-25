@@ -1,6 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SkillStatusEntry } from "../../api/types.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { readOwnEntry } from "../../lib/sessions/tool-overrides.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
@@ -23,20 +22,6 @@ export function resolveComposerSkills(
           : (readOwnEntry(toolOverrides?.skills, skill.key) ?? skill.baseEnabled),
     })) ?? null
   );
-}
-
-function toComposerSkill(skill: SkillStatusEntry): ChatComposerMenuSkill {
-  const missingDeps = Object.values(skill.missing).some((values) => values.length > 0);
-  const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter;
-  const baseEnabled = !skill.disabled;
-  return {
-    key: skill.skillKey,
-    name: skill.name,
-    enabled: baseEnabled && !missingDeps && !blocked,
-    baseEnabled,
-    ...(missingDeps ? { missingDeps: true } : {}),
-    ...(blocked ? { blocked: true } : {}),
-  };
 }
 
 export class ComposerSkillCatalog {
@@ -84,7 +69,19 @@ export class ComposerSkillCatalog {
         }
         const skills =
           report?.skills
-            .map(toComposerSkill)
+            .map((skill): ChatComposerMenuSkill => {
+              const missingDeps = Object.values(skill.missing).some((values) => values.length > 0);
+              const blocked = skill.blockedByAllowlist || skill.blockedByAgentFilter;
+              const baseEnabled = !skill.disabled;
+              return {
+                key: skill.skillKey,
+                name: skill.name,
+                enabled: baseEnabled && !missingDeps && !blocked,
+                baseEnabled,
+                ...(missingDeps ? { missingDeps: true } : {}),
+                ...(blocked ? { blocked: true } : {}),
+              };
+            })
             .toSorted((left, right) => left.name.localeCompare(right.name)) ?? null;
         if (skills) {
           this.skills.set(agentId, skills);

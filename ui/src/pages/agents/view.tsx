@@ -11,10 +11,11 @@ import {
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
+import { buildAgentContext } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
@@ -27,6 +28,8 @@ import { AgentSkills } from "./panels-skills.tsx";
 import { AgentChannels } from "./panels-status-files.tsx";
 import { AgentTools } from "./panels-tools-skills.tsx";
 import { AgentReadNotice, createAgentReadPending } from "./read-status.tsx";
+
+registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);

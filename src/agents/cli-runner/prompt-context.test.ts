@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
-import { buildCliSessionDriftNote } from "../cli-session.js";
+import { buildCliSessionDriftNote } from "../cli-session-drift.js";
 import * as media from "../media-generation-task-status.js";
 import { createCliCurrentPromptRenderer, prepareCliTurnPromptContext } from "./prompt-context.js";
 import type { CliReusableSession } from "./types.js";

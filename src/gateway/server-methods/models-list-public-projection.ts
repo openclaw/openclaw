@@ -1,3 +1,4 @@
+import { normalizeModelFamily } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import type {
@@ -115,11 +116,13 @@ export function buildPublicModelProjection(
 ): ModelChoice {
   const contextWindow = resolvePositiveSafeInteger(entry.contextWindow);
   const contextTokens = resolvePositiveSafeInteger(entry.contextTokens);
+  const family = normalizeModelFamily(entry.family);
   return {
     id: entry.id,
     name: entry.name,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    ...(family ? { family } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(contextTokens ? { contextTokens } : {}),
     ...(options.includeDetails && entry.baseUrl ? { local: isLocalBaseUrl(entry.baseUrl) } : {}),

@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { Show, createSignal, type Setter } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSidebarRegionCallbackMocks as callbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
@@ -36,19 +37,6 @@ function board(face: ResolvedBoardView["face"] = "dashboard") {
 }
 
 const containers: HTMLElement[] = [];
-
-function callbacks() {
-  return {
-    activatePanel: vi.fn(),
-    togglePanelExpanded: vi.fn(),
-    setDock: vi.fn(),
-    closeSlot: vi.fn(),
-    openSlot: vi.fn(),
-    reorderPanel: vi.fn(),
-    resizePanel: vi.fn(),
-    setOpen: vi.fn(),
-  };
-}
 
 function DetailContent() {
   return (

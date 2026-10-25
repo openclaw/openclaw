@@ -10,8 +10,7 @@ import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-
 import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { Agent } from "../../../agent-core/src/agent.js";
-
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sseState = vi.hoisted(() => ({
   clientHeaders: [] as Array<Record<string, string>>,
@@ -19,41 +18,11 @@ const sseState = vi.hoisted(() => ({
   requests: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("openai", () => {
-  class MockOpenAI {
-    apiKey: string;
-    baseURL: string;
-    responses = {
-      create: (request: Record<string, unknown>) => {
-        sseState.requests.push(request);
-        const outcome = sseState.outcomes.shift() ?? new Error("Unexpected SSE request");
-        return {
-          withResponse: async () => {
-            if (outcome instanceof Error) {
-              throw outcome;
-            }
-            return outcome;
-          },
-        };
-      },
-    };
-
-    constructor(options: {
-      apiKey?: string;
-      baseURL?: string;
-      defaultHeaders?: Record<string, string>;
-    }) {
-      this.apiKey = options.apiKey ?? "";
-      this.baseURL = options.baseURL ?? "https://api.openai.com/v1";
-      sseState.clientHeaders.push(options.defaultHeaders ?? {});
-    }
-
-    withOptions(options: { apiKey?: string }) {
-      return new MockOpenAI({ apiKey: options.apiKey ?? this.apiKey, baseURL: this.baseURL });
-    }
-  }
-
-  return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock(sseState, {
+    onConstruct: (options) => sseState.clientHeaders.push(options.defaultHeaders ?? {}),
+  });
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({

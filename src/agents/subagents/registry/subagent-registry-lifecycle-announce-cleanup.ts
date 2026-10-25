@@ -175,7 +175,7 @@ export const startSubagentAnnounceCleanupFlow = (
     return false;
   }
   const { cleanupGeneration, stateContext } = attempt;
-  const runCleanup = (run: () => Promise<void>) =>
+  const runCleanup = (run: (releasePreparation: () => void) => Promise<void>) =>
     runDetachedCleanupAttempt(context, entry, attempt, run);
   const assertPersistenceCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
@@ -547,7 +547,7 @@ export const startSubagentAnnounceCleanupFlow = (
     // fails closed instead of widening authority to another live Gateway.
     resolveGatewayContext: getGatewayContextResolver(entry),
   };
-  runCleanup(async () => {
+  runCleanup(async (releasePreparation) => {
     assertCurrent();
     let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
     const deadline = new AbortController();
@@ -583,8 +583,12 @@ export const startSubagentAnnounceCleanupFlow = (
           childAgentId: entry.childAgentId,
           childSessionIdentity: entry.childSessionIdentity,
           signal: deadline.signal,
+          onAccepted: releasePreparation,
           // Delivery expiry bounds admission; the requester owns its execution budget.
-          onExecutionStarted: () => clearTimeout(deadlineTimer),
+          onExecutionStarted: () => {
+            releasePreparation();
+            clearTimeout(deadlineTimer);
+          },
         }),
       );
     } catch (error) {

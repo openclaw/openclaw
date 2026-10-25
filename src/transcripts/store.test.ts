@@ -708,7 +708,7 @@ it("stores summaries in SQLite and materializes artifacts beneath a shared expor
   const artifacts = await store.materializeSessionArtifacts(target, "all");
 
   expect(markdownPath).toBe(path.join(store.sessionDir(target), "summary.md"));
-  expect(JSON.parse(readText(artifacts.summaryJsonPath))).toMatchObject({
+  expect(JSON.parse(readText(path.join(artifacts.sessionDir, "summary.json")))).toMatchObject({
     sessionId: target.sessionId,
   });
   expect(readText(artifacts.transcriptPath)).toContain('"text":"We decided to ship the CLI."');

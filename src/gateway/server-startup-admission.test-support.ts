@@ -46,7 +46,11 @@ export function registerGatewayStartupAdmissionTests(params: {
     const workerSidecar = { stop: vi.fn(async () => {}) };
     const startWorker = vi.fn(() => workerSidecar);
     const unlockStartupMethods = vi.fn();
-    const activateSubagentRegistry = vi.fn(async () => {});
+    const activateSubagentRegistry = vi.fn(() => ({
+      initial: Promise.resolve(),
+      pending: new Map(),
+      settled: Promise.resolve(),
+    }));
     await installGatewaySubagentModuleLoad(
       recoveryLoad.run,
       activateSubagentRegistry,

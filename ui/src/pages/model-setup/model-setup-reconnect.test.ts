@@ -6,6 +6,7 @@ import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import {
@@ -14,7 +15,6 @@ import {
   authButton,
   waitForElement,
   waitForText,
-  configSnapshot,
   createFirstRunContext,
   detection as emptyDetection,
   runningStep,
@@ -217,7 +217,7 @@ describe("ModelSetupPage detection ownership", () => {
         });
       }
       if (method === "config.get") {
-        return configSnapshot();
+        return sourceConfigSnapshot();
       }
       return method === "openclaw.setup.detect" ? detection : {};
     });

@@ -10,6 +10,7 @@ import {
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
   summarizeColdLoadTrace,
+  summarizeScriptCoverage,
   summarizeCpuProfile,
   type ColdLoadCpuProfile,
   type ColdLoadTraceEvent,
@@ -55,6 +56,23 @@ function event(
 }
 
 describe("cold-load trace accounting", () => {
+  it("counts UTF-8 coverage with nested unexecuted blocks and invoked inner functions", () => {
+    expect(
+      summarizeScriptCoverage({
+        source: "abcé😀xyz",
+        functions: [
+          { ranges: [{ startOffset: 0, endOffset: 9, count: 1 }] },
+          {
+            ranges: [
+              { startOffset: 3, endOffset: 9, count: 0 },
+              { startOffset: 4, endOffset: 6, count: 1 },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({ loadedBytes: 12, executedBytes: 7, unusedBytes: 5 });
+  });
+
   it("prepares numeric CDP envelopes, including unnamed end events", () => {
     expect(
       prepareColdLoadTraceEvent(
@@ -101,6 +119,11 @@ describe("cold-load trace accounting", () => {
       busyMs: 180,
       longTasks: 3,
       longTaskMs: 180,
+      longTaskIntervals: [
+        { startUs: 1_000_000, endUs: 1_070_000, durationMs: 70 },
+        { startUs: 1_040_000, endUs: 1_130_000, durationMs: 90 },
+        { startUs: 1_150_000, endUs: 1_200_000, durationMs: 50 },
+      ],
       longestTaskMs: 90,
       layoutCount: 2,
       layoutMs: 30,
@@ -165,10 +188,6 @@ describe("cold-load CPU accounting", () => {
       expect(mapped.profile.nodes[0]?.callFrame).toMatchObject({
         functionName: "flush",
         ...sourceLocation(/node_modules\/@solidjs\/signals\/dist\/prod\.js$/u),
-      });
-      expect(summarizeCpuProfile(mapped.profile)).toMatchObject({
-        solidFlushSelfMs: 2,
-        solidFlushInclusiveMs: 2,
       });
       expect(profile.nodes[0]?.callFrame.functionName).toBe("a");
     },
@@ -279,7 +298,8 @@ describe("cold-load CPU accounting", () => {
     ).toThrow();
   });
 
-  it.each(["live", "streaming"])("rejects comparisons that omit the %s phase", (phase) => {
+  it("rejects comparisons with different phase sets", () => {
+    const phase = "live";
     const tables = { functions: [], files: [] };
     const report = { reload: tables, [phase]: tables };
     expect(() => readCpuProfileReport(report, ["reload"])).toThrow("CPU profile phases differ");

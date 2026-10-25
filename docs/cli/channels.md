@@ -34,6 +34,9 @@ openclaw channels dead-letters list --channel telegram --account default
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
+Human-readable catalog labels neutralize terminal control sequences and display
+embedded tabs and line breaks as visible escapes. JSON preserves the original labels.
+
 `--json` returns a local account inventory from plugin metadata without contacting the Gateway or executing channel setup/runtime code. Configured accounts remain visible even when their plugin has a setup entry. Use `channels status --probe` for live checks.
 
 Disabling a plugin does not uninstall it. Its channels remain `installed: true` in the inventory; with `--all`, an installed channel without configured accounts has `origin: "available"` even when its plugin is disabled.
@@ -60,6 +63,9 @@ did not name.
 With `--json`, every channel entry includes `label` alongside its accounts, install state, and origin. Entries also include `docsPath` when verified official channel metadata provides a validated root-relative docs path. Automation can join this path with `https://docs.openclaw.ai` without trusting plugin-supplied URLs. Untracked or inconsistent installed-plugin provenance omits `docsPath`; repair verified legacy provenance with `openclaw doctor --fix` or reinstall the official package.
 
 ## Status / capabilities / resolve / logs
+
+Human-readable capability probe and diagnostic lines neutralize terminal control
+sequences. `--json` preserves the original values.
 
 `capabilities` and `resolve` reject explicitly empty or whitespace-only `--account`
 values. Omit the option to keep each command's default or broader account scope;

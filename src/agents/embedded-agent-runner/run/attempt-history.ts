@@ -14,19 +14,11 @@ import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.types.js";
+import type {
+  CurrentUserTimestampMatch,
+  UserTranscriptContext,
+} from "./attempt-llm-boundary.types.js";
 import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
-
-export type UserTranscriptContext = {
-  runtimeMessage: AgentMessage;
-  transcriptMessage: AgentMessage;
-};
-
-export type CurrentUserTimestampMatch = {
-  timestamp: number;
-  text: string;
-  alternateText?: string;
-  runtimeTimestamp?: number;
-};
 
 // Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts so sender
 // projection never displaces or duplicates a cache-stable timestamp envelope.

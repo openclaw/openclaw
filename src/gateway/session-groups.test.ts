@@ -29,8 +29,10 @@ import {
   mutateSessionGroupCatalog,
   readSessionGroupCatalog,
 } from "./session-group-catalog.js";
-import { readSessionGroupCatalogSnapshot } from "./session-group-catalog.kernel.js";
-import { registerSessionGroupInDatabase } from "./session-group-registration.kernel.js";
+import {
+  mutateSessionGroupCatalogInDatabase,
+  readSessionGroupCatalogSnapshot,
+} from "./session-group-catalog.kernel.js";
 import {
   deleteSessionGroup,
   ensureSessionGroupRegistered,
@@ -313,6 +315,28 @@ describe("session groups catalog", () => {
     expect(catalog().groups).toEqual(groups("Work"));
   });
 
+  it("allocates after the greatest position without a separate position read", () => {
+    const database = openOpenClawStateDatabase({ env });
+    vi.spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission").mockImplementation(() => {});
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    const append = (name: string) =>
+      mutateSessionGroupCatalogInDatabase(database, { kind: "register", name }, env);
+    try {
+      expect(append("First").snapshot.groups).toEqual([{ name: "First", position: 0 }]);
+      database.db.prepare("UPDATE session_groups SET position = ? WHERE name = ?").run(7, "First");
+      expect(append("Second").snapshot.groups).toEqual([
+        { name: "First", position: 7 },
+        { name: "Second", position: 8 },
+      ]);
+      expect(append("Second").changed).toBe(false);
+      expect(
+        reads.queries.filter((sql) => /^select "position" from "session_groups"/i.test(sql)),
+      ).toEqual([]);
+    } finally {
+      reads.restore();
+    }
+  });
+
   it("rechecks a missing category after another writer registers it", async () => {
     await put(["Work"]);
     // This native kernel fixture interleaves catalog preparation and BEGIN.
@@ -345,9 +369,15 @@ describe("session groups catalog", () => {
     );
 
     const database = openOpenClawStateDatabase({ env });
-    expect(registerSessionGroupInDatabase(database, "Travel", env)).toBe(false);
+    expect(
+      mutateSessionGroupCatalogInDatabase(database, { kind: "register", name: "Travel" }, env)
+        .changed,
+    ).toBe(false);
     expect(readSessionGroupCatalogSnapshot(database.db).groups).toEqual(groups("Work", "Travel"));
-    expect(registerSessionGroupInDatabase(database, "Later", env)).toBe(true);
+    expect(
+      mutateSessionGroupCatalogInDatabase(database, { kind: "register", name: "Later" }, env)
+        .changed,
+    ).toBe(true);
     expect(readSessionGroupCatalogSnapshot(database.db).groups.at(-1)).toEqual({
       name: "Later",
       position: 2,

@@ -110,22 +110,20 @@ async function launchctlGetenv(name: string): Promise<string | undefined> {
   }
 }
 
-function hasConfigGatewayCreds(cfg: OpenClawConfig): boolean {
-  return [
-    cfg.gateway?.auth?.token,
-    cfg.gateway?.auth?.password,
-    cfg.gateway?.remote?.token,
-    cfg.gateway?.remote?.password,
-  ].some((credential) => hasConfiguredSecretInput(credential, cfg.secrets?.defaults));
-}
-
 async function collectMacLaunchctlGatewayEnvOverrideWarning(
   cfg: OpenClawConfig,
 ): Promise<string | null> {
   if (process.platform !== "darwin") {
     return null;
   }
-  if (!hasConfigGatewayCreds(cfg)) {
+  if (
+    ![
+      cfg.gateway?.auth?.token,
+      cfg.gateway?.auth?.password,
+      cfg.gateway?.remote?.token,
+      cfg.gateway?.remote?.password,
+    ].some((credential) => hasConfiguredSecretInput(credential, cfg.secrets?.defaults))
+  ) {
     return null;
   }
 

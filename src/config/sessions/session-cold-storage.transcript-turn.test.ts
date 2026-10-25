@@ -116,7 +116,7 @@ describe("selected transcript turn cold restoration", () => {
     async (mode) => {
       const fixture = await createFixture();
       if (mode === "turn") {
-        await expect(fixture.append()).resolves.toMatchObject({ appendedCount: 1 });
+        await expect(fixture.append()).resolves.toMatchObject({ messages: [{ appended: true }] });
         expect(fixture.prepareMessage).toHaveBeenCalledOnce();
       } else {
         const message = { role: "user", content: "Resume selected history" };
@@ -214,7 +214,7 @@ describe("selected transcript turn cold restoration", () => {
       }
       await expect(pending).resolves.toMatchObject({
         rejectedReason: "session-rebound",
-        appendedCount: 0,
+        messages: [],
       });
       expect(admitted).toBe(timing === "at worker admission");
       expect(commitRequested).toBe(false);

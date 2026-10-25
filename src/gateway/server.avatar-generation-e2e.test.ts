@@ -4,15 +4,10 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
@@ -127,15 +122,12 @@ it(
               apiKey: "synthetic-local-provider-key",
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
               models: [
-                {
-                  id: "avatar-model",
+                modelDefinition("avatar-model", {
                   name: "Avatar model",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 8192,
                   maxTokens: 1024,
-                },
+                }),
               ],
             },
           },
@@ -177,22 +169,13 @@ it(
         return { client, closed: closed.promise };
       };
       const pair = async (name: string, scopes: string[]) => {
-        const identity = loadOrCreateDeviceIdentity({
-          path: state.path(name, "client", "credentials.sqlite"),
-        });
-        const pending = await requestDevicePairing({
-          deviceId: identity.deviceId,
-          publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        const { identity, issued } = await pairOperatorDeviceFixture({
+          identityPath: state.path(name, "client", "credentials.sqlite"),
+          scopes,
+          tokenScopes: scopes,
           clientId: "test",
           clientMode: "test",
-          role: "operator",
-          scopes,
-        });
-        await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
-        const issued = await rotateDeviceToken({
-          deviceId: identity.deviceId,
-          role: "operator",
-          scopes,
+          callerScopes: ["operator.admin"],
         });
         if (!issued.ok) {
           throw new Error("Could not issue synthetic device token");

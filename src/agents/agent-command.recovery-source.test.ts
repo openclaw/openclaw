@@ -5,6 +5,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import { isMainRestartRecoveryCandidate } from "../config/sessions/restart-recovery-state.js";
 import {
   agentCommandFromGatewayIngress,
   compactionTestRuntime,
@@ -92,12 +93,17 @@ it.each([false, true])(
   },
 );
 
-it.each(["settled", "unresolved", "terminal-pending"] as const)(
-  "keeps direct command steering bound to its admitted claim with predecessor custody %s",
-  async (predecessor) => {
+it.each([
+  ["settled", "dashboard"],
+  ["settled", "subagent"],
+  ["unresolved", "dashboard"],
+  ["terminal-pending", "dashboard"],
+] as const)(
+  "keeps direct command steering bound to its admitted claim with predecessor custody %s in %s",
+  async (predecessor, kind) => {
     const { loadSessionEntry, replaceSessionEntry } = compactionTestRuntime;
     const sessionId = "reused-child-session";
-    const sessionKey = "agent:main:dashboard:reused-child";
+    const sessionKey = `agent:main:${kind}:reused-child`;
     const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
     const previousRunId = "previous-child-command";
     const runId = "next-child-command";
@@ -146,6 +152,7 @@ it.each(["settled", "unresolved", "terminal-pending"] as const)(
             restartRecoveryTerminalRunIds: [previousRunId],
           });
           expect(current?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+          expect(isMainRestartRecoveryCandidate(current!, sessionKey)).toBe(false);
           expect(
             readRestartRecoveryRequesterSource({
               ...target,
@@ -204,5 +211,10 @@ it.each(["settled", "unresolved", "terminal-pending"] as const)(
       ...GATEWAY_INGRESS_ARGS,
     );
     expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+    if (kind === "subagent") {
+      const settled = loadSessionEntry(target);
+      expect(settled?.restartRecoveryRequesterSource).toBeUndefined();
+      expect(settled?.restartRecoveryTerminalRunIds).toContain(runId);
+    }
   },
 );

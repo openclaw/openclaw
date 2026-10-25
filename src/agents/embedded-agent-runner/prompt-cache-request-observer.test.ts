@@ -1,6 +1,8 @@
 import { hash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { createPromptCacheRequestObserver } from "./prompt-cache-request-observer.js";
 import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 
@@ -232,4 +234,40 @@ describe("prompt cache request observer", () => {
     expect(observed.map((entry) => entry.cacheRead)).toEqual(turns.flat());
     expect(observed.filter((entry) => entry.broke).map((entry) => entry.request)).toEqual(["2:1"]);
   });
+});
+
+it("bounds diagnostic retention for resident hydrated histories across requests", async ({
+  signal,
+}) => {
+  const result = await runNodeScript(
+    [
+      "--expose-gc",
+      "--import",
+      "./scripts/tsx.mjs",
+      "scripts/perf/prompt-cache-observation-measure.ts",
+      "--sessions",
+      "4",
+      "--messages",
+      "512",
+      "--rounds",
+      "20",
+    ],
+    process.env,
+    undefined,
+    { cwd: fileURLToPath(new URL("../../../", import.meta.url)), signal },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  const measured = JSON.parse(result.stdout.trim().split("\n").at(-1)!) as {
+    retainedFirst: number;
+    retainedFinal: number;
+    residentMessages: number;
+    sessionCount: number;
+  };
+  // Full diagnostic hashes fit within 1 KiB/message; revision maps do not.
+  expect(measured.retainedFinal).toBeLessThan(measured.residentMessages * 1024 + 128 * 1024);
+  // Re-observing the resident window must replace, rather than accumulate, baselines.
+  expect(measured.retainedFinal - measured.retainedFirst).toBeLessThan(
+    measured.sessionCount * 64 * 1024,
+  );
 });

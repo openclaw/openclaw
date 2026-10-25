@@ -12,7 +12,7 @@ import {
   interruptedChatHistory,
   interruptedChatCommentary,
 } from "../../../test-helpers/interrupted-chat-history.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
@@ -129,7 +129,9 @@ describe("chat transcript rendering", () => {
       for (const text of interruptedChatCommentary) {
         expect(container.textContent).toContain(text);
       }
-      expect(Boolean(container.querySelector(".chat-activity-group__summary"))).toBe(showTools);
+      await waitForSolid(() =>
+        expect(Boolean(container.querySelector(".chat-activity-group__summary"))).toBe(showTools),
+      );
       expect(container.textContent).toContain("Interrupted");
       expect(container.querySelector(".chat-working-indicator")).toBeNull();
     },
@@ -272,6 +274,7 @@ describe("chat transcript rendering", () => {
       },
     });
     const { container, rerender } = await mountThread(props);
+    await waitForSolid(() => expect(container.querySelector(".chat-compaction")).not.toBeNull());
     const marker = requireElement(container, ".chat-compaction");
     const glyph = requireElement(marker, ".chat-compaction__glyph");
     expect(marker.textContent).toContain("Compacting context");
@@ -340,6 +343,9 @@ describe("chat transcript rendering", () => {
       completedAt: null,
     };
     const { container, rerender } = await mountThread(props);
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-compaction--active")).not.toBeNull(),
+    );
     const active = requireElement(container, ".chat-compaction--active");
     expect(container.querySelectorAll(".chat-compaction")).toHaveLength(2);
     props.messages = [...props.messages, persisted("second", 3_000)];
@@ -475,7 +481,9 @@ describe("chat transcript rendering", () => {
     props.applicationContext = context;
     const { container } = await mountThread(props);
     expect(container.querySelector(".chat-work-group")).not.toBeNull();
-    expect(container.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")).toHaveLength(1);
+    await waitForSolid(() =>
+      expect(container.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")).toHaveLength(1),
+    );
     await vi.waitFor(() =>
       expect(capture).toHaveBeenCalledExactlyOnceWith(
         "browser.request",

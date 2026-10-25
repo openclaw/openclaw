@@ -77,8 +77,6 @@ function rewriteMarkdownIR(ir: MarkdownIR, edits: readonly MarkdownTextEdit[]): 
   };
 }
 
-type DelimitedMarkdownScan = { end: number } | { next: number } | undefined;
-
 function blankBlockEnd(text: string, index: number): number | undefined {
   if (text[index] !== "\n" && text[index] !== "\r") {
     return undefined;
@@ -91,7 +89,7 @@ function scanDelimitedMarkdown(
   text: string,
   start: number,
   nestedOpener: "![" | "@[",
-): DelimitedMarkdownScan {
+): { end: number } | { next: number } | undefined {
   let bracketDepth = 1;
   let altEnd: number | undefined;
   let fallbackNext: number | undefined;

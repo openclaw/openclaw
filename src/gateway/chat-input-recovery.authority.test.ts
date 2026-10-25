@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 // Load the real Gateway/model runtime during collection, outside the proof deadline.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -11,6 +11,7 @@ import { rawDataToString } from "../../packages/gateway-client/src/websocket-dat
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   acquireGatewayTestWebSocket,
   closeGatewayTestWebSocket,
@@ -49,7 +50,6 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
@@ -131,7 +131,7 @@ it.for([
           response.writeHead(200).end('{"data":[]}');
           return;
         }
-        const body = await readProviderBody(request);
+        const body = await readRequestText(request);
         const payload = JSON.parse(body) as {
           input: Array<{
             type?: string;
@@ -186,10 +186,14 @@ it.for([
     const recover = deliveryRecovery.recoverSessionSendDeliveries;
     const recoverySpy = vi
       .spyOn(deliveryRecovery, "recoverSessionSendDeliveries")
-      .mockImplementation(async (...args) => {
+      .mockImplementation((...args) => {
         recoveryStarted.resolve();
-        await releaseRecovery.promise;
-        await recover(...args);
+        const recovery = releaseRecovery.promise.then(() => recover(...args));
+        return {
+          initial: recovery.then((progress) => progress.initial),
+          pending: new Map(),
+          settled: recovery.then((progress) => progress.settled),
+        };
       });
     try {
       const provider = buildMockOpenAiResponsesProvider(

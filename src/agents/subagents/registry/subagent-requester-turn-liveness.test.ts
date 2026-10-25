@@ -1,7 +1,5 @@
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { admitReplyTurn } from "../../../auto-reply/reply/reply-turn-admission.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import type { ReplyOperation } from "../../../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
@@ -9,6 +7,7 @@ import { resetSessionControllerStateForTest } from "../../../sessions/session-li
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
+import { admitRequesterTurnForTest } from "./subagent-requester-turn-liveness.test-support.js";
 
 const storePath = "/private/tmp/requester-turn-liveness/main/sessions.json";
 const operations: ReplyOperation[] = [];
@@ -106,21 +105,7 @@ it.each(["default", "custom"] as const)(
         layout === "custom"
           ? state.path("custom", "openclaw-agent.sqlite")
           : state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey, storePath: logicalStore },
-        { sessionId: "requester-session", updatedAt: 1 },
-      );
-      const admitted = await admitReplyTurn({
-        agentId: "main",
-        sessionKey,
-        sessionId: "requester-session",
-        storePath: logicalStore,
-        kind: "visible",
-        resetTriggered: false,
-      });
-      if (admitted.status !== "owned") {
-        throw new Error("Requester did not acquire its turn");
-      }
+      const admitted = await admitRequesterTurnForTest(sessionKey, logicalStore);
       const turn = attach(admitted.operation);
       const entry = child({
         requesterSessionKey: sessionKey,

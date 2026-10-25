@@ -1,10 +1,12 @@
 import { once } from "node:events";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as workerMessageMetrics from "../infra/worker-message-metrics.js";
 import { createRealtimeVoiceAudioPortSender } from "./audio-output-port.js";
 
 describe("worker audio output port", () => {
   it("orders interruption before new PCM, owns buffers, and honors immediate sink revocation", async () => {
+    const recorded = vi.spyOn(workerMessageMetrics, "recordWorkerMessage");
     const { port1, port2 } = new MessageChannel();
     const state = new SharedArrayBuffer(4);
     const sender = createRealtimeVoiceAudioPortSender({ port: port1, state });
@@ -32,12 +34,18 @@ describe("worker audio output port", () => {
         setImmediate(resolve);
       });
       expect(receiveMessageOnPort(port2)).toBeUndefined();
+      expect(
+        recorded.mock.calls
+          .filter(([kind, direction]) => kind === "realtime" && direction === "to_worker")
+          .reduce((bytes, call) => bytes + (call[2] ?? 0), 0),
+      ).toBe(4);
       sender.close();
       sender.close();
       expect(Atomics.load(new Int32Array(state), 0)).toBe(1);
     } finally {
       sender.close();
       port2.close();
+      recorded.mockRestore();
     }
   });
   it("flushes only after queued PCM is acknowledged and settles empty output", async () => {

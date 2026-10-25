@@ -258,6 +258,18 @@ describe("agents add command", () => {
     expectUnused(runtime.error, runtime.exit, writeConfig);
   }
 
+  it("preserves the recovery owner's refusal for an existing held agent", async () => {
+    const message =
+      "Agent main has held databases. Restore its original agentDir and session.store configuration, then rerun agents add to restore the preserved store.";
+    createAgent.mockResolvedValueOnce({
+      status: "error",
+      reason: "already-exists",
+      agentId: "main",
+      message,
+    });
+    await expectRootFailure(add({ name: "main", workspace: "/tmp/main" }, true), message);
+  });
+
   it.each<[AddOptions, string]>([
     [
       { name: "Work" },
@@ -370,15 +382,14 @@ describe("agents add command", () => {
   it("reports only portable profiles persisted from shared state-db auth", async ({
     state: { workspaceDir, agentDir },
   }) => {
-    const sourceStore: AuthProfileStore = {
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" });
+    saveAuthProfileStore({
       version: AUTH_STORE_VERSION,
       profiles: {
         "openai:api-key": apiKey("sk-test"),
         "openai:oauth": createOAuthRefreshCredential({ copyToAgents: true }),
       },
-    };
-    writeConfigMachineState("auth.sharedStore", { location: "state-db" });
-    saveAuthProfileStore(sourceStore);
+    });
     const wizard = useWizard(["work", workspaceDir], [true, false]);
 
     await add();
@@ -409,8 +420,7 @@ describe("agents add command", () => {
     await add();
 
     expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
-    const copied = loadPersistedAuthProfileStore(agentDir);
-    expect(copied?.profiles["openai:portable"]).toBeDefined();
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["openai:portable"]).toBeDefined();
     expect(setupChannels).toHaveBeenCalledWith(
       expect.any(Object),
       defaultRuntime,
@@ -630,17 +640,4 @@ describe("agents add command", () => {
       }
     },
   );
-
-  it("reports a duplicate agent through the root failure owner", async () => {
-    createAgent.mockResolvedValueOnce({
-      status: "error",
-      reason: "already-exists",
-      agentId: "work",
-      message: 'agent "work" already exists',
-    });
-    await expectRootFailure(
-      add({ name: "Work", workspace: "/tmp/work" }, true),
-      'Agent "work" already exists.',
-    );
-  });
 });

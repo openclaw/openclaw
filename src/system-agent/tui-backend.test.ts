@@ -33,10 +33,16 @@ vi.mock("./hosted-setup.runtime.js", async (importOriginal) => ({
   runHostedSearchSetup: vi.fn(),
 }));
 
-vi.mock("../plugins/providers.js", () => ({
-  resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
-  resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
-}));
+vi.mock("../plugins/providers.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../plugins/providers.js")>();
+  return {
+    ...original,
+    // The verified-inference helper replaces the registry snapshot with exact synthetic
+    // records, so pass-through safety resolvers cannot consult the host plugin inventory.
+    resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
+    resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
+  };
+});
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),

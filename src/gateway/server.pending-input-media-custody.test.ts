@@ -30,10 +30,15 @@ function returned<T>(results: readonly MockResult<T>[]) {
   return results.flatMap((result) => (result.type === "return" ? [result.value] : []));
 }
 
-function expectAdmissionError(response: unknown, message: string) {
+function expectAdmissionError(response: unknown, message: string | RegExp) {
   expect(response).toMatchObject({
     ok: false,
-    error: { message: expect.stringContaining(message) },
+    error: {
+      message:
+        typeof message === "string"
+          ? expect.stringContaining(message)
+          : expect.stringMatching(message),
+    },
   });
 }
 
@@ -306,14 +311,12 @@ it.for(
         expect(transcript).toEqual(f.before);
       }
       if (!accepted) {
-        expectAdmissionError(
-          response,
-          outcome === "refused"
-            ? REFUSAL
-            : chat
-              ? LOST_REPLY
-              : "commitment is unknown; do not replay",
-        );
+        expectAdmissionError(response, outcome === "refused" ? REFUSAL : /confirm|saved/i);
+        if (outcome === "unknown") {
+          expect(response).toMatchObject({
+            error: { retryable: false, details: { code: "session_actor_reconciliation" } },
+          });
+        }
       }
       if (goal && outcome === "unknown") {
         expect(transcript.slice(0, f.before.length)).toEqual(f.before);

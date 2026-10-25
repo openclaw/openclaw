@@ -1,17 +1,11 @@
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
-type GatewayHealthRpcOpts = Parameters<
-  typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport
->[1];
-
-type GatewayHealthJsonRouteArgs = {
-  rpc: GatewayHealthRpcOpts;
-  localPortOverride?: number;
-};
-
 /** Run the successful JSON path without loading text presentation modules. */
 export async function runGatewayHealthJsonRoute(
-  args: GatewayHealthJsonRouteArgs,
+  args: {
+    rpc: Parameters<typeof import("../gateway-rpc.js").callGatewayFromCliWithTransport>[1];
+    localPortOverride?: number;
+  },
   runtime: RuntimeEnv,
 ): Promise<void> {
   let rpc = args.rpc;
@@ -41,14 +35,11 @@ export async function runGatewayHealthJsonRoute(
       }),
     );
   } catch (error) {
-    const [
-      { emitReachableGatewayAuthDiagnostic, readNonObservingHealthConfig },
-      {
-        formatGatewayAuthErrorJson,
-        formatGatewayClientRequestErrorJson,
-        formatGatewayTransportErrorJson,
-      },
-    ] = await Promise.all([import("../../commands/health.js"), import("../../gateway/call.js")]);
+    const {
+      emitReachableGatewayAuthDiagnostic,
+      emitGatewayHealthErrorJson,
+      readNonObservingHealthConfig,
+    } = await import("../../commands/health.js");
     const handled = await emitReachableGatewayAuthDiagnostic({
       error,
       config: rpc.config ?? (await readNonObservingHealthConfig()),
@@ -62,13 +53,7 @@ export async function runGatewayHealthJsonRoute(
     if (handled) {
       return;
     }
-    const payload =
-      formatGatewayAuthErrorJson(error) ??
-      formatGatewayClientRequestErrorJson(error) ??
-      formatGatewayTransportErrorJson(error);
-    if (payload) {
-      writeRuntimeJson(runtime, payload);
-      runtime.exit(1);
+    if (emitGatewayHealthErrorJson(error, runtime)) {
       return;
     }
     throw error;

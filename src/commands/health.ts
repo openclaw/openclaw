@@ -99,6 +99,19 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   return true;
 }
 
+export function emitGatewayHealthErrorJson(error: unknown, runtime: RuntimeEnv): boolean {
+  const payload =
+    formatGatewayAuthErrorJson(error) ??
+    formatGatewayClientRequestErrorJson(error) ??
+    formatGatewayTransportErrorJson(error);
+  if (!payload) {
+    return false;
+  }
+  writeRuntimeJson(runtime, payload);
+  runtime.exit(1);
+  return true;
+}
+
 function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   const eventLoop = summary.eventLoop;
   if (!eventLoop) {
@@ -168,16 +181,8 @@ export async function healthCommand(
     ) {
       return;
     }
-    if (opts.json) {
-      const payload =
-        formatGatewayAuthErrorJson(error) ??
-        formatGatewayClientRequestErrorJson(error) ??
-        formatGatewayTransportErrorJson(error);
-      if (payload) {
-        writeRuntimeJson(runtime, payload);
-        runtime.exit(1);
-        return;
-      }
+    if (opts.json && emitGatewayHealthErrorJson(error, runtime)) {
+      return;
     }
     throw error;
   }

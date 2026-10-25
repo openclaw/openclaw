@@ -91,24 +91,6 @@ function expectNoAuthWrites() {
   expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
 }
 
-async function expectGeneratedBrowserAuthPersistence(
-  cfg: OpenClawConfig,
-  mode: "none" | "trusted-proxy",
-  field: "token" | "password",
-) {
-  mocks.getRuntimeConfig.mockReturnValue(cfg);
-
-  const result = await ensureBrowserControlAuth({ cfg, env: {} });
-
-  expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
-  expect(result.auth[field]).toBe(result.generatedToken);
-  expect(result.auth[field === "token" ? "password" : "token"]).toBeUndefined();
-  expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-  const persistedCfg = mocks.writeConfigFile.mock.calls[0]![0];
-  expect(persistedCfg.gateway?.auth).toMatchObject({ mode, [field]: result.generatedToken });
-  expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
-}
-
 let ensureBrowserControlAuth: typeof import("./control-auth.js").ensureBrowserControlAuth;
 let resolveBrowserControlAuth: typeof import("./control-auth.js").resolveBrowserControlAuth;
 
@@ -193,19 +175,43 @@ describe("ensureBrowserControlAuth", () => {
     expectNoAuthWrites();
   });
 
-  it.each([
-    ["none", "token", "password"],
-    ["trusted-proxy", "password", "token"],
-  ] as const)(
-    "generates %s %s despite an inactive %s SecretRef",
-    async (mode, active, inactive) => {
-      const cfg = browserConfig({
-        mode,
-        [inactive]: { source: "env", provider: "default", id: "INACTIVE_SECRET" },
-      });
-      await expectGeneratedBrowserAuthPersistence(cfg, mode, active);
-    },
-  );
+  it("generates and persists a none-mode token despite an inactive password SecretRef", async () => {
+    const cfg = browserConfig({
+      mode: "none",
+      password: { source: "env", provider: "default", id: "INACTIVE_SECRET" },
+    });
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
+
+    const result = await ensureBrowserControlAuth({ cfg, env: {} });
+
+    expect(result.generatedToken).toMatch(/^[a-f0-9]{48}$/);
+    expect(result.auth).toEqual({ token: result.generatedToken });
+    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    const persistedCfg = mocks.writeConfigFile.mock.calls[0]![0];
+    expect(persistedCfg.gateway?.auth).toMatchObject({
+      mode: "none",
+      token: result.generatedToken,
+    });
+    expect(mocks.ensureGatewayStartupAuth).not.toHaveBeenCalled();
+  });
+
+  it("keeps a trusted-proxy browser password in this process instead of gateway.auth", async () => {
+    const cfg = browserConfig({
+      mode: "trusted-proxy",
+      token: { source: "env", provider: "default", id: "INACTIVE_SECRET" },
+    });
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
+
+    const first = await ensureBrowserControlAuth({ cfg, env: {} });
+    const second = await ensureBrowserControlAuth({ cfg, env: {} });
+
+    expect(first.auth.password).toMatch(/^[a-f0-9]{48}$/);
+    expect(first.auth.token).toBeUndefined();
+    // Every listener in this process shares one credential, so cached bridges stay reusable.
+    expect(second).toEqual({ auth: first.auth });
+    expect(mocks.mutateConfigFile).not.toHaveBeenCalled();
+    expectNoAuthWrites();
+  });
 
   it("reuses auth from latest config snapshot", async () => {
     const cfg = browserConfig();
@@ -221,7 +227,6 @@ describe("ensureBrowserControlAuth", () => {
     { mode: "none", afterWrite: "generated" },
     { mode: "none", afterWrite: "replacement" },
     { mode: "none", afterWrite: "other-mode" },
-    { mode: "trusted-proxy", afterWrite: "generated" },
   ] as const)(
     "rereads $afterWrite auth after generating for $mode",
     async ({ mode, afterWrite }) => {

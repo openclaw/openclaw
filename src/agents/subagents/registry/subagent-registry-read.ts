@@ -42,6 +42,39 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 
+/** Hydrate retained custody before resolving a private input's restart owner. */
+export async function getPrivateRequesterSettleRecoveryOwner(
+  requester: {
+    entry: { sessionId: string; lifecycleRevision?: string };
+    agentId: string;
+    canonicalKey: string;
+    storePath: string;
+    physicalStorePath?: string;
+  },
+  runId: string | undefined,
+) {
+  if (!runId) {
+    return undefined;
+  }
+  const { initSubagentRegistry } = await import("./subagent-registry.js");
+  await initSubagentRegistry();
+  const [
+    { prepareSqliteTargetFromSessionStorePath },
+    { resolvePrivateRequesterSettleRecoveryOwner },
+  ] = await Promise.all([
+    import("../../../config/sessions/session-sqlite-target.js"),
+    import("./subagent-registry-restart-recovery.js"),
+  ]);
+  const physical = await prepareSqliteTargetFromSessionStorePath(
+    requester.physicalStorePath ?? requester.storePath,
+    { agentId: requester.agentId },
+  );
+  return resolvePrivateRequesterSettleRecoveryOwner(
+    { ...requester, physicalStorePath: physical.path },
+    runId,
+  );
+}
+
 /** Resolve live owners through the existing aliases without scanning retained history. */
 export function listActiveSubagentSessionKeys(): string[] {
   const runIds = new Set([...listLiveAgentRunIds(), ...listSwarmRunReservationIds()]);

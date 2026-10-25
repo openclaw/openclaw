@@ -5,17 +5,19 @@ import { readNodePermissionRequest } from "../../../../../packages/gateway-proto
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { browserTabKey } from "../../../components/browser/browser-target.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
 import { resolveToolCardDisplay, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
-import { BrowserTabCardHost } from "./browser-tab-card.tsx";
+import "./browser-tab-card.css";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ToolIcon } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
@@ -25,17 +27,30 @@ import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
 
-const ToolCardRow = lazy(() => import("./chat-tool-card-row.solid.tsx"), { export: "ToolCardRow" });
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
-export function BrowserTabPreviews(props: { previews: readonly BrowserTabPreview[] | undefined }) {
+const ToolCardRow = lazy(() => import("./chat-tool-card-row.solid.tsx"), { export: "ToolCardRow" });
+const BrowserTabCardHost = lazy(() => import("./browser-tab-card.tsx"), {
+  export: "BrowserTabCardHost",
+});
+
+export function BrowserTabPreviews(props: {
+  previews: readonly BrowserTabPreview[] | undefined;
+  mediaReadAllowed?: boolean;
+}) {
   return (
-    <For each={props.previews} keyed={(item) => browserTabKey(item.preview)}>
+    <For
+      each={props.mediaReadAllowed === false ? undefined : props.previews}
+      keyed={(item) => browserTabKey(item.preview)}
+    >
       {(item) => (
-        <BrowserTabCardHost
-          preview={item().preview}
-          revision={item().revision}
-          latest={item().latest}
-        />
+        <ChatLazyBoundary>
+          <BrowserTabCardHost
+            preview={item().preview}
+            revision={item().revision}
+            latest={item().latest}
+          />
+        </ChatLazyBoundary>
       )}
     </For>
   );
@@ -282,6 +297,7 @@ export function ChatToolCard(props: ToolCardProps) {
       surface="tool-result"
       props={toolResultSurfaceProps(props.card, props.options)}
       presented={props.options.presented ?? true}
+      enabled={props.options.mediaReadAllowed !== false}
       renderDefault={() => (
         <openclaw-chat-tool-card style={{ display: "contents" }}>
           <ToolCardView

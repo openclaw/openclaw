@@ -49,6 +49,7 @@ import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { dispatchInboundMessage } from "../dispatch.js";
 import type { ReplyPayload } from "../types.js";
+import { createReplyAgentDefaults } from "./get-reply-config.test-support.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 
@@ -186,12 +187,7 @@ async function withChannelCommandPlugin(
       const nextConfig: OpenClawConfig = {
         ...cfg,
         agents: {
-          defaults: {
-            workspace: state.workspaceDir,
-            skipBootstrap: true,
-            model: { primary: "mock-openai/gpt-5.6-luna" },
-            models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-          },
+          defaults: createReplyAgentDefaults(state.workspaceDir),
         },
         commands: {
           ...cfg.commands,

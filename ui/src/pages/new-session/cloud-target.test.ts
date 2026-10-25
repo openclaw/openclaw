@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { CloudProfileMenuItems, SessionMenuItem } from "./cloud-target-view.tsx";
-import { requestPlaceCatalog, type CloudProfileMenuItemsOptions } from "./cloud-target.ts";
+import { SessionMenuItem } from "./cloud-target-view.tsx";
+import { mountCloudProfiles } from "./cloud-target.test-support.ts";
+import { requestPlaceCatalog } from "./cloud-target.ts";
 import {
   projectDevicePlacements,
   resolveAutomaticDevicePlacementDisabledReason,
@@ -16,26 +17,6 @@ function mountSessionItem(
   container: HTMLElement,
 ) {
   return mountSolid(() => createComponent(SessionMenuItem, { item, submitting }), { container });
-}
-
-function mountCloudProfiles(initial: CloudProfileMenuItemsOptions, container: HTMLElement) {
-  const [params, setParams] = createSignal(initial);
-  const mounted = mountSolid(
-    () =>
-      createComponent(CloudProfileMenuItems, {
-        get params() {
-          return params();
-        },
-      }),
-    { container },
-  );
-  return {
-    ...mounted,
-    update: (next: CloudProfileMenuItemsOptions) => {
-      setParams(next);
-      flush();
-    },
-  };
 }
 
 describe("cloud target menu", () => {

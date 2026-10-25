@@ -166,65 +166,52 @@ describe("applyEditsToNormalizedContent uniqueness", () => {
 });
 
 describe("fuzzy edit source-span mapping", () => {
-  it("maps smart-quote folds while preserving a smart-quote comment", () => {
-    const content =
-      "const label = \u201Chello\u201D; // keep \u201Ccomment\u201D \u2014 unchanged\n";
-    const result = prepareChangedEdit(
-      content,
-      [{ oldText: 'const label = "hello";', newText: "const label = 'hi';" }],
-      "test.ts",
-    );
+  it.each([
+    {
+      name: "maps smart-quote folds while preserving a smart-quote comment",
+      content: "const label = \u201Chello\u201D; // keep \u201Ccomment\u201D \u2014 unchanged\n",
+      oldText: 'const label = "hello";',
+      newText: "const label = 'hi';",
+      expected: "const label = 'hi'; // keep \u201Ccomment\u201D \u2014 unchanged\n",
+    },
+    {
+      name: "allows a match that covers a complete NFKC expansion",
+      content: "const value = \uFB01;\n",
+      oldText: "fi",
+      newText: "pair",
+      expected: "const value = pair;\n",
+    },
+    {
+      name: "maps a complete combining sequence and preserves supplementary characters",
+      content: "const caf\u0065\u0301 = 1; // \u{1F642}\n",
+      oldText: "const caf\u00E9 = 1;",
+      newText: "const cafe = 2;",
+      expected: "const cafe = 2; // \u{1F642}\n",
+    },
+    {
+      name: "preserves trimmed bytes at EOF",
+      content: "const value\u00A0= 1;  ",
+      oldText: "const value = 1;",
+      newText: "const value = 2;",
+      expected: "const value = 2;  ",
+    },
+    {
+      name: "preserves CRLF while mapping a fuzzy Unicode span",
+      content: "const value\u00A0= 1;\r\nnext\r\n",
+      oldText: "const value = 1;",
+      newText: "const value = 2;",
+      expected: "const value = 2;\r\nnext\r\n",
+    },
+  ])("$name", ({ content, oldText, newText, expected }) => {
+    const result = prepareChangedEdit(content, [{ oldText, newText }], "test.ts");
 
-    expect(result.content).toBe(
-      "const label = 'hi'; // keep \u201Ccomment\u201D \u2014 unchanged\n",
-    );
-  });
-
-  it("allows a match that covers a complete NFKC expansion", () => {
-    const result = prepareChangedEdit(
-      "const value = \uFB01;\n",
-      [{ oldText: "fi", newText: "pair" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("const value = pair;\n");
+    expect(result.content).toBe(expected);
   });
 
   it("rejects a match ending inside an NFKC expansion", () => {
     expect(() =>
       prepareChangedEdit("const value = \uFB01;\n", [{ oldText: "f", newText: "x" }], "test.ts"),
     ).toThrow(/ambiguous Unicode-normalization or trimmed-whitespace boundary/);
-  });
-
-  it("maps a complete combining sequence and preserves supplementary characters", () => {
-    const content = "const caf\u0065\u0301 = 1; // \u{1F642}\n";
-    const result = prepareChangedEdit(
-      content,
-      [{ oldText: "const caf\u00E9 = 1;", newText: "const cafe = 2;" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("const cafe = 2; // \u{1F642}\n");
-  });
-
-  it("preserves trimmed bytes at EOF", () => {
-    const result = prepareChangedEdit(
-      "const value\u00A0= 1;  ",
-      [{ oldText: "const value = 1;", newText: "const value = 2;" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("const value = 2;  ");
-  });
-
-  it("preserves CRLF while mapping a fuzzy Unicode span", () => {
-    const result = prepareChangedEdit(
-      "const value\u00A0= 1;\r\nnext\r\n",
-      [{ oldText: "const value = 1;", newText: "const value = 2;" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("const value = 2;\r\nnext\r\n");
   });
 
   it.each(["fuzzy first", "exact first"])(
@@ -254,23 +241,22 @@ describe("applyEditsToNormalizedContent fuzzy uniqueness", () => {
     ).toThrow(/Found 2 occurrences/);
   });
 
-  it("rejects an oldText whose occurrences overlap", () => {
-    expect(() =>
-      prepareFileEdit(
-        "a();\na();\na();\n",
-        [{ oldText: "a();\na();", newText: "b();" }],
-        "test.ts",
-      ),
-    ).toThrow(/Found 2 occurrences/);
-  });
-
-  it("rejects a fuzzy oldText whose normalized occurrences overlap", () => {
-    expect(() =>
-      prepareFileEdit(
-        "a();\na(); \na();\n",
-        [{ oldText: "a();\na();\n", newText: "b();\n" }],
-        "test.ts",
-      ),
-    ).toThrow(/Found 2 occurrences/);
+  it.each([
+    {
+      name: "rejects an oldText whose occurrences overlap",
+      content: "a();\na();\na();\n",
+      oldText: "a();\na();",
+      newText: "b();",
+    },
+    {
+      name: "rejects a fuzzy oldText whose normalized occurrences overlap",
+      content: "a();\na(); \na();\n",
+      oldText: "a();\na();\n",
+      newText: "b();\n",
+    },
+  ])("$name", ({ content, oldText, newText }) => {
+    expect(() => prepareFileEdit(content, [{ oldText, newText }], "test.ts")).toThrow(
+      /Found 2 occurrences/,
+    );
   });
 });

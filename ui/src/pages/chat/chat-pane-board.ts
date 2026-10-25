@@ -9,7 +9,7 @@ import {
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import { t } from "../../i18n/index.ts";
-import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
+import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,
@@ -584,13 +584,13 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   private pageBoardWidget(layout: SidebarLayout | undefined, board: ResolvedBoardView) {
+    // Eligibility belongs to the loaded snapshot, not the lazy renderer registration.
     if (
       !layout ||
       !this.state ||
       !selectedChatSessionRow(this.state) ||
       !this.visuallyPresented ||
       !board.provider.hasLoadedSnapshot ||
-      !customElements.get("openclaw-board-view") ||
       !isSidebarSlotVisible(layout, "dashboard")
     ) {
       return undefined;

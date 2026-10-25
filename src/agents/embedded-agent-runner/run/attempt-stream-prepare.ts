@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -50,6 +51,7 @@ import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
 } from "./attempt-async-tasks.js";
+import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
   readAttemptNestedToolActivity,
   type AttemptNestedToolActivityState,
@@ -104,6 +106,8 @@ type PrepareEmbeddedAttemptStreamInput = {
     revokeApprovals: () => void,
   ) => Promise<void>;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
+  readSessionForkBoundary?: () => LlmBoundaryOptions;
+  projectSessionForkMessages?: (messages: AgentMessage[]) => AgentMessage[];
   runtimeChannel?: string;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
@@ -601,6 +605,26 @@ function prepareStream(
     messageInjection,
     messageInjectionV2: messageInjection,
     isStreaming: () => activeSession.isStreaming,
+    readSessionForkContext: () => {
+      if (!isCurrentRegistration()) {
+        return undefined;
+      }
+      return {
+        model: attempt.model,
+        systemPrompt: activeSession.systemPrompt,
+        tools: activeSession.agent.state.tools.map(({ name, description, parameters, async }) => ({
+          name,
+          description,
+          parameters,
+          ...(async === false ? { async } : {}),
+        })),
+        messages: activeSession.messages.slice(),
+        projectMessages: input.projectSessionForkMessages,
+        sessionVersion: activeSession.sessionManager.getHeader()?.version,
+        boundary: input.readSessionForkBoundary?.(),
+        blockImages: activeSession.settingsManager.getBlockImages(),
+      };
+    },
     isAborted: () => input.getRunState().aborted,
     isStopped: () => !isSteeringAdmissionOpen(),
     isCompacting: () => subscription.isCompacting(),

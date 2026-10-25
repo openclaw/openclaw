@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MediaUnderstandingProvider } from "./types.js";
 
 const mediaMetadataPlugins = vi.hoisted(() => {
+  const nativeDocumentInputs = ["pdf"];
   const pdf = { pdf: { textExtraction: "MiniMax-M2.7", image: false } };
   const minimax = { capabilities: ["image"], documentModels: pdf };
   return [
@@ -10,10 +11,17 @@ const mediaMetadataPlugins = vi.hoisted(() => {
         mediaUnderstandingProviders: ["google", "minimax", "minimax-portal", "openrouter"],
       },
       mediaUnderstandingProviderMetadata: {
-        google: { capabilities: ["image"], autoPriority: { image: 30 } },
+        google: { capabilities: ["image"], autoPriority: { image: 30 }, nativeDocumentInputs },
         minimax: { ...minimax, autoPriority: { image: 40 } },
         "minimax-portal": { ...minimax, autoPriority: { image: 50 } },
         openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
+      },
+    },
+    {
+      contracts: { mediaUnderstandingProviders: ["anthropic", "openai"] },
+      mediaUnderstandingProviderMetadata: {
+        anthropic: { nativeDocumentInputs },
+        openai: { nativeDocumentInputs: [] },
       },
     },
   ];
@@ -111,13 +119,7 @@ describe("media defaults", () => {
     );
   });
   it("reads native PDF support from provider metadata", () => {
-    const providerRegistry = new Map([
-      ["anthropic", { id: "anthropic", nativeDocumentInputs: ["pdf" as const] }],
-      ["google", { id: "google", nativeDocumentInputs: ["pdf" as const] }],
-      ["openai", { id: "openai", nativeDocumentInputs: [] }],
-    ]);
-    const supports = (providerId: string) =>
-      providerSupportsNativePdfDocument({ providerId, providerRegistry });
+    const supports = (providerId: string) => providerSupportsNativePdfDocument({ providerId });
     expect([supports("anthropic"), supports("google"), supports("openai")]).toEqual([
       true,
       true,
@@ -126,7 +128,7 @@ describe("media defaults", () => {
   });
   it("reads document model hints from provider metadata", () => {
     const resolve = (providerId: string, mode: "textExtraction" | "image") =>
-      resolveDocumentMediaModel({ providerId, document: "pdf", mode });
+      resolveDocumentMediaModel({ providerId, mode });
     expect(resolve("minimax-portal-cn", "textExtraction")).toBe("MiniMax-M2.7");
     expect(resolve("minimax", "image")).toBe(false);
     expect(resolve("openai", "textExtraction")).toBeUndefined();

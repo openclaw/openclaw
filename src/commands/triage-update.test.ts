@@ -36,6 +36,26 @@ describe("update failure triage diagnostics", () => {
   const writePlugins = (plugins: Plugins) =>
     write({ reason: "post-update-plugins", postUpdate: { plugins } });
 
+  it("omits whole words when bounding the swap cause and recovery advice", async () => {
+    const { raw, failure } = await write({
+      steps: [
+        {
+          name: "global install swap",
+          exitCode: 1,
+          stderrTail: `Package rollback verification timed out. ${"diagnostic context ".repeat(30)}Installation recovery is unverified; inspect the installation and backups before restarting.`,
+        },
+      ],
+    });
+    expect(raw).toContain("Package rollback verification timed out.");
+    const detail = "result" in failure ? failure.result.steps[0]?.stderrTail : undefined;
+    expect(detail).toContain(" ... ");
+    const [head, tail] = detail!.split(" ... ");
+    expect(head).toMatch(/(?:timed out\.|diagnostic|context)$/u);
+    expect(tail).toMatch(
+      /^(?:diagnostic|context|Installation|recovery|is|unverified;|inspect|the|installation|and|backups|before|restarting\.)\b/u,
+    );
+  });
+
   it.runIf(process.platform !== "win32")("rejects a writerless FIFO without blocking", async () => {
     // This directory must outlive afterEach so the deadline cleanup can release the FIFO.
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-triage-fifo-"));

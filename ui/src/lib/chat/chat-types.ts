@@ -123,7 +123,7 @@ export type ChatGoalAction = "pause" | "resume" | "clear";
 export type ChatGoalRecovery = {
   pending: boolean;
   goalId?: string;
-  action?: ChatGoalAction | "edit" | "complete" | "block";
+  action?: ChatGoalAction | "edit" | "replace" | "complete" | "block";
   retired?: "expired" | "invalid";
   onCheck: () => Promise<boolean>;
 };
@@ -199,7 +199,6 @@ export type ChatQueueItem = {
     | "executing-command"
     | "sending"
     | "waiting-reconnect"
-    | "unconfirmed"
     // Provider review requires a new operator decision even if delivery has prior attempts.
     | "held"
     | "failed";
@@ -239,6 +238,8 @@ export type ChatItem =
       /** A background skill review's changes; rendered as a native row instead of `text`. */
       skillChanges?: SkillWorkshopChangeNotice;
       runError?: RunFailureNotice;
+      /** Total identical failures represented by the latest display notice. */
+      repeatCount?: number;
       permissionMissing?: NodePermissionRequest;
     }
   | {
@@ -392,6 +393,7 @@ export type MessageImageSource = {
 };
 
 export type MessageContentItem =
+  | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
   | ClawHubRecommendation
   | {
       type: "image";
@@ -522,3 +524,9 @@ export type ToolCardOutcome =
   | "blocked"
   | "skipped"
   | "unknown";
+
+export type ChatGoalMutationAction = { goalId: string } & (
+  | { action: ChatGoalAction }
+  | { action: "edit"; objective: string }
+  | { action: "replace"; objective: string; expectedRunId: string; expectedGoalUpdatedAt: number }
+);

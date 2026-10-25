@@ -84,10 +84,70 @@ const enChatMessageMetadata = {
       duplicatesCollapsed: "{count} consecutive identical messages collapsed",
       contextFor: "Message context for {timestamp}",
     },
+    systemNotice: {
+      event: "{count} system event",
+      events: "{count} system events",
+      updatesNotDelivered: "Updates not delivered",
+      guardian: {
+        approvedSummary: "Guardian approved {action}.",
+        deniedLabel: "Guardian denied",
+        deniedSummary: "{action} · risk: {risk}\n\n{rationale}",
+        warningLabel: "Guardian warning",
+        warningFallback: "Guardian stopped the requested action.",
+        strictReviewRequiredLabel: "Guardian review required",
+        strictReviewRequiredSummary: "Guardian is reviewing this action before it can continue.",
+        requestedAction: "Requested action",
+        unknownRisk: "unknown",
+        noRationale: "No rationale was provided.",
+      },
+      restartRecovery: {
+        label: "System · restart recovery",
+        interrupted:
+          "The Gateway restarted. Automatic recovery was interrupted before the agent could resume. Send a message to continue.",
+        cancelled:
+          "The Gateway restarted. Automatic recovery was cancelled before the agent could resume. Send a message to continue.",
+      },
+      automationRecovery: {
+        label: "System · automation recovery",
+        summary: "An automation failed — asked the agent to investigate and continue if needed.",
+      },
+      gatewayRestarted: {
+        label: "System · gateway restarted",
+      },
+      cliHarnessContext: {
+        label: "System · injected context",
+      },
+      claudeCliTaskNotification: {
+        label: "System · background task",
+      },
+      pluginSteering: {
+        label: "{plugin} guidance",
+      },
+    },
   },
 } satisfies TranslationMap;
 
 export const registerChatMessageMetadataEnglish = Object.assign(
-  () => Object.assign(en.chat.messages, enChatMessageMetadata.chat.messages),
+  () => {
+    Object.assign(en.chat.messages, enChatMessageMetadata.chat.messages);
+    const {
+      guardian,
+      restartRecovery,
+      automationRecovery,
+      gatewayRestarted,
+      cliHarnessContext,
+      claudeCliTaskNotification,
+      pluginSteering,
+      ...labels
+    } = enChatMessageMetadata.chat.systemNotice;
+    Object.assign(en.chat.systemNotice, labels);
+    Object.assign(en.chat.systemNotice.guardian, guardian);
+    Object.assign(en.chat.systemNotice.restartRecovery, restartRecovery);
+    Object.assign(en.chat.systemNotice.automationRecovery, automationRecovery);
+    Object.assign(en.chat.systemNotice.gatewayRestarted, gatewayRestarted);
+    Object.assign(en.chat.systemNotice.cliHarnessContext, cliHarnessContext);
+    Object.assign(en.chat.systemNotice.claudeCliTaskNotification, claudeCliTaskNotification);
+    Object.assign(en.chat.systemNotice.pluginSteering, pluginSteering);
+  },
   { catalog: enChatMessageMetadata },
 );

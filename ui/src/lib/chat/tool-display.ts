@@ -10,7 +10,6 @@ import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js
 import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
 import { resolveToolDisplayIdentity } from "./tool-display-identity.ts";
 
-const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 
@@ -69,12 +68,7 @@ export function formatToolDetail(display: ToolDisplay): string | undefined {
 }
 
 function isCanvasHttpPath(pathname: string): boolean {
-  return (
-    pathname === CANVAS_HOST_PATH ||
-    pathname.startsWith(`${CANVAS_HOST_PATH}/`) ||
-    pathname === A2UI_PATH ||
-    pathname.startsWith(`${A2UI_PATH}/`)
-  );
+  return pathname === CANVAS_HOST_PATH || pathname.startsWith(`${CANVAS_HOST_PATH}/`);
 }
 
 function sanitizeCanvasEntryUrl(

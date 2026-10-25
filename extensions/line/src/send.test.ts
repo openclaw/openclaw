@@ -3,6 +3,7 @@ import { HTTPFetchError } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 const realGlobalFetch = globalThis.fetch.bind(globalThis);
 
@@ -803,13 +804,7 @@ describe("LINE send helpers", () => {
         `proxy failure reflected Authorization: ${req.headers.authorization}; request rejected`,
       );
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback server address");
-    }
+    const port = await listenOnLoopback(server);
     try {
       // The production send boundary targets the fixed LINE API host; route only the
       // destination to the loopback reflector while the real fetch stack and the
@@ -818,7 +813,7 @@ describe("LINE send helpers", () => {
         async (url: string | URL | Request, init?: RequestInit) => {
           const target = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
           return realGlobalFetch(
-            target.replace("https://api.line.me", `http://127.0.0.1:${address.port}`),
+            target.replace("https://api.line.me", `http://127.0.0.1:${port}`),
             init,
           );
         },

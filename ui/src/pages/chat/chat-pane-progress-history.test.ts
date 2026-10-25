@@ -6,6 +6,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionProgressCardsForGateway } from "../../lib/session-progress-cards.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -79,12 +80,7 @@ function createHistoryProgressPane(
   state.client = client;
   state.connected = true;
   state.hello = hello;
-  state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [{ id: "main" }, { id: "research" }],
-  };
+  state.agentsList = makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] });
   context.agents.state.agentsList = state.agentsList;
   state.assistantAgentId = "main";
   pane.sessionKey = "notes";

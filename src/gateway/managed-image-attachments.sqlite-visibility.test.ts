@@ -64,6 +64,7 @@ import {
   readSessionMessagesMatchingIdAsync,
   readSessionMessagesWithSourceAsync,
 } from "./session-transcript-readers.js";
+import { iterateSessionTranscriptSourcePages } from "./session-transcript-source-pages.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const timestamp = "2026-09-04T00:00:00.000Z";
@@ -269,6 +270,85 @@ describe("managed attachment SQLite visibility", () => {
     },
   );
 
+  it.each(["active", "off-path", "archive"] as const)(
+    "selects recorded attachment messages without returning unrelated %s payloads",
+    async (source) => {
+      const f = await fixture();
+      const second = await createFixture(stateDir, {
+        attachmentId: randomUUID(),
+        sessionKey: f.scope.sessionKey,
+        agentId: "main",
+        messageId: "second",
+        createdAt: timestamp,
+        body: Buffer.from("second managed original"),
+        filename: "second.png",
+      });
+      const secondBlock = {
+        type: "image",
+        url: `/api/chat/media/outgoing/${encodeURIComponent(f.scope.sessionKey)}/${second.attachmentId}/full`,
+      };
+      const events = [
+        message("root", null, "root"),
+        ...Array.from({ length: 129 }, (_, index) =>
+          message(
+            `unrelated-${index}`,
+            index ? `unrelated-${index - 1}` : "root",
+            "x".repeat(1024),
+          ),
+        ),
+        message(f.messageId, "unrelated-128", [f.block]),
+        message("second", source === "off-path" ? "root" : f.messageId, [secondBlock]),
+      ];
+      await seed(f, source === "archive" ? [] : events);
+      if (source === "archive") {
+        archive(f, events);
+      }
+      const selected: unknown[] = [];
+      for await (const page of iterateSessionTranscriptSourcePages(
+        readSessionMessagesWithSourceAsync,
+        f.scope,
+        {
+          allowResetArchiveFallback: true,
+          includeOffPathMessages: true,
+          messageIds: [f.messageId, "second"],
+        },
+      )) {
+        selected.push(...page.messages);
+      }
+      expect(selected).toHaveLength(2);
+      expect(selected).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ __openclaw: expect.objectContaining({ id: f.messageId }) }),
+          expect.objectContaining({ __openclaw: expect.objectContaining({ id: "second" }) }),
+        ]),
+      );
+      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
+      expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
+      expect(await readManagedImageRecord(second.attachmentId, stateDir)).not.toBeNull();
+      expect(fs.existsSync(f.originalPath)).toBe(true);
+      expect(fs.existsSync(second.originalPath)).toBe(true);
+    },
+  );
+
+  it.each(["sqlite", "archive"] as const)(
+    "retains attachments whose %s message ID comes from legacy metadata",
+    async (source) => {
+      const f = await fixture();
+      const legacy = {
+        type: "message",
+        timestamp,
+        message: { role: "assistant", content: [f.block], __openclaw: { id: f.messageId } },
+      };
+      await seed(f, source === "sqlite" ? [legacy] : []);
+      if (source === "archive") {
+        archive(f, [legacy]);
+      }
+      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
+      expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
+      expect(fs.existsSync(f.originalPath)).toBe(true);
+    },
+  );
+
   it("preserves archive duplicates and full-reader oversized recovery", async () => {
     const f = await fixture("   ");
     await seed(f, []);
@@ -302,6 +382,8 @@ describe("managed attachment SQLite visibility", () => {
     expect(full).toHaveLength(2);
     expect(await readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toEqual(full);
     expect(await f.download()).not.toBeNull();
+    await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey: f.scope.sessionKey });
+    expect(await readManagedImageRecord(f.attachmentId, stateDir)).not.toBeNull();
   });
 
   it("uses the admitted bounds for both matching and missing IDs", async () => {

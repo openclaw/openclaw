@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   appendPage,
   createAuthStatus,
@@ -78,6 +78,12 @@ describe("ModelProvidersPage mutation presentation", () => {
     const previous = page.view.props.defaultModels.primary;
     const pending = deferred<boolean>();
     runtimeConfig.patch.mockImplementationOnce(() => pending.promise);
+    const behaviorDefaults = [
+      ...page.querySelectorAll<HTMLInputElement>(
+        '.settings-segmented__input[type="radio"][value=""]',
+      ),
+    ];
+    expect(behaviorDefaults).toHaveLength(2);
 
     page.view.props.onPrimaryChange("openai/synthetic-model");
     await waitForSolid(() => {
@@ -86,6 +92,7 @@ describe("ModelProvidersPage mutation presentation", () => {
         modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger")
           ?.disabled,
       ).toBe(true);
+      expect(behaviorDefaults.every((input) => input.disabled)).toBe(true);
     });
     expect(page.view.props.defaultModels.primary).toBe("openai/synthetic-model");
 
@@ -97,8 +104,56 @@ describe("ModelProvidersPage mutation presentation", () => {
         modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger")
           ?.disabled,
       ).toBe(false);
+      expect(behaviorDefaults.every((input) => !input.disabled)).toBe(true);
     });
   });
+
+  it.each(["thinking", "fastMode"] as const)(
+    "keeps only the initiating %s control focusable through rejection and retry",
+    async (field) => {
+      const { context, runtimeConfig } = createHarness("main");
+      const page = appendPage(context);
+      await waitForProviders(page);
+      const groups = page.querySelectorAll<HTMLElement>(
+        '.model-providers__defaults [role="radiogroup"]',
+      );
+      expect(groups).toHaveLength(2);
+      const own =
+        groups[field === "thinking" ? 0 : 1]!.querySelector<HTMLInputElement>('input[value=""]')!;
+      const other =
+        groups[field === "thinking" ? 1 : 0]!.querySelector<HTMLInputElement>('input[value=""]')!;
+      const pending = deferred<boolean>();
+      runtimeConfig.patch.mockImplementationOnce(() => pending.promise);
+      own.focus();
+      own.click();
+      flush();
+      expect(own.disabled).toBe(false);
+      expect(other.disabled).toBe(true);
+      expect(document.activeElement).toBe(own);
+      await waitForSolid(() => {
+        expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+        expect(own.getAttribute("aria-disabled")).toBe("true");
+      });
+      own.click();
+      other.click();
+      expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+
+      pending.reject(new Error("Synthetic behavior rejection"));
+      await waitForSolid(() => {
+        expect(page.renderRoot.textContent).toContain("Synthetic behavior rejection");
+        expect(own.getAttribute("aria-disabled")).toBeNull();
+        expect(own.disabled).toBe(false);
+        expect(other.disabled).toBe(false);
+      });
+      own.click();
+      await waitForSolid(() => {
+        expect(runtimeConfig.patch).toHaveBeenCalledTimes(2);
+        expect(own.getAttribute("aria-disabled")).toBeNull();
+        expect(other.disabled).toBe(false);
+        expect(page.renderRoot.textContent).not.toContain("Synthetic behavior rejection");
+      });
+    },
+  );
 
   it.each(["agent", "reconnect", "navigation"] as const)(
     "retires a held credential presentation on %s before the old write settles",

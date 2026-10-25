@@ -42,7 +42,7 @@ describe("Security", () => {
     expect(
       expectRowByTitle(container, "Browser enabled")
         .querySelector("input")
-        ?.hasAttribute("aria-disabled"),
+        ?.hasAttribute("disabled"),
     ).toBe(true);
   });
 

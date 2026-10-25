@@ -3,10 +3,7 @@ import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import type { WorkerHeartbeatResult } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "../agents/github-host-runtime.js";
-import {
-  AGENT_GIT_CONFIG_PARAMETERS,
-  managedGitHubIdentityEnvironment,
-} from "../agents/github-tool-identity-env.js";
+import { managedGitHubIdentityEnvironment } from "../agents/github-tool-identity-env.js";
 import {
   removeManagedGitHubProfile,
   writeManagedGitHubProfileFiles,
@@ -14,6 +11,7 @@ import {
 import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { executeGitCommand } from "../infra/git-exec.js";
+import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {

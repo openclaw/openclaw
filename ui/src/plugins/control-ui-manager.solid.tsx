@@ -11,10 +11,13 @@ import {
   onSettled,
 } from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 export function PluginManager() {
   const context = useApplication();

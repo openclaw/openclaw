@@ -64,9 +64,10 @@ describe("assembled Gateway update capability", () => {
     (profile) => {
       const tools = createTools({ tools: { profile } });
 
-      expect(gatewayActions(tools)).toEqual(["update.run"]);
+      expect(gatewayActions(tools)).toEqual(["update.run", "restart", "update.cleanup"]);
       expect(Object.keys(gatewayParameters(tools).properties).toSorted()).toEqual([
         "action",
+        "dryRun",
         "note",
       ]);
     },
@@ -79,6 +80,8 @@ describe("assembled Gateway update capability", () => {
         "config.get",
         "config.schema.lookup",
         "update.run",
+        "restart",
+        "update.cleanup",
       ]);
     },
   );
@@ -97,6 +100,8 @@ describe("assembled Gateway update capability", () => {
     ({ alsoAllow }) => {
       expect(gatewayActions(createTools({ tools: { profile: "coding", alsoAllow } }))).toEqual([
         "update.run",
+        "restart",
+        "update.cleanup",
       ]);
     },
   );

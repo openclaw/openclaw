@@ -4,6 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { readRequestText } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
@@ -13,7 +14,7 @@ import { onAgentEvent } from "../../infra/agent-events.js";
 import * as sessionAdmission from "../../sessions/session-controller.lifecycle.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as agentJob from "../agent-turn/agent-job.js";
-import { listenProvider, readProviderBody } from "../gateway-provider-fixture.test-support.js";
+import { listenProvider } from "../gateway-provider-fixture.test-support.js";
 import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -232,7 +233,7 @@ it.for(["reset", "complete"] as const)(
       providerServer = createServer((request, response) => {
         const handler = (async () => {
           const body: { input: ResponseInput[]; tools: Array<{ name: string }> } = JSON.parse(
-            await readProviderBody(request),
+            await readRequestText(request),
           );
           expect(request.url).toBe("/v1/responses");
           const userTexts = body.input

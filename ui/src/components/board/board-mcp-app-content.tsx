@@ -4,11 +4,14 @@ import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
 import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { LazyViewError } from "../solid/lazy-view-error.tsx";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 registerEnglishCatalog(registerBoardEnglish);
 

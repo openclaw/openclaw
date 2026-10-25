@@ -263,6 +263,7 @@ beforeEach(() => {
       return { profileId, assignedRole: null };
     };
     return {
+      readCurrentRevision: readCurrentProfile,
       readCurrentProfile,
       emailBindingIds: [],
       readCurrentFacts: () => ({

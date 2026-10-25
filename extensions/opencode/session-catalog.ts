@@ -420,10 +420,10 @@ export async function requireLocalOpenCodeSession(
   return session;
 }
 
-function jsonText(value: unknown, maxLength = 20_000): string | undefined {
+function jsonText(value: unknown): string | undefined {
   try {
     const text = JSON.stringify(value);
-    return text.length > maxLength ? `${truncateUtf16Safe(text, maxLength)}…` : text;
+    return text.length > 20_000 ? `${truncateUtf16Safe(text, 20_000)}…` : text;
   } catch {
     return undefined;
   }

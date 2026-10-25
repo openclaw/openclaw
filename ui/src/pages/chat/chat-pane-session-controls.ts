@@ -3,7 +3,6 @@ import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
-import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -22,7 +21,10 @@ import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
+import {
+  readChatModelCatalogState,
+  refreshChatModelCatalogOnDemand,
+} from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
@@ -178,21 +180,7 @@ export function renderChatPaneComposerControls(params: {
   const permissionPending = Boolean(
     (currentChange && !currentChange.retainWhileCurrent) || selectedSession?.permissionModePending,
   );
-  const modelCatalogState = resolveModelCatalogState(
-    {
-      models: state.chatModelCatalog,
-      refreshFailed: state.chatModelCatalogRefreshFailed,
-      pendingProviders: state.chatModelCatalogPendingProviders,
-      modelSelectionPolicy: state.chatModelSelectionPolicy,
-    },
-    {
-      connected: state.connected,
-      loading: state.chatModelsLoading,
-      error: state.chatModelCatalogError,
-      retired: state.chatModelCatalogRetired,
-      initialized: state.chatModelCatalogInitialized,
-    },
-  );
+  const modelCatalogState = readChatModelCatalogState(state);
   const thinkingLevelOverride = state.sessions.think(sessionKey, agentScope.agentId);
   const settingsPreview = state.sessions.settingsPreview(sessionKey, agentScope.agentId);
   const settingsSession =

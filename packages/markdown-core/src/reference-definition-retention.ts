@@ -1,10 +1,17 @@
-export function findUnsettledDefinitionStarts(
+export function findReferenceDefinitionRetention(
   text: string,
-  definitions: readonly { start: number; end: number }[],
-): number[] {
-  return definitions
+  definitions: readonly { identifier: string; start: number; end: number }[],
+) {
+  const unsettledDefinitionStarts = definitions
     .filter((definition) => canStillHaveReferenceTitle(text, definition.end))
     .map(({ start }) => start);
+  // Expanded labels cannot be serialized as carried CommonMark definitions (999 source
+  // characters maximum); keep their original source just like unfinished titles.
+  const retainStart = definitions.reduce(
+    (offset, { identifier, start }) => (identifier.length > 999 ? Math.min(offset, start) : offset),
+    Math.min(text.length, ...unsettledDefinitionStarts),
+  );
+  return { unsettledDefinitionStarts, retainStart };
 }
 
 function canStillHaveReferenceTitle(text: string, start: number): boolean {

@@ -425,17 +425,24 @@ describe("CI changed lint", () => {
     ).toBeNull(),
   );
 
-  it.each(["ui/src/app.ts", ".oxlintrc.json"])(
-    "retains the controller guard and staged scope when CI splits lint for %s",
-    (file) => {
-      for (const staged of [false, true]) {
-        expect(controllerCommand(file, "unavailable-base", staged)?.args).toEqual([
-          "check:control-ui-controllers",
-          ...(staged ? ["--staged"] : ["--base", "unavailable-base", "--no-merge-base"]),
-        ]);
-      }
-    },
-  );
+  it.each([
+    "ui/src/app.ts",
+    ".oxlintrc.json",
+    "extensions/workboard/browser/pages/workboard/view.tsx",
+    "extensions/memory-core/browser/index.tsx",
+    "extensions/nostr/browser/controller.ts",
+    "extensions/whatsapp/browser/settings.tsx",
+    "extensions/clawrouter/src/control-ui.tsx",
+    "extensions/x/src/control-ui.tsx",
+    "config/plugin-ui-createEffect-baseline.txt",
+  ])("retains the controller guard and staged scope when CI splits lint for %s", (file) => {
+    for (const staged of [false, true]) {
+      expect(controllerCommand(file, "unavailable-base", staged)?.args).toEqual([
+        "check:control-ui-controllers",
+        ...(staged ? ["--staged"] : ["--base", "unavailable-base", "--no-merge-base"]),
+      ]);
+    }
+  });
 
   it.each(["ui/src/app.ts", ".oxlintrc.json"])(
     "executes the generated controller guard against a depth-one merge checkout for %s",
@@ -465,7 +472,9 @@ describe("CI changed lint", () => {
         "onCleanup",
         "manualImport",
       ]) {
-        write(`config/control-ui-${pattern}-baseline.txt`, "");
+        for (const surface of ["control-ui", "plugin-ui"]) {
+          write(`config/${surface}-${pattern}-baseline.txt`, "");
+        }
       }
       git(source, ["init"]);
       git(source, ["add", "."]);

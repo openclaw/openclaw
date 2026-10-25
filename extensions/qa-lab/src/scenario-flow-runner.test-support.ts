@@ -15,6 +15,14 @@ import type { QaSuiteStep } from "./suite-types.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import { projectQaToolMessages } from "./tool-activity.js";
 
+export function addQaFlowTestOutbound(
+  state: ReturnType<typeof createQaBusState>,
+  to: string,
+  text: string,
+) {
+  return state.addOutboundMessage({ accountId: "qa-channel", to, text });
+}
+
 function formatTestTranscript(state: ReturnType<typeof createQaBusState>) {
   return state
     .getSnapshot()

@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { prepareSource } from "./code-mode-source.js";
+
+vi.mock("node:vm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:vm")>();
+  return {
+    ...actual,
+    Script: function Script() {
+      throw new EvalError("Host string compilation is disabled");
+    },
+  };
+});
 
 describe("Code Mode source preparation", () => {
   it.each([

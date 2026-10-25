@@ -14,11 +14,14 @@ import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
+import { registerConnectionRecoveryEnglish } from "../../i18n/locales/en-connection-recovery.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { Icon } from "./icon.tsx";
 import { LazyViewError } from "./lazy-view-error.tsx";
 import { LoadingState } from "./loading-state.tsx";
+
+registerEnglishCatalog(registerConnectionRecoveryEnglish);
 
 const ModalDialog = lazy(() => import("../modal-dialog.tsx"), { export: "ModalDialog" });
 

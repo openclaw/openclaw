@@ -8,7 +8,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -19,6 +18,7 @@ import {
   detectLegacyApnsRegistrations,
   migrateLegacyApnsRegistrations,
 } from "./state-migrations.apns.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 
 const APNS_DEVICE_FIELD = "token";
 const APNS_DEVICE_IDENTIFIER = "abcd1234abcd1234abcd1234abcd1234";
@@ -396,23 +396,7 @@ describe("legacy APNs Doctor migration", () => {
   it("requires exclusive state ownership", async () => {
     const sourcePath = await writeLegacyState();
     const env = envFor(stateDir);
-    const gatewayLock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_790,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-
-    let result: Awaited<ReturnType<typeof migrateLegacyApnsRegistrations>>;
-    try {
-      result = await migrate();
-    } finally {
-      await gatewayLock.release();
-    }
+    const result = await withGatewayLockHeld(env, 18_790, () => migrate());
 
     expect(result.warnings[0]).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(sourcePath)).toBe(true);

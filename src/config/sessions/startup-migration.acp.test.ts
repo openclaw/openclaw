@@ -28,6 +28,17 @@ import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
 
+function migrationAcpMeta(agent: string, runtimeSessionName: string, lastActivityAt = 100) {
+  return {
+    backend: "fixture",
+    agent,
+    runtimeSessionName,
+    mode: "persistent" as const,
+    state: "idle" as const,
+    lastActivityAt,
+  };
+}
+
 it.each([false, true])(
   "inspects legacy keys while ACP inspection is pending, refusing handoff on ACP failure=%s",
   async (refuse) => {
@@ -107,14 +118,7 @@ it.each(["recorded", "ownerless", "literal"] as const)(
         env,
         sessionKey,
         lifecycleRevision: "deferred-revision",
-        meta: {
-          backend: "fixture",
-          agent: "deferred",
-          runtimeSessionName: "deferred-runtime",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
-        },
+        meta: migrationAcpMeta("deferred", "deferred-runtime"),
         now: () => 100,
       });
       const deferredPath = resolveOpenClawAgentSqlitePath({ agentId: "deferred", env });
@@ -160,14 +164,7 @@ it("startup refuses unresolved ACP ownership even without a discovered agent sto
       env,
       sessionKey: "@agent:main:agent:ops:acp:legacy",
       lifecycleRevision: "unresolved-revision",
-      meta: {
-        backend: "fixture",
-        agent: "ops",
-        runtimeSessionName: "unresolved-runtime",
-        mode: "persistent",
-        state: "idle",
-        lastActivityAt: 100,
-      },
+      meta: migrationAcpMeta("ops", "unresolved-runtime"),
       now: () => 100,
     });
     await expect(
@@ -188,14 +185,7 @@ it("startup requires offline ACP repair before handing restored stores to runtim
       lifecycleRevision: "restored-revision",
       updatedAt: 100,
     };
-    const meta = {
-      backend: "fixture",
-      agent: "main",
-      runtimeSessionName: "restored-runtime",
-      mode: "persistent" as const,
-      state: "idle" as const,
-      lastActivityAt: 100,
-    };
+    const meta = migrationAcpMeta("main", "restored-runtime");
     const literalKey = buildAcpDatabaseSessionKey("absent", "other");
     const owners = new Set<string>();
     for (const { shape, agentId, sessionKey, sourceKey } of [
@@ -367,14 +357,7 @@ it.each([false, true])(
         env: state.env,
         sessionKey: "global",
         lifecycleRevision: "revision-ops",
-        meta: {
-          backend: "fixture",
-          agent: "ops",
-          runtimeSessionName: "ops-runtime",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
-        },
+        meta: migrationAcpMeta("ops", "ops-runtime"),
         now: () => 100,
       });
       const handoffDatabase = vi.fn(async () => {});
@@ -424,14 +407,7 @@ it("startup preserves unbound ACP rows retained by Doctor without serving their 
         env,
         sessionKey,
         lifecycleRevision: "old-revision",
-        meta: {
-          backend: "fixture",
-          agent: "main",
-          runtimeSessionName: "retained-runtime",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 50,
-        },
+        meta: migrationAcpMeta("main", "retained-runtime", 50),
         now: () => 50,
       });
     }

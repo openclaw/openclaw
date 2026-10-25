@@ -10,6 +10,7 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
+import "./chat-camera-capture.tsx";
 
 let host: HTMLDivElement;
 let restoreDialog: () => void;

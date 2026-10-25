@@ -13,15 +13,6 @@ const SIGN_IN_SLOW_MS = 45_000;
 const EXPIRY_TICK_MS = 15_000;
 const EXPIRY_VISIBLE_MINUTES = 5;
 
-type ModelSetupSignInProps = {
-  step: WizardStep;
-  /** True when a browser callback or Gateway poll settles this step without another answer. */
-  waiting: boolean;
-  providerId?: string;
-  providerLabel?: string;
-  onAutofocusRef?: (element: HTMLElement) => void;
-};
-
 function CopyAction(props: { value: string; label: string; class: string }) {
   let label!: HTMLSpanElement;
   return (
@@ -64,7 +55,14 @@ function ProviderBadge(props: { providerId?: string; providerLabel?: string; wai
  * Model-setup browser sign-in: the runner has already opened the provider tab, so the
  * dialog only explains that, offers quiet recovery, and lets the poll finish the step.
  */
-export function ModelSetupSignIn(props: ModelSetupSignInProps) {
+export function ModelSetupSignIn(props: {
+  step: WizardStep;
+  /** True when a browser callback or Gateway poll settles this step without another answer. */
+  waiting: boolean;
+  providerId?: string;
+  providerLabel?: string;
+  onAutofocusRef?: (element: HTMLElement) => void;
+}) {
   const code = createMemo(() => props.step.deviceCode);
   const provider = () => props.providerLabel || t("modelSetup.wizard.signInPage");
   const [slow, setSlow] = createSignal(false);

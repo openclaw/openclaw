@@ -31,7 +31,7 @@ export function parseVcard(vcard?: string): ParsedVcard {
     if (!baseKey || !ALLOWED_VCARD_KEYS.has(baseKey)) {
       continue;
     }
-    const value = cleanVcardValue(rawValue);
+    const value = rawValue.replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
     if (!value) {
       continue;
     }
@@ -44,7 +44,7 @@ export function parseVcard(vcard?: string): ParsedVcard {
       continue;
     }
     if (baseKey === "TEL") {
-      const phone = normalizeVcardPhone(value);
+      const phone = value.toLowerCase().startsWith("tel:") ? value.slice(4).trim() : value;
       if (phone) {
         phones.push(phone);
       }
@@ -62,14 +62,6 @@ function normalizeVcardKey(key: string): string | undefined {
   return segments[segments.length - 1] || undefined;
 }
 
-function cleanVcardValue(value: string): string {
-  return value.replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
-}
-
 function normalizeVcardName(value: string): string {
   return value.replace(/;/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function normalizeVcardPhone(value: string): string {
-  return value.toLowerCase().startsWith("tel:") ? value.slice(4).trim() : value;
 }

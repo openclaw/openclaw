@@ -64,16 +64,6 @@ export type ChatFastModeTarget = Pick<
   "effectiveFastMode" | "fastMode" | "model" | "modelProvider" | "agentRuntime"
 >;
 
-type ChatFastModeSelectStateInput = {
-  catalog: ModelCatalogEntry[];
-  connected: boolean;
-  currentModelOverride: string;
-  fastModeTarget?: ChatFastModeTarget;
-  gatewayAvailable: boolean;
-  loading: boolean;
-  sessionsResult: SessionsListResult | null;
-};
-
 // Preserve existing controls only when the selected request's applicability is unknown.
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
 
@@ -385,9 +375,15 @@ function isChatStandardOnlySpeed(
   );
 }
 
-export function resolveChatFastModeSelectState(
-  input: ChatFastModeSelectStateInput,
-): ChatFastModeSelectState {
+export function resolveChatFastModeSelectState(input: {
+  catalog: ModelCatalogEntry[];
+  connected: boolean;
+  currentModelOverride: string;
+  fastModeTarget?: ChatFastModeTarget;
+  gatewayAvailable: boolean;
+  loading: boolean;
+  sessionsResult: SessionsListResult | null;
+}): ChatFastModeSelectState {
   const activeRow = input.fastModeTarget;
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
   const defaultProvider =

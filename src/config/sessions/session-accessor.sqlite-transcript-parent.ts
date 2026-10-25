@@ -11,6 +11,7 @@ import type {
   TranscriptEventAppendOptions,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
+import { selectActiveTranscriptEventRows } from "./session-accessor.sqlite-projection-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
@@ -311,13 +312,7 @@ export function readTranscriptVisibleTailEntryIdInTransaction(
   if (!sessionTranscriptIndexNeedsReconcile(database.db, sessionId)) {
     const tail = executeSqliteQueryTakeFirstSync(
       database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
+      selectActiveTranscriptEventRows(database)
         .select(
           projectTranscriptNavigationSql(
             database.db,

@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
+import { runtimeProcessExternalPackageEntrypoints } from "./runtime-process-manifest.js";
 
 type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
 
@@ -12,7 +13,7 @@ const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
 export function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
   return entryPath.replace(
     PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN,
-    "$1$2node_modules$2openclaw$2openclaw.mjs",
+    `$1$2node_modules$2openclaw$2${runtimeProcessExternalPackageEntrypoints.cliLauncher}`,
   );
 }
 
@@ -23,7 +24,9 @@ export function resolveOpenClawInstallationRootSync(
 ): string {
   const launcherRoot = argv1 ? findPackageRootSync(path.dirname(path.resolve(argv1))) : null;
   const pnpmRoot = path.dirname(
-    rewritePnpmVersionedOpenClawEntryPath(path.join(runningRoot, "openclaw.mjs")),
+    rewritePnpmVersionedOpenClawEntryPath(
+      path.join(runningRoot, runtimeProcessExternalPackageEntrypoints.cliLauncher),
+    ),
   );
   for (const candidate of [launcherRoot, pnpmRoot]) {
     if (!candidate || candidate === runningRoot) {

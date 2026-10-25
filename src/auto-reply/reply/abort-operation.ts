@@ -89,8 +89,6 @@ export function captureChannelSessionStop(params: {
   sessionId?: string;
   storePath: string;
   agentId?: string;
-  aliases?: readonly (string | undefined)[];
-  includeQueued?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
 }): ChannelStopCapture {
   const key = normalizeOptionalString(params.key);
@@ -113,13 +111,11 @@ export function captureChannelSessionStop(params: {
             sessionKey: key,
             incarnation: params.sessionId,
             agentId: params.agentId,
-            aliases: params.aliases,
           }),
         ]
       : [],
     inputs: candidates.flatMap((candidate) => candidate.capture.inputs),
     operations: candidates.flatMap((candidate) => candidate.capture.operations),
-    includeQueued: params.includeQueued,
     resolveGatewayContext: params.resolveGatewayContext,
   });
   return captureChannelStopResources(controller, params.sessionId, {

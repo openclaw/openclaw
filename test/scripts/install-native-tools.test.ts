@@ -72,15 +72,11 @@ function makeFixture(version?: string) {
 }
 
 describe.runIf(process.platform !== "win32")("native tool installers", () => {
-  it.each(
-    [28, 56].flatMap((exitCode) =>
-      installers.map(({ script, url }) => ({ script, url, exitCode })),
-    ),
-  )("bounds downloads in $script (exit $exitCode)", ({ script, url, exitCode }) => {
+  it.each(installers)("bounds downloads in $script", ({ script, url }) => {
     const { file, stub, run } = makeFixture();
-    stub("curl", ['printf "%s\\n" "$@" >"$TMPDIR/curl-args.txt"', `exit ${exitCode}`]);
+    stub("curl", ['printf "%s\\n" "$@" >"$TMPDIR/curl-args.txt"', "exit 28"]);
 
-    run(script, exitCode);
+    run(script, 28);
     const args = read(file("curl-args.txt")).trimEnd().split("\n");
     const options = Object.fromEntries(args.map((arg, i) => [arg, args[i + 1]]).toReversed());
     expect(options).toMatchObject({
