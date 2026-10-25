@@ -19,34 +19,31 @@ vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 
-function messagingAgentConfig(
-  tools: OpenClawConfig["tools"] = {},
-  agentTools: ToolsConfig = { profile: "messaging" },
-): OpenClawConfig {
+function messagingAgentConfig(tools: OpenClawConfig["tools"] = {}): OpenClawConfig {
   return {
     tools: { profile: "full", ...tools },
     agents: {
       defaults: { model: "openai/test-model" },
-      entries: { assistant: { tools: agentTools } },
+      entries: { assistant: { tools: { profile: "messaging" } } },
     },
   };
 }
 
-type InventoryOptions = Parameters<typeof resolveEffectiveToolInventory>[0];
-const workspaceDir = "/tmp/tool-access-workspace";
-function inventory(cfg: OpenClawConfig, options: Partial<InventoryOptions> = {}) {
-  return resolveEffectiveToolInventory({
-    cfg,
-    agentId: "assistant",
-    sessionKey: "agent:assistant:main",
-    workspaceDir,
-    agentDir: "/tmp/tool-access-agent",
-    modelApi: null,
-    ...options,
-  });
+function excludedByMessagingProfile(id: string, toolsPath = "agents.entries.assistant.tools") {
+  return {
+    id,
+    status: "excluded",
+    reasons: [
+      {
+        kind: "profile",
+        label: "messaging profile",
+        source: `${toolsPath}.profile`,
+        profile: "messaging",
+      },
+    ],
+    alsoAllowPath: `${toolsPath}.alsoAllow`,
+  };
 }
-const names = (result: Awaited<ReturnType<typeof inventory>>) =>
-  result.groups.flatMap((group) => group.tools.map((tool) => tool.id));
 
 describe("tool access diagnostics", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-visible-message-");
@@ -65,36 +62,38 @@ describe("tool access diagnostics", () => {
       agentId: "assistant",
       toolNames: ["exec", "process", "session_status"],
     });
-    expect(result.checked).toBe("local-config");
-    expect(result.profiles).toEqual([
-      { profile: "full", source: "tools.profile", active: false },
-      { profile: "messaging", source: `${toolsPath}.profile`, active: true },
-    ]);
-    for (const id of ["exec", "process"]) {
-      expect(result.tools.find((tool) => tool.id === id)).toMatchObject({
-        status: "excluded",
-        alsoAllowPath: `${toolsPath}.alsoAllow`,
-        reasons: [{ kind: "profile", source: `${toolsPath}.profile` }],
-      });
-    }
-    expect(result.tools.find((tool) => tool.id === "session_status")?.status).toBe("allowed");
+    expect(result).toEqual({
+      checked: "local-config",
+      profiles: [
+        { profile: "full", source: "tools.profile", active: false },
+        { profile: "messaging", source: `${toolsPath}.profile`, active: true },
+      ],
+      tools: [
+        ...["exec", "process"].map((id) => excludedByMessagingProfile(id, toolsPath)),
+        { id: "session_status", status: "allowed", reasons: [] },
+      ],
+    });
   });
 
-  it.each<[ToolsConfig, string, "deny" | "allowlist" | "profile"]>([
-    [{ alsoAllow: ["browser"] }, "agents.entries.assistant.tools.profile", "profile"],
-    [{ deny: ["ex*"] }, "tools.deny", "deny"],
-    [{ allow: ["process"] }, "tools.allow", "allowlist"],
-    [
-      { byProvider: { "openai/test-model": { deny: ["exec"] } } },
-      'tools.byProvider["openai/test-model"].deny',
-      "deny",
-    ],
-    [
-      { byProvider: { openai: { profile: "minimal" } } },
-      'tools.byProvider["openai"].profile',
-      "profile",
-    ],
-  ])("omits ineffective or destructive profile repair for %j (%s)", (tools, source, kind) => {
+  it.each<{ tools: ToolsConfig; source: string; kind: "deny" | "allowlist" | "profile" }>([
+    {
+      tools: { alsoAllow: ["browser"] },
+      source: "agents.entries.assistant.tools.profile",
+      kind: "profile",
+    },
+    { tools: { deny: ["ex*"] }, source: "tools.deny", kind: "deny" },
+    { tools: { allow: ["process"] }, source: "tools.allow", kind: "allowlist" },
+    {
+      tools: { byProvider: { "openai/test-model": { deny: ["exec"] } } },
+      source: 'tools.byProvider["openai/test-model"].deny',
+      kind: "deny",
+    },
+    {
+      tools: { byProvider: { openai: { profile: "minimal" } } },
+      source: 'tools.byProvider["openai"].profile',
+      kind: "profile",
+    },
+  ])("omits ineffective or destructive profile repair for $source", ({ tools, source, kind }) => {
     const result = resolveConfiguredToolAccess({
       config: messagingAgentConfig(tools),
       agentId: "assistant",
@@ -108,29 +107,41 @@ describe("tool access diagnostics", () => {
   });
 
   it("observes actual inventory filtering and explicit profile repair", async () => {
+    const inventory = (cfg: OpenClawConfig) =>
+      resolveEffectiveToolInventory({
+        cfg,
+        agentId: "assistant",
+        sessionKey: "agent:assistant:main",
+        workspaceDir: "/tmp/tool-access-workspace",
+        agentDir: "/tmp/tool-access-agent",
+        modelApi: null,
+      });
+
     const before = await inventory(messagingAgentConfig());
-    expect(names(before)).not.toContain("exec");
+    expect(before.groups.flatMap((group) => group.tools.map((tool) => tool.id))).not.toContain(
+      "exec",
+    );
     expect(before.toolAccess?.checked).toBe("live-session");
     expect(before.toolAccess?.profiles).toContainEqual({
       profile: "full",
       source: "tools.profile",
       active: false,
     });
-    expect(before.toolAccess?.tools.find((tool) => tool.id === "exec")).toMatchObject({
-      status: "excluded",
-      alsoAllowPath: "agents.entries.assistant.tools.alsoAllow",
-    });
-
-    const after = await inventory(
-      messagingAgentConfig(
-        {},
-        {
-          profile: "messaging",
-          alsoAllow: ["exec", "process"],
-        },
-      ),
+    expect(before.toolAccess?.tools.find((tool) => tool.id === "exec")).toEqual(
+      excludedByMessagingProfile("exec"),
     );
-    expect(names(after)).toEqual(expect.arrayContaining(["exec", "process"]));
+
+    const after = await inventory({
+      tools: { profile: "full" },
+      agents: {
+        entries: {
+          assistant: { tools: { profile: "messaging", alsoAllow: ["exec", "process"] } },
+        },
+      },
+    });
+    expect(after.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(
+      expect.arrayContaining(["exec", "process"]),
+    );
     expect(after.toolAccess?.tools.find((tool) => tool.id === "exec")).toEqual({
       id: "exec",
       status: "available",
@@ -149,7 +160,7 @@ describe("tool access diagnostics", () => {
         sessionKey,
         ...(ceiling
           ? {
-              workspaceDir,
+              workspaceDir: "/tmp/tool-access-workspace",
               preparedSessionEntry: {
                 sessionKey,
                 entry: {
@@ -163,12 +174,19 @@ describe("tool access diagnostics", () => {
             }
           : {}),
       });
-      const result = await inventory(ceiling ? cfg : { tools: { profile: "full" } }, {
+      const result = await resolveEffectiveToolInventory({
+        cfg: ceiling ? cfg : { tools: { profile: "full" } },
+        agentId: "assistant",
         sessionKey,
+        workspaceDir: "/tmp/tool-access-workspace",
+        agentDir: "/tmp/tool-access-agent",
+        modelApi: null,
         conversationCapabilityProfile,
       });
       expect(result.profile).toBe("messaging");
-      expect(names(result)).not.toContain("exec");
+      expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).not.toContain(
+        "exec",
+      );
       if (ceiling) {
         const exec = result.toolAccess?.tools.find((tool) => tool.id === "exec");
         expect(exec?.reasons.map((reason) => reason.kind)).toEqual(["profile", "session"]);
@@ -177,49 +195,70 @@ describe("tool access diagnostics", () => {
     },
   );
 
-  it.each<
-    [
-      string,
-      boolean,
-      {
-        kind?: "subagent";
-        entry?: Partial<SessionEntry>;
-        tools?: ToolsConfig;
-      },
-    ]
-  >([
-    ["visible spawn", true, {}],
-    ["hidden helper", false, { kind: "subagent" }],
-    ["unstamped dashboard child", false, { entry: { createdVia: undefined } }],
-    ["configured subagent deny", false, { tools: { subagents: { tools: { deny: ["message"] } } } }],
-    [
-      "configured subagent allowlist",
-      false,
-      { tools: { subagents: { tools: { allow: ["read"] } } } },
-    ],
-    ["inherited deny", false, { entry: { inheritedToolDeny: ["message"] } }],
-  ])("resolves message availability for %s", async (_name, available, scenario) => {
+  it.each<{
+    name: string;
+    kind: "dashboard" | "subagent";
+    createdVia?: SessionEntry["createdVia"];
+    tools?: OpenClawConfig["tools"];
+    inheritedToolDeny?: string[];
+    available: boolean;
+  }>([
+    { name: "visible spawn", kind: "dashboard", createdVia: "spawn", available: true },
+    { name: "hidden helper", kind: "subagent", createdVia: "spawn", available: false },
+    { name: "unstamped dashboard child", kind: "dashboard", available: false },
+    {
+      name: "configured subagent deny",
+      kind: "dashboard",
+      createdVia: "spawn",
+      tools: { subagents: { tools: { deny: ["message"] } } },
+      available: false,
+    },
+    {
+      name: "configured subagent allowlist",
+      kind: "dashboard",
+      createdVia: "spawn",
+      tools: { subagents: { tools: { allow: ["read"] } } },
+      available: false,
+    },
+    {
+      name: "inherited deny",
+      kind: "dashboard",
+      createdVia: "spawn",
+      inheritedToolDeny: ["message"],
+      available: false,
+    },
+  ])("resolves message availability for $name", async (scenario) => {
     const dir = sessionDirs.make();
-    const sessionKey = `agent:assistant:${scenario.kind ?? "dashboard"}:child`;
+    const sessionKey = `agent:assistant:${scenario.kind}:child`;
     const storePath = path.join(dir, "agents/assistant/sessions/sessions.json");
-    const cfg = { ...messagingAgentConfig(scenario.tools), session: { store: storePath } };
+    const cfg: OpenClawConfig = {
+      ...messagingAgentConfig(scenario.tools),
+      session: { store: storePath },
+    };
     await replaceSessionEntry(
       { sessionKey, storePath },
       {
         sessionId: "child",
         updatedAt: 1,
-        createdVia: "spawn",
+        createdVia: scenario.createdVia,
         spawnedBy: "agent:assistant:main",
         spawnDepth: 1,
         inheritedToolPolicyVersion: 1,
-        ...scenario.entry,
+        inheritedToolDeny: scenario.inheritedToolDeny,
       },
     );
-    const result = await inventory(cfg, { sessionKey, workspaceDir: dir, agentDir: dir });
-    const toolNames = names(result);
-    expect(toolNames.includes("message")).toBe(available);
+    const result = await resolveEffectiveToolInventory({
+      cfg,
+      agentId: "assistant",
+      sessionKey,
+      workspaceDir: dir,
+      agentDir: dir,
+      modelApi: null,
+    });
+    const toolNames = result.groups.flatMap((group) => group.tools.map((tool) => tool.id));
+    expect(toolNames.includes("message")).toBe(scenario.available);
     expect(result.toolAccess?.tools.find((tool) => tool.id === "message")?.status).toBe(
-      available ? "available" : "excluded",
+      scenario.available ? "available" : "excluded",
     );
     for (const tool of ["gateway", "session_status", "sessions_send", "conversations_send"]) {
       expect(toolNames).not.toContain(tool);

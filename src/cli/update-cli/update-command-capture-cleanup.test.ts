@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { RecoveryCleanupReport } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
 import { createMissingConfigRecoveryManifest } from "../../commands/update-recovery-manifest.test-support.js";
 import { resolveUpdateCaptureRoot } from "../../infra/update-capture-paths.js";
 import {
@@ -108,13 +107,6 @@ async function withCaptureHistory(
     fs.writeFileSync(path.join(captures.incomplete, "manifest.json.partial"), "pending");
     captures.unattributed = writeCapture(root, "doctor-unrecorded", true);
     captures.unmarked = writeCapture(root, "c0ffee00-0000-4000-8000-000000000000", true, false);
-    for (const [index, age] of [5, 4, 3, 2, 1].entries()) {
-      captures[`doctor${index}`] = writeSealedCapture(
-        root,
-        `doctor-${randomUUID()}`,
-        new Date(Date.now() - age * 86_400_000).toISOString(),
-      );
-    }
     closeOpenClawStateDatabaseForTest();
     await run(captures, root);
   });
@@ -125,7 +117,16 @@ async function runCleanup(options: { dryRun?: boolean; yes?: boolean }) {
   const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   await updateCleanupCommand({ ...options, json: true });
   expect(exit).not.toHaveBeenCalled();
-  const report = writeJson.mock.calls.at(-1)?.[0] as RecoveryCleanupReport;
+  const report = writeJson.mock.calls.at(-1)?.[0] as {
+    status: string;
+    artifacts: Array<{
+      kind?: string;
+      path: string;
+      outcome: string;
+      reason: string;
+      bytes: number;
+    }>;
+  };
   return {
     status: report.status,
     captures: Object.fromEntries(
@@ -139,51 +140,68 @@ async function runCleanup(options: { dryRun?: boolean; yes?: boolean }) {
   };
 }
 
-function expectedPreview(captures: Record<string, string>) {
-  const candidate = (reason: string, bytes: unknown = expect.any(Number)) => ({
+const expectedPreview = (captures: Record<string, string>) => ({
+  [captures.superseded!]: {
     outcome: "candidate",
-    reason,
-    bytes,
-  });
-  const protectedCapture = (reason: string, bytes: unknown = expect.any(Number)) => ({
+    reason: "superseded-update-capture",
+    bytes: 1038,
+  },
+  [captures.unsealed!]: { outcome: "candidate", reason: "unsealed-update-capture", bytes: 1035 },
+  [captures.alreadyCurrent!]: {
+    outcome: "candidate",
+    reason: "superseded-update-capture",
+    bytes: 1038,
+  },
+  [captures.failedBaseline!]: {
     outcome: "protected",
-    reason,
-    bytes,
-  });
-  return Object.fromEntries(
-    Object.entries({
-      superseded: candidate("superseded-update-capture", 1038),
-      unsealed: candidate("unsealed-update-capture", 1035),
-      alreadyCurrent: candidate("superseded-update-capture", 1038),
-      failedBaseline: protectedCapture("unresolved-failed-update", 1038),
-      latest: protectedCapture("awaiting-later-completed-update", 1035),
-      unfinished: protectedCapture("unfinished-update-run", 1038),
-      orphan: protectedCapture("orphan-update-capture"),
-      incomplete: protectedCapture("unmanifested-update-capture"),
-      unattributed: protectedCapture("unmanifested-update-capture", 1038),
-      unmarked: protectedCapture("unmanifested-update-capture", 1003),
-      doctor0: candidate("superseded-doctor-capture"),
-      doctor1: candidate("superseded-doctor-capture"),
-      doctor2: protectedCapture("retained-doctor-capture"),
-      doctor3: protectedCapture("retained-doctor-capture"),
-      doctor4: protectedCapture("retained-doctor-capture"),
-    }).map(([label, expected]) => [captures[label], expected]),
-  );
-}
+    reason: "unresolved-failed-update",
+    bytes: 1038,
+  },
+  [captures.latest!]: {
+    outcome: "protected",
+    reason: "awaiting-later-completed-update",
+    bytes: 1035,
+  },
+  [captures.unfinished!]: { outcome: "protected", reason: "unfinished-update-run", bytes: 1038 },
+  [captures.orphan!]: {
+    outcome: "protected",
+    reason: "orphan-update-capture",
+    bytes: expect.any(Number),
+  },
+  [captures.incomplete!]: {
+    outcome: "protected",
+    reason: "unmanifested-update-capture",
+    bytes: expect.any(Number),
+  },
+  [captures.unattributed!]: {
+    outcome: "protected",
+    reason: "unmanifested-update-capture",
+    bytes: 1038,
+  },
+  [captures.unmarked!]: {
+    outcome: "protected",
+    reason: "unmanifested-update-capture",
+    bytes: 1003,
+  },
+});
 
 it.each(["current", "pre-migration"] as const)(
-  "previews %s captures without mutation, then removes only confirmed candidates",
+  "previews %s update captures with their classification and bytes without removing them",
+  async (location) => {
+    await withCaptureHistory(async (captures) => {
+      const preview = await runCleanup({ dryRun: true });
+      expect(preview).toEqual({ status: "preview", captures: expectedPreview(captures) });
+      for (const directory of Object.values(captures)) {
+        expect(fs.existsSync(directory)).toBe(true);
+      }
+    }, location);
+  },
+);
+
+it.each(["current", "pre-migration"] as const)(
+  "removes only %s candidate captures and keeps protected captures",
   async (location) => {
     await withCaptureHistory(async (captures, root) => {
-      const preview = expectedPreview(captures);
-      const resultPreview = await runCleanup({ dryRun: true });
-      expect(resultPreview).toEqual({ status: "preview", captures: preview });
-      for (const [label, directory] of Object.entries(captures)) {
-        expect(fs.existsSync(directory)).toBe(true);
-        if (/^doctor\d$/.test(label)) {
-          expect(resultPreview.captures[directory]!.bytes).toBeGreaterThan(1000);
-        }
-      }
       using stderr = vi.spyOn(process.stderr, "write").mockImplementation((text) => {
         if (!String(text).startsWith("Removing capture ")) {
           return true;
@@ -198,12 +216,13 @@ it.each(["current", "pre-migration"] as const)(
       const progress = stderr.mock.calls
         .map(([text]) => String(text))
         .filter((text) => text.startsWith("Removing capture "));
-      expect(progress).toHaveLength(5);
+      expect(progress).toHaveLength(3);
       for (const [index, text] of progress.entries()) {
         expect(text).toMatch(
-          new RegExp(`^Removing capture ${index + 1}/5: .+ \\(\\d+ bytes\\)\\n$`),
+          new RegExp(`^Removing capture ${index + 1}/3: .+ \\(103[58] bytes\\)\\n$`),
         );
       }
+      const preview = expectedPreview(captures);
       for (const [directory, item] of Object.entries(preview)) {
         expect(result.captures[directory]).toEqual(
           item.outcome === "candidate"
@@ -213,6 +232,36 @@ it.each(["current", "pre-migration"] as const)(
         expect(fs.existsSync(directory)).toBe(item.outcome !== "candidate");
       }
       expect(fs.existsSync(path.join(root, UPDATE_CAPTURE_PRIVACY_MARKER))).toBe(true);
+    }, location);
+  },
+);
+
+it.each(["current", "pre-migration"] as const)(
+  "lists standalone Doctor captures and retires only older %s captures through cleanup",
+  async (location) => {
+    await withCaptureHistory(async (_captures, root) => {
+      const now = Date.now();
+      const doctors = [5, 4, 3, 2, 1].map((age) => {
+        const runId = `doctor-${randomUUID()}`;
+        return writeSealedCapture(root, runId, new Date(now - age * 86_400_000).toISOString());
+      });
+      const preview = await runCleanup({ dryRun: true });
+      for (const [index, directory] of doctors.entries()) {
+        expect(preview.captures[directory]).toMatchObject({
+          outcome: index < 2 ? "candidate" : "protected",
+          reason: index < 2 ? "superseded-doctor-capture" : "retained-doctor-capture",
+        });
+        expect(preview.captures[directory]!.bytes).toBeGreaterThan(1000);
+        expect(fs.existsSync(directory)).toBe(true);
+      }
+      await runCleanup({ yes: true });
+      expect(doctors.map((directory) => fs.existsSync(directory))).toEqual([
+        false,
+        false,
+        true,
+        true,
+        true,
+      ]);
     }, location);
   },
 );
