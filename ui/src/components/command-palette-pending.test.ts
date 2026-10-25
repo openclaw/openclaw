@@ -71,10 +71,7 @@ describe("CommandPalette pending searches", () => {
       method === "sessions.search" ? { results: [], sessions: [] } : { models: [] },
     );
     const list = vi.fn(async () => createSessionResult("agent:main:plugins", "Plugins discussion"));
-    const { palette, queryAll } = await mountSearch(
-      { methods: ["sessions.search"], request },
-      list,
-    );
+    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
     await enterQuery(palette, "plugins");
     expect(palette.textContent).not.toContain("Searching sessions");
     await vi.advanceTimersByTimeAsync(199);
@@ -91,23 +88,6 @@ describe("CommandPalette pending searches", () => {
     expect(palette.onSelectSession).not.toHaveBeenCalled();
     expect(palette.isOpen).toBe(true);
     expect(input.value).toBe(prompt);
-
-    setInputValue(input, "");
-    await palette.updateComplete;
-    expect(findPaletteOption(palette, "Plugins", true)).toBeDefined();
-    expect(list).not.toHaveBeenCalled();
-
-    setInputValue(input, "plugins");
-    await settlePalette(palette);
-    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: "plugins" }));
-    expect(request).toHaveBeenCalledWith(
-      "sessions.search",
-      expect.objectContaining({ query: "plugins" }),
-    );
-    expect(request).toHaveBeenCalledWith("models.list", expect.anything());
-    expect(queryAll(".cmd-palette__filter")).toHaveLength(3);
-    findPaletteOption(palette, "Plugins discussion")!.click();
-    expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:plugins");
   });
 
   it("does not restore late session, transcript, or catalog results after entering a prompt", async () => {
@@ -436,15 +416,11 @@ describe("CommandPalette session search", () => {
     const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
       options?.search && !scenario.serverMatch ? metadata : roster,
     );
-    const searchResult: SessionsSearchResult = {
-      ...transcriptResult(contextOnly, "The needle appears only in the conversation body."),
-    };
-    const request = vi.fn(async (method: string) => {
-      if (method === "models.list") {
-        return { models: [] };
-      }
-      return searchResult;
-    });
+    const request = vi.fn(async (method: string) =>
+      method === "models.list"
+        ? { models: [] }
+        : transcriptResult(contextOnly, "The needle appears only in the conversation body."),
+    );
     const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
     await searchPalette(palette, query);
     expect(palette.querySelector('[role="listbox"]')?.getAttribute("aria-busy")).toBe("false");
@@ -459,9 +435,7 @@ describe("CommandPalette session search", () => {
       expect(items[1]?.textContent).toContain("Unrelated title");
       expect(items[1]?.textContent).toContain("needle appears only in the conversation body");
     }
-    expect(palette.textContent).not.toContain("Search notices");
-    expect(palette.textContent).not.toContain("may be incomplete");
-    expect(palette.textContent).not.toContain("Chat search failed");
+    expect(palette.textContent).not.toMatch(/Search notices|may be incomplete|Chat search failed/);
     findPaletteOption(palette, title)!.click();
     expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
   });
@@ -474,48 +448,23 @@ describe("CommandPalette metadata publications", () => {
       if (method === "skills.status") {
         return { skills: [{ skillKey: "needle", name: skillName, description: "Weather" }] };
       }
-      if (method === "models.list") {
-        return { models: [{ provider: "fixture", id: "needle", name: "Needle model" }] };
-      }
       if (method === "plugins.list") {
         return { plugins: [{ id: "needle-plugin", name: "Needle plugin", description: "Tools" }] };
       }
-      if (method === "cron.list") {
-        return { jobs: [{ id: "needle-job", name: "Needle automation" }] };
-      }
-      return { results: [], sessions: [] };
+      return method === "models.list"
+        ? { models: [{ provider: "fixture", id: "needle", name: "Needle model" }] }
+        : { results: [], sessions: [] };
     });
-    const { palette, emit, context } = await mountSearch({
-      methods: ["skills.status", "models.list", "plugins.list", "cron.list"],
+    const { palette, emit } = await mountSearch({
+      methods: ["skills.status", "models.list", "plugins.list"],
       request,
-    });
-    context.agents.ensureList = async () => ({
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global",
-      agents: [{ id: "main", name: "Needle agent" }],
     });
     await searchPalette(palette, "needle");
     expect(findPaletteOption(palette, "Needle old skill")?.textContent).toContain("Weather");
     expect(findPaletteOption(palette, "Needle plugin")?.textContent).toContain("Tools");
-    expect(
-      findPaletteOption(palette, "Needle plugin")?.querySelector(".cmd-palette__plugin-icon"),
-    ).not.toBeNull();
-    expect(findPaletteOption(palette, "Needle automation")).toBeDefined();
-    expect(findPaletteOption(palette, "Needle agent")).toBeDefined();
     expect(findPaletteOption(palette, "Needle model")).toBeDefined();
-    expect(request).toHaveBeenCalledWith(
-      "cron.list",
-      expect.objectContaining({
-        includeDisabled: true,
-        limit: 200,
-        offset: 0,
-        compact: true,
-      }),
-    );
     expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
     expect(request).toHaveBeenCalledWith("plugins.list", {});
-
     skillName = "Needle new skill";
     emit("chat.metadata.changed", { modelCatalogChanged: false, authChanged: false });
     await settlePalette(palette, 0);

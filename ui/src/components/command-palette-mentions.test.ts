@@ -81,32 +81,25 @@ async function mount(
   const getInput = () => palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
   await openPalette(palette);
   getInput().focus();
-  const edit = async (options: {
-    start: number;
-    end: number;
-    text: string;
-    inputType?: string;
-  }) => {
+  const edit = async (start: number, end: number, text: string, inputType = "insertText") => {
     const input = getInput();
     const previous = input.value;
-    input.setSelectionRange(options.start, options.end);
-    const inputType = options.inputType ?? "insertText";
+    input.setSelectionRange(start, end);
     const event = {
       bubbles: true,
       inputType,
-      data: inputType.startsWith("delete") ? null : options.text,
+      data: inputType.startsWith("delete") ? null : text,
     };
     input.dispatchEvent(new InputEvent("beforeinput", { ...event, cancelable: true }));
-    input.value = previous.slice(0, options.start) + options.text + previous.slice(options.end);
-    const caret = options.start + options.text.length;
+    input.value = previous.slice(0, start) + text + previous.slice(end);
+    const caret = start + text.length;
     input.setSelectionRange(caret, caret);
     input.dispatchEvent(new InputEvent("input", event));
     await palette.updateComplete;
   };
-  const append = (text: string) =>
-    edit({ start: getInput().value.length, end: getInput().value.length, text });
+  const append = (text: string) => edit(getInput().value.length, getInput().value.length, text);
   const replace = (text: string, inputType = "insertText") =>
-    edit({ start: 0, end: getInput().value.length, text, inputType });
+    edit(0, getInput().value.length, text, inputType);
   const key = async (pressedKey: string, extra: KeyboardEventInit = {}) => {
     const event = pressKey(getInput(), pressedKey, { cancelable: true, ...extra });
     await palette.updateComplete;
@@ -219,17 +212,17 @@ describe("command palette people mentions", () => {
       const f = await mount();
       await f.choose();
       await f.choose(change === "same-name token" ? "ArrowDown" : "End");
-      await f.edit({
-        start: change === "same-name token" ? 0 : 3,
-        end: change === "same-name token" ? 6 : 4,
-        text: "",
-        inputType: "deleteContentForward",
-      });
+      await f.edit(
+        change === "same-name token" ? 0 : 3,
+        change === "same-name token" ? 6 : 4,
+        "",
+        "deleteContentForward",
+      );
       expect(f.recipients()).toHaveLength(1);
       if (change === "same-name token") {
-        await f.edit({ start: 0, end: 0, text: "Review " });
+        await f.edit(0, 0, "Review ");
         await f.append(" tail");
-        await f.edit({ start: 13, end: 13, text: "@" });
+        await f.edit(13, 13, "@");
         await vi.advanceTimersByTimeAsync(150);
         await f.key("End");
         await f.key("Enter");
@@ -362,8 +355,7 @@ describe("command palette people mentions", () => {
     expect(f.query('[role="alert"]')?.textContent).toContain("First turn rejected");
     expect(f.recipients()).toHaveLength(1);
     await f.key("Escape");
-    f.palette.openPalette();
-    await f.palette.updateComplete;
+    await openPalette(f.palette);
     expect(f.recipients()).toHaveLength(1);
     pressKey(f.input, "Enter", { ctrlKey: true, cancelable: true });
     await vi.advanceTimersByTimeAsync(0);
@@ -412,8 +404,7 @@ describe("command palette people mentions", () => {
       await f.palette.updateComplete;
       // An identity change closes the old draft before the next opening.
       if (!f.palette.isOpen) {
-        f.palette.openPalette();
-        await f.palette.updateComplete;
+        await openPalette(f.palette);
       }
       await f.search();
       expect(f.directory).not.toHaveBeenCalled();
@@ -491,8 +482,7 @@ describe("command palette people mentions", () => {
       await f.palette.updateComplete;
       if (change !== "reconnect" && change !== "destination") {
         expect(f.palette.isOpen).toBe(false);
-        f.palette.openPalette();
-        await f.palette.updateComplete;
+        await openPalette(f.palette);
       }
       f.input.focus();
       await f.replace("@new");

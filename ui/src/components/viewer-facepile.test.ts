@@ -27,6 +27,14 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 import { ViewerAvatar, type ViewerFacepileProps } from "./solid/viewer-facepile.tsx";
 
+function viewer(id: string, name: string, extra: Partial<PresenceViewer> = {}): PresenceViewer {
+  return { id, name, watchedSessions: [], ...extra };
+}
+const avatarColor = (root: Element) =>
+  root
+    .querySelector<HTMLElement>(".viewer-avatar")
+    ?.style.getPropertyValue("--viewer-avatar-color");
+
 function mountAvatar(user: PresenceViewer, variant?: "session" | "profile") {
   const avatar = document.createElement("openclaw-viewer-avatar");
   Object.assign(avatar, { user, variant });
@@ -61,10 +69,7 @@ afterEach(() => {
 it.each(["session", "profile"] as const)(
   "labels the shared owner avatar in %s context",
   async (variant) => {
-    const avatar = mountAvatar(
-      { id: "gateway-owner", name: "Saved owner name", watchedSessions: [] },
-      variant,
-    );
+    const avatar = mountAvatar(viewer("gateway-owner", "Saved owner name"), variant);
     await avatar.updateComplete;
     expect(avatar.querySelector(".viewer-avatar")?.getAttribute("aria-label")).toBe(
       variant === "profile" ? "Saved owner name" : "Saved owner name · Shared owner",
@@ -75,13 +80,10 @@ it.each(["session", "profile"] as const)(
 it.each([false, true])(
   "keeps identity colors consistent through avatar updates (photo: %s)",
   async (photo) => {
-    const user: PresenceViewer = {
-      id: "profile-riley",
-      name: "Riley",
+    const user = viewer("profile-riley", "Riley", {
       email: "riley@example.test",
       ...(photo ? { avatarUrl: "/api/users/profile-riley/avatar?v=1" } : {}),
-      watchedSessions: [],
-    };
+    });
     const viewerAvatar = mountAvatar(user);
 
     const chat = document.createElement("div");
@@ -108,11 +110,7 @@ it.each([false, true])(
       const expectedStyle = document.createElement("span").style;
       expectedStyle.background = `hsl(${expected.colorSeed % 360} 48% 42%)`;
       expect(rosterInitials?.style.background).toBe(expectedStyle.background);
-      expect(
-        viewerAvatar
-          .querySelector<HTMLElement>(".viewer-avatar")
-          ?.style.getPropertyValue("--viewer-avatar-color"),
-      ).toBe(`hsl(${expected.colorSeed % 360} 48% 42%)`);
+      expect(avatarColor(viewerAvatar)).toBe(`hsl(${expected.colorSeed % 360} 48% 42%)`);
       expect(chatInitials?.getAttribute("style")).toContain(
         `--chat-author-avatar-hue: ${expected.colorSeed % 360}`,
       );
@@ -127,21 +125,16 @@ it.each([false, true])(
     await viewerAvatar.updateComplete;
     const nextColor = `hsl(${resolveAvatarInitials(nextUser).colorSeed % 360} 48% 42%)`;
     expect(nextColor).not.toBe(`hsl(${expected.colorSeed % 360} 48% 42%)`);
-    expect(
-      viewerAvatar
-        .querySelector<HTMLElement>(".viewer-avatar")
-        ?.style.getPropertyValue("--viewer-avatar-color"),
-    ).toBe(nextColor);
+    expect(avatarColor(viewerAvatar)).toBe(nextColor);
   },
 );
 
 it("uses the shared resolver and rejects cross-origin presence avatar metadata", async () => {
-  const avatar = mountAvatar({
-    id: "profile-mallory",
-    name: "Mallory",
-    avatarUrl: "https://evil.example/avatar.png",
-    watchedSessions: [],
-  });
+  const avatar = mountAvatar(
+    viewer("profile-mallory", "Mallory", {
+      avatarUrl: "https://evil.example/avatar.png",
+    }),
+  );
 
   await waitForSolid(async () => {
     await avatar.updateComplete;
@@ -151,12 +144,11 @@ it("uses the shared resolver and rejects cross-origin presence avatar metadata",
 });
 
 it("renders trusted presence avatar routes directly", async () => {
-  const avatar = mountAvatar({
-    id: "profile-ada",
-    name: "Ada Lovelace",
-    avatarUrl: "/api/users/profile-ada/avatar",
-    watchedSessions: [],
-  });
+  const avatar = mountAvatar(
+    viewer("profile-ada", "Ada Lovelace", {
+      avatarUrl: "/api/users/profile-ada/avatar",
+    }),
+  );
 
   await waitForSolid(async () => {
     await avatar.updateComplete;
@@ -202,12 +194,10 @@ it("shares the current self avatar with typed owner faces missing a revision", a
     .mockReturnValueOnce("blob:shared-viewer-avatar")
     .mockReturnValueOnce("blob:updated-viewer-avatar");
   const user = {
-    id: "profile-ada",
+    ...viewer("profile-ada", "Ada Lovelace"),
     identity: { type: "profile", id: "profile-ada" },
     email: "ada@example.test",
-    name: "Ada Lovelace",
     avatarUrl: "/api/users/profile-ada/avatar?v=7",
-    watchedSessions: [],
   } satisfies PresenceViewer;
   const fixture = createApplicationGateway();
   const { gateway } = fixture;
@@ -233,7 +223,7 @@ it("shares the current self avatar with typed owner faces missing a revision", a
   });
   await resolveAvatarImageUrl(user.avatarUrl);
   await settle(avatars);
-  expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
+  expect(avatars.map((avatar) => attr(avatar, "img", "src"))).toEqual([
     "blob:shared-viewer-avatar",
     "blob:shared-viewer-avatar",
   ]);
@@ -255,7 +245,7 @@ it("shares the current self avatar with typed owner faces missing a revision", a
   );
   await resolveAvatarImageUrl("/api/users/profile-ada/avatar?v=8");
   await settle(avatars);
-  expect(avatars.map((avatar) => avatar.querySelector("img")?.getAttribute("src"))).toEqual([
+  expect(avatars.map((avatar) => attr(avatar, "img", "src"))).toEqual([
     "blob:shared-viewer-avatar",
     "blob:updated-viewer-avatar",
   ]);
@@ -493,12 +483,9 @@ it("keeps a newly advertised teammate avatar ahead of cached directory availabil
   });
   // SAFETY: Avatar consumers use only the Gateway capability in this fixture.
   const provider = createSolidApplicationContextProvider({ gateway } as ApplicationContext);
-  const user = {
-    id: "teammate",
-    identity: { type: "profile" as const, id: "teammate" },
-    name: "Teammate",
-    watchedSessions: [],
-  };
+  const user = viewer("teammate", "Teammate", {
+    identity: { type: "profile", id: "teammate" },
+  });
   const view = mountSolid(() => createComponent(ViewerAvatar, { user }), {
     wrapper: provider.wrapper,
   });
