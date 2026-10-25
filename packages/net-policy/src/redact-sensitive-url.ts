@@ -30,6 +30,7 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "signature",
   "x_amz_signature",
   "x_amz_security_token",
+  "x_goog_signature",
   "private_key",
   "credential",
   "authorization",
