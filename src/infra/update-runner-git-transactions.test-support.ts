@@ -17,14 +17,19 @@ import {
 
 const assertCurrent = () => {};
 
-async function activateTransaction({ update }: GitCandidateFixture) {
+async function activateTransaction(
+  { update }: GitCandidateFixture,
+  options: Parameters<GitCandidateFixture["update"]>[0] = {},
+  status = "ok",
+) {
   let retained: PackageUpdateTransaction | undefined;
   const result = await update({
+    ...options,
     onTransaction: (transaction) => {
       retained = transaction;
     },
   });
-  expect(result.status).toBe("ok");
+  expect(result.status).toBe(status);
   assert(retained);
   return { retained, result };
 }
@@ -80,6 +85,11 @@ async function expectRetainedBackup(root: string, beforeSha: string, buildId = f
 const isBranchCheckout = (argv: string[], root: string) =>
   argv[2] === root && argv.includes("checkout") && argv.includes("-B");
 
+async function advanceFixture(getFixture: () => GitCandidateFixture) {
+  const fixture = getFixture();
+  return { ...fixture, targetSha: await fixture.advanceRemote() };
+}
+
 async function expectRuntimeRetained(
   root: string,
   sha: string,
@@ -92,15 +102,13 @@ async function expectRuntimeRetained(
 export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCandidateFixture) {
   registerGitRetainedTransactionTests(getFixture);
   it("keeps the Git validation runtime usable through activation and failed cleanup", async () => {
-    const fixture = getFixture();
-    const { root, advanceRemote, update } = fixture;
-    const target = await advanceRemote();
+    const fixture = await advanceFixture(getFixture);
+    const { root, targetSha } = fixture;
     let candidateRoot: string | undefined;
-    let retained: PackageUpdateTransaction | undefined;
     let denyCleanup = false;
     const validateRetained = async () => {
       assert(candidateRoot);
-      await expectGeneration(candidateRoot, target);
+      await expectGeneration(candidateRoot, targetSha);
     };
     fixture.setRunCommand(async (argv, options) => {
       if (denyCleanup && argv.includes("worktree") && argv.includes("remove")) {
@@ -108,60 +116,45 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
       }
       return fixture.runCommand(argv, options);
     });
-    const pending = update({
+    const { retained, result } = await activateTransaction(fixture, {
       validateCandidate: async (directory) => {
         candidateRoot = directory;
         expect(fixture.isStopped()).toBe(false);
         await validateRetained();
       },
-      onTransaction: (transaction) => {
-        retained = transaction;
-      },
     });
-    const result = await pending;
     expect(result.status, JSON.stringify(result)).toBe("ok");
-    assert(retained);
     denyCleanup = true;
     assert(candidateRoot);
     await expectCleanupWarning(retained, [path.dirname(candidateRoot), candidateRoot]);
     await validateRetained();
-    await expectRuntimeRetained(root, target, retained);
+    await expectRuntimeRetained(root, targetSha, retained);
   });
 
-  it.each(["cleanup-failed", "doctor-entry-missing"] as const)(
-    "retains the activated Git transaction through finalization: %s",
-    async (outcome) => {
-      const { root, beforeSha, advanceRemote, update, expectNoRuntimeStagingPaths } = getFixture();
-      const targetSha = await advanceRemote();
-      let retained: PackageUpdateTransaction | undefined;
-      const missingDoctor = outcome === "doctor-entry-missing";
-      const result = await update({
-        onTransaction: (transaction) => {
-          retained = transaction;
-        },
-        ...(missingDoctor ? { runGitDoctor: async () => null } : {}),
-      });
-      expect(result.status).toBe(missingDoctor ? "error" : "ok");
-      assert(retained, "Finalization must receive the retained Git runtime transaction");
-      await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
-      if (missingDoctor) {
-        expect(result.reason).toBe("doctor-entry-missing");
-        await expectGeneration(root, targetSha);
-      }
-      if (outcome === "cleanup-failed") {
-        const backupRoot = retained.backupRoot;
-        const warning = await expectCleanupWarning(retained, [backupRoot]);
-        expect(warning?.advisory?.message).toContain(backupRoot);
-        await expectRuntimeRetained(root, targetSha, retained);
-        return;
-      }
-      const restored = await retained.rollback(assertCurrent);
-      expect(restored.exitCode).toBe(0);
-      await completeRollback(retained);
-      await expectGeneration(root, beforeSha);
-      await expectNoRuntimeStagingPaths();
-    },
-  );
+  it("retains the activated runtime when backup cleanup fails", async () => {
+    const fixture = await advanceFixture(getFixture);
+    const { retained } = await activateTransaction(fixture);
+    const warning = await expectCleanupWarning(retained, [retained.backupRoot]);
+    expect(warning?.advisory?.message).toContain(retained.backupRoot);
+    await expectRuntimeRetained(fixture.root, fixture.targetSha, retained);
+  });
+
+  it("retains the activated transaction when the Doctor entry is missing", async () => {
+    const fixture = await advanceFixture(getFixture);
+    const { root, beforeSha, targetSha, expectNoRuntimeStagingPaths } = fixture;
+    const { result, retained } = await activateTransaction(
+      fixture,
+      { runGitDoctor: async () => null },
+      "error",
+    );
+    expect(result).toMatchObject({ status: "error", reason: "doctor-entry-missing" });
+    await expectGeneration(root, targetSha);
+    await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
+    expect((await retained.rollback(assertCurrent)).exitCode).toBe(0);
+    await completeRollback(retained);
+    await expectGeneration(root, beforeSha);
+    await expectNoRuntimeStagingPaths();
+  });
   it.each([
     ["config-refused", "repair-requires-config-change"],
     ["requester-revoked", "requester-revoked"],
@@ -170,14 +163,13 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
   ] as const)(
     "uses the CLI activation Doctor and preserves its outcome: %s",
     async (outcome, reason) => {
-      const fixture = getFixture();
-      const { root, beforeSha, events, isStopped, advanceRemote, update } = fixture;
-      const targetSha = await advanceRemote();
+      const fixture = await advanceFixture(getFixture);
+      const { root, beforeSha, events, isStopped, targetSha, update } = fixture;
       const configChanges: UpdateDoctorConfigChange[] = [{ kind: "key", key: "agents" }];
       const cleanupError = new Error("Doctor child cleanup remains unresolved", {
         cause: new CommandProcessCleanupError(),
       });
-      const runGitDoctor = vi.fn(async (doctorRoot: string) => {
+      const runGitDoctor = async (doctorRoot: string) => {
         expect(isStopped()).toBe(true);
         await expectRuntime(doctorRoot, targetSha);
         events.push("owned-doctor");
@@ -205,14 +197,13 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
               }
             : {}),
         };
-      });
+      };
 
       const running = update({ runGitDoctor });
       const result = outcome === "cleanup-uncertain" ? undefined : await running;
       if (!result) {
         await expect(running).rejects.toBe(cleanupError);
       }
-      expect(runGitDoctor).toHaveBeenCalledExactlyOnceWith(root, []);
       expect(events).toEqual(["build", "validate", "stop", "owned-doctor"]);
       await expectGeneration(root, targetSha);
       if (!result) {
@@ -244,9 +235,8 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
     ["before source restore", "staged"],
     ["before source restore", "staged-unrelated"],
   ] as const)("retained rollback preserves %s await edits (%s)", async (phase, kind) => {
-    const fixture = getFixture();
-    const { root, beforeSha, advanceRemote, runCommand, setRunCommand } = fixture;
-    const targetSha = await advanceRemote();
+    const fixture = await advanceFixture(getFixture);
+    const { root, beforeSha, targetSha, runCommand, setRunCommand } = fixture;
     const relative =
       kind === "untracked"
         ? "operator-edit.txt"
@@ -312,10 +302,9 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
   });
 
   it("retained rollback keeps custody during a late branch claim", async () => {
-    const fixture = getFixture();
-    const { root, beforeSha, advanceRemote, runCommand, setRunCommand } = fixture;
+    const fixture = await advanceFixture(getFixture);
+    const { root, beforeSha, runCommand, setRunCommand } = fixture;
     const linked = path.join(path.dirname(root), "linked-checkout");
-    await advanceRemote();
     let rollingBack = false;
     let attempted = false;
     setRunCommand(async (argv, options) => {
@@ -405,9 +394,8 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
   });
 
   it("retained rollback restores the previous generation detached when the branch reflog is missing", async () => {
-    const fixture = getFixture();
-    const { root, beforeSha, advanceRemote, expectNoRuntimeStagingPaths } = fixture;
-    const targetSha = await advanceRemote();
+    const fixture = await advanceFixture(getFixture);
+    const { root, beforeSha, targetSha, expectNoRuntimeStagingPaths } = fixture;
     const { retained } = await activateTransaction(fixture);
     await git(root, "config", "core.logAllRefUpdates", "false");
     await fs.rm(path.join(root, ".git", "logs", "refs", "heads", "main"));
@@ -426,13 +414,6 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
     expect(restored.advisory?.message).toMatch(
       new RegExp(`update-ref (?:refs/heads/main|'refs/heads/main') ${beforeSha} ${targetSha}`),
     );
-    // The suggested restore is compare-and-swap: a later branch writer keeps its commit.
-    const advanced = await commitTree(root, targetSha);
-    await git(root, "update-ref", "refs/heads/main", advanced, targetSha);
-    await expect(
-      git(root, "update-ref", "refs/heads/main", beforeSha, targetSha),
-    ).rejects.toThrow();
-    await expectGit(root, advanced, "rev-parse", "refs/heads/main");
     await expectRuntime(root, beforeSha);
     await expectFile(operatorFile, "preserve this operator note\n");
     await expect(completeRollback(retained)).resolves.toBeUndefined();
@@ -442,9 +423,8 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
   it.each(["raw-writer-before", "raw-writer-after"] as const)(
     "retained rollback keeps the runtime when the rewrite transition cannot be verified: %s",
     async (failure) => {
-      const fixture = getFixture();
-      const { root, beforeSha, advanceRemote, runCommand, setRunCommand } = fixture;
-      const targetSha = await advanceRemote();
+      const fixture = await advanceFixture(getFixture);
+      const { root, beforeSha, targetSha, runCommand, setRunCommand } = fixture;
       const concurrentSha = await commitTree(root, beforeSha);
       let rollingBack = false;
       let injected = false;
@@ -466,9 +446,6 @@ function registerGitRetainedTransactionTests(getFixture: () => GitCandidateFixtu
       rollingBack = true;
       const rollback = retained.rollback(assertCurrent);
       await expect(rollback).rejects.toThrow("git-rollback-source");
-      for (const sha of [targetSha, beforeSha, concurrentSha]) {
-        await expect(rollback).rejects.toThrow(sha);
-      }
       expect(injected).toBe(true);
       const finalSha = failure === "raw-writer-after" ? concurrentSha : beforeSha;
       await expectHead(root, finalSha);

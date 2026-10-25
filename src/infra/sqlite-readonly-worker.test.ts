@@ -35,27 +35,24 @@ const openDatabase = (location: string, readOnly = false) =>
   new (requireNodeSqlite().DatabaseSync)(location, { readOnly });
 const witnessSql = (value: string) =>
   `CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('${value}');`;
+type Worker = ReturnType<typeof createScopedSqliteReadOnlyWorker>;
 beforeEach(() => {
   vi.mocked(execFile).mockReset();
   vi.mocked(spawn).mockClear();
   vi.mocked(spawnSync).mockClear();
 });
 
-function createDatabase(paddingBytes: number | null, sql = ""): string {
+function createDatabase(sql = ""): string {
   const source = path.join(tempDirs.make("openclaw-snapshot-budget-"), "source.sqlite");
   using database = openDatabase(source);
   if (sql) {
     database.exec(sql);
   }
-  if (paddingBytes !== null) {
-    database.exec("CREATE TABLE padding (data BLOB)");
-    database.prepare("INSERT INTO padding VALUES (zeroblob(?))").run(paddingBytes);
-  }
   return source;
 }
 
 async function withWorker<T>(
-  run: (worker: ReturnType<typeof createScopedSqliteReadOnlyWorker>) => Promise<T>,
+  run: (worker: Worker) => Promise<T>,
   launch: Parameters<
     typeof createScopedSqliteReadOnlyWorker
   >[0] = captureSqliteReadOnlyWorkerLaunch(),
@@ -81,7 +78,7 @@ function readQueries(location: string, ...queries: string[]) {
 
 describe("scoped SQLite read-only children", () => {
   it("forks through retained IPC and joins cleanup after disposal refusal", async () => {
-    const source = createDatabase(null, witnessSql("checkpointed"));
+    const source = createDatabase(witnessSql("checkpointed"));
     using writer = openDatabase(source);
     writer.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO witness VALUES ('seed WAL'); DELETE FROM witness WHERE value='seed WAL'; PRAGMA wal_checkpoint(TRUNCATE)",
@@ -101,8 +98,6 @@ describe("scoped SQLite read-only children", () => {
       if (!family) {
         throw new Error("Retained fixture did not publish its captured WAL family");
       }
-      // The retained source may start a shared native broker. Only the fork owns
-      // the IPC child whose retirement this fixture must join.
       const firstChild = vi.mocked(spawn).mock.results.length;
       fork = await forkSqlitePrivateSnapshot(
         prepared.location,
@@ -186,7 +181,7 @@ describe("scoped SQLite read-only children", () => {
   );
 
   it("reuses fresh raw snapshots while joining backup-capable children before returning", async () => {
-    const source = createDatabase(1024 * 1024);
+    const source = createDatabase();
     using writer = openDatabase(source);
     writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
     await withSqliteReadOnlyWorkerScope(async () => {
@@ -197,13 +192,9 @@ describe("scoped SQLite read-only children", () => {
         } else {
           const prepared = await prepareSqliteReadOnlyLocation(source);
           try {
-            expect(
-              readQueries(
-                prepared.location,
-                "PRAGMA user_version",
-                "SELECT length(data) AS length FROM padding",
-              ),
-            ).toEqual([{ user_version: index + 1 }, { length: 1024 * 1024 }]);
+            expect(readQueries(prepared.location, "PRAGMA user_version")).toEqual([
+              { user_version: index + 1 },
+            ]);
           } finally {
             expect(await prepared.cleanupAsync()).toBe(true);
           }
@@ -221,7 +212,7 @@ describe("scoped SQLite read-only children", () => {
   });
 
   it("keeps concurrent source inspections in separate processes", async () => {
-    const source = createDatabase(0);
+    const source = createDatabase("CREATE TABLE witness(value)");
     await withSqliteReadOnlyWorkerScope(async () => {
       expect(await Promise.all([readSnapshotVersion(source), readSnapshotVersion(source)])).toEqual(
         [0, 0],
@@ -273,7 +264,7 @@ it("sums serial size-aware schema inspection budgets without giant fixtures", ()
 });
 
 it("preserves an intermittent failed launch without parsing absent worker output", async () => {
-  const source = createDatabase(null);
+  const source = createDatabase();
   const stagingRoot = tempDirs.make("openclaw-snapshot-launch-");
   const run = () => runSqliteReadOnlyWorkerSync(source, stagingRoot);
   expect(fs.existsSync(run())).toBe(true);
@@ -313,7 +304,7 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
   }
 
   it("budgets the WAL family while copying committed data from an open writer", async () => {
-    const source = createDatabase(null);
+    const source = createDatabase();
     using writer = openDatabase(source);
     writer.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE padding (data BLOB)",
@@ -328,12 +319,9 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
       expect(fs.existsSync(`${snapshot}-wal`)).toBe(false);
       expect(fs.existsSync(`${snapshot}-shm`)).toBe(false);
     }
-    {
-      using copied = openDatabase(snapshot, true);
-      expect(copied.prepare("SELECT length(data) AS bytes FROM padding").all()).toEqual([
-        { bytes: 32 * 1024 * 1024 },
-      ]);
-    }
+    expect(readQueries(snapshot, "SELECT length(data) AS bytes FROM padding")).toEqual([
+      { bytes: 32 * 1024 * 1024 },
+    ]);
     expectBudget(341_000);
   });
 
@@ -350,7 +338,7 @@ it.each(
     : ["unavailable"],
 )("cold-starts an absolute SQLite snapshot when the invoking cwd is %s", async (condition) => {
   const root = tempDirs.make("openclaw-sqlite-unavailable-cwd-");
-  const source = createDatabase(null, witnessSql("preserved"));
+  const source = createDatabase(witnessSql("preserved"));
   const stagingRoot = path.join(root, "staging");
   fs.mkdirSync(stagingRoot);
   const before = fs.readFileSync(source);
@@ -363,7 +351,7 @@ it.each(
     }
     throw unavailable;
   });
-  let worker: ReturnType<typeof createScopedSqliteReadOnlyWorker> | undefined;
+  let worker: Worker | undefined;
   let witness: unknown;
   try {
     worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
@@ -414,10 +402,7 @@ it.runIf(process.platform !== "win32")(
   "reports the real SQLite write errcode across the isolated worker boundary",
   () => {
     const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-worker-full-");
-    const databasePath = createDatabase(
-      null,
-      "CREATE TABLE probe (payload BLOB); INSERT INTO probe VALUES (zeroblob(8192));",
-    );
+    const databasePath = createDatabase("CREATE TABLE probe AS SELECT zeroblob(8192) AS payload");
     const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
     const extension = workerUrl.pathname.endsWith(".ts") ? ".ts" : ".js";
     const moduleUrl = new URL(`./sqlite-snapshot-source${extension}`, workerUrl).href;

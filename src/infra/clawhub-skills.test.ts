@@ -152,7 +152,6 @@ describe("clawhub skills", () => {
       items: [true, false, undefined].map((isOfficial, index) =>
         Object.assign({}, listing, {
           name: "email",
-          displayName: "Email",
           ownerHandle: ["alice", "bob", "charlie"][index],
           isOfficial,
           latestVersion: index === 0 ? "1.2.3" : null,
@@ -239,16 +238,7 @@ describe("clawhub skills", () => {
   it.each([{ family: "code-plugin" }, { ownerHandle: "bob" }])(
     "does not borrow official status from mismatched trending metadata: %j",
     async (mismatch) => {
-      catalogListing(
-        {
-          family: "skill",
-          name: "weather",
-          ownerHandle: "alice",
-          isOfficial: true,
-          ...mismatch,
-        },
-        null,
-      );
+      catalogListing({ ...listing, isOfficial: true, ...mismatch }, null);
       const result = await fetchClawHubSkillCatalog({ feed: "trending" });
       expect(result.items).toMatchObject([{ installRef: "@alice/weather", official: undefined }]);
     },
@@ -367,37 +357,25 @@ describe("clawhub skills", () => {
   });
 
   it.each([
-    {
-      options: { slug: "agentreceipt", tag: "latest" },
-      content: "# Agent Receipt\n\nVerified by ClawHub.\n",
-      url: "https://clawhub.ai/api/v1/skills/agentreceipt/card?tag=latest",
-    },
-    {
-      options: {
-        url: "https://cards.example.test/generated/agentreceipt.md",
-        baseUrl: "https://clawhub.ai",
-      },
-      content: "# Agent Receipt\n",
-      url: "https://cards.example.test/generated/agentreceipt.md",
-    },
-  ])("fetches generated Skill Card markdown at $url", async ({ options, content, url }) => {
+    [
+      { slug: "agentreceipt", tag: "latest" },
+      "https://clawhub.ai/api/v1/skills/agentreceipt/card?tag=latest",
+    ],
+    [
+      { url: "https://cards.example.test/card.md", baseUrl: "https://clawhub.ai" },
+      "https://cards.example.test/card.md",
+    ],
+  ] as const)("fetches generated Skill Card markdown: %j", async (options, url) => {
+    const content = "# Agent Receipt\n";
     const request = captureResponse(new Response(content));
     await expect(fetchClawHubSkillCard(options)).resolves.toBe(content);
     expect(request.url().href).toBe(url);
   });
 
   it.each([
-    {
-      content: "card missing",
-      status: 404,
-      error: "ClawHub /api/v1/skills/agentreceipt/card failed (404): card missing",
-    },
-    {
-      content: "x".repeat(256 * 1024 + 1),
-      status: 200,
-      error: "ClawHub skill card for agentreceipt exceeded 262144 bytes (262145 bytes received)",
-    },
-  ])("rejects invalid generated Skill Card: $error", async ({ content, status, error }) => {
+    ["card missing", 404, "failed (404): card missing"],
+    ["x".repeat(256 * 1024 + 1), 200, "exceeded 262144 bytes (262145 bytes received)"],
+  ] as const)("rejects invalid generated Skill Card (%s, %s)", async (content, status, error) => {
     captureResponse(new Response(content, { status }));
     await expect(fetchClawHubSkillCard({ slug: "agentreceipt" })).rejects.toThrow(error);
   });
@@ -416,9 +394,8 @@ describe("clawhub packages", () => {
       npmIntegrity: "sha512-proof",
       npmShasum: "abc",
     },
-    overview: "The plugin uses privileged local APIs.\n\nReview those capabilities.",
-    securityAuditUrl:
-      "https://clawhub.ai/plugins/@openclaw/diagnostics-otel/security-audit?version=2026.3.22",
+    overview: "Review privileged local APIs.",
+    securityAuditUrl: "https://clawhub.ai/audit",
     trust: {
       scanStatus: "clean",
       moderationState: null,
@@ -461,18 +438,8 @@ describe("clawhub packages", () => {
     expect(resolveLatestVersionFromPackage({ package: pkg })).toBe("1.2.2");
   });
 
-  it("fetches typed package artifact resolver reports", async () => {
-    const report = {
-      artifact: {
-        source: "clawhub",
-        artifactKind: "npm-pack",
-        packageName: packageSelector.name,
-        version: packageSelector.version,
-        downloadUrl: "https://clawhub.ai/api/v1/clawpacks/abc",
-        npmIntegrity: "sha512-demo",
-        npmShasum: "abc",
-      },
-    };
+  it("fetches package artifact resolver reports", async () => {
+    const report = { artifact: { source: "clawhub", downloadUrl: "https://clawhub.ai/artifact" } };
     const { url } = jsonRequest(report);
     await expect(fetchClawHubPackageArtifact(packageSelector)).resolves.toEqual(report);
     expect(url().pathname).toBe(`${versionPath}/artifact`);

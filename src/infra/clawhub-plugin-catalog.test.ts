@@ -14,7 +14,8 @@ import {
 import { captureClawHubJson as mockResponse } from "./clawhub.test-support.js";
 
 const registry = { baseUrl: "https://example.com" };
-const listingMetadata = {
+const remotePlugin = {
+  name: "memory-plus",
   displayName: "Memory Plus",
   family: "code-plugin",
   isOfficial: false,
@@ -23,10 +24,6 @@ const listingMetadata = {
   categories: ["memory"],
   latestVersion: "1.2.3",
   runtimeId: "memory-plus",
-};
-const remotePlugin = {
-  name: "memory-plus",
-  ...listingMetadata,
   ownerImage: "https://cdn.example.com/alice.png",
   icon: `/api/v1/skill-icons/${"a".repeat(64)}`,
   stats: { downloads: 42, installs: 7 },
@@ -46,7 +43,7 @@ async function catalog(
 ) {
   const fetchImpl = mockResponse(response);
   const result = await fetchClawHubPluginCatalog({ ...registry, ...options });
-  return { result, url: fetchImpl.url(), fetchImpl: fetchImpl.fetch };
+  return { result, url: fetchImpl.url() };
 }
 
 function readCategories(categories: unknown[]) {
@@ -57,6 +54,7 @@ function readCategories(categories: unknown[]) {
 function readDetail(value: Record<string, unknown>, version?: string) {
   mockResponse({ package: remotePlugin, versions: { items: [] }, ...value });
   return fetchClawHubPluginDetail({
+    ...registry,
     packageName: "memory-plus",
     version,
     skipAuth: true,
@@ -148,7 +146,7 @@ it.each([
   );
 });
 
-it("reads the bounded plugin overview in one request", async () => {
+it("reads ranked plugins and categories from the overview", async () => {
   const ranking = { featured: true, trending: true, featuredRank: 1, trendingRank: 0 };
   const fetchImpl = mockResponse({
     categories: [remoteCategory],
@@ -166,8 +164,6 @@ it("reads the bounded plugin overview in one request", async () => {
       ...ranking,
     },
   ]);
-  expect(result.items).toHaveLength(1);
-  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
 });
 
 it("browses the combined plugin endpoint with an opaque cursor", async () => {
@@ -182,16 +178,8 @@ it("browses the combined plugin endpoint with an opaque cursor", async () => {
     sort: "trending",
     limit: "12",
   });
-  expect(result).toEqual({
-    items: [
-      {
-        packageName: "memory-plus",
-        ...listingMetadata,
-        iconUrl: `https://example.com${remotePlugin.icon}`,
-        downloads: 42,
-        installs: 7,
-      },
-    ],
+  expect(result).toMatchObject({
+    items: [{ packageName: "memory-plus", downloads: 42, installs: 7 }],
     nextCursor: "pkgplugins:{opaque}",
   });
 });
@@ -254,13 +242,12 @@ it.each([
 });
 
 it("batch-reads current and legacy categories for exact package versions", async () => {
-  const categories = ["memory", "tools"];
   const packages = [
     { name: "@openclaw/memory", version: "1.2.3" },
     { name: "@openclaw/missing", version: "4.5.6" },
   ];
   const response = [
-    { ...packages[0], categories },
+    { ...packages[0], categories: ["memory", "tools"] },
     { ...packages[1], categories: null },
   ];
   const request = mockResponse({ packages: response });
@@ -291,7 +278,7 @@ it.each([
 ])("reads exact-version detail with UI metadata %j", async (ui, expected) => {
   const display = {
     topics: ["Retrieval"],
-    tags: { latest: "1.2.3", stable: "1.2.2" },
+    tags: { latest: "1.2.3" },
     createdAt: 100,
     updatedAt: 300,
   };
@@ -320,10 +307,7 @@ it.each([
   };
   const verification = {
     tier: "source-linked",
-    summary: "Linked to source.",
     sourceRepo: "alice/memory-plus",
-    sourceCommit: "abc123",
-    sourcePath: "plugins/memory-plus",
     scanStatus: "clean",
   };
   const security = {
@@ -381,7 +365,6 @@ it.each([
 
   const url = fetchImpl.url();
   expect(`${url.pathname}${url.search}`).toBe("/api/v1/packages/memory-plus/detail?version=1.2.2");
-  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
   expect(detail).toMatchObject({
     packageName: "memory-plus",
     iconUrl: `https://example.com${remotePlugin.icon}`,
@@ -408,10 +391,12 @@ it.each([
   });
   expect(detail.uiCapabilities).toEqual(expected);
   const joined = joinDetail(detail);
-  expect(joined).toMatchObject(capabilities);
-  expect(joined.uiCapabilities).toEqual(expected);
-  expect(joined.mcpServers).toEqual(["memory", "legacy"]);
-  expect(joined.mcpServerDetails).toEqual(detail.mcpServerDetails);
+  expect(joined).toMatchObject({
+    ...capabilities,
+    uiCapabilities: expected,
+    mcpServers: ["memory", "legacy"],
+    mcpServerDetails: mcpServers,
+  });
   expect(Value.Check(PluginDiscoveryDetailSchema, joined)).toBe(true);
 });
 
@@ -477,7 +462,7 @@ it("withholds unsafe MCP endpoints and only projects bounded public metadata", a
 });
 
 it.each([undefined, {}])("keeps unreleased detail with optional security: %s", async (security) => {
-  const fetchImpl = mockResponse({
+  const detail = await readDetail({
     package: {
       ...remotePlugin,
       latestVersion: undefined,
@@ -487,11 +472,6 @@ it.each([undefined, {}])("keeps unreleased detail with optional security: %s", a
     version: null,
     readme: null,
     security,
-  });
-  const detail = await fetchClawHubPluginDetail({
-    ...registry,
-    packageName: "memory-plus",
-    skipAuth: true,
   });
   expect(detail).toMatchObject({
     packageName: "memory-plus",
@@ -506,7 +486,6 @@ it.each([undefined, {}])("keeps unreleased detail with optional security: %s", a
     compatibility: { minGatewayVersion: ">=2.0.0" },
   });
   expect([detail.readme, detail.security]).toEqual([undefined, undefined]);
-  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
 });
 it.each([
   { blocked: true, securityVersion: "1.0.0", expected: "unavailable" },

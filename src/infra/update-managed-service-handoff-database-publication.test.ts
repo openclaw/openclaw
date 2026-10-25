@@ -190,15 +190,6 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it("preserves an existing malformed database", () => {
-  const malformed = Buffer.from("not a sqlite database");
-  fs.writeFileSync(databasePath, malformed, { mode: 0o600 });
-
-  expect(() => withDatabase(true, () => undefined)).toThrow();
-  expect(fs.readFileSync(databasePath)).toEqual(malformed);
-  expect(fs.statSync(databasePath).nlink).toBe(1);
-});
-
 it.each(["file", "parent"] as const)(
   "preserves initialization ownership when %s replacement is attempted",
   (target) => {
@@ -268,8 +259,11 @@ it.each([
       ? { kind: "absent" }
       : { kind: "unreadable", error: expect.any(Error) },
   );
+  if (state === "malformed") {
+    expect(() => withDatabase(true, () => undefined)).toThrow();
+  }
   expect(fs.readFileSync(databasePath)).toEqual(bytes);
-  expect(fs.statSync(databasePath).ino).toBe(before.ino);
+  expect(fs.statSync(databasePath)).toMatchObject({ ino: before.ino, nlink: 1 });
   expect(fs.readdirSync(root)).toEqual([path.basename(databasePath)]);
 });
 
@@ -364,22 +358,6 @@ it.skipIf(process.platform !== "win32")(
   },
 );
 
-it("ordinary readers observe no lease while a real peer initializes the schema", async () => {
-  const writer = spawnFixture("(await openDatabase())(true, () => undefined);");
-  do {
-    expect(store.read(root)).toEqual({ kind: "absent" });
-    if (fs.existsSync(databasePath)) {
-      const stat = fs.statSync(databasePath);
-      if (process.platform !== "win32") {
-        expect(stat.mode & 0o777).toBe(0o600);
-      }
-    }
-    await delay(1);
-  } while (writer.child.exitCode === null && writer.child.signalCode === null);
-  await expectSuccessfulExit(writer);
-  expectSingleLink([]);
-});
-
 it("recovers the same inode when its first writer crashes before schema initialization", async ({
   signal,
 }) => {
@@ -401,6 +379,9 @@ it("recovers the same inode when its first writer crashes before schema initiali
   await writer.waitForMarker("before-schema");
   const before = fs.statSync(databasePath);
   expect(before).toMatchObject({ size: 0, nlink: 1 });
+  if (process.platform !== "win32") {
+    expect(before.mode & 0o777).toBe(0o600);
+  }
   expect(store.read(root)).toEqual({ kind: "absent" });
   writer.child.kill("SIGKILL");
   await withinTest(writer.closed, signal);

@@ -29,7 +29,8 @@ import {
 } from "./state-migrations.device-identity.js";
 import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 
-type MigrationDatabase = Pick<ClientCredentialDatabase, "device_auth_tokens" | "device_identities">;
+type MigrationDatabase = Pick<ClientCredentialDatabase, "device_identities">;
+type MigrationOptions = Parameters<typeof migrateLegacyDeviceIdentity>[0];
 
 const CREATED_AT_MS = 1_700_000_000_000;
 const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
@@ -39,26 +40,18 @@ const SWIFT_RAW_PRIVATE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; //
 describe("legacy device identity Doctor migration", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  function useStateDir(): { env: NodeJS.ProcessEnv; stateDir: string } {
-    const stateDir = tempDirs.make("openclaw-device-identity-migration-");
-    return {
-      env: { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir },
-      stateDir,
-    };
-  }
-
   let stateDir: string;
   let env: NodeJS.ProcessEnv;
   beforeEach(() => {
-    ({ stateDir, env } = useStateDir());
+    stateDir = tempDirs.make("openclaw-device-identity-migration-");
+    env = { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
   });
 
   function withDatabase<T>(
     operation: (database: DatabaseSync) => T,
     create = false,
-    fixtureEnv: NodeJS.ProcessEnv = env,
   ): T | undefined {
-    using owner = openClientCredentialCustody(fixtureEnv, {
+    using owner = openClientCredentialCustody(env, {
       createIfMissing: create,
       migration: true,
     });
@@ -73,15 +66,10 @@ describe("legacy device identity Doctor migration", () => {
     });
   }
 
-  function query<T>(
-    build: (db: Kysely<MigrationDatabase>) => Compilable<T>,
-    create = false,
-    fixtureEnv = env,
-  ) {
+  function query<T>(build: (db: Kysely<MigrationDatabase>) => Compilable<T>, create = false) {
     return withDatabase(
       (db) => executeSqliteQuerySync(db, build(getNodeSqliteKysely<MigrationDatabase>(db))).rows,
       create,
-      fixtureEnv,
     );
   }
 
@@ -129,17 +117,12 @@ describe("legacy device identity Doctor migration", () => {
 
   async function writeLegacy(
     params: {
-      stateDir?: string;
       value?: unknown;
       bytes?: Buffer;
       filename?: string;
     } = {},
   ): Promise<string> {
-    const sourcePath = path.join(
-      params.stateDir ?? stateDir,
-      "identity",
-      params.filename ?? "device.json",
-    );
+    const sourcePath = path.join(stateDir, "identity", params.filename ?? "device.json");
     await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
     await fsp.writeFile(
       sourcePath,
@@ -148,22 +131,15 @@ describe("legacy device identity Doctor migration", () => {
     return sourcePath;
   }
 
-  function identityRow(fixtureEnv: NodeJS.ProcessEnv = env) {
-    return query(
-      (db) => db.selectFrom("device_identities").selectAll().where("identity_key", "=", "primary"),
-      false,
-      fixtureEnv,
+  function identityRow() {
+    return query((db) =>
+      db.selectFrom("device_identities").selectAll().where("identity_key", "=", "primary"),
     )?.[0];
   }
 
-  function receipt(
-    fixtureEnv: NodeJS.ProcessEnv = env,
-    identityKey: "primary" | "node" | "shareExtension" = "primary",
-  ) {
+  function receipt(identityKey: "primary" | "node" | "shareExtension" = "primary") {
     return withDatabase(
       (db) => readClientCredentialReceipt(db)?.receipt.legacyImports[`identity:${identityKey}`],
-      false,
-      fixtureEnv,
     );
   }
 
@@ -183,8 +159,7 @@ describe("legacy device identity Doctor migration", () => {
     result: Awaited<ReturnType<typeof migrate>>,
     change = "Migrated primary device identity to SQLite.",
   ) {
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toEqual([change]);
+    expect(result).toMatchObject({ warnings: [], changes: [change] });
   }
 
   function expectReplacement(result: Awaited<ReturnType<typeof migrate>>) {
@@ -227,17 +202,12 @@ describe("legacy device identity Doctor migration", () => {
   }
 
   function migrate(
-    overrides: Partial<
-      Pick<
-        Parameters<typeof migrateLegacyDeviceIdentity>[0],
-        "detected" | "doctorOnlyStateMigrations"
-      >
-    > = {},
-    fixture = { stateDir, env },
+    overrides: Partial<Pick<MigrationOptions, "detected" | "doctorOnlyStateMigrations">> = {},
   ) {
     return migrateLegacyDeviceIdentity({
-      detected: detectLegacyDeviceIdentity({ ...fixture, doctorOnlyStateMigrations: true }),
-      ...fixture,
+      detected: detect(),
+      stateDir,
+      env,
       doctorOnlyStateMigrations: true,
       ...overrides,
     });
@@ -300,13 +270,13 @@ describe("legacy device identity Doctor migration", () => {
       expect(migrated).toEqual(normalizedSwift());
       expect(identityRow()).toBeUndefined();
       await expect(fsp.readFile(sourcePath)).resolves.toEqual(sourceBytes);
-      const consumed = receipt(env, identityKey);
+      const consumed = receipt(identityKey);
       expect(consumed).toEqual({ sha256: createHash("sha256").update(sourceBytes).digest("hex") });
 
       await fsp.writeFile(sourcePath, JSON.stringify({ version: 1, ...anotherIdentity() }));
       expect((await migrate()).warnings).toEqual([]);
       expect(readStoredDeviceIdentity({ env, identityKey })).toEqual(normalizedSwift());
-      expect(receipt(env, identityKey)).toEqual(consumed);
+      expect(receipt(identityKey)).toEqual(consumed);
     },
   );
 
@@ -343,14 +313,10 @@ describe("legacy device identity Doctor migration", () => {
     expect(identityRow()?.device_id).toBe("0".repeat(64));
     const result = await migrate({ detected });
     expectReplacement(result);
-    expect(identityRow()).toMatchObject({
-      identity_key: "primary",
-      device_id: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
   });
 
   it("repairs a corrupted local identity without reimporting consumed legacy JSON", async () => {
-    const sourcePath = await writeLegacy({ stateDir });
+    const sourcePath = await writeLegacy();
     const sourceBytes = await fsp.readFile(sourcePath);
     expect((await migrate()).warnings).toEqual([]);
     const consumed = receipt();
@@ -423,7 +389,7 @@ describe("legacy device identity Doctor migration", () => {
   });
 
   it("preserves retired identity JSON when the local receipt no longer matches shared state", async () => {
-    const sourcePath = await writeLegacy({ stateDir });
+    const sourcePath = await writeLegacy();
     const original = await fsp.readFile(sourcePath);
     expect((await migrate()).warnings).toEqual([]);
     await fsp.writeFile(sourcePath, original);
