@@ -1,7 +1,16 @@
+import fs from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import vm from "node:vm";
-import { parse } from "acorn";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createStandaloneCodegenTransform } from "../../scripts/lib/bun-standalone-codegen.mjs";
+import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { typeCheckSources } from "../helpers/typescript.js";
+
+const parse = createStandaloneSourceParser();
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 const program = {
   signature: "SOURCE\nreturn value + prefix;",
@@ -10,6 +19,34 @@ const program = {
 };
 
 describe("standalone fixed code generation", () => {
+  it("keeps captured JavaScript outside typed callers and creates a fresh function per call", async () => {
+    const directory = dirs.make("typed-static-program-");
+    const programModule = path.join(directory, "programs.mjs");
+    const transform = createStandaloneCodegenTransform({
+      programs: [program],
+      parse: createStandaloneSourceParser(),
+      programModule,
+    });
+    fs.writeFileSync(programModule, transform.moduleSource);
+    fs.writeFileSync(path.join(directory, "programs.d.mts"), transform.declarationSource);
+    const source = `import { compileFunction } from "node:vm";
+const SOURCE = "const prefix = 3;";
+const first = compileFunction(\`\${SOURCE}\nreturn value + prefix;\`, ["value"]);
+const second = compileFunction(\`\${SOURCE}\nreturn value + prefix;\`, ["value"]);
+const input: number = 4;
+export const result = [first(input), first === second];`;
+    const filename = path.join(directory, "caller.mts");
+    const result = transform.transform({ filename, contents: source, preserveTypes: true });
+    fs.writeFileSync(filename, result.contents);
+    expect(
+      typeCheckSources({ [filename]: `/// <reference types="node" />\n${result.contents}` }),
+    ).toEqual([]);
+    const executable = path.join(directory, "caller.mjs");
+    fs.writeFileSync(executable, stripTypeScriptTypes(result.contents));
+    expect((await import(pathToFileURL(executable).href)).result).toEqual([7, false]);
+    expect(transform.residuals).toEqual([]);
+  });
+
   it("emits an executable lexical function and respects a shadowed compiler binding", () => {
     const transform = createStandaloneCodegenTransform({ programs: [program], parse });
     const source = `import { compileFunction as compile } from "node:vm";

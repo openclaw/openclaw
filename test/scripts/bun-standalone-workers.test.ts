@@ -60,6 +60,7 @@ it("routes declared physical worker paths through their embedded bootstrap", () 
     outputRoot,
     runtimeBootstrap: bootstrap,
     workerEntries: ["dist/commands/doctor.worker.js"],
+    sourceWorkerAliases: { "/typed/doctor.worker.ts": "dist/commands/doctor.worker.js" },
   });
   expect(fs.readFileSync(prepared.entrypoints[0]!, "utf8")).toBe(
     `import ${JSON.stringify(bootstrap)};\nawait import(${JSON.stringify(path.join(runtimeRoot, "dist/commands/doctor.worker.js"))});\n`,
@@ -82,6 +83,12 @@ it("routes declared physical worker paths through their embedded bootstrap", () 
   expect(new exported.exports!.Worker(physical).filename.toString()).toBe(
     "file:///$bunfs/root/standalone-workers/dist/commands/doctor.worker.js",
   );
+  expect(new exported.exports!.Worker("/typed/doctor.worker.ts").filename.toString()).toBe(
+    "file:///$bunfs/root/standalone-workers/dist/commands/doctor.worker.js",
+  );
+  expect(() =>
+    prepared.updateSourceWorkerAliases({ "/typed/unknown.ts": "dist/unknown.js" }),
+  ).toThrow("Unknown standalone worker alias target");
   expect(
     () => new exported.exports!.Worker(path.join(runtimeRoot, "..", "runtime", "dist/missing.js")),
   ).toThrow("Undeclared standalone worker: dist/missing.js");

@@ -76,12 +76,16 @@ fs.writeFileSync(output, JSON.stringify({aot: args.includes('--aot'), source: fs
   return { root, outputRoot, compileRoot, runtimeRoot, mainEntry, source, compiler };
 }
 
-function compile(input: ReturnType<typeof fixture>) {
+function compile(
+  input: ReturnType<typeof fixture>,
+  compileAot?: Parameters<typeof compileStandaloneArtifacts>[0]["compileAot"],
+  support = true,
+) {
   return compileStandaloneArtifacts({
     runtimeRoot: input.runtimeRoot,
     outputRoot: input.outputRoot,
     destination: path.join(input.root, "aot"),
-    supportDestination: path.join(input.root, "support"),
+    ...(support ? { supportDestination: path.join(input.root, "support") } : {}),
     mode: "aot",
     compileFlags: ["--aot"],
     compileRoot: input.compileRoot,
@@ -97,15 +101,38 @@ function compile(input: ReturnType<typeof fixture>) {
     nativeModules: [],
     sqlite: { path: "lib/test-sqlite.dylib" },
     buildId: "matched-build",
+    ...(compileAot ? { compileAot } : {}),
   });
 }
 
 describe("matched standalone support artifacts", () => {
   it.skipIf(process.platform === "win32")(
+    "runs original-source AOT through the shared build owner",
+    async () => {
+      const input = fixture();
+      const seen: object[] = [];
+      const artifacts = await compile(
+        input,
+        async ({ outfile, buildInfo }) => {
+          seen.push(buildInfo);
+          fs.writeFileSync(outfile, JSON.stringify(buildInfo));
+        },
+        false,
+      );
+      expect(seen).toHaveLength(1);
+      expect(artifacts.map(({ mode }) => mode)).toEqual(["aot"]);
+      const aot = JSON.parse(fs.readFileSync(path.join(input.outputRoot, "openclaw"), "utf8"));
+      expect(aot.mode).toBe("aot");
+      expect(aot.build.id).toBe("matched-build");
+      expect(aot.build.moduleGraphSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
+    },
+  );
+  it.skipIf(process.platform === "win32")(
     "publishes matching provenance, resources and debugger sources with distinct compilation modes",
     async () => {
       const input = fixture();
-      const artifacts = compile(input);
+      const artifacts = await compile(input);
       expect(fs.existsSync(path.join(input.root, "aot"))).toBe(false);
       expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
       for (const name of [
@@ -241,9 +268,9 @@ describe("matched standalone support artifacts", () => {
 
   it.skipIf(process.platform === "win32")(
     "does not publish either destination when companion compilation fails",
-    () => {
+    async () => {
       const input = fixture(true);
-      expect(() => compile(input)).toThrow("support compilation failed (42)");
+      await expect(compile(input)).rejects.toThrow("support compilation failed (42)");
       expect(fs.existsSync(path.join(input.root, "aot"))).toBe(false);
       expect(fs.existsSync(path.join(input.root, "support"))).toBe(false);
       expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);

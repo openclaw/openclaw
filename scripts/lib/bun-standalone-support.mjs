@@ -168,10 +168,11 @@ function stageSupportRuntime({ runtimeRoot, outputRoot, bunExecutable, omittedDi
  * @param {{runtimeRoot: string, outputRoot: string, destination: string, supportDestination?: string, mode: BuildInfo["mode"], compileFlags: string[],
  * compileRoot: string, compileCwd: string, mainEntry: string, compiledEntries: string[], compileEntries: Set<string>, external: string[],
  * bunExecutable: string, bun: BuildInfo["bun"], openclaw: BuildInfo["openclaw"], plugins: NonNullable<BuildInfo["plugins"]> & {omittedDirs: string[]},
- * nativeModules: NativeModules, sqlite: {path?: string}, buildId: string}} options
- * @returns {CompiledArtifact[]}
+ * nativeModules: NativeModules, sqlite: {path?: string}, buildId: string,
+ * compileAot?: (options: {outfile: string, buildInfo: object}) => Promise<void>}} options
+ * @returns {Promise<CompiledArtifact[]>}
  */
-export function compileStandaloneArtifacts({
+export async function compileStandaloneArtifacts({
   runtimeRoot,
   outputRoot,
   destination,
@@ -191,6 +192,7 @@ export function compileStandaloneArtifacts({
   nativeModules,
   sqlite,
   buildId,
+  compileAot,
 }) {
   const provenance = {
     id: buildId,
@@ -240,32 +242,36 @@ export function compileStandaloneArtifacts({
     };
     const restoreStamp = stampStandaloneBuild(compiledEntries, buildInfo);
     try {
-      const compiled = spawnSync(
-        bunExecutable,
-        [
-          "build",
-          "--compile",
-          "--splitting",
-          "--format=esm",
-          `--root=${compileRoot}`,
-          "--compile-autoload-package-json",
-          "--no-compile-autoload-dotenv",
-          "--no-compile-autoload-bunfig",
-          ...artifact.compileFlags,
-          ...external.map((specifier) => `--external=${specifier}`),
-          path.relative(compileCwd, mainEntry),
-          ...compiledEntries
-            .filter((entry) => entry !== mainEntry && compileEntries.has(entry))
-            .map((entry) => path.relative(compileCwd, entry)),
-          `--outfile=${path.join(artifact.outputRoot, "openclaw")}`,
-        ],
-        { stdio: "inherit", cwd: compileCwd },
-      );
-      if (compiled.error) {
-        throw compiled.error;
-      }
-      if (compiled.status !== 0) {
-        throw new Error(`Standalone ${artifact.flavor} compilation failed (${compiled.status})`);
+      if (artifact.mode === "aot" && compileAot) {
+        await compileAot({ outfile: path.join(artifact.outputRoot, "openclaw"), buildInfo });
+      } else {
+        const compiled = spawnSync(
+          bunExecutable,
+          [
+            "build",
+            "--compile",
+            "--splitting",
+            "--format=esm",
+            `--root=${compileRoot}`,
+            "--compile-autoload-package-json",
+            "--no-compile-autoload-dotenv",
+            "--no-compile-autoload-bunfig",
+            ...artifact.compileFlags,
+            ...external.map((specifier) => `--external=${specifier}`),
+            path.relative(compileCwd, mainEntry),
+            ...compiledEntries
+              .filter((entry) => entry !== mainEntry && compileEntries.has(entry))
+              .map((entry) => path.relative(compileCwd, entry)),
+            `--outfile=${path.join(artifact.outputRoot, "openclaw")}`,
+          ],
+          { stdio: "inherit", cwd: compileCwd },
+        );
+        if (compiled.error) {
+          throw compiled.error;
+        }
+        if (compiled.status !== 0) {
+          throw new Error(`Standalone ${artifact.flavor} compilation failed (${compiled.status})`);
+        }
       }
       if (artifact.flavor === "support") {
         const bootstrap = `import { fileURLToPath } from "node:url";
