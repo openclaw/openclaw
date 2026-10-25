@@ -1,6 +1,7 @@
 import { assert, beforeEach, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,

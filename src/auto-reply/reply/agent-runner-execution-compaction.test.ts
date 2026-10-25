@@ -85,7 +85,7 @@ describe("executeAgentTurn: compaction events", () => {
       text: expect.stringContaining("/new or a larger model"),
     });
   });
-  it("logs Codex app-server compaction completion while notices stay silent by default", async () => {
+  it("keeps compaction notices silent by default", async () => {
     const onBlockReply = vi.fn();
     mockCompaction({ backend: "codex-app-server" }, { backend: "codex-app-server" });
     expect((await executeTestTurn({ opts: { onBlockReply } })).kind).toBe("success");
