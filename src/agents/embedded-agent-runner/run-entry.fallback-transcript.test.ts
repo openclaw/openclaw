@@ -39,6 +39,8 @@ vi.mock("../harness/selection.js", () => ({
 describe("run entry durable fallback notices", () => {
   const files = useTempSessionsFixture("fallback-transcript-");
   afterEach(() => {
+    // These cases share one session id and deliberately leave rate-limit stickiness behind.
+    resetStickyRateLimitFallbacksForTest();
     clearRuntimeConfigSnapshot();
     vi.restoreAllMocks();
   });
