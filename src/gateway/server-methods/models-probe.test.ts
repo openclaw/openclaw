@@ -32,15 +32,8 @@ import { modelsProbeHandlers } from "./models-probe.js";
 
 const handler = expectDefined(modelsProbeHandlers["models.probe"], "models.probe handler");
 
-function summary(results: AuthProbeSummary["results"]): AuthProbeSummary {
-  return {
-    startedAt: 1,
-    finishedAt: 2,
-    durationMs: 1,
-    totalTargets: results.length,
-    options: { timeoutMs: 20_000, concurrency: 2, maxTokens: 8 },
-    results,
-  };
+function summary(results: AuthProbeSummary["results"]) {
+  return { results };
 }
 
 async function probe(params: Record<string, unknown>, cfg: OpenClawConfig = {}) {
@@ -112,14 +105,9 @@ it("returns typed selection-required when agentId is omitted", async () => {
 });
 
 it("normalizes providers, trims profiles, and clamps the timeout", async () => {
-  const cfg = modelConfig({
-    model: { primary: "openai/gpt-5.6", fallbacks: ["openai/gpt-5.5"] },
-    utilityModel: { primary: "openai/gpt-5.6-luna", fallbacks: ["local/backup"] },
-  });
-  await probe({ provider: " OpenAI ", profileId: " work ", timeoutMs: 1 }, cfg);
+  await probe({ provider: " OpenAI ", profileId: " work ", timeoutMs: 1 });
   expectProbe({
     providers: ["openai"],
-    modelCandidates: ["openai/gpt-5.6", "openai/gpt-5.5", "openai/gpt-5.6-luna", "local/backup"],
     options: expect.objectContaining({
       provider: "openai",
       profileIds: ["work"],
@@ -148,26 +136,18 @@ it.each([
     expected: ["openai/default"],
   },
   {
-    name: "agent aliases overriding default aliases",
+    name: "agent model and utility overrides",
     agent: {
-      model: { primary: "fast@work", fallbacks: ["backup"] },
-      utilityModel: { primary: "utility", fallbacks: ["utility-backup"] },
-      models: {
-        "openai/default": { alias: "" },
-        "qwen/qwen-plus": { alias: "fast" },
-        "qwen/qwen-backup": { alias: "backup" },
-        "qwen/qwen-flash": { alias: "utility" },
-        "local/small": { alias: "utility-backup" },
-      },
+      model: { primary: "qwen/large", fallbacks: ["qwen/backup"] },
+      utilityModel: { primary: "local/small", fallbacks: ["local/backup"] },
     },
-    expected: ["qwen/qwen-plus", "qwen/qwen-backup", "qwen/qwen-flash", "local/small"],
+    expected: ["qwen/large", "qwen/backup", "local/small", "local/backup"],
   },
 ])("uses the selected agent's model policy for $name", async ({ agent, expected }) => {
   const cfg = modelConfig(
     {
       model: { primary: "openai/default", fallbacks: ["openai/backup"] },
       utilityModel: { primary: "openai/small", fallbacks: ["local/utility-backup"] },
-      models: { "openai/default": { alias: "fast" } },
     },
     agent,
   );

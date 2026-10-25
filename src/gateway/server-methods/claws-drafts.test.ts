@@ -5,15 +5,9 @@ import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { stringify } from "yaml";
 import { validateClawDraftDocument } from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  clawDraftRevision,
-  createClawDraft,
-  MAX_CLAW_DRAFT_BYTES,
-  prepareClawDraft,
-} from "../../claws/draft.js";
+import { clawDraftRevision, createClawDraft, MAX_CLAW_DRAFT_BYTES } from "../../claws/draft.js";
 import { extractBuiltClawArtifact } from "../../claws/project-build.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -129,7 +123,7 @@ async function reviewDraft(
     assert(isRecord(file) && typeof file.path === "string" && typeof file.content === "string");
     return { path: file.path, content: file.content };
   });
-  return { reviewToken: payload.reviewToken, name: payload.name, files };
+  return { reviewToken: payload.reviewToken, name: payload.name, files, items: payload.items };
 }
 
 const proposal = {
@@ -219,32 +213,28 @@ describe("Claw draft reviewed publication", () => {
   it("publishes exactly the reviewed selections under the personal publisher", async () => {
     const fixture = await publicationFixture("@maker/public-researcher");
     const { workspaceDir, draft, uploads } = fixture;
-    const manifest = {
-      schemaVersion: 1,
-      agent: { id: "research-brief", description: "Original agent description" },
-      workspace: {
-        bootstrapFiles: { "AGENTS.md": { source: "workspace/AGENTS.md" } },
-        files: [{ source: "workspace/checklist.md", path: "checklist.md" }],
-      },
-      packages: [
-        { kind: "skill", source: "clawhub", ref: "@maker/sources", version: "1.2.3" },
-        { kind: "plugin", source: "clawhub", ref: "@maker/github", version: "2.0.0" },
-      ],
-      mcpServers: { research: { command: "research-mcp" } },
-      cronJobs: [
-        {
-          id: "weekly-recap",
-          schedule: { cron: "0 9 * * 1", timezone: "UTC" },
-          session: "isolated",
-          message: "Recap research.",
-        },
-      ],
-    };
     await writeFile(
       draft.path,
       JSON.stringify({
         ...proposal,
-        manifest: `---\n${stringify(manifest)}---\nResearch public sources.\n`,
+        manifest: `---
+schemaVersion: 1
+agent: { id: research-brief, description: Original agent description }
+workspace:
+  bootstrapFiles: { AGENTS.md: { source: workspace/AGENTS.md } }
+  files: [{ source: workspace/checklist.md, path: checklist.md }]
+packages:
+  - { kind: skill, source: clawhub, ref: "@maker/sources", version: 1.2.3 }
+  - { kind: plugin, source: clawhub, ref: "@maker/github", version: 2.0.0 }
+mcpServers: { research: { command: research-mcp } }
+cronJobs:
+  - id: weekly-recap
+    schedule: { cron: "0 9 * * 1", timezone: UTC }
+    session: isolated
+    message: Recap research.
+---
+Research public sources.
+`,
         files: [
           { path: "workspace/AGENTS.md", content: "Keep citations." },
           { path: "workspace/checklist.md", content: "Check dates." },
@@ -262,26 +252,20 @@ describe("Claw draft reviewed publication", () => {
         "cron:weekly-recap",
       ],
     };
-    await using selected = await prepareClawDraft({
-      workspaceDir,
-      draftId: draft.draftId,
-      publisher: "maker",
-      choices,
-    });
-    expect(selected.files.map((file) => file.path)).toEqual([
+    const review = await fixture.review({ choices });
+    expect(review.files.map((file) => file.path)).toEqual([
       "CLAW.md",
       "package.json",
       "workspace/AGENTS.md",
     ]);
-    expect(selected.items.filter((item) => item.included).map((item) => item.id)).toEqual([
-      "file:workspace/AGENTS.md",
+    expect(review.items).toEqual([
+      expect.objectContaining({ id: "file:workspace/AGENTS.md", included: true }),
+      ...choices.excluded.map((id) => expect.objectContaining({ id, included: false })),
     ]);
-    const claw = selected.files.find((file) => file.path === "CLAW.md")!.content;
+    const claw = review.files.find((file) => file.path === "CLAW.md")!.content;
     expect(claw).toContain("description: Researches public sources for a new user.");
     expect(claw).not.toMatch(/checklist|@maker\/sources|@maker\/github|research-mcp|weekly-recap/);
 
-    const review = await fixture.review({ choices });
-    expect(review.files).toEqual(selected.files);
     const rejected = await fixture.publish(review.reviewToken, {
       choices: { ...choices, excluded: [] },
     });

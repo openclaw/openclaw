@@ -12,8 +12,8 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createRequestGate } from "../server-methods.request-gate.test-support.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
@@ -182,12 +182,8 @@ it.each(["commands.list", "skills.status"] as const)(
             }),
           };
         }
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        discovery.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-        });
+        using gate = createRequestGate();
+        discovery.mockImplementationOnce(gate.pause);
         const invalidateMembership = () => {
           const target = projection.sharingTarget({ key: sessionKey, agentId: "main" })!;
           sessionChanges.emit({ all: true, scope: "stores" });
@@ -204,54 +200,55 @@ it.each(["commands.list", "skills.status"] as const)(
           }
           return change !== "request" || !revoked;
         });
-        try {
-          await awaitGateBeforeSettlement(
-            entered.promise,
+        await gate.during(
+          awaitGateBeforeSettlement(
+            gate.entered,
             pending,
             `${method}: ${change} did not reach discovery`,
-          );
-          revoked = true;
-          const changes: Partial<Record<typeof change, () => void>> = {
-            member: () => removeSessionMember(scope, "alice"),
-            dirty: invalidateMembership,
-            "callback-dirty": () => {
-              dirtyOnCheck = true;
-            },
-            profile: () => {
-              client.authenticatedUserProfile!.profileId = "bob";
-            },
-            projection: () => {
-              bindSessionRowProjection(context, () => undefined);
-            },
-            route: () => setConfig({ ...cfg, session: { mainKey: "replacement" } }),
-            policy: () =>
-              setConfig({
-                ...cfg,
-                gateway: {
-                  roles: {
-                    default: "blocked",
-                    definitions: {
-                      blocked: {
-                        sessions: { others: "none" },
-                        agents: "*",
-                        scopes: ["operator.read", "operator.write"],
+          ),
+          () => {
+            revoked = true;
+            const changes: Partial<Record<typeof change, () => void>> = {
+              member: () => removeSessionMember(scope, "alice"),
+              dirty: invalidateMembership,
+              "callback-dirty": () => {
+                dirtyOnCheck = true;
+              },
+              profile: () => {
+                client.authenticatedUserProfile!.profileId = "bob";
+              },
+              projection: () => {
+                bindSessionRowProjection(context, () => undefined);
+              },
+              route: () => setConfig({ ...cfg, session: { mainKey: "replacement" } }),
+              policy: () =>
+                setConfig({
+                  ...cfg,
+                  gateway: {
+                    roles: {
+                      default: "blocked",
+                      definitions: {
+                        blocked: {
+                          sessions: { others: "none" },
+                          agents: "*",
+                          scopes: ["operator.read", "operator.write"],
+                        },
                       },
                     },
                   },
-                },
-              }),
-            session: () => {
-              replaceSessionEntrySync(scope, {
-                ...sessionEntry,
-                sessionId: "replacement",
-                updatedAt: 2,
-              });
-            },
-          };
-          changes[change]?.();
-        } finally {
-          release.resolve();
-        }
+                }),
+              session: () => {
+                replaceSessionEntrySync(scope, {
+                  ...sessionEntry,
+                  sessionId: "replacement",
+                  updatedAt: 2,
+                });
+              },
+            };
+            changes[change]?.();
+          },
+          pending,
+        );
         expect(await pending, change).toMatchObject([false, undefined, expect.any(Object)]);
       }
     });
@@ -267,10 +264,9 @@ it("uses captured display selections and observes a committed change on the next
         ],
       });
     await select("first");
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
+    using gate = createRequestGate();
     const responses: Parameters<RespondFn>[] = [];
-    const discoverSelections = (ready = Promise.resolve()) =>
+    const discoverSelections = () =>
       withSessionDiscoveryAccess(
         {
           client: participant(),
@@ -281,23 +277,16 @@ it("uses captured display selections and observes a committed change on the next
           respond: (...response) => responses.push(response),
         },
         async (entry) => {
-          entered.resolve();
-          await ready;
+          await gate.pause();
           return entry?.skillLibrarySelections?.map(({ revision }) => revision);
         },
       );
-    const pending = discoverSelections(release.promise);
-    try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        pending,
-        "selection discovery did not start",
-      );
-      await select("second");
-    } finally {
-      release.resolve();
-    }
-    await pending;
+    const pending = discoverSelections();
+    await gate.during(
+      awaitGateBeforeSettlement(gate.entered, pending, "selection discovery did not start"),
+      () => select("second"),
+      pending,
+    );
     await discoverSelections();
     expect(responses).toEqual([
       [true, ["first"], undefined],
@@ -310,12 +299,10 @@ it.each(["ready", "rejected", "replaced"] as const)(
   "keeps the original target across membership preparation (%s)",
   async (outcome) => {
     await withDiscoveryState(async ({ call, projection }) => {
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      using gate = createRequestGate();
       const prepare = projection.prepareMembership.bind(projection);
       vi.spyOn(projection, "prepareMembership").mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
+        await gate.pause();
         if (outcome === "rejected") {
           throw new Error("membership unavailable");
         }
@@ -324,23 +311,24 @@ it.each(["ready", "rejected", "replaced"] as const)(
       sessionChanges.emit({ agentId: "main", sessionKey, factsInvalidated: "category" });
       discovery.mockClear();
       const pending = call("commands.list");
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
+      await gate.during(
+        awaitGateBeforeSettlement(
+          gate.entered,
           pending,
           "discovery skipped membership preparation",
-        );
-        expect(discovery).not.toHaveBeenCalled();
-        if (outcome === "replaced") {
-          replaceSessionEntrySync(scope, {
-            sessionId: "replacement",
-            updatedAt: 2,
-            visibility: "shared",
-          });
-        }
-      } finally {
-        release.resolve();
-      }
+        ),
+        () => {
+          expect(discovery).not.toHaveBeenCalled();
+          if (outcome === "replaced") {
+            replaceSessionEntrySync(scope, {
+              sessionId: "replacement",
+              updatedAt: 2,
+              visibility: "shared",
+            });
+          }
+        },
+        pending,
+      );
       expect((await pending)[0]).toBe(outcome === "ready");
       if (outcome !== "ready") {
         expect(discovery).not.toHaveBeenCalled();
