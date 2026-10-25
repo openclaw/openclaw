@@ -44,6 +44,13 @@ const add = (text: string, author = client("alice", "Alice")) =>
 const addSuggestion = async (text: string, author = client("alice", "Alice")) =>
   responseSuggestionId(await add(text, author));
 
+async function seedClaim(env: Parameters<typeof openOpenClawAgentDatabase>[0]["env"], id: string) {
+  await seedSession();
+  const scope = { agentId: "main", sessionKey, env };
+  await addSessionSuggestion(scope, { id, authorId: "owner", text: "synthetic suggestion" });
+  return { scope, database: openOpenClawAgentDatabase(scope) };
+}
+
 function resolveSuggestion(
   id: string,
   resolution: "send" | "queue" | "edit" | "dismiss",
@@ -94,14 +101,7 @@ it.each([
   ["dismiss", "host closed"],
 ] as const)("releases the %s claim after %s before finalization", (resolution, change) =>
   withState(async (state) => {
-    await seedSession();
-    const scope = { agentId: "main", sessionKey, env: state.env };
-    await addSessionSuggestion(scope, {
-      id: "revoke-before-finalize",
-      authorId: "owner",
-      text: "synthetic suggestion",
-    });
-    const database = openOpenClawAgentDatabase(scope);
+    const { database } = await seedClaim(state.env, "revoke-before-finalize");
     const requestAbort = new AbortController();
     let revoked = false;
     mocks.afterSuggestionClaim.mockImplementationOnce(() => {
@@ -154,14 +154,7 @@ it.each([
 
 it("settles an accepted dispatch after caller revocation while its write waits", () =>
   withState(async (state) => {
-    await seedSession();
-    const scope = { agentId: "main", sessionKey, env: state.env };
-    await addSessionSuggestion(scope, {
-      id: "settle-accepted-send",
-      authorId: "owner",
-      text: "synthetic suggestion",
-    });
-    const database = openOpenClawAgentDatabase(scope);
+    const { scope, database } = await seedClaim(state.env, "settle-accepted-send");
     const entered = createDeferred();
     const accepted = createDeferred();
     const release = createDeferred();
