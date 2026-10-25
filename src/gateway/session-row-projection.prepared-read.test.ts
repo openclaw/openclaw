@@ -1,4 +1,3 @@
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
@@ -499,25 +498,15 @@ it("consumes an incognito repository description without SQLite or resident priv
     const prepared = vi
       .spyOn(projection, "withPreparedExactRows")
       .mockImplementation((queries, consume) => {
-        const statements = [
-          vi.spyOn(DatabaseSync.prototype, "exec"),
-          ...(["all", "get", "iterate", "run"] as const).map((method) =>
-            vi.spyOn(StatementSync.prototype, method),
-          ),
-        ];
         return prepare(queries, (read) => {
           retained = read;
-          for (const statement of statements) {
-            statement.mockClear();
-          }
-          const result = consume(read);
-          for (const statement of statements) {
-            expect(statement).not.toHaveBeenCalled();
-          }
-          return result;
-        }).finally(() => {
-          for (const statement of statements) {
-            statement.mockRestore();
+          const sql = observeHostDataSql();
+          try {
+            const result = consume(read);
+            expect(sql.queries).toEqual([]);
+            return result;
+          } finally {
+            sql.restore();
           }
         });
       });

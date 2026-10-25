@@ -561,17 +561,13 @@ describe("control UI session PR subscriptions", () => {
 
   it("propagates rate-limit and failure states per key", async () => {
     vi.useFakeTimers();
+    const repository = { owner: "openclaw", repo: "openclaw" };
     load.mockImplementation(async ({ sessionKey }) => {
       if (sessionKey === "limited") {
-        return { pullRequests: [], rateLimited: true };
+        return { ...READY, rateLimited: true };
       }
       if (sessionKey === "repository-only") {
-        return {
-          pullRequests: [],
-          repository: { owner: "openclaw", repo: "openclaw" },
-          rateLimited: false,
-          status: "unavailable",
-        };
+        return { ...READY, repository, status: "unavailable" };
       }
       throw new Error("GitHub unavailable");
     });
@@ -581,16 +577,11 @@ describe("control UI session PR subscriptions", () => {
     expect(broadcastToConnIds).toHaveBeenCalledTimes(3);
     expect(broadcastToConnIds.mock.calls.map((call) => call[1])).toEqual(
       expect.arrayContaining([
-        { sessions: { limited: { pullRequests: [], rateLimited: true, status: "rate-limited" } } },
-        { sessions: { failed: { pullRequests: [], rateLimited: false, status: "unavailable" } } },
+        { sessions: { limited: { ...READY, rateLimited: true, status: "rate-limited" } } },
+        { sessions: { failed: { ...READY, status: "unavailable" } } },
         {
           sessions: {
-            "repository-only": {
-              pullRequests: [],
-              repository: { owner: "openclaw", repo: "openclaw" },
-              rateLimited: false,
-              status: "unavailable",
-            },
+            "repository-only": { ...READY, repository, status: "unavailable" },
           },
         },
       ]),

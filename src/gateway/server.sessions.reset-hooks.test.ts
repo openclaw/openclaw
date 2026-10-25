@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
@@ -150,7 +150,9 @@ async function resetWithBroadcast(key: string, connId: string) {
   return { reset, broadcast };
 }
 
-function createFromMainSession(params: { emitCommandHooks?: boolean; key?: string } = {}) {
+function createFromMainSession(
+  params: { emitCommandHooks?: boolean; key?: string; agentId?: string } = {},
+) {
   return directSessionReq<{ key: string; sessionId: string; runStarted: boolean }>(
     "sessions.create",
     {
@@ -214,15 +216,6 @@ function lifecycleEvents(): [HookEventRecord, HookEventRecord] {
     firstHookCall(sessionLifecycleHookMocks.runSessionEnd)[0],
     firstHookCall(sessionLifecycleHookMocks.runSessionStart)[0],
   ];
-}
-
-async function withMainDmScope(run: () => Promise<void>) {
-  testState.sessionConfig = { dmScope: "main" };
-  try {
-    await run();
-  } finally {
-    testState.sessionConfig = undefined;
-  }
 }
 
 test("sessions.reset removes automatic recovery state from the replacement session", async () => {
@@ -376,42 +369,72 @@ test("sessions.reset of an incognito session broadcasts a delete, not a reset", 
   }
 });
 
-test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
+test.each([
+  { mode: "dashboard parent hooks (#76957)", hooks: true, mainScope: false, explicit: false },
+  { mode: "main-scope reset in place (#77434)", hooks: true, mainScope: true, explicit: false },
+  { mode: "main-scope explicit TUI child", hooks: true, mainScope: true, explicit: true },
+  { mode: "command hooks disabled (#76957)", hooks: false, mainScope: false, explicit: false },
+])("sessions.create preserves $mode", async ({ hooks, mainScope, explicit }) => {
   await createSessionStoreDir();
-  const transcriptPath = await writeStoredSession("sess-parent-hooks", {
-    content: "remember this before new",
+  if (mainScope) {
+    testState.sessionConfig = { dmScope: "main" };
+    onTestFinished(() => {
+      testState.sessionConfig = undefined;
+    });
+  }
+  const parentId = "sess-parent";
+  const content = "remember this before new";
+  const transcriptPath = await writeStoredSession(parentId, { content });
+  beforeResetHookState.hasBeforeResetHook = hooks && !mainScope;
+  const result = await createFromMainSession({
+    ...(hooks ? { emitCommandHooks: true } : {}),
+    ...(explicit ? { key: "tui-explicit", agentId: "main" } : {}),
   });
-
-  beforeResetHookState.hasBeforeResetHook = true;
-
-  expect((await createFromMainSession({ emitCommandHooks: true })).ok).toBe(true);
-
-  expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
-  const [beforeResetEvent, beforeResetContext] = firstHookCall(beforeResetHookMocks.runBeforeReset);
-  expect(beforeResetEvent).toMatchObject({
-    sessionFile: transcriptPath,
-    reason: "new",
-    messages: [{ role: "user", content: "remember this before new" }],
-  });
-  expect(beforeResetContext).toMatchObject({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    sessionId: "sess-parent-hooks",
-  });
-
+  expect(result.ok).toBe(true);
+  if (!hooks) {
+    expectNoCreationHooks();
+    return;
+  }
   const [endEvent, startEvent] = lifecycleEvents();
   expect(endEvent).toMatchObject({
-    sessionId: "sess-parent-hooks",
+    sessionId: parentId,
     sessionKey: "agent:main:main",
     reason: "new",
-    nextSessionId: startEvent.sessionId,
-    nextSessionKey: startEvent.sessionKey,
   });
-  expect(startEvent.resumedFrom).toBe("sess-parent-hooks");
-  expect(startEvent.sessionId).toBeTypeOf("string");
-  expect(startEvent.sessionId).not.toBe("");
-  const key = expectStringValue(startEvent.sessionKey, "created session key");
-  expect(key).toMatch(/^agent:main:dashboard:[\s\S]+$/);
+  if (!mainScope) {
+    expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
+    expect(event).toMatchObject({
+      sessionFile: transcriptPath,
+      reason: "new",
+      messages: [{ role: "user", content }],
+    });
+    expect(context).toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: parentId,
+    });
+    expect(endEvent).toMatchObject({
+      nextSessionId: startEvent.sessionId,
+      nextSessionKey: startEvent.sessionKey,
+    });
+    expect(startEvent.resumedFrom).toBe(parentId);
+    expect(startEvent.sessionId).toEqual(expect.stringMatching(/[\s\S]+/));
+    expect(startEvent.sessionKey).toEqual(expect.stringMatching(/^agent:main:dashboard:[\s\S]+$/));
+  } else if (explicit) {
+    expect(result.payload?.key).toBe("agent:main:tui-explicit");
+    expect(result.payload?.sessionId).not.toBe(parentId);
+    expect(expectSingleCommandHookEvent("new").context?.commandSource).toBe("webchat");
+    expect(endEvent.nextSessionKey).toBe("agent:main:tui-explicit");
+    expect(startEvent.sessionKey).toBe("agent:main:tui-explicit");
+  } else {
+    expect(result.payload).toMatchObject({
+      key: "agent:main:main",
+      runStarted: false,
+      sessionId: parentId,
+    });
+    expect(startEvent).toMatchObject({ sessionKey: "agent:main:main", resumedFrom: parentId });
+  }
 });
 
 test("sessions.create waits for the parent run lifecycle before firing hooks", async () => {
@@ -516,72 +539,6 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     await cleanup();
     pendingHookCleanups.delete(cleanup);
   }
-});
-
-test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
-  await createSessionStoreDir();
-  await withMainDmScope(async () => {
-    await writeStoredSession("sess-parent-dms", {
-      content: "hello before /new",
-    });
-    const result = await createFromMainSession({ emitCommandHooks: true });
-    expect(result.ok).toBe(true);
-    // Reset-in-place: response key matches the parent main key, NOT a dashboard child.
-    expect(result.payload).toMatchObject({
-      key: "agent:main:main",
-      runStarted: false,
-      sessionId: "sess-parent-dms",
-    });
-    const [endEvent, startEvent] = lifecycleEvents();
-    expect(endEvent).toMatchObject({
-      sessionId: "sess-parent-dms",
-      sessionKey: "agent:main:main",
-      reason: "new",
-    });
-    expect(startEvent).toMatchObject({
-      sessionKey: "agent:main:main",
-      resumedFrom: "sess-parent-dms",
-    });
-  });
-});
-
-test("sessions.create keeps an explicit TUI child key when session.dmScope is 'main'", async () => {
-  await createSessionStoreDir();
-  await withMainDmScope(async () => {
-    await writeStoredSession("sess-parent-tui", {
-      content: "hello before TUI /new",
-    });
-
-    const result = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
-      key: "tui-explicit",
-      agentId: "main",
-      parentSessionKey: "main",
-      emitCommandHooks: true,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(result.payload?.key).toBe("agent:main:tui-explicit");
-    expect(result.payload?.sessionId).not.toBe("sess-parent-tui");
-    expect(expectSingleCommandHookEvent("new").context?.commandSource).toBe("webchat");
-    const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
-    const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
-    expect(endEvent).toMatchObject({
-      sessionKey: "agent:main:main",
-      nextSessionKey: "agent:main:tui-explicit",
-    });
-    expect(startEvent.sessionKey).toBe("agent:main:tui-explicit");
-  });
-});
-
-test("sessions.create without emitCommandHooks does not fire command:new hook (#76957)", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-parent2", "hello from parent 2");
-
-  await writeStoredSession("sess-parent2");
-
-  expect((await createFromMainSession()).ok).toBe(true);
-
-  expectNoCreationHooks();
 });
 
 test("sessions.reset clears cli session bindings for parent-linked non-subagent sessions (e.g. dashboard children)", async () => {

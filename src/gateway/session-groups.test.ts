@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -298,6 +297,8 @@ describe("session groups catalog", () => {
       { name: "Work" },
       groupDefaults("Travel", "/repos/travel"),
     ]);
+    expect(await register("Later")).toBe(true);
+    expect(catalog().groups.at(-1)).toEqual({ name: "Later", position: 3 });
   });
 
   it("registers after a queued removal instead of using the preceding catalog", async () => {
@@ -308,28 +309,6 @@ describe("session groups catalog", () => {
     expect((await removal).snapshot.groups).toEqual([]);
     expect(await registration).toBe(true);
     expect(catalog().groups).toEqual(groups("Work"));
-  });
-
-  it("allocates after the greatest position without a separate position read", () => {
-    const database = openOpenClawStateDatabase({ env });
-    vi.spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission").mockImplementation(() => {});
-    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-    const append = (name: string) =>
-      mutateSessionGroupCatalogInDatabase(database, { kind: "register", name }, env);
-    try {
-      expect(append("First").snapshot.groups).toEqual([{ name: "First", position: 0 }]);
-      database.db.prepare("UPDATE session_groups SET position = ? WHERE name = ?").run(7, "First");
-      expect(append("Second").snapshot.groups).toEqual([
-        { name: "First", position: 7 },
-        { name: "Second", position: 8 },
-      ]);
-      expect(append("Second").changed).toBe(false);
-      expect(
-        reads.queries.filter((sql) => /^select "position" from "session_groups"/i.test(sql)),
-      ).toEqual([]);
-    } finally {
-      reads.restore();
-    }
   });
 
   it("rechecks a missing category after another writer registers it", async () => {

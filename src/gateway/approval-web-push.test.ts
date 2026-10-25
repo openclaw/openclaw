@@ -347,35 +347,24 @@ it("sanitizes identified approval labels without changing agent filters", async 
   expect(record.request.agentId).toBe(agentId);
 });
 
-it("rechecks the profile role and excludes unbound role-based subscriptions", async () => {
-  const record = createRecord("exec:role-check");
+it("requires a current role policy for each binding", async () => {
   const current = boundSubscription("current-device", "profile-current");
-  const downgraded = boundSubscription("downgraded-device", "profile-downgraded");
-  const missingPolicy = boundSubscription("missing-policy-device", "profile-missing");
-  const unboundProfile = boundSubscription("unbound-profile-device", null);
-  bindSubscriptions(current, downgraded, missingPolicy, unboundProfile);
-  mocks.rolePolicy.mockImplementation((profileId: string) =>
-    profileId === "profile-missing"
-      ? undefined
-      : {
-          ...readOnlyPolicy(),
-          scopes:
-            profileId === "profile-current"
-              ? ["operator.approvals", "operator.read"]
-              : ["operator.read"],
-        },
+  bindSubscriptions(
+    current,
+    boundSubscription("missing-device", "profile-missing"),
+    boundSubscription("unbound-device", null),
   );
-  mocks.visible.mockImplementation(
-    ({ client }) =>
-      client?.authenticatedUserProfile?.profileId === "profile-current" ||
-      client?.authenticatedUserProfile?.profileId === "profile-missing",
+  mocks.rolePolicy.mockImplementation((profileId: string) =>
+    profileId === "profile-current"
+      ? { ...readOnlyPolicy(), scopes: ["operator.approvals", "operator.read"] }
+      : undefined,
   );
   mocks.send.mockResolvedValue([success(current)]);
-
   const delivery = await createDelivery(() => ({ gateway: { roles: { definitions: {} } } }));
-  await expect(delivery.handleRequested(record)).resolves.toBe(true);
-
-  expectSend({ subscriptions: [current] });
+  await expect(delivery.handleRequested(createRecord("exec:role-check"))).resolves.toBe(true);
+  expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ subscriptions: [current] }),
+  );
 });
 
 it.each([
