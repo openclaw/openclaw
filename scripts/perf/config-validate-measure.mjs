@@ -169,13 +169,13 @@ async function main() {
       process.env = env;
       const { openOpenClawStateDatabase, closeOpenClawStateDatabaseAsync } =
         await import("../../src/state/openclaw-state-db.ts");
-      const { writeConfigMachineState } =
-        await import("../../src/state/config-machine-state-write.ts");
+      const { writeConfigMachineStateAsync } =
+        await import("../../src/state/config-machine-state-async.ts");
       const database = openOpenClawStateDatabase({ env });
       try {
         const padding = "x".repeat(1024 * 1024);
         for (let i = 0; i < payloadMiB; i++) {
-          writeConfigMachineState(`perf.synthetic.${i}`, { padding }, { env });
+          await writeConfigMachineStateAsync(`perf.synthetic.${i}`, { padding }, { env });
         }
         database.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       } finally {
