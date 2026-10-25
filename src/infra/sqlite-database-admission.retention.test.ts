@@ -48,6 +48,7 @@ import {
   withSqliteDatabaseAdmissionExchange as withExchange,
   withSqliteDatabaseWriteScope,
 } from "./sqlite-database-admission.js";
+import { withSqlitePreparedNativeMutation } from "./sqlite-native-observer.js";
 import {
   stageSqliteTransactionState,
   withSqlitePostCommitPublications as postCommit,
@@ -55,7 +56,6 @@ import {
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts as schemaFacts,
-  withSqlitePreparedNativeMutation,
 } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync as transaction } from "./sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "./sqlite-worker-operation-admission.js";

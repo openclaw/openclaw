@@ -4,11 +4,11 @@ import {
   readSqliteDatabasePendingScopedWriteToken,
   withSqliteDatabaseWriteScope,
 } from "./sqlite-database-admission.js";
+import { withSqlitePreparedNativeMutation } from "./sqlite-native-observer.js";
 import {
   stageSqliteTransactionState,
   withSqlitePostCommitPublications,
 } from "./sqlite-post-commit.js";
-import { withSqlitePreparedNativeMutation } from "./sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "./sqlite-schema-facts.test-support.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-error.js";

@@ -265,9 +265,12 @@ export const getSessionEntryWriteQueries = createSqliteQueryCache((database: Eng
       node(parameter, true),
     ),
     terminalNode: !isPostgresSqlConnection(database)
-      ? prepareSqliteTerminalWrite<SessionNodeWriteRow>(database, (parameter) =>
-          node(parameter, false),
-        )
+      ? {
+          database,
+          write: prepareSqliteTerminalWrite<SessionNodeWriteRow>(database, (parameter) =>
+            node(parameter, false),
+          ),
+        }
       : undefined,
     claimWindow: prepareSqliteQuerySync<SessionWindowWriteRow>(database, (parameter) =>
       window(parameter, false),

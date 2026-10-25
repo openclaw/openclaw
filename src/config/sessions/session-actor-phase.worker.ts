@@ -1,11 +1,11 @@
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { retainSqliteDatabaseWriteScopesForPath } from "../../infra/sqlite-database-admission.js";
+import { withSqlitePreparedNativeMutation } from "../../infra/sqlite-native-observer.js";
 import {
   prepareSqliteTransactionCommit,
   stageSqliteTransactionState,
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
-import { withSqlitePreparedNativeMutation } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   deferCapturedSqliteWorkerCommitReceipt,
@@ -159,7 +159,7 @@ export function applyPreparedSessionActorAdoption({
     try {
       withSqlitePostCommitPublications(database.db, () =>
         withSqlitePreparedNativeMutation(
-          database.db,
+          prepared.database,
           () => {
             const release = retainSqliteDatabaseWriteScopesForPath(database.path, writeScopes);
             if (release) {

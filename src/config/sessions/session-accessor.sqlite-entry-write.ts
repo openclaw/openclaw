@@ -569,15 +569,12 @@ export function prepareSessionActorEntryWrite(
   database: OpenClawAgentDatabase,
   state: SessionActorStoredState,
   next: SessionEntry,
-):
-  | { kind: "unchanged" }
-  | { kind: "requires-transaction" }
-  | { kind: "single-node"; publish(): SessionEntry; write(): void } {
+) {
   const sessionKey = state.hot.target.sessionKey;
   const previous = state.hot.entry;
   const selected = state.entryRows.get(sessionKey);
   if (!previous || !selected || !state.window || state.window.session_id !== previous.sessionId) {
-    return { kind: "requires-transaction" };
+    return { kind: "requires-transaction" as const };
   }
   const prepared = prepareSessionEntryWrite(
     database,
@@ -592,24 +589,25 @@ export function prepareSessionActorEntryWrite(
     state,
   );
   if (!prepared) {
-    return { kind: "requires-transaction" };
+    return { kind: "requires-transaction" as const };
   }
   if (!prepared.node) {
-    return { kind: "unchanged" };
+    return { kind: "unchanged" as const };
   }
   const node = prepared.node;
-  const write = getSessionEntryWriteQueries(database.db).terminalNode;
-  if (!write) {
-    return { kind: "requires-transaction" };
+  const terminal = getSessionEntryWriteQueries(database.db).terminalNode;
+  if (!terminal) {
+    return { kind: "requires-transaction" as const };
   }
   return {
-    kind: "single-node",
+    kind: "single-node" as const,
+    database: terminal.database,
     publish: () => prepared.publish(undefined),
     write: () =>
       withSqliteDatabaseWriteScope(
         database.db,
         [sessionKey, sqliteSessionIdWriteScope(previous.sessionId)],
-        () => write(node),
+        () => terminal.write(node),
       ),
   };
 }

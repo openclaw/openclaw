@@ -45,6 +45,7 @@ it.each(["commit", "preparation", "abort"] as const)(
           sessionId: f.scope.sessionId,
           expectedState: buildRestartRecoveryExpectedState(initial.entry!),
           runId: "next-run",
+          lifecycle: {},
         },
       };
       await f.prepare(command);

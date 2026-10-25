@@ -48,7 +48,6 @@ import {
 } from "./sqlite-temp-generation-schema.js";
 
 export type { SqliteSchemaFacts } from "./sqlite-schema-admission.js";
-export { withSqlitePreparedNativeMutation } from "./sqlite-native-observer.js";
 export type {
   SqliteReadOperationRevision,
   SqliteReadScopeRevision,

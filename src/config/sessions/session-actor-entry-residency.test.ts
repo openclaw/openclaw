@@ -910,6 +910,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
         sessionId: f.scope.sessionId,
         expectedState: buildRestartRecoveryExpectedState(initial.entry!),
         runId: "oversized-run",
+        lifecycle: {},
         reducers: [
           { kind: "activity", updatedAt: 2 },
           { kind: "goal-continuation", goalId: initial.entry!.goal!.id },
