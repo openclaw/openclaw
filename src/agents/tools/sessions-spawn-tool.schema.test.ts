@@ -2,6 +2,11 @@ import "./sessions-spawn-tool.mocks.test-support.js";
 import { expect, it } from "vitest";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
+it("stays directly callable when tool search compacts the catalog", () => {
+  const tool = createSessionsSpawnTool({ config: {}, agentSessionKey: "agent:main:main" });
+  expect(tool.catalogMode).toBe("direct-only");
+});
+
 it("explains cwd-relative file-tool containment for external workspace edits", () => {
   const tool = createSessionsSpawnTool({ config: {}, agentSessionKey: "agent:main:main" });
   expect(tool.parameters).toMatchObject({

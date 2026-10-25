@@ -80,6 +80,7 @@ import {
 } from "./sessions-placement-tool-contract.js";
 import { describeSessionsSpawnAgentId } from "./sessions-spawn-agent-id.js";
 import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
+import { sessionsSpawnToolIdentity } from "./sessions-spawn-tool.identity.js";
 import { maybeSpawnVisibleSession } from "./sessions-spawn-visible.js";
 import { SESSIONS_SPAWN_SESSION_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
@@ -365,8 +366,7 @@ export function createSessionsSpawnTool(
         swarmEnabled: swarmConfig.enabled,
       });
   const tool: AnyAgentTool = {
-    label: "Sessions",
-    name: "sessions_spawn",
+    ...sessionsSpawnToolIdentity,
     displaySummary: acpAvailable
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
