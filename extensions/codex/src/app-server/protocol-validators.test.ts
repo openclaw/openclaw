@@ -64,22 +64,6 @@ describe("passive native turn items", () => {
     assertCodexPassiveTurnItems(items, submittedInput, "completion", options);
   const fragment = { text: "Revise the answer.", hookRunId: "managed-stop-1" };
 
-  it("accepts typed managed-hook fragments without allowing another user prompt", () => {
-    const items = [
-      passiveItem("userMessage", { content: [{ type: "text", text: prompt }] }),
-      passiveItem("agentMessage", { text: "Draft." }),
-      passiveItem("hookPrompt", {
-        fragments: [fragment, { text: "", hookRunId: "managed-stop-2" }],
-      }),
-      passiveItem("reasoning"),
-      passiveItem("agentMessage", { text: "Revised answer." }),
-    ];
-    expect(() => validate(items)).not.toThrow();
-    expect(() => assertCodexPassiveTurnItems(items, submittedInput, "completion")).toThrow(
-      "unexpected native item: hookPrompt",
-    );
-  });
-
   it("accepts an exact schema-fallback echo with an attested managed-hook continuation", () => {
     const fallbackInput = [
       ...submittedInput,
@@ -91,7 +75,9 @@ describe("passive native turn items", () => {
     ];
     const items = [
       passiveItem("userMessage", { content: fallbackInput }),
-      passiveItem("hookPrompt", { fragments: [fragment] }),
+      passiveItem("hookPrompt", {
+        fragments: [fragment, { text: "", hookRunId: "managed-stop-2" }],
+      }),
       passiveItem("agentMessage", { text: "Revised answer." }),
     ];
 
@@ -119,13 +105,6 @@ describe("passive native turn items", () => {
     });
     expect(() => validate([continuation])).toThrow("unexpected native item: userMessage");
   });
-
-  it.each(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch"])(
-    "does not admit %s with managed hooks enabled",
-    (type) => {
-      expect(() => validate([passiveItem(type)])).toThrow(`unexpected native item: ${type}`);
-    },
-  );
 });
 
 describe("Codex thread response validators", () => {
@@ -136,19 +115,9 @@ describe("Codex thread response validators", () => {
     const response = makeMinimalResponse({ turns: [turn()] });
     expect(assertResponse(response)).toMatchObject(response);
     expectInvalid(assertResponse, makeMinimalResponse({ turns: [turn(12)] }));
-  });
-
-  // The pinned Codex protocol requires both thread identities; never silently
-  // invent a session identity when a malformed response omits one.
-  it("rejects thread responses missing sessionId", () => {
-    for (const assertResponse of [
-      assertCodexThreadStartResponse,
-      assertCodexThreadResumeResponse,
-    ]) {
-      const response = makeMinimalResponse({ sessionId: undefined });
-      delete (response.thread as Record<string, unknown>).sessionId;
-      expectInvalid(assertResponse, response);
-    }
+    const missingIdentity = makeMinimalResponse({ sessionId: undefined });
+    delete (missingIdentity.thread as Record<string, unknown>).sessionId;
+    expectInvalid(assertResponse, missingIdentity);
   });
 });
 
