@@ -9,6 +9,10 @@ import {
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { registerApprovalsEnglish } from "../i18n/locales/en-approvals.ts";
 import { formatCountdown } from "../lib/format.ts";
+import {
+  KEYBOARD_SHORTCUT_COMBOS,
+  type KeyboardShortcutCombo,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
@@ -26,6 +30,8 @@ import {
 } from "./exec-approval-content.tsx";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
+import { KeyboardShortcut } from "./solid/kbd.tsx";
+import "./kbd.css";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
@@ -124,6 +130,14 @@ function approvalDecisionLabel(decision: ExecApprovalDecision, approval: ExecApp
 
 function decisionClass(decision: ExecApprovalDecision) {
   return decision === "allow-once" ? "btn primary" : decision === "deny" ? "btn danger" : "btn";
+}
+
+function approvalShortcutCombo(decision: ExecApprovalDecision): KeyboardShortcutCombo {
+  return decision === "allow-once"
+    ? KEYBOARD_SHORTCUT_COMBOS.modifiedEnter
+    : decision === "allow-always"
+      ? KEYBOARD_SHORTCUT_COMBOS.approveAlways
+      : KEYBOARD_SHORTCUT_COMBOS.denyApproval;
 }
 
 function decisionShortcut(decision: ExecApprovalDecision) {
@@ -314,34 +328,33 @@ function ExecApprovalCardContent(
   const agentId = () => (props.variant === "modal" ? active().request.agentId?.trim() : null);
   const commandAgent = () =>
     active().kind === "exec" ? active().request.agentId?.trim() : undefined;
-  const title = () => {
-    const agent = commandAgent();
-    if (!agent) {
-      return mobile() && !active().request.streamProposal
-        ? t("execApproval.runCommand")
-        : approvalTitle(active());
-    }
-    const proposal = active().request.streamProposal;
-    return proposal
-      ? t(
-          proposal.operation === "add"
-            ? "execApproval.agentStartWatcher"
-            : "execApproval.agentChangeWatcher",
-          { agent, name: proposal.name },
-        )
-      : t("execApproval.agentRunCommand", { agent });
-  };
+  const shortcuts = () =>
+    props.variant === "modal" && (active().kind !== "exec" || props.onDecisionReady !== undefined);
   const sourceSession = () => props.variant === "inline" && active().sourceSessionKey;
   const content = () => (
     <>
       <div class="exec-approval-header">
-        <Show when={active().kind === "exec"}>
-          <span class="exec-approval-agent" aria-hidden="true">
-            {commandAgent()?.slice(0, 1).toUpperCase() ?? <Icon name="terminal" />}
-          </span>
-        </Show>
         <div class="exec-approval-heading">
-          <div class="exec-approval-title">{title()}</div>
+          <div class="exec-approval-title">
+            <Show when={active().kind === "exec"} fallback={approvalTitle(active())}>
+              <Show when={commandAgent()}>
+                {(agent) => (
+                  <>
+                    <span class="exec-approval-identity">
+                      <span class="exec-approval-agent" aria-hidden="true">
+                        {agent().slice(0, 1).toUpperCase()}
+                      </span>
+                      <span class="exec-approval-agent-name">{agent()}</span>
+                    </span>{" "}
+                  </>
+                )}
+              </Show>
+              <span class="exec-approval-request">
+                <Icon name="terminal" />
+                <span>{approvalTitle(active())}</span>
+              </span>
+            </Show>
+          </div>
           {active().kind !== "exec" && (pluginId() || agentId()) ? (
             <div class="exec-approval-chips">
               {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
@@ -380,11 +393,6 @@ function ExecApprovalCardContent(
               role="timer"
               expiresAtMs={active().expiresAtMs}
             />
-            {(props.queueCount ?? 0) > 1 ? (
-              <div class="exec-approval-queue">
-                {t("execApproval.pending", { count: String(props.queueCount) })}
-              </div>
-            ) : undefined}
           </div>
         </Show>
       </div>
@@ -405,13 +413,7 @@ function ExecApprovalCardContent(
         {(_requestId) => (
           <Show
             when={mobile()}
-            fallback={
-              <ExecApprovalBody
-                request={active().request}
-                variant={props.variant}
-                error={props.error}
-              />
-            }
+            fallback={<ExecApprovalBody request={active().request} variant={props.variant} />}
           >
             <MobileExecApprovalBody request={active().request} />
           </Show>
@@ -480,7 +482,7 @@ function ExecApprovalCardContent(
         return (
           <button
             class={[
-              mobile() && decision === "deny" ? "btn" : decisionClass(decision),
+              active().kind === "exec" && decision === "deny" ? "btn" : decisionClass(decision),
               {
                 [`exec-approval-mobile-action--${decision}`]: mobile(),
                 "exec-approval-action--pending": pending(),
@@ -491,13 +493,20 @@ function ExecApprovalCardContent(
             aria-busy={pending() ? "true" : undefined}
             disabled={!props.connected || props.deciding() || props.busy || !props.canGrant}
             title={
-              props.variant === "modal" && props.connected && props.canGrant
+              shortcuts() && props.connected && props.canGrant
                 ? `${label()} (${decisionShortcut(decision)})`
                 : label()
             }
             onClick={() => void props.decide(active().id, decision)}
           >
             <span>{label()}</span>
+            <Show when={active().kind === "exec" && shortcuts()}>
+              <KeyboardShortcut
+                combo={approvalShortcutCombo(decision)}
+                class="exec-approval-shortcut"
+                ariaHidden={true}
+              />
+            </Show>
             <Show when={pending()}>
               <span class="btn__spinner exec-approval-spinner" aria-hidden="true" />
             </Show>
@@ -534,32 +543,11 @@ function ExecApprovalCardContent(
         </Show>
         <Show when={active().kind === "exec"} fallback={footer()}>
           <div class="exec-approval-footer">
-            <div class="exec-approval-status">
-              <Show
-                when={props.error && !grantError()}
-                fallback={
-                  active().request.security ? (
-                    <span
-                      class="exec-approval-security"
-                      title={`${t("execApproval.labels.security")}: ${active().request.security}`}
-                    >
-                      <Icon name={active().request.security === "deny" ? "shieldLock" : "shield"} />
-                      {active().request.security === "full"
-                        ? t("execApproval.securityFull")
-                        : active().request.security === "allowlist"
-                          ? t("execApproval.securityAllowlist")
-                          : active().request.security === "deny"
-                            ? t("execApproval.securityDeny")
-                            : active().request.security}
-                    </span>
-                  ) : undefined
-                }
-              >
-                <div class="exec-approval-error" role="alert">
-                  {props.error}
-                </div>
-              </Show>
-            </div>
+            <Show when={props.error && !grantError()}>
+              <div class="exec-approval-status exec-approval-error" role="alert">
+                {props.error}
+              </div>
+            </Show>
             {footer()}
           </div>
         </Show>

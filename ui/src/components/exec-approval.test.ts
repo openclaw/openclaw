@@ -188,21 +188,24 @@ describe("openclaw-exec-approval", () => {
     expect(onDecision).toHaveBeenCalledWith("approval-newer", "allow-once");
   });
 
-  it("compacts queued commands without splitting a surrogate pair", async () => {
-    const queue = [
+  it("keeps complete queued commands and agent names available when the row is compact", async () => {
+    const command = `${"a".repeat(60)}🙂 --with-extra-arguments\n  --output /workspace/report.txt`;
+    const agent = "release-review-worker";
+    await renderOpenedApproval([
       createExecRequest({ id: "approval-active", createdAtMs: 1 }),
       createExecRequest({
         id: "approval-queued",
         createdAtMs: 2,
-        // The emoji straddles code unit 61, so a hard slice(0, 61) would
-        // leave a dangling high surrogate in front of the ellipsis.
-        request: { command: `${"a".repeat(60)}🙂 --with-extra-arguments` },
+        request: { command, agentId: agent },
       }),
-    ];
-    await renderOpenedApproval(queue);
-
-    expect(container.querySelector(".exec-approval-list__command")?.textContent).toBe(
-      `${"a".repeat(60)}…`,
+    ]);
+    expect(container.querySelector(".exec-approval-list__command")?.textContent).toBe(command);
+    const row = container.querySelector<HTMLButtonElement>(".exec-approval-list__item")!;
+    expect(row.getAttribute("aria-label")).toContain(command);
+    expect(row.getAttribute("aria-label")).toContain(agent);
+    row.click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".exec-approval-command")?.textContent).toBe(command),
     );
   });
 

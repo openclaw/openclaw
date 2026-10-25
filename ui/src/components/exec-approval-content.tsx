@@ -66,7 +66,6 @@ function renderDetails(content: SolidJSX.Element) {
 export function ExecApprovalBody(props: {
   request: ExecApprovalRequestPayload;
   variant: ExecApprovalCardProps["variant"];
-  error: string | null;
 }) {
   const detailsId = createUniqueId();
   return (
@@ -99,7 +98,7 @@ export function ExecApprovalBody(props: {
         when={
           props.request.resolvedPath ||
           props.request.ask ||
-          (props.error && props.request.security) ||
+          props.request.security ||
           (props.variant === "modal" && props.request.sessionKey)
         }
       >
@@ -116,9 +115,7 @@ export function ExecApprovalBody(props: {
             {renderMetaRow(t("execApproval.labels.resolved"), props.request.resolvedPath, {
               path: true,
             })}
-            {props.error
-              ? renderMetaRow(t("execApproval.labels.security"), props.request.security)
-              : undefined}
+            {renderMetaRow(t("execApproval.labels.security"), props.request.security)}
             {renderMetaRow(t("execApproval.labels.ask"), props.request.ask)}
             {props.variant === "modal"
               ? renderMetaRow(t("execApproval.labels.session"), props.request.sessionKey)

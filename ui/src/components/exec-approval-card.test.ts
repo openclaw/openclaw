@@ -448,9 +448,8 @@ describe("exec approval card", () => {
     expect(details?.textContent).toContain("Resolved");
     expect(details?.textContent).toContain("/usr/bin/pnpm");
     expect(details?.textContent).toContain("Ask");
-    expect(card?.querySelector('[title="Security: allowlist"]')?.textContent).toContain(
-      "Allowlist",
-    );
+    expect(details?.textContent).toContain("Security");
+    expect(details?.textContent).toContain("allowlist");
     expect(card?.querySelector('[data-approval-chip="agent"]')).toBeNull();
     expect(card?.textContent).not.toContain("agent:main:session-1");
   });
@@ -467,7 +466,7 @@ describe("exec approval card", () => {
     const disclosure = container.querySelector<HTMLDetailsElement>("details")!;
     expect(disclosure.open).toBe(false);
     expect(view.getByRole("timer").textContent).toContain("expires in");
-    expect(view.getByText("Run this command?")).toBeTruthy();
+    expect(view.getByText("Exec approval needed")).toBeTruthy();
     disclosure.querySelector("summary")!.click();
     expect(disclosure.open).toBe(true);
     expect(view.getByText(command)).toBeTruthy();

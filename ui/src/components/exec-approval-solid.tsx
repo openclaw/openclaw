@@ -1,6 +1,5 @@
 // Control UI modal presents approvals after an explicit operator action.
 import { For, createSignal, onSettled } from "solid-js";
-import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -39,7 +38,7 @@ function renderApprovalQueueList(params: {
       <div class="exec-approval-list__heading">{t("execApproval.otherPending")}</div>
       <For each={others}>
         {(entry) => {
-          const command = compactApprovalCommand(entry.request.command);
+          const command = entry.request.command;
           const agent = entry.request.agentId?.trim() || "—";
           return (
             <button
@@ -48,14 +47,19 @@ function renderApprovalQueueList(params: {
               aria-label={t("execApproval.reviewRequest", { agent, command })}
               onClick={() => params.onSelect(entry.id)}
             >
-              <span class="exec-approval-list__agent">{agent}</span>
-              <span class="exec-approval-list__command mono">{command}</span>
-              <ApprovalCountdown
-                class="exec-approval-list__expiry"
+              <span
+                class="exec-approval-list__agent exec-approval-agent"
+                title={agent}
                 aria-hidden="true"
-                expiresAtMs={entry.expiresAtMs}
-                compact={true}
-              />
+              >
+                {agent.slice(0, 1).toUpperCase()}
+              </span>
+              <span class="exec-approval-list__command mono" title={command}>
+                {command}
+              </span>
+              <span class="exec-approval-list__expiry" aria-hidden="true">
+                <ApprovalCountdown expiresAtMs={entry.expiresAtMs} compact={true} />
+              </span>
             </button>
           );
         }}
