@@ -691,6 +691,30 @@ test("reuses and verifies committed tokens while writes wait, then rejects commi
   ).resolves.toEqual({ ok: false, reason: "token-revoked" });
 });
 
+test("keeps queued token rotation before revocation in the pairing owner", async () => {
+  const params = { deviceId: "paired-rich", role: "operator", baseDir };
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const holding = withDevicePairingLock(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  const rotating = rotateDeviceToken(params);
+  const revoking = revokeDeviceToken(params);
+  release.resolve();
+  const [, rotated, revoked] = await Promise.all([holding, rotating, revoking]);
+  expect(rotated.ok).toBe(true);
+  expect(revoked.ok).toBe(true);
+  if (rotated.ok && revoked.ok) {
+    expect(revoked.entry.token).toBe(rotated.entry.token);
+    await expect(verifyDeviceToken({ ...params, token: rotated.entry.token })).resolves.toEqual({
+      ok: false,
+      reason: "token-revoked",
+    });
+  }
+});
+
 test("admits revocation between coalesced token last-use writes", async ({ signal }) => {
   await listDevicePairing(baseDir);
   const params = { deviceId: "paired-rich", role: "operator", scopes: ["operator.read"], baseDir };
