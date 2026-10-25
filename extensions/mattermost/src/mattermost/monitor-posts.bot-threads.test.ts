@@ -110,25 +110,6 @@ describe("Mattermost bot-owned thread mention policy", () => {
     accounts: { work: { implicitMentions: { threadParticipation: false } } },
   };
   const relaxedThread = { ...threadPolicy(true), groups: { "*": threadPolicy(false) } };
-  const threadReply = { BodyForAgent: body, MessageThreadId: "root" };
-  it.each([
-    ["default follow-up", {}, { BodyForAgent: body, WasMentioned: true }, "default", true],
-    ["channel policy", policy, { AccountId: "default", WasMentioned: true }, "default", true],
-    ["account participation override", policy, null, "work", true],
-    ["wildcard bot-thread override", relaxedThread, threadReply, "default", false],
-  ] satisfies Array<[string, Partial<MattermostConfig>, object | null, string, boolean]>)(
-    "applies %s",
-    async (_name, config, expected, accountId, engaged) => {
-      const f = setup(config, "bot", accountId);
-      hasParticipation.mockResolvedValue(engaged);
-      await f.receive();
-      expect(dispatch).toHaveBeenCalledTimes(expected ? 1 : 0);
-      if (expected) {
-        expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject(expected);
-      }
-    },
-  );
-
   const explicitOnly = {
     implicitMentions: { threadParticipation: false },
     groupAllowFrom: ["sender"],
@@ -141,29 +122,39 @@ describe("Mattermost bot-owned thread mention policy", () => {
     CommandAuthorized: true,
     CommandSource: "text",
   };
+  const threadReply = { BodyForAgent: body, MessageThreadId: "root" };
   const accountRequirement = { requireMention: false, ...threadPolicy(true) };
   const groupRequirement = {
     ...threadPolicy(false),
     groups: { "*": threadPolicy(false), room: threadPolicy(true) },
   };
+  type Options = { activation?: string; commands?: boolean; accountId?: string; engaged?: boolean };
+  const explicit = { activation: mention, commands: true };
   it.each([
-    ["explicit mention", explicitOnly, mention, true, mentioned],
-    ["authorized command", explicitOnly, "/reset", true, commanded],
-    ["account bot-thread requirement", accountRequirement, mention, false, null],
-    ["exact group bot-thread requirement", groupRequirement, mention, false, null],
-  ] satisfies Array<[string, Partial<MattermostConfig>, string, boolean, object | null]>)(
-    "requires activation despite participation: %s",
-    async (_name, config, message, commands, expected) => {
-      const f = setup(config);
+    ["default follow-up", {}, { BodyForAgent: body, WasMentioned: true }],
+    ["channel policy", policy, { AccountId: "default", WasMentioned: true }],
+    ["account participation override", policy, null, { accountId: "work" }],
+    ["wildcard bot-thread override", relaxedThread, threadReply, { engaged: false }],
+    ["explicit mention", explicitOnly, mentioned, explicit],
+    ["authorized command", explicitOnly, commanded, { ...explicit, activation: "/reset" }],
+    ["account bot-thread requirement", accountRequirement, {}, { activation: mention }],
+    ["exact group bot-thread requirement", groupRequirement, {}, { activation: mention }],
+  ] satisfies Array<[string, Partial<MattermostConfig>, object | null, Options?]>)(
+    "applies %s",
+    async (_name, config, expected, options: Options = {}) => {
+      const { activation, commands, accountId = "default", engaged = true } = options;
+      const f = setup(config, "bot", accountId);
       if (commands) {
         f.core.channel.commands.isControlCommandMessage = isControlCommandMessage;
         f.core.channel.commands.shouldHandleTextCommands = shouldHandleTextCommands;
       }
-      hasParticipation.mockResolvedValue(true);
-      await f.receive();
-      expect(dispatch).not.toHaveBeenCalled();
-      await f.receive({ id: "activated-follow-up", message });
-      expect(dispatch).toHaveBeenCalledOnce();
+      hasParticipation.mockResolvedValue(engaged);
+      if (activation) {
+        await f.receive();
+        expect(dispatch).not.toHaveBeenCalled();
+      }
+      await f.receive(activation ? { id: "activated-follow-up", message: activation } : {});
+      expect(dispatch).toHaveBeenCalledTimes(expected ? 1 : 0);
       if (expected) {
         expect(dispatch.mock.calls[0]?.[1].ctxPayload).toMatchObject(expected);
       }
