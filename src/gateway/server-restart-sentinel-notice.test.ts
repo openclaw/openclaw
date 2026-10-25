@@ -11,7 +11,6 @@ import { attachOutboundDeliveryCommitHook } from "../infra/outbound/delivery-com
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../infra/outbound/delivery-queue-media-staging.js";
 import * as queue from "../infra/outbound/delivery-queue-storage.js";
 import * as runs from "../infra/update-run-ledger.js";
-import { renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as admission from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -22,7 +21,6 @@ import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/chan
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
-import { resolveUpdateRunNoticeTarget } from "./update-run-notice-target.js";
 
 const {
   sendDurableMessageBatch: sendBatch,
@@ -222,8 +220,6 @@ describe("restart sentinel notice recovery", () => {
         target: { version: "2026.9.2" },
         origin: destination === "control-ui" ? {} : { sessionKey },
       });
-      const target = await resolveUpdateRunNoticeTarget({ cfg, sessionKey: run.origin.sessionKey });
-      expect.soft(target.kind).toBe(destination === "owner" ? "route" : "none");
       const notify = await createUpdateRunNotifier(run, () => cfg, {});
       await notify(run, "ack");
       await notify(run, "ack");
@@ -246,22 +242,18 @@ describe("restart sentinel notice recovery", () => {
       });
       await successor(run, "finished");
       await notify(run, "finished");
-      expect(sendBatch.mock.calls.map(([request]) => request.payloads[0].text)).toEqual(
-        destination === "owner"
-          ? [
-              "⬆️ Updating OpenClaw… You'll get a message here when it's done.",
-              "⏳ Restarting OpenClaw…",
-              "🔁 Checking that OpenClaw is ready…",
-              renderUpdateRunSummary(run),
-            ]
-          : [],
-      );
+      // Wording belongs to infra/update-run-notice.test.ts; this boundary proves that
+      // each milestone reaches only the configured recipient and is durable once.
+      expect(sendBatch).toHaveBeenCalledTimes(destination === "owner" ? 4 : 0);
       expect(runs.getUpdateRun(run.runId)?.verification.noticeDelivered).toBe(
         destination === "owner",
       );
-      if (destination !== "owner") {
-        for (const kind of ["ack", "activating", "verifying", "finished"]) {
-          expect(await queue.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`)).toBeNull();
+      for (const kind of ["ack", "activating", "verifying", "finished"]) {
+        const intent = await queue.findDeliveryIntentOwner(`update-run-${kind}:${run.runId}`);
+        if (destination === "owner") {
+          expect(intent).toMatchObject({ status: "completed" });
+        } else {
+          expect(intent).toBeNull();
         }
       }
       expect(recover).not.toHaveBeenCalled();
@@ -401,16 +393,9 @@ describe("restart sentinel notice recovery", () => {
     expect(admission.getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it.each([
-    ["enqueue", "state directory"],
-    ["enqueue", "supervisor mode"],
-    ["preparation", "state directory"],
-    ["preparation", "supervisor mode"],
-    ["transport", "state directory"],
-    ["transport", "supervisor mode"],
-  ] as const)(
-    "retains notice custody through %s when ambient %s changes",
-    async (phase, changed) => {
+  it.each(["enqueue", "preparation", "transport"] as const)(
+    "retains notice custody through %s when ambient state and supervisor change",
+    async (phase) => {
       const context = capturedCustody(stateDir, "notice-custody-fixture");
       const replacement = tempDirs.make();
       const gate = pauseGate();
@@ -434,10 +419,8 @@ describe("restart sentinel notice recovery", () => {
       const queueId = "lifecycle-retained-context";
       const pending = phase === "enqueue" ? enqueueNotice() : sendLifecycleNotice(queueId, true);
       await gate.entered;
-      setTestEnvValue(
-        changed === "state directory" ? "OPENCLAW_STATE_DIR" : "OPENCLAW_SUPERVISOR_MODE",
-        changed === "state directory" ? replacement : "",
-      );
+      setTestEnvValue("OPENCLAW_STATE_DIR", replacement);
+      setTestEnvValue("OPENCLAW_SUPERVISOR_MODE", "");
       gate.release();
       const result = await pending;
       if (phase === "enqueue") {

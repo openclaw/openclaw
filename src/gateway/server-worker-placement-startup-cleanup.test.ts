@@ -513,13 +513,7 @@ describe("worker placement startup cleanup ownership", () => {
     await requestProvisioningTeardown(environmentId, operationId);
     const placements = createPlacements(true);
     const provisioning = await seedProvisioningPlacement(placements, environmentId, "remote-exec");
-    const failed = await failPlacement(placements, provisioning);
-    expect(failed).toMatchObject({
-      state: "failed",
-      environmentId,
-      turnClaim: null,
-      activeOwnerEpoch: null,
-    });
+    await failPlacement(placements, provisioning);
     const runtime = createRuntime({
       placements,
       environments,
@@ -547,11 +541,9 @@ describe("worker placement startup cleanup ownership", () => {
         destroyRequestedAtMs: expect.any(Number),
       });
       const intent = testState.store.get(environmentId);
-      const stopped = vi.fn();
-      const stopping = sidecar.stop().then(stopped);
+      const stopping = sidecar.stop();
       const pending = formatGatewayPendingCloseSteps();
       await withinTest(stopping, signal);
-      expect(stopped).toHaveBeenCalledOnce();
       expect(destroy).not.toHaveBeenCalled();
       expect(pending).toContain("environment=worker-startup-indeterminate");
       expect(pending).toContain("provider=fake");

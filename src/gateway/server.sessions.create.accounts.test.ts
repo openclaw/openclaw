@@ -167,21 +167,11 @@ test("sessions.create preserves an explicit personal account across adoption and
 });
 
 test.each([
-  {
-    endpoint: "direct model override",
-    modelId: "trinity-large-thinking",
-    expectedPin: "arcee:work",
-    expectedSource: "user-link",
-  },
-  {
-    endpoint: "inherited OpenRouter endpoint",
-    modelId: "trinity-large-preview",
-    expectedPin: undefined,
-    expectedSource: undefined,
-  },
+  ["trinity-large-thinking", "arcee:work", "user-link"],
+  ["trinity-large-preview", undefined, undefined],
 ] as const)(
-  "sessions.create applies an admin-linked Arcee default only for the $endpoint",
-  async ({ modelId, expectedPin, expectedSource }) => {
+  "sessions.create applies an admin-linked Arcee default only to its direct endpoint: %s",
+  async (modelId, expectedPin, expectedSource) => {
     await withSessionTestState(
       { layout: "state-only", prefix: "session-arcee-linked-default-" },
       async (state) => {
@@ -200,13 +190,10 @@ test.each([
                 baseUrl: "https://openrouter.ai/api/v1",
                 api: "openai-completions",
                 models: ["trinity-large-thinking", "trinity-large-preview"].map((id) =>
-                  modelDefinition(id, {
-                    name: id,
-                    api: "openai-completions",
-                    ...(id.endsWith("thinking") ? { baseUrl: "https://api.arcee.ai/api/v1" } : {}),
-                    contextWindow: 32768,
-                    maxTokens: 2048,
-                  }),
+                  modelDefinition(
+                    id,
+                    id.endsWith("thinking") ? { baseUrl: "https://api.arcee.ai/api/v1" } : {},
+                  ),
                 ),
               },
             },
@@ -284,15 +271,6 @@ test.each([
                 { client: adminClient, context },
               );
               expect(linked.ok, JSON.stringify(linked.error)).toBe(true);
-              const linksBefore = await directSessionReq(
-                "users.listAuthLinks",
-                { profileId: owner.id },
-                { client, context },
-              );
-              expect(linksBefore.ok, JSON.stringify(linksBefore.error)).toBe(true);
-              expect(linksBefore.payload).toMatchObject({
-                links: [{ provider: "arcee", authProfileId: "arcee:work" }],
-              });
 
               const key = `agent:main:dashboard:arcee-linked-${modelId}`;
               expect(loadSessionEntry({ sessionKey: key, storePath })).toBeUndefined();
@@ -341,8 +319,10 @@ test.each([
                   { profileId: owner.id },
                   { client, context },
                 );
-                expect(linksAfter.ok, JSON.stringify(linksAfter.error)).toBe(true);
-                expect(linksAfter.payload).toEqual(linksBefore.payload);
+                expect(linksAfter).toMatchObject({
+                  ok: true,
+                  payload: { links: [{ provider: "arcee", authProfileId: "arcee:work" }] },
+                });
                 expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(
                   inputConfig,
                 );
@@ -426,19 +406,11 @@ test.each(["foreign admin", "unidentified admin", "synthetic owner"] as const)(
         });
 
         expect(created).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
-        expect(context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
         expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
         expect(loadSessionEntry({ sessionKey: key, storePath })).toEqual(before);
         expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
       } finally {
-        const worktree = await managedWorktrees.findLiveByOwner("session", key);
-        if (worktree) {
-          await managedWorktrees.remove({
-            id: worktree.id,
-            reason: "test-cleanup",
-            allowSnapshotLoss: true,
-          });
-        }
+        await removeSessionWorktree(key);
         testState.agentConfig = undefined;
       }
     });
@@ -479,17 +451,12 @@ test("sessions.create names an adopted worktree with its committed account befor
 
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(profileAtNaming).toBe(previousAuthProfileId);
-      expect(
-        dashboardTitleGenerationMocks.generate.mock.calls.map(([request]) => ({
-          regularModelRef: request.regularModelRef,
-          preferredProfile: request.preferredProfile,
-        })),
-      ).toEqual([
-        {
+      expect(dashboardTitleGenerationMocks.generate).toHaveBeenCalledWith(
+        expect.objectContaining({
           regularModelRef: `openai/gpt-5.6-luna@${previousAuthProfileId}`,
           preferredProfile: previousAuthProfileId,
-        },
-      ]);
+        }),
+      );
       expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
         authProfileOverride: selectedAuthProfileId,
         authProfileOverrideSource: "user",

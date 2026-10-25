@@ -453,11 +453,10 @@ describe("gateway probe endpoints", () => {
     );
   });
 
-  it("reports startup lifecycle independently of hard channel failures", async ({
-    onTestFinished,
-  }) => {
+  it("reports startup lifecycle independently of hard channel failures", async () => {
     let startupPending = true;
     let gatewayDraining = false;
+    let channelFailed = false;
     const pending = createAgentDatabaseInspectionRefusal({
       agentId: "optional-worker",
       paths: ["/isolated/optional-worker.sqlite"],
@@ -466,25 +465,6 @@ describe("gateway probe endpoints", () => {
     });
     let refusals: AgentDatabaseAdmissionRefusal[] = [pending];
     const startedAt = Date.now() - 5_000;
-    const account = {
-      accountId: "default",
-      running: true,
-      connected: true,
-      enabled: true,
-      configured: true,
-      lifecycle: "ready" as "ready" | "blocked",
-      linked: true,
-      terminalDisconnect: false,
-      lastStartAt: startedAt,
-    };
-    const channelManager = {
-      getRuntimeSnapshot: () => ({
-        channels: { whatsapp: account },
-        channelAccounts: { whatsapp: { default: account } },
-      }),
-      getAutostartSuppression: () => null,
-      isAmbientAutostartSuppressed: () => false,
-    };
     const startupDeps = {
       startedAt,
       getStartupPending: () => startupPending,
@@ -492,17 +472,15 @@ describe("gateway probe endpoints", () => {
       getGatewayDraining: () => gatewayDraining,
     };
     const getStartup = createStartupChecker(startupDeps, () => refusals);
-    const getReadiness = createReadinessChecker({
-      channelManager,
-      ...startupDeps,
-    });
+    // Channel-health policy is covered by server/readiness.test.ts; here the
+    // contract is that HTTP startup uses its own lifecycle, not readiness.
+    const getReadiness = () => ({ ...unready, ...readyState(channelFailed ? ["whatsapp"] : []) });
     await withProbeServer({ getReadiness, getStartup }, async (probe) => {
       await probe.json("/startupz", 503, startupDetails("starting", "plugin-convergence"));
 
       gatewayDraining = true;
       await probe.json("/startupz", 503, startupDetails("draining"));
 
-      await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
       gatewayDraining = false;
 
       startupPending = false;
@@ -518,13 +496,7 @@ describe("gateway probe endpoints", () => {
       await probe.json("/startupz", 200, startupDetails("started"));
 
       refusals = [];
-      account.lifecycle = "blocked";
-      account.running = false;
-      account.connected = false;
-      account.linked = false;
-      account.terminalDisconnect = true;
-      const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
-      onTestFinished(() => now.mockRestore());
+      channelFailed = true;
       await probe.json("/readyz", 503, readyState(["whatsapp"]));
 
       await probe.json("/startupz", 200, { ok: true, status: "started" });
