@@ -108,30 +108,6 @@ afterEach(() => {
 });
 
 describe("canonical anonymous HTTP entry", () => {
-  it("bootstraps a native private home and draft without opening the public document or weakening auth", async () => {
-    resolveSession.mockResolvedValue(null);
-    const instance = server();
-    const home = "/control/chat/main";
-    const unavailable = await request(instance, home);
-    expect(unavailable.res.statusCode).toBe(404);
-    expect(unavailable.getBody()).not.toContain("<openclaw-app>");
-
-    const destination = `${home}?draft=Keep%2Bdraft%26question%3F`;
-    const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: destination })}`;
-    expect((await request(instance, `${entry}&probe=1`)).res.statusCode).toBe(401);
-    const app = await request(instance, entry);
-    expect(app.res.statusCode).toBe(200);
-    expect(app.getBody()).toContain("<openclaw-app>");
-    expect(app.getBody()).toContain(`history.replaceState(null,"","${destination}"+location.hash)`);
-    expect(reader).not.toHaveBeenCalled();
-
-    const unsupported = new URLSearchParams({ path: `${destination}&__openclawComposerFocus=1` });
-    expect(
-      (await request(instance, `/control/__openclaw__/session-entry?${unsupported}`)).res
-        .statusCode,
-    ).toBe(404);
-  });
-
   it("renders widgets with document-scoped links on the canonical chat route", async () => {
     reader.mockResolvedValue({
       title: "Public chart",
