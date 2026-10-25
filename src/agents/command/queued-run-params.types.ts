@@ -43,6 +43,11 @@ export type QueuedAgentRunParams = {
   senderIsOwner?: boolean;
   /** Verified current requester for Git credit only; grants no tool authority. */
   gitContributorProfileId?: string;
+  /**
+   * Verified Gateway profile that sent this turn, never the shared owner or a channel
+   * sender. Requester-scoped MCP signs in as this person instead of the transport sender.
+   */
+  requesterProfileId?: string;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
   workspaceDir: string;

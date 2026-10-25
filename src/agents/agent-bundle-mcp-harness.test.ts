@@ -509,6 +509,65 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     await result!.dispose();
   });
 
+  it("rechecks a profile before a remembered tool starts its sign-in", async () => {
+    // Another requester connected first, so the session advertises its real calendar tool.
+    mocks.advertised.set("session-remembered", {
+      version: 1,
+      generatedAt: 0,
+      servers: { calendar: { serverName: "calendar", launchSummary: "calendar", toolCount: 1 } },
+      tools: [catalogTool("calendar", "events")],
+    });
+    mocks.setResolveImpl(async (params) =>
+      makeConnectRuntime({
+        sessionId: params.sessionId,
+        requesterSenderId: "profile-b",
+        publicOrigin: "https://gateway.example",
+      }),
+    );
+    startAuthorization.mockResolvedValue({
+      status: "redirect",
+      authorizationUrl: "https://auth.example/authorize?state=opaque",
+    });
+    let current = true;
+    const result = await requesterTools("session-remembered", {
+      requesterSenderId: "gateway-client",
+      requesterProfile: {
+        profileId: "profile-b",
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("operator authority revoked");
+          }
+        },
+      },
+      cfg: { gateway: { publicOrigin: "https://gateway.example" }, mcp: connectConfig },
+    });
+    // This profile has not connected, so the remembered tool starts its sign-in instead.
+    const events = result!.tools.find((tool) => tool.name === "calendar__events")!;
+
+    current = false;
+    await expect(events.execute("events", {})).rejects.toThrow("revoked");
+    expect(startAuthorization).not.toHaveBeenCalled();
+    current = true;
+    await expect(events.execute("events", {})).resolves.toMatchObject({
+      details: { mcpConnect: { serverName: "calendar" } },
+    });
+    expect(startAuthorization).toHaveBeenCalledOnce();
+
+    // The sign-in itself keeps checking: losing access while it runs stops it before its next effect.
+    startAuthorization.mockImplementationOnce(
+      async (_identity: unknown, _config: unknown, opts: { login?: { assertCurrent(): void } }) => {
+        current = false;
+        opts.login?.assertCurrent();
+        return {
+          status: "redirect",
+          authorizationUrl: "https://auth.example/authorize?state=late",
+        };
+      },
+    );
+    await expect(events.execute("events", {})).rejects.toThrow("revoked");
+    await result!.dispose();
+  });
+
   it("releases the live runtime when pre-return catalog publication fails", async () => {
     const runtime = makeRuntime({ sessionId: "session-cleanup", requesterSenderId: "authed" });
     mocks.setResolveImpl(async () => runtime);

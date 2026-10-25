@@ -14,7 +14,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
 import { mergeMcpConnectCatalog } from "./agent-bundle-mcp-requester-connect.js";
-import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
+import type { McpRequesterProfile, McpToolCatalog } from "./agent-bundle-mcp-types.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
   prepareConversationCapabilityProfile,
@@ -144,6 +144,8 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   requesterSenderId?: string | null;
+  /** Verified Gateway profile that sent the turn; the requester ahead of the sender. */
+  requesterProfile?: McpRequesterProfile;
   agentAccountId?: string | null;
   messageChannel?: string | null;
   reservedToolNames?: Iterable<string>;
@@ -220,7 +222,7 @@ function applyHarnessToolPolicy(
 export async function materializeStaticMcpToolsForHarnessRunCore(
   params: Omit<
     MaterializeRequesterScopedMcpToolsForHarnessRunParams,
-    "requesterSenderId" | "agentAccountId" | "messageChannel"
+    "requesterSenderId" | "requesterProfile" | "agentAccountId" | "messageChannel"
   > & {
     /** Prepared native projection carries exact persisted per-tool approval grants. */
     projectedMcpServers?: CodexMcpServersConfig;
@@ -345,6 +347,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     manifestRegistry: params.manifestRegistry,
     toolOverrides: params.toolOverrides,
     requesterSenderId: params.requesterSenderId,
+    requesterProfile: params.requesterProfile,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
     toolDenylist: policyParams.conversationCapabilityProfile?.policy.explicitToolDenylist,
@@ -358,6 +361,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
       liveRuntime = await materializeBundleMcpToolsForRun({
         runtime: scopedRuntime,
         releaseLease: scopedRuntimeHandle?.releaseLease,
+        assertRequesterCurrent: params.requesterProfile?.assertCurrent,
         agentId: params.agentId,
         reservedToolNames: params.reservedToolNames,
       });
@@ -384,9 +388,19 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     const advertisedTools = buildBundleMcpToolsFromCatalog({
       catalog: advertisedCatalog,
       reservedToolNames,
-      createExecute: (tool) =>
-        requesterConnect?.createExecute(tool.serverName) ??
-        (async () => notConnectedToolResult(tool.serverName, tool.toolName)),
+      createExecute: (tool) => {
+        const connect = requesterConnect?.createExecute(tool.serverName, {
+          assertRequesterCurrent: params.requesterProfile?.assertCurrent,
+        });
+        if (!connect) {
+          return async () => notConnectedToolResult(tool.serverName, tool.toolName);
+        }
+        // A remembered tool without a live counterpart starts this requester's sign-in, which keeps checking.
+        return async (...args: Parameters<typeof connect>) => {
+          params.requesterProfile?.assertCurrent();
+          return await connect(...args);
+        };
+      },
     });
     const liveByName = new Map((liveRuntime?.tools ?? []).map((tool) => [tool.name, tool]));
     // Live tools supply execution; advertised catalog supplies the stable name/schema surface.

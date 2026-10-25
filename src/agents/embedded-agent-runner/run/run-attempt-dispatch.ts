@@ -5,6 +5,7 @@ import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provide
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { bindRunRequesterProfile } from "../../agent-bundle-mcp-requester-profile.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import { resizeExecApprovalContinuationPrompt } from "../../bash-tools.exec-approval-output.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
@@ -423,6 +424,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     spawnedBy: params.spawnedBy,
     isCanonicalWorkspace,
     ...projectEmbeddedMessageContext(params),
+    requesterProfile: bindRunRequesterProfile(params.requesterProfileId, params.admittedRunContext),
     hasRepliedRef: params.hasRepliedRef,
     sessionFile,
     ...(sessionManager ? { sessionManager } : { sessionTarget: resolvedSessionTarget }),

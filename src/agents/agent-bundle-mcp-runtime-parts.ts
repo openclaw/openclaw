@@ -132,8 +132,8 @@ export function createSessionMcpRuntimeParts<T extends RuntimePart>(
         tools: catalog.tools.filter((tool) => connectFingerprints.has(tool.serverName)),
       };
     },
-    createExecute(serverName) {
-      const execute = requesterConnect.createExecute(serverName);
+    createExecute(serverName, options) {
+      const execute = requesterConnect.createExecute(serverName, options);
       return (
         execute &&
         (async (...args) => {

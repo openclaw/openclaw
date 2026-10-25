@@ -154,6 +154,8 @@ The per-requester flow is sender-driven:
 2. OpenClaw returns a sign-in link for that sender instead of exposing another sender's credentials.
 3. The provider redirects through the Gateway callback. After the callback succeeds, the sender retries the tool call with their connected account.
 
+A channel sender is the requester. A Gateway chat turn from a verified Gateway profile, such as a signed-in Control UI user or a backend client authenticated through trusted-proxy auth, uses that profile instead: the same account its MCP Apps use. A shared token or password login is not a verified profile.
+
 If `gateway.publicOrigin` is missing, the sign-in result names that setting and `openclaw doctor` reports the same operator fix. `openclaw mcp login` and `openclaw mcp logout` remain operator-only commands for shared credentials; they do not manage per-requester accounts.
 
 Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth in channels where every trusted sender is mutually trusted; a requester-private sign-in handoff is tracked as follow-up work.

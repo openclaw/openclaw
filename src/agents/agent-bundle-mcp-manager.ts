@@ -7,6 +7,7 @@ import {
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManagerInstall } from "./agent-bundle-mcp-manager-install.js";
 import {
@@ -49,6 +50,23 @@ const createSessionMcpRuntimeLazy: CreateSessionMcpRuntime = async (params) => {
   return runtime.createSessionMcpRuntime(params);
 };
 
+/**
+ * A verified Gateway profile is the requester whatever transport sender the turn
+ * carries, keyed as MCP Apps key it: the internal channel and no channel account.
+ * One sign-in then serves that person's chat turns and MCP Apps.
+ */
+function withRequesterProfile(params: RuntimeAcquisitionParams): RuntimeAcquisitionParams {
+  const profileId = params.requesterProfile?.profileId;
+  return profileId
+    ? {
+        ...params,
+        requesterSenderId: profileId,
+        agentAccountId: undefined,
+        messageChannel: INTERNAL_MESSAGE_CHANNEL,
+      }
+    : params;
+}
+
 export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpts) {
   const lifecycle = createSessionMcpRuntimeManagerLifecycle(opts, createSessionMcpRuntimeLazy);
   const { store, catalogs } = lifecycle;
@@ -74,7 +92,8 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
     scope: "full" | "requester",
     acquire: (params: PreparedAcquisitionParams) => Promise<T>,
   ) =>
-    async function current(params: RuntimeAcquisitionParams): Promise<T> {
+    async function current(input: RuntimeAcquisitionParams): Promise<T> {
+      const params = withRequesterProfile(input);
       const senderId = normalizeOptionalString(params.requesterSenderId);
       const requester = senderId
         ? {
@@ -97,6 +116,9 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         return await lifecycle.runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
           await Promise.all([priorDisposal, priorSessionWork].filter((work) => work !== undefined));
           store.scheduler.signal.throwIfAborted();
+          // A revoked or reassigned profile throws here, before its credentials are
+          // selected, and never falls back to the transport sender it shares.
+          params.requesterProfile?.assertCurrent();
           const reload = store.configReload;
           acquired = await acquire({
             ...params,

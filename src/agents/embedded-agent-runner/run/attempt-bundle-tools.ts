@@ -136,7 +136,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
         // or the triggering run's sender on follow-ups). Cron/subagent runs
         // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
+        // A verified Gateway profile, set only by Gateway chat ingress, wins over it.
         requesterSenderId: params.attempt.senderId,
+        requesterProfile: params.attempt.requesterProfile,
         agentAccountId: params.attempt.agentAccountId,
         messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
       })
@@ -144,6 +146,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const bundleMcpRuntime = bundleMcpAcquisition
     ? await materializeBundleMcpToolsForRun({
         ...bundleMcpAcquisition,
+        assertRequesterCurrent: params.attempt.requesterProfile?.assertCurrent,
         agentId: params.setup.sessionAgentId,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),

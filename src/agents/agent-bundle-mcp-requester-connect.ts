@@ -8,8 +8,31 @@ import type {
   RequesterMcpConnect,
   SessionMcpRequesterScope,
 } from "./agent-bundle-mcp-types.js";
+import type { McpOAuthLoginLifecycle } from "./mcp-oauth-provider.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import type { AnyAgentTool } from "./tools/common.js";
+
+/**
+ * A requester's live authority for a sign-in it starts: the OAuth owner rechecks it before each network and store
+ * effect, so a sign-in started before the requester lost access cannot register a client or persist an authorization.
+ */
+function requesterSignInLifecycle(
+  assertRequesterCurrent: () => void,
+  signal: AbortSignal = new AbortController().signal,
+): McpOAuthLoginLifecycle {
+  return {
+    signal,
+    assertCurrent: () => {
+      signal.throwIfAborted();
+      assertRequesterCurrent();
+    },
+    // The Gateway's callback completes the sign-in; nothing to track here.
+    onAuthorizationPublished: () => {},
+    beforeTokensSaved: () => {},
+    onTokensSaved: () => {},
+  };
+}
 
 async function connectRequesterOAuthServer(params: {
   serverName: string;
@@ -116,21 +139,31 @@ export async function createRequesterMcpConnect(params: {
     requesterMcpOAuthIdentity(serverName, resolved.url, params.requesterScope),
   );
   const statuses = await readMcpOAuthCredentialsStatuses(identities);
-  const servers = new Map<string, () => Promise<AgentToolResult<unknown>>>();
+  const servers = new Map<
+    string,
+    (options?: { assertRequesterCurrent?: () => void }) => AnyAgentTool["execute"]
+  >();
   const authorizedServerNames: string[] = [];
   for (const [index, { serverName, resolved }] of configured.entries()) {
     const status = expectDefined(statuses[index], "requester MCP OAuth status");
-    servers.set(serverName, () =>
-      connectRequesterOAuthServer({
-        serverName,
-        publicOrigin: params.cfg?.gateway?.publicOrigin,
-        authorize: (redirectUrl) =>
-          startMcpOAuthAuthorization(
-            requesterMcpOAuthIdentity(serverName, resolved.url, params.requesterScope),
-            resolved,
-            { redirectUrl },
-          ),
-      }),
+    servers.set(
+      serverName,
+      (options) => async (_toolCallId, _input, signal) =>
+        await connectRequesterOAuthServer({
+          serverName,
+          publicOrigin: params.cfg?.gateway?.publicOrigin,
+          authorize: (redirectUrl) =>
+            startMcpOAuthAuthorization(
+              requesterMcpOAuthIdentity(serverName, resolved.url, params.requesterScope),
+              resolved,
+              {
+                redirectUrl,
+                ...(options?.assertRequesterCurrent
+                  ? { login: requesterSignInLifecycle(options.assertRequesterCurrent, signal) }
+                  : {}),
+              },
+            ),
+        }),
     );
     if (status.state === "authorized") {
       authorizedServerNames.push(serverName);
@@ -145,7 +178,7 @@ export async function createRequesterMcpConnect(params: {
     catalog: buildRequesterConnectCatalog(servers.keys(), params.safeServerNamesByServer),
     authorizedServerNames,
     configFingerprint,
-    createExecute: (serverName) => servers.get(serverName),
+    createExecute: (serverName, options) => servers.get(serverName)?.(options),
   };
 }
 

@@ -24,6 +24,17 @@ describe("followup delivery context", () => {
     );
   });
 
+  it("never collect-batches runs from different verified requester profiles", () => {
+    const first = createQueueTestRun({ prompt: "first" });
+    first.run.requesterProfileId = "profile-a";
+    const second = createQueueTestRun({ prompt: "second" });
+    second.run.requesterProfileId = "profile-b";
+
+    expect(resolveFollowupDeliveryStorageKey(first)).not.toBe(
+      resolveFollowupDeliveryStorageKey(second),
+    );
+  });
+
   it("separates runs with different parent policy provenance", () => {
     const first = createQueueTestRun({ prompt: "first" });
     first.run.spawnedBy = "agent:main:telegram:group:first";
