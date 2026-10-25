@@ -323,11 +323,7 @@ it("tracks a missing requester inline", async () => {
     const run = vi.fn(async (handle) => {
       expect(handle).toMatchObject({ detach: false, requesterTranscript: undefined });
       expect(hasPending(sessionKey, "main")).toBe(true);
-      return {
-        ...generated,
-        contentText: "inline result",
-        details: { generated: true },
-      };
+      return { ...generated, contentText: "inline result", details: { generated: true } };
     });
     const result = await runTask({ scheduleBackgroundWork: schedule, run });
     expect(run).toHaveBeenCalledOnce();

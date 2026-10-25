@@ -320,6 +320,11 @@ describe("cron shorthand and schedule recovery", () => {
   function update(params: Record<string, unknown>) {
     return execute({ action: "update", jobId: "job", ...params });
   }
+  function presentation() {
+    const present = getToolTerminalPresentation(createCronTool());
+    expect(present).toBeTypeOf("function");
+    return (action: string, details: unknown) => present?.({ action }, { content: [], details });
+  }
 
   describe("cron shorthand recovery", () => {
     it.each(
@@ -387,26 +392,17 @@ describe("cron shorthand and schedule recovery", () => {
     );
 
     it("presents list metadata without private job content", () => {
-      const presentation = getToolTerminalPresentation(createCronTool());
-      if (!presentation) {
-        throw new Error("expected terminal presentation");
-      }
-      const result = {
-        content: [],
-        details: {
-          total: 250,
-          jobs: [{ id: "one", name: "private reminder", payload: { text: "secret" } }],
-        },
+      const present = presentation();
+      const details = {
+        total: 250,
+        jobs: [{ id: "one", name: "private reminder", payload: { text: "secret" } }],
       };
-      expect(presentation({ action: "list" }, result)).toEqual({
-        text: "Automations listed.\nCount: 250",
-      });
-      expect(presentation({ action: "add" }, result)).toBeUndefined();
+      expect(present("list", details)).toEqual({ text: "Automations listed.\nCount: 250" });
+      expect(present("add", details)).toBeUndefined();
     });
 
     it("presents watcher execution separately from its saved setting", () => {
-      const presentation = getToolTerminalPresentation(createCronTool());
-      expect(presentation).toBeTypeOf("function");
+      const present = presentation();
       const observed = {
         id: "watcher",
         name: "Application errors",
@@ -414,8 +410,6 @@ describe("cron shorthand and schedule recovery", () => {
         enabled: false,
         state: { streamStatus: "error", streamError: "PRIVATE_DIAGNOSTIC" },
       };
-      const present = (action: string, details: unknown) =>
-        presentation?.({ action }, { content: [], details });
       const uncertain = present("update", observed);
       expect(uncertain?.text).toContain("Paused. Source termination is not confirmed.");
       expect(uncertain?.text).not.toContain("PRIVATE_DIAGNOSTIC");
@@ -431,23 +425,12 @@ describe("cron shorthand and schedule recovery", () => {
       expect(present("remove", { ok: true, removed: true })).toBeUndefined();
     });
 
+    const script = { script: "return { notify: 'changed' }", timeoutSeconds: 30, toolBudget: 12 };
     it.each([
       {
         name: "script before agent-turn hints",
-        input: {
-          everyMs: 60_000,
-          script: "return { notify: 'changed' }",
-          timeoutSeconds: 30,
-          toolBudget: 12,
-        },
-        expected: {
-          payload: {
-            kind: "script",
-            script: "return { notify: 'changed' }",
-            timeoutSeconds: 30,
-            toolBudget: 12,
-          },
-        },
+        input: { everyMs: 60_000, ...script },
+        expected: { payload: { kind: "script", ...script } },
       },
       {
         name: "out-of-range timestamp for gateway validation",

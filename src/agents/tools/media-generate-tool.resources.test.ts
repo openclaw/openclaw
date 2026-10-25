@@ -297,6 +297,18 @@ describe.each(["image", "music", "video"] as const)(
       music: musicGenerationTaskLifecycle,
       video: videoGenerationTaskLifecycle,
     }[kind];
+    const createPreparedTool = (
+      fixture: ReturnType<typeof createNativeFixture>,
+      snapshot: Awaited<ReturnType<typeof prepareSnapshot>>["snapshot"],
+      config = fixture.config,
+    ) =>
+      createTool({
+        config,
+        agentDir: snapshot.agentDir,
+        workspaceDir: fixture.dir,
+        preparedModelRuntime: snapshot,
+        agentSessionKey: "agent:main:discord:direct:synthetic-media",
+      });
     it("waits for the captured workspace before reading a generation reference", async () => {
       const fixture = createNativeFixture(kind, true);
       const waiting = createDeferredCore();
@@ -324,14 +336,7 @@ describe.each(["image", "music", "video"] as const)(
               },
               assertCurrent: () => {},
             },
-            async () =>
-              createTool({
-                config: fixture.config,
-                agentDir: prepared.snapshot.agentDir,
-                workspaceDir: fixture.dir,
-                preparedModelRuntime: prepared.snapshot,
-                agentSessionKey: sessionKey,
-              }),
+            async () => createPreparedTool(fixture, prepared.snapshot),
           );
           const outcome = tool!.execute("workspace-reference", {
             prompt: "Use the synthetic workspace reference",
@@ -425,15 +430,9 @@ describe.each(["image", "music", "video"] as const)(
               }
               return tasks;
             });
-            const tool = createTool({
-              config: {
-                ...fixture.config,
-                agents: pause === "request lookup" ? undefined : fixture.config.agents,
-              },
-              agentDir: snapshot.agentDir,
-              workspaceDir: fixture.dir,
-              preparedModelRuntime: snapshot,
-              agentSessionKey: "agent:main:discord:direct:synthetic-media",
+            const tool = createPreparedTool(fixture, snapshot, {
+              ...fixture.config,
+              agents: pause === "request lookup" ? undefined : fixture.config.agents,
             });
             const outcome = tool!
               .execute("preflight-image-call", {
@@ -530,13 +529,7 @@ describe.each(["image", "music", "video"] as const)(
               await resumeRollback.promise;
               return remove(...args);
             });
-            const tool = createTool({
-              config: fixture.config,
-              agentDir: snapshot.agentDir,
-              workspaceDir: fixture.dir,
-              preparedModelRuntime: snapshot,
-              agentSessionKey: sessionKey,
-            });
+            const tool = createPreparedTool(fixture, snapshot);
             expect(tool).not.toBeNull();
             const started = await tool!.execute("image-resource-call", {
               prompt: "Synthetic media resource proof",

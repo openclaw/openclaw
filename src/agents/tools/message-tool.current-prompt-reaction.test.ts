@@ -50,6 +50,7 @@ const EXTERNAL_TARGET = {
   target: "channel:external",
   messageId: "external-message",
 };
+const AGENT_IDENTITY = { id: "agent:main", label: "Test Agent" };
 type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
 type ToolOptions = NonNullable<Parameters<typeof createMessageTool>[0]>;
 function required<T>(value: T | undefined): T {
@@ -255,30 +256,27 @@ it.each(["webchat", "discord"])(
   },
 );
 
-it.each([["discord", { internalEventExecution: true }]])(
-  "fails prompt reactions locally on a %s-routed run that mints no grant (%o)",
-  async (currentChannelProvider, kind) => {
-    const nextRunId = runId + "-next";
-    const grant = mintTurn(recorder, nextRunId, kind);
-    expect(grant).toBeUndefined();
-    const nextRun = tool({
-      currentChannelProvider,
-      runId: nextRunId,
-      messageActionTurnCapability: grant,
-    });
-    for (const args of [
-      {},
-      { channel: "WebChat" },
-      { target: "channel:external", messageId: "external-message" },
-    ]) {
-      await expect(execute(args, nextRun)).rejects.toThrow("No prompt here permits reactions");
-    }
-    expect(external).not.toHaveBeenCalled();
-    expect(broadcast).not.toHaveBeenCalled();
-    await execute(EXTERNAL_TARGET, nextRun);
-    expect(external).toHaveBeenCalledOnce();
-  },
-);
+it("fails prompt reactions locally on a Discord-routed internal event that mints no grant", async () => {
+  const nextRunId = runId + "-next";
+  const grant = mintTurn(recorder, nextRunId, { internalEventExecution: true });
+  expect(grant).toBeUndefined();
+  const nextRun = tool({
+    currentChannelProvider: "discord",
+    runId: nextRunId,
+    messageActionTurnCapability: grant,
+  });
+  for (const args of [
+    {},
+    { channel: "WebChat" },
+    { target: "channel:external", messageId: "external-message" },
+  ]) {
+    await expect(execute(args, nextRun)).rejects.toThrow("No prompt here permits reactions");
+  }
+  expect(external).not.toHaveBeenCalled();
+  expect(broadcast).not.toHaveBeenCalled();
+  await execute(EXTERNAL_TARGET, nextRun);
+  expect(external).toHaveBeenCalledOnce();
+});
 
 it("commits the agent's current-prompt reaction and publishes only actual changes", async () => {
   const messageId = await persist();
@@ -300,10 +298,7 @@ it("commits the agent's current-prompt reaction and publishes only actual change
     {
       emoji: "👍",
       count: 2,
-      identities: expect.arrayContaining([
-        { id: "human" },
-        { id: "agent:main", label: "Test Agent" },
-      ]),
+      identities: expect.arrayContaining([{ id: "human" }, AGENT_IDENTITY]),
     },
   ]);
   expect(broadcast).toHaveBeenCalledWith(
@@ -367,12 +362,11 @@ it("records a terminal reaction on its exact source despite a colliding physical
   const competingOperation = createOperation(state.path("other", "sessions.json"));
   operation.attachBackend({ kind: "embedded", runId, cancel() {} });
   try {
-    const [outcome] = await Promise.allSettled([execute({ final: true })]);
+    await execute({ final: true });
     expect(broadcast).toHaveBeenCalledOnce();
     expect(reactions()[messageId]).toEqual([
-      { emoji: "👍", count: 1, identities: [{ id: "agent:main", label: "Test Agent" }] },
+      { emoji: "👍", count: 1, identities: [AGENT_IDENTITY] },
     ]);
-    expect(outcome.status).toBe("fulfilled");
     expect(operation.sourceReplyDelivered).toBe(true);
     expect(competingOperation.sourceReplyDelivered).toBe(false);
     expect(external).not.toHaveBeenCalled();
@@ -441,8 +435,7 @@ it("rolls back a reaction when its capability expires at SQLite commit", async (
   );
   expect(commitRequests).toBeGreaterThan(0);
   probe.mockRestore();
-  expect(broadcast).not.toHaveBeenCalled();
-  expect(reactions()).toEqual({});
+  expectNoReaction();
 });
 
 it.each([
@@ -549,8 +542,7 @@ it("rejects reactions after session reset instead of adopting the successor prom
   const selected = tool();
   await upsertSessionEntryCore(scope, { sessionId: "successor-session", updatedAt: 2 });
   await expect(execute({}, selected)).rejects.toThrow("session changed before reaction mutation");
-  expect(broadcast).not.toHaveBeenCalled();
-  expect(reactions("successor-session")).toEqual({});
+  expectNoReaction("successor-session");
 });
 
 it("keeps explicit external reactions separate and never substitutes the WebChat run ID", async () => {
