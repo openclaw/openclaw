@@ -37,6 +37,7 @@ const imageCreateMock = vi.hoisted(() => vi.fn());
 const messageCreateMock = vi.hoisted(() =>
   vi.fn<(request: { data: MessageData }) => Promise<unknown>>(),
 );
+const messageReplyMock = vi.hoisted(() => vi.fn());
 const messageResourceGetMock = vi.hoisted(() =>
   vi.fn<(request: ResourceRequest) => Promise<unknown>>(),
 );
@@ -170,13 +171,14 @@ describe("sendMediaFeishu msg_type routing", () => {
       im: {
         file: { create: fileCreateMock },
         image: { create: imageCreateMock },
-        message: { create: messageCreateMock },
+        message: { create: messageCreateMock, reply: messageReplyMock },
         messageResource: { get: messageResourceGetMock },
       },
     });
     fileCreateMock.mockResolvedValue({ code: 0, data: { file_key: "file_key_1" } });
     imageCreateMock.mockResolvedValue({ code: 0, data: { image_key: "image_key_1" } });
     messageCreateMock.mockResolvedValue({ code: 0, data: { message_id: "msg_1" } });
+    messageReplyMock.mockResolvedValue({ code: 0, data: { message_id: "msg_reply" } });
     loadWebMediaMock.mockResolvedValue(webMedia("remote.opus", "audio/ogg", "remote-audio"));
     messageResourceGetMock.mockImplementation(async () => resourceResponse("resource-bytes"));
     transcodeAudioMock.mockResolvedValue(Buffer.from("opus-output"));
