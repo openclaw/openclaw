@@ -162,6 +162,7 @@ describe("production lint suppressions", () => {
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
+        "scripts/perf/lease-main-thread-renewal.mjs|typescript/unbound-method|3",
         // The size-record probe forwards Map.set with the original map receiver.
         "scripts/perf/model-prompt-stats-measure.ts|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
