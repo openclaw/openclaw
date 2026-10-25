@@ -36,26 +36,24 @@ import { userProfileOperations } from "./user-profiles.worker.js";
 
 const { options, hydrate, github } = useProfileDatabase("openclaw-multi-account-");
 
-function syncEmailGitHubProfile(params: {
-  accountId: number;
-  canonicalLogin: string;
-  email: string;
-  name?: string;
-}) {
-  return github(params.accountId, params.canonicalLogin, {
-    email: params.email,
-    initialName: params.name,
-  });
-}
-
-const createAccount = (accountId: number, canonicalLogin: string, email: string) =>
-  syncEmailGitHubProfile({ accountId, canonicalLogin, email });
+const createAccount = (accountId: number, login: string, email: string, initialName?: string) =>
+  github(accountId, login, { email, initialName });
+const accountFixture = (accountId: number, login: string, email: string, name: string) => ({
+  accountId,
+  login,
+  email,
+  signIn: () => createAccount(accountId, login, email, name),
+});
 const consent = (id: string, enabled: boolean) =>
   setUserPreferences(id, { [GIT_COAUTHOR_PREFERENCE_KEY]: enabled }, options);
 const readConsent = (id: string) => getUserPreferences(id, [GIT_COAUTHOR_PREFERENCE_KEY], options);
+const publicCredit = (enabled: boolean) => ({ [GIT_COAUTHOR_PREFERENCE_KEY]: enabled });
 const attribution = async (id: string) => (await resolveAttribution([id], options)).get(id);
 const schemaVersion = () =>
   openDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version;
+const readCredit = (db: Parameters<typeof readGitHub>[0], profileIds: string[]) =>
+  readGitHub(db, { type: "userProfiles.githubAttribution.resolve", profileIds });
+const directoryRow = (id: string, ...logins: string[]) => ({ id, logins });
 const legacyPerson = { displayName: "Saved Person Name", githubIdentity: { login: "legacy" } };
 
 describe("multi-account people", () => {
@@ -106,10 +104,7 @@ describe("multi-account people", () => {
           },
         ),
       ).toEqual({
-        profiles: [
-          { id: "a", logins: ["person", "person-work"] },
-          { id: "b", logins: [] },
-        ],
+        profiles: [directoryRow("a", "person", "person-work"), directoryRow("b")],
         truncated: true,
       });
       expect(rowsRead.length).toBeLessThanOrEqual(2);
@@ -120,10 +115,10 @@ describe("multi-account people", () => {
     expect(await directory(0)).toEqual({ profiles: [], truncated: true });
     expect(await directory(4)).toEqual({
       profiles: [
-        { id: "a", logins: ["person", "person-work"] },
-        { id: "b", logins: [] },
-        { id: "c", logins: ["off-page"] },
-        { id: "d", logins: [] },
+        directoryRow("a", "person", "person-work"),
+        directoryRow("b"),
+        directoryRow("c", "off-page"),
+        directoryRow("d"),
       ],
       truncated: false,
     });
@@ -149,12 +144,7 @@ describe("multi-account people", () => {
     const reads = observeMainThreadReads();
     const transactions = vi.spyOn(db, "exec");
     try {
-      expect(
-        readGitHub(db, {
-          type: "userProfiles.githubAttribution.resolve",
-          profileIds: [person.id, alias.id, alias.id, unverified.id, "missing"],
-        }),
-      ).toEqual({
+      expect(readCredit(db, [person.id, alias.id, alias.id, unverified.id, "missing"])).toEqual({
         type: "userProfiles.githubAttribution.resolve",
         identities: new Map([
           [person.id, { accountId: 71, login: "person" }],
@@ -187,22 +177,14 @@ describe("multi-account people", () => {
     ).run("legacy-person");
     const version = schemaVersion();
     // Decode the legacy shape before the schema owner makes it admissible for reopen.
-    expect(
-      readGitHub(db, {
-        type: "userProfiles.githubAttribution.resolve",
-        profileIds: ["legacy-person"],
-      }),
-    ).toMatchObject({ identities: new Map([["legacy-person", null]]) });
+    expect(readCredit(db, ["legacy-person"])).toMatchObject({
+      identities: new Map([["legacy-person", null]]),
+    });
     db.exec("ALTER TABLE user_profile_identities ADD COLUMN canonical_login TEXT");
     db.prepare(
       "UPDATE user_profile_identities SET canonical_login = 'legacy' WHERE subject = '70'",
     ).run();
-    expect(
-      readGitHub(db, {
-        type: "userProfiles.githubAttribution.resolve",
-        profileIds: ["legacy-person"],
-      }),
-    ).toMatchObject({
+    expect(readCredit(db, ["legacy-person"])).toMatchObject({
       identities: new Map([["legacy-person", { accountId: 70, login: "legacy" }]]),
     });
     expect(db.prepare("PRAGMA table_info(user_profiles)").all()).not.toContainEqual(
@@ -239,20 +221,10 @@ describe("multi-account people", () => {
     expect(getProfile(profile.id, options)).toMatchObject(legacyPerson);
   });
   it("keeps both verified accounts on one person across merge and alternating sign-ins", async () => {
-    const primary = {
-      accountId: 71,
-      canonicalLogin: "person",
-      email: "personal@example.test",
-      name: "One Person",
-    };
-    const secondary = {
-      accountId: 72,
-      canonicalLogin: "person-work",
-      email: "work@example.test",
-      name: "person",
-    };
-    const person = syncEmailGitHubProfile(primary);
-    const work = syncEmailGitHubProfile(secondary);
+    const primary = accountFixture(71, "person", "personal@example.test", "One Person");
+    const secondary = accountFixture(72, "person-work", "work@example.test", "person");
+    const person = primary.signIn();
+    const work = secondary.signIn();
     setAvatar(person.id, new Uint8Array([1, 2, 3]), "image/png", options);
     consent(person.id, false);
     const version = schemaVersion();
@@ -261,46 +233,41 @@ describe("multi-account people", () => {
     expect(beforeMerge.isCurrent()).toBe(false);
     closeDatabase();
     await hydrate();
+    const display = { id: person.id, displayName: "One Person", hasAvatar: true };
     for (const account of [secondary, primary, secondary]) {
-      expect(syncEmailGitHubProfile(account)).toMatchObject({
-        id: person.id,
-        displayName: "One Person",
+      expect(account.signIn()).toMatchObject({
+        ...display,
         githubIdentity: { login: "person" },
-        hasAvatar: true,
       });
       expect(
         (await resolveIdentity({ accountId: account.accountId, email: account.email }, options))
           ?.profileId,
       ).toBe(person.id);
-      expect(getUserProfileDisplay(work.id, options)).toMatchObject({
-        id: person.id,
-        displayName: "One Person",
-        hasAvatar: true,
-      });
+      expect(getUserProfileDisplay(work.id, options)).toMatchObject(display);
       expect(getProfileAvatar(work.id, options)?.bytes).toEqual(new Uint8Array([1, 2, 3]));
-      expect(readConsent(person.id)).toEqual({ [GIT_COAUTHOR_PREFERENCE_KEY]: false });
+      expect(readConsent(person.id)).toEqual(publicCredit(false));
     }
     expect(
       readSnapshot(options).profiles.filter((profile) => profile.mergedInto === null),
     ).toHaveLength(1);
     expect(await readDirectory(10, options)).toEqual({
-      profiles: [{ id: person.id, logins: ["person", "person-work"] }],
+      profiles: [directoryRow(person.id, "person", "person-work")],
       truncated: false,
     });
     const signInAlias = ensureProfileForTailscaleIdentity(
-      { login: `${secondary.canonicalLogin}@github` },
+      { login: `${secondary.login}@github` },
       options,
     );
     expect(signInAlias.id).not.toBe(person.id);
     expect(
       syncGitHubIdentity(
         {
-          identity: { accountId: secondary.accountId, login: secondary.canonicalLogin },
-          authenticationAlias: { kind: "github-login", login: secondary.canonicalLogin },
+          identity: { accountId: secondary.accountId, login: secondary.login },
+          authenticationAlias: { kind: "github-login", login: secondary.login },
         },
         options,
       ),
-    ).toMatchObject({ id: person.id, githubIdentity: { login: primary.canonicalLogin } });
+    ).toMatchObject({ id: person.id, githubIdentity: { login: primary.login } });
     expect(getUserProfileDisplay(signInAlias.id, options).id).toBe(person.id);
     expect(await resolveIdentity({ accountId: 73, email: primary.email }, options)).toBeUndefined();
     expect((await resolveAttribution([person.id, work.id], options)).get(work.id)).toBeNull();
@@ -322,7 +289,7 @@ describe("multi-account people", () => {
       }
       expect(await attribution(work.id)).toEqual({
         accountId: primary.accountId,
-        login: primary.canonicalLogin,
+        login: primary.login,
       });
       expect(attributionRead).not.toHaveBeenCalled();
     } finally {
@@ -331,16 +298,16 @@ describe("multi-account people", () => {
     expect(await setPreferences(work.id, { theme: "dark" }, options)).toMatchObject({ ok: true });
     expect(preparedCredit.isCurrent()).toBe(true);
     expect(
-      await setPreferences(
-        work.id,
-        { [GIT_COAUTHOR_PREFERENCE_KEY]: false },
-        { ...options, expectedEntries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } },
-      ),
+      await setPreferences(work.id, publicCredit(false), {
+        ...options,
+        expectedEntries: publicCredit(false),
+      }),
     ).toEqual({ ok: false, error: { code: "conflict" } });
     expect(preparedCredit.isCurrent()).toBe(true);
-    expect(
-      await setPreferences(work.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false }, options),
-    ).toEqual({ ok: true, value: { profileId: person.id } });
+    expect(await setPreferences(work.id, publicCredit(false), options)).toEqual({
+      ok: true,
+      value: { profileId: person.id },
+    });
     expect(preparedCredit.isCurrent()).toBe(false);
     expect(await resolveAttribution([person.id, work.id], options)).toEqual(
       new Map([
@@ -371,10 +338,10 @@ describe("multi-account people", () => {
     });
     expect(getProfileAvatar(older.id, options)?.bytes).toEqual(new Uint8Array([4, 5]));
     expect(await readDirectory(10, options)).toEqual({
-      profiles: [{ id: target.id, logins: ["older-work", "primary-person"] }],
+      profiles: [directoryRow(target.id, "older-work", "primary-person")],
       truncated: false,
     });
-    expect(readConsent(target.id)).toEqual({ [GIT_COAUTHOR_PREFERENCE_KEY]: false });
+    expect(readConsent(target.id)).toEqual(publicCredit(false));
   });
 
   it("leaves ambiguous or invalid primary accounts out of public credit without breaking sign-in", async () => {

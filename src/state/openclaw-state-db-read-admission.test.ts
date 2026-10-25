@@ -38,10 +38,7 @@ import { getOpenClawStateWorkerOwner as workerOwner } from "./openclaw-state-wor
 import { runOpenClawStateWorkerOperation as runOperation } from "./openclaw-state-worker-store.js";
 import { openExistingSqliteWorkerBackend as openBackend } from "./openclaw-state.worker.js";
 
-const hostBirth: {
-  paths: Set<string>;
-  ctimeAdvanceNs: bigint;
-} = { paths: new Set(), ctimeAdvanceNs: 0n };
+const hostBirth = { paths: new Set<string>(), ctimeAdvanceNs: 0n };
 const ignoresHostBirthtime = process.platform === "linux" || process.platform === "android";
 
 function fixture(run: (fixture: ReturnType<typeof bindFixture>) => Promise<void>) {
@@ -60,11 +57,10 @@ function bindFixture({ env, statePath }: OpenClawTestState) {
       createPluginStateKeyedStore<string>("discord", { namespace, maxEntries: 1, env }),
     empty: (version?: number) => {
       const pathname = statePath("inspected.sqlite");
-      const database = new DatabaseSync(pathname);
+      using database = new DatabaseSync(pathname);
       if (version !== undefined) {
         database.exec(`PRAGMA user_version = ${version}`);
       }
-      database.close();
       return pathname;
     },
   };
@@ -128,12 +124,6 @@ function observeHostBirthtime(paths: string[]): void {
   syncBuiltinESMExports();
 }
 
-// Coarse-timestamp filesystems (ext4 before Linux 6.13, CI overlays) keep ctime across a
-// write or link within one clock tick; advance it explicitly so fallback birthtime moves.
-function advanceHostCtime(): void {
-  hostBirth.ctimeAdvanceNs += 1n;
-}
-
 it("permits a lazy native write after healthy peer changes when birthtime falls back to ctime", async () => {
   await fixture(async ({ open, statePath, context, prepare }) => {
     const pathname = open().path;
@@ -151,12 +141,15 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
     );
     try {
       await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.patch");
-      const peer = new DatabaseSync(pathname);
-      peer.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-      peer.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-      peer.close();
+      {
+        using peer = new DatabaseSync(pathname);
+        peer.exec(
+          `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}; PRAGMA wal_checkpoint(TRUNCATE)`,
+        );
+      }
       fs.linkSync(pathname, alias);
-      advanceHostCtime();
+      // Advance coarse filesystem timestamps so the ctime birthtime fallback moves.
+      hostBirth.ctimeAdvanceNs += 1n;
       const after = fs.statSync(pathname, { bigint: true });
       expect(after.ino).toBe(before.ino);
       expect(after.birthtimeNs).not.toBe(before.birthtimeNs);

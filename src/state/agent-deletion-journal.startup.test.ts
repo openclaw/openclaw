@@ -290,9 +290,7 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
     };
     const first = await beginSessionEffect(target);
     first.release();
-    const directReads = vi.spyOn(stateReads, "withExistingOpenClawStateDatabaseCurrentReadOnly");
-    expect(isAgentDeletionBlocked("doomed", fixture.options)).toBe(false);
-    expect(directReads).not.toHaveBeenCalled();
+    fixture.blocked(false);
     reads.mockClear();
     const active = await beginSessionEffect(target);
     const queued = beginSessionEffect(target);
@@ -307,9 +305,7 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
         expect(active.isActive()).toBe(true);
         await expect(beginSessionEffect(target)).rejects.toThrow("deletion");
         expect(await fixture.read()).toBe("pending");
-        directReads.mockClear();
-        expect(isAgentDeletionBlocked("doomed", fixture.options)).toBe(true);
-        expect(directReads).not.toHaveBeenCalled();
+        fixture.blocked(true);
         active.release();
       });
       reopen();

@@ -50,6 +50,13 @@ function createPreflightState(stateDir: string) {
   return { ...fixture, statePath };
 }
 
+function expectSnapshotDirectories(locations: string[], exists: boolean) {
+  expectFiles(
+    locations.map((location) => path.dirname(location)),
+    exists,
+  );
+}
+
 it.each([
   ...(["success", "failure", "cancel"] as const).map((outcome) => ({
     source: "direct",
@@ -83,6 +90,8 @@ it.each([
     }
 
     const marker = (name: string) => path.join(root, name);
+    const resume = (name: string) => fs.writeFileSync(marker(name), "resume");
+    const expectMarker = (name: string, exists: boolean) => expectFiles([marker(name)], exists);
     const preload = marker("pause-reader-close.cjs");
     const sources = paths.map((pathname) =>
       path.toNamespacedPath(fs.realpathSync.native(pathname)),
@@ -189,12 +198,9 @@ it.each([
     const settled = trackSettlement(run);
     let childClosures: Promise<void>[] = [];
     try {
-      await vi.waitFor(
-        () => {
-          expectFiles([marker("close-0"), marker("close-1")], true);
-        },
-        { timeout: 10_000 },
-      );
+      await vi.waitFor(() => expectFiles([marker("close-0"), marker("close-1")], true), {
+        timeout: 10_000,
+      });
       expect(settled()).toBe(false);
       expect(
         prepare.mock.calls.filter(([pathname]) =>
@@ -204,7 +210,7 @@ it.each([
       expect(cleanedSnapshots.size).toBe(0);
       // Snapshot-copy workers use spawn; this counts the two schema-reader children.
       expect(fork).toHaveBeenCalledTimes(2);
-      expect(fs.existsSync(marker("close-2"))).toBe(false);
+      expectMarker("close-2", false);
       const readLocations = source === "snapshot" ? locations : sources;
       const [firstReadLocation, secondReadLocation] = readLocations;
       if (firstReadLocation === undefined || secondReadLocation === undefined) {
@@ -232,16 +238,16 @@ it.each([
         expect(children.map((child) => child.killed)).toEqual([true, true]);
         await expect(run).rejects.toBe(cancellation);
       } else {
-        fs.writeFileSync(marker("release-0"), "resume");
+        resume("release-0");
         if (outcome === "close-failure") {
-          await vi.waitFor(() => expect(fs.existsSync(marker("retired-0"))).toBe(true), {
+          await vi.waitFor(() => expectMarker("retired-0", true), {
             timeout: 10_000,
           });
           expect(settled()).toBe(false);
           expect(closedChildren).toBe(0);
           expect(cleanedSnapshots.size).toBe(0);
           expect(fs.existsSync(firstReadLocation)).toBe(true);
-          fs.writeFileSync(marker("exit-release"), "resume");
+          resume("exit-release");
         }
         if (outcome === "failure" || outcome === "close-failure") {
           await childClosures[0];
@@ -261,7 +267,7 @@ it.each([
           }
           expect(fork).toHaveBeenCalledTimes(2);
         }
-        fs.writeFileSync(marker("release-1"), "resume");
+        resume("release-1");
         if (outcome === "failure") {
           await expect(run).rejects.toMatchObject({ name: "SqliteIntegrityError" });
         } else if (outcome === "close-failure") {
@@ -272,7 +278,7 @@ it.each([
       }
       expect(closedChildren).toBe(2);
       expect(fork).toHaveBeenCalledTimes(2);
-      expect(fs.existsSync(marker("close-2"))).toBe(outcome === "success");
+      expectMarker("close-2", outcome === "success");
       if (outcome === "success") {
         expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith({
           schemaProcessCount: 2,
@@ -280,10 +286,7 @@ it.each([
           schemaSnapshotCount: 0,
         });
       }
-      expectFiles(
-        locations.map((location) => path.dirname(location)),
-        false,
-      );
+      expectSnapshotDirectories(locations, false);
       deepStrictEqual(
         paths.map((pathname) => fs.readFileSync(pathname)),
         originalBytes,
@@ -295,9 +298,9 @@ it.each([
         false,
       );
     } finally {
-      fs.writeFileSync(marker("release-0"), "resume");
-      fs.writeFileSync(marker("release-1"), "resume");
-      fs.writeFileSync(marker("exit-release"), "resume");
+      resume("release-0");
+      resume("release-1");
+      resume("exit-release");
       controller.abort(cancellation);
       await Promise.allSettled([run, ...childClosures]);
     }
@@ -402,10 +405,7 @@ it.each(["cancel", "failure"] as const)(
           paths: 2,
           locations: 2,
         });
-        expectFiles(
-          locations.map((location) => path.dirname(location)),
-          true,
-        );
+        expectSnapshotDirectories(locations, true);
         controller.abort(new Error("intentional preflight cancellation"));
       } else {
         await withTestTimeout(firstCleaned.promise, 10_000, "failing snapshot did not clean up");
@@ -426,28 +426,15 @@ it.each(["cancel", "failure"] as const)(
     } else {
       await expect(run).rejects.toThrow();
     }
-    expect({
-      settledBeforeRelease,
-      preparedBeforeRelease,
-      prepared: preparedPaths.length,
-      cleaned: cleaned.length,
-      active,
-      peak,
-      peerCleanupFinished,
-      locations: locations.length,
-    }).toEqual({
+    expect({ settledBeforeRelease, active, peak, peerCleanupFinished }).toEqual({
       settledBeforeRelease: false,
-      preparedBeforeRelease: 2,
-      prepared: 2,
-      cleaned: 2,
       active: 0,
       peak: 2,
       peerCleanupFinished: true,
-      locations: 2,
     });
-    expectFiles(
-      locations.map((location) => path.dirname(location)),
-      false,
+    expect([preparedBeforeRelease, preparedPaths.length, cleaned.length, locations.length]).toEqual(
+      [2, 2, 2, 2],
     );
+    expectSnapshotDirectories(locations, false);
   },
 );
