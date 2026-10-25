@@ -72,8 +72,7 @@ struct OpenClawNativeStateSQLiteTests {
         try self.withDatabaseURL { writer, url in
             try writer.ensureCanonicalTable(.macosPortGuardianRecords)
             try self.createConfigMachineState(writer)
-            try writer.execute(
-                "PRAGMA user_version = 2147483647; UPDATE schema_meta SET schema_version = 2147483647")
+            try writer.execute("PRAGMA user_version = 33; UPDATE schema_meta SET schema_version = 33")
             let original = try Data(contentsOf: url)
 
             #expect {
