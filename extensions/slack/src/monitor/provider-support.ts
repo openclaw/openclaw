@@ -328,6 +328,12 @@ export function createSlackBoltApp(params: {
   socketModeLogger: SlackSocketModeLogger;
 } {
   const socketModeLogger = createSlackSocketModeLogger();
+  const processEventErrorHandler = async ({ logger }: { logger: SlackSdkLogger }) => {
+    // Receiver failures can precede durable admission. Record the failure without
+    // exposing event/error contents or changing the existing acknowledgement policy.
+    logger.error("Slack receiver event processing failed");
+    return false;
+  };
   const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
     appToken: params.appToken ?? "",
     autoReconnectEnabled: true,
@@ -337,7 +343,7 @@ export function createSlackBoltApp(params: {
     installerOptions: {
       clientOptions: params.clientOptions,
     },
-    ...(params.wrapReceiver ? { processEventErrorHandler: async () => false } : {}),
+    ...(params.wrapReceiver ? { processEventErrorHandler } : {}),
   };
 
   let receiver:
@@ -367,7 +373,7 @@ export function createSlackBoltApp(params: {
     receiver = new params.interop.HTTPReceiver({
       signingSecret: params.signingSecret ?? "",
       endpoints: params.slackWebhookPath,
-      ...(params.wrapReceiver ? { processEventErrorHandler: async () => false } : {}),
+      ...(params.wrapReceiver ? { processEventErrorHandler } : {}),
     });
   } else {
     receiver = createSlackRelayReceiver();
