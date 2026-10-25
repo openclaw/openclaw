@@ -14,10 +14,10 @@ result and one SELECT, with no replacement SQL or extra worker request. Count
 both total work and Gateway main-thread work; main-thread SQL must not increase.
 An operation without a reproduced envelope is not a measured saving.
 
-The candidate flows are transcript projection-status reads through `chat.history`,
-Team Reports week/month aggregation, and managed-update handoff inspection.
+The candidate flows are transcript projection-status reads through `chat.history`
+and Team Reports week/month aggregation.
 Preserve owner admission, cancellation, committed-write visibility, report
-ordering and date bounds, and handoff revision/identity checks. This change must
+ordering and date bounds. This change must
 not alter schema, durability, write transactions, or cross-store commit ordering.
 
 Use the existing projection workload with a new synthetic output directory:
@@ -29,8 +29,19 @@ node --import ./scripts/tsx.mjs scripts/bench-session-projection-ready.mts \
   --warm-samples 5 --cpu-profile
 ```
 
-Run real owner regressions for the other operations and reproduce their product
-entry points with synthetic state. Report entry-point gaps explicitly. Reuse the
+Run the Team Reports workload through a real Gateway with one synthetic commit,
+summaries and automatic scheduling disabled, and week/month rollups enabled:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-team-reports-snapshots.mts \
+  --out <new-output> --observer <frozen-observer.cjs> --samples 5 \
+  --settle-ms 2000 --cpu-profile
+```
+
+Run real owner regressions for committed-write visibility. Report entry-point
+gaps explicitly. Managed-update handoff and nested auth snapshots remain: their
+actual PostgreSQL callers already hold an outer transaction, so removing the
+inner wrapper saves no statements. Reuse the
 frozen standard Gateway workload for whole-SQL and warmed-turn non-regression.
 Keep cold startup, cold requests, warm requests, and background work separate.
 Compare statement/request/main-thread medians and ranges for three alternating
