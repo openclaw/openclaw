@@ -208,7 +208,7 @@ it("rejects state and repository overlap in either canonical direction", async (
   }
 });
 
-it("backs up a configured external agent database for explicit and all scopes", async () => {
+it("backs up an explicitly selected external agent database", async () => {
   const root = await fs.realpath(tempRoot());
   const { stateDir } = createStateDatabaseFixture(root);
   const agentDir = path.join(root, "external-agent");
@@ -219,28 +219,17 @@ it("backs up a configured external agent database for explicit and all scopes", 
   await withBackupStateEnv(
     { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
     async () => {
-      for (const { scope, selection } of [
-        { scope: "explicit", selection: { agents: ["main"] } },
-        { scope: "all", selection: { all: true } },
-      ]) {
-        const repositoryPath = path.join(root, `${scope}-repository`);
-        await initializeGitBackupRepository({ repositoryPath, stateDir });
-        const result = await backupGitCreateCommand(createTestRuntime(), {
-          repository: repositoryPath,
-          ...selection,
-        });
-        const manifest = JSON.parse(
-          await fs.readFile(path.join(repositoryPath, "agents", "main", "manifest.json"), "utf8"),
-        ) as { identity: { role: string; agentId: string } };
-
-        expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
-        expect(manifest.identity).toEqual({ role: "agent", agentId: "main" });
-        if (scope === "all") {
-          await expect(
-            fs.stat(path.join(repositoryPath, "global", "manifest.json")),
-          ).resolves.toBeDefined();
-        }
-      }
+      const repositoryPath = path.join(root, "repository");
+      await initializeGitBackupRepository({ repositoryPath, stateDir });
+      const result = await backupGitCreateCommand(createTestRuntime(), {
+        repository: repositoryPath,
+        agents: ["main"],
+      });
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(repositoryPath, "agents/main/manifest.json"), "utf8"),
+      ) as { identity: { role: string; agentId: string } };
+      expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
+      expect(manifest.identity).toEqual({ role: "agent", agentId: "main" });
     },
   );
 });
@@ -285,6 +274,7 @@ it.each(["missing", "old-schema", "removed"] as const)(
           warnings: z.array(z.string()).optional(),
         });
         const first = resultSchema.parse(JSON.parse((await create()).stdout));
+        await expect(fs.stat(file("global/manifest.json"))).resolves.toBeDefined();
         const opsTree = await git("rev-parse", "HEAD:agents/ops");
         const mainTree = await git("rev-parse", "HEAD:agents/main");
         withDatabase(path.join(entries.main.agentDir, "openclaw-agent.sqlite"), (main) => {
