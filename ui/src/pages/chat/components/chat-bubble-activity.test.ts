@@ -16,6 +16,20 @@ import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
+const query = <T extends HTMLElement = HTMLElement>(root: ParentNode, selector: string) =>
+  root.querySelector<T>(selector);
+function indicator(options: Parameters<typeof ChatWorkingIndicator>[0]["options"], key = "status") {
+  const view = mountSolid(ChatWorkingIndicator, {
+    part: { kind: "reading-indicator", key, startedAt: 1 },
+    options: { bubbleMode: true, ...options },
+  });
+  onTestFinished(view.dispose);
+  return view.container;
+}
+function expand(root: ParentNode) {
+  query(root, "summary")!.click();
+  expect(query<HTMLDetailsElement>(root, "details")?.open).toBe(true);
+}
 
 function mountThread(id: string, overrides: Partial<ChatThreadProps> = {}) {
   const container = document.body.appendChild(document.createElement("div"));
@@ -53,7 +67,7 @@ it("keeps streaming text and open status details stable behind the dot preview",
     expect(find(".chat-bubble-activity")).not.toBeNull();
   });
   const paragraph = find(".chat-bubble.streaming p");
-  const details = container.querySelector<HTMLDetailsElement>(".chat-bubble-activity");
+  const details = query<HTMLDetailsElement>(container, ".chat-bubble-activity");
   expect(details?.open).toBe(false);
   expect(details?.querySelectorAll(".chat-bubble-dots > span")).toHaveLength(3);
   details!.querySelector("summary")!.click();
@@ -90,12 +104,10 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
     expect(find(".chat-activity-group--bubble > button")?.textContent).toContain("Raw details");
     expect(container.textContent).toContain("The answer keeps streaming.");
   });
-  const button = container.querySelector<HTMLButtonElement>(
-    ".chat-activity-group--bubble > button",
-  );
+  const button = query(container, ".chat-activity-group--bubble > button");
   expect(button?.querySelector(".chat-bubble-dots")).toBeNull();
   expect(container.textContent).not.toContain("Detailed file contents.");
-  const status = container.querySelector<HTMLDetailsElement>(".chat-bubble-activity");
+  const status = query<HTMLDetailsElement>(container, ".chat-bubble-activity");
   expect(status).not.toBeNull();
   status!.querySelector("summary")!.click();
   expect(status!.open).toBe(true);
@@ -105,9 +117,7 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
     expect(find(".chat-activity-group.is-open")).not.toBeNull();
     expect(find(".chat-activity-group__body .chat-tool-msg-summary:enabled")).not.toBeNull();
   });
-  const tool = container.querySelector<HTMLButtonElement>(
-    ".chat-activity-group__body .chat-tool-msg-summary",
-  );
+  const tool = query(container, ".chat-activity-group__body .chat-tool-msg-summary");
   expect(tool).not.toBeNull();
   tool!.click();
   await waitForSolid(() => {
@@ -127,31 +137,21 @@ it("labels tool activity and exposes existing cards without hiding the answer", 
 });
 
 it("keeps model startup quiet and approval actionable in bubble mode", () => {
-  const { container, dispose } = mountSolid(ChatWorkingIndicator, {
-    part: { kind: "reading-indicator", key: "status", startedAt: 1 },
-    options: { bubbleMode: true, startupLabel: "Starting model", outputTokens: 42 },
-  });
-  onTestFinished(dispose);
+  const container = indicator({ startupLabel: "Starting model", outputTokens: 42 });
   const summary = container.querySelector("summary")!;
   expect(summary.textContent?.trim()).toBe("");
   expect(summary.querySelectorAll(".chat-bubble-dots > span")).toHaveLength(3);
   expect(container.querySelector("openclaw-working-phrase")).toBeNull();
-  summary.click();
-  expect(container.querySelector("details")?.open).toBe(true);
+  expand(container);
   expect(container.textContent).toContain("Starting model");
-  const approval = mountSolid(ChatWorkingIndicator, {
-    part: { kind: "reading-indicator", key: "approval", startedAt: 1 },
-    options: { bubbleMode: true, waitingApproval: true },
-  });
-  onTestFinished(approval.dispose);
-  expect(approval.container.querySelector("summary")?.textContent).toContain(
-    "Waiting for approval",
-  );
-  expect(approval.container.querySelector("summary .chat-bubble-dots")).toBeNull();
-  expect(approval.container.querySelector("svg")).toBeNull();
+  const approval = indicator({ waitingApproval: true }, "approval");
+  expect(query(approval, "summary")?.textContent).toContain("Waiting for approval");
+  expect(query(approval, "summary .chat-bubble-dots")).toBeNull();
+  expect(query(approval, "svg")).toBeNull();
 });
 
 it("uses one live work bubble and restores dots when the operation settles", async () => {
+  const args = { command: "pnpm test", title: "Checking the tests" };
   const call = (phase: "start" | "result") => ({
     role: "assistant",
     runId: "bubble-run",
@@ -161,14 +161,14 @@ it("uses one live work bubble and restores dots when the operation settles", asy
         type: "toolcall",
         id: "check",
         name: "exec",
-        arguments: { command: "pnpm test", title: "Checking the tests" },
+        arguments: args,
       },
     ],
     activity: [
       projectAgentToolActivity({
         toolCallId: "check",
         name: "exec",
-        args: { command: "pnpm test", title: "Checking the tests" },
+        args,
         phase,
       }),
     ],
@@ -193,17 +193,12 @@ it("uses one live work bubble and restores dots when the operation settles", asy
 
 it("keeps the active parent's work bubble and child count without embedding child rows", () => {
   const onOpenSubagents = vi.fn();
-  const { container, dispose } = mountSolid(ChatWorkingIndicator, {
-    part: { kind: "reading-indicator", key: "parallel", startedAt: 1 },
-    options: { bubbleMode: true, runningSubagents: 2, onOpenSubagents },
-  });
-  onTestFinished(dispose);
+  const container = indicator({ runningSubagents: 2, onOpenSubagents }, "parallel");
   expect(container.querySelectorAll("summary .chat-bubble-dots--working")).toHaveLength(1);
   expect(container.querySelector("[data-subagent-session-key]")).toBeNull();
   expect(container.querySelector("summary")?.textContent?.trim()).toBe("");
-  container.querySelector("summary")!.click();
-  expect(container.querySelector("details")?.open).toBe(true);
-  const count = container.querySelector<HTMLButtonElement>(".chat-working-indicator__subagents");
+  expand(container);
+  const count = query(container, ".chat-working-indicator__subagents");
   expect(count?.textContent).toBe("2 subagents running");
   count?.click();
   expect(onOpenSubagents).toHaveBeenCalledOnce();

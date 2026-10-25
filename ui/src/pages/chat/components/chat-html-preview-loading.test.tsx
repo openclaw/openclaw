@@ -122,48 +122,39 @@ it("defers HTML controls, retries imports, and retains the frame across source t
     wrapper: provider.wrapper,
     container: document.body.appendChild(createApplicationContextProvider(context)),
   });
+  const query = (selector: string) => view.container.querySelector<HTMLElement>(selector);
+  const retry = () => query(".lazy-view-error__action")!.click();
+  const toggle = () => query("button")!.click();
+  const pending = () => expect(query('[role="status"]')).not.toBeNull();
+  const failed = (text: string) =>
+    waitForSolid(() => expect(query('[role="alert"]')?.textContent).toContain(text));
+  const loaded = (count: number) => waitForSolid(() => expect(load).toHaveBeenCalledTimes(count));
   flush();
   expect(load).not.toHaveBeenCalled();
-  expect(view.container.querySelector("openclaw-chat-html-preview")).toBeNull();
-  view.container.querySelector<HTMLButtonElement>("button")!.click();
-  await waitForSolid(() => expect(load).toHaveBeenCalledOnce());
-  expect(
-    view.container.querySelector('[role="status"]'),
-    "initial import is pending",
-  ).not.toBeNull();
+  expect(query("openclaw-chat-html-preview")).toBeNull();
+  toggle();
+  await loaded(1);
+  pending();
   initialLoad.reject(new Error("Synthetic preview import failed"));
-  await waitForSolid(() =>
-    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Synthetic preview import failed",
-    ),
-  );
-  view.container.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-  await waitForSolid(() => expect(load).toHaveBeenCalledTimes(2));
-  expect(view.container.querySelector('[role="status"]'), "retry import is pending").not.toBeNull();
+  await failed("Synthetic preview import failed");
+  retry();
+  await loaded(2);
+  pending();
   const staleFailure = new Error("Failed to fetch dynamically imported module");
   staleLoad.reject(staleFailure);
   const event = new Event("vite:preloadError", { cancelable: true });
   Object.defineProperty(event, "payload", { value: staleFailure });
   window.dispatchEvent(event);
-  await waitForSolid(() =>
-    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
-      "Failed to fetch dynamically imported module",
-    ),
-  );
+  await failed("Failed to fetch dynamically imported module");
   await waitForSolid(() => expect(fetchDocument).toHaveBeenCalledOnce());
-  view.container.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-  await waitForSolid(() =>
-    expect(
-      view.container.querySelector('[role="status"]'),
-      "stale recovery is pending",
-    ).not.toBeNull(),
-  );
+  retry();
+  await waitForSolid(pending);
   const canReload = retryStale.mock.calls[0]![0].canReload;
   expect(canReload()).toBe(true);
   replaceFile({ ...first, line: undefined });
   flush();
   expect(canReload()).toBe(true);
-  expect(view.container.querySelector('[role="status"]')).not.toBeNull();
+  pending();
   replaceFile({
     ...first,
     path: "current.html",
@@ -182,15 +173,10 @@ it("defers HTML controls, retries imports, and retains the frame across source t
     expect.any(String),
   );
   recovery.resolve(false);
-  await waitForSolid(() =>
-    expect(
-      view.container.querySelector('[role="alert"]'),
-      "retired recovery returns to retry",
-    ).not.toBeNull(),
-  );
+  await waitForSolid(() => expect(query('[role="alert"]')).not.toBeNull());
   expect(load).toHaveBeenCalledTimes(2);
-  view.container.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-  await waitForSolid(() => expect(load).toHaveBeenCalledTimes(3));
+  retry();
+  await loaded(3);
   const removed = mountSolid(
     () => (
       <HtmlPreview
@@ -205,26 +191,21 @@ it("defers HTML controls, retries imports, and retains the frame across source t
   removed.unmount();
   retryLoad.resolve();
   await moduleLoaded.promise;
-  await waitForSolid(() =>
-    expect(
-      view.container.querySelector("iframe"),
-      "current preview loads its frame",
-    ).not.toBeNull(),
-  );
+  await waitForSolid(() => expect(query("iframe")).not.toBeNull());
   expect(load).toHaveBeenCalledTimes(3);
   expect(request).toHaveBeenCalledExactlyOnceWith(
     "canvas.document.preview",
     { html: "<h1>Current</h1>" },
     expect.any(Object),
   );
-  const frame = view.container.querySelector("iframe");
-  view.container.querySelector<HTMLButtonElement>("button")!.click();
+  const frame = query("iframe");
+  toggle();
   flush();
-  expect(view.container.querySelector<HTMLElement>(".chat-html-preview")?.hidden).toBe(true);
-  expect(view.container.querySelector("iframe")).toBe(frame);
-  view.container.querySelector<HTMLButtonElement>("button")!.click();
+  expect(query(".chat-html-preview")?.hidden).toBe(true);
+  expect(query("iframe")).toBe(frame);
+  toggle();
   flush();
-  expect(view.container.querySelector<HTMLElement>(".chat-html-preview")?.hidden).toBe(false);
-  expect(view.container.querySelector("iframe")).toBe(frame);
+  expect(query(".chat-html-preview")?.hidden).toBe(false);
+  expect(query("iframe")).toBe(frame);
   expect(request).toHaveBeenCalledOnce();
 });
