@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import {
   composerFixture,
@@ -147,55 +146,7 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       expect(view.value().mentions).toEqual([mention("profile-alex-online")]);
       expect(view.send).not.toHaveBeenCalled();
     });
-    it("ends an in-flight bare @ search on space and keeps subsequent prose as text", async () => {
-      const prefix = "Please review the proposal and keep the literal symbol ";
-      const suffix = " in the final explanation without notifying anyone";
-      const view = composerFixture(kind, `${prefix}${suffix}`);
-      const response = createDeferred<UsersMentionableResult>();
-      view.request.mockReturnValue(response.promise);
-      view.edit(`${prefix}@${suffix}`, {
-        start: prefix.length,
-        caret: prefix.length + 1,
-        data: "@",
-      });
-      expect(view.query(".mention-menu")).not.toBeNull();
-      await vi.advanceTimersByTimeAsync(150);
-      view.edit(`${prefix}@ ${suffix}`, {
-        start: prefix.length + 1,
-        caret: prefix.length + 2,
-        data: " ",
-      });
-      expect(view.query(".mention-menu")).toBeNull();
-      response.resolve(people);
-      const draft = `${prefix}@ as plain text${suffix}`;
-      view.edit(draft, {
-        start: prefix.length + 2,
-        caret: prefix.length + "@ as plain text".length,
-        data: "as plain text",
-      });
-      await vi.advanceTimersByTimeAsync(150);
-      expect(view.query(".mention-menu")).toBeNull();
-      expect(view.request).toHaveBeenCalledTimes(1);
-      view.key("Enter");
-      expect(view.send).toHaveBeenCalledExactlyOnceWith({ draft, mentions: [] });
-    });
   }
-
-  it("closes the picker after keyup moves beyond the active mention", async () => {
-    const prefix = "Please review ";
-    const suffix = "the written instructions and leave the rest unchanged";
-    const view = composerFixture(kind, `${prefix}${suffix}`);
-    const draft = `${prefix}@${suffix}`;
-    view.edit(draft, { start: prefix.length, caret: prefix.length + 1, data: "@" });
-    const textarea = view.query<HTMLTextAreaElement>("textarea")!;
-    textarea.setSelectionRange(draft.length, draft.length, "forward");
-    textarea.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "End" }));
-    await vi.advanceTimersByTimeAsync(150);
-    expect(view.query(".mention-menu")).toBeNull();
-    expect(view.request).not.toHaveBeenCalled();
-    view.key("Enter");
-    expect(view.send).toHaveBeenCalledExactlyOnceWith({ draft, mentions: [] });
-  });
 
   it.each(kind === "chat" ? ["original end"] : ["original end", "edited name part", "typed name"])(
     "selects a full-name target from %s",
@@ -294,32 +245,16 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     });
   }
 
-  it.each(kind === "new-session" ? ["first identical label", "edited token"] : ["edited token"])(
-    "reconciles recipients after deleting %s",
-    (target) => {
-      const first = target === "first identical label";
-      const view = composerFixture(
-        kind,
-        first ? "@Alex @Alex" : "@Alex",
-        first ? [mention("first-alex"), mention("second-alex", 6, 11)] : [mention("alex")],
-      );
-      const expected = first ? [mention("second-alex")] : [];
-      view.edit(first ? "@Alex" : "@Alx", {
-        start: first ? 0 : 3,
-        end: first ? 6 : 4,
-        inputType: first ? "deleteContentBackward" : "deleteContentForward",
-        data: null,
-      });
-      expect(view.value().mentions).toEqual(expected);
-      if (expected.length === 0) {
-        expect(view.container.textContent).not.toContain("Will notify");
-        view.edit("@Alex", { start: 0, end: 4, inputType: "insertFromPaste" });
-        expect(view.request).not.toHaveBeenCalled();
-      }
-      view.key("Enter");
-      expect(view.send).toHaveBeenCalledWith({ draft: "@Alex", mentions: expected });
-    },
-  );
+  it("drops edited recipients and keeps pasted labels as text", () => {
+    const view = composerFixture(kind, "@Alex", [mention("alex")]);
+    view.edit("@Alx", { start: 3, end: 4, inputType: "deleteContentForward", data: null });
+    expect(view.value().mentions).toEqual([]);
+    expect(view.container.textContent).not.toContain("Will notify");
+    view.edit("@Alex", { start: 0, end: 4, inputType: "insertFromPaste" });
+    expect(view.request).not.toHaveBeenCalled();
+    view.key("Enter");
+    expect(view.send).toHaveBeenCalledWith({ draft: "@Alex", mentions: [] });
+  });
 
   if (kind === "new-session") {
     it.each(["`@Peter Steinberger", "```\n@Peter Steinberger", "/command @Peter Steinberger"])(

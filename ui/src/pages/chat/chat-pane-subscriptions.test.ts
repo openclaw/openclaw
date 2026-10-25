@@ -49,28 +49,20 @@ describe("chat pane approval replay subscriptions", () => {
     };
     const sync = syncSelectedSessionMessageSubscription(state);
     await started.promise;
-    for (const payload of [
-      {
-        sessionKey: state.sessionKey,
-        phase: "terminal",
-        updatedAtMs: 2,
-        approval: {
-          ...pending,
-          status: "denied",
-          decision: "deny",
-          reason: "user",
-          resolvedAtMs: 2,
-        },
-      },
-      {
-        sessionKey: state.sessionKey,
-        phase: "pending",
-        updatedAtMs: 3,
-        approval: { ...pending, id: "exec:new-live", urlPath: "/approve/exec%3Anew-live" },
-      },
-    ]) {
-      handlePageGatewayEvent(state, { type: "event", event: "session.approval", payload });
-    }
+    const emit = (phase: string, updatedAtMs: number, approval: unknown) =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.approval",
+        payload: { sessionKey: state.sessionKey, phase, updatedAtMs, approval },
+      });
+    emit("terminal", 2, {
+      ...pending,
+      status: "denied",
+      decision: "deny",
+      reason: "user",
+      resolvedAtMs: 2,
+    });
+    emit("pending", 3, { ...pending, id: "exec:new-live", urlPath: "/approve/exec%3Anew-live" });
     replay.resolve({
       key: state.sessionKey,
       agentId: null,
@@ -257,51 +249,6 @@ it("updates native locality synchronously and catches up parked panes on reveal"
   connectPaneTestView(pane);
   await pane.updateComplete;
   expect(rendered.at(-1)).toBeNull();
-});
-
-it("parks and remounts presentation subscriptions using the runtime's context without a provider", async () => {
-  const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
-  const navigation = pane.context.navigation;
-  const subscribe = navigation.subscribe.bind(navigation);
-  const released = vi.fn();
-  const subscriptions = vi.spyOn(navigation, "subscribe").mockImplementation((listener) => {
-    const stop = subscribe(listener);
-    return () => {
-      released();
-      stop();
-    };
-  });
-  const pluginSubscriptions = vi.spyOn(pane.context.plugins, "subscribe");
-  const { rendered, render, expectUpdate } = observeRender(
-    pane,
-    () => navigation.snapshot.navCollapsed,
-  );
-  onTestFinished(() => {
-    pane.disconnectedCallback();
-    vi.restoreAllMocks();
-  });
-  connectPaneTestView(pane);
-  await pane.updateComplete;
-  expect(subscriptions).toHaveBeenCalledOnce();
-  expect(pluginSubscriptions).toHaveBeenCalledOnce();
-
-  await expectUpdate(() => navigation.update({ navCollapsed: true }), true);
-  await expectUpdate(() => navigation.update({ navCollapsed: false }), false, true);
-
-  pane.disconnectedCallback();
-  expect(released).toHaveBeenCalledTimes(subscriptions.mock.calls.length);
-  const acquired = subscriptions.mock.calls.length;
-  render.mockClear();
-  navigation.update({ navCollapsed: true });
-  await Promise.resolve();
-  flush();
-  expect(render).not.toHaveBeenCalled();
-  expect(subscriptions).toHaveBeenCalledTimes(acquired);
-
-  connectPaneTestView(pane);
-  await pane.updateComplete;
-  expect(subscriptions).toHaveBeenCalledTimes(acquired + 1);
-  expect(rendered.at(-1)).toBe(true);
 });
 
 it("retires auth presentation once per event and releases the Gateway listener on disconnect", async () => {

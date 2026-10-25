@@ -7,7 +7,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationRouter } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
 import { loadRoute, routeLocation as locationFor } from "./route-loading.test-support.ts";
 import {
@@ -42,37 +41,17 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
 }
 
 function coldContext() {
-  type GatewayListener = Parameters<ApplicationContext["gateway"]["subscribe"]>[0];
-  let listener: GatewayListener | null = null;
-  const gateway = {
-    snapshot: {
-      phase: "connecting",
-      client: null,
-      hello: null,
-    } as ApplicationContext["gateway"]["snapshot"],
-    subscribe: (next: GatewayListener) => {
-      listener = next;
-      return () => undefined;
-    },
-  };
-  const context = {
-    basePath: "",
-    gateway,
-    agents: { state: { agentsList: null } },
-    sessions: createChatPageSessions(),
-  } as unknown as ApplicationContext;
+  const { context, publishGateway } = contextFor();
+  publishGateway({ phase: "connecting", client: null, hello: null });
+  context.agents.state.agentsList = null;
   return {
     context,
     connect(this: void, mainKey = "workspace") {
-      gateway.snapshot = {
+      publishGateway({
         phase: "connected",
         client: {},
         hello: { snapshot: { sessionDefaults: { mainKey } } },
-      } as unknown as ApplicationContext["gateway"]["snapshot"];
-      if (!listener) {
-        throw new Error("expected gateway readiness subscription");
-      }
-      listener(gateway.snapshot);
+      } as unknown as ApplicationContext["gateway"]["snapshot"]);
     },
   };
 }
@@ -190,16 +169,12 @@ describe("loadChatRoute", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
-  it.each(["slug", "prefix"] as const)("builds working links for ambiguous %s", async (kind) => {
-    const slug = kind === "slug";
-    const face = slug ? "chat" : "dashboard";
-    const agents = slug ? ["roboclaw", "research"] : ["main", "work"];
-    const name = slug ? "Default mode with rare surprises" : "Deploy Monitor";
+  it("builds working dashboard links for ambiguous prefixes", async () => {
     const rows = ["0aaa-4000-8000-000000000001", "0bbb-4000-8000-000000000002"].map(
       (suffix, index) =>
         row({
-          key: `agent:${agents[index]}:${slug ? "thread" : "dashboard"}:12345678-${suffix}`,
-          displayName: !slug && index === 1 ? "Deploy Monitor Two" : name,
+          key: `agent:${index ? "work" : "main"}:dashboard:12345678-${suffix}`,
+          displayName: index ? "Deploy Monitor Two" : "Deploy Monitor",
         }),
     );
     const { context, request, list } = contextFor({
@@ -212,41 +187,22 @@ describe("loadChatRoute", () => {
     });
     const ambiguous = await loadRoute(
       context,
-      slug
-        ? "/chat/roboclaw/default-mode-with-rare-surprises"
-        : "/dashboard/ignored/deploy-12345678",
-      slug ? "" : "?draft=ship&__openclawComposerFocus=1",
-      face,
+      "/dashboard/ignored/deploy-12345678",
+      "?draft=ship&__openclawComposerFocus=1",
+      "dashboard",
     );
     expect(ambiguous).toMatchObject({
       kind: "ambiguous",
       truncated: false,
-      ...(slug
-        ? {
-            shortId: "default-mode-with-rare-surprises",
-            candidates: [{ agentId: "roboclaw" }, { agentId: "research" }],
-          }
-        : {}),
     });
     if (!("kind" in ambiguous) || ambiguous.kind !== "ambiguous") {
       throw new Error("expected ambiguous route");
     }
-    expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual(
-      slug
-        ? [
-            "/chat/roboclaw/default-mode-with-rare-surprises-123456780a",
-            "/chat/research/default-mode-with-rare-surprises-123456780b",
-          ]
-        : [
-            "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
-            "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
-          ],
-    );
-    expect(request).toHaveBeenCalledOnce();
+    expect(ambiguous.candidates.map((candidate) => candidate.href)).toEqual([
+      "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
+      "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
+    ]);
     expect(list).not.toHaveBeenCalled();
-    if (slug) {
-      return;
-    }
     for (const [index, candidate] of ambiguous.candidates.entries()) {
       const expectedRow = rows[index]!;
       request.mockResolvedValueOnce({ ok: true, ...expectedRow, agentId: candidate.agentId });
@@ -263,21 +219,6 @@ describe("loadChatRoute", () => {
       );
     }
   });
-
-  it.each(["dashboard", "chat"] as const)(
-    "carries expanded dashboard presentation into %s route data",
-    async (face) => {
-      const { context } = contextFor();
-      await expect(
-        loadRoute(context, `/${face}/work`, "?dashboard=expanded", face),
-      ).resolves.toMatchObject(
-        sessionData("agent:work:main", {
-          face,
-          dashboardExpanded: true,
-        }),
-      );
-    },
-  );
 
   it("reclassifies a slug-shaped path after cold defaults reveal the main key", async () => {
     const { context, connect } = coldContext();

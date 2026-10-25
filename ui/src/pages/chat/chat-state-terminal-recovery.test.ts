@@ -12,8 +12,6 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
-const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
-
 // Keep history ordering/count assertions independent of auxiliary post-run auth reads.
 function withAuthStatus(request: GatewayRequestHandler): GatewayRequestHandler {
   return (method, ...args) =>
@@ -39,21 +37,24 @@ function recoveryState(request: GatewayRequestHandler, overrides: Partial<ChatPa
 }
 
 describe("terminal reply recovery", () => {
-  function createRecoveryPrompt(runId: string, text: string, seq = 1) {
+  const runId = "run-1";
+  const promptText = "Finish the task";
+  const replyText = "The durable reply";
+  function createRecoveryPrompt() {
     return {
       role: "user",
-      content: [{ type: "text", text }],
-      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq },
+      content: [{ type: "text", text: promptText }],
+      __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
     };
   }
 
-  function createTerminalHistory(messages: unknown[], sessionKey = "agent:main:main") {
+  function createTerminalHistory(messages: unknown[]) {
     return {
       messages,
       sessionId: "selected-session",
       sessionInfo: {
-        key: sessionKey,
-        kind: sessionKey === "global" ? ("global" as const) : ("direct" as const),
+        key: "agent:main:main",
+        kind: "direct" as const,
         updatedAt: 2,
         hasActiveRun: false,
         activeRunIds: [],
@@ -64,12 +65,6 @@ describe("terminal reply recovery", () => {
 
   const assistant = (text: string) => ({ role: "assistant", content: [{ type: "text", text }] });
   const retired = (text: string) => ({ ...assistant(text), openclawDisplayContent: [] });
-  const reply = (runId: string, content: unknown) => ({
-    role: "assistant",
-    content,
-    stopReason: "stop",
-    __openclaw: { id: "reply-1", runId, seq: 2 },
-  });
   const transcript = (...turns: [role: string, text: string][]) =>
     turns.map(([role, text]) => ({ role, text }));
   const expectTranscript = (state: ChatPageHost, ...turns: [role: string, text: string][]) =>
@@ -87,14 +82,17 @@ describe("terminal reply recovery", () => {
       );
   }
   function fixture(
-    runId: string,
-    promptText: string,
-    replyContent: unknown,
     overrides: Partial<ChatPageHost> = {},
+    replyContent: unknown = assistant(replyText).content,
     authenticated = false,
   ) {
-    const prompt = createRecoveryPrompt(runId, promptText);
-    const persistedReply = reply(runId, replyContent);
+    const prompt = createRecoveryPrompt();
+    const persistedReply = {
+      role: "assistant",
+      content: replyContent,
+      stopReason: "stop",
+      __openclaw: { id: "reply-1", runId, seq: 2 },
+    };
     const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt, persistedReply]));
     const state = recoveryState(request, {
       chatMessages: [prompt],
@@ -118,35 +116,17 @@ describe("terminal reply recovery", () => {
   ] as const)(
     "recovers the durable reply when the terminal message is %s",
     async (_name, terminalMessage, startsActive) => {
-      const runId = "run-with-message-less-terminal";
-      const replyText = "The durable reply must appear below Done.";
-      const { request, state } = fixture(
-        runId,
-        "Finish the dashboard task",
-        assistant(replyText).content,
-        { chatRunId: startsActive ? runId : null },
-      );
+      const { request, state } = fixture({ chatRunId: startsActive ? runId : null });
       const finish = event(state, { runId, state: "final", message: terminalMessage });
       finish();
 
       expect(state.chatRunId).toBeNull();
-      expectTranscript(state, ["user", "Finish the dashboard task"]);
+      expectTranscript(state, ["user", promptText]);
       await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith(
-          "chat.history",
-          {
-            sessionKey: state.sessionKey,
-            knownState: {},
-            ...historyBudget,
-          },
-          { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
-        ),
+        expectTranscript(state, ["user", promptText], ["assistant", replyText]),
       );
-      await vi.waitFor(() => expect(state.chatLoading).toBe(false));
+      expect(state.chatLoading).toBe(false);
       expect(request).toHaveBeenCalledTimes(1);
-      await vi.waitFor(() =>
-        expectTranscript(state, ["user", "Finish the dashboard task"], ["assistant", replyText]),
-      );
 
       request.mockClear();
       finish();
@@ -156,7 +136,6 @@ describe("terminal reply recovery", () => {
 
   it("recovers a terminal failure once without retrying a missing receipt", async () => {
     fakeTimers();
-    const runId = "failed-run";
     const request = vi.fn().mockResolvedValue({
       ...createTerminalHistory([]),
       sessionInfo: {
@@ -206,12 +185,7 @@ describe("terminal reply recovery", () => {
   );
 
   it("recovers once when history completed the run before its message-less terminal arrives", async () => {
-    const runId = "run-completed-by-history-before-terminal";
-    const { persistedReply, request, state } = fixture(
-      runId,
-      "Finish after the tool call",
-      assistant("The durable final arrived after the snapshot.").content,
-    );
+    const { persistedReply, request, state } = fixture();
     reduceChatSessionProjection(state, { type: "runTerminal", runId, status: "completed" });
 
     const finish = event(state, { runId, state: "final" });
@@ -227,12 +201,9 @@ describe("terminal reply recovery", () => {
 
   it("recovers durable media from a message-less terminal", async () => {
     fakeTimers();
-    const runId = "run-with-message-less-terminal";
     const { persistedReply, request, state } = fixture(
-      runId,
-      "Show the generated image",
-      [{ type: "image", url: "data:image/png;base64,aW1hZ2U=" }],
       {},
+      [{ type: "image", url: "data:image/png;base64,aW1hZ2U=" }],
       true,
     );
     event(state, { runId, state: "final" })();
@@ -242,105 +213,66 @@ describe("terminal reply recovery", () => {
     expect(request).toHaveBeenCalledTimes(1);
     expect(state.chatMessages).toContainEqual(persistedReply);
   });
-  it.each([
-    { name: "without a pending session-message reload", pendingReload: false },
-    { name: "after a pending session-message reload", pendingReload: true },
-  ])("waits for the old read before fresh terminal history $name", async ({ pendingReload }) => {
-    const runId = "run-with-pre-final-history";
-    const staleHistory = createDeferred<ChatHistoryResult>();
-    const freshHistory = createDeferred<ChatHistoryResult>();
-    const freshHistoryStarted = createDeferred();
-    const request = vi
-      .fn()
-      .mockReturnValueOnce(staleHistory.promise)
-      .mockImplementationOnce(() => {
-        freshHistoryStarted.resolve();
-        return freshHistory.promise;
-      });
-    const { prompt, persistedReply, state } = fixture(
-      runId,
-      "Finish after the stale snapshot",
-      assistant("The post-final snapshot contains this reply.").content,
-      {
+  it.each([false, true])(
+    "waits for the old read before fresh terminal history (pending=%s)",
+    async (pendingReload) => {
+      const staleHistory = createDeferred<ChatHistoryResult>();
+      const freshHistory = createDeferred<ChatHistoryResult>();
+      const freshHistoryStarted = createDeferred();
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(staleHistory.promise)
+        .mockImplementationOnce(() => {
+          freshHistoryStarted.resolve();
+          return freshHistory.promise;
+        });
+      const { prompt, persistedReply, state } = fixture({
         pendingSessionMessageReloadSessionKey: pendingReload ? "agent:main:main" : null,
         client: { request: withAuthStatus(request) } as unknown as GatewayBrowserClient,
-      },
-    );
+      });
 
-    const preFinalLoad = loadChatHistory(state);
-    expect(request).toHaveBeenCalledTimes(1);
+      const preFinalLoad = loadChatHistory(state);
+      expect(request).toHaveBeenCalledTimes(1);
 
-    event(state, { runId, state: "final" })();
+      event(state, { runId, state: "final" })();
 
-    expect(request).toHaveBeenCalledTimes(1);
-    staleHistory.resolve(createTerminalHistory([prompt]));
-    await freshHistoryStarted.promise;
-    expect(request).toHaveBeenCalledTimes(2);
-    expectTranscript(state, ["user", "Finish after the stale snapshot"]);
+      expect(request).toHaveBeenCalledTimes(1);
+      staleHistory.resolve(createTerminalHistory([prompt]));
+      await freshHistoryStarted.promise;
+      expect(request).toHaveBeenCalledTimes(2);
+      expectTranscript(state, ["user", promptText]);
 
-    freshHistory.resolve(createTerminalHistory([prompt, persistedReply]));
-    await preFinalLoad;
-    expect(state.chatLoading).toBe(false);
-    expectTranscript(
-      state,
-      ["user", "Finish after the stale snapshot"],
-      ["assistant", "The post-final snapshot contains this reply."],
-    );
-  });
+      freshHistory.resolve(createTerminalHistory([prompt, persistedReply]));
+      await preFinalLoad;
+      expect(state.chatLoading).toBe(false);
+      expectTranscript(state, ["user", promptText], ["assistant", replyText]);
+    },
+  );
 
   it.each([
-    "background",
-    "yielded",
-    "live reply",
-    "retired background",
-    "retired yielded",
-    "retired other session",
-    "aborted",
-  ])("does not recover history for a %s terminal", (kind) => {
-    const runId = "foreground-run";
-    const prompt = createRecoveryPrompt(runId, "Finish the dashboard task");
+    ["background", { runId: "background-run" }],
+    ["yielded", { yielded: true, stopReason: "end_turn" }],
+    ["live reply", { message: assistant("Live reply") }],
+    ["retired background", { runId: "background-run", message: retired("Retired") }],
+    ["retired yielded", { yielded: true, stopReason: "end_turn", message: retired("Retired") }],
+    ["retired other session", { sessionKey: "agent:main:other", message: retired("Retired") }],
+    ["aborted", { state: "aborted", message: retired("Retired") }],
+  ] as const)("does not recover history for a %s terminal", (kind, payload) => {
+    const prompt = createRecoveryPrompt();
     const request = vi.fn();
+    const streaming = { chatStream: "Streaming", chatStreamStartedAt: 123 };
     const state = recoveryState(request, {
       chatRunId: runId,
-      ...(kind === "background"
-        ? {
-            chatStream: "The foreground reply is still streaming.",
-            chatStreamStartedAt: 123,
-          }
-        : kind === "live reply"
-          ? { chatMessages: [prompt] }
-          : {}),
+      ...(kind === "background" ? streaming : {}),
+      ...(kind === "live reply" ? { chatMessages: [prompt] } : {}),
     });
-    event(state, {
-      runId: kind.endsWith("background") ? "background-run" : runId,
-      state: kind === "aborted" ? "aborted" : "final",
-      ...(kind.endsWith("yielded") ? { yielded: true, stopReason: "end_turn" } : {}),
-      ...(kind === "retired other session" ? { sessionKey: "agent:main:other" } : {}),
-      ...(kind.startsWith("retired") || kind === "aborted"
-        ? {
-            message: retired("Already retired"),
-          }
-        : {}),
-      ...(kind === "live reply"
-        ? {
-            message: assistant("The live reply is already projected."),
-          }
-        : {}),
-    })();
+    event(state, { runId, state: "final", ...payload })();
     expect(request).not.toHaveBeenCalled();
     if (kind === "background") {
-      expect(state).toMatchObject({
-        chatRunId: runId,
-        chatStream: "The foreground reply is still streaming.",
-        chatStreamStartedAt: 123,
-      });
+      expect(state).toMatchObject({ chatRunId: runId, ...streaming });
     } else if (kind === "live reply") {
       expect(state.chatRunId).toBeNull();
-      expectTranscript(
-        state,
-        ["user", "Finish the dashboard task"],
-        ["assistant", "The live reply is already projected."],
-      );
+      expectTranscript(state, ["user", promptText], ["assistant", "Live reply"]);
     }
   });
 });

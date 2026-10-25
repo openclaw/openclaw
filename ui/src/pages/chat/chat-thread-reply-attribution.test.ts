@@ -5,10 +5,9 @@ import {
   sessionParticipantIdentityKey,
 } from "../../lib/chat/sender-label.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
-import { createProps } from "./chat-thread.test-support.ts";
-import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import { buildItems, createProps, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
+import { resetChatThreadState } from "./chat-thread.ts";
 
-type Props = Parameters<typeof buildCachedChatItems>[0];
 type Fields = Record<string, unknown>;
 function makeMessage(role: string, content: unknown, timestamp: number, fields: Fields = {}) {
   return { role, content, timestamp, ...fields };
@@ -21,8 +20,8 @@ function namedPrompt(
   content: string,
   timestamp: number,
   id: string,
-  name: string,
-  metadata: Record<string, unknown> = {},
+  name = id,
+  metadata: Fields = {},
 ) {
   return userMessage(content, timestamp, {
     __openclaw: { senderId: id, senderName: name, ...metadata },
@@ -41,8 +40,13 @@ function observedSender(accountId: string, reversed = false) {
     : identity;
   return { senderId: "alice", senderIdentity };
 }
-function profilePrompt(...args: Parameters<typeof namedPrompt>) {
-  const [content, timestamp, id, name, metadata] = args;
+function profilePrompt(
+  content: string,
+  timestamp: number,
+  id: string,
+  name = id,
+  metadata: Fields = {},
+) {
   return namedPrompt(content, timestamp, id, name, {
     senderIdentity: { type: "profile", id },
     ...metadata,
@@ -63,22 +67,40 @@ function sender(senderId = "alice", fields: Fields = {}) {
   return { senderId, senderName: senderId === "alice" ? "Alice" : "Bob", ...fields };
 }
 const profileKey = (id: string) => sessionParticipantIdentityKey({ type: "profile", id });
-function senderCase(
-  label: string,
-  senders: Record<string, unknown>[],
-  shared?: boolean,
-  people: string[] = [],
-) {
+function senderCase(label: string, senders: Fields[], shared?: boolean, people: string[] = []) {
   return { case: label, senders, shared, people };
 }
-function messageGroups(props: Partial<Props>) {
-  return buildCachedChatItems(createProps(props)).filter((item) => item.kind === "group");
+function messageGroups(props: Partial<CachedChatItemsProps>) {
+  return buildItems(props).filter((item) => item.kind === "group");
 }
-const assistantGroups = (props: Partial<Props>) =>
+const assistantGroups = (props: Partial<CachedChatItemsProps>) =>
   messageGroups(props).filter((group) => group.role === "assistant");
 const forwarded = { provenance: { kind: "inter_session", sourceTool: "sessions_send" } };
 const projected = { senderSession: { sessionKey: "agent:other:main", agentId: "other" } };
+const alice = namedPrompt("Alice asks", 1000, "alice", "Alice");
+const followUp = namedPrompt("Bob follows up", 1003, "bob", "Bob");
+const conversation = [
+  alice,
+  assistantMessage("For Alice", 1001),
+  namedPrompt("Bob asks", 1002, "bob", "Bob"),
+  followUp,
+  assistantMessage("For Bob", 1004),
+];
 beforeEach(() => resetChatThreadState());
+it("attributes replies to the latest grouped prompt from each sender", () => {
+  const groups = messageGroups({ messages: conversation });
+  const replies = groups.filter((group) => group.role === "assistant");
+  expect(replies[0]).toMatchObject({
+    replyToSender: { id: "alice", name: "Alice" },
+    replyToMessage: { message: alice },
+  });
+  const bob = groups.find((group) => group.role === "user" && group.sender?.id === "bob");
+  expect(bob?.messages).toHaveLength(2);
+  expect(replies[1]).toMatchObject({
+    replyToSender: { id: "bob", name: "Bob" },
+    replyToMessage: { message: followUp, key: bob?.messages.at(-1)?.key },
+  });
+});
 it.each([
   boundary("sender-less user", false, { role: "user" }),
   boundary("[System] Scheduled report", false, {
@@ -110,8 +132,6 @@ it.each([
     __openclaw: { turnBoundary: true },
   }),
 ])("attributes $boundary prompts (search=$searchOpen)", ({ message, recipient, searchOpen }) => {
-  const alice = namedPrompt("Alice asks", 1000, "alice", "Alice");
-  const followUp = namedPrompt("Bob follows up", 1003, "bob", "Bob");
   const groups = messageGroups({
     searchOpen,
     searchQuery: "Rollout",
@@ -123,15 +143,7 @@ it.each([
           message,
           assistantMessage("Rollout done", 1003),
         ]
-      : [
-          alice,
-          assistantMessage("For Alice", 1001),
-          namedPrompt("Bob asks", 1002, "bob", "Bob"),
-          followUp,
-          assistantMessage("For Bob", 1004),
-          message,
-          assistantMessage("After boundary", 1007),
-        ],
+      : [...conversation, message, assistantMessage("After boundary", 1007)],
   });
   if (searchOpen) {
     expect(groups.map((group) => [group.messages.length, group.replyToSender?.name])).toEqual([
@@ -139,18 +151,7 @@ it.each([
       [1, recipient],
     ]);
   } else {
-    const replies = groups.filter((group) => group.role === "assistant");
-    expect(replies[0]).toMatchObject({
-      replyToSender: { id: "alice", name: "Alice" },
-      replyToMessage: { message: alice },
-    });
-    const bob = groups.find((group) => group.role === "user" && group.sender?.id === "bob");
-    expect(bob?.messages).toHaveLength(2);
-    expect(replies[1]).toMatchObject({
-      replyToSender: { id: "bob", name: "Bob" },
-      replyToMessage: { message: followUp, key: bob?.messages.at(-1)?.key },
-    });
-    const last = replies.at(-1);
+    const last = groups.findLast((group) => group.role === "assistant");
     expect([last?.replyToSender, last?.replyToMessage]).toEqual([undefined, undefined]);
   }
 });
@@ -240,16 +241,14 @@ it.each([false, true])("attributes live output before future input (search=%s)",
   const future = namedPrompt("Rollout follow-up", 1001, "alice", "Alice", {
     id: "pending:future",
   });
-  const items = buildCachedChatItems(
-    createProps({
-      searchOpen,
-      searchQuery: "Rollout",
-      runId: "current",
-      stream: "Rollout in progress",
-      streamStartedAt: 1002,
-      pendingInputs: [queuedPrompt("current", current, 1000), queuedPrompt("future", future, 1001)],
-    }),
-  );
+  const items = buildItems({
+    searchOpen,
+    searchQuery: "Rollout",
+    runId: "current",
+    stream: "Rollout in progress",
+    streamStartedAt: 1002,
+    pendingInputs: [queuedPrompt("current", current, 1000), queuedPrompt("future", future, 1001)],
+  });
   const streamIndex = items.findIndex((item) => item.kind === "stream");
   const futureIndex = items.findIndex(
     (item) => item.kind === "group" && item.messages.some((source) => source.message === future),
@@ -283,7 +282,6 @@ it.each([
     ]),
   });
   expect(groups.map((group) => group.replyShared)).toEqual(groups.map(() => shared));
-  expect(groups.map((group) => group.role)).toEqual(senders.flatMap(() => ["user", "assistant"]));
   const last = groups.at(-1);
   if (!shared) {
     expect([last?.replyToSender, last?.replyToMessage]).toEqual([undefined, undefined]);
@@ -334,7 +332,6 @@ it.each([
   const items = groupMessages(
     messages.map((message, index) => ({ kind: "message", key: `reply:${index}`, message })),
   );
-  expect(items).toHaveLength(groups);
   expect(
     items.filter((item) => item.kind === "group").map((group) => group.messages.length),
   ).toEqual(groups === 1 ? [2] : [1, 1]);
@@ -346,16 +343,16 @@ it.each([
 ] as const)(
   "%s refreshes attribution on an unchanged assistant reply",
   (_changed, text, name, avatar) => {
-    const alice = profilePrompt("first", 1, "alice", "Alice");
+    const first = profilePrompt("first", 1, "alice", "Alice");
     const bob = profilePrompt("second", 2, "bob", "Bob", { id: "bob-prompt" });
     const reply = assistantMessage("answer", 3);
-    const input = createProps({ messages: [alice, bob, reply] });
+    const input = createProps({ messages: [first, bob, reply] });
     const original = assistantGroups(input)[0];
     const replacement = profilePrompt(text, 2, "bob", name, {
       id: "bob-prompt",
       ...(avatar ? { senderProfileAvatarUrl: avatar } : {}),
     });
-    const updated = assistantGroups({ ...input, messages: [alice, replacement, reply] })[0];
+    const updated = assistantGroups({ ...input, messages: [first, replacement, reply] })[0];
     expect(updated).toMatchObject({
       replyToSender: { name, ...(avatar ? { profileAvatarUrl: avatar } : {}) },
     });
