@@ -77,6 +77,18 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
             input: {
               providerIdentities: generation.identities,
               hashes,
+              ...(this.reindexProgress
+                ? {
+                    rebuild: {
+                      chunks: candidates.map(({ source, entry, chunk }) => ({
+                        source,
+                        path: entry.path,
+                        hash: chunk.hash,
+                      })),
+                      dimensions: generation.embeddingDimensions,
+                    },
+                  }
+                : {}),
             },
           },
           () => {
