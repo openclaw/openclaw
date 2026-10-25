@@ -307,14 +307,12 @@ it("rechecks ingress authority before publishing after observer authentication",
   });
   const release = vi.fn();
   try {
-    expect(
-      handleDesktopObserveUpgrade(
-        ingressRequest(`/desktop/observe?token=${ticket.token}`, context),
-        transport,
-        Buffer.alloc(0),
-        { registry: { claimStream: () => desktop, attachObserver: () => ({ release }) } },
-      ),
-    ).toBe(true);
+    handleDesktopObserveUpgrade(
+      ingressRequest(`/desktop/observe?token=${ticket.token}`, context),
+      transport,
+      Buffer.alloc(0),
+      { registry: { claimStream: () => desktop, attachObserver: () => ({ release }) } },
+    );
     current = false;
     authentication.resolve();
     await authentication.promise;
@@ -340,25 +338,13 @@ it.each(["observe", "audio"] as const)(
       principal: { kind: "person", profileId: "person-b" },
     });
     const requester = { isCurrent: () => true, remoteIngressPrincipal: source.resolvePrincipal() };
-    const audio =
-      kind === "audio"
-        ? mintDesktopAudioObserver({
-            requester,
-            source: {
-              start: async () => {
-                throw new Error("Rejected tickets must not start audio");
-              },
-            },
-          })
-        : undefined;
+    const audio = kind === "audio" ? fixture(requester, undefined, source) : undefined;
     const req = ingressRequest(
-      audio?.descriptor.wsPath ??
+      audio?.observation.descriptor.wsPath ??
         `/desktop/observe?token=${mintDesktopObserverToken({ ...observerDefaults, requester }).token}`,
       destination,
     );
     const transport = new PassThrough();
-    const chunks: Buffer[] = [];
-    transport.on("data", (chunk: Buffer) => chunks.push(chunk));
     const attachObserver = vi.fn();
     const claimStream = vi.fn();
     try {
@@ -369,11 +355,13 @@ it.each(["observe", "audio"] as const)(
           registry: { attachObserver, claimStream },
         });
       }
-      expect(Buffer.concat(chunks).toString()).toContain("401 Unauthorized");
+      expect(transport.read()?.toString()).toContain("401 Unauthorized");
       expect(attachObserver).not.toHaveBeenCalled();
       expect(claimStream).not.toHaveBeenCalled();
+      if (audio) {
+        expect(audio.start).not.toHaveBeenCalled();
+      }
     } finally {
-      audio?.close();
       transport.destroy();
     }
   },

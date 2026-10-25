@@ -316,7 +316,6 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       const harness = await createProxyHarness({
         control,
         stream,
-        requester: { signal: new AbortController().signal, isCurrent: () => true },
       });
       const pulse = once(harness.ws, "message");
       stream.push(Buffer.from("synthetic-server-pulse"));

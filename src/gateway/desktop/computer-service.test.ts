@@ -1,11 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
-import { createPluginRecord } from "../../plugins/loader-records.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { startComputerHostProcess, type ComputerHostProcess } from "./computer-process.js";
 import { ComputerHostFinalizationError } from "./computer-protocol.js";
+import { createComputerRegistry } from "./computer-registry.test-support.js";
 import { createGatewayComputerService, type GatewayComputerService } from "./computer-service.js";
 import { computerCapabilities, observeSettlement, whileHeld } from "./computer.test-support.js";
 import type { HostDesktopService } from "./host-source.js";
@@ -48,16 +46,6 @@ function createFixture() {
     desktop: { host: { enabled: true, managed: true } },
     plugins: { entries: { fixture: { enabled: true } } },
   };
-  const registry = createEmptyPluginRegistry();
-  registry.plugins.push(
-    createPluginRecord({
-      id: "fixture",
-      source: "fixture",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    }),
-  );
   const snapshot = vi.fn(async (_paramsJSON?: string | null) => JSON.stringify(screenshot));
   const act = vi.fn(async (_paramsJSON?: string | null) => JSON.stringify({ ok: true }));
   const physicalClose = vi.fn(async (_reason: string) => {});
@@ -73,16 +61,7 @@ function createFixture() {
       label: "Fixture computer",
       generation: `generation-${generation}`,
     });
-  registerComputerUseProvider(
-    {
-      registerNodeHostCommand: (command) =>
-        registry.nodeHostCommands.push({
-          pluginId: "fixture",
-          pluginName: "Fixture",
-          command,
-          source: "fixture",
-        }),
-    },
+  const registry = createComputerRegistry(
     {
       id: "fixture",
       label: "Fixture computer",
@@ -90,6 +69,7 @@ function createFixture() {
       isAvailable: () => true,
       openExecution,
     },
+    { pluginName: "Fixture" },
   );
   const leases: Array<
     DesktopComputerLease & { valid: boolean; release: ReturnType<typeof vi.fn<() => void>> }

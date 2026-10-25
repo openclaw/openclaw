@@ -1,5 +1,5 @@
 import { createDecipheriv, createHash } from "node:crypto";
-import { EventEmitter, once } from "node:events";
+import { on } from "node:events";
 import { type Duplex, duplexPair } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
@@ -21,42 +21,29 @@ const ARD: RfbPreauthDescriptor = {
   credentials: { username: "operator", password: "password" },
 };
 
-class ScriptedPeer extends EventEmitter implements RfbPreauthPeer {
-  private buffered = Buffer.alloc(0);
-  private failure: Error | undefined;
-
-  constructor(readonly stream: Duplex) {
-    super();
-    stream.on("data", (chunk: Buffer) => {
-      this.buffered = Buffer.concat([this.buffered, chunk]);
-      this.emit("available");
-    });
-    stream.once("error", (error) => {
-      this.failure = error;
-      this.emit("available");
-    });
-    stream.once("close", () => {
-      this.failure = new Error("scripted peer closed");
-      this.emit("available");
-    });
-  }
+class ScriptedPeer implements RfbPreauthPeer {
+  constructor(readonly stream: Duplex) {}
 
   async readExactly(length: number, signal?: AbortSignal): Promise<Buffer> {
-    while (this.buffered.length < length) {
-      if (this.failure) {
-        throw this.failure;
+    const readable = on(this.stream, "readable", { signal, close: ["close"] });
+    try {
+      for (;;) {
+        const bytes: Buffer | null = this.stream.read(length);
+        if (bytes?.length === length) {
+          return bytes;
+        }
+        if (
+          bytes ||
+          this.stream.readableEnded ||
+          this.stream.destroyed ||
+          (await readable.next()).done
+        ) {
+          throw new Error("scripted peer closed");
+        }
       }
-      try {
-        await once(this, "available", { signal });
-      } catch {
-        throw signal?.reason instanceof Error
-          ? signal.reason
-          : new Error("scripted RFB negotiation aborted");
-      }
+    } finally {
+      await readable.return();
     }
-    const value = this.buffered.subarray(0, length);
-    this.buffered = this.buffered.subarray(length);
-    return value;
   }
 
   async write(buffer: Buffer): Promise<void> {

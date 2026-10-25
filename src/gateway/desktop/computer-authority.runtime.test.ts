@@ -7,27 +7,21 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import {
   claimAgentRunApprovalAuthority,
   claimAgentRunDelegatedAuthority,
+  registerAgentRunDelegatedAuthorityClosedHandler,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
-import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
-import { createPluginRecord } from "../../plugins/loader-records.js";
 import { computerUseSdkEntrypoint } from "../../plugins/loader-sdk-bridge-artifacts.test-support.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   createColdPluginConfig,
   createColdPluginFixture,
 } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
-import { createGatewayAuxHandlers } from "../server-aux-handlers.js";
-import { createGatewayAuxHandlerTestParams } from "../server-aux-handlers.test-support.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { computerHandlers } from "../server-methods/computer.js";
-import type { RespondFn } from "../server-methods/types.js";
+import { computerRunOwner } from "./computer-owner.js";
 import { startComputerHostProcess } from "./computer-process.js";
+import { createComputerRegistry } from "./computer-registry.test-support.js";
 import { createGatewayComputerService } from "./computer-service.js";
 import { computerCapabilities } from "./computer.test-support.js";
 
@@ -184,26 +178,7 @@ module.exports = {
 };
 `,
     );
-    const registry = createEmptyPluginRegistry();
-    registry.plugins.push(
-      createPluginRecord({
-        id: pluginId,
-        source: fixture.runtimeSource,
-        origin: "config",
-        enabled: true,
-        configSchema: true,
-      }),
-    );
-    registerComputerUseProvider(
-      {
-        registerNodeHostCommand: (command) =>
-          registry.nodeHostCommands.push({
-            pluginId,
-            pluginName: "Synthetic authority computer",
-            command,
-            source: fixture.runtimeSource,
-          }),
-      },
+    const registry = createComputerRegistry(
       {
         id: pluginId,
         label: "Synthetic authority computer",
@@ -213,6 +188,7 @@ module.exports = {
           throw new Error("Native execution must run in the child");
         },
       },
+      { source: fixture.runtimeSource, origin: "config", configSchema: true },
     );
     let desktopCurrent = true;
     const service = createGatewayComputerService({
@@ -247,56 +223,30 @@ module.exports = {
     const unrelated = claimAgentRunApprovalAuthority(parentAuthority, [
       new AbortController().signal,
     ]);
-    const aux = createGatewayAuxHandlers(
-      createGatewayAuxHandlerTestParams({
-        onAgentRunAuthorityClosed: (closed) => service.revokeRunAuthority(closed),
-      }),
+    const unsubscribe = registerAgentRunDelegatedAuthorityClosedHandler((closed) =>
+      service.revokeRunAuthority(closed),
     );
-    const validateAuthority = createAgentRuntimeApprovalAuthorityValidator();
     const requestLifetime = new AbortController();
     const pending: Promise<unknown>[] = [];
-    const invoke = async (text: string) => {
-      const params = {
-        command: "computer.act",
-        generation: "authority-generation",
-        params: { action: "type", text, executionId: "123e4567-e89b-42d3-a456-426614174000" },
-        idempotencyKey: text,
-      };
-      let response: Parameters<RespondFn> | undefined;
-      await computerHandlers["computer.invoke"]!({
-        req: { type: "req", id: text, method: "computer.invoke", params },
-        params,
-        signal: requestLifetime.signal,
-        respond: (...args) => {
-          response = args;
-        },
-        isWebchatConnect: () => false,
-        client: {
-          connId: "computer-agent-rpc",
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
+    const invoke = (text: string) =>
+      service
+        .invoke({
+          command: "computer.act",
+          generation: "authority-generation",
+          params: { action: "type", text, executionId: "123e4567-e89b-42d3-a456-426614174000" },
+          idempotencyKey: text,
+          owner: computerRunOwner(authority),
+          signal: requestLifetime.signal,
+          assertCurrent() {
+            if (!validateAgentRunDelegatedAuthority(authority)) {
+              throw new Error("Computer run authority is closed");
+            }
           },
-          internal: {
-            syntheticClient: true,
-            agentRuntimeIdentity: {
-              kind: "agentRuntime",
-              agentId: "main",
-              sessionKey: "agent:main:computer-proof",
-              operationalRunInstance: authority.operationalRunInstance,
-              delegatedAuthority: { ...authority, kind: "local" },
-            },
-          },
-        },
-        context: createDirectChatContext({
-          gatewayComputerService: service,
-          validateAgentRuntimeApprovalAuthority: validateAuthority,
-        }),
-      });
-      expect(response).toBeDefined();
-      return response!;
-    };
+        })
+        .then(
+          () => true,
+          () => false,
+        );
     try {
       expect(await service.status()).toMatchObject({ configured: true, available: true });
       const allowed = invoke("allowed");
@@ -305,7 +255,7 @@ module.exports = {
       releaseAgentRunDelegatedAuthority(unrelated);
       expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
       releaseAllowed.writeHead(204).end();
-      expect((await allowed)[0]).toBe(true);
+      expect(await allowed).toBe(true);
       expect(fs.readFileSync(effects.allowed, "utf8")).toBe("applied");
 
       const blocker = invoke("blocker");
@@ -328,8 +278,8 @@ module.exports = {
         "Run revocation did not cancel queued native input",
       );
       await service.close();
-      expect((await blocker)[0]).toBe(false);
-      expect((await revoked)[0]).toBe(false);
+      expect(await blocker).toBe(false);
+      expect(await revoked).toBe(false);
       expect(fs.existsSync(effects.blocker)).toBe(false);
       expect(fs.existsSync(effects.revoked)).toBe(false);
       const nativeEvents = fs.readFileSync(events, "utf8");
@@ -343,12 +293,9 @@ module.exports = {
       releaseAgentRunDelegatedAuthority(parentAuthority);
       releaseAgentRunDelegatedAuthority(unrelated);
       requestLifetime.abort();
-      try {
-        await service.close();
-        await Promise.allSettled(pending);
-      } finally {
-        await aux.stopOperatorInteractions();
-      }
+      unsubscribe();
+      await service.close();
+      await Promise.allSettled(pending);
     }
   },
   90_000,
