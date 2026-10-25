@@ -5,15 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   installOpenClawInternalCorePackageNativeResolver,
   installOpenClawPluginSdkNativeResolver,
 } from "./plugin-sdk-native-resolver.js";
-
-function writeJsonFile(targetPath: string, value: unknown): void {
-  writeFile(targetPath, `${JSON.stringify(value, null, 2)}\n`);
-}
 
 function writeFile(targetPath: string, content = "export default {};\n") {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -59,14 +56,6 @@ function writeExternalPluginEntry(root: string): string {
   return writeFile(path.join(root, "dist", "runtime-api.js"));
 }
 
-function writeInternalCorePackageSource(
-  root: string,
-  packageDir: string,
-  sourceFile: string,
-): string {
-  return writeFile(path.join(root, "packages", packageDir, "src", sourceFile), "export {};\n");
-}
-
 function writeInternalCorePackageExports(
   root: string,
   packageDir: string,
@@ -100,7 +89,10 @@ function addFakePluginSdkDistExport(root: string, subpath: string): string {
 function createInternalCoreAliasFixture(prefix: string) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   const { loaderModulePath } = writeFakeOpenClawPackage(root);
-  const sourcePath = writeInternalCorePackageSource(root, "markdown-core", "code-spans.ts");
+  const sourcePath = writeFile(
+    path.join(root, "packages/markdown-core/src/code-spans.ts"),
+    "export {};\n",
+  );
   const coreSourceParent = writeFile(path.join(root, "src", "host-probe.js"));
   return {
     coreSourceParent,
@@ -368,7 +360,10 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       }
       return subpaths.map((subpath) => ({
         specifier: `@openclaw/${packageDir}${subpath ? `/${subpath}` : ""}`,
-        sourcePath: writeInternalCorePackageSource(root, packageDir, `${subpath || "index"}.ts`),
+        sourcePath: writeFile(
+          path.join(root, "packages", packageDir, "src", `${subpath || "index"}.ts`),
+          "export {};\n",
+        ),
       }));
     });
     const coreSourceParent = writeFile(path.join(root, "src/config/plugin-web-search-config.ts"));

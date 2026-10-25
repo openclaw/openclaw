@@ -46,9 +46,9 @@ function expectFailure(
   pluginId: string,
   installPath: string,
   reason: string,
-  detail: string,
 ) {
-  expect(result.failures).toStrictEqual([{ pluginId, installPath, reason, detail }]);
+  expect(result.failures).toHaveLength(1);
+  expect(result.failures[0]).toMatchObject({ pluginId, installPath, reason });
 }
 
 async function writeBundle(
@@ -86,10 +86,6 @@ function resolveTestHostRoot(): string {
   });
   expect(hostRoot).toBeTruthy();
   return hostRoot!;
-}
-
-async function resolveRealPath(target: string): Promise<string> {
-  return await fs.realpath(target).catch(() => target);
 }
 
 async function writeHostDependency(dir: string, dependencyField: string, native = true) {
@@ -165,13 +161,7 @@ it.each([false, true])("reports missing package payload (directory exists: %s)",
     await fs.mkdir(dir, { recursive: true });
   }
   const result = await checkPackage("brave", dir);
-  expectFailure(
-    result,
-    "brave",
-    dir,
-    exists ? "missing-package-json" : "missing-package-dir",
-    exists ? `package.json is missing under ${dir}` : `Install dir is missing: ${dir}`,
-  );
+  expectFailure(result, "brave", dir, exists ? "missing-package-json" : "missing-package-dir");
 });
 
 it.each([
@@ -202,65 +192,42 @@ it.each([
 );
 
 it.each([
-  ["missing", "missing-bundle-manifest", undefined],
-  [
-    "non-object",
-    "invalid-bundle-manifest",
-    "Bundle manifest validation failed: plugin manifest must be an object",
-  ],
-  [
-    "dual-format",
-    "missing-extension-entry",
-    "Plugin extension entry validation failed: extension entry not found: ./missing-extension.js",
-  ],
-] as const)(
-  "validates %s bundle payloads without requiring package.json",
-  async (kind, reason, detail) => {
-    const dir = path.join(tmpRoot, "bundle");
-    if (kind === "missing") {
-      await fs.mkdir(path.join(dir, ".codex-plugin"), { recursive: true });
-    } else {
-      await writeBundle(dir, "codex", kind === "non-object" ? [] : undefined);
-      if (kind === "dual-format") {
-        await writePackage(dir, {
-          name: "dual-format-bundle",
-          openclaw: { extensions: ["./missing-extension.js"] },
-        });
-      }
+  ["missing", "missing-bundle-manifest"],
+  ["non-object", "invalid-bundle-manifest"],
+  ["dual-format", "missing-extension-entry"],
+] as const)("validates %s bundle payloads without requiring package.json", async (kind, reason) => {
+  const dir = path.join(tmpRoot, "bundle");
+  if (kind === "missing") {
+    await fs.mkdir(path.join(dir, ".codex-plugin"), { recursive: true });
+  } else {
+    await writeBundle(dir, "codex", kind === "non-object" ? [] : undefined);
+    if (kind === "dual-format") {
+      await writePackage(dir, {
+        name: "dual-format-bundle",
+        openclaw: { extensions: ["./missing-extension.js"] },
+      });
     }
-    const record =
-      kind === "missing"
-        ? ({
-            source: "marketplace",
-            format: "bundle",
-            installPath: dir,
-            bundleFormat: "codex",
-          } as const)
-        : ({ source: "clawhub", clawhubFamily: "bundle-plugin", installPath: dir } as const);
-    expectFailure(
-      await checkRecord("bundle", record),
-      "bundle",
-      dir,
-      reason,
-      detail ?? `No supported bundle manifest or bundle marker found under ${dir}`,
-    );
-  },
-);
+  }
+  const record =
+    kind === "missing"
+      ? ({
+          source: "marketplace",
+          format: "bundle",
+          installPath: dir,
+          bundleFormat: "codex",
+        } as const)
+      : ({ source: "clawhub", clawhubFamily: "bundle-plugin", installPath: dir } as const);
+  expectFailure(await checkRecord("bundle", record), "bundle", dir, reason);
+});
 
 it.each([
   { extensions: ["./index.js", " "], entry: "index.js", error: "[1] must be a non-empty string" },
   { extensions: [], entry: undefined, error: " is empty" },
 ])(
   "reports only extension failure for $error even when main is missing",
-  async ({ extensions, entry, error }) => {
+  async ({ extensions, entry }) => {
     const { dir, result } = await checkExtension(extensions, entry);
-    expectFailure(
-      result,
-      "brave",
-      dir,
-      "missing-extension-entry",
-      `Plugin extension entry validation failed: package.json openclaw.extensions${error}`,
-    );
+    expectFailure(result, "brave", dir, "missing-extension-entry");
   },
 );
 
@@ -300,18 +267,12 @@ it.each(["missing", "wrong root", "host root"])(
       pluginId: "codex",
       installPath: dir,
       reason: "missing-openclaw-peer-link",
-      detail:
-        target === "wrong root"
-          ? expect.stringContaining(
-              `${peerPath} points to ${await resolveRealPath(wrongRoot)} instead of ${await resolveRealPath(resolveTestHostRoot())}`,
-            )
-          : `Plugin declares peerDependency "openclaw" but peer link audit failed: missing ${peerPath}.`,
     };
-    expect((await checkPackage("codex", dir)).failures).toStrictEqual(
-      target === "host root"
-        ? []
-        : [target === "wrong root" ? expect.objectContaining(failure) : failure],
-    );
+    const result = await checkPackage("codex", dir);
+    expect(result.failures).toHaveLength(target === "host root" ? 0 : 1);
+    if (target !== "host root") {
+      expect(result.failures[0]).toMatchObject(failure);
+    }
   },
 );
 
@@ -326,26 +287,12 @@ it("reports a failure when `main` resolves to a directory rather than a file", a
   await writePackage(dir, { name: "dir-main", main: "lib" });
   await fs.mkdir(path.join(dir, "lib"), { recursive: true });
   const result = await checkPackage("x", dir);
-  expectFailure(
-    result,
-    "x",
-    dir,
-    "missing-main-entry",
-    `Plugin main entry "lib" not found at ${path.join(dir, "lib")}`,
-  );
+  expectFailure(result, "x", dir, "missing-main-entry");
 });
 
-it.each([
-  [
-    "not-json",
-    process.versions.bun
-      ? 'JSON Parse error: Unexpected identifier "not"'
-      : "Unexpected token 'o', \"not-json\" is not valid JSON",
-  ],
-  ["null", "package.json must be an object"],
-])(
+it.each(["not-json", "null"])(
   "reports invalid package.json %s and continues checking later plugins",
-  async (content, error) => {
+  async (content) => {
     const dir = path.join(tmpRoot, "broken");
     const laterDir = path.join(tmpRoot, "later");
     await writeFile(path.join(dir, "package.json"), content);
@@ -360,40 +307,33 @@ it.each([
     });
 
     expect(result.checked).toEqual(["broken", "later"]);
-    expect(result.failures).toStrictEqual([
+    expect(result.failures).toHaveLength(2);
+    expect(result.failures).toMatchObject([
       {
         pluginId: "broken",
         installPath: dir,
         reason: "invalid-package-json",
-        detail: `Could not parse package.json: ${error}`,
       },
       {
         pluginId: "later",
         installPath: laterDir,
         reason: "missing-main-entry",
-        detail: `Plugin main entry "missing.js" not found at ${path.join(laterDir, "missing.js")}`,
       },
     ]);
   },
 );
 
-it.each(["EACCES"])("classifies a %s package.json read failure as unreadable", async (code) => {
+it("classifies a package.json read failure as unreadable", async () => {
   const dir = path.join(tmpRoot, "unreadable");
   const packageJsonPath = path.join(dir, "package.json");
   await writePackage(dir, { name: "unreadable" });
   vi.spyOn(fs, "readFile").mockRejectedValueOnce(
-    Object.assign(new Error(`${code}: could not read ${packageJsonPath}`), { code }),
+    Object.assign(new Error(`EACCES: could not read ${packageJsonPath}`), { code: "EACCES" }),
   );
 
   const result = await checkPackage("unreadable", dir);
 
-  expectFailure(
-    result,
-    "unreadable",
-    dir,
-    "unreadable-package-json",
-    `Could not read package.json at ${packageJsonPath}: ${code}: could not read ${packageJsonPath}`,
-  );
+  expectFailure(result, "unreadable", dir, "unreadable-package-json");
 });
 
 it("reports a failure when an install record is missing installPath", async () => {

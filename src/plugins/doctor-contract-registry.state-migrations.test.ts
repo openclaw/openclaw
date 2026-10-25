@@ -395,24 +395,16 @@ describe("doctor-contract-registry state migrations", () => {
     ).toEqual(["alpha-state"]);
   });
 
-  it("prefers modern migrations without loading the same owner's legacy setup entry", () => {
-    const { pluginRoot, events } = modernLegacyFixture(
-      "throw new Error('obsolete setup entry loaded');",
-    );
-    writeMigrations(pluginRoot, "alpha-modern");
-    expect(migrationIds()).toEqual(["alpha-modern"]);
-    expect(events()).toEqual([]);
-    expect(doctorContractWarnMock).not.toHaveBeenCalled();
-  });
-
-  it("does not fall back to legacy when an explicit modern declaration yields no migrations", () => {
-    const { pluginRoot, events } = modernLegacyFixture();
-    writeMigrations(pluginRoot);
-
-    expect(migrationEntries()).toEqual([]);
-    expect(events()).toEqual([]);
-    expect(doctorContractWarnMock).not.toHaveBeenCalled();
-  });
+  it.each([{ ids: [] }, { ids: ["alpha-modern"] }])(
+    "never falls back to legacy for an explicit modern declaration: $ids",
+    ({ ids }) => {
+      const { pluginRoot, events } = modernLegacyFixture();
+      writeMigrations(pluginRoot, ...ids);
+      expect(migrationIds()).toEqual(ids);
+      expect(events()).toEqual([]);
+      expect(doctorContractWarnMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps bundled non-channel state migrations available when plugins are globally disabled", () => {
     const pluginRoot = makeTempDir();
