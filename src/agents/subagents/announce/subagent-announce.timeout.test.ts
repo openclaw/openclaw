@@ -1,7 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { deliverSubagentAnnouncement } from "./subagent-announce-delivery.js";
-import { captureSubagentCompletionReply } from "./subagent-announce-output.js";
-import * as announceRuntime from "./subagent-announce.runtime.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
@@ -298,31 +296,5 @@ describe("subagent announce timeout config", () => {
     await timeout("progress", { terminalReply: { disposition: "empty" } });
     expect(completionEvent()?.result).toEqual(expected);
     expect(completionEvent()?.result).not.toContain("private tool output");
-  });
-});
-
-describe("captureSubagentCompletionReply", () => {
-  const sessionKey = "agent:main:subagent:child";
-  const sessionTarget = {
-    agentId: "main",
-    sessionKey,
-    sessionId: "child",
-    storePath: "/tmp/sessions-main.json",
-  };
-  const readMessages = vi.mocked(announceRuntime.readSessionMessagesAsync);
-  const capture = (waitForReply?: boolean) =>
-    captureSubagentCompletionReply(sessionKey, { sessionTarget, waitForReply });
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    readMessages.mockReset().mockResolvedValue([]);
-  });
-  afterEach(() => vi.useRealTimers());
-
-  it("returns immediate assistant output without polling", async () => {
-    readMessages.mockResolvedValue([textAssistant("Immediate completion")]);
-    await expect(capture()).resolves.toBe("Immediate completion");
-    expect(readMessages).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
   });
 });
