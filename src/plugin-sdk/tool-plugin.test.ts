@@ -105,6 +105,27 @@ describe("defineToolPlugin", () => {
     ]);
   });
 
+  it("retains a declared resultContentSource on the registered tool", () => {
+    const entry = defineToolPlugin({
+      ...pluginDetails,
+      tools: (tool) => [
+        tool({
+          ...echoTool,
+          name: "network_echo",
+          resultContentSource: "network",
+          execute: ({ input }) => input,
+        }),
+      ],
+    });
+    const captured = register(entry);
+
+    expect(captured.tools).toHaveLength(1);
+    expect(captured.tools[0]).toMatchObject({
+      name: "network_echo",
+      resultContentSource: "network",
+    });
+  });
+
   it("supports context factories while keeping static tool metadata", () => {
     const entry = defineToolPlugin({
       ...pluginDetails,

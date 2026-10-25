@@ -461,6 +461,28 @@ that duration in the fallback warning without exposing raw error text. Return
 available; the warning includes their count. These diagnostics do not turn an
 incomplete operation into a successful call.
 
+## Network-derived results
+
+Declare `resultContentSource: "network"` on the tool definition when the tool
+returns externally controlled content (web fetches, API responses, search
+results). This is a definition-level property: OpenClaw uses it to taint the
+rest of the turn and classify derived memory as untrusted, matching the
+lower-level `api.registerTool({ resultContentSource: "network", ... })`
+capability. Returning a similarly named field from `execute()` has no effect.
+
+```typescript
+tool({
+  name: "note_fetch",
+  description: "Fetch an external note.",
+  parameters: Type.Object({ id: Type.String() }),
+  resultContentSource: "network",
+  execute: ({ id }) => fetchNote(id),
+});
+```
+
+Factory tools declare `resultContentSource` on the concrete `AnyAgentTool`
+they return, not on the static declaration.
+
 ## Deliver the reply directly
 
 By default the model reads every tool result and writes the user-visible reply
