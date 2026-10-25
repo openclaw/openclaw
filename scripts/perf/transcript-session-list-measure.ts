@@ -37,7 +37,7 @@ try {
     const session = {
       sessionId: `synthetic-${index % 4}`,
       source: { providerId: "manual-transcript" },
-      startedAt: new Date(Date.UTC(2026, 0, 1) + index * 60_000).toISOString(),
+      startedAt: new Date(Date.UTC(2026, 0, 1) + index * 86_400_000).toISOString(),
     };
     await store.writeSession(session);
     if (index % 2 === 0) {
