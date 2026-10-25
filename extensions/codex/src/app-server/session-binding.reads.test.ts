@@ -33,6 +33,19 @@ async function createStateFixture(prefix: string) {
   return fixture;
 }
 
+async function createPersistedState(namespace: string, maxEntries = 10) {
+  const { stateDir } = await createStateFixture(`codex-${namespace}-`);
+  const options = {
+    namespace,
+    maxEntries,
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  };
+  return {
+    state: createSqliteState(options),
+    peer: () => createBindingStore(createSqliteState(options)),
+  };
+}
+
 async function createAuthorityFixture(name: string) {
   const fixture = await createStateFixture(`codex-${name}-`);
   const sessionKey = `agent:main:${name}`;
@@ -119,15 +132,9 @@ it.each([
 );
 
 it("rechecks physical ownership after a worker comparison loses to a same-thread successor", async () => {
-  const fixture = await createStateFixture("codex-client-cas-");
-  const options = {
-    namespace: "physical-owner-cas",
-    maxEntries: 10,
-    env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-  };
-  const state = createSqliteState(options);
+  const { state, peer: createPeer } = await createPersistedState("physical-owner-cas");
   const store = createBindingStore(state);
-  const peer = createBindingStore(createSqliteState(options));
+  const peer = createPeer();
   const identity = {
     kind: "session" as const,
     agentId: "main",
@@ -166,12 +173,7 @@ it.each([
   ["eager", createBindingStore],
   ["lazy", createLazyCodexAppServerBindingStore],
 ] as const)("%s prepared binding observes native and worker commits", async (_, createStore) => {
-  const fixture = await createStateFixture("codex-prepared-binding-");
-  const state = createSqliteState({
-    namespace: "prepared-binding",
-    maxEntries: 10,
-    env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-  });
+  const { state } = await createPersistedState("prepared-binding");
   const store = createStore(state);
   const identity = { kind: "session" as const, agentId: "main", sessionId: "current" };
   const key = bindingStoreKey(identity);
@@ -211,13 +213,7 @@ it.each([
 });
 
 it("keeps native monitor guards current through worker-published binding reads", async () => {
-  const fixture = await createStateFixture("codex-prepared-native-read-");
-  const options = {
-    namespace: "prepared-native-read",
-    maxEntries: 10,
-    env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-  };
-  const state = createSqliteState(options);
+  const { state, peer: createPeer } = await createPersistedState("prepared-native-read");
   const store = createLazyCodexAppServerBindingStore(state);
   const identity = { kind: "session" as const, agentId: "main", sessionId: "prepared-native" };
   const binding = {
@@ -283,7 +279,7 @@ it("keeps native monitor guards current through worker-published binding reads",
     await expect(assignments.record(assignment, assertSourceCurrent)).rejects.toThrow(
       "Native source custody was revoked",
     );
-    const peer = createBindingStore(createSqliteState(options));
+    const peer = createPeer();
     await peer.mutate(identity, { kind: "set", binding: { ...binding, threadId: "replacement" } });
     expect(() => submissions.assertCurrent()).toThrow(
       "Native submission binding is no longer current",
@@ -487,12 +483,10 @@ it("normalizes legacy fingerprints without rehashing canonical values", async ()
 });
 
 it("canonicalizes undefined fields and preserves empty instruction snapshots in JSON-only plugin state", async () => {
-  const { stateDir } = await createStateFixture("openclaw-codex-binding-state-");
-  const state = createSqliteState({
-    namespace: "app-server-thread-bindings-json-test",
-    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
+  const { state } = await createPersistedState(
+    "app-server-thread-bindings-json-test",
+    CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+  );
   const store = createBindingStore(state);
   const identity = { kind: "conversation" as const, bindingId: "binding-json" };
   const baseBinding = { threadId: "thread-json", cwd: "/repo" };

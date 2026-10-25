@@ -7,12 +7,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerClient } from "./client.js";
-import { createDynamicToolCall } from "./dynamic-tools.test-support.js";
+import { createDynamicToolCall, textToolResult } from "./dynamic-tools.test-support.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { buildEmptyToolTelemetry } from "./event-projector.test-harness.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { isJsonObject } from "./protocol.js";
 import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
+import { runningCommand } from "./run-attempt-continuity.test-support.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createTestParams,
@@ -64,17 +65,8 @@ describe("managed Codex plugin refresh", () => {
       const releaseTerminal = createDeferred<void>();
       const terminalAcknowledged = createDeferred<void>();
       const nativeCommand = {
-        id: "native-background",
-        type: "commandExecution",
-        command: "fixture background task",
-        cwd: "/workspace",
-        processId: "42",
+        ...runningCommand("native-background", "fixture background task", "42"),
         source: "agent",
-        status: "inProgress",
-        commandActions: [],
-        aggregatedOutput: null,
-        exitCode: null,
-        durationMs: null,
       };
       let terminalRunning = hasNativeCommand;
       const steerText = "After reloading, inspect the new description before continuing.";
@@ -100,17 +92,14 @@ describe("managed Codex plugin refresh", () => {
         siblingStarted.resolve();
         await releaseSibling.promise;
         events.push("sibling-finished");
-        return { content: [{ type: "text" as const, text: "sibling committed" }], details: {} };
+        return textToolResult("sibling committed");
       });
       const reload = createRuntimeDynamicTool("reload_runtime");
       reload.execute = vi.fn(async () => {
         expect(consumer?.()).toBe(true);
         pending = true;
         refreshRequested.resolve();
-        return {
-          content: [{ type: "text" as const, text: "generation 2 committed" }],
-          details: {},
-        };
+        return textToolResult("generation 2 committed");
       });
 
       const params = createTestParams();
@@ -422,18 +411,18 @@ describe("managed Codex plugin refresh", () => {
         if (!("result" in completed)) {
           throw completed.error;
         }
+        const expectedResults = expect.arrayContaining(
+          ["slow-call", "reload-call"].map((toolCallId) =>
+            expect.objectContaining({ role: "toolResult", toolCallId }),
+          ),
+        );
         if (outcome !== "confirmed") {
           expect(completed.result.terminal.kind).toBe("failed");
           expect(completed.result.replayMetadata).toMatchObject({
             hadPotentialSideEffects: true,
             replaySafe: false,
           });
-          expect(completed.result.messagesSnapshot).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ role: "toolResult", toolCallId: "slow-call" }),
-              expect.objectContaining({ role: "toolResult", toolCallId: "reload-call" }),
-            ]),
-          );
+          expect(completed.result.messagesSnapshot).toEqual(expectedResults);
           expect(completed.result.pluginRuntimeRefreshMessages).toBeUndefined();
           expect(completed.result.settledTurnFinalizationContext).toBeUndefined();
           const retainedBinding = await readCodexAppServerBinding(params.sessionFile);
@@ -460,12 +449,7 @@ describe("managed Codex plugin refresh", () => {
           expect.objectContaining({ success: true }),
           expect.objectContaining({ success: true }),
         ]);
-        expect(completed.result.pluginRuntimeRefreshMessages).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ role: "toolResult", toolCallId: "slow-call" }),
-            expect.objectContaining({ role: "toolResult", toolCallId: "reload-call" }),
-          ]),
-        );
+        expect(completed.result.pluginRuntimeRefreshMessages).toEqual(expectedResults);
         expect(
           completed.result.pluginRuntimeRefreshMessages
             ?.filter((message) => message.role === "user")

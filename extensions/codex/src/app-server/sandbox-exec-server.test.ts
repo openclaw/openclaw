@@ -287,29 +287,23 @@ it.each([
   },
 );
 
-it.each([
-  {
-    description: "unrestricted managed filesystem access",
-    sandbox: unrestricted("enabled"),
-  },
-  {
-    description: "network restrictions already enforced by a Podman container",
-    sandbox: { permissions: { type: "external", network: "restricted" } },
-    backendId: "podman",
-  },
-])(
-  "preserves $description and reports its actual sandbox type",
-  async ({ sandbox: policy, backendId }) => {
-    const buildExecSpec = vi.fn(async () => execSpec());
-    const sandbox = createSandboxContext({ buildExecSpec });
-    setBackend(sandbox, backendId);
-    const socket = await openSandboxSocket(sandbox, false);
-    await expect(
-      startProcess(socket, "proc-external-sandbox", { sandbox: policy }),
-    ).resolves.toEqual({ processId: "proc-external-sandbox", sandboxType: "none" });
-    expect(buildExecSpec).toHaveBeenCalledOnce();
-  },
-);
+it.each<[string, object, string?]>([
+  ["unrestricted filesystem", unrestricted("enabled")],
+  [
+    "Podman network isolation",
+    { permissions: { type: "external", network: "restricted" } },
+    "podman",
+  ],
+])("preserves %s and reports its actual sandbox type", async (_label, policy, backendId) => {
+  const buildExecSpec = vi.fn(async () => execSpec());
+  const sandbox = createSandboxContext({ buildExecSpec });
+  setBackend(sandbox, backendId);
+  const socket = await openSandboxSocket(sandbox, false);
+  await expect(startProcess(socket, "proc-external-sandbox", { sandbox: policy })).resolves.toEqual(
+    { processId: "proc-external-sandbox", sandboxType: "none" },
+  );
+  expect(buildExecSpec).toHaveBeenCalledOnce();
+});
 
 it.runIf(process.platform !== "win32")(
   "provides a real terminal and Ctrl-C for tty processes",
@@ -508,21 +502,13 @@ it.runIf(process.platform !== "win32")(
         stdinMode: "pipe-closed",
       }),
     });
-    const client = createClient();
-    await register(sandbox, client);
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "command-identity-test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-    await rpc(socket, "process/start", {
-      processId: "literal-command",
+    const socket = await openSandboxSocket(sandbox);
+    await startProcess(socket, "literal-command", {
       argv: [
         process.execPath,
         "-e",
         "console.log(process.pid + ':' + process.env.BACKEND_EXEC_PID); process.exit(42)",
       ],
-      cwd: "file:///workspace",
-      env: {},
-      tty: false,
     });
     const read = await readUntilClosed(socket, "literal-command");
     expect(read).toMatchObject({ exited: true, closed: true, exitCode: 42 });
