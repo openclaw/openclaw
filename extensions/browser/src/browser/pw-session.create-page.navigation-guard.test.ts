@@ -30,6 +30,167 @@ vi.mock(
   "./pw-session-cdp-transport.js",
   () => import("./pw-session-cdp-transport.test-support.js"),
 );
+
+describe("Playwright created-page ownership", () => {
+  const lightpanda = { cdpUrl: "ws://127.0.0.1:18792/", engine: "lightpanda" } as const;
+  const createBlank = (opts: Partial<Parameters<typeof createPageViaPlaywright>[0]> = {}) =>
+    create({ url: "about:blank", ...opts });
+  const targetInfo = { targetInfo: { targetId: "TARGET_1", title: "" } };
+
+  function pauseAtBoundary() {
+    const entered = Promise.withResolvers<void>();
+    const pending = Promise.withResolvers<void>();
+    return {
+      entered: entered.promise,
+      release: pending.resolve,
+      pause: async <T>(result: T) => {
+        entered.resolve();
+        await pending.promise;
+        return result;
+      },
+    };
+  }
+
+  it("closes the captured Lightpanda connection when its created page is released", async () => {
+    const created = await createBlank(lightpanda);
+    expect(created.targetId).toMatch(/^connection:[^:]+:TARGET_1$/);
+    expect(f.browserMock.newContext).not.toHaveBeenCalled();
+    await created.close();
+    expect(f.browserMock.close).toHaveBeenCalledOnce();
+    expect(f.pageMock.close).not.toHaveBeenCalled();
+    expect(f.contextMock.close).not.toHaveBeenCalled();
+  });
+  it("refuses a second Lightpanda page without closing the existing page or connection", async () => {
+    await f.contextMock.newPage();
+    f.contextMock.newPage.mockClear();
+    await expect(createBlank(lightpanda)).rejects.toThrow(
+      "Lightpanda supports 1 page per connection",
+    );
+    expect(f.browserMock.newContext).not.toHaveBeenCalled();
+    expect(f.contextMock.newPage).not.toHaveBeenCalled();
+    expect(f.browserMock.close).not.toHaveBeenCalled();
+    expect(f.pageMock.close).not.toHaveBeenCalled();
+    expect(f.context.pages()).toEqual([f.page]);
+  });
+  it.each(["connect", "context", "page", "target", "route"] as const)(
+    "rejects an unsignalled authority revocation during %s before navigation",
+    async (stage) => {
+      getChromeWebSocketEndpointSpy.mockResolvedValue({
+        url: "ws://127.0.0.1:18792/devtools/browser/authority-fixture",
+      });
+      const { entered, release, pause } = pauseAtBoundary();
+      if (stage === "connect") {
+        connectOverCdpSpy.mockImplementationOnce(() => pause(f.browser));
+      } else if (stage === "context") {
+        f.browserMock.newContext.mockImplementationOnce(() => pause(f.context));
+      } else if (stage === "page") {
+        f.contextMock.newPage.mockImplementationOnce(() => pause(f.page));
+      } else if (stage === "target") {
+        f.sessionSend.mockImplementationOnce(() => pause(targetInfo));
+      } else {
+        f.pageMock.route.mockImplementationOnce(() => pause(undefined));
+      }
+      let current = true;
+      const creation = createBlank({
+        url: "http://127.0.0.1:18793/revocation-fixture",
+        isolatedContext: true,
+        ssrfPolicy: { allowPrivateNetwork: true },
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("caller receipt expired");
+          }
+        },
+      });
+      try {
+        await Promise.race([
+          entered,
+          creation.then(() => {
+            throw new Error(`Creation completed before the ${stage} rendezvous`);
+          }),
+        ]);
+        current = false;
+        release();
+        await expect(creation).rejects.toThrow("caller receipt expired");
+      } finally {
+        release();
+        await creation.catch(() => {});
+      }
+      expect(f.pageMock.goto).not.toHaveBeenCalled();
+      expect(f.browserMock.newContext).toHaveBeenCalledTimes(stage === "connect" ? 0 : 1);
+      expect(f.contextMock.close).toHaveBeenCalledTimes(stage === "connect" ? 0 : 1);
+    },
+  );
+  it.each(["navigation", "focus"] as const)(
+    "starts %s in the same turn as its synchronous authority assertion",
+    async (operation) => {
+      let expired = false;
+      const assertCurrent = () =>
+        queueMicrotask(() => {
+          expired = true;
+        });
+      if (operation === "navigation") {
+        f.pageMock.goto.mockImplementationOnce(async () => {
+          expect(expired).toBe(false);
+          return null;
+        });
+        await navigate({
+          url: "http://127.0.0.1:18793/authority-turn",
+          assertPageCurrent: assertCurrent,
+        });
+        expect(f.pageMock.goto).toHaveBeenCalledOnce();
+      } else {
+        await f.contextMock.newPage();
+        f.pageMock.bringToFront.mockImplementationOnce(async () => {
+          expect(expired).toBe(false);
+        });
+        await pwAi.focusPageByTargetIdViaPlaywright({
+          cdpUrl,
+          targetId: "TARGET_1",
+          assertCurrent,
+        });
+        expect(f.pageMock.bringToFront).toHaveBeenCalledOnce();
+      }
+      expect(expired).toBe(true);
+    },
+  );
+  it("closes a new page when its target identity cannot be read", async () => {
+    f.sessionSend.mockRejectedValue(new Error("Target metadata unavailable"));
+    await expect(createBlank()).rejects.toThrow("Failed to get targetId for new page");
+    expect(f.pageMock.close).toHaveBeenCalledOnce();
+    expect(f.page.context().pages()).toEqual([]);
+  });
+  it("does not navigate when cancellation wins navigation validation", async () => {
+    const { entered, release, pause } = pauseAtBoundary();
+    const validation = vi
+      .spyOn(await import("./navigation-guard.js"), "assertBrowserNavigationAllowed")
+      .mockImplementationOnce(() => pause(undefined));
+    const controller = new AbortController();
+    try {
+      const creation = createBlank({ url: "https://example.com", signal: controller.signal });
+      const rejected = expect(creation).rejects.toThrow("cancelled validation");
+      await entered;
+      controller.abort(new Error("cancelled validation"));
+      release();
+      await rejected;
+      expect(f.pageMock.goto).not.toHaveBeenCalled();
+      expect(f.page.context().pages()).toEqual([]);
+    } finally {
+      release();
+      validation.mockRestore();
+    }
+  });
+  it("closes a new page when cancellation wins target resolution", async () => {
+    const { entered, release, pause } = pauseAtBoundary();
+    f.sessionSend.mockImplementationOnce(() => pause(targetInfo));
+    const controller = new AbortController();
+    const creation = createBlank({ signal: controller.signal });
+    await entered;
+    controller.abort(new Error("cancelled page creation"));
+    release();
+    await expect(creation).rejects.toThrow("cancelled page creation");
+    expect(f.pageMock.close).toHaveBeenCalledOnce();
+  });
+});
 const cdpUrl = "http://127.0.0.1:18792";
 const publicUrl = "https://93.184.216.34/start";
 const privateUrl = "http://127.0.0.1:18080/internal-hop";
