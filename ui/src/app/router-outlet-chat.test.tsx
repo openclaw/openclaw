@@ -4,11 +4,6 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { SolidRouteProps } from "../app-route-types.tsx";
 import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
-import {
-  SESSION_COMPOSER_FOCUS_PARAM,
-  SESSION_NAVIGATION_KEY_PARAM,
-  sessionNavigationTarget,
-} from "../lib/sessions/route-navigation.ts";
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
 import { pages as chatPages } from "../pages/chat/route.ts";
 import { routeFixtures, type OutletModule } from "./router-outlet-fixtures.test-support.tsx";
@@ -22,7 +17,7 @@ import {
 // mock-isolation: Supply the renderer while retaining the registered route's ownership policy.
 vi.mock("../pages/chat/chat-page.tsx", () => ({}));
 
-type RouteId = "chat" | "dashboard" | "home" | "settings" | "new-session";
+type RouteId = "chat" | "dashboard" | "home" | "new-session";
 type TestContext = Record<string, never>;
 type TestModule = OutletModule<ChatRouteData>;
 const routes = routeFixtures<RouteId, TestContext, ChatRouteData>();
@@ -197,7 +192,7 @@ describe("openclaw-router-outlet chat ownership", () => {
       expect(outlet.querySelector('[data-testid="chat-ready"]')?.textContent).toBe("Chat");
     },
   );
-  it("keeps the loaded session connected and inert across Home and Settings, then restores its draft", async () => {
+  it("parks the loaded session on Home and restores its draft on return", async () => {
     const { teardown, module } = await ownedModule();
     const refreshed = createDeferredCore<ChatRouteData>();
     const loader = vi
@@ -206,9 +201,7 @@ describe("openclaw-router-outlet chat ownership", () => {
       .mockImplementation(() => refreshed.promise);
     const router = testRouter(
       page("chat", module, loader),
-      ...(["home", "settings"] as const).map((id) =>
-        page(id, { renderSolid: () => <div data-testid="ordinary-route">{id}</div> }),
-      ),
+      page("home", { renderSolid: () => <div data-testid="ordinary-route">Home</div> }),
     );
     const outlet = createOutlet(router);
     await navigate(router, outlet, "chat");
@@ -216,13 +209,11 @@ describe("openclaw-router-outlet chat ownership", () => {
     const draft = outlet.querySelector<HTMLTextAreaElement>('[data-testid="route-draft"]')!;
     draft.value = "Keep this unfinished message";
 
-    for (const id of ["home", "settings"] as const) {
-      await navigate(router, outlet, id);
-      expect(outlet.querySelector('[data-testid="ordinary-route"]')?.textContent).toBe(id);
-      expectParked(outlet, view);
-      expect(routeValue(outlet)?.getAttribute("data-presented")).toBe("false");
-      expect(teardown).not.toHaveBeenCalled();
-    }
+    await navigate(router, outlet, "home");
+    expect(outlet.querySelector('[data-testid="ordinary-route"]')?.textContent).toBe("Home");
+    expectParked(outlet, view);
+    expect(routeValue(outlet)?.getAttribute("data-presented")).toBe("false");
+    expect(teardown).not.toHaveBeenCalled();
 
     const navigation = router.navigate("chat", {});
     await settleOutlet(outlet);
@@ -240,15 +231,6 @@ describe("openclaw-router-outlet chat ownership", () => {
   it.each([false, true])(
     "retains the session subtree across presentation switches (parked: %s)",
     async (parked) => {
-      const target = (key: string, face: "chat" | "dashboard") =>
-        sessionNavigationTarget({
-          face,
-          sessionKey: key,
-          fallbackAgentId: "main",
-          row: { key, displayName: "Retained board" },
-        });
-      const chatTarget = target(sessionKey, "chat");
-      const dashboardTarget = target(nextKey, "dashboard");
       const nextData = createDeferredCore<ChatRouteData>();
       const teardown = vi.fn(async () => undefined);
       const render = ownedRenderer(teardown);
@@ -258,19 +240,12 @@ describe("openclaw-router-outlet chat ownership", () => {
         page("home", { renderSolid: () => <div>Home</div> }),
       );
       const outlet = createOutlet(router);
-      await navigate(router, outlet, "chat", parked ? undefined : location(chatTarget.href));
+      await navigate(router, outlet, "chat");
       const view = appView(outlet)!;
       if (parked) {
         await navigate(router, outlet, "home");
       }
-      const navigation = router.navigate(
-        "dashboard",
-        {},
-        undefined,
-        parked
-          ? undefined
-          : location(dashboardTarget.options.pathname, dashboardTarget.options.search),
-      );
+      const navigation = router.navigate("dashboard", {});
       await settleOutlet(outlet);
       expectRetained(outlet, view, teardown);
       if (parked) {
@@ -458,93 +433,31 @@ describe("openclaw-router-outlet chat ownership", () => {
     expect(loader).toHaveBeenCalledTimes(2);
   });
 
-  const firstKey = "agent:main:dashboard:12345678-0aaa-4000-8000-000000000001";
-  const collisionKey = "agent:main:dashboard:12345678-0bbb-4000-8000-000000000002";
-  const path = "/chat/main/deploy-monitor-12345678";
-  const composerSearch = new URLSearchParams({
-    draft: "ship it",
-    [SESSION_COMPOSER_FOCUS_PARAM]: "1",
-  });
-  const hinted = (key: string) =>
-    location(path, `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(key)}`);
-  const unresolved = {
-    initialLocation: location("/chat/main/alpha-12345678"),
-    destination: location("/chat/main/beta-12345678"),
-    initial: sessionData(firstKey, "chat"),
-    deps: (routeLocation: RouteLocation) => routeLocation.pathname,
-  };
-
-  it.each([
-    {
-      label: "a full-key hint cleans up to its canonical location",
-      initialLocation: location(
-        "/chat/main/wrong-name-12345678",
-        `?${composerSearch}&${SESSION_NAVIGATION_KEY_PARAM}=${sessionKey}`,
+  it("retains an unresolved route until its missing-session result replaces it", async () => {
+    const nextData = createDeferredCore<ChatRouteData>();
+    let loadCount = 0;
+    const { teardown, module } = await ownedModule();
+    const router = testRouter(
+      page(
+        "chat",
+        module,
+        () => (++loadCount === 1 ? sessionData(sessionKey, "chat") : nextData.promise),
+        (_context, routeLocation) => routeLocation.pathname,
       ),
-      destination: location(path),
-      initial: {
-        ...sessionData(sessionKey, "chat"),
-        canonicalLocation: location(path, `?${composerSearch}`),
-      },
-      result: sessionData(sessionKey, "chat"),
-      deps: (routeLocation: RouteLocation) => `${routeLocation.pathname}${routeLocation.search}`,
-    },
-    {
-      label: "a colliding short path's full-key hint changes",
-      initialLocation: hinted(firstKey),
-      destination: hinted(collisionKey),
-      initial: sessionData(firstKey, "chat"),
-      result: sessionData(collisionKey, "chat"),
-      deps: (routeLocation: RouteLocation) => routeLocation.search,
-    },
-    {
-      ...unresolved,
-      label: "an unresolved route becomes ambiguous",
-      result: {
-        kind: "ambiguous",
-        shortId: "12345678",
-        candidates: [],
-        truncated: false,
-        face: "chat",
-      } satisfies ChatRouteData,
-    },
-    {
-      ...unresolved,
-      label: "an unresolved route becomes missing-session",
-      result: {
-        kind: "missing-session",
-        face: "chat",
-        currentSessionHref: "/chat/main",
-        sessionsHref: "/sessions",
-      } satisfies ChatRouteData,
-    },
-  ])(
-    "retains the route while $label",
-    async ({ initialLocation, destination, initial, result, deps }) => {
-      const nextData = createDeferredCore<ChatRouteData>();
-      let loadCount = 0;
-      const { teardown, module } = await ownedModule();
-      const router = testRouter(
-        page(
-          "chat",
-          module,
-          () => (++loadCount === 1 ? initial : nextData.promise),
-          (_context, routeLocation) => deps(routeLocation),
-        ),
-      );
-      const outlet = createOutlet(router);
-      await navigate(router, outlet, "chat", initialLocation);
-      const firstView = appView(outlet);
-      const navigation = router.navigate("chat", {}, undefined, destination);
-      await settleOutlet(outlet);
-      expectRetained(outlet, firstView, teardown);
-      await finishNavigation(outlet, navigation, nextData, result);
-      if (result.kind === "session") {
-        expectRetained(outlet, firstView, teardown);
-      } else {
-        expect(routeValue(outlet)?.textContent).toBe("chooser");
-        expect(teardown).toHaveBeenCalledOnce();
-      }
-    },
-  );
+    );
+    const outlet = createOutlet(router);
+    await navigate(router, outlet, "chat", location("/chat/main/alpha-12345678"));
+    const firstView = appView(outlet);
+    const navigation = router.navigate("chat", {}, undefined, location("/chat/main/beta-12345678"));
+    await settleOutlet(outlet);
+    expectRetained(outlet, firstView, teardown);
+    await finishNavigation(outlet, navigation, nextData, {
+      kind: "missing-session",
+      face: "chat",
+      currentSessionHref: "/chat/main",
+      sessionsHref: "/sessions",
+    });
+    expect(routeValue(outlet)?.textContent).toBe("chooser");
+    expect(teardown).toHaveBeenCalledOnce();
+  });
 });

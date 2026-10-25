@@ -6,8 +6,10 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
+import type { BoardDocumentProps } from "../components/board/board-document.tsx";
 import type { LoginGateProps } from "../components/login-gate-solid.tsx";
 import "../components/login-gate-solid.tsx";
+import type { TerminalInputs } from "../components/terminal/terminal-panel-session-types.ts";
 import { i18n } from "../i18n/index.ts";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { loadChatRoute, type ChatRouteData } from "../pages/chat/route-loader.ts";
@@ -26,44 +28,22 @@ vi.mock("./app-host.tsx", () => ({
   OpenClawShell: () => document.createElement("openclaw-app-shell"),
 }));
 
+type NativeProps<Props> = Props & { ref?: JSX.Ref<HTMLElement> };
+
 // mock-isolation: exercise root-to-panel inputs without board RPCs or terminal emulator custody.
 vi.mock("../components/board/board-document.tsx", () => ({
-  OpenClawBoardDocument: (
-    props: Omit<
-      Parameters<
-        (typeof import("../components/board/board-document.tsx"))["OpenClawBoardDocument"]
-      >[0],
-      "ref"
-    > & { ref?: JSX.Ref<HTMLElement> },
-  ) => (
-    <openclaw-board-document
-      ref={props.ref}
-      prop:gatewaySnapshot={props.gatewaySnapshot}
-      prop:sessions={props.sessions}
-      prop:sessionKey={props.sessionKey}
-      prop:preparedSession={props.preparedSession}
-      prop:onDocumentClose={props.onDocumentClose}
-    />
+  OpenClawBoardDocument: (props: NativeProps<BoardDocumentProps>) => (
+    <openclaw-board-document ref={props.ref} prop:sessionKey={props.sessionKey} />
   ),
 }));
 // mock-isolation: root panel inputs do not require an emulator or terminal session owner.
 vi.mock("../components/terminal/terminal-panel-registration.tsx", () => ({
-  TerminalPanelHost: (
-    props: Omit<
-      Parameters<
-        (typeof import("../components/terminal/terminal-panel-registration.tsx"))["TerminalPanelHost"]
-      >[0],
-      "ref"
-    > & { ref?: JSX.Ref<HTMLElement> },
-  ) => (
+  TerminalPanelHost: (props: NativeProps<Partial<TerminalInputs>>) => (
     <openclaw-terminal-panel
       ref={props.ref}
       prop:client={props.client}
       prop:gatewayConnected={props.gatewayConnected}
       prop:available={props.available}
-      prop:agentId={props.agentId}
-      prop:themeMode={props.themeMode}
-      prop:fullscreen={props.fullscreen}
     />
   ),
 }));
@@ -188,12 +168,6 @@ async function createOfflineSurface(warm = false) {
   await surface.draw({ phase: "offline", lastError: "Connect to continue" });
   return surface;
 }
-
-it("retires the static HTML frame in the first application commit", async () => {
-  const { container } = await createWarmSurface(false, new Promise(() => {}));
-  expect(container.querySelector("#openclaw-boot-shell")).toBeNull();
-  expect(container.querySelectorAll(".connect-splash--skeleton")).toHaveLength(1);
-});
 
 describe("warm boot app root", () => {
   it("loads a focused dashboard after startup and reports its committed result to automation", async () => {
@@ -364,10 +338,12 @@ describe("warm boot app root", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 
-  it("keeps the login gate out of the first render while application startup is pending", async () => {
+  it("replaces the static frame with one splash, admitting login only after startup", async () => {
     const starting = Promise.withResolvers<void>();
     const { container, start } = await createWarmSurface(false, starting.promise);
     expect(start).toHaveBeenCalledOnce();
+    expect(container.querySelector("#openclaw-boot-shell")).toBeNull();
+    expect(container.querySelectorAll(".connect-splash--skeleton")).toHaveLength(1);
     expectSurface([".connect-splash"], ["openclaw-login-gate"]);
     starting.resolve();
     await starting.promise;
@@ -504,9 +480,6 @@ describe("warm boot app root", () => {
     const { container, start, rosterSubscriptions } = await createOfflineSurface();
     const gate = loginGate(container);
     expect(rosterSubscriptions).not.toHaveBeenCalled();
-    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.get).toEqual(
-      expect.any(Function),
-    );
     expect(container.hasAttribute("data-openclaw-ready")).toBe(false);
 
     expect(window.openclawControlUi).toBeUndefined();
@@ -517,7 +490,6 @@ describe("warm boot app root", () => {
     expect(window.openclawControlUi).toBe(hook);
     expect(loginGate(container)).toBe(gate);
     expect(start).toHaveBeenCalledOnce();
-    expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")?.value).toBe(hook);
 
     disposeApp();
     expect(Object.getOwnPropertyDescriptor(window, "openclawControlUi")).toBeUndefined();

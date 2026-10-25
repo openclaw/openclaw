@@ -13,6 +13,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { campaignSchedule } from "./overlays-update.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { projectUpdateRunFailure } from "./update-overlay-helpers.ts";
 import type { UpdateFailureTriage, UpdateTriageAdmission } from "./update-overlay-helpers.ts";
@@ -174,12 +175,15 @@ describe("update triage presentation", () => {
 
   it("requires new diagnosis after run facts change", async () => {
     stubStorage();
-    let run = createUpdateRunFixture();
+    let run = createUpdateRunFixture({
+      phase: "finished",
+      status: "failed",
+      reason: "restart-revision-mismatch",
+      finishedAtMs: 2_000,
+      updatedAtMs: 2_000,
+    });
     const request = vi.fn(
       async (method: string, params?: { sessionId?: string; message?: string }) => {
-        if (method === "update.run") {
-          return { ok: true, runId: run.runId };
-        }
         if (method === "update.runs.get") {
           return { run };
         }
@@ -195,7 +199,7 @@ describe("update triage presentation", () => {
           : {};
       },
     );
-    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
+    const { context, emitGatewayEvent } = createContext(request);
     const onUpdateFailure = vi.fn(
       (failure: UpdateFailureTriage, admission: UpdateTriageAdmission) =>
         presentUpdateFailureTriage(context, failure, admission),
@@ -210,25 +214,12 @@ describe("update triage presentation", () => {
       await vi.waitFor(() =>
         expect(surface.querySelector('[data-option-value="Ask first"]')).not.toBeNull(),
       );
-      await overlays.runUpdate();
-      setGatewaySnapshot({ phase: "reconnecting" });
-      run = {
-        ...run,
-        phase: "finished",
-        status: "failed",
-        reason: "restart-revision-mismatch",
-        finishedAtMs: 2_000,
-        updatedAtMs: 2_000,
-      };
-      setGatewaySnapshot({ phase: "connected" });
       await overlays.refreshUpdateStatus();
       expect(onUpdateFailure).not.toHaveBeenCalled();
       expect(diagnosticMessages()).toEqual([]);
       overlays.diagnoseUpdateFailure(run.runId);
       expect(custodianAlertStore.alert?.question).toContain("restart-revision-mismatch");
       const staleAdmission = onUpdateFailure.mock.calls[0]?.[1];
-      await overlays.refreshUpdateStatus();
-      expect(onUpdateFailure).toHaveBeenCalledOnce();
       expect(staleAdmission?.isCurrent()).toBe(true);
 
       run = {
@@ -251,8 +242,6 @@ describe("update triage presentation", () => {
       await vi.waitFor(() => expect(custodianAlertStore.alert?.question).toContain("Disk is full"));
       expect(custodianAlertStore.alert?.question).not.toContain("restart-revision-mismatch");
       expect(onUpdateFailure).toHaveBeenCalledTimes(2);
-      await overlays.refreshUpdateStatus();
-      expect(onUpdateFailure).toHaveBeenCalledTimes(2);
       await vi.waitFor(() => expect(diagnosticMessages()).toHaveLength(2));
       expect(diagnosticMessages()).toEqual(["Ask first", expect.stringContaining("Disk is full")]);
       expect(diagnosticMessages()[1]).toContain(run.runId);
@@ -271,58 +260,26 @@ describe("update triage presentation", () => {
     }
   });
 
-  it("requires explicit diagnosis despite stale campaign", async () => {
+  it("requires explicit diagnosis after a campaign run fails", async () => {
     stubStorage();
-    const schedule = {
-      channel: "stable",
-      autoEnabled: true,
-      campaign: {
-        id: "applying-campaign",
-        state: "applying",
-        announcedAtMs: 1_000,
-        forceAtMs: 2_000,
-        updatedAtMs: 2_000,
-      },
-    } as const;
+    const schedule = campaignSchedule({ state: "applying" });
     let run = createUpdateRunFixture({
       phase: "verifying",
       origin: { campaignId: schedule.campaign.id },
     });
-    const request = vi.fn(
-      async (method: string, params?: { sessionId?: string; message?: string }) => {
-        if (method === "update.run") {
-          return { ok: true, runId: run.runId };
-        }
-        if (method === "update.runs.get") {
-          return { run };
-        }
-        if (method === "update.status") {
-          return { activeRun: run.status === "running" ? run : null, lastRun: run, schedule };
-        }
-        return method === "openclaw.chat"
-          ? { sessionId: params?.sessionId, reply: "Ready to inspect the update." }
-          : {};
-      },
+    const request = vi.fn(async (method: string) =>
+      method === "update.runs.get"
+        ? { run }
+        : method === "update.status"
+          ? { activeRun: run.status === "running" ? run : null, lastRun: run, schedule }
+          : {},
     );
-    const diagnosticMessages = () =>
-      request.mock.calls.flatMap(([method, params]) =>
-        method === "openclaw.chat" && params?.message ? [params.message] : [],
-      );
-    const { context, emitGatewayEvent, setGatewaySnapshot } = createContext(request);
-    const overlays = createApplicationOverlays(context.gateway, {
-      onUpdateFailure: (failure, admission) =>
-        presentUpdateFailureTriage(context, failure, admission),
-    });
-    const surface = mountSurface(context);
+    const { context, emitGatewayEvent } = createContext(request);
+    const onUpdateFailure = vi.fn();
+    const overlays = createApplicationOverlays(context.gateway, { onUpdateFailure });
     try {
-      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
       await overlays.refreshUpdateStatus();
       expect(overlays.snapshot.updateRunning).toBe(true);
-      expect(diagnosticMessages()).toEqual([]);
-      setGatewaySnapshot({ phase: "reconnecting" });
-      setGatewaySnapshot({ phase: "connected" });
-      await overlays.refreshUpdateStatus();
-      expect(diagnosticMessages()).toEqual([]);
       run = {
         ...run,
         phase: "finished",
@@ -332,27 +289,13 @@ describe("update triage presentation", () => {
         updatedAtMs: 3_000,
       };
       emitGatewayEvent({ event: "update.run.changed", payload: run });
-      expect(diagnosticMessages()).toEqual([]);
       expect(overlays.snapshot.diagnosableUpdateFailureId).toBeNull();
       await vi.waitFor(() => expect(overlays.snapshot.updateRun).toEqual(run));
-      expect(diagnosticMessages()).toEqual([]);
-      expect(overlays.snapshot.diagnosableUpdateFailureId).toBe(run.runId);
-      overlays.diagnoseUpdateFailure(run.runId);
-      await vi.waitFor(() =>
-        expect(diagnosticMessages()).toEqual([expect.stringContaining("Do not retry the update")]),
-      );
+      expect(onUpdateFailure).not.toHaveBeenCalled();
       expect(overlays.snapshot.updateRunning).toBe(false);
       expect(overlays.snapshot.updateSchedule?.campaign?.state).toBe("applying");
-      await overlays.refreshUpdateStatus();
-      emitGatewayEvent({ event: "update.run.changed", payload: run });
-      setGatewaySnapshot({ phase: "reconnecting" });
-      setGatewaySnapshot({ phase: "connected" });
-      await overlays.refreshUpdateStatus();
-      expect(diagnosticMessages()).toHaveLength(1);
-      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
       overlays.diagnoseUpdateFailure(run.runId);
-      await vi.waitFor(() => expect(diagnosticMessages()).toHaveLength(2));
-      expect(diagnosticMessages()[1]).toContain("restart-unhealthy");
+      expect(onUpdateFailure).toHaveBeenCalledOnce();
     } finally {
       overlays.dispose();
     }

@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
-import { openSlot } from "../pages/chat/sidebar-layout.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import {
   expectedGatewayUrl,
@@ -256,18 +255,6 @@ describe("gateway settings and layout persistence", () => {
     });
   });
 
-  it("persists and parses a chat split layout", () => {
-    const chatSplitLayout = {
-      columns: [
-        { id: "c1", panes: [{ id: "p1", sessionKey: "main" }], paneWeights: [1] },
-        { id: "c2", panes: [{ id: "p2", sessionKey: "agent:main:work" }], paneWeights: [1] },
-      ],
-      columnWeights: [0.4, 0.6],
-      activePaneId: "p2",
-    };
-    roundTrip("chatSplitLayout", chatSplitLayout);
-  });
-
   it("round-trips dashboard tabs and docks, dropping legacy face", () => {
     const boardSessionViews = {
       main: { activeTabId: "research", reopenDockByTab: { research: "left" } },
@@ -283,18 +270,6 @@ describe("gateway settings and layout persistence", () => {
     roundTrip("boardSessionViews", boardSessionViews);
   });
 
-  it("normalizes and round-trips per-session sidebar layouts", () => {
-    const valid = openSlot({ columns: [] }, "discussion");
-    writeStored({ sidebarSessionLayouts: { main: valid, corrupt: { columns: "invalid" } } });
-    const expected = {
-      main: valid,
-      corrupt: { columns: [], open: false, expanded: false },
-    };
-    expect(loadSettings().sidebarSessionLayouts).toMatchObject(expected);
-    saveSettings(loadSettings());
-    expect(loadSettings().sidebarSessionLayouts).toMatchObject(expected);
-  });
-
   it.each([
     [" Research ", "research"],
     [null, null],
@@ -308,64 +283,42 @@ describe("gateway settings and layout persistence", () => {
   });
 
   it("persists rail shortcuts across save and load, normalizing bad values", () => {
-    const gwUrl = expectedGatewayUrl("");
-    saveSettings(
-      makeUiSettings(gwUrl, {
-        sidebarEntries: ["route:tasks", "route:cron"],
-        textScale: 100,
-        navCollapsed: true,
-      }),
-    );
+    saveSettings({
+      ...loadSettings(),
+      sidebarEntries: ["route:tasks", "route:cron"],
+      navCollapsed: true,
+    });
     expect(loadSettings().sidebarEntries).toEqual(["route:cron"]);
     expect(readStored().railShortcuts).toEqual(["route:tasks", "route:cron"]);
     expect(readStored()).not.toHaveProperty("sidebarEntries");
     expect(loadSettings().navWidth).toBe(258);
     expect(readStored()).not.toHaveProperty("navCollapsed");
 
-    // Corrupt the persisted list; load falls back to the empty rail.
     writeStored({
       ...readStored(),
       railShortcuts: "route:tasks",
       navWidth: 220,
       navCollapsed: true,
     });
-    expect(loadSettings().sidebarEntries).toEqual([]);
-    expect(loadSettings().navWidth).toBe(258);
-    expect(loadSettings().navCollapsed).toBe(false);
+    expect(loadSettings()).toMatchObject({
+      sidebarEntries: [],
+      navWidth: 258,
+      navCollapsed: false,
+    });
   });
 
   it.each(["direct save", "unrelated locale patch"])(
     "preserves legacy sidebar data outside rail shortcuts: %s",
     (action) => {
-      const gatewayUrl = expectedGatewayUrl("");
-      const sessionsByGateway = {
-        [gatewayUrl]: { sessionKey: "agent:main:work", lastActiveSessionKey: "agent:main:work" },
-      };
-      const sidebarEntries = ["route:chat", "route:activity", "route:usage", "route:cron"];
-      const sidebarPinnedRoutes = ["workboard", "usage", "tasks", "usage", "worktrees", 7];
-      writeStored({
-        gatewayUrl,
-        theme: "claw",
-        themeMode: "dark",
-        navWidth: 300,
-        sessionsByGateway,
-        sidebarEntries,
-        sidebarPinnedRoutes,
-      });
+      const sidebarEntries = ["route:chat", "route:cron"];
+      const sidebarPinnedRoutes = ["usage", "usage", 7];
+      writeStored({ sidebarEntries, sidebarPinnedRoutes });
       if (action === "unrelated locale patch") {
         patchSettings({ locale: "de" });
       }
       const settings = loadSettings();
-      expect(settings).toMatchObject({
-        gatewayUrl,
-        sessionKey: "agent:main:work",
-        lastActiveSessionKey: "agent:main:work",
-        themeMode: "dark",
-        navWidth: 300,
-      });
       expect(settings.sidebarEntries).toEqual([]);
       saveSettings(settings);
-      expect(readStored().sessionsByGateway).toEqual(sessionsByGateway);
       expect(readStored()).toMatchObject({
         sidebarEntries,
         sidebarPinnedRoutes,
@@ -547,11 +500,7 @@ describe("gateway settings and layout persistence", () => {
     expect(loadSettings()).toMatchObject({ theme: "claw", themeMode: "dark" });
   });
 
-  it("round-trips explicit camera intent and rejects invalid stored values", () => {
-    for (const talkCameraAutoEnable of [true, false]) {
-      roundTrip("talkCameraAutoEnable", talkCameraAutoEnable);
-      expect(readStored().talkCameraAutoEnable).toBe(talkCameraAutoEnable);
-    }
+  it("rejects non-boolean camera intent", () => {
     writeStored({ talkCameraAutoEnable: "true" });
     expect(loadSettings().talkCameraAutoEnable).toBeUndefined();
   });

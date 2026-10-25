@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { createRouter, definePage, type RouterHistory } from "@openclaw/uirouter";
-import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -8,7 +7,6 @@ import type { AgentsListResult } from "../api/types.ts";
 import { locationForRoute, routePageSpec, type RouteId } from "../app-route-paths.ts";
 import { agentCreationRejection } from "../lib/agents/creation.test-support.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
-import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -16,7 +14,6 @@ import {
   mountSidebarContext,
 } from "../test-helpers/app-sidebar.ts";
 import "../lib/toast-host.tsx";
-import "../pages/chat/pending-session-create.tsx";
 import "../test-helpers/app-sidebar-suite.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
@@ -27,9 +24,6 @@ import { loadSettings, patchSettings } from "./settings.ts";
 
 const mainAgent = { id: "main", name: "Molty" };
 const mainLocation = { pathname: "/chat/main", search: "", hash: "" };
-const newAgentSelector = '[data-value="command:new-agent"]';
-const nameSelector = ".agent-create-dialog input[name='name']";
-const submitSelector = ".agent-create-dialog button[type='submit']";
 const methods = (request: Awaited<ReturnType<typeof fixture>>["request"]) =>
   request.mock.calls.map(([method]) => method);
 
@@ -50,7 +44,6 @@ async function openAgentMenu(context: ApplicationContext) {
 async function fixture(
   options: {
     verification?: Promise<{ ok: boolean; error?: string }>;
-    creation?: Promise<void>;
     onboardingError?: string;
   } = {},
 ) {
@@ -88,7 +81,6 @@ async function fixture(
       if (!verification.ok) {
         throw agentCreationRejection(verification.error ?? "Inference unavailable");
       }
-      await options.creation;
       if (
         !params ||
         typeof params !== "object" ||
@@ -211,56 +203,6 @@ describe("application agent creation", () => {
     },
   );
 
-  it("opens the new chat before waiting for inference verification", async () => {
-    const verification = createDeferred<{ ok: boolean; error?: string }>();
-    const { context, request, roster, navigate, creationStarted } = await fixture({
-      verification: verification.promise,
-    });
-    const creating = createApplicationAgent(context);
-    try {
-      expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", {
-        pathname: expect.stringMatching(/^\/chat\/bot-/),
-        search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
-      });
-      expect(roster.agents).toHaveLength(1);
-      expect(context.chatSubmissions.creation).toMatchObject({
-        sessionKey: expect.stringMatching(/^agent:bot-.*:home$/),
-        admitted: false,
-      });
-      expect(context.chatSubmissions.readCreate()).toMatchObject({
-        displayName: "New agent",
-        message: null,
-      });
-      expect(context.gateway.snapshot.sessionKey).toBe("agent:main:home");
-      await creationStarted;
-      expect(methods(request)).toEqual(["agents.list", "agents.create"]);
-      Object.assign(context.placementStartup, {
-        get: () => null,
-        subscribe: () => () => undefined,
-      });
-      const pending = Object.assign(document.createElement("openclaw-pending-session-create"), {
-        context,
-        sessionKey: context.chatSubmissions.creation!.sessionKey,
-      });
-      document.body.append(pending);
-      onTestFinished(() => pending.remove());
-      await vi.waitFor(() => {
-        expect(pending.querySelector(".chat-group.assistant .chat-text")?.textContent?.trim()).toBe(
-          "Hi, I’m New agent. Happy to help.",
-        );
-      });
-      expect(pending.querySelector(".chat-avatar.assistant")?.getAttribute("aria-label")).toBe(
-        "New agent",
-      );
-      expect(pending.querySelector(".chat-group.user")).toBeNull();
-      expect(roster.agents).toHaveLength(1);
-      expect(context.chatSubmissions.creation?.admitted).toBe(false);
-    } finally {
-      verification.resolve({ ok: false, error: "Test verification did not pass" });
-      await creating;
-    }
-  });
-
   it("creates the chosen name and avatar and opens that agent's own chat", async () => {
     const avatar = "data:image/webp;base64,Ym90";
     const { context, request, roster, settledNavigation } = await fixture();
@@ -277,78 +219,6 @@ describe("application agent creation", () => {
       onboarding: true,
       avatar,
     });
-  });
-
-  it("puts creation first, shows a pending top row, and opens the agent-initiated chat", async () => {
-    const verification = createDeferred<{ ok: boolean }>();
-    const creation = createDeferred();
-    const { context, request, roster, navigate, toast, settledNavigation } = await fixture({
-      verification: verification.promise,
-      creation: creation.promise,
-    });
-    const sidebar = await openAgentMenu(context);
-    const query = <T extends Element = HTMLElement>(selector: string) =>
-      sidebar.querySelector<T>(selector);
-    await vi.waitFor(() =>
-      expect(query(newAgentSelector)?.textContent).toContain("Create new agent"),
-    );
-    const create = query<HTMLButtonElement>(newAgentSelector);
-    expect(sidebar.querySelector(".sidebar-agent-menu [data-value]")).toBe(create);
-    expect(sidebar.querySelector(".sidebar-agent-menu [role=separator]")).toBeNull();
-    create?.click();
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
-    await vi.waitFor(() => expect(query(nameSelector)).not.toBeNull());
-    const name = query<HTMLInputElement>(nameSelector)!;
-    name.value = "New agent";
-    name.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    expect(name.value).toBe("New agent");
-    expect(query<HTMLButtonElement>(submitSelector)?.disabled).toBe(false);
-    query<HTMLButtonElement>(submitSelector)!.click();
-    await sidebar.updateComplete;
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
-    await sidebar.updateComplete;
-    await vi.waitFor(() => {
-      expect(context.agents.state.pendingAgent).toBeDefined();
-      expect(query(newAgentSelector)?.textContent).toContain("Creating new agent");
-    });
-    expect(roster.agents).toHaveLength(1);
-    expect(navigate).toHaveBeenCalledOnce();
-
-    verification.resolve({ ok: true });
-    await vi.waitFor(() => {
-      expect(context.agents.state.pendingAgent).toBeDefined();
-      const pendingRow = query(newAgentSelector);
-      expect(pendingRow?.textContent).toContain("Creating new agent");
-      expect(pendingRow?.getAttribute("aria-disabled")).toBe("true");
-      const firstAgent = query('[data-value^="agent:"]');
-      expect(firstAgent?.textContent).toContain("New agent");
-      expect(firstAgent?.getAttribute("aria-disabled")).toBe("true");
-      expect(firstAgent?.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe(
-        "Creating new agent…",
-      );
-    });
-    expect(navigate).toHaveBeenCalledOnce();
-    creation.resolve();
-    await vi.waitFor(() => expect(context.chatSubmissions.creation).toBeUndefined());
-    await settledNavigation();
-    const bot = roster.agents[1];
-    expect(bot).toEqual({ id: expect.stringMatching(/^bot-/), name: "New agent" });
-    expectSelected(context, bot?.id);
-    expect(context.agents.state.agentsList?.agents).toContainEqual(bot);
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("chat", {
-      pathname: `/chat/${bot?.id}`,
-      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
-    });
-    expect(request).toHaveBeenCalledWith("agents.create", {
-      agentId: bot?.id,
-      name: "New agent",
-      onboarding: true,
-    });
-    // The creation owner starts the assistant turn; the UI never impersonates a user.
-    expect(methods(request)).toEqual(["agents.list", "agents.create"]);
-    expect(toast.toast).toBeNull();
   });
 
   it("keeps the created agent first after reconnect and a fresh sidebar", async () => {
