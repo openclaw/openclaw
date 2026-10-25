@@ -87,8 +87,10 @@ for (let parent = 0; parent < parentCount; parent++) {
     };
     memory.subagentRuns.set(runId, entry);
     snapshot.set(runId, memory.immutableSubagentRunSessionList(entry));
-    if (child === 0) active.push(entry);
-    if (child < 4)
+    if (child === 0) {
+      active.push(entry);
+    }
+    if (child < 4) {
       rows.push({
         key,
         entry: {
@@ -100,6 +102,7 @@ for (let parent = 0; parent < parentCount; parent++) {
           ...(child % 3 ? { archivedAt: now } : {}),
         },
       });
+    }
   }
 }
 function claim(entry: SubagentRunRecord, clock: number) {
@@ -118,16 +121,22 @@ function claim(entry: SubagentRunRecord, clock: number) {
   assert.ok(token);
   claims.set(entry.runId, token);
 }
-for (const entry of active) claim(entry, now);
+for (const entry of active) {
+  claim(entry, now);
+}
 const resident = createSubagentSessionListReadIndex(
   {
     snapshotIdentity: () => memory.subagentRuns,
     runs(ids) {
-      if (!ids) return snapshot;
+      if (!ids) {
+        return snapshot;
+      }
       const selected = new Map<string, SubagentRunReadRecord>();
       for (const id of ids) {
         const entry = memory.subagentRuns.get(id);
-        if (entry) selected.set(id, memory.immutableSubagentRunSessionList(entry));
+        if (entry) {
+          selected.set(id, memory.immutableSubagentRunSessionList(entry));
+        }
       }
       return selected;
     },
@@ -146,7 +155,9 @@ function updateRun() {
   const clock = now + Math.floor((sequence * 1000) / 48);
   const running = Math.floor(sequence / parentCount) % 2 === 0;
   const token = claims.get(previous.runId);
-  if (token) registry.releaseAgentRunContext(previous.runId, token);
+  if (token) {
+    registry.releaseAgentRunContext(previous.runId, token);
+  }
   claims.delete(previous.runId);
   const entry: SubagentRunRecord = {
     ...previous,
@@ -156,7 +167,9 @@ function updateRun() {
     cleanupCompletedAt: running ? undefined : clock,
   };
   memory.subagentRuns.set(entry.runId, entry);
-  if (running) claim(entry, clock);
+  if (running) {
+    claim(entry, clock);
+  }
   active[index] = entry;
   publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
   sequence++;
@@ -165,11 +178,16 @@ function resolveList() {
   const clock = now + Math.floor((sequence * 1000) / 48);
   const index = resident.read(clock);
   const topology = lookup.captureTopology();
-  if (topology !== previousTopology) topologyChanges++;
+  if (topology !== previousTopology) {
+    topologyChanges++;
+  }
   previousTopology = topology;
-  for (const key of parentKeys) checksum += index.countActiveDescendantRuns(key);
-  for (const row of rows)
+  for (const key of parentKeys) {
+    checksum += index.countActiveDescendantRuns(key);
+  }
+  for (const row of rows) {
     checksum += resolveSessionChildOwners({ ...row, now: clock, subagentRuns: index }).length;
+  }
 }
 async function run(count: number) {
   let completed = 0;
@@ -180,7 +198,9 @@ async function run(count: number) {
     // 48 updates/s : 1.44 lists/s = 100 updates per three resolution passes.
     const batch = Math.min(count - completed, [33, 33, 34][lists % 3]!);
     let before = process.threadCpuUsage();
-    for (let step = 0; step < batch; step++) updateRun();
+    for (let step = 0; step < batch; step++) {
+      updateRun();
+    }
     let cpu = process.threadCpuUsage(before);
     updateCpuMicros += cpu.user + cpu.system;
     before = process.threadCpuUsage();
@@ -238,7 +258,9 @@ try {
   }
   const gc: Record<string, { count: number; totalMs: number }> = {};
   for (const entry of gcEntries) {
-    if (entry.at < started || entry.at >= ended) continue;
+    if (entry.at < started || entry.at >= ended) {
+      continue;
+    }
     const name =
       entry.kind === constants.NODE_PERFORMANCE_GC_MINOR
         ? "minor"
@@ -277,6 +299,8 @@ try {
   observer.disconnect();
   inspector.disconnect();
   resident.dispose();
-  for (const [id, token] of claims) registry.releaseAgentRunContext(id, token);
+  for (const [id, token] of claims) {
+    registry.releaseAgentRunContext(id, token);
+  }
   memory.subagentRuns.clear();
 }

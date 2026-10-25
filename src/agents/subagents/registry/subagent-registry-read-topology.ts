@@ -118,11 +118,11 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     for (const [runId, entry] of changes) {
       const previous = runKeys.get(runId) ?? [];
       const next = entry ? groupingKeys(entry) : [];
-      const position = positionsByIndex.get(snapshotRunsByChildSessionKey)?.get(runId);
+      const previousPosition = positionsByIndex.get(snapshotRunsByChildSessionKey)?.get(runId);
       const observed =
-        position === undefined
+        previousPosition === undefined
           ? undefined
-          : snapshotRunsByChildSessionKey.get(previous[0] ?? "")?.[position];
+          : snapshotRunsByChildSessionKey.get(previous[0] ?? "")?.[previousPosition];
       if (
         !observed ||
         !entry ||

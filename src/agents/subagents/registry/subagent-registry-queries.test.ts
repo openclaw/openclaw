@@ -57,7 +57,9 @@ describe("subagent registry query regressions", () => {
     let seed = 203;
     for (let step = 0; step < 100; step++) {
       // Prime both groups before every mutation, including an empty parent.
-      for (const root of roots) index.listDescendantRunsForRequester(root);
+      for (const root of roots) {
+        index.listDescendantRunsForRequester(root);
+      }
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
       const original = originals[seed % originals.length]!;
       const previous = expected.get(original.runId) ?? original;
@@ -75,10 +77,13 @@ describe("subagent registry query regressions", () => {
                   : { status: "terminal" as const, endedAt: now },
             };
       index = index.patch(new Map([[original.runId, next]]), new Map(), now);
-      if (next) expected.set(original.runId, next);
-      else expected.delete(original.runId);
+      if (next) {
+        expected.set(original.runId, next);
+      } else {
+        expected.delete(original.runId);
+      }
       const latest = new Map<string, SubagentRunRecord>();
-      for (const row of [...expected.values()].sort(
+      for (const row of [...expected.values()].toSorted(
         (left, right) =>
           (left.generation ?? 0) - (right.generation ?? 0) ||
           left.createdAt - right.createdAt ||
@@ -90,7 +95,9 @@ describe("subagent registry query regressions", () => {
         const rows = [...latest.values()].filter((row) => row.requesterSessionKey === root);
         const byId = (left: SubagentRunRecord, right: SubagentRunRecord) =>
           left.runId.localeCompare(right.runId);
-        expect(index.listDescendantRunsForRequester(root).sort(byId)).toEqual(rows.sort(byId));
+        expect(index.listDescendantRunsForRequester(root).toSorted(byId)).toEqual(
+          rows.toSorted(byId),
+        );
         expect(index.countActiveDescendantRuns(root)).toBe(
           rows.filter((row) => row.execution.endedAt === undefined).length,
         );
