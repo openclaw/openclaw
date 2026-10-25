@@ -26,6 +26,7 @@ import { resolveToolSearchConfig } from "../tool-search-config.js";
 import { ToolSearchRuntime } from "../tool-search-runtime.js";
 import { jsonResult, type AnyAgentTool } from "../tools/common.js";
 import { wrapToolWithGatewayCallerIdentity } from "../tools/gateway-caller-context.js";
+import { testTool } from "./host-capability.shard.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 async function callCatalog(
@@ -103,10 +104,8 @@ describe("harness tool delegation through the catalog", () => {
       });
       const respond = vi.fn<RespondFn>();
       const plugin: AnyAgentTool = {
+        ...testTool().tool,
         name: "crabbox",
-        label: "Crabbox",
-        description: "Present the conversation environment",
-        parameters: { type: "object", properties: {} },
         async execute() {
           await environmentsSessionHandlers["environments.session.create"]!({
             req: { type: "req", id: "create-preview", method: "environments.session.create" },
@@ -209,10 +208,8 @@ it.each(["preparation", "finalization"] as const)(
       return args;
     };
     const tool: AnyAgentTool = {
+      ...testTool().tool,
       name: `delegation_${suffix}`,
-      label: `Delegation ${suffix}`,
-      description: "Retain source authority through catalog execution",
-      parameters: { type: "object", properties: {} },
       ...(stage === "preparation" ? { prepareBeforeToolCallParams } : {}),
       execute,
     };

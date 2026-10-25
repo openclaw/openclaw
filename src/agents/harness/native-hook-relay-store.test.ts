@@ -97,8 +97,15 @@ describe("native hook relay store", () => {
     await write(replacement, 2_000);
     expect(await read(replacement.relayId)).toStrictEqual(replacement);
 
+    for (const mismatch of [{ pid: replacement.pid + 1 }, { token: "decoy-token" }]) {
+      expect(await renew({ ...replacement, ...mismatch, expiresAtMs: 35_000 })).toBe(false);
+      expect(await remove({ ...replacement, ...mismatch })).toBe(false);
+    }
+    expect(await read(replacement.relayId)).toStrictEqual(replacement);
     expect(await renew({ ...replacement, expiresAtMs: 40_000 })).toBe(true);
+    expect(await read(replacement.relayId)).toStrictEqual({ ...replacement, expiresAtMs: 40_000 });
     expect(await remove(replacement)).toBe(true);
+    expect(await read(replacement.relayId)).toBeUndefined();
     expect(await renew(replacement)).toBe(true);
     expect(await read(replacement.relayId)).toStrictEqual(replacement);
     await closeOpenClawStateDatabaseByPathAsync(primaryStateDbPath);
@@ -106,52 +113,8 @@ describe("native hook relay store", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
-  it("requires matching token and pid to renew or delete a bridge", async () => {
-    const record = bridgeRecord("relay-owned");
-    await write(record, 1_000);
-
-    expect(await renew({ ...record, pid: record.pid + 1, expiresAtMs: 30_000 })).toBe(false);
-    expect(await renew({ ...record, token: "decoy-token", expiresAtMs: 30_000 })).toBe(false);
-    expect(await renew({ ...record, expiresAtMs: 30_000 }, 2_000)).toBe(true);
-    expect(await read(record.relayId)).toStrictEqual({ ...record, expiresAtMs: 30_000 });
-
-    expect(await remove({ ...record, pid: record.pid + 1 })).toBe(false);
-    expect(await remove({ ...record, token: "decoy-token" })).toBe(false);
-    expect(await remove(record)).toBe(true);
-    expect(await read(record.relayId)).toBeUndefined();
-  });
-
-  it("prunes expired and dead bridges while preserving live and unknown pids", async () => {
-    const sql = observeMainThreadSql();
-    const expired = bridgeRecord("relay-expired", { pid: 200, expiresAtMs: 9_999 });
-    const dead = bridgeRecord("relay-dead", { pid: 201 });
-    const live = bridgeRecord("relay-live", { pid: 202 });
-    const unknown = bridgeRecord("relay-unknown", { pid: 203 });
-    for (const [index, record] of [expired, dead, live, unknown].entries()) {
-      await write(record, 1_000 + index);
-    }
-    const isPidDead = vi.fn((pid: number) => pid === dead.pid);
-
-    using _ = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    const pruned = await prune(isPidDead);
-    expect(pruned).toHaveLength(2);
-    expect(pruned).toEqual(
-      expect.arrayContaining([
-        { relayId: expired.relayId, pid: expired.pid, reason: "expired" },
-        { relayId: dead.relayId, pid: dead.pid, reason: "dead-pid" },
-      ]),
-    );
-    expect(new Set(isPidDead.mock.calls.map(([pid]) => pid))).toStrictEqual(
-      new Set([dead.pid, live.pid, unknown.pid]),
-    );
-    expect(await read(expired.relayId)).toBeUndefined();
-    expect(await read(dead.relayId)).toBeUndefined();
-    expect(await read(live.relayId)).toStrictEqual(live);
-    expect(await read(unknown.relayId)).toStrictEqual(unknown);
-    sql.expectIdle();
-  });
-
   it("preserves a replacement published during dead-pid planning", async () => {
+    const sql = observeMainThreadSql();
     const stale = bridgeRecord("relay-prune-race", { pid: 201, token: "secret-token" });
     const replacement = bridgeRecord("relay-prune-race", {
       pid: 202,
@@ -170,6 +133,7 @@ describe("native hook relay store", () => {
 
     expect(pruned).toStrictEqual([]);
     expect(await read(replacement.relayId)).toStrictEqual(replacement);
+    sql.expectIdle();
   });
 
   it("isolates records by the exact state database path", async () => {

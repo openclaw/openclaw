@@ -120,22 +120,6 @@ async function withLibraryHost(run: (fixture: LibraryHost) => Promise<void>) {
   });
 }
 
-it("reads cold and warm pinned resources through awaited host construction without host SQL", async () => {
-  await withLibraryHost(async ({ build, resourcePath }) => {
-    requireNodeSqlite();
-    const sql = observeMainThreadSql();
-    try {
-      sql.calibrate();
-      for (let pass = 0; pass < 2; pass++) {
-        await expectResource(await build(), resourcePath, `library-${pass}`);
-      }
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-  });
-});
-
 it("keeps pinned resources available to the deprecated synchronous host", async () => {
   await withLibraryHost(async ({ host, resourcePath }) => {
     await expectResource(

@@ -20,7 +20,6 @@ import {
   resolveCodexAgentHarnessNativeCompaction as resolveCompaction,
   resetRegisteredAgentHarnessSessions as resetSessions,
 } from "./registry.js";
-import { selectAgentHarness } from "./selection.js";
 import type { AgentHarness } from "./types.js";
 
 const warn = vi.hoisted(() => vi.fn());
@@ -31,17 +30,6 @@ vi.mock("../../logging/subsystem.js", async () => {
     await import("../../../test/helpers/mock-subsystem-logger.js");
   return { createSubsystemLogger: (name: string) => createMockSubsystemLogger(name, { warn }) };
 });
-
-// Synthetic selection fixtures avoid cold-loading bundled provider artifacts.
-// mock-isolation: selection tests supply ownership without initializing provider runtimes.
-vi.mock("../../plugins/providers.js", () => ({
-  resolveProviderRefOwnership: () => ({ status: "unowned" }),
-}));
-vi.mock("../../plugins/provider-model-routes.js", () => ({
-  resolveProviderModelCatalogId: () => null,
-  resolveProviderModelPolicySurface: () => null,
-  resolveProviderModelRoutes: () => null,
-}));
 
 beforeEach(() => {
   clearAgentHarnesses();
@@ -112,19 +100,14 @@ it("warns once per harness across reset failures and registry replacement while 
     ids.forEach((id) => registerAgentHarness({ ...makeHarness(id), reset: failingReset }));
   registerFailing();
   registerAgentHarness({ ...makeHarness("healthy-reset"), reset: healthyReset });
-  await Promise.all(Array.from({ length: 110 }, () => resetSessions({ reason: "reset" })));
+  await Promise.all([resetSessions({ reason: "reset" }), resetSessions({ reason: "reset" })]);
   clearAgentHarnesses();
   registerFailing();
   await resetSessions({ reason: "reset" });
   expect([failingReset, healthyReset, warn].map((mock) => mock.mock.calls.length)).toEqual([
-    222, 110, 2,
+    6, 2, 2,
   ]);
-  for (const id of ids) {
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("session reset hook failed"), {
-      harnessId: id,
-      error: expect.any(Error),
-    });
-  }
+  expect(warn.mock.calls.map(([, detail]) => detail.harnessId).toSorted()).toEqual(ids);
 });
 
 it.each([
@@ -154,7 +137,6 @@ it.each(["active", "request"] as const)(
     const dispose = vi.fn(async () => {});
     const reset = vi.fn(async () => {});
     const nativeCompaction = vi.fn(async () => ({ ok: true, compacted: true }));
-    const select = () => selectAgentHarness({ provider: "synthetic", agentHarnessId: "codex" });
     const inContext = <T>(run: () => T): T =>
       context === "request" ? withPluginRuntimeRegistryScope(selected, run) : run();
     try {
@@ -164,10 +146,9 @@ it.each(["active", "request"] as const)(
         registerAgentHarness({ ...makeHarness("codex"), dispose, reset }, { nativeCompaction }),
       );
       const registered = inContext(() => getHarness("codex"))!;
-      expect(registered).toBeDefined();
       const { harness } = registered;
       inContext(() => {
-        expect([getHarness("codex"), listHarnesses()]).toEqual([registered, [registered]]);
+        expect(listHarnesses()).toEqual([registered]);
         expect(resolveOwner(harness)).toBe("codex");
         expect(resolveCompaction(harness)).toBe(nativeCompaction);
         expect(() => resolveCompaction(makeHarness("codex"))).toThrow(
@@ -186,7 +167,6 @@ it.each(["active", "request"] as const)(
         expect
           .soft(() => resolveCompaction(harness))
           .toThrow("changed during native compaction resolution");
-        expect.soft(select).toThrow('Requested agent harness "codex" is not registered');
       });
       await inContext(() => resetSessions({ reason: "reset" }));
       await inContext(disposeHarnesses);

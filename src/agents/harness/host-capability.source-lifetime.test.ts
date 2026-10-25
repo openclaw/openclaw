@@ -29,9 +29,10 @@ async function createSourceHost(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   abortSignal?: AbortSignal,
   nativeModelPolicySupport?: "exact",
+  attempt: Partial<Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]> = {},
 ) {
   const host = await createAdmittedHostCapabilityTestFixture(
-    { runId: "retained-source", abortSignal },
+    { runId: "retained-source", abortSignal, ...attempt },
     { operatorAuthority, nativeModelPolicySupport },
   );
   cleanup.push(host.closeAdmission, host.closeHost);
@@ -78,16 +79,12 @@ it("records completed turn bookkeeping while revocation blocks the next tool eff
     },
   });
   const recorder = { recordEvent: vi.fn(), flush: vi.fn(async () => {}) };
-  const fixture = await createAdmittedHostCapabilityTestFixture(
-    {
-      runId: "bookkeeping-source",
-      agentId: "main",
-      sessionKey: "agent:main:bookkeeping",
-      trajectoryRecorder: recorder,
-    },
-    { operatorAuthority: source },
-  );
-  cleanup.push(fixture.closeAdmission, fixture.closeHost);
+  const fixture = await createSourceHost(source, undefined, undefined, {
+    runId: "bookkeeping-source",
+    agentId: "main",
+    sessionKey: "agent:main:bookkeeping",
+    trajectoryRecorder: recorder,
+  });
   const host = await withGatewayToolCallerIdentity(
     createAdmittedGatewayToolCallerIdentity(fixture.attempt),
     () => createAgentHarnessHostCapabilities({ attempt: fixture.attempt, pluginId: "codex" }),
@@ -258,8 +255,7 @@ it("guards retained unknown-model work through policy introduction and releases 
   expect(() => retained.assertCurrent()).toThrow("operator role cannot use this model");
   retained.release();
   retained.release();
-  expect(holds).toBe(0);
-  expect(listeners.size).toBe(0);
+  expect([holds, listeners.size]).toEqual([0, 0]);
 });
 
 it("captures request custody before plugin handoff and retains continuation ancestry", async () => {
@@ -270,8 +266,7 @@ it("captures request custody before plugin handoff and retains continuation ance
     ownerConnId: "request-owner",
   };
   const captured = await withExecRequestTurn({ identity }, async () => {
-    const host = await createAdmittedHostCapabilityTestFixture(identity);
-    cleanup.push(host.closeAdmission, host.closeHost);
+    const host = await createSourceHost(undefined, undefined, undefined, identity);
     return { host, owners: captureExecRequestOwners(identity) };
   });
   const host = captured.host.hostCapabilities;
