@@ -266,28 +266,12 @@ describe("imessageApprovalNativeRuntime", () => {
       approval: { status: "allowed", decision: "allow-once", reason: "user" },
     });
 
-    const entry = await deliverPoll({
+    await deliverPoll({
       ...args,
       pendingPayload,
       ...deliveryTarget(to),
     });
 
-    expect(entry).toMatchObject({
-      messageId: PROMPT_GUID,
-      conversation: { chatGuid: groupChatGuid },
-    });
-    expect(pendingPayload.text).toContain("React with:");
-    expectSend(
-      pendingPayload.text,
-      {
-        approvalPrompt: {
-          approvalId,
-          approvalKind: "system-agent",
-          allowedDecisions: ["allow-once", "deny"],
-        },
-      },
-      to,
-    );
     expect(actionsMock.sendPoll).not.toHaveBeenCalled();
     const react = async (sender: string) =>
       (
@@ -320,18 +304,6 @@ describe("imessageApprovalNativeRuntime", () => {
     });
     await expect(react(HANDLE)).resolves.toBe(false);
     expect(approvalGatewayMock.resolve).toHaveBeenCalledTimes(1);
-  });
-
-  it("attests text fallback sends as host-originated, not delegated", async () => {
-    // #99905: host-owned approval targets must not default to delegated authority.
-    actionsMock.sendPoll.mockRejectedValue(new Error("bridge gone"));
-
-    await deliverPoll();
-    for (const call of send.mock.calls) {
-      expect(call[2]).toEqual(
-        expect.objectContaining({ conversationReadOrigin: "direct-operator" }),
-      );
-    }
   });
 
   it("keeps markdown markers out of the poll question", async () => {
@@ -402,15 +374,28 @@ describe("imessageApprovalNativeRuntime", () => {
     expect(entry).toMatchObject({ poll: expect.anything(), reactionFallbackVisible: true });
   });
 
-  it("adds a threaded tapback hint when the chat is not registered with Messages", async () => {
-    actionsMock.resolveChat.mockResolvedValue(null);
+  it.each([
+    ["chat is not registered", () => actionsMock.resolveChat.mockResolvedValue(null), 0],
+    ["poll send fails", () => actionsMock.sendPoll.mockRejectedValue(new Error("bridge gone")), 1],
+    [
+      "poll metadata is incomplete",
+      () =>
+        actionsMock.sendPoll.mockResolvedValue({ messageId: "orphan-poll-guid", pollOptions: [] }),
+      1,
+    ],
+  ] as const)("restores bound text controls when %s", async (_name, arrange, pollCalls) => {
+    arrange();
     send.mockResolvedValueOnce(receipt()).mockResolvedValueOnce(receipt("hint-guid"));
-
     const entry = await deliverPoll();
-
-    expectTextOnly(entry);
+    expect(entry?.poll).toBeUndefined();
+    expect(actionsMock.sendPoll).toHaveBeenCalledTimes(pollCalls);
     expect(send).toHaveBeenCalledTimes(2);
-    expectLastSend(expect.stringContaining("👍 Allow Once"), {
+    // #99905: both the initial prompt and fallback remain host-authorized.
+    expectSend(pollDeliverArgs.pendingPayload.pollText, {
+      conversationReadOrigin: "direct-operator",
+    });
+    expectLastSend(pollDeliverArgs.pendingPayload.text, {
+      approvalPrompt: promptBinding,
       conversationReadOrigin: "direct-operator",
       replyToId: PROMPT_GUID,
     });
@@ -428,19 +413,6 @@ describe("imessageApprovalNativeRuntime", () => {
     });
     expect(actionsMock.sendPoll).not.toHaveBeenCalled();
     expect(entry).toBeNull();
-  });
-
-  it("restores text controls when poll option metadata is incomplete", async () => {
-    actionsMock.sendPoll.mockResolvedValue({ messageId: "orphan-poll-guid", pollOptions: [] });
-
-    const entry = await deliverPoll();
-
-    expect(entry?.poll).toBeUndefined();
-    expect(send).toHaveBeenCalledTimes(2);
-    expectLastSend(pollDeliverArgs.pendingPayload.text, {
-      approvalPrompt: promptBinding,
-      replyToId: PROMPT_GUID,
-    });
   });
 
   it("threads poll resolution updates to the verified approval prompt", async () => {

@@ -51,11 +51,14 @@ function execPayload(
 function prepare(payload: ReplyPayload, approvalKind: "exec" | "plugin" = "exec") {
   return addIMessageApprovalReactionHintToStructuredPayload({ payload, approvalKind });
 }
-function resolveTarget(messageId: string) {
-  return lookupTarget({ ...identity, messageId, reactionKey: "👎" });
+function resolveTarget(messageId: string, reactionKey = "👎") {
+  return lookupTarget({ ...identity, messageId, reactionKey });
 }
-function requirePrepared(payload: ReplyPayload): ReplyPayload & { text: string } {
-  const prepared = prepare(payload);
+function requirePrepared(
+  payload: ReplyPayload,
+  kind: "exec" | "plugin" = "exec",
+): ReplyPayload & { text: string } {
+  const prepared = prepare(payload, kind);
   if (!prepared?.text) {
     throw new Error("Expected typed iMessage approval payload");
   }
@@ -149,33 +152,47 @@ describe("iMessage approval reactions", () => {
     resolverMocks.resolve.mockReset().mockImplementation(resolvedApproval);
   });
 
-  it("uses typed metadata to prepare shared forwarded prompts", () => {
-    const payload: ReplyPayload = buildForwardedApproval("plugin", "plugin:shared-1", "shared-1");
-
-    const prepared = prepare(payload, "plugin");
-    expect(prepared?.text).toBe(
-      "🛡️ Plugin approval required\nID: plugin:shared-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve plugin:shared-1 allow-once|deny",
-    );
-    expect(prepared?.channelData?.imessageApprovalReactionBindingV1).toEqual({
-      version: 1,
-      approvalId: "plugin:shared-1",
-      approvalSlug: "shared-1",
-      approvalKind: "plugin",
-      allowedDecisions: ["allow-once", "deny"],
-    });
-    expect(prepare(payload)).toBeNull();
-  });
-
-  it("binds delivered shared prompts from typed metadata and stable GUIDs", async () => {
-    const payload = requirePrepared(execPayload("exec-shared-1", "shared-1", "echo shared"));
-    expect(await bind(payload, [delivery("42", payload.text, "p:0/shared-guid")])).toBe(true);
-    await expect(resolveTarget("p:0/shared-guid")).resolves.toEqual({
-      approvalId: "exec-shared-1",
-      approvalKind: "exec",
-      decision: "deny",
-    });
-    await expect(resolveTarget("42")).resolves.toBeNull();
-  });
+  it.each(["exec", "plugin"] as const)(
+    "binds delivered %s prompts from typed metadata and stable GUIDs",
+    async (kind) => {
+      const approvalId = `${kind}:shared-1`;
+      const source =
+        kind === "exec"
+          ? execPayload(approvalId, "shared-1", "echo shared")
+          : buildForwardedApproval(kind, approvalId, "shared-1");
+      const payload = requirePrepared(source, kind);
+      expect(prepare(source, kind === "exec" ? "plugin" : "exec")).toBeNull();
+      expect(await bind(payload, [delivery("42", payload.text, "p:0/shared-guid")])).toBe(true);
+      await expect(resolveTarget("p:0/shared-guid")).resolves.toEqual({
+        approvalId,
+        approvalKind: kind,
+        decision: "deny",
+      });
+      await expect(resolveTarget("42")).resolves.toBeNull();
+      await expect(resolveTarget("p:0/shared-guid", "♾️")).resolves.toBeNull();
+      const gatewayRuntime = { request: vi.fn() } as never;
+      expect(
+        await resolveReaction(
+          buildTapbackReactionPayload({
+            is_from_me: true,
+            reacted_to_guid: "p:0/shared-guid",
+          }),
+          { gatewayRuntime },
+        ),
+      ).toBe(true);
+      expect(resolverMocks.resolve).toHaveBeenCalledWith(
+        expect.objectContaining({
+          approvalId,
+          approvalKind: kind,
+          decision: "allow-once",
+          channel: "imessage",
+          accountId: "default",
+          senderId: "+15551230000",
+          gatewayRuntime,
+        }),
+      );
+    },
+  );
 
   it("fails closed when typed metadata and approval actions disagree", () => {
     const missingKind = execPayload();
@@ -258,50 +275,24 @@ describe("iMessage approval reactions", () => {
     );
   });
 
-  it("resolves is_from_me tapbacks when the actor is an explicit approver", async () => {
-    await registerTarget({ approvalId: "exec-self" });
-
-    const gatewayRuntime = { request: vi.fn() } as never;
-    const handled = await resolveReaction(buildTapbackReactionPayload({ is_from_me: true }), {
-      gatewayRuntime,
-    });
-
-    expect(handled).toBe(true);
-    expect(resolverMocks.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "exec-self",
-        decision: "allow-once",
-        channel: "imessage",
-        accountId: "default",
-        senderId: "+15551230000",
-        gatewayRuntime,
-      }),
-    );
-  });
-
   it.each([
-    {
-      name: "ignores removed tapbacks",
-      message: buildTapbackReactionPayload({ is_reaction_add: false }),
-      handled: false,
-    },
-    {
-      name: "requires explicit approvers",
-      message: buildTapbackReactionPayload({}),
-      handled: true,
-      limited: true,
-      options: { cfg: { channels: { imessage: {} } } },
-    },
-    {
-      name: "falls through for legacy text tapbacks",
-      message: { sender: "+15551230000", reacted_to_guid: "approval-message" },
-      handled: false,
-      options: { bodyText: "liked “Exec approval required”" },
-    },
-  ])("$name", async ({ message, handled, options, limited }) => {
+    ["removed tapback", buildTapbackReactionPayload({ is_reaction_add: false }), false, {}],
+    [
+      "no explicit approvers",
+      buildTapbackReactionPayload({}),
+      true,
+      { cfg: { channels: { imessage: {} } } },
+    ],
+    [
+      "legacy text tapback",
+      { sender: "+15551230000", reacted_to_guid: "approval-message" },
+      false,
+      { bodyText: "liked “Exec approval required”" },
+    ],
+  ] as const)("does not resolve %s", async (_name, message, handled, options) => {
     await registerTarget({
       approvalId: "exec-1",
-      allowedDecisions: limited ? ["allow-once"] : ["allow-once", "deny"],
+      allowedDecisions: handled ? ["allow-once"] : ["allow-once", "deny"],
     });
     expect(await resolveReaction(message, options)).toBe(handled);
     expect(resolverMocks.resolve).not.toHaveBeenCalled();

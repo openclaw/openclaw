@@ -117,22 +117,6 @@ describe("mapSentPollOptionsToDecisions", () => {
 });
 
 describe("maybeResolveIMessageApprovalPollVote", () => {
-  it("resolves a pending approval from an authorized vote", async () => {
-    expect(await bind()).toBe(true);
-    const gatewayRuntime = { request: vi.fn() } as never;
-
-    await expect(resolveVote(buildVote(), { gatewayRuntime })).resolves.toBe(true);
-
-    expect(resolverMocks.resolve).toHaveBeenCalledWith(
-      expect.objectContaining({
-        approvalId: "exec-1",
-        decision: "allow-once",
-        senderId: APPROVER,
-        gatewayRuntime,
-      }),
-    );
-  });
-
   it.each([
     [
       "selects the transport actor from a multi-participant complete vote set",
@@ -160,10 +144,18 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     ],
   ] as const)("%s", async (_name, votes, decision, vote) => {
     expect(await bind()).toBe(true);
-    expect(await resolveVote(pollVote(POLL_GUID, [...votes], {}, vote))).toBe(true);
+    const gatewayRuntime = { request: vi.fn() } as never;
+    expect(await resolveVote(pollVote(POLL_GUID, [...votes], {}, vote), { gatewayRuntime })).toBe(
+      true,
+    );
     if (decision) {
       expect(resolverMocks.resolve).toHaveBeenCalledWith(
-        expect.objectContaining({ approvalId: "exec-1", decision }),
+        expect.objectContaining({
+          approvalId: "exec-1",
+          decision,
+          senderId: APPROVER,
+          gatewayRuntime,
+        }),
       );
     } else {
       expect(resolverMocks.resolve).not.toHaveBeenCalled();
@@ -311,18 +303,5 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     ).toBe(false);
 
     await expectUnresolved(buildVote({ pollGuid: expiredPollGuid }), false);
-  });
-
-  it("stops resolving after the target is unregistered", async () => {
-    await bind();
-    await iMessageApprovalPollTargets.unregister({
-      accountId: "default",
-      conversation: { handle: APPROVER },
-      pollGuid: POLL_GUID,
-      optionDecisions,
-    });
-
-    await resolveVote(buildVote());
-    expect(resolverMocks.resolve).not.toHaveBeenCalled();
   });
 });
