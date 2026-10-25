@@ -30,11 +30,19 @@ export function filterSessionPartitions(
   const ownerEntries: SessionEntryPair[] = [];
   const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
   let totalCount = 0;
+  let activityExpiresAt = Infinity;
   for (const partition of params.partitions) {
     if (!partition.entries.size) {
       continue;
     }
     let part = params.retained.get(partition.revision);
+    // Expiry precedes owner/creator filters; rebuild that partition's clock aggregate.
+    if (
+      params.opts.activeMinutes !== undefined &&
+      part?.partition!.version !== partition.revision.changes.length
+    ) {
+      part = undefined;
+    }
     const changes = new Map<string, SessionEntryPair | undefined>();
     if (part) {
       for (
@@ -110,6 +118,7 @@ export function filterSessionPartitions(
     entries.push(...part.entries.slice(0, pageEnd));
     ownerEntries.push(...part.ownerEntries.slice(0, ownerLimit));
     totalCount += part.totalCount;
+    activityExpiresAt = Math.min(activityExpiresAt, part.activityExpiresAt ?? Infinity);
     for (const owner of part.ownerFacet) {
       addSessionOwnerFacetIdentity(owners, owner);
     }
@@ -119,5 +128,6 @@ export function filterSessionPartitions(
     ownerEntries,
     totalCount,
     ownerFacet: sortSessionOwnerFacet(owners),
+    ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
   };
 }
