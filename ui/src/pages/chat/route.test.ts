@@ -104,11 +104,18 @@ describe("loadChatRoute", () => {
   );
 
   it.each(["deploy-monitor-12345678", "deploy-monitor"])(
-    "keeps a disconnected exact revalidation retryable for %s",
+    "keeps %s bound to its established key through disconnected revalidation",
     async (reference) => {
       const { context, request, router, scopedContext } = await mountedSession(reference);
       const pending = createDeferredCore<SessionsResolveResult>();
-      request.mockReturnValueOnce(pending.promise);
+      request.mockImplementation(async (_method, params) => {
+        if (!isRecord(params)) {
+          throw new Error("Missing resolution parameters");
+        }
+        return isRecord(params.reference) && params.reference.key === sessionKey
+          ? pending.promise
+          : resolvedRow(replacementKey);
+      });
       const revalidation = router
         .revalidate(scopedContext, "chat")
         .catch((error: unknown) => error);
@@ -119,27 +126,6 @@ describe("loadChatRoute", () => {
       expect(router.getState().matches[0]?.status).toBe("error");
       context.gateway.snapshot.phase = "connected";
       request.mockResolvedValue({ ok: false });
-      await router.revalidate(scopedContext, "chat");
-      expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
-    },
-  );
-
-  it.each(["deploy-monitor-12345678", "deploy-monitor"])(
-    "keeps revalidation bound to the established session when %s is reassigned",
-    async (reference) => {
-      const { request, router, scopedContext } = await mountedSession(reference);
-      expect(router.getState().matches[0]?.data).toMatchObject({ sessionKey });
-      request.mockImplementation(async (_method, params) => {
-        if (!isRecord(params)) {
-          throw new Error("Missing resolution parameters");
-        }
-        return params.reference &&
-          typeof params.reference === "object" &&
-          "key" in params.reference &&
-          params.reference.key === sessionKey
-          ? { ok: false }
-          : resolvedRow(replacementKey);
-      });
       await router.revalidate(scopedContext, "chat");
       expect(router.getState().matches[0]?.data).toMatchObject({ kind: "missing-session" });
       expect(request).toHaveBeenLastCalledWith(
@@ -223,12 +209,10 @@ describe("loadChatRoute", () => {
   it("reclassifies a slug-shaped path after cold defaults reveal the main key", async () => {
     const { context, connect } = coldContext();
     const pending = loadRoute(context, "/chat/research/workspace");
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
+    const settled = vi.fn();
+    void pending.then(settled);
     await Promise.resolve();
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
 
     connect();
 
@@ -272,33 +256,23 @@ describe("loadChatRoute", () => {
   });
   it.each([pages[1]])("isolates $id loader results across connection owners", (page) => {
     const { context } = contextFor();
-    let snapshot = context.gateway.snapshot;
-    let revision = 0;
-    const gateway = {
-      ...context.gateway,
-      get snapshot() {
-        return snapshot;
-      },
-      get connectionRevision() {
-        return revision;
-      },
-    };
+    const gateway = { ...context.gateway, connectionRevision: 0 };
     const scopedContext = { ...context, gateway };
     const location = locationFor(`/${page.id}/main`);
     const cacheKey = () => page.loaderDeps!(scopedContext, location);
     const initial = cacheKey();
 
-    snapshot = { ...snapshot, selfUser: { id: "first-user" } };
+    gateway.snapshot = { ...gateway.snapshot, selfUser: { id: "first-user" } };
     expect(cacheKey()).toBe(initial);
-    snapshot = { ...snapshot, phase: "reconnecting", selfUser: null };
+    gateway.snapshot = { ...gateway.snapshot, phase: "reconnecting", selfUser: null };
     expect(cacheKey()).toBe(initial);
-    snapshot = { ...snapshot, phase: "connected", selfUser: { id: "first-user" } };
+    gateway.snapshot = { ...gateway.snapshot, phase: "connected", selfUser: { id: "first-user" } };
     expect(cacheKey()).toBe(initial);
 
-    snapshot = { ...snapshot, selfUser: { id: "second-user" } };
+    gateway.snapshot = { ...gateway.snapshot, selfUser: { id: "second-user" } };
     const replacementUser = cacheKey();
     expect(replacementUser).not.toBe(initial);
-    revision += 1;
+    gateway.connectionRevision += 1;
     const replacementCredentials = cacheKey();
     expect(replacementCredentials).not.toBe(replacementUser);
     expect(page.loaderDeps!({ ...scopedContext, gateway: { ...gateway } }, location)).not.toBe(

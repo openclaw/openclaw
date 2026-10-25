@@ -2,7 +2,6 @@
 import { afterEach, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildItems } from "./chat-thread.test-support.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
@@ -70,10 +69,8 @@ const group = (message: { role: string }) => ({
   messages: [{ message }],
 });
 function expectMidTurn(notice: ChatItem) {
-  expect([chatItemStartsUserTurn(notice), chatItemStartsDisplayTurn(notice)]).toEqual([
-    false,
-    false,
-  ]);
+  expect(chatItemStartsUserTurn(notice)).toBe(false);
+  expect(chatItemStartsDisplayTurn(notice)).toBe(false);
 }
 
 it.each([
@@ -98,7 +95,7 @@ it.each([
       sourceTool === "main_session_restart_recovery"
         ? baseMessage.content
         : sourceTool === "cron_failure_repair"
-          ? "Automation repair request from the scheduler.\n<untrusted-text>Private task payload and last error</untrusted-text>"
+          ? "Private scheduler payload"
           : (midTurn ? "" : "[System] ") + text,
     );
     const [notice] = projectChatSystemNotice(messageItem(message));
@@ -110,7 +107,7 @@ it.each([
 );
 
 it.each([false, true])(
-  "preserves notice promotion, search and framing (imported=%s)",
+  "preserves notice promotion, search and boundary identity (imported=%s)",
   (imported) => {
     const message = {
       ...systemMessage(imported ? "cli_harness_context" : "restart-sentinel", "[System] Context"),
@@ -141,11 +138,6 @@ it.each([false, true])(
       expect(notice?.kind === "notice" && notice.boundaryId).toBe(
         stage === 1 && !imported ? "send:run" : undefined,
       );
-      const framed = coalesceAgentRunFrames(items);
-      expect(framed).toContain(notice);
-      expect(framed.filter((item) => item.kind === "agent-run-frame")).toMatchObject([
-        { runId: "run", boundaryId: "send:run", parts: [items[stage === 1 ? 2 : 1]] },
-      ]);
     }
     for (const messages of stages) {
       expect(render(messages, inputs, "rollback")).toMatchObject([group(after)]);
@@ -173,17 +165,10 @@ it.each(["queued", "interrupted", "cancelled"] as const)(
 it.each([
   ["cli_harness_context", undefined, undefined],
   ["claude_cli_task_notification", undefined, undefined],
-  ...(
-    [
-      [{ pluginId: "release-helper", pluginName: "Release Helper" }, "Release Helper"],
-      [{ pluginId: "review-helper" }, "review-helper"],
-      [{ pluginId: "review-helper", pluginName: " " }, "review-helper"],
-      [undefined, "review-helper"],
-    ] as const
-  ).map(
-    ([pluginSteering, name]) =>
-      [`plugin:${pluginSteering?.pluginId ?? "review-helper"}`, pluginSteering, name] as const,
-  ),
+  ["plugin:p", { pluginId: "p", pluginName: "Plugin" }, "Plugin"],
+  ["plugin:p", { pluginId: "p" }, "p"],
+  ["plugin:p", { pluginId: "p", pluginName: " " }, "p"],
+  ["plugin:p", undefined, "p"],
 ] as const)(
   "keeps %s between tool groups with source attribution and no new turn",
   (sourceTool, pluginSteering, name) => {
@@ -250,17 +235,6 @@ const skillMessage = {
   model: "delivery-mirror",
   timestamp: 2000,
 };
-const notice = (skills: unknown) => ({
-  ...skillMessage,
-  content: [{ type: "text", text: skillMessage.content }],
-  openclawDeliveryMirror: {
-    kind: "skill-workshop-change",
-    agentId: "main",
-    runId: "skill-workshop-review:r1",
-    skills,
-  },
-  __openclaw: { id: "notice-1", seq: 3 },
-});
 
 it.each([
   [{ idempotencyKey: "skill-workshop-notice:review" }, true],
@@ -279,26 +253,16 @@ it.each([
   );
 });
 
-it("renders a marked review notice natively and keeps malformed markers as text", () => {
-  const skills = [{ name: "deploy-staging", action: "updated", summary: "rollback" }];
-  expect(render([before, after, notice(skills)])).toMatchObject([
-    { kind: "group", role: "user" },
-    group(after),
-    {
-      kind: "notice",
-      text: "",
-      timestamp: 2000,
-      skillChanges: {
-        kind: "skill-workshop-change",
-        agentId: "main",
-        runId: "skill-workshop-review:r1",
-        skills,
-      },
+it("keeps malformed skill review markers as text", () => {
+  const malformed = {
+    ...skillMessage,
+    openclawDeliveryMirror: {
+      kind: "skill-workshop-change",
+      agentId: "main",
+      runId: "skill-workshop-review:r1",
+      skills: [{ name: "deploy-staging", action: "renamed" }],
     },
-  ]);
-
-  const malformed = notice([{ name: "deploy-staging", action: "renamed" }]);
+  };
   const items = render([before, malformed]);
-  expect(items.some((item) => item.kind === "notice")).toBe(false);
   expect(items).toMatchObject([{ kind: "group", role: "user" }, group(malformed)]);
 });

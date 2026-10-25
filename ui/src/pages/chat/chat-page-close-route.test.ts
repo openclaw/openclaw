@@ -3,7 +3,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 
@@ -22,8 +22,8 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   createChatPageNavigationContext,
@@ -32,26 +32,12 @@ import {
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
 import "./chat-page.tsx";
-import type { ChatPaneProps } from "./chat-pane-inputs.ts";
-import type { ChatRouteData } from "./route-loader.ts";
+import type { ChatPaneElement } from "./chat-pane.tsx";
 import { ChatRouteView } from "./route-view.tsx";
 import type { SessionChatRouteData } from "./session-route-data.ts";
 
-type RenderedPane = HTMLElement &
-  Pick<
-    ChatPaneProps,
-    | "active"
-    | "paneId"
-    | "presented"
-    | "sessionKey"
-    | "routeFace"
-    | "onPaneSessionChange"
-    | "onClosePane"
-    | "onOpenSplitView"
-  >;
-
 const panesIn = (page: HTMLElementTagNameMap["openclaw-chat-page"]) => [
-  ...page.querySelectorAll<RenderedPane>("openclaw-chat-pane"),
+  ...page.querySelectorAll<ChatPaneElement>("openclaw-chat-pane"),
 ];
 const paneIn = (page: HTMLElementTagNameMap["openclaw-chat-page"]) =>
   expectDefined(panesIn(page)[0], "openclaw-chat-pane");
@@ -86,35 +72,28 @@ describe("chat page close navigation", () => {
     const { context } = createChatPageNavigationContext();
     const provider = createSolidApplicationContextProvider(context);
     const container = document.body.appendChild(createApplicationContextProvider(context));
-    const [route, setRoute] = createSignal<{ data?: ChatRouteData; presented: boolean }>({
-      presented: true,
-    });
-    const view = mountSolid(
-      () =>
-        createComponent(ChatRouteView, {
-          get data() {
-            return route().data;
-          },
-          get presented() {
-            return route().presented;
+    const view = mountSolid<Parameters<typeof ChatRouteView>[0]>(
+      (props) =>
+        createComponent(provider.wrapper, {
+          get children() {
+            return createComponent(ChatRouteView, props);
           },
         }),
-      { container, wrapper: provider.wrapper },
+      { presented: true },
+      container,
     );
-    setRoute({ data: { kind: "session", sessionKey: firstKey, face: "chat" }, presented: true });
+    view.update({ data: { kind: "session", sessionKey: firstKey, face: "chat" }, presented: true });
     await Promise.resolve();
-    flush();
     const page = expectDefined(view.container.querySelector("openclaw-chat-page"), "chat page");
     await settleChatPage(page);
     expect(panesIn(page).map((pane) => pane.sessionKey)).toEqual([firstKey]);
     const firstPane = paneIn(page);
 
     for (const presented of [false, true]) {
-      setRoute({
+      view.update({
         data: { kind: "session", sessionKey: nextKey, face: "dashboard" },
         presented,
       });
-      flush();
       await settleChatPage(page);
       expect(view.container.querySelector("openclaw-chat-page")).toBe(page);
       expect(page.presented).toBe(presented);
@@ -124,7 +103,7 @@ describe("chat page close navigation", () => {
       presented: true,
       routeFace: "dashboard",
     });
-    view.unmount();
+    view.dispose();
   });
 
   it("preserves a pending Home draft when its bound pane adopts the global wire key after collapsing", async () => {

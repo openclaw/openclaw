@@ -113,10 +113,16 @@ describe("terminal reply recovery", () => {
     ["retired while idle", retired("Saved reply"), false],
     ["retired while active", retired("The durable reply must appear below Done."), true],
     ["omitted while idle", undefined, false],
+    ["completed by history", undefined, true, true],
   ] as const)(
     "recovers the durable reply when the terminal message is %s",
-    async (_name, terminalMessage, startsActive) => {
-      const { request, state } = fixture({ chatRunId: startsActive ? runId : null });
+    async (_name, terminalMessage, startsActive, completedByHistory = false) => {
+      const { request, state, persistedReply } = fixture({
+        chatRunId: startsActive ? runId : null,
+      });
+      if (completedByHistory) {
+        reduceChatSessionProjection(state, { type: "runTerminal", runId, status: "completed" });
+      }
       const finish = event(state, { runId, state: "final", message: terminalMessage });
       finish();
 
@@ -126,6 +132,7 @@ describe("terminal reply recovery", () => {
         expectTranscript(state, ["user", promptText], ["assistant", replyText]),
       );
       expect(state.chatLoading).toBe(false);
+      expect(state.chatMessages).toContainEqual(persistedReply);
       expect(request).toHaveBeenCalledTimes(1);
 
       request.mockClear();
@@ -162,41 +169,6 @@ describe("terminal reply recovery", () => {
     fail();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(historyCalls()).toHaveLength(1);
-  });
-
-  it.each(["other session", "background run"])(
-    "does not recover failure history for %s",
-    (kind) => {
-      const request = vi.fn();
-      const state = recoveryState(request, { chatRunId: "foreground-run" });
-      event(
-        state,
-        {
-          sessionKey: kind === "other session" ? "agent:main:other" : state.sessionKey,
-          runId: kind === "background run" ? "background-run" : "foreground-run",
-          state: "error",
-          errorMessage: "Another request failed",
-        },
-        false,
-      )();
-      expect(request).not.toHaveBeenCalled();
-      expect(state.chatRunId).toBe("foreground-run");
-    },
-  );
-
-  it("recovers once when history completed the run before its message-less terminal arrives", async () => {
-    const { persistedReply, request, state } = fixture();
-    reduceChatSessionProjection(state, { type: "runTerminal", runId, status: "completed" });
-
-    const finish = event(state, { runId, state: "final" });
-    finish();
-
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(state.chatMessages).toContainEqual(persistedReply));
-
-    request.mockClear();
-    finish();
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("recovers durable media from a message-less terminal", async () => {
@@ -257,6 +229,11 @@ describe("terminal reply recovery", () => {
     ["retired yielded", { yielded: true, stopReason: "end_turn", message: retired("Retired") }],
     ["retired other session", { sessionKey: "agent:main:other", message: retired("Retired") }],
     ["aborted", { state: "aborted", message: retired("Retired") }],
+    [
+      "other session failure",
+      { sessionKey: "agent:main:other", state: "error", errorMessage: "Failed" },
+    ],
+    ["background failure", { runId: "background-run", state: "error", errorMessage: "Failed" }],
   ] as const)("does not recover history for a %s terminal", (kind, payload) => {
     const prompt = createRecoveryPrompt();
     const request = vi.fn();
@@ -266,8 +243,12 @@ describe("terminal reply recovery", () => {
       ...(kind === "background" ? streaming : {}),
       ...(kind === "live reply" ? { chatMessages: [prompt] } : {}),
     });
-    event(state, { runId, state: "final", ...payload })();
+    const failure = "state" in payload && payload.state === "error";
+    event(state, { runId, state: "final", ...payload }, !failure)();
     expect(request).not.toHaveBeenCalled();
+    if (failure) {
+      expect(state.chatRunId).toBe(runId);
+    }
     if (kind === "background") {
       expect(state).toMatchObject({ chatRunId: runId, ...streaming });
     } else if (kind === "live reply") {
