@@ -5,10 +5,19 @@ import {
 } from "../../../../test/helpers/openai-transport-request-policy.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { streamSimpleOpenAICompletions } from "../providers/openai-completions.js";
-import type { AssistantMessage, SimpleStreamOptions } from "../types.js";
-import { replyContext, withServer } from "./openai-completions-suite.test-support.js";
+import type { SimpleStreamOptions } from "../types.js";
+import {
+  collectStream,
+  replyContext,
+  withServer,
+} from "./openai-completions-suite.test-support.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
+
+const toolCalls = [
+  { name: "weather", arguments: { city: "Vienna" } },
+  { name: "time", arguments: { zone: "UTC" } },
+];
 
 describe("openai completions transport requests", () => {
   it.each([
@@ -40,26 +49,14 @@ describe("openai completions transport requests", () => {
         );
       },
       async (baseUrl) => {
-        const model = makeCompletionsModel({
-          id: "gpt-5.4-mini",
-          name: "GPT-5.4 Mini",
-          baseUrl,
-        });
-        const stream = createOpenAICompletionsTransportStreamFn()(
-          model,
-          replyContext() as never,
-          { apiKey: "test-key" } as never,
+        const { terminal } = await collectStream(
+          createOpenAICompletionsTransportStreamFn()(
+            makeCompletionsModel({ id: "gpt-5.4-mini", baseUrl }),
+            replyContext(),
+            { apiKey: "test-key" },
+          ),
         );
-
-        let errorPayload: Record<string, unknown> | undefined;
-        for await (const event of stream as AsyncIterable<{
-          type: string;
-          error?: Record<string, unknown>;
-        }>) {
-          if (event.type === "error") {
-            errorPayload = event.error;
-          }
-        }
+        const errorPayload = terminal?.type === "error" ? terminal.error : undefined;
 
         expect(errorPayload).toMatchObject({
           stopReason: "error",
@@ -100,18 +97,11 @@ describe("openai completions transport requests", () => {
                       content: "live-ok",
                       ...(includeTools
                         ? {
-                            tool_calls: [
-                              {
-                                id: "call_weather",
-                                type: "function",
-                                function: { name: "weather", arguments: '{"city":"Vienna"}' },
-                              },
-                              {
-                                id: "call_time",
-                                type: "function",
-                                function: { name: "time", arguments: '{"zone":"UTC"}' },
-                              },
-                            ],
+                            tool_calls: toolCalls.map(({ name, arguments: args }) => ({
+                              id: `call_${name}`,
+                              type: "function",
+                              function: { name, arguments: JSON.stringify(args) },
+                            })),
                           }
                         : {}),
                     },
@@ -166,21 +156,11 @@ describe("openai completions transport requests", () => {
             };
             const stream = await createStream(
               { ...model, params: scenario.params },
-              {
-                systemPrompt: "system",
-                messages: [{ role: "user", content: "Reply live-ok", timestamp: 1 }],
-                tools: [],
-              },
+              replyContext("Reply live-ok"),
               options,
             );
-            let final: AssistantMessage | undefined;
-            const eventTypes: string[] = [];
-            for await (const event of stream) {
-              eventTypes.push(event.type);
-              if (event.type === "done") {
-                final = event.message;
-              }
-            }
+            const { result: final, events } = await collectStream(stream);
+            const eventTypes = events.map((event) => event.type);
             const request = capturedRequests.at(-1);
             expect(request?.stream).toBe(scenario.expected);
             if (scenario.expected) {
@@ -205,20 +185,13 @@ describe("openai completions transport requests", () => {
               }),
               expect.objectContaining({ type: "text", text: "live-ok" }),
               ...(includeTools
-                ? [
+                ? toolCalls.map((call) =>
                     expect.objectContaining({
                       type: "toolCall",
-                      id: "call_weather",
-                      name: "weather",
-                      arguments: { city: "Vienna" },
+                      id: `call_${call.name}`,
+                      ...call,
                     }),
-                    expect.objectContaining({
-                      type: "toolCall",
-                      id: "call_time",
-                      name: "time",
-                      arguments: { zone: "UTC" },
-                    }),
-                  ]
+                  )
                 : []),
             ]);
             expect(eventTypes.filter((type) => type === "toolcall_end")).toHaveLength(
@@ -235,9 +208,7 @@ describe("openai completions transport requests", () => {
           };
           const oversizedStream = await createStream(
             model,
-            {
-              messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
-            },
+            { messages: replyContext().messages },
             options,
           );
           expect(await oversizedStream.result()).toMatchObject({

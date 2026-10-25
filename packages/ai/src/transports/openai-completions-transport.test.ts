@@ -235,13 +235,9 @@ describe("openai completions transport", () => {
       },
       async (baseUrl) => {
         const model = makeCompletionsModel({
-          id: "generic-openai-compatible",
-          name: "Generic OpenAI Compatible",
           provider: "custom-openai-compatible",
           baseUrl,
           reasoning: false,
-          contextWindow: 4096,
-          maxTokens: 256,
         });
         const stream = createOpenAICompletionsTransportStreamFn()(
           model,
@@ -249,19 +245,13 @@ describe("openai completions transport", () => {
             systemPrompt: "runtime-only system prompt",
             messages: [],
             tools: [],
-          } as never,
-          { apiKey: "test-key" } as never,
+          },
+          { apiKey: "test-key" },
         );
 
-        let doneReason: string | undefined;
-        for await (const event of stream as AsyncIterable<{ type: string; reason?: string }>) {
-          if (event.type === "done") {
-            doneReason = event.reason;
-          }
-        }
-
+        const { terminal } = await collectStream(stream);
         expect(capturedRoles).toEqual(["system"]);
-        expect(doneReason).toBe("stop");
+        expect(terminal).toMatchObject({ type: "done", reason: "stop" });
       },
     );
   });
