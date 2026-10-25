@@ -67,6 +67,9 @@ async function selectText(text: Locator) {
     range.selectNodeContents(element);
     const selection = window.getSelection();
     selection?.removeAllRanges();
+    element.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }),
+    );
     selection?.addRange(range);
   });
   await text.dispatchEvent("pointerup", { button: 0, pointerType: "mouse" });

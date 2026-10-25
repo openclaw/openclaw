@@ -43,10 +43,11 @@ function pointerUp(
   },
   settle = true,
 ) {
-  handleChatSelectionPointerUp({ currentTarget: thread } as unknown as PointerEvent, {
-    paneId: "pane-a",
-    ...options,
-  });
+  handleChatSelectionPointerUp(
+    { currentTarget: thread } as unknown as PointerEvent,
+    { paneId: "pane-a", ...options },
+    null,
+  );
   if (settle) {
     vi.runAllTimers();
   }

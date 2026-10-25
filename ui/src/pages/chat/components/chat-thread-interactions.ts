@@ -365,17 +365,27 @@ function toggleTouchMessageMeta(event: PointerEvent, messageElements: Iterable<H
 export function handleTranscriptPointerUp(
   event: PointerEvent,
   props: TranscriptInteractionProps,
+  previousSelection: Range | null | undefined,
   messageElements: Iterable<HTMLElement> = [],
 ) {
   toggleTouchMessageMeta(event, messageElements);
-  if (event.button !== 0 || event.ctrlKey || typeof props.onCompanionSelection !== "function") {
+  if (
+    event.button !== 0 ||
+    event.ctrlKey ||
+    previousSelection === undefined ||
+    typeof props.onCompanionSelection !== "function"
+  ) {
     return;
   }
-  handleChatSelectionPointerUp(event, {
-    paneId: props.paneId,
-    onAddToChat: props.onAddToChat,
-    onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
-  });
+  handleChatSelectionPointerUp(
+    event,
+    {
+      paneId: props.paneId,
+      onAddToChat: props.onAddToChat,
+      onAskSideChat: (selection, anchorRect) => props.onCompanionSelection?.(selection, anchorRect),
+    },
+    previousSelection,
+  );
 }
 
 function selectionIntersectsElement(selection: Selection | null, element: Element): boolean {
