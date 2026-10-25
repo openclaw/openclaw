@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import type { GroupPolicy } from "../config/types.base.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMutableAllowEntryDetector,
   collectStandardAllowlistLists,
@@ -60,20 +61,17 @@ describe("retained group policy helpers", () => {
 
 describe("mutable allowlist table helpers", () => {
   it("collects standard account, DM, and nested group lists in stable order", () => {
-    expect(
-      collectStandardAllowlistLists(
-        {
-          prefix: "channels.demo",
-          account: {
-            allowFrom: ["user"],
-            groupAllowFrom: ["group-user"],
-            dm: { allowFrom: ["dm-user"] },
-            rooms: { general: { users: ["room-user"] } },
-          },
-        },
-        { includeDm: true, includeGroups: true, groupsKey: "rooms", groupField: "users" },
-      ),
-    ).toEqual([
+    const account = {
+      allowFrom: ["user"],
+      groupAllowFrom: ["group-user"],
+      dm: { allowFrom: ["dm-user"] },
+      rooms: { general: { users: ["room-user"] } },
+    };
+    const lists = collectStandardAllowlistLists(
+      { prefix: "channels.demo", account },
+      { includeDm: true, includeGroups: true, groupsKey: "rooms", groupField: "users" },
+    );
+    expect(lists).toEqual([
       { pathLabel: "channels.demo.allowFrom", list: ["user"] },
       { pathLabel: "channels.demo.groupAllowFrom", list: ["group-user"] },
       { pathLabel: "channels.demo.dm.allowFrom", list: ["dm-user"] },
@@ -98,12 +96,13 @@ it("createRestrictSendersChannelSecurity builds DM policy and warnings from one 
     resolveDmScope: () => "per-peer" as const,
     resolveDmRoute: () => ({ kind: "core" as const }),
   };
-  const security = createRestrictSendersChannelSecurity<{
+  type Account = {
     accountId: string;
     allowFrom?: string[];
     dmPolicy?: string;
     groupPolicy?: GroupPolicy;
-  }>({
+  };
+  const security = createRestrictSendersChannelSecurity<Account>({
     channelKey: "line",
     resolveDmPolicy: (account) => account.dmPolicy,
     resolveDmAllowFrom: (account) => account.allowFrom,
@@ -118,19 +117,18 @@ it("createRestrictSendersChannelSecurity builds DM policy and warnings from one 
     classifyEntryAuthentication: () => "asserted",
     dmRouting,
   });
+  const scope = (account: Omit<Account, "accountId"> = {}, cfg: OpenClawConfig = {}) => ({
+    cfg,
+    accountId: "default",
+    account: { accountId: "default", ...account },
+  });
 
   expect(security.dmRouting).toBe(dmRouting);
 
   expect(
-    security.resolveDmPolicy?.({
-      cfg: { channels: {} },
-      accountId: "default",
-      account: {
-        accountId: "default",
-        dmPolicy: "allowlist",
-        allowFrom: ["line:user:abc"],
-      },
-    }),
+    security.resolveDmPolicy?.(
+      scope({ dmPolicy: "allowlist", allowFrom: ["line:user:abc"] }, { channels: {} }),
+    ),
   ).toEqual({
     policy: "allowlist",
     allowFrom: ["line:user:abc"],
@@ -141,22 +139,12 @@ it("createRestrictSendersChannelSecurity builds DM policy and warnings from one 
     classifyEntryAuthentication: expect.any(Function),
   });
 
-  expect(
-    security
-      .resolveDmPolicy?.({
-        cfg: {},
-        accountId: "default",
-        account: { accountId: "default" },
-      })
-      ?.classifyEntryAuthentication?.("line:user:abc"),
-  ).toBe("asserted");
+  expect(security.resolveDmPolicy?.(scope())?.classifyEntryAuthentication?.("line:user:abc")).toBe(
+    "asserted",
+  );
 
   expect(
-    security.collectWarnings?.({
-      cfg: { channels: { line: {} } },
-      accountId: "default",
-      account: { accountId: "default", groupPolicy: "open" },
-    }),
+    security.collectWarnings?.(scope({ groupPolicy: "open" }, { channels: { line: {} } })),
   ).toEqual([
     {
       checkId: "channels.line.groups.open",

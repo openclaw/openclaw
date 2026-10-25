@@ -17,18 +17,11 @@ import {
 
 describe("status issue composition", () => {
   it("coerces only standard and requested account fields", () => {
-    expect(
-      readAccountStatusSnapshot(
-        { accountId: "work", enabled: true, configured: true, mode: "polling", secret: "drop" },
-        ["mode"],
-      ),
-    ).toEqual({
-      accountId: "work",
-      enabled: true,
-      configured: true,
+    const fields = { accountId: "work", enabled: true, configured: true, mode: "polling" };
+    expect(readAccountStatusSnapshot({ ...fields, secret: "drop" }, ["mode"])).toEqual({
+      ...fields,
       running: undefined,
       connected: undefined,
-      mode: "polling",
     });
     expect(readAccountStatusSnapshot(null, ["mode"])).toBeNull();
   });
@@ -44,8 +37,8 @@ describe("status issue composition", () => {
       fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
     });
     const auth = {
+      ...account,
       channel: "zalouser",
-      accountId: "default",
       message: "Not authenticated.",
       fix: "Run login.",
     };
@@ -72,20 +65,8 @@ const defaultAccountSnapshot = {
 };
 
 const adapterAccount = { accountId: "default", enabled: true, profileUrl: "https://example.test" };
-const adapterRuntime = { accountId: "default", running: true };
 const adapterProbe = { ok: true };
-
-const expectedAdapterAccountSnapshot = {
-  ...defaultAccountSnapshot,
-  enabled: true,
-  configured: true,
-  running: true,
-  probe: adapterProbe,
-  profileUrl: adapterAccount.profileUrl,
-  connected: true,
-};
-
-function createStatus(mode: "sync" | "async") {
+function accountSnapshot(mode: "sync" | "async", ingressUnavailable?: true) {
   const resolveAccountSnapshot = ({
     account,
     runtime,
@@ -104,30 +85,30 @@ function createStatus(mode: "sync" | "async") {
     defaultRuntime: createDefaultChannelRuntimeState("default"),
     resolveAccountSnapshot,
   };
-  return mode === "async"
-    ? createAsyncComputedAccountStatusAdapter({
-        ...options,
-        resolveAccountSnapshot: async (params: Parameters<typeof resolveAccountSnapshot>[0]) =>
-          resolveAccountSnapshot(params),
-      })
-    : createComputedAccountStatusAdapter(options);
-}
-function accountSnapshot(mode: "sync" | "async", ingressUnavailable?: true) {
-  return createStatus(mode).buildAccountSnapshot!({
+  const adapter =
+    mode === "async"
+      ? createAsyncComputedAccountStatusAdapter({
+          ...options,
+          resolveAccountSnapshot: async (params: Parameters<typeof resolveAccountSnapshot>[0]) =>
+            resolveAccountSnapshot(params),
+        })
+      : createComputedAccountStatusAdapter(options);
+  return adapter.buildAccountSnapshot!({
     account: adapterAccount,
     cfg: {} as never,
-    runtime: { ...adapterRuntime, ...(ingressUnavailable ? { ingressUnavailable } : {}) },
+    runtime: {
+      accountId: "default",
+      running: true,
+      ...(ingressUnavailable ? { ingressUnavailable } : {}),
+    },
     probe: adapterProbe,
   });
 }
 
 it("builds account status when configured is computed outside resolver", () => {
-  const snapshot = buildComputedAccountStatusSnapshot({
-    accountId: "default",
-    enabled: true,
-    configured: false,
-  });
-  expect(snapshot).toEqual({
+  expect(
+    buildComputedAccountStatusSnapshot({ accountId: "default", enabled: true, configured: false }),
+  ).toEqual({
     ...defaultAccountSnapshot,
     enabled: true,
     stateReason: "not configured",
@@ -136,16 +117,20 @@ it("builds account status when configured is computed outside resolver", () => {
 
 describe("computed account status adapters", () => {
   it("builds account snapshots from async computed account metadata and extras", async () => {
-    await expect(Promise.resolve(accountSnapshot("async"))).resolves.toEqual(
-      expectedAdapterAccountSnapshot,
-    );
+    expect(await accountSnapshot("async")).toEqual({
+      ...defaultAccountSnapshot,
+      enabled: true,
+      configured: true,
+      running: true,
+      probe: adapterProbe,
+      profileUrl: adapterAccount.profileUrl,
+      connected: true,
+    });
   });
 
   it("preserves ingress failure for channel health evaluation", async () => {
-    const snapshot = await accountSnapshot("sync", true);
-
     expect(
-      evaluateChannelHealth(snapshot, {
+      evaluateChannelHealth(await accountSnapshot("sync", true), {
         channelId: "discord",
         now: 100_000,
         channelConnectGraceMs: 10_000,
@@ -229,11 +214,13 @@ it("defaults mode to webhook and keeps supplied extras", () => {
 });
 
 it("uses source metadata from sanitized snapshots to pick the missing field", () => {
+  const missingPrimaryMessage = "LINE channel access token not configured";
+  const missingDependentMessage = "LINE channel secret not configured";
   const collect = createDependentCredentialStatusIssueCollector({
     channel: "line",
     dependencySourceKey: "tokenSource",
-    missingPrimaryMessage: "LINE channel access token not configured",
-    missingDependentMessage: "LINE channel secret not configured",
+    missingPrimaryMessage,
+    missingDependentMessage,
   });
 
   expect(
@@ -243,18 +230,8 @@ it("uses source metadata from sanitized snapshots to pick the missing field", ()
       { accountId: "ok", configured: true, tokenSource: "env" },
     ]),
   ).toEqual([
-    {
-      channel: "line",
-      accountId: "default",
-      kind: "config",
-      message: "LINE channel access token not configured",
-    },
-    {
-      channel: "line",
-      accountId: "work",
-      kind: "config",
-      message: "LINE channel secret not configured",
-    },
+    { channel: "line", accountId: "default", kind: "config", message: missingPrimaryMessage },
+    { channel: "line", accountId: "work", kind: "config", message: missingDependentMessage },
   ]);
 });
 
