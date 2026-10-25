@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import type { MessagePort } from "node:worker_threads";
 import zlib from "node:zlib";
 import { requireDirectorySync, syncDirectorySync } from "../../infra/directory-durability.js";
 import { hasErrnoCode } from "../../infra/errno.js";
@@ -113,11 +114,16 @@ export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databa
     }
 );
 export type SessionColdWorkerData = {
-  type: "sqlite-transcript-archive-v2";
-  operation: "cold-mutate";
   commitGate: SharedArrayBuffer;
   sourceMatches?: SessionColdSourceMatches;
   plan: SessionColdMutationPlan;
+};
+
+export type SqliteArchiveMutationRequest = {
+  type: "cold-mutation";
+  operationId: number;
+  data: SessionColdWorkerData;
+  port: MessagePort;
 };
 
 async function prepareSessionColdArchiveInWorker(
