@@ -19,52 +19,41 @@ function tab(
   pluginId: string,
   overrides: Partial<PluginControlUiDescriptor & { surface: "tab" | "run" | "widget" }> = {},
 ) {
-  const descriptor: PluginControlUiDescriptor = {
-    id: "logbook",
-    surface: "tab",
-    label: "Logbook",
-    ...overrides,
+  return {
+    pluginId,
+    descriptor: { id: "logbook", surface: "tab" as const, label: "Logbook", ...overrides },
   };
-  return { pluginId, descriptor };
 }
 
 function grant(pluginId: string, path = `/plugins/${pluginId}`, match = "prefix") {
   return { pluginId, path, match, scopes: ["operator.read"] };
 }
 
+function route(
+  pluginId: string,
+  path = `/plugins/${pluginId}`,
+  match: "exact" | "prefix" = "prefix",
+  auth: "gateway" | "plugin" = "gateway",
+) {
+  return { pluginId, path, match, auth };
+}
+
 function activateDescriptors(
   entries: Array<{ pluginId: string; descriptor: PluginControlUiDescriptor }>,
-  routes: Array<{
-    pluginId: string;
-    path: string;
-    auth?: "gateway" | "plugin";
-    match?: "exact" | "prefix";
-  }> = [],
+  routes: ReturnType<typeof route>[] = [],
 ) {
   const registry = createTestRegistry([]);
   registry.controlUiDescriptors = entries.map((entry) => ({
     ...entry,
     source: `test:${entry.pluginId}`,
   }));
-  registry.httpRoutes = routes.map((route) => ({
-    ...route,
-    auth: route.auth ?? "gateway",
-    match: route.match ?? "prefix",
-    source: `test:${route.pluginId}`,
+  registry.httpRoutes = routes.map((entry) => ({
+    ...entry,
+    source: `test:${entry.pluginId}`,
     handler: async () => true,
   }));
   setActivePluginRegistry(registry);
   return registry;
-}
-
-function activateRoutes(
-  entries: Array<[string, string, Parameters<typeof tab>[1]?]>,
-  routes: Parameters<typeof activateDescriptors>[1],
-) {
-  return activateDescriptors(
-    entries.map(([pluginId, path, overrides]) => tab(pluginId, { path, ...overrides })),
-    routes,
-  );
 }
 
 afterEach(() => {
@@ -89,14 +78,14 @@ it.each([
   { basePath: "/team", path: "/team", match: "prefix" as const, auth: "gateway" as const },
 ])(
   "drops a slug shadowed by $auth $match route $path under $basePath once",
-  ({ basePath, ...route }) => {
+  ({ basePath, ...shadow }) => {
     setRuntimeConfigSnapshot({ gateway: { controlUi: { basePath } } });
     const registry = activateDescriptors([
       tab("reports-fixture", { slug: "reports", path: "/plugins/reports-fixture" }),
     ]);
     // HTTP registration after the descriptor must produce the same projection.
     registry.httpRoutes.push({
-      ...route,
+      ...shadow,
       pluginId: "other",
       source: "test:other",
       handler: async () => true,
@@ -196,16 +185,7 @@ it("grants only same-plugin gateway routes with least-privilege scopes", () => {
       }),
       tab("publicish", { id: "publicish", path: "/plugins/publicish/panel" }),
     ],
-    [
-      { pluginId: "logbook", path: "/plugins/logbook", match: "prefix" },
-      { pluginId: "adminy", path: "/plugins/adminy", match: "prefix" },
-      {
-        pluginId: "publicish",
-        path: "/plugins/publicish",
-        auth: "plugin",
-        match: "prefix",
-      },
-    ],
+    [route("logbook"), route("adminy"), route("publicish", undefined, "prefix", "plugin")],
   );
 
   expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([
@@ -225,10 +205,7 @@ it("grants only same-plugin gateway routes with least-privilege scopes", () => {
 it("uses the first dispatched gateway route as descriptor owner", () => {
   activateDescriptors(
     [tab("outer", { path: "/shared/panel" })],
-    [
-      { pluginId: "nested", path: "/shared/panel", match: "exact" },
-      { pluginId: "outer", path: "/shared", match: "prefix" },
-    ],
+    [route("nested", "/shared/panel", "exact"), route("outer", "/shared")],
   );
 
   expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([]);
@@ -236,10 +213,7 @@ it("uses the first dispatched gateway route as descriptor owner", () => {
 });
 
 it("does not require a cookie grant when gateway auth is disabled", () => {
-  activateDescriptors(
-    [tab("logbook", { path: "/plugins/logbook/panel" })],
-    [{ pluginId: "logbook", path: "/plugins/logbook", match: "prefix" }],
-  );
+  activateDescriptors([tab("logbook", { path: "/plugins/logbook/panel" })], [route("logbook")]);
 
   const [projected] = listControlUiPluginTabs(["operator.admin"], {
     requireGatewayAuthGrant: false,
@@ -250,29 +224,23 @@ it("does not require a cookie grant when gateway auth is disabled", () => {
 
 it.each([false, true])("coalesces read grants and widens an exact path: %s", (widen) => {
   const root = "/plugins/logbook";
-  activateRoutes(
+  activateDescriptors(
     [
-      ["logbook", widen ? root : `${root}/read`],
-      ["logbook", `${root}/admin`, { id: "admin", requiredScopes: ["operator.admin"] }],
+      tab("logbook", { path: widen ? root : `${root}/read` }),
+      tab("logbook", { path: `${root}/admin`, id: "admin", requiredScopes: ["operator.admin"] }),
     ],
-    [
-      ...(widen ? [{ pluginId: "logbook", path: root, match: "exact" as const }] : []),
-      { pluginId: "logbook", path: root, match: "prefix" },
-    ],
+    [...(widen ? [route("logbook", root, "exact")] : []), route("logbook", root)],
   );
   expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([grant("logbook")]);
 });
 
 it("keeps separate grants for different plugins that share a cookie path", () => {
-  activateRoutes(
+  activateDescriptors(
     [
-      ["alpha", "/shared", { id: "alpha" }],
-      ["beta", "/shared/child", { id: "beta" }],
+      tab("alpha", { path: "/shared", id: "alpha" }),
+      tab("beta", { path: "/shared/child", id: "beta" }),
     ],
-    [
-      { pluginId: "alpha", path: "/shared", match: "exact" },
-      { pluginId: "beta", path: "/shared", match: "prefix" },
-    ],
+    [route("alpha", "/shared", "exact"), route("beta", "/shared")],
   );
 
   expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([

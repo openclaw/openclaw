@@ -3,6 +3,11 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
@@ -38,13 +43,8 @@ it(
     let requests: unknown[] = [];
     const events: unknown[] = [];
     const provider = createServer((request, response) => {
-      let body = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk) => {
-        body += chunk;
-      });
-      request.on("end", () => {
-        const payload: unknown = JSON.parse(body);
+      void (async () => {
+        const payload: unknown = JSON.parse(await readRequestText(request));
         requests.push({ method: request.method, url: request.url, payload });
         const tool =
           scenario.endsWith("tool") && (scenario !== "compatible-tool" || requests.length === 1);
@@ -92,7 +92,7 @@ it(
         }
         response.writeHead(200, { "content-type": "text/event-stream" });
         response.end(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""));
-      });
+      })().catch((error: unknown) => response.writeHead(500).end(String(error)));
     });
     let gateway: OpenClawTestInstance | undefined;
     let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -127,13 +127,7 @@ it(
         );
         fixture = path.join(workspace, "fixture.txt");
         await fs.writeFile(fixture, "COMPLETE_TOOL_READ_MARKER");
-        await new Promise<void>((resolve) => {
-          provider.listen(0, "127.0.0.1", resolve);
-        });
-        const address = provider.address();
-        if (!address || typeof address === "string") {
-          throw new Error("loopback provider did not bind");
-        }
+        const baseUrl = await listenLoopback(provider);
         await gateway.state.writeConfig({
           agents: {
             defaults: {
@@ -147,7 +141,7 @@ it(
             mode: "replace",
             providers: {
               "stream-fixture": {
-                baseUrl: `http://127.0.0.1:${address.port}`,
+                baseUrl,
                 apiKey: "local-fixture-key",
                 api: "anthropic-messages",
                 models: [
@@ -202,16 +196,6 @@ it(
           );
           const assistant = history.messages.findLast((message) => message.role === "assistant");
           const toolResults = history.messages.filter((message) => message.role === "toolResult");
-          console.log(
-            JSON.stringify({
-              scenario,
-              status: waited.status,
-              stopReason: assistant?.stopReason,
-              requests: requests.length,
-              toolResults: toolResults.length,
-              content: assistant?.content,
-            }),
-          );
           if (scenario.startsWith("started") || scenario.startsWith("sealed")) {
             expect.soft(waited.status, scenario).toBe("error");
             expect
@@ -271,10 +255,7 @@ it(
         if (!provider.listening) {
           return;
         }
-        provider.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          provider.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeHttpServer(provider);
       },
     );
   },

@@ -7,6 +7,7 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
@@ -86,17 +87,7 @@ it(
         respond(response, `avatar-response-${index}`);
       }
     });
-    await new Promise<void>((resolve, reject) => {
-      provider.once("error", reject);
-      provider.listen(0, "127.0.0.1", () => {
-        provider.removeListener("error", reject);
-        resolve();
-      });
-    });
-    const address = provider.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Missing local completion provider listener");
-    }
+    const baseUrl = await listenProvider(provider);
     const clients: GatewayClient[] = [];
     let gateway: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
     try {
@@ -120,7 +111,7 @@ it(
             "avatar-proof": {
               api: "openai-completions",
               apiKey: "synthetic-local-provider-key",
-              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              baseUrl,
               models: [
                 modelDefinition("avatar-model", {
                   name: "Avatar model",
