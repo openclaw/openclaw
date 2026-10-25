@@ -121,6 +121,8 @@ const repositoryScriptEntries = [
   // #181150 invokes this reproducible session-row owner probe by path.
   "scripts/perf/session-actor-row-facts-measure.ts!",
   "scripts/perf/session-catalog-selection-measure.ts!",
+  // #183020 invokes this synthetic category-registration workload by path.
+  "scripts/perf/session-group-registration-measure.ts!",
   "scripts/perf/session-pr-subscriptions-measure.ts!",
   "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
