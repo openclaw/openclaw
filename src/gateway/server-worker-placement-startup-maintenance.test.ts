@@ -191,6 +191,30 @@ async function expectWorkerPreservation(storePath: string, keys: string[]) {
 }
 
 describe("worker placement session maintenance ownership", () => {
+  it("prepares and recaptures placement preservation without caller-thread SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const store = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+      const placement = await store.startDispatch({
+        sessionId: "preserved-placement",
+        sessionKey: "agent:main:preserved-placement",
+        agentId: "main",
+      });
+      const { runtime } = createMaintenanceRuntime({
+        placements: [placement],
+        preservationStore: store,
+      });
+      const sidecar = await startMaintenanceRuntime(runtime);
+      try {
+        await expectWorkerPreservation(
+          resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+          [placement.sessionKey],
+        );
+      } finally {
+        await sidecar.stop();
+      }
+    });
+  });
+
   it.each(["claim", "release", "dispatch"] as const)(
     "preserves worker-owned session data during a concurrent %s",
     async (publication) => {
@@ -228,7 +252,6 @@ describe("worker placement session maintenance ownership", () => {
         const sidecar = await startMaintenanceRuntime(runtime);
         await using runtimeCleanup = new AsyncDisposableStack();
         runtimeCleanup.defer(() => sidecar.stop());
-        await expectWorkerPreservation(storePath, active ? [identity.sessionKey] : []);
         const read = stateReads.executeExistingOpenClawStateRead;
         let preservationReads = 0;
         const interleave = vi
