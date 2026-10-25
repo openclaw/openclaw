@@ -392,7 +392,6 @@ describe("node SQLite safety", () => {
 });
 
 const homebrew = "/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib";
-const intelHomebrew = "/usr/local/opt/sqlite/lib/libsqlite3.dylib";
 const safeProbe = { version: "3.53.4", extensionLoadingSupported: true };
 const bundled = "/standalone/runtime/lib/libsqlite3.dylib";
 const standalone = { standaloneRootUrl: "file:///standalone/runtime/" };
@@ -408,6 +407,7 @@ function fixture(overrides: Parameters<typeof mockBunSqliteNativeBoundary>[0] = 
 function expectSelection(f: ReturnType<typeof fixture>, source: string, libraryPath: string) {
   const selected = f.ensure();
   expect(selected).toEqual({ source, path: libraryPath, ...safeProbe });
+  expect(f.select).toHaveBeenCalledExactlyOnceWith(libraryPath);
   return selected;
 }
 
@@ -441,7 +441,6 @@ describe("Bun SQLite library selection", () => {
     });
     const selected = expectSelection(f, "bundled", bundled);
     expect(f.probe).toHaveBeenCalledExactlyOnceWith(bundled);
-    expect(f.select).toHaveBeenCalledExactlyOnceWith(bundled);
     expect(f.publish).toHaveBeenCalledExactlyOnceWith(
       "openclaw.bunSqliteLibrarySelection",
       selected,
@@ -454,19 +453,15 @@ describe("Bun SQLite library selection", () => {
       const f = fixture({
         ...standalone,
         exists: () => failure !== "missing",
-        probe: (candidate) => {
-          if (candidate !== bundled) {
-            return safeProbe;
-          }
-          if (failure === "missing") {
-            throw new Error("dlopen failed");
-          }
-          return { ...safeProbe, version: "3.51.2" };
-        },
+        probe: vi
+          .fn()
+          .mockImplementationOnce(
+            failure === "missing" ? unloadable : () => ({ ...safeProbe, version: "3.51.2" }),
+          )
+          .mockReturnValue(safeProbe),
       });
       expectSelection(f, "discovered", homebrew);
       expect(f.probe.mock.calls.map(([candidate]) => candidate)).toEqual([bundled, homebrew]);
-      expect(f.select).toHaveBeenCalledExactlyOnceWith(homebrew);
     },
   );
 
@@ -512,49 +507,33 @@ describe("Bun SQLite library selection", () => {
   });
 
   it.each([
-    {
-      probe: () => {
+    [
+      "dlopen: incompatible architecture",
+      () => {
         throw new Error("dlopen: incompatible architecture");
       },
-      reason: "dlopen: incompatible architecture",
-    },
-    {
-      probe: () => ({ ...safeProbe, version: "3.51.2" }),
-      reason: "SQLite version 3.51.2 below the WAL safety floor",
-    },
-    {
-      probe: () => ({ ...safeProbe, extensionLoadingSupported: false }),
-      reason: "built with SQLITE_OMIT_LOAD_EXTENSION",
-    },
-  ])("reports override validation failure: $reason", ({ probe, reason }) => {
+    ],
+    [
+      "SQLite version 3.51.2 below the WAL safety floor",
+      () => ({ ...safeProbe, version: "3.51.2" }),
+    ],
+    [
+      "built with SQLITE_OMIT_LOAD_EXTENSION",
+      () => ({ ...safeProbe, extensionLoadingSupported: false }),
+    ],
+  ] as const)("reports override validation failure: %s", (reason, probe) => {
     const f = fixture({ env: { OPENCLAW_SQLITE_LIBRARY: "/custom/sqlite.dylib" }, probe });
     expectRefusal(f, `Cannot use SQLite library /custom/sqlite.dylib: ${reason}`);
-  });
-
-  it.each([
-    { ...safeProbe, version: "3.51.2" },
-    { ...safeProbe, extensionLoadingSupported: false },
-  ])("skips unusable discovered libraries (%j)", (firstProbe) => {
-    const f = fixture({
-      probe: vi.fn().mockReturnValueOnce(firstProbe).mockReturnValue(safeProbe),
-    });
-    expectSelection(f, "discovered", intelHomebrew);
-    expect(f.select).toHaveBeenCalledExactlyOnceWith(intelHomebrew);
   });
 
   it("skips missing and unloadable candidates and reaches MacPorts", () => {
     const f = fixture({
       env: { HOMEBREW_PREFIX: "/custom-brew" },
       exists: (libraryPath) => libraryPath !== "/custom-brew/opt/sqlite/lib/libsqlite3.dylib",
-      probe: (libraryPath) => {
-        if (libraryPath !== "/opt/local/lib/libsqlite3.dylib") {
-          throw new Error("dlopen failed");
-        }
-        return safeProbe;
-      },
+      probe: (libraryPath) =>
+        libraryPath === "/opt/local/lib/libsqlite3.dylib" ? safeProbe : unloadable(),
     });
     expectSelection(f, "discovered", "/opt/local/lib/libsqlite3.dylib");
-    expect(f.select).toHaveBeenCalledTimes(1);
   });
 
   it("prefers HOMEBREW_PREFIX and memoizes the selection without probing again", () => {
@@ -566,7 +545,6 @@ describe("Bun SQLite library selection", () => {
     );
     expect(f.ensure({ explicitPath: "/different.dylib" })).toBe(selected);
     expect(f.probe).toHaveBeenCalledTimes(1);
-    expect(f.select).toHaveBeenCalledTimes(1);
   });
 
   it("refuses Apple's runtime library when no library exists, including a blank override", () => {

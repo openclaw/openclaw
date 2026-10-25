@@ -111,6 +111,71 @@ function scriptFixture() {
   return { ...f, script: f.write("scripts/save_crystal.sh", "echo ok\n") };
 }
 
+async function rejectsBroadGrant(
+  command: string,
+  binaries: readonly string[],
+  target: string,
+  file?: string,
+) {
+  if (process.platform === "win32") {
+    return;
+  }
+  const f = fixture();
+  const paths = Object.fromEntries(binaries.map((name) => [name, f.exe(name)]));
+  if (file) {
+    paths[file] = f.write(file);
+  }
+  let expanded = command;
+  for (const [name, value] of Object.entries(paths)) {
+    expanded = expanded.replaceAll(`{${name}}`, value);
+  }
+  const pattern = paths[target];
+  if (pattern === undefined) {
+    throw new Error(`Missing broad-grant fixture target: ${target}`);
+  }
+  await f.reject(expanded, [{ pattern, source: "allow-always" }]);
+}
+
+async function rejectsWrapperReuse(first: string, second = first, platform?: string) {
+  if (process.platform === "win32" || (platform && process.platform !== platform)) {
+    return;
+  }
+  const f = fixture();
+  const echo = f.exe("echo");
+  f.exe("id");
+  await f.bypass(
+    first + " /bin/zsh -c 'echo warmup-ok'",
+    second + " /bin/zsh -c 'id > marker'",
+    null,
+    echo,
+  );
+}
+
+async function rejectsInterpreterReuse(
+  executable: string,
+  first: string,
+  second: string,
+  grant?: "executable" | "persisted",
+) {
+  if (process.platform === "win32") {
+    return;
+  }
+  const f = fixture();
+  const wrapper = f.exe(executable);
+  const { persisted } = await f.persist(first);
+  expect(persisted).toStrictEqual([]);
+  const command = second.replace("{marker}", path.join(f.dir, executable + "-marker"));
+  const allowlist =
+    grant === "persisted"
+      ? persisted.map((pattern) => ({ pattern }))
+      : [{ pattern: grant ? wrapper : "" }];
+  if (!grant) {
+    await f.reject(command, allowlist);
+  } else {
+    await f.expectAllowed(command, allowlist, false);
+  }
+}
+
 describe("allow-always pattern persistence", () => {
   it("keeps POSIX direct executable approvals bound to argv and cwd", async () => {
     if (process.platform === "win32") {
@@ -329,30 +394,16 @@ describe("allow-always pattern persistence", () => {
   );
 
   it.each([
-    { shellName: "csh", args: "-c 'id > marker'" },
-    { shellName: "nu", args: "--execute='id > marker'" },
-  ])("prevents $shellName $args from reusing broad grants", async ({ shellName, args }) => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const f = fixture();
-    const shell = f.exe(shellName);
-    f.exe("id");
-    await f.reject(shell + " " + args, [{ pattern: shell, source: "allow-always" }]);
-  });
-
-  it("prevents Nushell startup option values from becoming allowlist targets", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const f = fixture();
-    const shell = f.exe("nu");
-    const plugins = f.write("allowed-plugins.nuon");
-    f.exe("id");
-    await f.reject(shell + " --plugins " + plugins + " --commands 'id > marker'", [
-      { pattern: plugins, source: "allow-always" },
-    ]);
-  });
+    ["{csh} -c 'id > marker'", ["csh", "id"], "csh"],
+    ["{nu} --execute='id > marker'", ["nu", "id"], "nu"],
+    [
+      "{nu} --plugins {allowed-plugins.nuon} --commands 'id > marker'",
+      ["nu", "id"],
+      "allowed-plugins.nuon",
+      "allowed-plugins.nuon",
+    ],
+    ["command -p echo warmup-ok", ["command", "echo"], "echo"],
+  ] as const)("rejects broad grants for %s", rejectsBroadGrant);
 
   it.each([
     { wrapper: "busybox", shell: true },
@@ -412,27 +463,16 @@ describe("allow-always pattern persistence", () => {
   });
 
   it.each([
-    ["/usr/bin/caffeinate -d -w 42", "/usr/bin/caffeinate -d -w 42"],
+    ["/usr/bin/caffeinate -d -w 42"],
     [
       "/usr/bin/sandbox-exec -p '(deny default) (allow process*)'",
       "/usr/bin/sandbox-exec -p '(allow default)'",
     ],
-    ["/usr/bin/time -p", "/usr/bin/time -p"],
-    ["/usr/bin/flock lockfile", "/usr/bin/flock lockfile"],
-  ])("prevents allow-always bypass for %s wrapper chains", async (first, second) => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const f = fixture();
-    const echo = f.exe("echo");
-    f.exe("id");
-    await f.bypass(
-      first + " /bin/zsh -c 'echo warmup-ok'",
-      second + " /bin/zsh -c 'id > marker'",
-      null,
-      echo,
-    );
-  });
+    ["/usr/bin/time -p"],
+    ["/usr/bin/flock lockfile"],
+    ["/usr/bin/arch -arm64", undefined, "darwin"],
+    ["/usr/bin/xcrun", undefined, "darwin"],
+  ] as const)("prevents allow-always bypass for %s wrapper chains", rejectsWrapperReuse);
 
   it.each([
     ["npm --unknown-global-option exec sh -c 'id > marker'", "npm"],
@@ -518,16 +558,6 @@ describe("allow-always pattern persistence", () => {
     }
   });
 
-  it("requires approval for command carriers that use default PATH lookup", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const f = fixture();
-    f.exe("command");
-    const echo = f.exe("echo");
-    await f.reject("command -p echo warmup-ok", [{ pattern: echo, source: "allow-always" }]);
-  });
-
   it("keeps ambiguous flock command strings out of allow-always", async () => {
     if (process.platform === "win32") {
       return;
@@ -539,27 +569,6 @@ describe("allow-always pattern persistence", () => {
     ).toStrictEqual([]);
   });
 
-  it("prevents allow-always bypass for macOS dispatch-wrapper chains", async () => {
-    if (process.platform !== "darwin") {
-      return;
-    }
-    const f = fixture();
-    const echo = f.exe("echo");
-    f.exe("id");
-    await f.bypass(
-      "/usr/bin/arch -arm64 /bin/zsh -c 'echo warmup-ok'",
-      "/usr/bin/arch -arm64 /bin/zsh -c 'id > marker-arch'",
-      null,
-      echo,
-    );
-    await f.bypass(
-      "/usr/bin/xcrun /bin/zsh -c 'echo warmup-ok'",
-      "/usr/bin/xcrun /bin/zsh -c 'id > marker-xcrun'",
-      null,
-      echo,
-    );
-  });
-
   it.each([
     ["julia", "julia '-eprintln(1)'", "julia '-Erun(\x60id > {marker}\x60)'"],
     [
@@ -568,49 +577,25 @@ describe("allow-always pattern persistence", () => {
       'groovy -pe \'["sh", "-c", "id > {marker}"].execute()\'',
     ],
     ["gdb", "gdb -ev 'print 1'", "gdb --ev 'shell id > {marker}'"],
-  ])(
-    "prevents allow-always bypass for inline-eval interpreter %s",
-    async (executable, first, second) => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const f = fixture();
-      f.exe(executable);
-      await f.bypass(
-        first,
-        second.replace("{marker}", path.join(f.dir, executable + "-marker")),
-        null,
-      );
-    },
-  );
-
-  it("prevents allow-always bypass for shell-carried awk interpreters", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const f = fixture();
-    f.exe("awk");
-    const { persisted } = await f.persist("sh -c '$0 \"$@\"' awk '{print $1}' data.csv");
-    expect(persisted).toStrictEqual([]);
-    await f.expectAllowed(
+    [
+      "awk",
+      "sh -c '$0 \"$@\"' awk '{print $1}' data.csv",
       "sh -c '$0 \"$@\"' awk 'BEGIN{system(\"id > /tmp/pwned\")}'",
-      persisted.map((pattern) => ({ pattern })),
-      false,
-    );
-  });
-
-  it.each([
-    ["env", "env echo SAFE", "env BASH_ENV=/tmp/payload.sh bash -c 'id > /tmp/pwned'"],
-    ["bash", "bash -c 'echo safe'", "bash -c 'id > /tmp/pwned'"],
-  ])("rejects positional carriers of %s wrappers", async (executable, first, second) => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const f = fixture();
-    const wrapper = f.exe(executable);
-    expect((await f.persist("sh -c '$0 \"$@\"' " + first)).persisted).toStrictEqual([]);
-    await f.expectAllowed("sh -c '$0 \"$@\"' " + second, [{ pattern: wrapper }], false);
-  });
+      "persisted",
+    ],
+    [
+      "env",
+      "sh -c '$0 \"$@\"' env echo SAFE",
+      "sh -c '$0 \"$@\"' env BASH_ENV=/tmp/payload.sh bash -c 'id > /tmp/pwned'",
+      "executable",
+    ],
+    [
+      "bash",
+      "sh -c '$0 \"$@\"' bash -c 'echo safe'",
+      "sh -c '$0 \"$@\"' bash -c 'id > /tmp/pwned'",
+      "executable",
+    ],
+  ] as const)("prevents persisted %s interpreter reuse", rejectsInterpreterReuse);
 });
 
 it.runIf(process.platform !== "win32")(

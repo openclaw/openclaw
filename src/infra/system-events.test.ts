@@ -43,8 +43,14 @@ function ids(events: SystemEvent[]) {
   return events.map((event) => event.id);
 }
 
-function claim(sessionKey: string, events: SystemEvent[], cancelled: () => void) {
-  return expectDefined(claimSystemEventTurn(sessionKey, events, cancelled), "turn owner");
+function claim(events: SystemEvent[], cancelled: () => void) {
+  return expectDefined(claimSystemEventTurn(key, events, cancelled), "turn owner");
+}
+
+function owned(text: string) {
+  const occurrence = enqueueEntry(text);
+  const cancelled = vi.fn();
+  return { occurrence, cancelled, owner: claim([occurrence], cancelled) };
 }
 
 const route = { channel: "telegram", to: "-100123", threadId: "42" };
@@ -68,7 +74,7 @@ describe("delivery-owned system event selection", () => {
       const first = enqueueEntry("First", sessionKey);
       const second = enqueueEntry("Second", sessionKey);
       const cancelled = vi.fn();
-      const owner = claim(sessionKey, [first, second], cancelled);
+      const owner = claim([first, second], cancelled);
       expect(peekDeliverable(sessionKey)).toEqual([]);
       consumeSelected(sessionKey, [first]);
       const replacement = enqueueEntry("Replacement", sessionKey);
@@ -126,9 +132,7 @@ describe("delivery-owned system event selection", () => {
   });
 
   it("retires ordinary owners on soft restart while keeping passive receipt custody", async () => {
-    const occurrence = enqueueEntry("Ordinary task", sessionKey);
-    const cancelled = vi.fn();
-    const owner = claim(sessionKey, [occurrence], cancelled);
+    const { owner, cancelled } = owned("Ordinary task");
     const passiveReceipt = expectDefined(
       enqueueSystemEventWithReceipt("Deferred notice", { sessionKey }),
       "passive receipt",
@@ -142,12 +146,10 @@ describe("delivery-owned system event selection", () => {
   });
 
   it("returns only a rejected claim to passive custody and rejects its stale handles", () => {
-    const occurrence = enqueueEntry("Deferred", sessionKey);
-    const cancelled = vi.fn();
-    const first = claim(sessionKey, [occurrence], cancelled);
+    const { occurrence, cancelled, owner: first } = owned("Deferred");
     expect(first.release()).toBe(true);
     expect(peekDeliverable(sessionKey)).toEqual([occurrence]);
-    const successor = claim(sessionKey, [occurrence], cancelled);
+    const successor = claim([occurrence], cancelled);
     expect(first.release()).toBe(false);
     expect(first.cancel()).toBe(false);
     expect(() => first.start()).toThrow("cancelled before admission");
@@ -163,7 +165,7 @@ describe("delivery-owned system event selection", () => {
       const options = { sessionKey, contextKey: "task:completion" };
       const occurrence = expectDefined(enqueueSystemEventEntry("Original", options), "original");
       const cancelled = vi.fn();
-      const owner = claim(sessionKey, [occurrence], cancelled);
+      const owner = claim([occurrence], cancelled);
       if (boundary === "replace") {
         enqueueSystemEvent("Replacement", { ...options, replace: true });
       } else if (boundary === "drain") {
@@ -597,25 +599,17 @@ describe("system events (session routing)", () => {
   });
 
   it.each([
-    { run: () => enqueueSystemEvent("Unbound", { sessionKey: " " }), error: "sessionKey" },
-    {
-      run: () =>
-        enqueueSystemEvent("Roster", {
-          sessionKey: "agent:main:main",
-          contextKey: " ",
-          replace: true,
-        }),
-      error: "contextKey",
-    },
-    {
-      run: () => enqueueRoutedSystemEvent("Unbound", { agentId: " ", sessionKey: "global" }),
-      error: "route.agentId",
-    },
-    {
-      run: () => enqueueRoutedSystemEvent("Unbound", { agentId: "alpha", sessionKey: " " }),
-      error: "sessionKey",
-    },
-  ])("rejects invalid event routing: $error", ({ run, error }) => {
+    ["sessionKey", () => enqueue("Unbound", { sessionKey: " " })],
+    ["contextKey", () => enqueue("Roster", { contextKey: " ", replace: true })],
+    [
+      "route.agentId",
+      () => enqueueRoutedSystemEvent("Unbound", { agentId: " ", sessionKey: "global" }),
+    ],
+    [
+      "sessionKey",
+      () => enqueueRoutedSystemEvent("Unbound", { agentId: "alpha", sessionKey: " " }),
+    ],
+  ] as const)("rejects invalid event routing: %s", (error, run) => {
     expect(run).toThrow(error);
     expect(peekSystemEvents("agent:beta:global")).toStrictEqual([]);
   });

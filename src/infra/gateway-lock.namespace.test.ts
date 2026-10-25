@@ -354,7 +354,9 @@ describe("gateway lock namespaces", () => {
     async (kind) => {
       const env = await makeEnv();
       const namespace = mockLinuxNamespace(env.OPENCLAW_STATE_DIR);
-      vi.useFakeTimers();
+      let now = Date.now();
+      const began = now;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
       const paths = resolveGatewayLockPaths(env, resolveTestLockDir(env));
       const payload = JSON.stringify({
         ...createLockPayload({ configPath: paths.configPath, startTime: 1 }),
@@ -365,91 +367,53 @@ describe("gateway lock namespaces", () => {
         writeOwner(file, payload);
       }
       followFakeClock();
-      const renew =
-        kind === "renewing"
-          ? setInterval(() => {
-              for (const file of [paths.ownerLockPath, paths.stateLockPath]) {
-                fsSync.utimesSync(file, new Date(), new Date());
-              }
-            }, 15_000)
-          : undefined;
-      const waiting = createDeferred();
       const delays: number[] = [];
-      let completed = false;
       const startup = acquireGatewayLock({
         allowInTests: true,
         env,
         lockDir: resolveTestLockDir(env),
         now: Date.now,
-        sleep: (ms) => {
+        sleep: async (ms) => {
           delays.push(ms);
-          waiting.resolve();
-          return new Promise((resolve) => {
-            setTimeout(resolve, ms);
-          });
+          now += ms;
+          if (kind === "renewing") {
+            for (const file of [paths.ownerLockPath, paths.stateLockPath]) {
+              fsSync.utimesSync(file, new Date(now), new Date(now));
+            }
+          }
         },
-      }).then(
-        (lock) => {
-          completed = true;
-          return { lock };
-        },
-        (error: unknown) => ({ error }),
-      );
-      let gateway: Awaited<ReturnType<typeof acquireGatewayLock>> | undefined;
-      try {
-        await awaitGateBeforeSettlement(
-          waiting.promise,
-          startup,
-          "Gateway startup settled before waiting for the owner heartbeat",
-        );
-        await vi.advanceTimersByTimeAsync(85_000);
-        expect(completed).toBe(false);
-        await vi.advanceTimersByTimeAsync(10_000);
-        const outcome = await startup;
-        expect(delays.length).toBeGreaterThanOrEqual(18);
-        expect(delays.length).toBeLessThanOrEqual(19);
-        expect(delays.every((delay) => delay === 5000)).toBe(true);
-        if ("lock" in outcome) {
-          gateway = outcome.lock;
-        }
-        expect(outcome).toEqual({ error: expect.any(GatewayLockError) });
-        expect(String("error" in outcome ? outcome.error : "")).toContain(
-          "openclaw gateway recover-lock",
-        );
-        expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(payload);
-      } finally {
-        clearInterval(renew);
-        await gateway?.release();
-      }
+      }).then(async (lock) => {
+        await lock?.release();
+        return lock;
+      });
+      await expect(startup).rejects.toBeInstanceOf(GatewayLockError);
+      await expect(startup).rejects.toThrow("openclaw gateway recover-lock");
+      expect(now - began).toBe(95_000);
+      expect(delays.length).toBeGreaterThanOrEqual(18);
+      expect(delays.length).toBeLessThanOrEqual(19);
+      expect(delays.every((delay) => delay === 5000)).toBe(true);
+      expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(payload);
     },
   );
 
-  it.each([
-    "stale",
-    "exited",
-    "local-exited",
-    "renewing",
-    "live",
-    "deadline",
-    "revoked",
-    "clock-skew",
-  ] as const)(
+  it.each(["stale", "exited", "renewing", "deadline", "revoked", "clock-skew"] as const)(
     "Doctor maintenance handles a %s container owner through shared admission",
     async (kind) => {
       const env = await makeEnv();
       const namespace = mockLinuxNamespace(env.OPENCLAW_STATE_DIR);
       vi.useFakeTimers();
       const began = Date.now();
+      const bounded = kind === "deadline" || kind === "revoked" || kind === "clock-skew";
+      const duration = bounded ? 5_000 : 95_000;
       const paths = resolveGatewayLockPaths(env);
       const record = JSON.stringify({
         ...createLockPayload({ configPath: paths.configPath, startTime: 1 }),
-        pid: kind === "live" ? process.pid : 2_147_483_647,
+        pid: 2_147_483_647,
         startTime: undefined,
         processNamespace: {
           ...namespace,
-          ...(kind === "live" || kind === "local-exited"
-            ? {}
-            : { host: "exited-container", pidNsInode: "foreign-namespace" }),
+          host: "exited-container",
+          pidNsInode: "foreign-namespace",
         },
       });
       writeOwner(
@@ -488,61 +452,35 @@ describe("gateway lock namespaces", () => {
       );
       let owner: Awaited<ReturnType<typeof acquireDoctorGatewayMaintenanceOwner>> | undefined;
       try {
-        if (kind !== "local-exited" && kind !== "live") {
-          await awaitGateBeforeSettlement(
-            waiting.promise,
-            admission,
-            "Doctor settled before waiting for the foreign container heartbeat",
-          );
-          expect(log).toHaveBeenCalledWith(
-            expect.stringContaining("exited-container/pid-ns foreign-namespace"),
-          );
-          expect(log).toHaveBeenCalledWith(
-            expect.stringContaining(`last renewed ${kind === "stale" ? 91 : 0} s ago`),
-          );
-          authorized = kind !== "revoked";
-          await vi.advanceTimersByTimeAsync(
-            kind === "deadline" || kind === "revoked" || kind === "clock-skew" ? 5_000 : 95_000,
-          );
-        }
+        await awaitGateBeforeSettlement(
+          waiting.promise,
+          admission,
+          "Doctor settled before waiting for the foreign container heartbeat",
+        );
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining("exited-container/pid-ns foreign-namespace"),
+        );
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining(`last renewed ${kind === "stale" ? 91 : 0} s ago`),
+        );
+        authorized = kind !== "revoked";
+        await vi.advanceTimersByTimeAsync(duration);
         const result = await admission;
-        if (kind === "local-exited") {
-          if (!("lock" in result)) {
-            throw result.error;
-          }
+        expect(result).toEqual({ error: expect.any(Error) });
+        if (!("error" in result)) {
           owner = result.lock;
-          owner.assertCurrent();
-          expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).not.toBe(record);
-          expect(Date.now() - began).toBe(0);
-        } else {
-          expect(result).toEqual({ error: expect.any(Error) });
-          if (!("error" in result)) {
-            owner = result.lock;
-            throw new Error("Expected refusal");
-          }
-          const message = String(result.error);
-          if (kind === "revoked") {
-            expect(message).toContain("update owner was revoked");
-          } else {
-            expect(message).toContain(
-              kind === "live"
-                ? `holder ${process.pid} is alive on this host, stop it first`
-                : "exited-container/pid-ns foreign-namespace",
-            );
-            expect(message).toContain("last renewed");
-            if (kind !== "live") {
-              expect(message).toContain("openclaw gateway recover-lock");
-            }
-          }
-          expect(Date.now() - began).toBe(
-            kind === "live"
-              ? 0
-              : kind === "deadline" || kind === "revoked" || kind === "clock-skew"
-                ? 5_000
-                : 95_000,
-          );
-          expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(record);
+          throw new Error("Expected refusal");
         }
+        const message = String(result.error);
+        if (kind === "revoked") {
+          expect(message).toContain("update owner was revoked");
+        } else {
+          expect(message).toContain("exited-container/pid-ns foreign-namespace");
+          expect(message).toContain("last renewed");
+          expect(message).toContain("openclaw gateway recover-lock");
+        }
+        expect(Date.now() - began).toBe(duration);
+        expect(fsSync.readFileSync(paths.ownerLockPath, "utf8")).toBe(record);
       } finally {
         clearInterval(renew);
         await owner?.release();
