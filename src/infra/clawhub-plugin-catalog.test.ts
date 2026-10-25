@@ -72,36 +72,22 @@ function joinDetail(remote: Awaited<ReturnType<typeof fetchClawHubPluginDetail>>
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each([false, true])("attributes search unless telemetry is disabled: %s", async (disabled) => {
-  await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
-    const { result, url, fetchImpl } = await catalog(
-      { query: "memory", searchSource: "openclaw-control-ui", category: "memory", limit: 5 },
-      { results: [{ score: 9, package: remotePlugin }] },
-    );
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    expect(url.pathname).toBe("/api/v1/plugins/search");
-    expect(Object.fromEntries(url.searchParams)).toEqual({
-      q: "memory",
-      category: "memory",
-      limit: "5",
-      ...(disabled ? {} : { searchSource: "openclaw-control-ui" }),
-    });
-    expect(result.items.map((item) => item.packageName)).toEqual(["memory-plus"]);
-  });
-});
-
 it.each([false, true])(
-  "retries only unrecorded searches: telemetry disabled=%s",
+  "attributes searches and retries only unrecorded requests: telemetry disabled=%s",
   async (disabled) => {
     await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
       const fetchImpl = vi
-        .fn(async () => jsonResponse({ results: [{ score: 9, package: remotePlugin }] }))
+        .fn(async (_input: string | URL | Request) =>
+          jsonResponse({ results: [{ score: 9, package: remotePlugin }] }),
+        )
         .mockRejectedValueOnce(new TypeError("fetch failed"));
       vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
       const result = fetchClawHubPluginCatalog({
         ...registry,
         query: "memory",
         searchSource: "openclaw-control-ui",
+        category: "memory",
+        limit: 5,
       });
       if (disabled) {
         await expect(result).resolves.toMatchObject({ items: [{ packageName: "memory-plus" }] });
@@ -110,6 +96,14 @@ it.each([false, true])(
         await expect(result).rejects.toThrow("fetch failed");
         expect(fetchImpl).toHaveBeenCalledOnce();
       }
+      const url = new URL(String(fetchImpl.mock.calls[0]?.[0]));
+      expect(url.pathname).toBe("/api/v1/plugins/search");
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        q: "memory",
+        category: "memory",
+        limit: "5",
+        ...(disabled ? {} : { searchSource: "openclaw-control-ui" }),
+      });
     });
   },
 );
@@ -176,15 +170,6 @@ it("reads the bounded plugin overview in one request", async () => {
   expect(fetchImpl.fetch).toHaveBeenCalledOnce();
 });
 
-it("retains category priority identities from curated page metadata", async () => {
-  const category = { ...remoteCategory, pinnedPackages: ["@vendor/model"] };
-  const { result } = await catalog(
-    { intent: "all", category: "models" },
-    { items: [], categories: [category] },
-  );
-  expect(result).toEqual({ items: [], categories: [category] });
-});
-
 it("browses the combined plugin endpoint with an opaque cursor", async () => {
   const { result, url } = await catalog(
     { intent: "trending", category: "memory", cursor: "pkgplugins:{opaque}", limit: 12 },
@@ -237,9 +222,11 @@ it.each([
     { category: "models", curated: "true", sort: "downloads", limit: "8" },
   ],
 ] as const)("preserves canonical ordering: %j", async (options, query) => {
-  const { url } = await catalog(options);
+  const category = { ...remoteCategory, pinnedPackages: ["@vendor/model"] };
+  const { result, url } = await catalog(options, { items: [], categories: [category] });
   expect(url.pathname).toBe("/api/v1/plugins");
   expect(Object.fromEntries(url.searchParams)).toEqual(query);
+  expect(result).toEqual({ items: [], categories: [category] });
 });
 
 it("validates and restores canonical category ordering", async () => {

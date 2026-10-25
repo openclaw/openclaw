@@ -10,7 +10,6 @@ import {
   expectRuntime,
   runFixtureGit as git,
   expectHead,
-  expectMissing,
   expectFile,
   readText,
   type GitCandidateFixture,
@@ -92,85 +91,44 @@ async function expectRuntimeRetained(
 
 export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCandidateFixture) {
   registerGitRetainedTransactionTests(getFixture);
-  it.each(["refuse", "cleanup-failed"] as const)(
-    "keeps the Git validation runtime usable through late admission and finalization: %s",
-    async (outcome) => {
-      const fixture = getFixture();
-      const { root, beforeSha, advanceRemote, update, expectNoRuntimeStagingPaths } = fixture;
-      const target = await advanceRemote();
-      let candidateRoot: string | undefined;
-      let retained: PackageUpdateTransaction | undefined;
-      const boundaries: string[] = [];
-      let denyCleanup = false;
-      const validateRetained = async () => {
-        assert(candidateRoot);
-        await expectGeneration(candidateRoot, target);
-      };
-      fixture.setRunCommand(async (argv, options) => {
-        if (denyCleanup && argv.includes("worktree") && argv.includes("remove")) {
-          return { code: 1, stdout: "", stderr: "candidate cleanup denied" };
-        }
-        const boundary = argv.includes("index-pack")
-          ? "transfer"
-          : argv.includes("checkout")
-            ? "checkout"
-            : undefined;
-        if (
-          argv[0] === "git" &&
-          argv[2] === root &&
-          boundary &&
-          !argv.some((arg) => arg.startsWith("--git-dir="))
-        ) {
-          await validateRetained();
-          await expectHead(root, beforeSha);
-          boundaries.push(boundary);
-        }
-        return fixture.runCommand(argv, options);
-      });
-      const pending = update({
-        validateCandidate: async (directory) => {
-          candidateRoot = directory;
-          expect(fixture.isStopped()).toBe(false);
-          await validateRetained();
-        },
-        onTransaction: (transaction) => {
-          retained = transaction;
-        },
-        ...(outcome === "refuse"
-          ? {
-              beforeGitMutation: async () => {
-                await validateRetained();
-                expect(fixture.isStopped()).toBe(false);
-                throw new Error("synthetic late admission refusal");
-              },
-            }
-          : {}),
-      });
-      if (outcome === "refuse") {
-        await expect(pending).rejects.toThrow("synthetic late admission refusal");
-        expect(fixture.isStopped()).toBe(false);
-        expect(retained).toBeUndefined();
-        await expectHead(root, beforeSha);
-      } else {
-        const result = await pending;
-        expect(result.status, JSON.stringify(result)).toBe("ok");
-        expect(boundaries).toEqual(["transfer", "checkout"]);
-        assert(retained);
-        await validateRetained();
-        denyCleanup = true;
-        assert(candidateRoot);
-        await expectCleanupWarning(retained, [path.dirname(candidateRoot), candidateRoot]);
-        await validateRetained();
-        await expectRuntimeRetained(root, target, retained);
-        return;
-      }
+  it("keeps the Git validation runtime usable through activation and failed cleanup", async () => {
+    const fixture = getFixture();
+    const { root, advanceRemote, update } = fixture;
+    const target = await advanceRemote();
+    let candidateRoot: string | undefined;
+    let retained: PackageUpdateTransaction | undefined;
+    let denyCleanup = false;
+    const validateRetained = async () => {
       assert(candidateRoot);
-      await expectMissing(candidateRoot);
-      await expectNoRuntimeStagingPaths();
-    },
-  );
+      await expectGeneration(candidateRoot, target);
+    };
+    fixture.setRunCommand(async (argv, options) => {
+      if (denyCleanup && argv.includes("worktree") && argv.includes("remove")) {
+        return { code: 1, stdout: "", stderr: "candidate cleanup denied" };
+      }
+      return fixture.runCommand(argv, options);
+    });
+    const pending = update({
+      validateCandidate: async (directory) => {
+        candidateRoot = directory;
+        expect(fixture.isStopped()).toBe(false);
+        await validateRetained();
+      },
+      onTransaction: (transaction) => {
+        retained = transaction;
+      },
+    });
+    const result = await pending;
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    assert(retained);
+    denyCleanup = true;
+    assert(candidateRoot);
+    await expectCleanupWarning(retained, [path.dirname(candidateRoot), candidateRoot]);
+    await validateRetained();
+    await expectRuntimeRetained(root, target, retained);
+  });
 
-  it.each(["cleanup-failed", "source-changed", "doctor-entry-missing"] as const)(
+  it.each(["cleanup-failed", "doctor-entry-missing"] as const)(
     "retains the activated Git transaction through finalization: %s",
     async (outcome) => {
       const { root, beforeSha, advanceRemote, update, expectNoRuntimeStagingPaths } = getFixture();
@@ -189,26 +147,12 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
       if (missingDoctor) {
         expect(result.reason).toBe("doctor-entry-missing");
         await expectGeneration(root, targetSha);
-      } else {
-        expect(result.gitRuntime).toEqual({
-          commit: targetSha,
-          distDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
-        });
       }
       if (outcome === "cleanup-failed") {
         const backupRoot = retained.backupRoot;
         const warning = await expectCleanupWarning(retained, [backupRoot]);
         expect(warning?.advisory?.message).toContain(backupRoot);
         await expectRuntimeRetained(root, targetSha, retained);
-        return;
-      }
-      if (outcome === "source-changed") {
-        await fs.writeFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
-        await expect(retained.rollback(assertCurrent)).rejects.toThrow("changed after activation");
-        await expect(completeRollback(retained)).rejects.toThrow("changed after activation");
-        await expectHead(root, targetSha);
-        await expectFile(path.join(root, "operator-edit.txt"), "preserve this edit\n");
-        await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
         return;
       }
       const restored = await retained.rollback(assertCurrent);

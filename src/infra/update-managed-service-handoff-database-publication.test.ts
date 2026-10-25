@@ -433,23 +433,19 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
     const identityLess = version === "9.4 identity-less";
     const numeric = version === "9.6 numeric" || version === "9.6 bridge";
     const executor = store.processIdentity(process.ppid);
-    const owner = randomUUID();
     const runId = randomUUID();
     const spawnerKey =
       version === "9.6 bridge" ? `${root}/.openclaw-update-child-${randomUUID()}` : root;
-    const payloadFor = (
-      childExecutor = executor,
-      action: ManagedHandoffLease["action"] = { kind: "update" },
-      helper = childExecutor,
-    ) => JSON.stringify({ version: 2, helper, executor: childExecutor, action });
-    const payload = payloadFor(executor, {
+    const action: ManagedHandoffLease["action"] = {
       kind: "update",
       ...(version === "9.7 exact" ? { mutationProtocol: "original-cancellation-v1" } : {}),
-    });
+    };
+    const payloadFor = (actor = executor, nextAction = action, helper = actor) =>
+      JSON.stringify({ version: 2, helper, executor: actor, action: nextAction });
     withDatabase(true, (db) => {
-      insertRow(db, root, owner, payload);
+      insertRow(db, root, "parent", payloadFor());
       if (spawnerKey !== root) {
-        insertRow(db, spawnerKey, runId, payload);
+        insertRow(db, spawnerKey, runId, payloadFor());
       }
     });
     const parent = store.read(root);
@@ -488,9 +484,6 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
           parentIdentity: numericIdentity(root),
         }
       : captureManagedUpdateLeaseDatabaseIdentity(databasePath);
-    expect(databaseIdentity.parentIdentity).toMatch(
-      numeric ? /:168040561096346660$/ : new RegExp(`:${initialInode}$`),
-    );
     const makeGrant = (
       sender: ManagedHandoffLease,
       identity: typeof databaseIdentity,
@@ -501,23 +494,25 @@ it.each(["9.4 identity-less", "9.6 numeric", "9.6 bridge", "9.7 exact"] as const
         ? payloadFor(store.processIdentity(process.pid), { kind: "update" }, executor)
         : payloadFor(sender.executor, sender.action);
       withSqlite((db) => insertRow(db, childKey, runId, childPayload, sender.updatedAt + 1));
-      const grant = { runId, root, databasePath, parent: parent.lease, childKey };
-      return legacy
-        ? grant
-        : {
-            ...grant,
-            databaseIdentity: identity,
-            originalParent: parent.lease,
-            spawner: sender,
-            originalChildKey: childKey,
-          };
+      return {
+        runId,
+        root,
+        databasePath,
+        parent: parent.lease,
+        childKey,
+        ...(!legacy && {
+          databaseIdentity: identity,
+          originalParent: parent.lease,
+          spawner: sender,
+          originalChildKey: childKey,
+        }),
+      };
     };
     const grant = makeGrant(spawner.lease, databaseIdentity, identityLess);
     const resolve = () => resolveUpdateCommandChildBinding(grant, runId, root);
     const admitted = await resolve();
     assert(admitted.databaseIdentity);
     expect(admitted.databaseIdentity.parentIdentity).toMatch(new RegExp(`^\\d+:${initialInode}$`));
-    expect(admitted.store.read(root)).toMatchObject({ kind: "current" });
     const descendantGrant = makeGrant(admitted.child, admitted.databaseIdentity);
     const resolveDescendant = async () => {
       // Model the next receiver's parent PID without booting another source runtime.

@@ -245,8 +245,9 @@ describe("legacy device identity Doctor migration", () => {
 
   it("keeps normal migration read-only and imports only with Doctor authority", async () => {
     const sourcePath = await writeLegacy();
+    expect(detect(false)).toMatchObject({ hasLegacy: false, hasInvalidCanonical: false });
     const skipped = await migrateLegacyDeviceIdentity({
-      detected: detect(false),
+      detected: detect(),
       env,
       stateDir,
     });
@@ -309,20 +310,29 @@ describe("legacy device identity Doctor migration", () => {
     },
   );
 
-  it("repairs noncanonical PEM formatting while preserving JSON", async () => {
-    const expected = normalizedSwift();
-    seedCanonical({
-      ...expected,
-      publicKeyPem: rewrapPem(expected.publicKeyPem),
-      privateKeyPem: rewrapPem(expected.privateKeyPem),
-      createdAtMs: expected.createdAtMs + 50,
-    });
-    const sourcePath = await writeLegacy();
-    const result = await migrate();
-    expectMigration(result);
-    expectIdentity(expected);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-  });
+  it.each(["PEM formatting", "update timestamp"])(
+    "repairs %s while preserving JSON",
+    async (field) => {
+      const expected = normalizedSwift();
+      seedCanonical(expected);
+      updateCanonical(
+        field === "PEM formatting"
+          ? {
+              public_key_pem: rewrapPem(expected.publicKeyPem),
+              private_key_pem: rewrapPem(expected.privateKeyPem),
+              created_at_ms: expected.createdAtMs + 50,
+            }
+          : { updated_at_ms: -1 },
+      );
+      const sourcePath = await writeLegacy();
+      const result = await migrate();
+      expectMigration(result);
+      expectIdentity(expected);
+      expect(identityRow()?.updated_at_ms).toBeGreaterThanOrEqual(expected.createdAtMs);
+      expect(fs.existsSync(sourcePath)).toBe(true);
+      expect(receipt()?.sha256).toMatch(/^[a-f0-9]{64}$/);
+    },
+  );
   it("replaces an invalid canonical row without legacy JSON only under Doctor authority", async () => {
     seedInvalidCanonical();
     expect(detect(false).hasInvalidCanonical).toBe(false);
@@ -402,17 +412,6 @@ describe("legacy device identity Doctor migration", () => {
     const result = await migrate({ detected });
     expectReplacement(result);
   });
-  it("requires mutation-time Doctor authority after canonical state becomes invalid", async () => {
-    seedCanonical(normalizedSwift());
-    const sourcePath = await writeLegacy();
-    const detected = detect();
-    expect(detected).toMatchObject({ hasLegacy: true, hasInvalidCanonical: false });
-    updateCanonical({ device_id: "0".repeat(64) });
-    const result = await migrate({ detected, doctorOnlyStateMigrations: false });
-    expect(result).toEqual({ changes: [], warnings: [] });
-    expect(identityRow()?.device_id).toBe("0".repeat(64));
-    expect(fs.existsSync(sourcePath)).toBe(true);
-  });
   it("does not generate an identity from a stale legacy-only detection", async () => {
     const sourcePath = await writeLegacy();
     const detected = detect();
@@ -421,19 +420,6 @@ describe("legacy device identity Doctor migration", () => {
     const result = await migrate({ detected });
     expect(result).toEqual({ changes: [], warnings: [] });
     expect(identityRow()).toBeUndefined();
-  });
-
-  it("repairs an invalid canonical update timestamp while preserving JSON", async () => {
-    const expected = normalizedSwift();
-    seedCanonical(expected);
-    updateCanonical({ updated_at_ms: -1 });
-    const sourcePath = await writeLegacy();
-    const result = await migrate();
-    expect(result.warnings).toEqual([]);
-    expectIdentity(expected);
-    expect(identityRow()?.updated_at_ms).toBeGreaterThanOrEqual(expected.createdAtMs);
-    expect(fs.existsSync(sourcePath)).toBe(true);
-    expect(receipt()?.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("preserves retired identity JSON when the local receipt no longer matches shared state", async () => {

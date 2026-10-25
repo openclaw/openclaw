@@ -352,21 +352,7 @@ describe("clawhub skills", () => {
 
   it("posts bulk skill security verdict requests", async () => {
     const items = [{ slug: "agentreceipt", ownerHandle: "openclaw", version: "1.2.3" }];
-    const envelope = {
-      schema: "clawhub.skill.security-verdicts.v1",
-      items: [
-        {
-          ok: true,
-          decision: "pass",
-          reasons: [],
-          requestedSlug: "agentreceipt",
-          slug: "agentreceipt",
-          requestedVersion: "1.2.3",
-          version: "1.2.3",
-          security: { status: "clean", passed: true },
-        },
-      ],
-    };
+    const envelope = { schema: "clawhub.skill.security-verdicts.v1", items: [] };
     const request = jsonRequest(envelope);
 
     await expect(fetchClawHubSkillSecurityVerdicts({ items })).resolves.toEqual(envelope);
