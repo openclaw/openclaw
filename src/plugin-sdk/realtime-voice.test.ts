@@ -26,9 +26,7 @@ it("requires command binding only for negotiated Gateway control", () => {
   expectTypeOf<Legacy & Claim>().not.toMatchTypeOf<RealtimeVoiceBrowserSessionCreateRequest>();
 });
 
-function connectLifecycle(
-  lifecycle: RealtimeVoiceSessionLifecycle,
-): RealtimeVoiceSessionConnection {
+function connectLifecycle(lifecycle: RealtimeVoiceSessionLifecycle) {
   let connection: RealtimeVoiceSessionConnection | undefined;
   void lifecycle.connect(async (current) => {
     connection = current;
@@ -89,8 +87,8 @@ describe("RealtimeVoiceSessionLifecycle", () => {
   });
 
   it("keeps terminal outcomes authoritative and notifies once", () => {
-    const canceled = new RealtimeVoiceSessionLifecycle("Test");
-    const canceledConnection = connectLifecycle(canceled);
+    const canceled = lifecycle;
+    const canceledConnection = connectLifecycle(lifecycle);
 
     expect(canceled.cancel()).toBe(true);
     expect(canceledConnection.signal.aborted).toBe(true);
@@ -243,21 +241,19 @@ describe("RealtimeVoiceSessionLifecycle", () => {
 });
 
 describe("createRealtimeVoiceAudioQueue", () => {
-  it("releases byte budget as queued audio is consumed", () => {
+  it("releases byte budget when audio is consumed or cleared", () => {
     const queue = createRealtimeVoiceAudioQueue("reject-newest");
     const first = Buffer.alloc(512 * 1024, 0x01);
     const second = Buffer.alloc(512 * 1024, 0x02);
 
-    expect(queue.enqueue(first)).toBe(true);
-    expect(queue.enqueue(second)).toBe(true);
-    expect(queue.enqueue(Buffer.from([0x03]))).toBe(false);
+    expect([
+      queue.enqueue(first),
+      queue.enqueue(second),
+      queue.enqueue(Buffer.from([0x03])),
+    ]).toEqual([true, true, false]);
     expect(queue.dequeue()).toEqual(first);
     expect(queue.enqueue(Buffer.from([0x03]))).toBe(true);
     expect(queue.drain()).toEqual([second, Buffer.from([0x03])]);
-  });
-
-  it("resets audio queue accounting on clear", () => {
-    const queue = createRealtimeVoiceAudioQueue("drop-oldest");
     expect(queue.enqueue(Buffer.alloc(1024 * 1024, 0x04))).toBe(true);
     queue.clear();
     expect(queue.enqueue(Buffer.from([0x05]))).toBe(true);

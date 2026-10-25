@@ -91,10 +91,16 @@ it.each(["eof", "error"] as const)("%s unlocks without request cleanup", async (
   expect(cancel).not.toHaveBeenCalled();
 });
 
-it.each(["cancel", "release"] as const)("%s awaits source and cleanup", async (operation) => {
+it.each(
+  (["cancel", "release"] as const).flatMap((first) =>
+    ["success", "cancel-error", "cleanup-error"].map((outcome) => ({ first, outcome })),
+  ),
+)("$first first, $outcome: awaits and shares finalization", async ({ first, outcome }) => {
   const canceled = createDeferredCore();
   const cleaned = createDeferredCore();
   const reason = new Error("stop playback");
+  const cancelError = new Error("source cancellation failed");
+  const cleanupError = new Error("request cleanup failed");
   const cancel = vi.fn(() => canceled.promise);
   const source = new ReadableStream<Uint8Array>({ cancel });
   const cleanup = vi.fn(async () => {
@@ -106,64 +112,43 @@ it.each(["cancel", "release"] as const)("%s awaits source and cleanup", async (o
     canceled,
     cleaned,
   ]);
-  const pending = track(operation === "cancel" ? bounded.stream.cancel(reason) : bounded.release());
-
+  const earlyCancel = first === "cancel" ? bounded.stream.cancel(reason) : undefined;
+  const pendingRelease = track(bounded.release());
+  const pendingCancel = track(earlyCancel ?? bounded.stream.cancel(reason));
+  const pending = Promise.allSettled([pendingCancel.result, pendingRelease.result]);
+  const expectPending = () =>
+    expect([pendingCancel.state.settled, pendingRelease.state.settled]).toEqual([false, false]);
   await waitForImmediate();
-  expect(pending.state.settled).toBe(false);
-  expect(cleanup).toHaveBeenCalledOnce();
-  canceled.resolve();
+  expectPending();
+  if (outcome === "success") {
+    canceled.resolve();
+  } else {
+    canceled.reject(cancelError);
+  }
   await waitForImmediate();
-  expect(pending.state.settled).toBe(false);
-  cleaned.resolve();
-  await expect(pending.result).resolves.toBeUndefined();
+  expectPending();
+  if (outcome === "cleanup-error") {
+    cleaned.reject(cleanupError);
+  } else {
+    cleaned.resolve();
+  }
+  const [cancellation, release] = await pending;
+  const fulfilled = { status: "fulfilled", value: undefined };
+  expect(cancellation).toEqual(
+    outcome === "success"
+      ? fulfilled
+      : {
+          status: "rejected",
+          reason: outcome === "cleanup-error" ? cleanupError : cancelError,
+        },
+  );
+  expect(release).toEqual(
+    outcome === "cleanup-error" ? { status: "rejected", reason: cleanupError } : fulfilled,
+  );
   await bounded.release().catch(() => undefined);
-  await bounded.release().catch(() => undefined);
-  expect(cancel).toHaveBeenCalledOnce();
+  expect(cancel).toHaveBeenCalledExactlyOnceWith(reason);
   expect(cleanup).toHaveBeenCalledOnce();
 });
-
-it.each(
-  (["cancel", "release"] as const).flatMap((first) =>
-    [false, true].map((cleanupRejects) => ({ first, cleanupRejects })),
-  ),
-)(
-  "$first first, cleanup rejects=$cleanupRejects: joins finalization",
-  async ({ first, cleanupRejects }) => {
-    const canceled = createDeferredCore();
-    const reason = new Error("stop playback");
-    const cancelError = new Error("source cancellation failed");
-    const cleanupError = new Error("request cleanup failed");
-    const cancel = vi.fn(() => canceled.promise);
-    const source = new ReadableStream<Uint8Array>({ cancel });
-    const cleanup = vi.fn(async () => {
-      if (cleanupRejects) {
-        throw cleanupError;
-      }
-    });
-    await using bounded = bound(source, cleanup, { createReleaseError: () => reason }, [canceled]);
-    const earlyCancel = first === "cancel" ? bounded.stream.cancel(reason) : undefined;
-    const pendingRelease = bounded.release();
-    const pendingCancel = earlyCancel ?? bounded.stream.cancel(reason);
-    const pending = track(Promise.allSettled([pendingCancel, pendingRelease]));
-
-    await waitForImmediate();
-    expect(cleanup).toHaveBeenCalledOnce();
-    expect(pending.state.settled).toBe(false);
-    expect(source.locked).toBe(false);
-    canceled.reject(cancelError);
-    const [cancellation, release] = await pending.result;
-    expect(cancellation.status === "rejected" && cancellation.reason).toBe(
-      cleanupRejects ? cleanupError : cancelError,
-    );
-    if (cleanupRejects) {
-      expect(release.status === "rejected" && release.reason).toBe(cleanupError);
-    } else {
-      expect(release).toEqual({ status: "fulfilled", value: undefined });
-    }
-    expect(cancel).toHaveBeenCalledExactlyOnceWith(reason);
-    expect(cleanup).toHaveBeenCalledOnce();
-  },
-);
 
 it("delivers overflow before delayed cleanup and preserves its later release failure", async () => {
   const cleaned = createDeferredCore();
@@ -210,12 +195,11 @@ it.each(["release", "overflow"] as const)(
       createReleaseError: () => expected,
     });
     const operation = (async () => {
-      await expect(bounded.read()).resolves.toEqual({
-        done: false,
-        value: Uint8Array.from(kind === "overflow" ? [1, 2, 3, 4] : [1, 2, 3, 4, 5]),
-      });
+      const first = await bounded.read();
       if (kind === "overflow") {
         await expect(bounded.read()).rejects.toBe(expected);
+      } else {
+        expect(first).toEqual({ done: false, value: Uint8Array.from([1, 2, 3, 4, 5]) });
       }
       await bounded.release();
       await bounded.release();

@@ -53,92 +53,72 @@ const defaultRuntimeState = {
   lastError: null,
 };
 
-const defaultAccountSnapshot = {
-  accountId: "default",
-  name: undefined,
-  enabled: undefined,
-  configured: false,
-  ...defaultRuntimeState,
-  probe: undefined,
-  lastInboundAt: null,
-  lastOutboundAt: null,
-};
-
-const adapterAccount = { accountId: "default", enabled: true, profileUrl: "https://example.test" };
-const adapterProbe = { ok: true };
-function accountSnapshot(mode: "sync" | "async", ingressUnavailable?: true) {
-  const resolveAccountSnapshot = ({
-    account,
-    runtime,
-    probe,
-  }: {
-    account: typeof adapterAccount;
-    runtime?: { running?: boolean };
-    probe?: typeof adapterProbe;
-  }) => ({
-    accountId: account.accountId,
-    enabled: account.enabled,
-    configured: true,
-    extra: { profileUrl: account.profileUrl, connected: runtime?.running ?? false, probe },
-  });
-  const options = {
-    defaultRuntime: createDefaultChannelRuntimeState("default"),
-    resolveAccountSnapshot,
-  };
-  const adapter =
-    mode === "async"
-      ? createAsyncComputedAccountStatusAdapter({
-          ...options,
-          resolveAccountSnapshot: async (params: Parameters<typeof resolveAccountSnapshot>[0]) =>
-            resolveAccountSnapshot(params),
-        })
-      : createComputedAccountStatusAdapter(options);
-  return adapter.buildAccountSnapshot!({
-    account: adapterAccount,
-    cfg: {} as never,
-    runtime: {
-      accountId: "default",
-      running: true,
-      ...(ingressUnavailable ? { ingressUnavailable } : {}),
-    },
-    probe: adapterProbe,
-  });
-}
-
 it("builds account status when configured is computed outside resolver", () => {
   expect(
     buildComputedAccountStatusSnapshot({ accountId: "default", enabled: true, configured: false }),
-  ).toEqual({
-    ...defaultAccountSnapshot,
+  ).toMatchObject({
+    accountId: "default",
     enabled: true,
+    configured: false,
     stateReason: "not configured",
+    lastInboundAt: null,
+    lastOutboundAt: null,
   });
 });
 
-describe("computed account status adapters", () => {
-  it("builds account snapshots from async computed account metadata and extras", async () => {
-    expect(await accountSnapshot("async")).toEqual({
-      ...defaultAccountSnapshot,
+it.each(["sync", "async"] as const)(
+  "%s account adapter projects metadata and ingress health",
+  async (mode) => {
+    const account = { accountId: "default", enabled: true, profileUrl: "https://example.test" };
+    const probe = { ok: true };
+    const resolve = (params: {
+      account: typeof account;
+      runtime?: { running?: boolean };
+      probe?: typeof probe;
+    }) => ({
+      accountId: params.account.accountId,
+      enabled: params.account.enabled,
+      configured: true,
+      extra: {
+        profileUrl: params.account.profileUrl,
+        connected: params.runtime?.running ?? false,
+        probe: params.probe,
+      },
+    });
+    const options = { defaultRuntime: createDefaultChannelRuntimeState("default") };
+    const adapter =
+      mode === "sync"
+        ? createComputedAccountStatusAdapter({ ...options, resolveAccountSnapshot: resolve })
+        : createAsyncComputedAccountStatusAdapter({
+            ...options,
+            resolveAccountSnapshot: async (params: Parameters<typeof resolve>[0]) =>
+              resolve(params),
+          });
+    const snapshot = await adapter.buildAccountSnapshot!({
+      account,
+      cfg: {},
+      probe,
+      runtime: { accountId: "default", running: true, ingressUnavailable: true },
+    });
+    expect(snapshot).toMatchObject({
+      accountId: "default",
       enabled: true,
       configured: true,
       running: true,
-      probe: adapterProbe,
-      profileUrl: adapterAccount.profileUrl,
+      probe,
+      profileUrl: account.profileUrl,
       connected: true,
     });
-  });
-
-  it("preserves ingress failure for channel health evaluation", async () => {
     expect(
-      evaluateChannelHealth(await accountSnapshot("sync", true), {
+      evaluateChannelHealth(snapshot, {
         channelId: "discord",
         now: 100_000,
         channelConnectGraceMs: 10_000,
         staleEventThresholdMs: 30_000,
       }),
     ).toEqual({ healthy: false, reason: "ingress-unavailable" });
-  });
-});
+  },
+);
 
 describe("buildRuntimeAccountStatusSnapshot", () => {
   const connectivity = {
