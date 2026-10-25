@@ -27,6 +27,7 @@ import {
   CODEX_MANAGED_THREAD_NAMESPACE,
   type StoredCodexManagedThread,
 } from "./src/app-server/managed-thread-store.js";
+import type { CodexBindingOverflowRecoveryState } from "./src/app-server/session-binding-overflow.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -183,9 +184,27 @@ export default definePluginEntry({
       entries: () => openManagedThreadStateStore().entries(),
       registerIfAbsent: (key, value) => openManagedThreadStateStore().registerIfAbsent(key, value),
     };
+    // Capacity recovery pages and observes through the same worker-backed V2
+    // store ordinary binding mutations already use on this namespace, so an
+    // overflow never parks the Gateway thread on a full-table decode and no
+    // second handle or capability probe is needed. Deletes stay on the
+    // authority-bound opener, which binds the caller's checks at write
+    // admission.
+    const bindingRecoveryState: CodexBindingOverflowRecoveryState = {
+      entriesInKeyRange: (range) => openBindingMutationStore().entriesInKeyRange?.(range),
+      observe: (key) => openBindingMutationStore().observe?.(key),
+      compareAndApply: (key, comparison, action) =>
+        openBindingMutationStore().compareAndApply?.(key, comparison, action),
+      withCurrent: (authority) =>
+        api.runtime.state.openKeyedStoreV2<StoredCodexAppServerBinding>(
+          bindingStateOptions,
+          authority,
+        ),
+    };
     const bindingStore = createLazyCodexAppServerBindingStore(
       lazyBindingStateStore,
       lazyManagedThreadStateStore,
+      bindingRecoveryState,
     );
     registerCodexCliMetadata(api);
     const { resolveCodexSupervisionAppServerRuntimeOptions } = createCodexAppServerConfig(

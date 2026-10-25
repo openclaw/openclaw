@@ -276,6 +276,30 @@ describe("plugin contract boundary invariants", () => {
     ).not.toContain("api.pluginConfig");
   });
 
+  it("keeps the codex binding-overflow recovery sourced from the current-host stores", () => {
+    // The recovery must reuse the V2 mutation store for paging/observation and
+    // the authority-bound opener for deletes; a second handle with capability
+    // probes is prohibited for bundled plugins (extensions/AGENTS.md).
+    const source = readRepoSource("extensions/codex/index.ts");
+    const blockStart = source.indexOf("const bindingRecoveryState");
+    expect(blockStart).toBeGreaterThanOrEqual(0);
+    const blockEnd = source.indexOf("};", blockStart);
+    expect(blockEnd).toBeGreaterThan(blockStart);
+    // oxlint-disable-next-line unicorn/prefer-set-has -- block is a string slice; includes() below is substring search, not array lookup.
+    const block = source.slice(blockStart, blockEnd);
+    const requiredSnippets = [
+      "entriesInKeyRange",
+      "openBindingMutationStore()",
+      "observe",
+      "compareAndApply",
+      "withCurrent",
+      "openKeyedStoreV2",
+      "bindingStateOptions",
+    ];
+    const missing = requiredSnippets.filter((snippet) => !block.includes(snippet));
+    expect(missing).toStrictEqual([]);
+  });
+
   it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {
     expectSnippetGuards(BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS, false);
   });
