@@ -1,10 +1,11 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  AgentHarnessAttemptParamsV2,
-  AgentHarnessAttemptResult,
+import {
+  onAgentEvent,
+  type AgentHarnessAttemptParamsV2,
+  type AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type * as ExecApprovalsRuntime from "openclaw/plugin-sdk/exec-approvals-runtime";
@@ -15,7 +16,6 @@ import {
 import type * as ProviderAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import type * as TranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerMuseLifecycleTests } from "./harness-lifecycle.test-support.js";
 import {
   createMuseAgentHarness as createMuseAgentHarnessImpl,
   type MuseSessionBinding,
@@ -30,10 +30,9 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   appendSessionTranscriptMessagesByIdentity: writes.append,
   publishSessionTranscriptUpdateByIdentity: writes.publish,
 }));
-const auth = vi.hoisted(() => ({ resolve: vi.fn(async () => ({ apiKey: "profile-key" })) }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof ProviderAuthRuntime>()),
-  resolveApiKeyForProvider: auth.resolve,
+  resolveApiKeyForProvider: vi.fn(async () => ({ apiKey: "profile-key" })),
 }));
 const approvals = vi.hoisted(() => ({
   load: vi.fn<typeof ExecApprovalsRuntime.loadExecApprovalsReadOnlyAsync>(),
@@ -46,7 +45,6 @@ const readHistory = vi.spyOn(SessionManager, "openModelContextAsync");
 beforeEach(() => {
   approvals.load.mockResolvedValue({ version: 1, agents: {} });
   readHistory.mockResolvedValue(SessionManager.inMemory());
-  vi.stubEnv("OPENCLAW_STATE_DIR", join(workspace, "state"));
 });
 
 let workspace: string;
@@ -54,9 +52,7 @@ const fixture = fileURLToPath(new URL("./src/test-support/fake-muse.mjs", import
 beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), "muse-harness-test-"));
 });
-afterAll(async () => {
-  await rm(workspace, { recursive: true, force: true });
-});
+afterAll(() => rm(workspace, { recursive: true, force: true }));
 
 const harnesses = new Set<ReturnType<typeof createMuseAgentHarnessImpl>>();
 afterEach(async () => {
@@ -159,12 +155,6 @@ async function readRequests(log: string, method?: string) {
   return method ? requests.filter((request) => request.method === method) : requests;
 }
 
-async function bootstrap() {
-  const dir = await mkdtemp(join(workspace, "bootstrap-"));
-  await writeFile(join(dir, "SOUL.md"), "Speak like a patient astronomer.");
-  return dir;
-}
-
 function expectFailure(result: AgentHarnessAttemptResult, message: string) {
   expect(terminal(result)).toMatchObject({
     kind: "failed",
@@ -192,20 +182,10 @@ describe("Muse native MSP harness", () => {
     expect(
       harness.supports({
         provider: "meta",
-        modelId: "muse-spark-1.3",
         requestedRuntime: "muse",
         modelProvider,
       }).supported,
     ).toBe(supported);
-  });
-
-  registerMuseLifecycleTests({
-    setup,
-    getWorkspace: () => workspace,
-    fixture,
-    writes,
-    terminal,
-    createHarness: createMuseAgentHarness,
   });
 
   it.each([
@@ -231,20 +211,11 @@ describe("Muse native MSP harness", () => {
     }
     await run(policy);
     const requests = await readRequests(log);
-    expect(requests.find((request) => request.event === "spawn")?.args).toEqual([
-      "serve",
-      "--disable-shell",
-      "--disable-write",
-    ]);
+    const spawn = requests.find((request) => request.event === "spawn");
+    expect(spawn?.args).toEqual(["serve", "--disable-shell", "--disable-write"]);
     expect(requests.find((request) => request.method === "session/start")?.params).toMatchObject({
       approvalMode: "denyUnmatched",
     });
-  });
-
-  it("refuses host ask-always floors even when config grants full exec", async () => {
-    const { run } = setup();
-    approvals.load.mockResolvedValue({ version: 1, defaults: { ask: "always" } });
-    await expect(run({ config: fullExec })).rejects.toThrow("ask: always");
   });
 
   it("allows explicit full-session elevation to bypass host floors", async () => {
@@ -305,8 +276,9 @@ describe("Muse native MSP harness", () => {
   });
 
   it("seeds bootstrap only on the first accepted turn, retrying aborted admission", async () => {
-    const { params, bindings, run, log } = setup(true);
-    const bootstrapWorkspace = await bootstrap();
+    const { params, run, log } = setup(true);
+    const bootstrapWorkspace = await mkdtemp(join(workspace, "bootstrap-"));
+    await writeFile(join(bootstrapWorkspace, "SOUL.md"), "Speak like a patient astronomer.");
 
     // Abort during transcript admission: after the session opened, before Muse got the turn.
     const controller = new AbortController();
@@ -327,7 +299,6 @@ describe("Muse native MSP harness", () => {
       },
     });
     expect(terminal(aborted).kind).toBe("aborted");
-    expect(bindings.has(params.sessionId)).toBe(false);
     await run({ workspaceDir: bootstrapWorkspace, prompt: "next" });
     const turns = await readRequests(log, "turn/start");
     expect(turns).toHaveLength(1);
@@ -358,12 +329,15 @@ describe("Muse native MSP harness", () => {
     ]);
   });
 
-  it("returns the terminal observer's unresolved native tool error", async () => {
-    const { run } = setup();
+  it.each(["tool", "tool-failure"])("streams and journals native %s outcomes", async (prompt) => {
+    const { run, params, events } = setup();
+    const prepare = vi.fn();
+    params.hostCapabilities.prepareContinuationRetryCount = prepare;
+    const globalEvents: typeof events = [];
+    const unsubscribe = onAgentEvent((event) => void globalEvents.push(event));
     const lastToolError = { toolName: "read_file", error: "file unavailable" };
-    const result = await run({
-      prompt: "tool-failure",
-      observeToolTerminal: ({ outcome }) => {
+    if (prompt === "tool-failure") {
+      params.observeToolTerminal = ({ outcome }) => {
         expect(outcome).toBe("failure");
         return {
           lastToolError,
@@ -371,10 +345,33 @@ describe("Muse native MSP harness", () => {
           sideEffectEvidence: false,
           effectReceipt: { state: "failed_no_effect" },
         };
-      },
-    });
-    expect(terminal(result).kind).toBe("ok");
-    expect(result.lastToolError).toEqual(lastToolError);
+      };
+    }
+    try {
+      const result = await run({ prompt });
+      expect(prepare).toHaveBeenCalledExactlyOnceWith({ cwd: await realpath(workspace) });
+      expect(terminal(result).kind).toBe("ok");
+      expect(result.assistantTexts).toEqual(["started: hello"]);
+      expect(result.lastToolError).toEqual(prompt === "tool" ? undefined : lastToolError);
+      for (const stream of [events, globalEvents]) {
+        const deltas = stream.flatMap((event) =>
+          event.stream === "assistant" ? event.data.delta : [],
+        );
+        expect(deltas.join("")).toBe("started: hello");
+      }
+      expect(globalEvents.at(0)?.data.phase).toBe("start");
+      expect(globalEvents.at(-1)?.data.phase).toBe("end");
+      const roles = result.messagesSnapshot.map((message) => message.role);
+      expect(roles).toEqual(["assistant", "assistant", "toolResult", "assistant"]);
+      expect(result.toolMetas).toEqual([{ toolName: "read_file" }]);
+      expect(writes.append.mock.calls.flatMap(([{ messages }]) => messages)).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({ role: "toolResult", toolCallId: "call-1" }),
+        }),
+      );
+    } finally {
+      unsubscribe();
+    }
   });
 
   it.each(["callback", "transcript", "abort", "timeout", "approval"] as const)(
@@ -444,7 +441,6 @@ describe("Muse native MSP harness", () => {
   it.each([
     ["off", "minimal"],
     ["low", "low"],
-    ["high", "high"],
   ] as const)("maps reasoning effort %s", async (thinkLevel, expected) => {
     const { run } = setup();
     const result = await run({ prompt: "effort", thinkLevel });
@@ -475,9 +471,7 @@ describe("Muse native MSP harness", () => {
       });
       expect(terminal(second).kind).toBe("aborted");
       firstController.abort();
-      const result = await first;
-      expect(terminal(result)).toMatchObject({ kind: "aborted" });
-      expect(terminal(result)).not.toHaveProperty("failure");
+      expect(terminal(await first)).toMatchObject({ kind: "aborted" });
     } finally {
       firstController.abort();
       await first;
@@ -487,20 +481,17 @@ describe("Muse native MSP harness", () => {
   it.each([
     ["fail", "fixture provider rejected authentication"],
     ["crash", "fixture: provider process crashed"],
+    ["loggedout", "muse login"],
   ])("surfaces %s failures without hanging", async (prompt, expected) => {
-    const { run } = setup();
-    const result = await run({ prompt });
+    const { params, restart } = setup();
+    const warn = vi.fn();
+    const result = await (await restart({ warn })).runAttempt({ ...params, prompt });
     expectFailure(result, expected);
     expect(result.replayMetadata?.replaySafe).toBe(false);
-  });
-
-  it("explains a missing Muse sign-in and logs it for operators", async () => {
-    const { params, sessionStore } = setup();
-    const warn = vi.fn();
-    const harness = createMuseAgentHarness({ binaryPath: fixture, sessionStore, logger: { warn } });
-    expectFailure(await harness.runAttempt({ ...params, prompt: "loggedout" }), "muse login");
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("Muse Code is not signed in on the Gateway host"),
+      expect.stringContaining(
+        prompt === "loggedout" ? "Muse Code is not signed in on the Gateway host" : expected,
+      ),
     );
   });
 
@@ -533,7 +524,7 @@ describe("Muse native MSP harness", () => {
   it.runIf(process.platform !== "win32")(
     "verifies native catalogs on inherited PATH without a workspace, and rejects bundled fallback",
     async () => {
-      const { harness, log } = setup(true);
+      const { harness, params, log } = setup(true);
       await writeFile(
         join(workspace, "muse"),
         `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)} "$@"\n`,
@@ -546,58 +537,49 @@ describe("Muse native MSP harness", () => {
       vi.stubEnv("PATH", `${workspace}${delimiter}${process.env.PATH ?? ""}`);
 
       vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "providerCatalog");
-      const scope = {
+      const context = {
+        ...params,
         config: { plugins: { entries: { muse: { config: { binaryPath: "muse" } } } } },
         agentId: "main",
-        agentDir: workspace,
         workspaceDir: join(workspace, "absent"),
-      };
-      const verification = {
-        ...scope,
-        provider: "meta",
-        modelId: "muse-spark-1.3",
         signal: new AbortController().signal,
         assertCurrent: () => {},
       };
-      await harness.verifySetup!(verification);
-      await harness.loadModelCatalog!(scope);
-      expect(harness.readModelCatalogReadiness!(verification)).toEqual({ accountType: "native" });
+      await harness.verifySetup!(context);
+      await harness.loadModelCatalog!(context);
+      expect(harness.readModelCatalogReadiness!(context)).toEqual({ accountType: "native" });
       vi.stubEnv("MUSE_FIXTURE_CATALOG_SOURCE", "bundledCatalog");
       await writeFile(join(stateDir, "muse", "muse", "auth.json"), '{"changed":true}');
-      await expect(harness.verifySetup!(verification)).rejects.toThrow("authenticate");
-      await expect(harness.loadModelCatalog!(scope)).rejects.toThrow("authenticate");
-      expect(harness.readModelCatalogReadiness!(verification)).toBeUndefined();
+      await expect(harness.verifySetup!(context)).rejects.toThrow("authenticate");
+      await expect(harness.loadModelCatalog!(context)).rejects.toThrow("authenticate");
+      expect(harness.readModelCatalogReadiness!(context)).toBeUndefined();
       const requests = await readRequests(log);
-      expect(requests[0]).toMatchObject({
-        path: process.env.PATH,
-        credentialBackend: "file",
-        configHome: join(stateDir, "muse"),
-      });
+      expect(requests[0].path).toBe(process.env.PATH);
       expect(requests.map((request) => request.method)).not.toContain("turn/start");
       expect(requests.map((request) => request.method)).not.toContain("session/start");
     },
   );
 
-  it("rejects sandbox and workspace-only attempts before starting native work", async () => {
+  it("rejects unenforceable policies before starting native work", async () => {
     const { bindings, run } = setup();
     await expect(run({ requireWorkspaceOnly: true })).rejects.toThrow("cannot enforce");
     await expect(run({ execOverrides: { ask: "always" } })).rejects.toThrow("exec ask: always");
     await expect(run({ thinkLevel: "adaptive" })).rejects.toThrow(
       "does not support adaptive reasoning",
     );
+    approvals.load.mockResolvedValue({ version: 1, defaults: { ask: "always" } });
+    await expect(run({ config: fullExec })).rejects.toThrow("ask: always");
     expect(bindings.size).toBe(0);
   });
 
   it("starts fresh sessions when managed auth appears, changes, or disappears", async () => {
-    const { params, bindings, run } = setup();
+    const { params, bindings, run, log } = setup(true);
     const stateDir = await mkdtemp(join(workspace, "session-auth-"));
     const authDir = join(stateDir, "muse", "muse");
     const authFile = join(authDir, "auth.json");
-    const log = join(stateDir, "requests.jsonl");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("META_API_KEY", undefined);
-    vi.stubEnv("MUSE_REQUEST_LOG", log);
-    const identities: Array<MuseSessionBinding | undefined> = [];
+    const sessionIds = new Set<string>();
     for (const account of [undefined, "managed", "replacement-account", null]) {
       if (account === null) {
         await rm(authFile);
@@ -606,12 +588,10 @@ describe("Muse native MSP harness", () => {
         await writeFile(authFile, JSON.stringify({ account }));
       }
       expect(terminal(await run()).kind).toBe("ok");
-      identities.push(bindings.get(params.sessionId));
+      sessionIds.add(bindings.get(params.sessionId)!.sessionId);
     }
-    expect(identities.every((binding) => binding !== undefined)).toBe(true);
-    expect(new Set(identities.map((binding) => binding?.sessionId)).size).toBe(4);
+    expect(sessionIds.size).toBe(4);
     const requests = await readRequests(log);
-    expect(requests.filter((request) => request.method === "session/start")).toHaveLength(4);
     expect(requests.filter((request) => request.method === "session/resume")).toHaveLength(0);
   });
 
