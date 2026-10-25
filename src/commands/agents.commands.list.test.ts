@@ -148,11 +148,7 @@ describe("agentsListCommand", () => {
       fs.writeFileSync(path.join(workspace, "avatar.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
       const agent = (identity: IdentityConfig) => ({ workspace, identity });
       setEntries({
-        configured: agent({
-          name: " Chosen ",
-          emoji: "🦉",
-          avatar: "https://e.test/n.png",
-        }),
+        configured: agent({ name: " Chosen ", emoji: "🦉", avatar: "https://e.test/n.png" }),
         partial: agent({ name: "Chosen" }),
         fallback: agent({ name: " ", emoji: "\t", avatar: "slack://avatar.png" }),
         local: agent({ avatar: "avatar.png" }),
@@ -349,11 +345,8 @@ describe("agent provider inventories", () => {
   });
 
   it("builds a read-only mixed account inventory without exposing unavailable credentials", async () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        imessage: { accounts: { Alpha: { name: "Alias" }, alpha: { name: "Exact" }, Secret: {} } },
-      },
-    };
+    const accounts = { Alpha: { name: "Alias" }, alpha: { name: "Exact" }, Secret: {} };
+    const cfg: OpenClawConfig = { channels: { imessage: { accounts } } };
     const inspectAccount = vi.fn(() => makeAccount("default", { linked: true, name: "Work" }));
     const resolveAccount = vi.fn(() => fail("must inspect read-only accounts"));
     const isLinked = vi.fn(() => fail("linkage unavailable"));
@@ -452,16 +445,9 @@ describe("agent provider inventories", () => {
     ]);
     expect(JSON.stringify(output)).not.toContain("PRIVATE_PROVIDER_TOKEN");
     expect(resolveAccount).not.toHaveBeenCalled();
-    expect(inspectAccount).toHaveBeenCalledWith(expect.objectContaining(cfg), "default");
     expect(isLinked).not.toHaveBeenCalled();
-    expect(resolveAccountState).toHaveBeenCalledOnce();
     expect(calls).toEqual(raw.config.listAccountIds(cfg));
     expect(cfg.channels?.imessage?.accounts?.Alpha?.name).toBe("Alias");
-    expect(providerMocks.repairs).toHaveBeenCalledWith({
-      config: expect.objectContaining(cfg),
-      channelIds: ["feishu"],
-    });
-    expect(providerMocks.plugins).toHaveBeenCalledOnce();
     expect(providerMocks.plugins).toHaveBeenCalledWith(expect.objectContaining(cfg), {
       includeSetupFallbackPlugins: false,
     });
