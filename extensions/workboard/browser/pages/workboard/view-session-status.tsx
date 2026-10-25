@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { createEffect, onSettled } from "solid-js";
+import { createEffect, createMemo, onSettled } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import { getCardStaleAgeMs } from "../../lib/workboard/card-alerts.ts";
@@ -170,7 +170,8 @@ export function SessionStatus(props: {
       }
     }, 150);
   };
-  createEffect(() => `${props.context.id}:${props.presentation.visible}`, dismiss);
+  const identity = createMemo(() => `${props.context.id}:${props.presentation.visible}`);
+  createEffect(identity, dismiss);
   onSettled(() => () => dismiss());
   return (
     <openclaw-workboard-session-status

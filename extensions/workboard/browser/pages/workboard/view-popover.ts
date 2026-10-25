@@ -176,10 +176,7 @@ export function workboardPopoverRef(
     };
     const toggle = () => {
       synchronizePosition();
-      trigger()?.setAttribute(
-        "aria-expanded",
-        String(element.matches(":popover-open")),
-      );
+      trigger()?.setAttribute("aria-expanded", String(element.matches(":popover-open")));
       position();
     };
     const keydown = (event: KeyboardEvent) => {
