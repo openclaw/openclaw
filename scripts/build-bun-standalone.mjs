@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 // Build a relocatable executable and sidecar from a completed pnpm build.
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -51,7 +50,7 @@ import {
   publishStandaloneArtifacts,
   STANDALONE_BUILD_MARKER,
 } from "./lib/bun-standalone-support.mjs";
-import { prepareStandaloneWasm } from "./lib/bun-standalone-wasm.mjs";
+import { prepareStandaloneWasm, standaloneWasmImport } from "./lib/bun-standalone-wasm.mjs";
 import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
@@ -101,7 +100,6 @@ if (!fs.existsSync(path.join(sourceRoot, "dist/cli-startup-metadata.json"))) {
   throw new Error("Run pnpm build before building a standalone executable.");
 }
 const plugins = planStandalonePlugins(sourceRoot, options.pluginIds);
-const buildId = randomUUID();
 fs.mkdirSync(path.dirname(destinationRoot), { recursive: true });
 const outputRoot = fs.mkdtempSync(path.join(path.dirname(destinationRoot), ".standalone-build-"));
 const runtimeRoot = path.join(outputRoot, "runtime");
@@ -345,7 +343,6 @@ const artifacts = createStandaloneArtifactAdapter({
   runtimeRoot,
   embeddedPaths,
   parse,
-  buildIdentity: buildId,
 });
 const metadata = createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, parse });
 const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, pluginLoader });
@@ -616,7 +613,7 @@ for (const filename of compiledEntries) {
     fs.writeFileSync(
       filename,
       // Every embedded worker imports this bootstrap before its library loaders.
-      (wasm?.registrationPath ? `import ${JSON.stringify(wasm.registrationPath)};\n` : "") +
+      (wasm?.registrationPath ? standaloneWasmImport(filename, wasm.registrationPath) : "") +
         contents.replaceAll(
           nativeResources.bootstrapReplacement.search,
           nativeResources.bootstrapReplacement.replacement,
@@ -716,7 +713,7 @@ const bunIdentity = {
   commit: Bun.revision,
   executableSha256: await sha256File(process.execPath),
 };
-const artifactsToPublish = compileStandaloneArtifacts({
+const artifactsToPublish = await compileStandaloneArtifacts({
   runtimeRoot,
   outputRoot,
   destination: destinationRoot,
@@ -735,7 +732,7 @@ const artifactsToPublish = compileStandaloneArtifacts({
   plugins,
   nativeModules,
   sqlite: sqlite.manifest,
-  buildId,
+  resourcePlan,
 });
 const pruning = pruneStandaloneRuntime(resourcePlan);
 await publishStandaloneArtifacts({
