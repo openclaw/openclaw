@@ -6,7 +6,6 @@ import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-deci
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import {
@@ -18,6 +17,8 @@ import type { GatewayClient, GatewayRequestContext } from "./server-methods/type
 
 const PLUGIN_ID = "secret-demo-plugin";
 const COMMAND = "secret.demo.read";
+let receipts: DecisionReceiptV1[];
+let clearReceipts: () => void;
 
 function createNode(commands = [COMMAND]): NodeSession {
   return createNodeSession({
@@ -78,43 +79,50 @@ function createContext(node: NodeSession) {
   };
 }
 
-async function runPolicy(node = createNode(), receipts: DecisionReceiptV1[] = []) {
-  const { context, invoke } = createContext(node);
-  const clear = configureRuntimeActionDecisionSink((receipt) => {
-    receipts.push(receipt);
-    return true;
+function invokePolicy(
+  node: NodeSession,
+  context: GatewayRequestContext,
+  runId = "run-node-receipt",
+) {
+  return applyPluginNodeInvokePolicy({
+    context,
+    client: createClient(runId),
+    nodeSession: node,
+    command: COMMAND,
+    params: { private: "arguments" },
   });
-  try {
-    const result = await applyPluginNodeInvokePolicy({
-      context,
-      client: createClient("run-node-receipt"),
-      nodeSession: node,
-      command: COMMAND,
-      params: { private: "arguments" },
-    });
-    return { result, receipts, invoke };
-  } finally {
-    clear();
-  }
+}
+
+function expectedReceipt(outcome: string, reasonCode: string, coverageState = "enforced") {
+  return { decision: { outcome, reasonCode }, enforcement: { coverageState } };
+}
+
+async function runPolicy(node = createNode()) {
+  const { context, invoke } = createContext(node);
+  return { result: await invokePolicy(node, context), invoke };
 }
 
 describe("plugin node action receipts", () => {
-  beforeEach(resetPluginRuntimeStateForTest);
-  afterEach(resetPluginRuntimeStateForTest);
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+    receipts = [];
+    clearReceipts = configureRuntimeActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
+    });
+  });
+  afterEach(() => {
+    clearReceipts();
+    resetPluginRuntimeStateForTest();
+  });
 
   it("records gate enforcement and successful action as attribution only", async () => {
-    registerPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode());
-    const { result, receipts } = await runPolicy();
+    registerPolicy((ctx) => ctx.invokeNode());
+    const { result } = await runPolicy();
     expect(result).toMatchObject({ ok: true });
     expect(receipts).toMatchObject([
-      {
-        decision: { outcome: "allowed", reasonCode: "node_dispatch_gate_allowed" },
-        enforcement: { coverageState: "enforced" },
-      },
-      {
-        decision: { outcome: "allowed", reasonCode: "node_action_completed" },
-        enforcement: { coverageState: "attribution-only" },
-      },
+      expectedReceipt("allowed", "node_dispatch_gate_allowed"),
+      expectedReceipt("allowed", "node_action_completed", "attribution-only"),
     ]);
     const serialized = JSON.stringify(receipts);
     expect(serialized).not.toContain(PLUGIN_ID);
@@ -124,28 +132,22 @@ describe("plugin node action receipts", () => {
 
   it("records unknown when the policy omits the expected node callback", async () => {
     registerPolicy(async () => ({ ok: true, payload: "done" }));
-    const { receipts, invoke } = await runPolicy();
+    const { invoke } = await runPolicy();
     expect(invoke).not.toHaveBeenCalled();
     expect(receipts).toMatchObject([
       {
-        decision: { outcome: "unknown", reasonCode: "node_action_callback_missing" },
-        enforcement: { coverageState: "unknown" },
+        ...expectedReceipt("unknown", "node_action_callback_missing", "unknown"),
         missingEvidence: ["node.action_callback"],
       },
     ]);
   });
 
   it("records node capability denial at the owning dispatch gate", async () => {
-    registerPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode());
-    const { result, receipts, invoke } = await runPolicy(createNode([]));
+    registerPolicy((ctx) => ctx.invokeNode());
+    const { result, invoke } = await runPolicy(createNode([]));
     expect(result).toMatchObject({ ok: false, code: "NODE_COMMAND_REVOKED" });
     expect(invoke).not.toHaveBeenCalled();
-    expect(receipts).toMatchObject([
-      {
-        decision: { outcome: "denied", reasonCode: "node_command_revoked" },
-        enforcement: { coverageState: "enforced" },
-      },
-    ]);
+    expect(receipts).toMatchObject([expectedReceipt("denied", "node_command_revoked")]);
   });
 
   it("does not turn a closed approval observation into a denied policy receipt", async () => {
@@ -153,8 +155,7 @@ describe("plugin node action receipts", () => {
     registerPolicy(async () => {
       throw closed;
     });
-    const receipts: DecisionReceiptV1[] = [];
-    await expect(runPolicy(createNode(), receipts)).rejects.toBe(closed);
+    await expect(runPolicy()).rejects.toBe(closed);
     expect(receipts).toEqual([]);
   });
 
@@ -177,33 +178,18 @@ describe("plugin node action receipts", () => {
       let authorityActive = true;
       const { context, invoke } = createContext(node);
       context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
-      const receipts: DecisionReceiptV1[] = [];
-      const clear = configureRuntimeActionDecisionSink((receipt) => {
-        receipts.push(receipt);
-        return true;
-      });
-      try {
-        const resultPromise = applyPluginNodeInvokePolicy({
-          context,
-          client: createClient(`run-node-policy-${outcome}`),
-          nodeSession: node,
-          command: COMMAND,
-          params: { private: "arguments" },
-        });
-        await policyStarted;
-        authorityActive = false;
-        policyWait.resolve();
+      const resultPromise = invokePolicy(node, context, `run-node-policy-${outcome}`);
+      await policyStarted;
+      authorityActive = false;
+      policyWait.resolve();
 
-        if (outcome === "throws") {
-          await expect(resultPromise).rejects.toThrow("late policy failure");
-        } else {
-          await expect(resultPromise).resolves.toMatchObject({ ok: outcome === "allowed" });
-        }
-        expect(invoke).not.toHaveBeenCalled();
-        expect(receipts).toEqual([]);
-      } finally {
-        clear();
+      if (outcome === "throws") {
+        await expect(resultPromise).rejects.toThrow("late policy failure");
+      } else {
+        await expect(resultPromise).resolves.toMatchObject({ ok: outcome === "allowed" });
       }
+      expect(invoke).not.toHaveBeenCalled();
+      expect(receipts).toEqual([]);
     },
   );
 });
