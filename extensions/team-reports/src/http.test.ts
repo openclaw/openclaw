@@ -10,7 +10,12 @@ import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js"
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
-import { measureReads, reportDocument, reportMember } from "./reports-data.test-support.js";
+import {
+  githubItem,
+  measureReads,
+  reportDocument,
+  reportMember,
+} from "./reports-data.test-support.js";
 import { githubCounts } from "./reports.fixtures.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
@@ -57,32 +62,24 @@ const member = (login: string, display = login, aliases: string[] = []): PersonR
 
 function report(period: Period, key: string, partial = false): ReportDocument {
   const descriptor = describePeriod(period, key);
-  return reportDocument(
-    [
-      {
-        ...member("alice", "Alice"),
-        github: {
-          ...counts,
-          items: [
-            {
-              kind: "commit",
-              repo: "example/project",
-              title: maliciousTitle,
-              url: "javascript:alert(1)",
-              actor: "alice",
-              atMs: descriptor.sinceMs,
-            },
-          ],
-        },
-      },
+  const github = {
+    ...counts,
+    items: [
+      githubItem({
+        repo: "example/project",
+        title: maliciousTitle,
+        url: "javascript:alert(1)",
+        actor: "alice",
+        atMs: descriptor.sinceMs,
+      }),
     ],
-    {
-      period: descriptor,
-      status: partial ? "partial" : "closed",
-      otherActors: [{ login: "bob", github: counts }],
-      sources: { github: { ok: true, warnings: ["Fixture coverage warning"], stats: {} } },
-    },
-  );
+  };
+  return reportDocument([reportMember("alice", { display: "Alice", github })], {
+    period: descriptor,
+    status: partial ? "partial" : "closed",
+    otherActors: [{ login: "bob", github: counts }],
+    sources: { github: { ok: true, warnings: ["Fixture coverage warning"], stats: {} } },
+  });
 }
 
 const summary: SummaryDocument = {

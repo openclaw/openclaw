@@ -5,14 +5,13 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { describePeriod } from "./periods.js";
-import { reportMember } from "./reports-data.test-support.js";
+import { reportDocument, reportMember } from "./reports-data.test-support.js";
 import { githubCounts as counts } from "./reports.fixtures.js";
 import { buildRoster } from "./roster.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { PeriodDescriptor, ReportDocument, SummaryDocument } from "./types.js";
+import type { ReportDocument, SummaryDocument } from "./types.js";
 
-const DAY_MS = 86_400_000;
 const workerModuleUrl = resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint);
 const resources: Array<{ store: TeamReportsStore; directory: string }> = [];
 
@@ -24,26 +23,31 @@ async function openStore() {
 }
 
 function report(key = "2026-08-20", logins = ["alice", "bob"]): ReportDocument {
-  const sinceMs = Date.parse(`${key}T00:00:00Z`);
-  return {
-    version: 1,
-    period: { period: "day", key, sinceMs, untilMs: sinceMs + DAY_MS, title: key },
-    generatedAtMs: sinceMs + DAY_MS,
-    status: "closed",
-    orgs: ["example"],
-    memberCount: logins.length,
-    activeMembers: logins.length,
-    totals: {
-      github: counts(logins.length),
-      discord: { messages: logins.length * 2, channels: { general: logins.length * 2 } },
-    },
-    members: logins.map((login) =>
+  return reportDocument(
+    logins.map((login) =>
       reportMember(login, { discord: { total: 2, channels: { general: 2 }, excerpts: [] } }),
     ),
-    otherActors: [],
-    unmatchedDiscord: [],
-    sources: { github: { ok: true, warnings: [], stats: { apiCalls: 1 } } },
-  };
+    {
+      period: describePeriod("day", key),
+      totals: {
+        github: counts(logins.length),
+        discord: { messages: logins.length * 2, channels: { general: logins.length * 2 } },
+      },
+      sources: { github: { ok: true, warnings: [], stats: { apiCalls: 1 } } },
+    },
+  );
+}
+
+async function expectStored(
+  store: TeamReportsStore,
+  document: ReportDocument,
+  markdown: string,
+  storedSummary: SummaryDocument | null = null,
+) {
+  const { period, key } = document.period;
+  const expected = { report: document, summary: storedSummary };
+  expect(await store.getPeriod(period, key)).toEqual({ ...expected, markdown });
+  expect(await store.getPeriodDocument(period, key)).toEqual(expected);
 }
 
 const summary: SummaryDocument = {
@@ -87,15 +91,7 @@ describe("Team Reports storage", () => {
     await store.close();
     const reopened = await createTeamReportsStore({ dbPath, workerModuleUrl });
     try {
-      expect(await reopened.getPeriod("day", "2026-08-20")).toEqual({
-        report: report(),
-        summary,
-        markdown: "# Daily report",
-      });
-      expect(await reopened.getPeriodDocument("day", "2026-08-20")).toEqual({
-        report: report(),
-        summary,
-      });
+      await expectStored(reopened, report(), "# Daily report", summary);
       expect((await reopened.latestPeople())?.members.map((member) => member.login)).toEqual([
         "alice",
         "bob",
@@ -159,15 +155,7 @@ describe("Team Reports storage", () => {
           markdown: "failed refresh",
         }),
       ).rejects.toThrow();
-      expect(await store.getPeriod("day", "2026-08-20")).toEqual({
-        report: report(),
-        summary,
-        markdown: "original",
-      });
-      expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
-        report: report(),
-        summary,
-      });
+      await expectStored(store, report(), "original", summary);
       expect((await store.listPersonDaysSince("2026-08-20")).map((day) => day.login)).toEqual([
         "alice",
         "bob",
@@ -178,15 +166,7 @@ describe("Team Reports storage", () => {
     refreshed.members[0]!.github.total = 3;
     refreshed.generatedAtMs += 1000;
     await store.upsertPeriod({ report: refreshed, markdown: "refreshed" });
-    expect(await store.getPeriod("day", "2026-08-20")).toEqual({
-      report: refreshed,
-      summary: null,
-      markdown: "refreshed",
-    });
-    expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
-      report: refreshed,
-      summary: null,
-    });
+    await expectStored(store, refreshed, "refreshed");
     expect((await store.listPersonDays("alice"))[0]).toMatchObject({ githubTotal: 3, commits: 3 });
     expect(await store.listPersonDays("bob")).toEqual([]);
   });
@@ -250,13 +230,7 @@ describe("Team Reports storage", () => {
       await store.upsertPeriod({ report: day, markdown: key });
     }
     const week = report();
-    week.period = {
-      period: "week",
-      key: "2026-W34",
-      title: "Week 34",
-      sinceMs: Date.parse("2026-08-17T00:00:00Z"),
-      untilMs: Date.parse("2026-08-24T00:00:00Z"),
-    };
+    week.period = describePeriod("week", "2026-W34");
     await store.upsertPeriod({ report: week, markdown: "week" });
     const aggregated = await store.aggregatePeriod({
       period: {
@@ -286,43 +260,26 @@ describe("Team Reports storage", () => {
   });
 
   it.each([
-    "report member schema",
-    "report JSON syntax",
-    "summary schema",
-    "summary JSON syntax",
-    "unsafe until timestamp",
-    "unsafe extracted total",
-  ])("preserves latest warning and people failures for %s", async (failure) => {
+    ["report member schema", "data_json", JSON.stringify({ ...report(), members: "invalid" })],
+    ["report JSON syntax", "data_json", "{"],
+    ["summary schema", "summary_json", JSON.stringify({ ...summary, globalSummary: 123 })],
+    ["summary JSON syntax", "summary_json", "{"],
+    ["unsafe until timestamp", "until_ms", 9_007_199_254_740_992],
+    [
+      "unsafe extracted total",
+      "data_json",
+      JSON.stringify({ ...report(), activeMembers: 9_007_199_254_740_992 }),
+    ],
+  ])("preserves latest warning and people failures for %s", async (failure, column, value) => {
     const { store, dbPath } = await openStore();
     await store.upsertPeriod({ report: report(), summary, markdown: "kept" });
     const database = openNodeSqliteDatabase(dbPath);
     try {
       const data = report();
-      switch (failure) {
-        case "report member schema":
-          database
-            .prepare("UPDATE team_reports_periods SET data_json = ?")
-            .run(JSON.stringify({ ...data, members: "invalid" }));
-          break;
-        case "report JSON syntax":
-          database.prepare("UPDATE team_reports_periods SET data_json = ?").run("{");
-          break;
-        case "summary schema":
-          database
-            .prepare("UPDATE team_reports_periods SET summary_json = ?")
-            .run(JSON.stringify({ ...summary, globalSummary: 123 }));
-          break;
-        case "summary JSON syntax":
-          database.prepare("UPDATE team_reports_periods SET summary_json = ?").run("{");
-          break;
-        case "unsafe until timestamp":
-          database.exec("UPDATE team_reports_periods SET until_ms = 9007199254740992");
-          break;
-        case "unsafe extracted total":
-          database
-            .prepare("UPDATE team_reports_periods SET data_json = ?")
-            .run(JSON.stringify({ ...data, activeMembers: 9_007_199_254_740_992 }));
-          break;
+      if (column === "until_ms") {
+        database.exec(`UPDATE team_reports_periods SET until_ms = ${value}`);
+      } else {
+        database.prepare(`UPDATE team_reports_periods SET ${column} = ?`).run(value);
       }
       const originalRead = async () => {
         const latest = (await store.listPeriods({ period: "day", limit: 1 }))[0];
@@ -404,23 +361,7 @@ describe("Team Reports storage", () => {
     for (const key of ["2026-08-15", "2026-08-16", "2026-08-17"]) {
       await store.upsertPeriod({ report: report(key, ["alice"]), markdown: key });
     }
-    const periods: PeriodDescriptor[] = [
-      {
-        period: "week",
-        key: "2026-W33",
-        title: "Older week",
-        sinceMs: Date.parse("2026-08-10T00:00:00Z"),
-        untilMs: Date.parse("2026-08-17T00:00:00Z"),
-      },
-      {
-        period: "month",
-        key: "2026-08",
-        title: "Overlapping month",
-        sinceMs: Date.parse("2026-08-01T00:00:00Z"),
-        untilMs: Date.parse("2026-09-01T00:00:00Z"),
-      },
-    ];
-    for (const period of periods) {
+    for (const period of [describePeriod("week", "2026-W33"), describePeriod("month", "2026-08")]) {
       await store.upsertPeriod({ report: { ...report(), period }, markdown: period.title });
     }
     await store.startRun({ id: "old-complete", kind: "closed-day", startedAtMs: 1, periods: [] });
