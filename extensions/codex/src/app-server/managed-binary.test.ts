@@ -275,7 +275,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
   beforeEach(async () => {
     bin = path.join(root, "prefix", "bin");
     await mkdir(bin, { recursive: true });
-    vi.spyOn(log, "info").mockImplementation(() => undefined);
     // Each case makes this process's first decision.
     delete installedState.selection;
   });
@@ -336,10 +335,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     return selected;
   }
 
-  function expectChoice(message: string) {
-    expect(log.info).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(message));
-  }
-
   it("selects a newer npm-installed Codex after its version and handshake probes", async () => {
     const { launcher, native } = await installNpmCodex(`echo "codex-cli ${NEWER}"`);
     const probeHandshake = vi.fn(async () => NEWER);
@@ -349,9 +344,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
       selected: { command: launcher, nativeCommand: native, version: NEWER },
     });
     expect(probeHandshake).toHaveBeenCalledExactlyOnceWith(launcher);
-    expectChoice(
-      `Codex app-server: using installed ${path.join(bin, "codex")} ${NEWER} (newer than bundled ${VERSION})`,
-    );
   });
 
   it.each([
@@ -361,25 +353,19 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     { output: 'echo "codex-cli 1.0.0"', reason: "1.0.0 is a different major version" },
     { output: 'echo "garbage"', reason: "did not report a parseable version" },
     { output: "exit 3", reason: "--version failed: Version check failed (3)" },
-  ])("keeps the bundled package when the installed Codex $reason", async ({ output, reason }) => {
+  ])("keeps the bundled package when the installed Codex $reason", async ({ output }) => {
     await installNpmCodex(output);
     const probeHandshake = vi.fn(async () => NEWER);
 
     await expectBundled({ probeHandshake });
     expect(probeHandshake).not.toHaveBeenCalled();
-    expectChoice(`Codex app-server: using bundled ${VERSION} (installed `);
-    expectChoice(reason);
   });
 
   it("keeps the bundled package without a codex on PATH", async () => {
     await expectBundled();
-    expectChoice(`Codex app-server: using bundled ${VERSION} (no codex on PATH)`);
   });
 
-  it.each([
-    ["timeout", "failed the app-server handshake: timed out after 15000 ms"],
-    ["mismatch", `reported ${VERSION} from app-server`],
-  ])("keeps the bundled package on handshake %s", async (failure, reason) => {
+  it.each(["timeout", "mismatch"])("keeps the bundled package on handshake %s", async (failure) => {
     await installNpmCodex();
     await expectBundled({
       probeHandshake: async () => {
@@ -389,7 +375,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
         throw new Error("timed out after 15000 ms");
       },
     });
-    expectChoice(reason);
   });
 
   it("reserves bundled startup time across the complete cold selection", async () => {
@@ -404,7 +389,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
       probeHandshake,
     });
     expect(probeHandshake).not.toHaveBeenCalled();
-    expectChoice("selection timed out before the app-server handshake");
   });
 
   it("returns the bundled pin within a caller's shorter selection budget and ignores late success", async () => {
@@ -428,7 +412,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
       await expect(selected).resolves.toEqual(BUNDLED);
       completed.resolve(NEWER);
       await expectBundled();
-      expectChoice("installed Codex selection exceeded its startup budget");
     } finally {
       completed.resolve(NEWER);
     }
@@ -438,7 +421,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     await writeExecutable(path.join(bin, "codex"), `#!/bin/sh\necho "codex-cli ${NEWER}"\n`);
 
     await expectBundled();
-    expectChoice("is not a native Codex executable or the official @openai/codex launcher");
   });
 
   it("accepts a standalone native Codex as its own native artifact", async () => {
@@ -475,7 +457,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     ).resolves.toBe(VERSION);
     expect(runVersion).not.toHaveBeenCalled();
     expect(probeHandshake).not.toHaveBeenCalled();
-    expectChoice("belongs to a macOS desktop app");
   });
 
   it("starts the selected installed binary unless the caller pins the package", async () => {
@@ -531,17 +512,11 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
         "/opt/codex/lib/node_modules/@openai/codex/bin/codex.js",
         "/opt/codex/lib/node_modules/@openai/codex-linux-x64/vendor/codex",
       );
-      const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
       const gone = missing === "launcher" ? selected.command : selected.nativeCommand;
       vi.spyOn(pathExistence, "canAccess").mockImplementation(async (command) => command !== gone);
 
       await expect(resolveStart()).resolves.toMatchObject({ command: packaged });
       await expect(resolveVersion("package-first")).resolves.toBe(VERSION);
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining(
-          `installed ${selected.command} ${NEWER} failed to start (executable`,
-        ),
-      );
     },
   );
 

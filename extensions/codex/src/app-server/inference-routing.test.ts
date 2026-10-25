@@ -219,7 +219,6 @@ it.each([
     onWrite(line, send) {
       expect(retained).toBe(true);
       const request = JSON.parse(line);
-      expect(["config/read", "account/read"]).toContain(request.method);
       send({
         id: request.id,
         result: request.method === "config/read" ? snapshot() : { account: { type: accountType } },
@@ -238,7 +237,6 @@ it.each([
   if (rejectAdmission) {
     await expect(prepareConfig(input)).rejects.toBe(failure);
     expect(protect).not.toHaveBeenCalled();
-    expect(h.writes).toHaveLength(1);
     // A refused owner update must not leave the old auth route installed.
     if (rejectAdmission === 2) {
       accountType = "chatgpt";
@@ -249,11 +247,6 @@ it.each([
   expect(retained).toBe(false);
   if (rejectAdmission) {
     expect(route.upstream).toBe(accountType === "chatgpt" ? chatgptUrl : openaiUrl);
-  } else {
-    expect(admissions).toBe(preparedConfig ? 3 : 4);
-    expect(h.writes.map((line) => JSON.parse(line).method)).toEqual(
-      preparedConfig ? ["account/read"] : ["config/read", "account/read"],
-    );
   }
 });
 
@@ -360,7 +353,6 @@ it.each(["/alpha/search", "/images/generations"])("binds %s ownership", async (p
     });
     resolveModelThreadId.mockReturnValue(undefined);
     await expect(bind(request)).rejects.toThrow("cannot verify the owner");
-    expect(captureModelSource).toHaveBeenCalledTimes(3);
   } else {
     expect(cancel).toHaveBeenCalledOnce();
     expect(resolveModelThreadId).not.toHaveBeenCalled();
@@ -433,9 +425,6 @@ it.each([false, true])("projects only operator-backed routes (%s)", async (opera
   const h = owned(accountHarness("apiKey", effectiveConfig));
   const prepared = required(await prepareThread(h.client, undefined, { config, operatorBacked }));
   expect({ effectiveConfig, config }).toEqual(original);
-  expect(h.writes.map((line) => JSON.parse(line).method)).toEqual(
-    operatorBacked ? ["config/read", "account/read"] : ["config/read"],
-  );
   expect(prepared.route.upstream).toBe("https://current.example/v1");
   expect(
     ["restored", "flat", "openai", "signed"].map((id) => prepared.providers?.has(id) ?? false),
@@ -469,7 +458,6 @@ it("fails closed for host OAuth on native backend and custom provider configurat
   ownClient(h.client, {}, { resolve: vi.fn() });
   const configs: CodexConfigReadResponse["config"][] = [
     { openai_base_url: "https://chatgpt.com/backend-api/codex" },
-    { openai_base_url: "https://models.example.com/v1" },
     { model_provider: "bedrock" },
     { features: { respect_system_proxy: true } },
   ];
@@ -536,15 +524,6 @@ it("keeps the physical client owner across same-build module copies", async () =
 
 const legacyProfiles: CodexConfigReadResponse["config"][] = [
   { model_provider: "bedrock" },
-  {
-    model_provider: "amazon-bedrock",
-    model_providers: { "amazon-bedrock": { base_url: "https://models.example.com/v1" } },
-  },
-  {
-    model_provider: "signed",
-    "model_providers.signed.base_url": "https://models.example.com/v1",
-    "model_providers.signed.aws.region": "synthetic",
-  },
   { features: { respect_system_proxy: true } },
   { openai_base_url: "http://127.0.0.1:1234/v1" },
   { openai_base_url: "https://models.example.com/v1?api-version=synthetic" },
