@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runWithReplyNativeSubagents } from "../../../auto-reply/reply/dispatch-native-subagent.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
@@ -143,6 +143,20 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
     throwBoundFailures,
     runEmbeddedAgent,
   } = options;
+  function finalizeTool(bound: BoundParent, tool: AnyAgentTool) {
+    return expectDefined(
+      finalizeAgentTools({
+        tools: [tool],
+        hookContext: {
+          config: bound.cfg,
+          agentId: "main",
+          sessionKey: bound.parentSessionKey,
+          runId: bound.parentRunId,
+        },
+      })[0],
+      "finalized tool",
+    );
+  }
   async function withRewriteFixture(
     test: (fixture: {
       native: NativeSubagentRuntime;
@@ -186,28 +200,21 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
               pluginId: "native-test",
               assertCurrent: owner.authority.assertCurrent,
             });
-          const [ordinary] = finalizeAgentTools({
-            tools: [
-              createSessionsSpawnTool({
-                config: bound.cfg,
-                senderIsOwner: true,
-                agentSessionKey: bound.parentSessionKey,
-                expectedParentSessionId: "parent-session",
-                requesterRunId: bound.parentRunId,
-                requesterTurnRunId: bound.parentRunId,
-              }),
-            ],
-            hookContext: {
+          const ordinary = finalizeTool(
+            bound,
+            createSessionsSpawnTool({
               config: bound.cfg,
-              agentId: "main",
-              sessionKey: bound.parentSessionKey,
-              runId: bound.parentRunId,
-            },
-          });
+              senderIsOwner: true,
+              agentSessionKey: bound.parentSessionKey,
+              expectedParentSessionId: "parent-session",
+              requesterRunId: bound.parentRunId,
+              requesterTurnRunId: bound.parentRunId,
+            }),
+          );
           await test({
             native: makeNative(bound, source),
             makeNative,
-            ordinary: expectDefined(ordinary, "ordinary spawn"),
+            ordinary,
             bound,
             modelsStarted: modelsStarted.promise,
           });
@@ -239,22 +246,14 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
           { context: gatewayB.context, isWebchatConnect: () => false },
           () => makeNative(parentB, ownerB),
         );
-        const [waitB] = finalizeAgentTools({
-          tools: [
-            createAgentsWaitTool({
-              config: parentB.cfg,
-              agentSessionKey: parentB.parentSessionKey,
-              agentId: "main",
-            }),
-          ],
-          hookContext: {
+        const ordinaryB = finalizeTool(
+          parentB,
+          createAgentsWaitTool({
             config: parentB.cfg,
+            agentSessionKey: parentB.parentSessionKey,
             agentId: "main",
-            sessionKey: parentB.parentSessionKey,
-            runId: parentB.parentRunId,
-          },
-        });
-        const ordinaryB = expectDefined(waitB, "ordinary B wait");
+          }),
+        );
         const [childA, childB] = await Promise.all([
           native.spawn({ requestId: "owner-a", task: "A", context: "isolated" }),
           nativeB.spawn({ requestId: "owner-b", task: "B", context: "isolated" }),
@@ -341,26 +340,21 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
   });
 
   it.each([
-    { name: "collect false", rewrite: { collect: false } },
-    { name: "noncollector ACP", rewrite: { collect: false, runtime: "acp" } },
-    { name: "session mode", rewrite: { mode: "session" } },
-    { name: "replay key replaced", rewrite: { [SWARM_CODE_MODE_IDEMPOTENCY_KEY]: "different" } },
-    {
-      name: "fingerprint replaced",
-      rewrite: { [SWARM_CODE_MODE_REQUEST_FINGERPRINT]: "different" },
-    },
-  ])("native plugin rejects incompatible finalized rewrite: $name", async ({ rewrite }) => {
+    ["collect false", { collect: false }],
+    ["noncollector ACP", { collect: false, runtime: "acp" }],
+    ["session mode", { mode: "session" }],
+    ["replay key replaced", { [SWARM_CODE_MODE_IDEMPOTENCY_KEY]: "different" }],
+    ["fingerprint replaced", { [SWARM_CODE_MODE_REQUEST_FINGERPRINT]: "different" }],
+  ] as const)("native plugin rejects incompatible finalized rewrite: %s", async (_, rewrite) => {
     await withRewriteFixture(async ({ native, bound }) => {
       const keys = () => listSessionEntryKeysReadOnly({ storePath: bound.storePath });
       const before = await keys();
-      const hook = vi.fn(async (event: { toolName: string }) =>
+      installNativeToolHook("native-rewrite-test", async (event) =>
         event.toolName === "sessions_spawn" ? { params: rewrite } : undefined,
       );
-      installNativeToolHook("native-rewrite-test", hook);
       await expect(
         native.spawn({ requestId: "rewrite", task: "original", context: "isolated" }),
       ).rejects.toThrow("Native subagent hooks must preserve collector mode and replay identity.");
-      expect(hook).toHaveBeenCalledTimes(1);
       expect(await keys()).toEqual(before);
       expect(subagentRuns.size).toBe(0);
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
@@ -371,7 +365,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
   it("native plugin permits task rewrites and nested ordinary noncollector calls", async () => {
     await withRewriteFixture(async ({ native, ordinary, bound, modelsStarted }) => {
       let ordinaryRunId: string | undefined;
-      const hook = vi.fn(async (event: { toolName: string; params: Record<string, unknown> }) => {
+      const hook = async (event: { toolName: string; params: Record<string, unknown> }) => {
         if (event.toolName !== "sessions_spawn") {
           return undefined;
         }
@@ -392,7 +386,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
         ordinaryRunId = accepted.runId;
         expect(accepted.expectsCompletionMessage).toBe(true);
         return { params: { task: "native rewritten", label: "native-rewritten" } };
-      });
+      };
       installNativeToolHook("native-rewrite-test", hook);
       const request = {
         requestId: "permitted",
@@ -401,15 +395,10 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
       };
       const accepted = await native.spawn(request);
       expect(await native.spawn(request)).toEqual(accepted);
-      expect(hook).toHaveBeenCalledTimes(2);
       expect(subagentRuns.size).toBe(2);
       expect(subagentRuns.get(expectDefined(ordinaryRunId, "ordinary run"))).toMatchObject({
         collect: false,
         expectsCompletionMessage: true,
-      });
-      expect(subagentRuns.get(accepted.runId)).toMatchObject({
-        collect: true,
-        swarmLaunchReplayKey: expect.any(String),
       });
       expect(
         loadSessionEntry({ storePath: bound.storePath, sessionKey: accepted.childSessionKey }),

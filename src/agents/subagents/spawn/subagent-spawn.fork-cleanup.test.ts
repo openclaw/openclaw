@@ -34,8 +34,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
   let forkedEntry: SessionEntry | undefined;
   const registerSubagentRun = vi.fn();
   const startQueuedSubagentRun = vi.fn();
-  const settleFailedQueuedSubagentLaunch = vi.fn();
-  const completeCollectorLaunchCleanup = vi.fn();
   const prepareSubagentSpawn = vi.fn();
   const dispatch = vi.fn();
   const scope = (sessionKey = parentKey) => ({
@@ -95,8 +93,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       forkSessionEntryFromParentMock: fork,
       registerSubagentRunMock: registerSubagentRun,
       startQueuedSubagentRunMock: startQueuedSubagentRun,
-      settleFailedQueuedSubagentLaunchMock: settleFailedQueuedSubagentLaunch,
-      completeCollectorLaunchCleanupMock: completeCollectorLaunchCleanup,
       resolveContextEngineMock: async () => ({ prepareSubagentSpawn }),
       getRuntimeConfig: () => config,
       getSessionBindingService: () => ({
@@ -156,8 +152,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     fork.mockClear();
     registerSubagentRun.mockReset().mockResolvedValue(undefined);
     startQueuedSubagentRun.mockReset().mockResolvedValue(false);
-    settleFailedQueuedSubagentLaunch.mockReset().mockResolvedValue(true);
-    completeCollectorLaunchCleanup.mockReset().mockResolvedValue(undefined);
     prepareSubagentSpawn.mockReset();
     dispatch
       .mockReset()

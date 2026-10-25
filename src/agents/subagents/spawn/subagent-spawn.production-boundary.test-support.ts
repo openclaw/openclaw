@@ -243,10 +243,10 @@ export async function createBoundWorker(
       }
     },
   );
-  const capability = getWorkerTurnExecutionIdentityCapability(store, claim);
-  if (!capability) {
-    throw new Error("expected the admitted worker capability");
-  }
+  const capability = expectDefined(
+    getWorkerTurnExecutionIdentityCapability(store, claim),
+    "admitted worker capability",
+  );
   return { store, session, claim, capability };
 }
 
@@ -301,10 +301,7 @@ export function createBoundSpawnInvocation(
       },
       abortSignal: bound.parent.controller.signal,
     });
-    if (!finalized) {
-      throw new Error("expected the finalized spawn tool");
-    }
-    tool = finalized;
+    tool = expectDefined(finalized, "finalized spawn tool");
   }
   const caller = createAdmittedGatewayToolCallerIdentity({
     admittedRunContext: bound.admitted,

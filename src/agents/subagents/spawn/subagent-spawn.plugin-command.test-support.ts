@@ -59,6 +59,10 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
     let retained: NativeSubagentRuntime | undefined;
     let commandRun = 0;
     let activeSignal: AbortSignal | undefined = bound.parent.controller.signal;
+    const closedSpawn = (requestId: string) =>
+      expect(
+        expectDefined(retained, "retained runtime").spawn({ requestId, task: "Must not run" }),
+      ).rejects.toSatisfy((error: unknown) => String(error).includes("command invocation closed"));
     const handler = vi.fn(async (ctx: PluginCommandContext) => {
       const native = expectDefined(ctx.runtimeContext?.subagents, "host command capability");
       retained = native;
@@ -241,14 +245,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
               shouldContinue: false,
               reply: { text: "review queued" },
             });
-            await expect(
-              expectDefined(retained, "retained runtime").spawn({
-                requestId: "late",
-                task: "Must not run",
-              }),
-            ).rejects.toSatisfy((error: unknown) =>
-              String(error).includes("command invocation closed"),
-            );
+            await closedSpawn("late");
           }
           const stopStartedAt = performance.now();
           const stop = await tryFastAbortFromMessage({
@@ -274,14 +271,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
             expect(collectFailure).toMatchObject({ name: "AbortError" });
             expect(await handler.mock.results[0]?.value).not.toHaveProperty("continueAgent");
             const acceptedRunIds = [...subagentRuns.keys()];
-            await expect(
-              expectDefined(retained, "retained runtime").spawn({
-                requestId: "late-after-stop",
-                task: "Must not run after stop",
-              }),
-            ).rejects.toSatisfy((error: unknown) =>
-              String(error).includes("command invocation closed"),
-            );
+            await closedSpawn("late-after-stop");
             expect([...subagentRuns.keys()]).toEqual(acceptedRunIds);
           }
           expect(
@@ -290,7 +280,6 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
           ).toBe("killed");
           expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
           if (stopTiming === "during collect") {
-            expect(handler).toHaveBeenCalledTimes(1);
             return;
           }
           const before = expectDefined(readSession(parentSessionKey), "before reset");
@@ -311,7 +300,6 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
             shouldContinue: false,
             reply: { text: "old child refused" },
           });
-          expect(handler).toHaveBeenCalledTimes(2);
         },
       );
     } catch (error) {

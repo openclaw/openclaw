@@ -1,8 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { prepareGatewayRunShutdown } from "../../../gateway/server-run-shutdown.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
@@ -80,15 +79,7 @@ function abortableChild(runEmbeddedAgent: BoundaryHarness["runEmbeddedAgent"]) {
     state.signal = signal;
     started.resolve();
     try {
-      return await new Promise<never>((_resolve, reject) => {
-        const abort = () =>
-          reject(toErrorObject(signal.reason, "Accepted child execution aborted"));
-        signal.addEventListener("abort", abort, { once: true });
-        if (signal.aborted) {
-          signal.removeEventListener("abort", abort);
-          abort();
-        }
-      });
+      return await withinTest(new Promise<never>(() => {}), signal);
     } finally {
       state.settled = true;
     }
