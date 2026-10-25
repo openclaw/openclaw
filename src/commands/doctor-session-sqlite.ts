@@ -139,7 +139,7 @@ export async function runDoctorSessionSqlite(
   const env = options.env ?? process.env;
   const cfg = resolveDoctorSessionSqliteConfig(options);
   const configuredAgentIds = new Set(listAgentIds(cfg));
-  const pendingPlugins = readDeferredPluginMigrations({ env });
+  const expected = readDeferredPluginMigrations({ env });
   const verifyMissingIndex = createMissingSessionIndexVerifier({ cfg, env });
   const {
     targets: candidates,
@@ -211,7 +211,7 @@ export async function runDoctorSessionSqlite(
                 verifyMissingIndex,
                 deferredPluginIds: deferredPluginSessionStoreIds({
                   target,
-                  pending: pendingPlugins,
+                  pending: expected,
                 }),
               });
         settlementIssuesForStore(target.storePath).forEach((issue) => report.issues.push(issue));
@@ -257,7 +257,7 @@ export async function runDoctorSessionSqlite(
         ),
         deferredPluginIds: deferredPluginSessionStoreIds({
           target,
-          pending: pendingPlugins,
+          pending: expected,
         }),
       }),
     );
@@ -347,7 +347,7 @@ export async function runDoctorSessionSqlite(
       >(
         {
           env,
-          expectedPending: pendingPlugins,
+          expectedPending: expected,
           onConflict(pending) {
             retainSource();
             if (pending.length > 0) {
@@ -388,7 +388,7 @@ export async function runDoctorSessionSqlite(
           }
         }
         retainDeferredSources();
-        throw ConflictError.withContext(conflict, pendingPlugins, "session archive publication");
+        throw new ConflictError(conflict, { expected, phase: "session archive publication" });
       }
     };
     retainDeferredSources();
@@ -497,8 +497,8 @@ export async function settleRetainedDoctorSessionSources(
   assertCurrent();
   retainedArchivePlans.delete(report);
   const completed = new Set(completedPluginIds);
-  const expectedPending = readDeferredPluginMigrations({ env: plan.env });
-  const remainingPending = expectedPending.filter((plugin) => !completed.has(plugin.pluginId));
+  const expected = readDeferredPluginMigrations({ env: plan.env });
+  const remainingPending = expected.filter((plugin) => !completed.has(plugin.pluginId));
   if (remainingPending.length > 0) {
     return;
   }
@@ -508,7 +508,7 @@ export async function settleRetainedDoctorSessionSources(
     >(
       {
         env: plan.env,
-        expectedPending,
+        expectedPending: expected,
         onConflict(pending) {
           authority.assertCurrent();
           retainSource();
@@ -521,7 +521,7 @@ export async function settleRetainedDoctorSessionSources(
       },
     );
     if (conflict) {
-      throw ConflictError.withContext(conflict, expectedPending, "session source retirement");
+      throw new ConflictError(conflict, { expected, phase: "session source retirement" });
     }
   };
   const verifyImports = () => {

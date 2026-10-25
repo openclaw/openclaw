@@ -172,14 +172,6 @@ export class DeferredPluginMigrationConflictError extends Error {
     this.expected = context.expected;
     this.phase = phase;
   }
-
-  static withContext(
-    pending: readonly DeferredPluginMigration[],
-    expected: readonly DeferredPluginMigration[],
-    phase: string,
-  ): DeferredPluginMigrationConflictError {
-    return new DeferredPluginMigrationConflictError(pending, { expected, phase });
-  }
 }
 
 const MAX_CONFLICT_DIAGNOSTIC_ITEMS = 4;
@@ -197,10 +189,7 @@ function formatChangedObligationFields(
 ): string {
   const expectedById = new Map(expected.map((entry) => [entry.pluginId, entry]));
   const currentById = new Map(current.map((entry) => [entry.pluginId, entry]));
-  // SAFETY: the Zod object schema enumerates exactly the persisted migration keys used below.
-  const fields = Object.keys(deferredPluginMigrationSchema.shape) as Array<
-    keyof DeferredPluginMigration
-  >;
+  const fields = deferredPluginMigrationSchema.keyof().options;
   const changed: string[] = [];
   for (const pluginId of [...expectedById.keys()].toSorted()) {
     const before = expectedById.get(pluginId);
