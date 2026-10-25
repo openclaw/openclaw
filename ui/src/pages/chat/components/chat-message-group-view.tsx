@@ -526,8 +526,13 @@ function FramedMessageGroup(props: {
                 </Show>
               ) : undefined}
               <SenderIdentity frame={frame()} />
-              <ChatSendStatus status={frame().sendStatus} actions={options()} />
-              <MessageMeta timestamp={props.group.timestamp} meta={frame().meta} />
+              {/* Keep delivery status and timestamp in one slot to avoid wrapping them together. */}
+              <Show
+                when={frame().sendStatus}
+                fallback={<MessageMeta timestamp={props.group.timestamp} meta={frame().meta} />}
+              >
+                <ChatSendStatus status={frame().sendStatus} actions={options()} />
+              </Show>
             </div>
             <Show
               when={frame().isPeerGroup}
