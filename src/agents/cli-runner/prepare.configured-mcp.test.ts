@@ -106,9 +106,12 @@ async function startProbeServer() {
 
 describe("configured MCP servers on CLI turns", () => {
   let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
+  let probeServer: Awaited<ReturnType<typeof startProbeServer>>;
+  let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+  let config: OpenClawConfig;
   const mintGrant = vi.fn<typeof MintMcpLoopbackClientGrant>();
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mintGrant.mockReset().mockImplementation(createTestMcpLoopbackClientGrant);
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
@@ -123,81 +126,83 @@ describe("configured MCP servers on CLI turns", () => {
       setRuntimeConfigSnapshot(params.config ?? {});
       return prepareCliRunContext({
         skillsSnapshot: { prompt: "", skills: [] },
+        ...params,
         provider: "claude-cli",
         model: "opus",
         modelHasVision: false,
         sourceReplyDeliveryMode: "automatic",
-        ...params,
       });
     });
+    probeServer = await startProbeServer();
+    scheduler = createTestGatewayScheduler();
+    await setSessionMcpRuntimeScheduler(scheduler);
+    config = {
+      session: { store: fixture.session.sessionTarget.storePath },
+      plugins: { enabled: false },
+      mcp: {
+        servers: {
+          probe: { transport: "streamable-http", url: `http://127.0.0.1:${probeServer.port}/mcp` },
+        },
+      },
+    };
   });
 
   afterEach(async () => {
-    await fixture.settle();
-    clearRuntimeConfigSnapshot();
-    resetCliRunnerPrepareTestDeps();
-    cliBackendsTesting.resetDepsForTest();
+    try {
+      await disposeAllSessionMcpRuntimes();
+      await scheduler.stop();
+      await probeServer.close();
+    } finally {
+      await fixture.settle();
+      clearRuntimeConfigSnapshot();
+      resetCliRunnerPrepareTestDeps();
+      cliBackendsTesting.resetDepsForTest();
+    }
   });
 
   it.each(["config", "run"] as const)(
     "bridges configured MCP with a %s-selected node exec host without restricting native tools",
     async (source) => {
       const { sessionTarget } = fixture.session;
-      const probeServer = await startProbeServer();
-      const scheduler = createTestGatewayScheduler();
-      const config: OpenClawConfig = {
-        session: { store: sessionTarget.storePath },
-        plugins: { enabled: false },
-        tools: { exec: { host: source === "config" ? "node" : "gateway" } },
-        mcp: {
-          servers: {
-            probe: {
-              transport: "streamable-http",
-              url: `http://127.0.0.1:${probeServer.port}/mcp`,
-            },
-            openclaw: {
-              transport: "streamable-http",
-              url: `http://127.0.0.1:${probeServer.port}/mcp`,
-            },
+      config.tools = { exec: { host: source === "config" ? "node" : "gateway" } };
+      config.mcp = {
+        servers: {
+          ...config.mcp?.servers,
+          openclaw: {
+            transport: "streamable-http",
+            url: `http://127.0.0.1:${probeServer.port}/mcp`,
           },
         },
       };
-      try {
-        await setSessionMcpRuntimeScheduler(scheduler);
-        const context = await fixture.prepare({
-          sessionKey: sessionTarget.sessionKey,
-          sessionId: sessionTarget.sessionId,
-          config,
-          toolOverrides: { mcpServers: { openclaw: false }, webSearch: false },
-          ...(source === "run" ? { execOverrides: { host: "node" as const } } : {}),
+      const context = await fixture.prepare({
+        sessionKey: sessionTarget.sessionKey,
+        sessionId: sessionTarget.sessionId,
+        config,
+        toolOverrides: { mcpServers: { openclaw: false }, webSearch: false },
+        ...(source === "run" ? { execOverrides: { host: "node" as const } } : {}),
+      });
+      await withCliContext(context, async () => {
+        expect(context.params.cliToolAvailability).toBeUndefined();
+        expect(context.hostOwnedTools).toBeUndefined();
+        const args = context.preparedBackend.backend.args ?? [];
+        expect(args[args.indexOf("--disallowedTools") + 1]?.split(",")).toContain("WebSearch");
+        expect(Object.keys(readMcpServers(context))).toEqual(["openclaw"]);
+        const minted = mintGrant.mock.lastCall?.[0];
+        expect(minted).toBeDefined();
+        const scoped = await resolveMcpLoopbackScopedTools({
+          cfg: config,
+          context: minted!.context,
+          admittedRunContext: context.params.admittedRunContext,
+          bundledTools: minted!.bundledTools,
         });
-        await withCliContext(context, async () => {
-          expect(context.params.cliToolAvailability).toBeUndefined();
-          expect(context.hostOwnedTools).toBeUndefined();
-          const args = context.preparedBackend.backend.args ?? [];
-          expect(args[args.indexOf("--disallowedTools") + 1]?.split(",")).toContain("WebSearch");
-          expect(Object.keys(readMcpServers(context))).toEqual(["openclaw"]);
-          const minted = mintGrant.mock.lastCall?.[0];
-          expect(minted).toBeDefined();
-          const scoped = await resolveMcpLoopbackScopedTools({
-            cfg: config,
-            context: minted!.context,
-            admittedRunContext: context.params.admittedRunContext,
-            bundledTools: minted!.bundledTools,
-          });
-          const probe = scoped.tools.find((tool) => tool.name === "probe__echo");
-          expect(scoped.tools.some((tool) => tool.name === "openclaw__echo")).toBe(false);
-          expect(probe).toBeDefined();
-          expect(getTextContent(await probe!.execute("configured-mcp", { word: "pong" }))).toBe(
-            "probe:pong",
-          );
-          expect(probeServer.calls).toBe(1);
-        });
-      } finally {
-        await disposeAllSessionMcpRuntimes();
-        await scheduler.stop();
-        await probeServer.close();
-      }
+        const probe = scoped.tools.find((tool) => tool.name === "probe__echo");
+        expect(scoped.tools.some((tool) => tool.name === "openclaw__echo")).toBe(false);
+        expect(probe).toBeDefined();
+        expect(getTextContent(await probe!.execute("configured-mcp", { word: "pong" }))).toBe(
+          "probe:pong",
+        );
+        expect(probeServer.calls).toBe(1);
+      });
     },
   );
 
@@ -209,7 +214,6 @@ describe("configured MCP servers on CLI turns", () => {
     "serves $name configured MCP servers through the loopback on every turn",
     async ({ allow, deny, childAllow }) => {
       const { sessionTarget } = fixture.session;
-      const probeServer = await startProbeServer();
       const childSessionKey = "agent:main:subagent:configured-mcp";
       replaceSessionEntrySync(
         { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
@@ -222,72 +226,52 @@ describe("configured MCP servers on CLI turns", () => {
           inheritedToolAllow: childAllow ?? allow,
         },
       );
-      const config: OpenClawConfig = {
-        session: { store: sessionTarget.storePath },
-        plugins: { enabled: false },
-        tools: { allow, deny },
-        mcp: {
-          servers: {
-            probe: {
-              transport: "streamable-http",
-              url: `http://127.0.0.1:${probeServer.port}/mcp`,
-            },
-          },
-        },
-      };
       const turns = [];
-      const scheduler = createTestGatewayScheduler();
-      try {
-        await setSessionMcpRuntimeScheduler(scheduler);
-        for (const completion of [false, true, false]) {
-          const context = await fixture.prepare({
-            sessionKey: sessionTarget.sessionKey,
-            sessionId: sessionTarget.sessionId,
-            config,
-            ...(completion
-              ? createPersistedCompletionHandoff(
-                  childSessionKey,
-                  "configured-mcp-child",
-                  sessionTarget,
-                )
-              : {}),
+      config.tools = { allow, deny };
+      for (const completion of [false, true, false]) {
+        const context = await fixture.prepare({
+          sessionKey: sessionTarget.sessionKey,
+          sessionId: sessionTarget.sessionId,
+          config,
+          ...(completion
+            ? createPersistedCompletionHandoff(
+                childSessionKey,
+                "configured-mcp-child",
+                sessionTarget,
+              )
+            : {}),
+        });
+        await withCliContext(context, async () => {
+          const minted = mintGrant.mock.lastCall?.[0];
+          // The CLI never reaches the configured server directly.
+          expect(Object.keys(readMcpServers(context))).toEqual(["openclaw"]);
+          const scoped = minted
+            ? await resolveMcpLoopbackScopedTools({
+                cfg: config,
+                context: minted.context,
+                admittedRunContext: context.params.admittedRunContext,
+                ...(minted.bundledTools ? { bundledTools: minted.bundledTools } : {}),
+              })
+            : { tools: [] };
+          const probe = scoped.tools.find((tool) => tool.name === "probe__echo");
+          const initialized = (await handleMcpJsonRpc({
+            message: { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+            tools: scoped.tools,
+            toolSchema: buildMcpToolSchema(scoped.tools),
+            serverInstructions: resolveBundleMcpServerInstructions(
+              minted?.bundledTools,
+              new Set(buildMcpToolSchema(scoped.tools).map((entry) => entry.name)),
+            ),
+          })) as { result: { instructions?: string } };
+          turns.push({
+            toolsAllow: minted?.context.toolsAllow?.toSorted(),
+            listed: scoped.tools.map((tool) => tool.name).toSorted(),
+            instructions: initialized.result.instructions,
+            result: probe
+              ? getTextContent(await probe.execute("configured-mcp", { word: "pong" }))
+              : undefined,
           });
-          await withCliContext(context, async () => {
-            const minted = mintGrant.mock.lastCall?.[0];
-            // The CLI never reaches the configured server directly.
-            expect(Object.keys(readMcpServers(context))).toEqual(["openclaw"]);
-            const scoped = minted
-              ? await resolveMcpLoopbackScopedTools({
-                  cfg: config,
-                  context: minted.context,
-                  admittedRunContext: context.params.admittedRunContext,
-                  ...(minted.bundledTools ? { bundledTools: minted.bundledTools } : {}),
-                })
-              : { tools: [] };
-            const probe = scoped.tools.find((tool) => tool.name === "probe__echo");
-            const initialized = (await handleMcpJsonRpc({
-              message: { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
-              tools: scoped.tools,
-              toolSchema: buildMcpToolSchema(scoped.tools),
-              serverInstructions: resolveBundleMcpServerInstructions(
-                minted?.bundledTools,
-                new Set(buildMcpToolSchema(scoped.tools).map((entry) => entry.name)),
-              ),
-            })) as { result: { instructions?: string } };
-            turns.push({
-              toolsAllow: minted?.context.toolsAllow?.toSorted(),
-              listed: scoped.tools.map((tool) => tool.name).toSorted(),
-              instructions: initialized.result.instructions,
-              result: probe
-                ? getTextContent(await probe.execute("configured-mcp", { word: "pong" }))
-                : undefined,
-            });
-          });
-        }
-      } finally {
-        await disposeAllSessionMcpRuntimes();
-        await scheduler.stop();
-        await probeServer.close();
+        });
       }
       const expectedTools = deny.length > 0 ? ["read"] : ["probe__echo", "read"];
       expect(turns[0]).toEqual({

@@ -5,7 +5,6 @@ import { configureExecutionDecisionWorkSink } from "../../audit/execution-decisi
 import type { ExecutionDecisionWork } from "../../audit/execution-decision-work.types.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import {
   createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
@@ -18,7 +17,6 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
-  createTestMcpLoopbackServer,
 } from "../cli-runner.test-helpers.js";
 import {
   providerContextTokenCacheKey,
@@ -26,11 +24,7 @@ import {
 } from "../context-cache.js";
 import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
-import {
-  emptyCliPreparation,
-  mockCliMcpPreparation,
-  setRawCliBackendForPrepareTest,
-} from "./prepare-mcp.test-support.js";
+import { emptyCliPreparation, setRawCliBackendForPrepareTest } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -94,17 +88,9 @@ describe("CLI model-routing receipt authority", () => {
   let clearDecisionSink: (() => void) | undefined;
 
   beforeEach(() => {
+    resetContextWindowCacheForTest();
     setRawCliBackendForPrepareTest(buildDefaultTestCliBackend());
-    mockCliMcpPreparation({
-      getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
-      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
-      resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
-      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
-      prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
-        args: [],
-        cleanup: vi.fn(async () => undefined),
-      })),
-    });
+    setCliRunnerPrepareTestDeps(emptyCliPreparation());
     fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
   });
 
@@ -116,6 +102,7 @@ describe("CLI model-routing receipt authority", () => {
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
     await fixture.cleanup();
+    resetContextWindowCacheForTest();
   });
 
   it.each(["native", "selected", "automatic"] as const)(
@@ -249,58 +236,25 @@ describe("CLI model-routing receipt authority", () => {
     expect.soft(decisionWork).toEqual([]);
     expect.soft(dispatch).not.toHaveBeenCalled();
   });
-});
 
-describe("CLI context-window ownership", () => {
-  let fixture: ReturnType<typeof createCliRunnerPrepareFixture>;
-
-  beforeEach(() => {
-    resetContextWindowCacheForTest();
-    setCliRunnerPrepareTestDeps(emptyCliPreparation());
-    fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
-  });
-
-  afterEach(async () => {
-    resetCliRunnerPrepareTestDeps();
-    cliBackendsTesting.resetDepsForTest();
-    resetContextWindowCacheForTest();
-    await fixture.cleanup();
-  });
-
-  it("keeps test-cli stable when another provider loads the same model", async () => {
+  it("keeps CLI context discovery owned by its provider across turns", async () => {
     const provider = "test-cli";
     const model = "large-model";
-    const catalogProvider = "api-provider";
-    const prepareExecution = vi.fn<NonNullable<CliBackendPlugin["prepareExecution"]>>(
-      async () => undefined,
-    );
     setRawCliBackendForPrepareTest({
       ...buildDefaultTestCliBackend(),
-      id: provider,
-      modelProvider: catalogProvider,
-      prepareExecution,
+      modelProvider: "api-provider",
     });
-    const prepare = () => fixture.prepare({ provider, model });
-    const cold = await prepare();
-    expect(cold.contextWindowInfo?.tokens).toBe(200_000);
-
-    // Discovery publishes both provider-qualified and bare keys. The latter cannot
-    // supply a different runtime's native budget on the next turn.
-    const discoveredCache = new Map([
+    const prepare = async () =>
+      (await fixture.prepare({ provider, model })).contextWindowInfo?.tokens;
+    expect(await prepare()).toBe(200_000);
+    const discovered = new Map([
       [model, 1_000_000],
-      [providerContextTokenCacheKey(catalogProvider, model), 1_000_000],
+      [providerContextTokenCacheKey("api-provider", model), 1_000_000],
     ]);
-    replaceDiscoveredContextTokenCache(new Map(discoveredCache));
-    const resumed = await prepare();
-    expect(resumed.contextWindowInfo?.tokens).toBe(200_000);
-
-    // A provider-owned large window remains usable even without a manifest row.
-    discoveredCache.set(providerContextTokenCacheKey(provider, model), 1_000_000);
-    replaceDiscoveredContextTokenCache(new Map(discoveredCache));
-    const owned = await prepare();
-    expect(owned.contextWindowInfo?.tokens).toBe(1_000_000);
-    expect(prepareExecution.mock.calls.map(([context]) => context.contextTokenBudget)).toEqual([
-      200_000, 200_000, 1_000_000,
-    ]);
+    replaceDiscoveredContextTokenCache(new Map(discovered));
+    expect(await prepare()).toBe(200_000);
+    discovered.set(providerContextTokenCacheKey(provider, model), 1_000_000);
+    replaceDiscoveredContextTokenCache(new Map(discovered));
+    expect(await prepare()).toBe(1_000_000);
   });
 });

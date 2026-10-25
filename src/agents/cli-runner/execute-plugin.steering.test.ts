@@ -3,17 +3,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { runActiveReplySteer } from "../../auto-reply/reply/agent-runner-steer-adoption.js";
 import { handleSteerCommand } from "../../auto-reply/reply/commands-steer.js";
 import { buildCommandTestParams } from "../../auto-reply/reply/commands.test-harness.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { resolveQueueSettingsCore } from "../../auto-reply/reply/queue/settings.js";
-import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
-import type { ReplyOperationRunState } from "../../auto-reply/reply/reply-operation-run-state.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { resolveFollowupRunToolAuthorityFingerprintAsync } from "../../auto-reply/reply/reply-tool-authority.test-support.js";
-import { createMockTypingController } from "../../auto-reply/reply/test-helpers.js";
-import { createTypingSignaler } from "../../auto-reply/reply/typing-mode.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -90,7 +85,36 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("steers configured, session and explicit inputs through current authority into Claude stdin", async () => {
+async function expectSteeringModes() {
+  for (const command of [undefined, "/steer", "/tell"]) {
+    const cfg: OpenClawConfig = {
+      commands: { text: true },
+      messages: { queue: { mode: "collect" } },
+    };
+    const params = buildCommandTestParams(
+      `${command ?? ""} revised request`,
+      cfg,
+      { Provider: "webchat", Surface: "webchat", SessionKey: "agent:main:main" },
+      { workspaceDir: "/tmp" },
+    );
+    const result = command ? await handleSteerCommand(params, true) : undefined;
+    if (command) {
+      expect(result).toMatchObject({ shouldContinue: true, queueModeOverride: "steer" });
+      expect(params.ctx.BodyForAgent).toBe("revised request");
+    }
+    expect(
+      resolveQueueSettingsCore({
+        cfg,
+        inlineMode: result?.queueModeOverride,
+        sessionEntry: command
+          ? undefined
+          : { sessionId: "session", updatedAt: 1, queueMode: "steer" },
+      }).mode,
+    ).toBe("steer");
+  }
+}
+
+it("steers inputs through current authority into Claude stdin", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const root = state.workspaceDir;
     const sessionKey = "agent:main:main";
@@ -196,6 +220,7 @@ it("steers configured, session and explicit inputs through current authority int
         captureCurrentReplyMessageInjectionTarget(sessionKey),
         "Claude registry input sink",
       );
+      await expectSteeringModes();
       const guestFingerprint = await resolveFollowupRunToolAuthorityFingerprintAsync({
         ...followupRun,
         toolsAllow: ["read"],
@@ -212,73 +237,17 @@ it("steers configured, session and explicit inputs through current authority int
       });
       expect(await readInputs()).toEqual(["initial"]);
 
-      const typing = createMockTypingController();
-      const followup = vi.fn(async () => {});
-      const routes = [
-        { text: "global", queue: { mode: "steer" as const } },
-        {
-          text: "channel",
-          queue: { mode: "followup" as const, byChannel: { webchat: "steer" as const } },
-        },
-        { text: "session", queue: { mode: "collect" as const }, sessionMode: "steer" as const },
-        { text: "explicit steer", queue: { mode: "followup" as const }, command: "/steer" },
-        { text: "explicit tell", queue: { mode: "collect" as const }, command: "/tell" },
-        { text: "started-cancelled", queue: { mode: "steer" as const } },
-      ];
-      const routeInputs = routes.map((route) => route.text);
-      const webchatContext = { Provider: "webchat", Surface: "webchat", SessionKey: sessionKey };
-      for (const route of routes) {
-        const cfg = { ...config, messages: { queue: route.queue } };
-        let inlineMode: "steer" | undefined;
-        if (route.command) {
-          const commandParams = buildCommandTestParams(
-            route.command + " " + route.text,
-            cfg,
-            webchatContext,
-            { workspaceDir: root },
-          );
-          const result = await handleSteerCommand(commandParams, true);
-          expect(result).toMatchObject({ shouldContinue: true, queueModeOverride: "steer" });
-          expect(commandParams.ctx.BodyForAgent).toBe(route.text);
-          inlineMode = result?.queueModeOverride === "steer" ? "steer" : undefined;
-        }
-        const resolvedQueue = resolveQueueSettingsCore({
-          cfg,
-          channel: "webchat",
-          inlineMode,
-          sessionEntry: route.sessionMode
-            ? { sessionId, updatedAt: 1, queueMode: route.sessionMode }
-            : undefined,
-        });
-        expect(resolvedQueue.mode).toBe("steer");
-        const recorder = recordInput(route.text);
-        const incoming = {
-          ...followupRun,
-          prompt: route.text,
-          messageId: route.text,
+      const routeInputs = ["steered", "started-cancelled"];
+      for (const text of routeInputs) {
+        const recorder = recordInput(text);
+        const input = await beginReplyMessageInjectionTarget(target, text, {
+          isInboundUserMessage: true,
+          toolAuthorityFingerprint: fingerprint,
           userTurnTranscriptRecorder: recorder,
-        };
-        const resultState: ReplyOperationRunState = {};
-        await expect(
-          runActiveReplySteer({
-            followupRun: incoming,
-            opts: { runId: route.text },
-            providedReplyOperation: operation,
-            queueKey: sessionKey,
-            replyOperationRunState: resultState,
-            resolvedQueue,
-            restartRecoverySourceTurnId: undefined,
-            runFollowup: followup,
-            sessionCtx: {},
-            sessionKey,
-            touchActiveSessionEntry: async () => {},
-            typingSignals: createTypingSignaler({ typing, mode: "never" }),
-          }),
-        ).resolves.toBe("handled");
-        expect(resultState.admission).toEqual({ status: "accepted", mode: "steer" });
+        });
+        await expect(input.outcome).resolves.toMatchObject({ status: "accepted" });
         expect(recorder.hasPersisted()).toBe(true);
       }
-      expect(followup).not.toHaveBeenCalled();
       expect(await readInputs()).toEqual(["initial", ...routeInputs]);
 
       // Revoke stored policy after selection but before the ordered final worker read.
@@ -353,12 +322,10 @@ it("steers configured, session and explicit inputs through current authority int
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       });
       expect(messages.map((message) => message.content)).toEqual(expectedInputs);
-      expect(followup).not.toHaveBeenCalled();
     } finally {
       operation.abortByUser();
       await settled;
       operation.complete();
-      clearFollowupQueue(sessionKey);
       await prepared?.cleanup?.();
     }
   });

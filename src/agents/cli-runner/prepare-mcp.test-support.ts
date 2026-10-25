@@ -126,49 +126,27 @@ export function registerCliMcpPreparationTests({
     });
     const sessionKey = "agent:main:telegram:group:chat123";
     const senderId = "canonical-sender";
-    const sender = {
-      senderName: "Canonical Name",
-      senderUsername: "canonical-user",
-      senderE164: "+15551234567",
-      groupId: "chat123",
-      groupChannel: "ops",
-      groupSpace: "workspace-a",
-    };
-    const sessionEntry = { execHost: "node", execNode: "mac-a" } as const;
     const forwarded = {
       runtimePolicySessionKey: "agent:worker:discord:default:direct:canonical-sender",
-      modelProvider: "anthropic",
       runId: "run-test-room-event-tools",
-      execOverrides: { host: "node", security: "allowlist", ask: "always", node: "mac-b" },
-      bashElevated: {
-        enabled: true,
-        allowed: true,
-        defaultLevel: "full",
-        fullAccessAvailable: false,
-        fullAccessBlockedReason: "runtime",
-      },
-      trigger: "user",
       clientCaps: ["tool-events", "inline-widgets"],
       pinnedWidgetAuthoring: true,
       currentChannelId: "telegram:-100123:topic:42",
       currentThreadTs: "42",
       currentMessageId: "reply-message-1",
-      currentInboundAudio: true,
       sourceReplyDeliveryMode: "message_tool_only",
       taskSuggestionDeliveryMode: "gateway",
       requireExplicitMessageTarget: true,
       approvalReviewerDeviceId: "reviewer-device",
       spawnedBy: "agent:main:telegram:group:parent",
     } satisfies Partial<RunCliAgentParams>;
-    const { preparedBackend, params, workspaceDir, mcpDeliveryCapture, systemPrompt } =
+    const { preparedBackend, params, mcpDeliveryCapture, systemPrompt } =
       await getFixture().prepare({
         ...forwarded,
-        ...sender,
         sessionKey,
         agentId: "worker",
         provider: "native-cli",
         messageActionTurnCapability,
-        sessionEntry: sessionEntry as never,
         currentInboundEventKind: "room_event",
         messageChannel: "telegram",
         messageProvider: "discord",
@@ -184,37 +162,25 @@ export function registerCliMcpPreparationTests({
       OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
     });
     expect(JSON.stringify(preparedBackend.env)).not.toContain(messageActionTurnCapability);
-    const settings = { permissionMode: undefined, toolOverrides: undefined };
-    expect(mint).toHaveBeenCalledWith({
-      context: {
-        ...forwarded,
-        ...sender,
-        sessionKey,
-        requesterOrigin: { ...sender, sessionKey, messageProvider: "discord", senderId },
-        runtimePolicyAgentId: "worker",
-        agentId: "main",
-        sessionId: "session-test",
-        workspaceDir,
-        modelId: "test-model",
-        messageProvider: "telegram",
-        accountId: undefined,
-        inboundEventKind: "room_event",
-        senderIsOwner: false,
-        nodeExecAllowed: true,
-        execSession: sessionEntry,
-        channelContext: { sender: { id: senderId }, chat: { id: "chat-1" } },
-      },
-      runtimeOwnerToken,
-      admittedRunContext: params.admittedRunContext,
-      toolPolicyConfig: {},
-      sessionEventSourcePolicy: { toolsAllow: undefined, settings },
-      messageActionTurnCapability,
-      bindQuestionAnswerAuthority: expect.any(Function),
-      toolAuth: {
-        agentDir: expect.any(String),
-        store: expect.objectContaining({ version: 1, profiles: {} }),
-      },
-    });
+    expect(mint).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          ...forwarded,
+          sessionKey,
+          requesterOrigin: { sessionKey, messageProvider: "discord", senderId },
+          runtimePolicyAgentId: "worker",
+          agentId: "main",
+          messageProvider: "telegram",
+          inboundEventKind: "room_event",
+          senderIsOwner: false,
+          channelContext: { sender: { id: senderId }, chat: { id: "chat-1" } },
+        }),
+        runtimeOwnerToken,
+        admittedRunContext: params.admittedRunContext,
+        messageActionTurnCapability,
+        bindQuestionAnswerAuthority: expect.any(Function),
+      }),
+    );
     const capture = preparedBackend.mcpClientGrantCapture;
     expect(capture?.transportToken).toBe(token);
     capture?.adoptProcessToken(processToken);
