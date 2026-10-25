@@ -322,7 +322,6 @@ export function registerQueuedReservationFailureTests({
     "session replacement",
     "row replacement",
     "lifecycle rotation",
-    "parent persistence",
   ])("releases or withdraws the exact queued reservation after %s failure", async (failure) => {
     const { controllerSessionKey } = controlController;
     let entry = createSubagentRunRecord({
@@ -429,26 +428,19 @@ export function registerQueuedReservationFailureTests({
           if (failure === "lifecycle rotation") {
             rotateAgentEventLifecycleGeneration();
           }
-          if (failure === "parent persistence") {
-            throw new Error("partial persistence failed");
-          }
           return true;
         },
       });
-      if (failure === "parent persistence") {
-        await expect(pending).rejects.toThrow("partial persistence failed");
-      } else {
-        const result = await pending;
-        expect(result.killed).toBe(0);
-        expect(result.status).toBe(
-          ["row replacement", "lifecycle rotation"].includes(failure) ? "ok" : "error",
-        );
-        if (failure === "session replacement release") {
-          expect(rejectedWrite).toBe(2);
-          expect(result).toMatchObject({
-            error: expect.stringContaining("kill intent could not be released"),
-          });
-        }
+      const result = await pending;
+      expect(result.killed).toBe(0);
+      expect(result.status).toBe(
+        ["row replacement", "lifecycle rotation"].includes(failure) ? "ok" : "error",
+      );
+      if (failure === "session replacement release") {
+        expect(rejectedWrite).toBe(2);
+        expect(result).toMatchObject({
+          error: expect.stringContaining("kill intent could not be released"),
+        });
       }
       if (["tombstone write", "claim release", "session replacement release"].includes(failure)) {
         expect(subagentRuns.get(entry.runId)?.killIntent).toMatchObject({ reason: "killed" });

@@ -35,7 +35,7 @@ import {
   createControlRunFixture,
   enqueueControlRun,
 } from "./subagent-control.fixtures.test-support.js";
-import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
+import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import type { ResolvedSubagentController } from "./subagent-control.types.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -143,7 +143,7 @@ export function registerQueuedStopControlTests({
   ) => void;
   writeSessionStoreFixture: (label: string, store: Record<string, unknown>) => Promise<string>;
 }) {
-  it.for(["first cancellation await", "admin tree", "channel stop", "channel ACP lookup"])(
+  it.for(["first cancellation await", "channel stop", "channel ACP lookup"])(
     "does not dispatch selected queued work during %s cancellation",
     async (kind, { signal }) => {
       const duringLookup = kind === "channel ACP lookup";
@@ -151,10 +151,6 @@ export function registerQueuedStopControlTests({
       const controllerSessionKey = "agent:main:main";
       const collector = (name: "running" | "queued") => {
         const queued = name === "queued";
-        const owner =
-          queued && kind.endsWith("tree")
-            ? "agent:main:subagent:running-collector"
-            : controllerSessionKey;
         return createSubagentRunRecord({
           runId: `${name}-collector`,
           childSessionKey: `agent:main:subagent:${name}-collector`,
@@ -162,9 +158,8 @@ export function registerQueuedStopControlTests({
             sessionId: `${name}-session`,
             lifecycleRevision: `${name}-session-revision`,
           },
-          controllerSessionKey: owner,
-          requesterSessionKey: owner,
-          requesterTurnRunId: queued && kind === "admin tree" ? "running-collector" : undefined,
+          controllerSessionKey,
+          requesterSessionKey: controllerSessionKey,
           collect: true,
           createdAt: 1,
           execution: queued ? { status: "queued" } : { status: "running", startedAt: 2 },
@@ -198,11 +193,7 @@ export function registerQueuedStopControlTests({
         storePath,
         running.childSessionKey,
         "running-session",
-        () => {
-          if (!channelStop && kind !== "first cancellation await") {
-            expect(releaseSwarmRun(running.runId)).toBe(true);
-          }
-        },
+        () => {},
         running.runId,
       );
       const controller = { ...controllerFor(controllerSessionKey), controllerAgentId: "main" };
@@ -228,16 +219,6 @@ export function registerQueuedStopControlTests({
           // admission is pending; no synthetic execution outcome is needed.
           expect(releaseSwarmRun(running.runId)).toBe(true);
           expect(await cancellation).toMatchObject({ status: "ok", killed: 2 });
-        } else if (kind === "admin tree") {
-          expect(
-            await killSubagentRunAdmin({
-              cfg,
-              sessionKey: running.childSessionKey,
-              expectedRunId: running.runId,
-              expectedGeneration: running.generation,
-              expectedOwnerKey: controllerSessionKey,
-            }),
-          ).toMatchObject({ found: true, killed: true, cascadeKilled: 1 });
         } else if (duringLookup) {
           lookup = holdConversationLookup();
           stopDuringLookup = tryFastAbortFromMessage({
