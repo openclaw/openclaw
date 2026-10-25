@@ -268,19 +268,24 @@ it. The complete semantic program is preserved on cache misses.
 ## Maintenance Rules
 
 Fixed validators are emitted from their canonical schemas. Gateway, Control UI,
-Codex, and plugin generators share the standalone TypeBox emitter in
+Codex, and fixed first-party generators share the standalone TypeBox emitter in
 `lib/typebox-standalone.mts`; it binds explicit static captures and rejects
-unsupported ones.
+unsupported ones. Lobster uses the Ajv standalone emitter to preserve its
+dependency-owned error contract.
 
-| Schemas                                                     | Regenerate                             |
-| ----------------------------------------------------------- | -------------------------------------- |
-| Gateway protocol                                            | `pnpm gateway:validators:gen`          |
-| Control UI protocol                                         | `pnpm ui:validators:gen`               |
-| Codex app-server protocol                                   | `pnpm codex-app-server:validators:gen` |
-| Model registry, theme, TypeSafe, and computer-use contracts | `pnpm static:validators:gen`           |
+| Schemas                                                     | Regenerate                                                         |
+| ----------------------------------------------------------- | ------------------------------------------------------------------ |
+| Gateway protocol                                            | `pnpm gateway:validators:gen`                                      |
+| Control UI protocol                                         | `pnpm ui:validators:gen`                                           |
+| Codex app-server protocol                                   | `pnpm codex-app-server:validators:gen`                             |
+| Model registry, theme, TypeSafe, and computer-use contracts | `pnpm static:validators:gen`                                       |
+| Lobster fixed payload/envelope contracts                    | `pnpm lobster:validators:gen --package-dir <pnpm-patch-directory>` |
 
 Run `pnpm validators:check` after schema changes to verify the committed
 validators are current. CI runs this freshness check alongside the normal build.
+The Lobster generator writes only inside an explicit `pnpm patch` edit directory;
+after regeneration, run `pnpm patch-commit <directory>` to refresh the dependency
+patch. Its check command reads the installed patched schemas without modifying them.
 
 - Read `scripts/AGENTS.md` before changing scripts.
 - Keep package scripts, generators, generated-artifact checks, docs references,
@@ -290,3 +295,7 @@ validators are current. CI runs this freshness check alongside the normal build.
   behavior.
 
 See also [Scripts](https://docs.openclaw.ai/help/scripts) for public-facing script guidance.
+
+### Dynamic validator benchmark
+
+`node --import ./scripts/tsx.mjs scripts/bench-dynamic-validators.mts <jit|aot> [iterations] [warmup] [mcp|plugin|llm|llm-coerce]` measures the actual validation owners. Compare five interleaved fresh baseline/candidate processes per fixture; import/setup and warm CPU/wall costs are reported separately.

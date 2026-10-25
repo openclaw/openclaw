@@ -376,9 +376,8 @@ describe("Bun private node runtime installation", () => {
   it("keeps npm metadata and packing on Windows under Bun", async () => {
     const stateDir = tempDirs.make("openclaw-node-bun-windows-");
     // Simulating Windows must not change the host filesystem's temp-path semantics.
-    vi.spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir").mockReturnValue(
-      tempDirs.make("openclaw-node-bun-windows-tmp-"),
-    );
+    const hostTmpDir = tmpOpenClawDir.resolvePreferredOpenClawTmpDir();
+    vi.spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir").mockReturnValue(hostTmpDir);
     Object.defineProperty(process, "platform", { value: "win32" });
     mocks.pack.mockResolvedValue({ ok: false, error: "synthetic npm pack failure" });
     await expect(prepare(stateDir)).rejects.toThrow("synthetic npm pack failure");

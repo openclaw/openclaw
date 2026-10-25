@@ -16,6 +16,7 @@ import type {
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { notifyListeners } from "../shared/listeners.js";
+import { encodeOwnedBuffer } from "../shared/owned-buffer.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
@@ -390,7 +391,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
   // Own only the retained suffix; producer strings may borrow a large callback.
   const ownedChunk = {
     order: session.totalOutputChars,
-    text: Buffer.from(
+    text: encodeOwnedBuffer(
       sliceUtf16Safe(chunk, Math.max(0, chunk.length - session.maxOutputChars)),
       "utf16le",
     ),

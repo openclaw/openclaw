@@ -22,6 +22,7 @@ import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { dropPostgresTestSchemas } from "../infra/postgres-sync/schema-cleanup.test-support.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { retireSqliteDatabaseAdmissionForPath as retireAdmission } from "../infra/sqlite-database-admission.js";
 import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
@@ -116,13 +117,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
         });
         await owners.cleanupSessionStateForTest({ stateDir: root });
       }
-      const schemas = await queryRows<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-        [prefix.length + 1, `${prefix}_`],
-      );
-      for (const { nspname } of schemas) {
-        await client.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
-      }
+      await dropPostgresTestSchemas(client, prefix);
     } finally {
       await client?.end();
       resetDatabaseEngineSelectionForTest();
@@ -206,6 +201,21 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         );
       }
     });
+  });
+
+  it("reuses one idle PostgreSQL backend across sequential read-only session opens", async () => {
+    await createSession("readonly-reuse");
+    const backend = () =>
+      admit(() => {
+        const opened = owners.openOpenClawAgentDatabaseReadOnly({ agentId: "actor" });
+        assert(opened.found);
+        try {
+          return opened.database.db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+        } finally {
+          opened.database.close();
+        }
+      });
+    expect(backend()).toBe(backend());
   });
 
   it("migrates version 27 indexes and revision triggers while retaining rows and search", async () => {

@@ -117,8 +117,15 @@ it.each([
         vi.spyOn(fs, "lstat").mockImplementation(async (pathname) => {
           const result = await lstat(pathname);
           if (
-            pathname ===
-            path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath)
+            pathname instanceof URL &&
+            pathname.href ===
+              pathToFileURL(
+                path.join(
+                  root,
+                  "dist",
+                  runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+                ),
+              ).href
           ) {
             current = false;
           }

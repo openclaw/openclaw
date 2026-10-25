@@ -2,6 +2,7 @@ import { writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
@@ -77,18 +78,7 @@ const server = createServer((req, res) => {
 let port = 0;
 
 beforeAll(async () => {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("Expected a TCP icon fixture listener"));
-        return;
-      }
-      port = address.port;
-      resolve();
-    });
-  });
+  port = Number(new URL(await listenLoopback(server)).port);
 });
 
 afterAll(async () => {

@@ -1,6 +1,7 @@
 import { err, ok } from "@openclaw/normalization-core/result";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type { SessionEntrySummary } from "./session-accessor.types.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
@@ -10,6 +11,7 @@ import {
   type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+import type { InternalSessionEntry } from "./types.js";
 
 export type SessionHistoryWorkerRequestRunner = <
   Kind extends SessionHistoryWorkerPreparedInput["kind"],
@@ -25,6 +27,56 @@ export type SessionHistoryWorkerRequestRunner = <
 
 type Readers = Omit<SessionHistoryWorkerDatabase, "assertCurrent">;
 type ReaderContext = { runRequest: SessionHistoryWorkerRequestRunner };
+
+// JSON and worker transport copy primitive strings. Reuse equal identities only after
+// transport, while the received graph is still owned here; mismatched evidence stays intact.
+function shareSummaryIdentityStrings(entry: InternalSessionEntry | undefined, key?: string) {
+  if (!entry) {
+    return entry;
+  }
+  const digest = entry.observerDigest;
+  const source = entry.restartRecoveryOperatorSource;
+  if (!digest && !source) {
+    return entry;
+  }
+  const sessionKey = key ?? digest?.sessionKey ?? source?.sessionKey;
+  for (const summary of [digest, source]) {
+    if (!summary) {
+      continue;
+    }
+    if (summary.sessionId === entry.sessionId) {
+      summary.sessionId = entry.sessionId;
+    }
+    if (
+      summary.lifecycleRevision !== undefined &&
+      summary.lifecycleRevision === entry.lifecycleRevision
+    ) {
+      summary.lifecycleRevision = entry.lifecycleRevision;
+    }
+    if (sessionKey !== undefined && summary.sessionKey === sessionKey) {
+      summary.sessionKey = sessionKey;
+    }
+  }
+  if (digest?.runId !== undefined && digest.runId === entry.lastRunId) {
+    digest.runId = entry.lastRunId;
+  }
+  if (source && digest) {
+    if (digest.runId !== undefined && source.sourceRunId === digest.runId) {
+      source.sourceRunId = digest.runId;
+    }
+    if (digest.agentId !== undefined && source.agentId === digest.agentId) {
+      source.agentId = digest.agentId;
+    }
+  }
+  return entry;
+}
+
+function shareSummaryRowStrings<T extends { entries: SessionEntrySummary[] }>(value: T): T {
+  for (const { entry, sessionKey } of value.entries) {
+    shareSummaryIdentityStrings(entry, sessionKey);
+  }
+  return value;
+}
 
 /** Share stateless methods; each retained read keeps its own admission runner. */
 export function createSessionHistoryWorkerReaders(
@@ -266,7 +318,7 @@ const readers: Readers & ThisType<ReaderContext> = {
     return this.runRequest(
       () => ({ kind: "session-exact-entries", ...captured }),
       JSON.stringify(captured).length * 2,
-      (value) => value,
+      shareSummaryRowStrings,
       signal,
     );
   },
@@ -282,7 +334,12 @@ const readers: Readers & ThisType<ReaderContext> = {
     return await this.runRequest(
       () => ({ kind: "session-row-facts", ...captured }),
       JSON.stringify(captured).length * 2,
-      (value) => value,
+      (value) => {
+        for (const { entry, sessionKey } of value.rows) {
+          shareSummaryIdentityStrings(entry, sessionKey);
+        }
+        return value;
+      },
     );
   },
   readProgressCard: reader("session-progress-card", (value) => value.card),
@@ -298,9 +355,9 @@ const readers: Readers & ThisType<ReaderContext> = {
   readEntryResult: reader("session-entry-read", (value) => ({
     ...(value.readError
       ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-      : ok(value.entry)),
+      : ok(shareSummaryIdentityStrings(value.entry))),
     source: value.source,
-    facts: value.facts,
+    facts: value.facts && shareSummaryRowStrings(value.facts),
   })),
   readEntryCurrent: reader("session-entry-current", (value) => value.entry),
   // The native reader validates the selected file. Replacement after that read is best effort.
@@ -315,10 +372,10 @@ const readers: Readers & ThisType<ReaderContext> = {
         ifRevision,
       }),
       JSON.stringify({ scope, continuation, expectedIdentity: captured, ifRevision }).length * 2,
-      (value) => value,
+      shareSummaryRowStrings,
     );
   },
-  readStoreProjection: reader("session-store-projection", (value) => value),
+  readStoreProjection: reader("session-store-projection", shareSummaryRowStrings),
   readStoreSummary: reader("session-store-summary", (value) => value.summary),
   readIdentityEvidence: reader("session-identity-evidence", (value) => value.evidence),
   readProjectionStatus: reader("projection-status", (value) => value),

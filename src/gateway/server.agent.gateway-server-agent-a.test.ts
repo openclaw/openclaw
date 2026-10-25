@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -98,13 +99,9 @@ async function setGatewayModelCatalogForTest(
       providers: {
         "ollama-cloud": {
           baseUrl: "https://ollama-cloud.example.test/v1",
-          models: models.map((model) => ({
-            ...model,
-            reasoning: false,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 8_192,
-          })),
+          models: models.map((model) =>
+            modelDefinition(model.id, { ...model, reasoning: false, contextWindow: 128_000 }),
+          ),
         },
       },
     },

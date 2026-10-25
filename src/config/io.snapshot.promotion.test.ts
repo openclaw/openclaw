@@ -303,6 +303,20 @@ describe("config observe recovery promotion", () => {
 });
 
 describe("last-known-good promotion after accepted writes", () => {
+  function registerFailingRuntimeOverlay(configPath: string, failure: Error) {
+    return registerConfigWriteListener(vi.fn(), {
+      ownsRuntimeActivationFor: configPath,
+      preCommitRuntimePreflight: async (sourceConfig) => ({
+        runtimeConfig: sourceConfig,
+        compareConfig: sourceConfig,
+        reapplyRuntimeOverlays() {
+          throw failure;
+        },
+        reapplyCompareOverlays: (config) => config,
+      }),
+    });
+  }
+
   function acceptedWriteFixture() {
     const root = tempDirs.make("openclaw-config-lgg-accepted-write-");
     const configPath = path.join(root, ".openclaw", "openclaw.json");
@@ -670,17 +684,7 @@ describe("last-known-good promotion after accepted writes", () => {
       await expect(io.promoteConfigSnapshotToLastKnownGood(edited)).resolves.toBe(false);
       const acceptedRaw = fs.readFileSync(configPath, "utf8");
       const failure = new Error("synthetic overlay failure");
-      const unsubscribe = registerConfigWriteListener(vi.fn(), {
-        ownsRuntimeActivationFor: configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          reapplyRuntimeOverlays() {
-            throw failure;
-          },
-          reapplyCompareOverlays: (config) => config,
-        }),
-      });
+      const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
       try {
         setRuntimeConfigSnapshot(edited.config, edited.config);
         await expect(
@@ -741,17 +745,7 @@ describe("last-known-good promotion after accepted writes", () => {
       expect(
         Buffer.byteLength(`${JSON.stringify(grownConfig, null, 2)}\n`, "utf-8"),
       ).toBeGreaterThan(Buffer.byteLength(originalRaw, "utf-8") * 2);
-      const unsubscribe = registerConfigWriteListener(vi.fn(), {
-        ownsRuntimeActivationFor: configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          reapplyRuntimeOverlays() {
-            throw failure;
-          },
-          reapplyCompareOverlays: (config) => config,
-        }),
-      });
+      const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
       try {
         setRuntimeConfigSnapshot(initialConfig, initialConfig);
         await expect(writeConfigFile(grownConfig)).rejects.toMatchObject({
@@ -834,17 +828,7 @@ describe("last-known-good promotion after accepted writes", () => {
           createSnapshot({ path: configPath, raw, sourceConfig: parsed }),
         );
       };
-      const unsubscribe = registerConfigWriteListener(vi.fn(), {
-        ownsRuntimeActivationFor: configPath,
-        preCommitRuntimePreflight: async (sourceConfig) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          reapplyRuntimeOverlays() {
-            throw failure;
-          },
-          reapplyCompareOverlays: (config) => config,
-        }),
-      });
+      const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
       try {
         setRuntimeConfigSnapshot(initialConfig, initialConfig);
         await expect(

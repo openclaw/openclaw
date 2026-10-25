@@ -564,8 +564,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   get isPositionSettled(): boolean {
-    const { pendingScrollOffset } = this.offsetState;
-    return this.contentReady && !this.initialRange.pending && !pendingScrollOffset;
+    return this.contentReady && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
   }
 
   private canAutoFollow(): boolean {
@@ -750,7 +749,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       return;
     }
     this.syncViewportGeometry();
-    if (this.presentation.measureRows() || this.initialRange.extend(this.scrollElement)) {
+    const measured = this.presentation.measureRows();
+    if (this.initialRange.extend(this.scrollElement) || measured) {
       this.invalidate();
       return;
     }

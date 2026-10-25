@@ -193,10 +193,7 @@ describe("ClawRouter usage", () => {
   });
 
   it("observes peer closure when a real loopback server returns non-OK", async () => {
-    let onResponseClosed: () => void;
-    const responseClosed = new Promise<void>((resolve) => {
-      onResponseClosed = resolve;
-    });
+    const { promise: responseClosed, resolve: onResponseClosed } = Promise.withResolvers<void>();
     const { baseUrl, requests } = await startUsageServer((_req, res) => {
       res.once("close", onResponseClosed);
       res.writeHead(503, { "content-type": "text/plain" });

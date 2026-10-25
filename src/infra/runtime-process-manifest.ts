@@ -18,6 +18,8 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
   }
 
   return {
+    pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
+    openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
     doctorDatabaseEngineInspection: runtimeProcessEntrypoint(
       "commands/doctor-database-engine-inspection.worker",
     ),
@@ -146,6 +148,10 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     providerPromptState: runtimeProcessEntrypoint(
       "agents/embedded-agent-runner/provider-prompt-state.worker",
     ),
+    retiredWorktreeCleanup: runtimeProcessEntrypoint(
+      "agents/worktrees/retired-worktree-cleanup.worker",
+    ),
+    updateNativeGate: runtimeProcessEntrypoint("cli/update-cli/update-command-native-gate.worker"),
     updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
     immutableBuild: runtimeProcessEntrypoint("infra/update-immutable-build.worker"),
     updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
@@ -254,9 +260,65 @@ export const pluginRuntimeProcessManifest = {
       distWorkerPath: "document-extractor.worker.js",
     },
   },
+  fileTransferDirFetch: {
+    plugin: "file-transfer",
+    ownerSource: "extensions/file-transfer/src/node-host/dir-fetch-archive.ts",
+    sourceWorkerName: "dir-fetch-archive.worker",
+    distWorkerPath: "extensions/file-transfer/src/node-host/dir-fetch-archive.worker.js",
+    package: {
+      name: "@openclaw/file-transfer",
+      distWorkerPath: "src/node-host/dir-fetch-archive.worker.js",
+    },
+  },
+  fileTransferDirList: {
+    plugin: "file-transfer",
+    ownerSource: "extensions/file-transfer/src/node-host/dir-list-worker-command.ts",
+    sourceWorkerName: "dir-list.worker",
+    distWorkerPath: "extensions/file-transfer/src/node-host/dir-list.worker.js",
+    package: {
+      name: "@openclaw/file-transfer",
+      distWorkerPath: "src/node-host/dir-list.worker.js",
+    },
+  },
   iMessageChatDb: {
     ...pluginRuntimeProcess("imessage", "src/chat-db", "src/chat-db.worker"),
     sourceWorkerName: "chat-db.worker",
+  },
+  mxcLauncher: {
+    plugin: "mxc",
+    ownerSource: "extensions/mxc/src/plugin-root.ts",
+    sourceWorkerName: "mxc-spawn-launcher",
+    sourceExtension: ".mjs",
+    build: "static-asset",
+    distWorkerPath: "extensions/mxc/mxc-spawn-launcher.mjs",
+    package: {
+      name: "@openclaw/mxc-sandbox",
+      distWorkerPath: "mxc-spawn-launcher.mjs",
+    },
+  },
+  onePasswordSecretResolver: {
+    plugin: "onepassword",
+    ownerSource: "extensions/onepassword/onepassword-secret-ref-resolver.js",
+    sourceWorkerName: "onepassword-secret-ref-resolver",
+    sourceExtension: ".js",
+    build: "static-asset",
+    distWorkerPath: "extensions/onepassword/onepassword-secret-ref-resolver.js",
+    package: {
+      name: "@openclaw/onepassword",
+      distWorkerPath: "onepassword-secret-ref-resolver.js",
+    },
+  },
+  vaultSecretResolver: {
+    plugin: "vault",
+    ownerSource: "extensions/vault/vault-secret-ref-resolver.js",
+    sourceWorkerName: "vault-secret-ref-resolver",
+    sourceExtension: ".js",
+    build: "static-asset",
+    distWorkerPath: "extensions/vault/vault-secret-ref-resolver.js",
+    package: {
+      name: "@openclaw/vault",
+      distWorkerPath: "vault-secret-ref-resolver.js",
+    },
   },
   memorySearch: {
     ...pluginRuntimeProcess(
@@ -358,10 +420,9 @@ export const pluginRuntimeProcessManifest = {
   workboardSqlite: pluginRuntimeProcess("workboard", "index", "src/sqlite-store.worker"),
 } as const;
 
-export function createPluginRuntimeProcessEntrypoint(
-  name: keyof typeof pluginRuntimeProcessManifest,
-  currentModuleUrl: string,
-) {
+export function createPluginRuntimeProcessEntrypoint<
+  Name extends keyof typeof pluginRuntimeProcessManifest,
+>(name: Name, currentModuleUrl: string) {
   return { ...pluginRuntimeProcessManifest[name], currentModuleUrl };
 }
 
@@ -395,6 +456,12 @@ export const runtimeProcessDeployManifest = {
   },
 } as const;
 
+export function runtimeProcessDeployEntryFileName<
+  Name extends keyof typeof runtimeProcessDeployManifest,
+>(name: Name): `${Name}.mjs` {
+  return `${name}.mjs`;
+}
+
 export const runtimeProcessHelperManifest = {
   "workspace-rsync-receiver": { source: "src/worker/workspace-rsync-receiver.ts", sealed: false },
   "github-exec-launcher": { source: "src/agents/github-exec-launcher.ts", sealed: false },
@@ -404,6 +471,94 @@ export const runtimeProcessHelperManifest = {
     sealed: true,
   },
 } as const;
+
+// Each sealed bootstrap selects only the sibling entries it owns.
+export const runtimeProcessSealedManifest = {
+  worker: {
+    ownerSource: "src/worker/worker-deploy-runtime.ts",
+    entries: [
+      ["clientCredentials", "client-credential.worker"],
+      ["codeModeNode", "code-mode-node.worker"],
+      ["stateRead", "openclaw-state-read.worker"],
+      ["workerNativeLifecycle", "worker-native-lifecycle.worker"],
+      ["fileToolPlanning", "file-tool-planning.worker"],
+      ["fileToolRead", "file-tool-read.worker"],
+      ["gatewayStateOwnerHeartbeat", "gateway-state-owner-heartbeat.worker"],
+      ["githubExec", "github-exec-launcher"],
+      ["imageProcessor", "image-processor.worker"],
+      ["serviceChildRelay", "service-child-relay"],
+      ["sqliteSourceRevision", "sqlite-source-revision.worker"],
+      ["sqliteStore", "sqlite-store.worker"],
+      ["sharedStateStore", "sqlite-store.worker"],
+    ],
+  },
+  serviceChildRelay: {
+    ownerSource: "src/process/supervisor/service-child-relay.ts",
+    entries: [["serviceChildGroupAnchor", "service-child-group-anchor"]],
+  },
+} as const satisfies Record<
+  string,
+  {
+    ownerSource: string;
+    entries: readonly (readonly [
+      keyof ReturnType<typeof createRuntimeProcessEntrypoints>,
+      keyof typeof runtimeProcessDeployManifest | keyof typeof runtimeProcessHelperManifest,
+    ])[];
+  }
+>;
+
+export function createSealedRuntimeProcessEntrypoints(
+  group: keyof typeof runtimeProcessSealedManifest,
+  currentModuleUrl: string,
+) {
+  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
+    name,
+    url: new URL(`./${entry}.mjs`, currentModuleUrl),
+  }));
+}
+
+// These programs belong to the selected external installation, not the running image.
+export const runtimeProcessExternalPackageEntrypoints = {
+  sourceCli: "src/entry.ts",
+  sourceUiBuild: "scripts/ui.js",
+  sourceRunner: "scripts/run-node.mjs",
+  cliLauncher: "openclaw.mjs",
+  gatewayIndex: "dist/index.js",
+  gatewayIndexModule: "dist/index.mjs",
+  gatewayEntry: "dist/entry.js",
+  gatewayEntryModule: "dist/entry.mjs",
+  preinstall: "scripts/preinstall-package-manager-warning.mjs",
+  postinstall: "scripts/postinstall-bundled-plugins.mjs",
+} as const;
+
+/** Dependency programs retain their installed package topology and disk runtime. */
+export const runtimeProcessDependencyEntrypoints = {
+  npm: {
+    specifier: "npm/bin/npm-cli.js",
+    packageJsonSpecifier: "npm/package.json",
+    relativePath: "bin/npm-cli.js",
+    execution: "external-disk",
+    kind: "standalone-package-manager",
+  },
+  chromeDevtoolsMcp: {
+    specifier: "chrome-devtools-mcp/build/src/bin/chrome-devtools-mcp.js",
+    execution: "external-disk",
+    kind: "package",
+  },
+  matrixCryptoDownload: {
+    specifier: "@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
+    execution: "external-disk",
+    kind: "package",
+  },
+} as const;
+
+// Keep installed CLI recovery compatible with the supported historical entry order.
+export const runtimeProcessGatewayEntrypointNames = [
+  "gatewayIndex",
+  "gatewayIndexModule",
+  "gatewayEntry",
+  "gatewayEntryModule",
+] as const satisfies readonly (keyof typeof runtimeProcessExternalPackageEntrypoints)[];
 
 export const runtimeProcessStandaloneModules = [
   "../openclaw.mjs",
@@ -446,6 +601,18 @@ export function createStandaloneRuntimeProcessEntrypoints(
 
 // Script assets execute in their destination runtime rather than a worker thread.
 export const runtimeProcessScriptEntrypoints = {
+  updateNativeGate: {
+    sourceModule: "src/cli/update-cli/update-command-native-gate.generated.ts",
+    sourceBinding: "UPDATE_NATIVE_GATE_SOURCE",
+    kind: "file",
+    fileName: "update-native-gate.mjs",
+  },
+  managedUpdateHandoff: {
+    sourceModule: "src/infra/update-managed-service-handoff.ts",
+    sourceBinding: "HANDOFF_SCRIPT",
+    kind: "file",
+    fileName: "handoff.cjs",
+  },
   workspaceQuiescence: {
     sourceModule: "src/gateway/worker-environments/workspace-quiescence-scripts.ts",
     export: "workspaceQuiescenceArgv",

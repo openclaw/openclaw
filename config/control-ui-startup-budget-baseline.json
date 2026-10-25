@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281671,
-  "reason": "Bound Cron run-history selector traversal: matched c64f3109 startup 281744 to 281671 B gzip, style CPU median down 15.25% desktop and 17.09% mobile; 7 JS and 1 CSS request unchanged.",
-  "updatedAt": "2026-10-24"
+  "startupJsGzipBytes": 281465,
+  "reason": "Streaming-only token-to-DOM: Peter accepted chat boot growth after the original experiment reduced streaming script CPU 8.6% and HTML assignments 2129 to 178. Settled rendering retains HTML plus DOMPurify; startup measures 281465 B with unchanged requests. Ratchet to the measured head.",
+  "updatedAt": "2026-10-25"
 }

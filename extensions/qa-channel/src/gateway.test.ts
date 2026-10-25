@@ -107,10 +107,7 @@ describe("qa-channel gateway", () => {
       }),
     }));
     stops.push(() => server.stop());
-    let releaseFirst: (() => void) | undefined;
-    const firstPending = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+    const { promise: firstPending, resolve: releaseFirst } = Promise.withResolvers<void>();
     vi.mocked(handleQaInbound).mockImplementation(async ({ message: inbound }) => {
       if (inbound.text === "hello") {
         await firstPending;
@@ -265,10 +262,7 @@ describe("qa-channel gateway", () => {
       }
     });
 
-    let rejectSecond = (_error: Error) => {};
-    const secondAttempt = new Promise<void>((_resolve, reject) => {
-      rejectSecond = reject;
-    });
+    const { promise: secondAttempt, reject: rejectSecond } = Promise.withResolvers<void>();
     let restarting = false;
     const recoveredMessageIds: string[] = [];
     const restartedController = new AbortController();

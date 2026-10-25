@@ -183,15 +183,17 @@ it("keeps both option routes and the selected avatar with token auth", async () 
     const avatar = element.querySelector(".agent-select__trigger .agent-select__avatar");
     expect(avatar?.classList).toContain("is-pending");
     expect(avatar?.classList).not.toContain("is-fallback");
-    expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
-      credentials: "include",
-      headers: { Authorization: "Bearer tok" },
-      signal: expect.any(AbortSignal),
+    await waitForFast(() => {
+      expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+        credentials: "include",
+        headers: { Authorization: "Bearer tok" },
+        signal: expect.any(AbortSignal),
+      });
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `${globalThis.location.origin}/avatar/alpha`,
+        `${globalThis.location.origin}/avatar/beta`,
+      ]);
     });
-    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      `${globalThis.location.origin}/avatar/alpha`,
-      `${globalThis.location.origin}/avatar/beta`,
-    ]);
 
     response.resolve(
       new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
@@ -299,7 +301,7 @@ it("aborts the stale request on auth rotation without duplicating the current fe
   });
 
   try {
-    expect(avatarCalls()).toHaveLength(1);
+    await waitForFast(() => expect(avatarCalls()).toHaveLength(1));
     setAvatarGatewayOrigin(globalThis.location.origin, ["tok2"]);
     await element.updateComplete;
     await waitForFast(() => expect(avatarCalls()).toHaveLength(2));
@@ -366,9 +368,9 @@ it.each(["fetch", "body"] as const)(
     });
 
     try {
+      await vi.advanceTimersByTimeAsync(0);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       if (stage === "body") {
-        await vi.advanceTimersByTimeAsync(0);
         expect(blob).toHaveBeenCalledTimes(1);
       }
       const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
@@ -411,10 +413,12 @@ it("fetches a local avatar image without a header when token auth is not active"
   });
 
   try {
-    expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
-      credentials: "include",
-      signal: expect.any(AbortSignal),
-    });
+    await waitForFast(() =>
+      expect(fetchMock).toHaveBeenCalledWith(`${globalThis.location.origin}/avatar/alpha`, {
+        credentials: "include",
+        signal: expect.any(AbortSignal),
+      }),
+    );
     await waitForFast(() => {
       expect(
         element.querySelector<HTMLImageElement>(".agent-select__avatar img")?.getAttribute("src"),

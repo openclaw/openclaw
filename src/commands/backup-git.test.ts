@@ -24,15 +24,14 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
   return {
     ...actual,
     getRuntimeConfig: mocks.getRuntimeConfig,
     loadConfig: mocks.getRuntimeConfig,
     readConfigFileSnapshot: async () => ({ config: mocks.getRuntimeConfig() }),
-    captureRuntimeConfigAsyncReader:
-      (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-      async () =>
-        mocks.getRuntimeConfig(...args),
+    captureRuntimeConfigAsyncReader: createTestConfigReadMocks(mocks, "getRuntimeConfig")
+      .captureRuntimeConfigAsyncReader,
   };
 });
 

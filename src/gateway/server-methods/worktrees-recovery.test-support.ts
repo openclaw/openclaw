@@ -158,7 +158,7 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         if (!prepared) {
           throw new Error("Expected a local sandbox projection");
         }
-        const relative = ".openclaw/tmp/oversized.bin";
+        const relative = "artifacts/oversized.bin";
         const source = path.join(prepared.workspaceDir, relative);
         const recoveryId = randomUUID();
         const destination = path.join(

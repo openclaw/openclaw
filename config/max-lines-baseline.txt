@@ -132,7 +132,6 @@ extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/webhook.test.ts
 extensions/tlon/src/monitor/index.ts
-extensions/voice-call/src/webhook.test.ts
 extensions/voice-call/src/webhook.ts
 extensions/voice-call/src/webhook/realtime-handler.test.ts
 extensions/voice-call/src/webhook/realtime-handler.ts
@@ -156,7 +155,6 @@ packages/tool-call-repair/src/stream-normalizer.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
 src/agents/agent-command.live-model-switch.test.ts
-src/agents/agent-hooks/compaction-safeguard.test.ts
 src/agents/agent-hooks/compaction-safeguard.ts
 src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
@@ -228,7 +226,6 @@ src/auto-reply/reply/queue.collect.test.ts
 src/auto-reply/reply/reply-run-registry.test.ts
 src/auto-reply/reply/session.test.ts
 src/auto-reply/reply/session.ts
-src/channels/plugins/outbound/interactive.test.ts
 src/channels/plugins/setup-wizard-helpers.ts
 src/channels/streaming.ts
 src/cli/capability-cli.test.ts
@@ -390,7 +387,6 @@ src/secrets/configure.ts
 src/secrets/runtime-state.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts
-src/shared/json-schema-defaults.ts
 src/skills/lifecycle/clawhub.test.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts

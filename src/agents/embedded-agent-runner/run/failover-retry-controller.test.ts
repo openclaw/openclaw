@@ -146,28 +146,41 @@ it("omits provider and credential metadata from retry decisions", async () => {
 });
 
 it.each([
-  { jitter: 0, delays: [500, 1000, 2000, 4000, 8000, 15000, 15000, 15000, 15000] },
-  { jitter: 0.999, delays: [1499, 2998, 5996, 11992, 23984, 30000, 30000, 30000, 30000] },
-])("caps ten-attempt rate-limit backoff (jitter=$jitter)", async ({ jitter, delays }) => {
+  {
+    jitter: 0,
+    delays: [
+      500, 1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000, 30000, 30000,
+      30000,
+    ],
+  },
+  {
+    jitter: 0.999,
+    delays: [
+      1499, 2998, 5996, 11992, 23984, 47968, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000,
+      60000,
+    ],
+  },
+])("caps sixteen-attempt rate-limit backoff (jitter=$jitter)", async ({ jitter, delays }) => {
   vi.spyOn(Math, "random").mockReturnValue(jitter);
-  for (let attempt = 2; attempt <= 10; attempt++) {
+  for (let attempt = 2; attempt <= 16; attempt++) {
     await checkRetry({ reason: "rate_limit", onRetry });
     expect(onRetry.mock.lastCall?.[0]).toEqual({
       reason: "rate_limit",
       attempt: attempt - 1,
-      maxRetries: 9,
+      maxRetries: 15,
       delayMs: expect.any(Number),
     });
   }
   await checkRetry({ reason: "rate_limit" }, false);
+  expect(controller.rateLimitRetriesExhausted).toBe(15);
   expect(sleep.mock.calls.map(([delay]) => delay)).toEqual(delays);
-  expect(onRetry).toHaveBeenCalledTimes(9);
+  expect(onRetry).toHaveBeenCalledTimes(15);
 });
 
 it.each([
-  [undefined, 3, 9],
+  [undefined, 3, 15],
   [3, 0, 3],
-  [12, 0, 9],
+  [30, 0, 15],
 ] as const)(
   "shares retry ceilings (budget=%s, prior=%s, limit=%s)",
   async (budget, prior, limit) => {
@@ -182,13 +195,19 @@ it.each([
   },
 );
 
-it("waits exactly the provider's rate-limit timing instead of a longer local backoff", async () => {
-  vi.spyOn(Math, "random").mockReturnValue(0.999);
-  await checkRetry({ reason: "rate_limit", retryAfterMs: 200, onRetry });
-  await checkRetry({ reason: "rate_limit", retryAfterMs: 1_200, onRetry });
-  await checkRetry({ reason: "rate_limit", onRetry });
-  expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([200, 1_200, 5_996]);
-});
+it.each([200, 1_000])(
+  "backs off beyond a short rate-limit floor of %i ms",
+  async (retryAfterMs) => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    for (let retry = 0; retry < 7; retry++) {
+      await checkRetry({ reason: "rate_limit", retryAfterMs, onRetry });
+    }
+    await checkRetry({ reason: "rate_limit", retryAfterMs: 120_000, onRetry });
+    expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([
+      1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 120_000,
+    ]);
+  },
+);
 
 it("retains the non-rate retry window after a long rate-limit wait", async () => {
   const advanceTime = clock();
@@ -249,10 +268,12 @@ it.each([
   ["disabled cap", true, undefined, 0, "rate_limit", 9_897_000, true],
   ["absent cap", true, undefined, undefined, "rate_limit", 9_897_000, true],
   ["inside cap", true, undefined, 30_000, "rate_limit", 20_000, true],
+  ["short floor", true, undefined, 30_000, "rate_limit", 200, true],
   ["non-rate limit", true, undefined, 30_000, "server_error", 60_000, true],
 ] as const)(
   "handles provider retry floors: %s",
   async (_name, fallback, failoverEligible, maxRetryDelayMs, reason, retryAfterMs, expected) => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     // Session-window 429s can carry hours of Retry-After without usage-window keywords.
     const message =
       'HTTP 429: {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}';
@@ -273,7 +294,7 @@ it.each([
     );
     expect(controller.transientRetryCount).toBe(expected ? 1 : 0);
     if (expected) {
-      expect(sleep).toHaveBeenCalledWith(retryAfterMs, undefined);
+      expect(sleep).toHaveBeenCalledWith(Math.max(1_000, retryAfterMs), undefined);
     } else {
       expect(sleep).not.toHaveBeenCalled();
       expect(onRetry).not.toHaveBeenCalled();

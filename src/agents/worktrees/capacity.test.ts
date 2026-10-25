@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as execRunner from "../../process/exec-runner.js";
@@ -212,12 +212,11 @@ describe("worktree Git size estimates", () => {
         assertCurrent: () => authority.signal.throwIfAborted(),
       });
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           discovered.promise,
-          pending.then(() => {
-            throw new Error("hydration bypassed the queued ref writer");
-          }),
-        ]);
+          pending,
+          "hydration bypassed the queued ref writer",
+        );
         await expectMissing(clone, missing);
         const rejected = expect(pending).rejects.toThrow(revoked.message);
         (action === "cancel" ? controller : authority).abort(revoked);

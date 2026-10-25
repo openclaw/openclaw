@@ -1082,8 +1082,6 @@ describe("Codex app-server elicitation bridge", () => {
       requestParams._meta.tool_title = "read_event";
       const result = await handleCodexAppServerElicitationRequest({
         requestParams,
-        paramsForRun: createParams(),
-        ...codexTestTurnIds(),
         pluginAppPolicyContext: createPluginAppPolicyContext({
           allowDestructiveActions: false,
           apps: [
@@ -1121,8 +1119,6 @@ describe("Codex app-server elicitation bridge", () => {
           tool_title: "create_event",
         },
       }),
-      paramsForRun: createParams(),
-      ...codexTestTurnIds(),
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
         apps: [{ appId: `connector_${suffix}`, pluginName: "google-calendar", mcpServerNames: [] }],
@@ -1231,26 +1227,11 @@ describe("Codex app-server elicitation bridge", () => {
   it("does not inherit persist defaults for one-time approvals", async () => {
     mockApprovalDecision("plugin:approval-5", "allow-once");
 
+    const requestParams = buildApprovalElicitation();
+    Object.assign(requestParams.requestedSchema.properties.persist, { default: "always" });
+
     const result = await handleCodexAppServerElicitationRequest({
-      requestParams: {
-        ...buildApprovalElicitation(),
-        requestedSchema: {
-          type: "object",
-          properties: {
-            approve: {
-              type: "boolean",
-              title: "Approve this tool call",
-            },
-            persist: {
-              type: "string",
-              title: "Persist choice",
-              enum: ["session", "always"],
-              default: "always",
-            },
-          },
-          required: ["approve"],
-        },
-      },
+      requestParams,
     });
 
     expect(result).toEqual({

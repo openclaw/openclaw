@@ -90,6 +90,7 @@ export type MemorySemanticProviderGeneration = Extract<
 
 export type MemoryReindexProgress = {
   memoryComplete: boolean;
+  cacheWritesPendingPrune?: boolean;
   memoryPlan?: MemorySourceSyncPlan;
   completedSessionFiles: Set<string>;
   changedSessionFiles: Set<string>;

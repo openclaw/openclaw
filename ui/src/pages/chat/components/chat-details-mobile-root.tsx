@@ -1,11 +1,12 @@
 import type { JSX } from "@solidjs/web";
-import { For, Loading, Show, children } from "solid-js";
+import { For, Show, children } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ChatPullRequestMobileRow,
   ChatPullRequestMobileRecovery,
@@ -65,7 +66,6 @@ export type ChatDetailsMobileRootProps = {
     | "people"
     | "taskProgress"
     | "subagents"
-    | "processes"
     | "environment"
     | "context"
     | "pullRequests"
@@ -81,7 +81,7 @@ export type ChatDetailsMobileRootProps = {
   taskProgress?: ChatDetailsMobileEntry;
   taskProgressNotice?: JSX.Element;
   subagents?: Omit<ChatDetailsSubagentsProps, "mobile" | "collapsed">;
-  /** Mobile content without another section heading or scroll container. */
+  /** Complete Processes section; its owner retains the empty exit envelope. */
   processes?: JSX.Element;
   /** The complete mobile Environment section, including its own heading and group. */
   environment?: JSX.Element;
@@ -274,7 +274,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           </Show>
         </RootGroup>
       </Show>
-      <Loading>
+      <ChatLazyBoundary>
         <Show when={automationsTotal() > 0 || automationNotice.toArray().length > 0}>
           <RootGroup name="automations" label={props.labels.automations}>
             <Show when={props.automations}>
@@ -310,7 +310,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
             </Show>
           </RootGroup>
         </Show>
-      </Loading>
+      </ChatLazyBoundary>
       <Show when={props.outputs}>
         {(entry) => (
           <RootGroup name="outputs" label={props.labels.generatedFiles}>
@@ -335,11 +335,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           </RootGroup>
         )}
       </Show>
-      <Show when={props.processes}>
-        <RootGroup name="processes" label={props.labels.processes}>
-          {props.processes}
-        </RootGroup>
-      </Show>
+      {props.processes}
     </div>
   );
 }

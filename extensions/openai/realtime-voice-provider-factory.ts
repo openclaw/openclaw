@@ -278,6 +278,7 @@ export function buildOpenAIRealtimeVoiceProvider(
           audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
           instructions: req.instructions,
           interruptResponseOnInputAudio: config.interruptResponseOnInputAudio,
+          inputTranscriptionModel: config.inputTranscriptionModel,
           model,
           noiseReduction: { type: "near_field" },
           prefixPaddingMs: req.prefixPaddingMs ?? config.prefixPaddingMs,
@@ -362,7 +363,9 @@ export function buildOpenAIRealtimeVoiceProvider(
               prefix_padding_ms: req.prefixPaddingMs ?? config.prefixPaddingMs,
               silence_duration_ms: req.silenceDurationMs ?? config.silenceDurationMs,
             },
-            transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
+            transcription: {
+              model: config.inputTranscriptionModel ?? OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
+            },
           },
           output: { voice },
         },

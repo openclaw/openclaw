@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
   resetConfigRuntimeState,
@@ -36,15 +37,7 @@ type RecordedHit = {
 };
 
 function providerModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
-    maxTokens: 1024,
-  };
+  return modelDefinition(id, { reasoning: false, contextWindow: 8192, maxTokens: 1024 });
 }
 
 async function waitForHit(arrival: Promise<void>, work: Promise<unknown>, label: string) {

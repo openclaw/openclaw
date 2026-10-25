@@ -1089,7 +1089,7 @@ src/agents/cron-creator-authority-context.ts	1
 src/agents/custom-api-registry.ts	1
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
-src/agents/embedded-agent-helpers/images.ts	6
+src/agents/embedded-agent-helpers/images.ts	3
 src/agents/embedded-agent-helpers/openai.ts	11
 src/agents/embedded-agent-helpers/turns.ts	8
 src/agents/embedded-agent-live-edit-diff.ts	1
@@ -2182,7 +2182,7 @@ src/plugins/runtime.ts	1
 src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	2
-src/plugins/schema-validator.ts	5
+src/plugins/schema-validator.ts	4
 src/plugins/session-catalog-history-import.ts	1
 src/plugins/setup-registry.ts	2
 src/plugins/slots.ts	1

@@ -32,6 +32,8 @@ export type MessageRenderOptions = {
   runActive?: boolean;
   asyncQuestions?: AsyncQuestionPresentation;
   mediaOwner?: object;
+  /** Saved transcript text can render before live resource admission. */
+  mediaReadAllowed?: boolean;
   canvasPluginSurfaceUrl?: string | null;
   resourceBasePath?: string;
   mediaPolicyKey?: string;

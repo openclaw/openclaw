@@ -276,6 +276,7 @@ export function projectChatTranscript(
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onPermissionRetry: props.onPermissionRetry,
     mediaOwner: props.mediaOwner,
+    mediaReadAllowed: props.mediaReadAllowed,
     resourceBasePath: props.resourceBasePath,
     mediaPolicyKey,
     connectionEpoch: props.connectionEpoch,
@@ -460,6 +461,7 @@ export function projectChatTranscript(
           item,
           options: {
             expanded: workExpanded,
+            mediaReadAllowed: props.mediaReadAllowed,
             bubbleMode: props.chatBubbleMode === true && !searchFiltering,
             browserTabPreviews: workPreviews.get(item.key),
             onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
@@ -607,6 +609,7 @@ export function projectChatTranscript(
     mediaPolicyKey,
     props.assistantAttachmentAuthToken,
     props.mediaOwner,
+    props.mediaReadAllowed,
     props.connectionEpoch,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, createWriteStream } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  registerSealedRuntimeProcessEntrypoint,
+  registerSealedRuntimeProcessEntrypoints,
   resolveRuntimeProcessEntrypointUrl,
 } from "../../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
@@ -19,10 +19,7 @@ import { reserveStdioEntry, setStdioEntry } from "./service-child-stdio.js";
 declare const WORKER_DEPLOY_BUILD: boolean;
 
 if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
-  registerSealedRuntimeProcessEntrypoint(
-    "serviceChildGroupAnchor",
-    new URL("./service-child-group-anchor.mjs", import.meta.url),
-  );
+  registerSealedRuntimeProcessEntrypoints("serviceChildRelay", import.meta.url);
 }
 
 function runServiceChildRelay(): void {

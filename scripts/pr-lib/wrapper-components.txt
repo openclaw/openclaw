@@ -10,6 +10,7 @@ worker-heap-flag.mjs
 node-runtime-env.mjs
 node-sqlite.mjs
 node-version.mjs
+standalone-runtime-profile.mjs
 package.json
 packages/acp-core/package.json
 packages/acp-core/src/structured-auth-redaction.ts
@@ -129,6 +130,7 @@ packages/normalization-core/src/home-dir.ts
 packages/normalization-core/src/index.ts
 packages/normalization-core/src/json-coercion.ts
 packages/normalization-core/src/json-schema.ts
+packages/normalization-core/src/json-schema-validator.ts
 packages/normalization-core/src/mountinfo-path.ts
 packages/normalization-core/src/node-crypto.ts
 packages/normalization-core/src/number-coercion.ts
@@ -302,6 +304,7 @@ src/agents/model-selection-alias-scope.ts
 src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
+src/agents/model-selection-warnings.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
 src/agents/owner-display.ts
@@ -1809,6 +1812,7 @@ src/shared/immutable-data.ts
 src/shared/import-specifier.ts
 src/shared/incognito-session-key.ts
 src/shared/json-schema-defaults.ts
+src/shared/json-schema-keywords.ts
 src/shared/lazy-promise.ts
 src/shared/lazy-runtime.ts
 src/shared/listeners.ts
@@ -2696,6 +2700,7 @@ src/plugins/inline-view.ts
 src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
+src/shared/owned-buffer.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
 src/infra/sqlite-readonly-inspection.ts

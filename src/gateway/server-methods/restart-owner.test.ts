@@ -1,6 +1,6 @@
-import { beforeEach, afterEach, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readRestartSentinel } from "../../infra/restart-sentinel.js";
+import { readRestartSentinel, writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
   setPreRestartDeferralCheck,
@@ -28,6 +28,11 @@ async function restart(params: Record<string, unknown>, guard?: () => void) {
   return result;
 }
 
+beforeAll(async () => {
+  // A running Gateway already has shared state before owner authorization reads it.
+  await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+});
+
 beforeEach(() => {
   config = { commands: { ownerAllowFrom: ["owner"] } };
   vi.useFakeTimers();
@@ -45,7 +50,7 @@ afterEach(() => {
 });
 
 it.each(["non-owner", "disabled", "requester-revoked"])(
-  "refuses %s before scheduling",
+  "refuses %s without restarting",
   async (change) => {
     if (change === "disabled") {
       config.commands!.restart = false;
@@ -68,7 +73,7 @@ it.each(["non-owner", "disabled", "requester-revoked"])(
           ? "current owner principal"
           : "requester revoked",
     );
-    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(0);
     expect(emitted).not.toHaveBeenCalled();
   },
 );

@@ -10,6 +10,7 @@ import {
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
   summarizeColdLoadTrace,
+  summarizeScriptCoverage,
   summarizeCpuProfile,
   type ColdLoadCpuProfile,
   type ColdLoadTraceEvent,
@@ -55,6 +56,23 @@ function event(
 }
 
 describe("cold-load trace accounting", () => {
+  it("counts UTF-8 coverage with nested unexecuted blocks and invoked inner functions", () => {
+    expect(
+      summarizeScriptCoverage({
+        source: "abcé😀xyz",
+        functions: [
+          { ranges: [{ startOffset: 0, endOffset: 9, count: 1 }] },
+          {
+            ranges: [
+              { startOffset: 3, endOffset: 9, count: 0 },
+              { startOffset: 4, endOffset: 6, count: 1 },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({ loadedBytes: 12, executedBytes: 7, unusedBytes: 5 });
+  });
+
   it("prepares numeric CDP envelopes, including unnamed end events", () => {
     expect(
       prepareColdLoadTraceEvent(

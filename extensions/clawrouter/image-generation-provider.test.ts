@@ -572,10 +572,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
       if (path === "/result.png") {
         payload = { data: [{ url: baseUrl + "/result.png" }] };
       }
-      let resolveHeld!: (response: ServerResponse) => void;
-      const held = new Promise<ServerResponse>((resolve) => {
-        resolveHeld = resolve;
-      });
+      const { promise: held, resolve: resolveHeld } = Promise.withResolvers<ServerResponse>();
       onHeld = resolveHeld;
       const controller = new AbortController();
       const pending = generate({ signal: controller.signal });
@@ -599,10 +596,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
     await generate();
     calls.length = 0;
     holdPath = "/v1/images/generations";
-    let resolveHeld!: (response: ServerResponse) => void;
-    const held = new Promise<ServerResponse>((resolve) => {
-      resolveHeld = resolve;
-    });
+    const { promise: held, resolve: resolveHeld } = Promise.withResolvers<ServerResponse>();
     onHeld = resolveHeld;
     const pending = generate({ timeoutMs: 500 });
     const settled = pending.catch(() => undefined);

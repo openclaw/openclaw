@@ -59,6 +59,7 @@ import {
   createCronTestInvoker,
   createCronCallerClient as callerClient,
   createCronJob,
+  cronAccountPolicy,
   setCronValidationTestRegistry,
   pluginEntries,
   telegramConfig,
@@ -344,12 +345,7 @@ describe("cron method validation", () => {
           sessionKey: "agent:telegram-agent:telegram:dm:42",
           accountId: "telegram",
         },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:telegram-agent:telegram:dm:42",
-          ownerAccountId: "telegram",
-        },
+        scheduledToolPolicy: cronAccountPolicy("agent:telegram-agent:telegram:dm:42", "telegram"),
       });
       if (trusted) {
         job.scheduledToolPolicy = { version: 1, mode: "trusted" };
@@ -1041,12 +1037,7 @@ describe("cron method validation", () => {
       const currentJob = createCronJob({
         agentId: "ops",
         owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:ops:main",
-          ownerAccountId: "default",
-        },
+        scheduledToolPolicy: cronAccountPolicy("agent:ops:main", "default"),
       });
       const context = createCronContext(method === "update" ? currentJob : undefined);
       context.validateAgentRuntimeApprovalAuthority = () => true;
@@ -1113,12 +1104,7 @@ describe("cron method validation", () => {
           : createCronJob({
               agentId: "ops",
               owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
-              scheduledToolPolicy: {
-                version: 1,
-                mode: "account",
-                ownerSessionKey: "agent:ops:main",
-                ownerAccountId: "default",
-              },
+              scheduledToolPolicy: cronAccountPolicy("agent:ops:main", "default"),
             }),
       );
       const params =
@@ -1360,12 +1346,7 @@ describe("cron method validation", () => {
       const job = createCronJob({
         agentId: "ops",
         owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey,
-          ownerAccountId: "work",
-        },
+        scheduledToolPolicy: cronAccountPolicy(ownerSessionKey, "work"),
       });
       const context = createCronContext(job);
       const client = callerClient(
@@ -1470,12 +1451,7 @@ describe("cron method validation", () => {
     const ownerSessionKey = "agent:ops:discord:work:group:creator";
     const accountJob = createCronJob({
       owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
-      scheduledToolPolicy: {
-        version: 1,
-        mode: "account",
-        ownerSessionKey,
-        ownerAccountId: "work",
-      },
+      scheduledToolPolicy: cronAccountPolicy(ownerSessionKey, "work"),
     });
     const context = createCronContext(accountJob);
 
@@ -1529,12 +1505,7 @@ describe("cron method validation", () => {
     const accountJob = createCronJob({
       agentId: "ops",
       owner: { agentId: "ops", sessionKey: ownerSessionKey, accountId: "work" },
-      scheduledToolPolicy: {
-        version: 1,
-        mode: "account",
-        ownerSessionKey,
-        ownerAccountId: "work",
-      },
+      scheduledToolPolicy: cronAccountPolicy(ownerSessionKey, "work"),
     });
     const siblingJob = createCronJob({
       id: "cron-2",

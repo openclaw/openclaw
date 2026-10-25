@@ -2,6 +2,7 @@
 import { createComponent, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopComposition } from "./chat-details-session.tsx";
@@ -49,11 +50,7 @@ function mountDetails() {
   flush();
   onTestFinished(() => {
     view.unmount();
-    if (animate) {
-      Object.defineProperty(Element.prototype, "animate", animate);
-    } else {
-      Reflect.deleteProperty(Element.prototype, "animate");
-    }
+    restorePropertyDescriptor(Element.prototype, "animate", animate);
     vi.useRealTimers();
   });
   return {

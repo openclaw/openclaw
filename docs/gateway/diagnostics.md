@@ -587,7 +587,7 @@ node --import ./scripts/tsx.mjs scripts/gateway-heap-rig.mjs \
 ```
 
 Run this on a dedicated host with enough memory for snapshots. It starts the
-dist Gateway and local mock model servers on loopback ports 19548–19550,
+dist Gateway and local mock model servers on loopback ports 41673–41675,
 seeds 2,000 sessions with 32 KiB histories across two agents, and drives ten
 reconnecting Control UI WebSocket clients. The workload polls session, history,
 model, and cron APIs and sends mock `chat.send` turns with 8 KiB replies, Code
@@ -861,8 +861,10 @@ scavenges, major mark/sweep/compact collections, incremental work, and weak-refe
 processing. Counts and elapsed durations are grouped by main thread or bounded
 worker script kind, without per-GC log lines. Instrumented workers use their
 existing memory telemetry port and observe GC only while an exporter is interested.
-One native `GCProfiler` per isolate supplies batches on a one-second timer, shared
-with the Code Mode thrash guard. It does not schedule JavaScript after each GC:
+One native `GCProfiler` per isolate supplies batches on a one-second timer on both
+main and worker threads, shared with the Code Mode thrash guard. Worker drains no
+longer restart Node's native profiler every 100 milliseconds. Orderly retirement
+explicitly flushes pending collections without waiting for the timer. It does not schedule JavaScript after each GC:
 per-collection `PerformanceObserver` delivery can keep an idle worker collecting.
 Native counts and durations remain exact; callback flags are unavailable, so the
 `reason` label is `other`.

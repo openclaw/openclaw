@@ -270,6 +270,7 @@ function observeModelResponse(
   startedAt: number,
   value: unknown,
   kind: "chunk" | "result",
+  captureByteStats: boolean,
 ): void {
   // A result decorator can settle long after the terminal stream chunk. Do not
   // label that bookkeeping delay as new provider activity. Result-only adapters
@@ -286,7 +287,7 @@ function observeModelResponse(
       state.outputMessages = [cloneDiagnosticContentValue(value)];
     }
   }
-  if (kind === "chunk" || state.responseStreamBytes === 0) {
+  if (captureByteStats && (kind === "chunk" || state.responseStreamBytes === 0)) {
     const bytes = kind === "chunk" ? responseStreamChunkByteLength(value) : jsonLength(value, true);
     if (bytes !== undefined) {
       state.responseStreamBytes += bytes;
@@ -341,6 +342,7 @@ export function createModelObserver(params: {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
   capturePromptStats: boolean;
+  captureByteStats: boolean;
   measurePromptStats?: ReturnType<typeof createModelPromptStats>;
 }) {
   const modelContent = streamContextModelContentFields(params.contentCapture, params.streamContext);
@@ -358,16 +360,16 @@ export function createModelObserver(params: {
     promptStats,
     modelContent,
     assignRequestPayloadBytes(payload: unknown) {
-      const bytes = jsonLength(payload, true);
+      const bytes = params.captureByteStats ? jsonLength(payload, true) : undefined;
       if (bytes !== undefined) {
         state.requestPayloadBytes = bytes;
       }
     },
     observeResponseChunk(startedAt: number, chunk: unknown) {
-      observeModelResponse(state, startedAt, chunk, "chunk");
+      observeModelResponse(state, startedAt, chunk, "chunk", params.captureByteStats);
     },
     observeFinalResult(eventBase: ModelCallEventBase, startedAt: number, result: unknown) {
-      observeModelResponse(state, startedAt, result, "result");
+      observeModelResponse(state, startedAt, result, "result", params.captureByteStats);
       // Queue semantic progress beside model lifecycle events so request starts,
       // progress, and the next request retain their authoritative FIFO ordering.
       if (!state.semanticProgressEmitted && isSemanticModelCallResult(result)) {

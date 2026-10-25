@@ -7,6 +7,7 @@ import {
   normalizeTranscriptJsonValue,
   isOwnedTranscriptPayload,
 } from "../../config/sessions/transcript-json.js";
+import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message, TextContent } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -288,6 +289,44 @@ describe("prompt cache history fingerprints", () => {
       await expect(observer.onModelRequest(model, { messages })).rejects.toThrow(
         "changed fields: content[0].arguments",
       );
+    });
+  });
+
+  it("prepares shared frozen hydration without retaining mutable revision state", async () => {
+    const publish = (path: string) => {
+      const message = makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path } }],
+        timestamp: 1,
+      });
+      normalizeTranscriptJsonValue(message, "");
+      return Object.freeze(message);
+    };
+    const model = { provider: "openai", id: "test-model", api: "openai-responses" } as const;
+    const observer = createPromptCacheRequestObserver(
+      { sessionId: scopedKey("frozen-hydration"), streamStrategy: "test" },
+      () => {},
+    );
+    const entries = [{ message: publish("frozen-hydration-fixture") }];
+    const request = () => {
+      const hydrated = cloneTranscriptView(entries);
+      expect(hydrated[0]!.message).toBe(entries[0]!.message);
+      return observer.onModelRequest(model, {
+        messages: convertToLlm(hydrated.map(({ message }) => message)),
+      });
+    };
+    expect(isOwnedTranscriptPayload(entries[0]!.message)).toBe(false);
+    await request();
+    expect(
+      vi
+        .mocked(crypto.hash)
+        .mock.calls.some(
+          ([, text]) => typeof text === "string" && text.includes("frozen-hydration-fixture"),
+        ),
+    ).toBe(false);
+    expect(await request()).toMatchObject({ prefixUnchanged: true, changes: null });
+    entries[0]!.message = publish("replacement");
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+      await expect(request()).rejects.toThrow("changed fields: content[0].arguments");
     });
   });
 

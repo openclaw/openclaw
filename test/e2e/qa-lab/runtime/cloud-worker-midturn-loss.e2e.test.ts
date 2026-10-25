@@ -11,6 +11,7 @@ import {
   reserveTestPortListener,
   type TestPortClaim,
 } from "../../../../src/test-utils/port-claims.js";
+import { writeSealedRuntimeProcessFixture } from "../../../../src/test-utils/sealed-runtime-process-fixture.js";
 import {
   openFixtureReceiptChannel,
   fixtureReceiptClientSource,
@@ -251,13 +252,20 @@ it.skipIf(process.platform === "win32")(
         ).href;
         const hostScript = path.join(root, "host.mts");
         const optionsFile = path.join(root, "host-options.json");
+        const processOwnerBootstrap = await writeSealedRuntimeProcessFixture(
+          path.join(root, "process-owner"),
+          "serviceChildRelay",
+          {
+            serviceChildGroupAnchor: resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor"),
+          },
+        );
         await fs.writeFile(
           optionsFile,
           JSON.stringify({
             root,
             gateway: { wsUrl: gateway.wsUrl, token: gateway.token, runtimeEnv: gateway.runtimeEnv },
             nodeConfig,
-            processOwnerUrl: resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor").href,
+            processOwnerBootstrap,
           }),
         );
         await fs.writeFile(
@@ -265,11 +273,11 @@ it.skipIf(process.platform === "win32")(
           `${fixtureReceiptClientSource(receipts.endpoint)}
 import fs from 'node:fs/promises';
 import { connectWireClient, createPairedNodeWorkerHost } from ${JSON.stringify(fixtureUrl)};
-import { registerSealedRuntimeProcessEntrypoint } from ${JSON.stringify(pathToFileURL(path.resolve("src/infra/runtime-process-url.ts")).href)};
+import { registerSealedRuntimeProcessEntrypoints } from ${JSON.stringify(pathToFileURL(path.resolve("src/infra/runtime-process-url.ts")).href)};
 const options = JSON.parse(await fs.readFile(process.argv[2], 'utf8'));
 const source = process.argv[3];
 // Linux custody requires the runner's built owner; a source-loader owner cannot reap safely.
-registerSealedRuntimeProcessEntrypoint('serviceChildGroupAnchor', new URL(options.processOwnerUrl));
+registerSealedRuntimeProcessEntrypoints('serviceChildRelay', options.processOwnerBootstrap);
 const operator = await connectWireClient({ gateway: options.gateway, role: 'operator', identity: null });
 process.stderr.write('operator connected\\n');
 let host;

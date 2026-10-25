@@ -31,6 +31,7 @@ import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { onSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
@@ -563,13 +564,9 @@ it("rearms native execution for an interrupted run's successor", async () => {
 
 it("admits a child follow-up while its predecessor's browser cleanup is still pending", async () => {
   const predecessorWait = createDeferred<AgentWaitResult>();
-  const cleanupEntered = createDeferred();
-  const releaseCleanup = createDeferred();
+  const cleanupGate = createEnteredGate();
   fixture.gateway.mockImplementationOnce(async () => predecessorWait.promise);
-  fixture.cleanup.mockImplementationOnce(async () => {
-    cleanupEntered.resolve();
-    await releaseCleanup.promise;
-  });
+  fixture.cleanup.mockImplementationOnce(cleanupGate.wait);
   fixture.announce.mockResolvedValue("delivered");
   const childSessionKey = "agent:main:subagent:held-browser-cleanup";
   await writeSession(childSessionKey, "held-browser-cleanup-session", {
@@ -589,7 +586,7 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
       endedAt: Date.now(),
       terminalReply: { disposition: "visible", text: "Browser work completed" },
     });
-    await cleanupEntered.promise;
+    await cleanupGate.entered;
     await expect(
       reactivateCompletedSubagentSession({
         sessionKey: childSessionKey,
@@ -611,7 +608,7 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
       execution: { status: "running" },
     });
   } finally {
-    releaseCleanup.resolve();
+    cleanupGate.release();
     await fixture.settle();
   }
   expect(fixture.cleanup).toHaveBeenCalledOnce();

@@ -13,6 +13,7 @@ import {
   connectPaneTestView,
   createGatewayBrowserClientFixture,
   createTestChatPane,
+  getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
 import type { ChatSessionRailElement } from "./components/chat-session-rail.tsx";
 import {
@@ -227,4 +228,30 @@ it("closes dashboard presentation through its owner without minimizing unrelated
   expect(h.state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
   expect(isSidebarSlotVisible(h.state.sidebarLayout, "terminal")).toBe(true);
   expect(h.state.sidebarLayout.open).toBe(true);
+});
+
+it("discards a Details process request after switching agents on the same global key", () => {
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  const { pane, state, mount } = createDashboardHarness({
+    row: { key: "global", agentId: "main", sessionId: "global-session", kind: "direct" },
+  });
+  onTestFinished(() => mount.remove());
+  pane.routeFace = "chat";
+  const runtime = getPaneTestRuntime(pane);
+  state.assistantAgentId = "main";
+  const open = () => {
+    const details = pane.render().layout?.header?.header.header.detailsControl?.chat;
+    expectDefined(details?.onOpenProcesses, "Details process action")("process-main");
+  };
+  open();
+  state.assistantAgentId = "research";
+  expect(runtime.companionIntents.processesShowRequest?.()).toBeUndefined();
+
+  open();
+  expect(runtime.companionIntents.processesShowRequest?.()).toEqual({
+    instanceId: "process-main",
+    fromDetails: true,
+  });
+  expect(runtime.companionIntents.processesShowRequest).toBeUndefined();
 });

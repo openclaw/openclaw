@@ -3909,7 +3909,7 @@ describe("prepareCliRunContext", () => {
     expect(context.preparedBackend.secretInput?.fingerprint).toBe(
       "selected-node-token-fingerprint",
     );
-    expect(context.preparedBackend.backend.clearEnv).toEqual(
+    expect(context.preparedBackend.resetEnv).toEqual(
       expect.arrayContaining(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
     );
   });

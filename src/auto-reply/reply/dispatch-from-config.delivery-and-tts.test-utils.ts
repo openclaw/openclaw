@@ -70,6 +70,58 @@ import { buildTestCtx, createDiscordPluginBindingCtx, createRoutedTestCtx } from
 
 const NO_VISIBLE_REPLY_FALLBACK_TEXT = MISSING_REPLY_NOTICE_TEXT;
 
+function createHistoryContext(body: string, messageSid: string) {
+  return buildTestCtx({
+    Provider: "openclaw",
+    Surface: "openclaw",
+    OriginatingChannel: "slack",
+    OriginatingTo: "user:U123",
+    To: "user:U123",
+    AccountId: "default",
+    CommandAuthorized: true,
+    BodyForAgent: body,
+    RawBody: body,
+    Body: body,
+    MessageSid: messageSid,
+    SessionKey: "agent:main:main",
+  });
+}
+
+function createPreparedRuntimeSnapshot(config: OpenClawConfig) {
+  return Object.freeze({
+    agentId: "main",
+    agentDir: "/tmp/prepared-agent",
+    workspaceDir: "/tmp/prepared-workspace",
+    config,
+    modelCatalog: { entries: [], routeVariants: [] },
+    inboundPluginRegistry: createTestRegistry([]),
+    pluginGeneration: {} as never,
+  });
+}
+
+function queuedBlockError() {
+  return Object.assign(
+    new OutboundDeliveryError("queued block", {
+      cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
+    }),
+    { queueCustody: "held" as const },
+  );
+}
+
+function createHeldDeliveryDispatcher() {
+  const delivered: ReplyPayload[] = [];
+  const deliveryStarted = createDeferred();
+  const deliveryGate = createDeferred();
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      delivered.push(payload);
+      deliveryStarted.resolve();
+      await deliveryGate.promise;
+    },
+  });
+  return { delivered, deliveryStarted, deliveryGate, dispatcher };
+}
+
 beforeAll(globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
@@ -370,14 +422,8 @@ describe("dispatchReplyFromConfig", () => {
       pluginId: "codex",
       pluginRoot: "/plugins/codex",
     });
-    let markDeliveryStarted: (() => void) | undefined;
-    let releaseDelivery: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryRelease = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const { promise: deliveryStarted, resolve: markDeliveryStarted } = createDeferred();
+    const { promise: deliveryRelease, resolve: releaseDelivery } = createDeferred();
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
         markDeliveryStarted?.();
@@ -464,20 +510,7 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "openclaw",
-        Surface: "openclaw",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        To: "user:U123",
-        AccountId: "default",
-        CommandAuthorized: true,
-        BodyForAgent: "continue",
-        RawBody: "continue",
-        Body: "continue",
-        MessageSid: "msg-plugin-history",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createHistoryContext("continue", "msg-plugin-history"),
       cfg: emptyConfig,
       dispatcher,
       replyOptions: {
@@ -533,20 +566,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     const rotatedDispatcher = createDispatcher();
     const rotatedResult = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "openclaw",
-        Surface: "openclaw",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        To: "user:U123",
-        AccountId: "default",
-        CommandAuthorized: true,
-        BodyForAgent: "continue after reset",
-        RawBody: "continue after reset",
-        Body: "continue after reset",
-        MessageSid: "msg-plugin-history-rotated",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createHistoryContext("continue after reset", "msg-plugin-history-rotated"),
       cfg: emptyConfig,
       dispatcher: rotatedDispatcher,
       replyOptions: {
@@ -583,20 +603,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     const blockedDispatcher = createDispatcher();
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "openclaw",
-        Surface: "openclaw",
-        OriginatingChannel: "slack",
-        OriginatingTo: "user:U123",
-        To: "user:U123",
-        AccountId: "default",
-        CommandAuthorized: true,
-        BodyForAgent: "continue during second reset",
-        RawBody: "continue during second reset",
-        Body: "continue during second reset",
-        MessageSid: "msg-plugin-history-blocked",
-        SessionKey: "agent:main:main",
-      }),
+      ctx: createHistoryContext("continue during second reset", "msg-plugin-history-blocked"),
       cfg: emptyConfig,
       dispatcher: blockedDispatcher,
       replyOptions: {
@@ -1279,17 +1286,7 @@ describe("dispatchReplyFromConfig", () => {
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
-      .mockResolvedValue(
-        Object.freeze({
-          agentId: "main",
-          agentDir: "/tmp/prepared-agent",
-          workspaceDir: "/tmp/prepared-workspace",
-          config: runtimeCfg,
-          modelCatalog: { entries: [], routeVariants: [] },
-          inboundPluginRegistry: createTestRegistry([]),
-          pluginGeneration: {} as never,
-        }),
-      );
+      .mockResolvedValue(createPreparedRuntimeSnapshot(runtimeCfg));
 
     const overrideCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
@@ -1419,17 +1416,7 @@ describe("dispatchReplyFromConfig", () => {
     const preparedRuntimeModule = await import("../../agents/prepared-model-runtime.js");
     const preparedLookup = vi
       .spyOn(preparedRuntimeModule, "loadPublishedGatewayReplyDispatchRuntime")
-      .mockResolvedValue(
-        Object.freeze({
-          agentId: "main",
-          agentDir: "/tmp/prepared-agent",
-          workspaceDir: "/tmp/prepared-workspace",
-          config: runtimeCfg,
-          modelCatalog: { entries: [], routeVariants: [] },
-          inboundPluginRegistry: createTestRegistry([]),
-          pluginGeneration: {} as never,
-        }),
-      );
+      .mockResolvedValue(createPreparedRuntimeSnapshot(runtimeCfg));
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
 
@@ -1947,16 +1934,7 @@ describe("dispatchReplyFromConfig", () => {
   it("does not wait for same-channel block dispatcher delivery before resolving block replies", async () => {
     setNoAbort();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const delivered: ReplyPayload[] = [];
-    const deliveryStarted = createDeferred();
-    const deliveryGate = createDeferred();
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        deliveryStarted.resolve();
-        await deliveryGate.promise;
-      },
-    });
+    const { delivered, deliveryStarted, deliveryGate, dispatcher } = createHeldDeliveryDispatcher();
     let blockReplySettled = false;
     const replyResolver = async (
       _ctx: MsgContext,
@@ -1992,16 +1970,7 @@ describe("dispatchReplyFromConfig", () => {
   it("waits for pending same-channel block delivery before completing block-only dispatch", async () => {
     setNoAbort();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const delivered: ReplyPayload[] = [];
-    const deliveryStarted = createDeferred();
-    const deliveryGate = createDeferred();
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        deliveryStarted.resolve();
-        await deliveryGate.promise;
-      },
-    });
+    const { delivered, deliveryStarted, deliveryGate, dispatcher } = createHeldDeliveryDispatcher();
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
@@ -2116,16 +2085,7 @@ describe("dispatchReplyFromConfig", () => {
       agents: { defaults: { verboseDefault: "on" } },
     } as const satisfies OpenClawConfig;
     const ctx = buildTestCtx({ Provider: "whatsapp" });
-    const delivered: ReplyPayload[] = [];
-    const deliveryStarted = createDeferred();
-    const deliveryGate = createDeferred();
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        delivered.push(payload);
-        deliveryStarted.resolve();
-        await deliveryGate.promise;
-      },
-    });
+    const { delivered, deliveryStarted, deliveryGate, dispatcher } = createHeldDeliveryDispatcher();
     const onItemEvent = vi.fn();
     let itemProgressSettled = false;
     const replyResolver = async (
@@ -2463,12 +2423,7 @@ describe("dispatchReplyFromConfig", () => {
         if (info.kind === "block") {
           blockStarted.resolve();
           await releaseBlock.promise;
-          throw Object.assign(
-            new OutboundDeliveryError("queued block", {
-              cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
-            }),
-            { queueCustody: "held" as const },
-          );
+          throw queuedBlockError();
         }
       },
     });
@@ -2645,12 +2600,7 @@ describe("dispatchReplyFromConfig", () => {
               deliver: async (reply, info) => {
                 nativePayloads.push(reply);
                 if (info.kind === "block") {
-                  throw Object.assign(
-                    new OutboundDeliveryError("queued block", {
-                      cause: new PlatformMessageNotDispatchedError("offline", { cause: undefined }),
-                    }),
-                    { queueCustody: "held" as const },
-                  );
+                  throw queuedBlockError();
                 }
               },
             })

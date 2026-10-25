@@ -232,12 +232,11 @@ describe("registered completion source custody", () => {
               },
             ),
           );
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             entered.promise,
-            pending.then(() => {
-              throw new Error("Registration completed without entering worker persistence");
-            }),
-          ]);
+            pending,
+            "Registration completed without entering worker persistence",
+          );
           expect(subagentRuns.has(runId)).toBe(false);
           expect(callGateway).not.toHaveBeenCalled();
           current = transition !== "before commit";
@@ -333,12 +332,11 @@ describe("registered completion source custody", () => {
         (error: unknown) => ({ error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          outcome.then(() => {
-            throw new Error("Registration did not reach its native ACK gate");
-          }),
-        ]);
+          outcome,
+          "Registration did not reach its native ACK gate",
+        );
         expect(loadSubagentRegistryFromSqlite().has(params.runId)).toBe(true);
         expect(subagentRuns.has(params.runId)).toBe(false);
         revoked.abort(new Error("operator source revoked after commit"));

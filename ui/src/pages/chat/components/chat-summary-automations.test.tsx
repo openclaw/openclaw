@@ -691,7 +691,6 @@ it("shares pending reads, retained results, and failed refresh recovery between 
                   people: "People",
                   taskProgress: "Task progress",
                   subagents: "Subagents",
-                  processes: "Processes",
                   environment: "Environment",
                   context: "Context",
                   pullRequests: "Pull requests",
@@ -890,9 +889,11 @@ it("describes cron weekdays and non-uniform minute steps without inventing a fix
   await current.ready("Weekday review");
   const weekday = current.element.querySelector<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
   const minutes = current.element.querySelector<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
-  expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
-  expect(minutes.textContent).toContain(
-    "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
-  );
+  await waitForSolid(() => {
+    expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
+    expect(minutes.textContent).toContain(
+      "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
+    );
+  });
   expect(minutes.textContent).not.toContain("Every 7 minutes");
 });

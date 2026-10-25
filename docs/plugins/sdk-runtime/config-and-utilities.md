@@ -194,6 +194,25 @@ metadata must agree with that manifest. Keep each worker in an explicit entry
 module rather than starting its host module again or passing source with
 `eval: true`.
 
+`resolvePackageRuntimeProcessEntrypointUrl(name, packageRoot)` resolves a declared
+host entry inside a selected OpenClaw package. It prefers its built entry,
+including an entry embedded in a standalone executable, and falls back to the
+source entry in a checkout. A package missing both entries is rejected. Pass the
+result to `resolveRuntimeWorkerArgv` to retain the host's Node/Bun loader policy.
+Managed MCP bridges use this owner for their stdio entrypoints.
+
+Dependency-owned child programs use
+`resolveRuntimeDependencyEntrypointUrl(name, import.meta.url)` from the same
+subpath. The host manifest owns their package specifiers; resolution retains the
+calling package's dependency tree and npm's standalone sidecar. These disk
+programs retain their external-runtime contract; declaring one does not embed
+its dependency graph into the standalone executable. Resolution selects the
+program without changing the selected runtime's execution capabilities. Copied
+plugin program assets use `resolvePluginRuntimeProcessAssetUrl(name, packageRoot)`
+and keep their package `staticAssets` declaration aligned with the runtime
+manifest. Exact embedded module membership takes precedence over loose disk
+candidates.
+
 Third-party plugins retain the explicit descriptor contract of
 `resolveRuntimeWorkerUrl`; loading new plugin code is a separate runtime boundary
 from declaring entries embedded in a standalone executable.

@@ -80,7 +80,7 @@ export function fetchGuardJson(body: unknown) {
   return fetchGuardResponse(JSON.stringify(body), "application/json");
 }
 
-function fetchGuardResponse(body: BodyInit, contentType: string) {
+export function fetchGuardResponse(body: BodyInit, contentType: string) {
   return {
     response: new Response(body, { status: 200, headers: { "content-type": contentType } }),
     release: vi.fn(async () => {}),
