@@ -187,10 +187,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       const ownsSocket = () => ownsGeneration() && this.ws === socket;
 
       const clearConnectTimeout = () => {
-        if (connectTimeout) {
-          clearTimeout(connectTimeout);
-          connectTimeout = undefined;
-        }
+        clearTimeout(connectTimeout);
+        connectTimeout = undefined;
         if (this.cancelConnecting === finishClosedConnect) {
           this.cancelConnecting = undefined;
         }
@@ -405,10 +403,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           if (readyForMs >= RECONNECT_STABLE_RESET_MS) {
             this.reconnectSupervisor.reset();
           }
-          if (this.closeTimer) {
-            clearTimeout(this.closeTimer);
-            this.closeTimer = undefined;
-          }
+          clearTimeout(this.closeTimer);
+          this.closeTimer = undefined;
           if (this.closed) {
             this.forceClose(socket);
             return;
@@ -518,10 +514,8 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     if (socket !== this.ws) {
       return;
     }
-    if (this.closeTimer) {
-      clearTimeout(this.closeTimer);
-      this.closeTimer = undefined;
-    }
+    clearTimeout(this.closeTimer);
+    this.closeTimer = undefined;
     this.ready = false;
     this.readySinceMs = undefined;
     this.ws = null;

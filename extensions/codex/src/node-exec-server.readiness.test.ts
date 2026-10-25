@@ -44,10 +44,8 @@ async function startFixture(readyBeforeRegistrationReturns = false) {
     onInput: () => {},
     frames: { send, onMessage: receiver },
   } satisfies OpenClawPluginNodeHostCommandIo;
-  let resolveChild!: (child: ChildProcessWithoutNullStreams) => void;
-  const childCreated = new Promise<ChildProcessWithoutNullStreams>((resolve) => {
-    resolveChild = resolve;
-  });
+  const { promise: childCreated, resolve: resolveChild } =
+    Promise.withResolvers<ChildProcessWithoutNullStreams>();
   let privateHome: string | undefined;
   const create = transport.createStdioTransport;
   vi.spyOn(transport, "createStdioTransport").mockImplementation(

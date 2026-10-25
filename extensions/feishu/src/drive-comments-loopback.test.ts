@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { withFeishuRuntimeDefaults } from "./bot.test-support.js";
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import { registerFeishuDriveTools } from "./drive.js";
@@ -74,20 +75,13 @@ async function createDriveLoopback(replies: ApiReply[], deliveryContext?: Delive
       response.writeHead(500).end(String(error));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
   onTestFinished(async () => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
   });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Missing loopback server address");
-  }
-  const origin = `http://127.0.0.1:${address.port}`;
+  const origin = `http://127.0.0.1:${port}`;
   const client = new Lark.Client({
     appId: config.channels.feishu.appId,
     appSecret: config.channels.feishu.appSecret,

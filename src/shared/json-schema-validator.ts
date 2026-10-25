@@ -79,6 +79,7 @@ function acquireValidator(
   registry: SchemaRegistry,
   schema: Exclude<JsonSchemaValue, boolean>,
   modern: boolean,
+  duplicateIds: "reuse" | "reject",
 ): PreparedValidator {
   const cached = registry.bySchema.get(schema);
   if (cached) {
@@ -88,6 +89,9 @@ function acquireValidator(
     typeof schema.$id === "string" ? resolveJsonSchemaResourceId(schema.$id, undefined) : undefined;
   const validationId = id === undefined ? undefined : resolveJsonSchemaValidationId(id);
   const registered = validationId === undefined ? undefined : registry.prepared.get(validationId);
+  if (id !== undefined && registered !== undefined && duplicateIds === "reject") {
+    throw new Error(`schema with key or id "${id}" already exists`);
+  }
   if (!modern && id !== undefined && registered !== undefined) {
     let existing = registry.byId.get(id);
     if (!existing) {
@@ -169,14 +173,50 @@ export type JsonSchemaValidatorProvider = {
 export function createJsonSchemaValidatorProvider(options: {
   dialect: "draft7" | "2020-12";
   formats: ReadonlyMap<string, JsonSchemaRefinement>;
+  /** Validate schema documents against their registered metaschema at admission. */
+  validateSchema?: boolean;
+  /** Preserve each caller's policy for repeated root schema identifiers. */
+  duplicateIds?: "reuse" | "reject";
 }): JsonSchemaValidatorProvider {
   const modern = options.dialect === "2020-12";
   const registry = createRegistry(modern, options.formats);
+  const metaValidators = new Map<string, PreparedValidator>();
+  const defaultMetaId = modern ? DRAFT_2020_12_SCHEMA : DRAFT_7_SCHEMA;
+  if (options.validateSchema) {
+    metaValidators.set(
+      defaultMetaId,
+      createJsonSchemaValidator(
+        { $ref: defaultMetaId },
+        { context: validatorContext(registry.prepared) },
+      ),
+    );
+  }
   return {
     getValidator(schema) {
+      if (options.validateSchema && typeof schema !== "boolean" && !registry.bySchema.has(schema)) {
+        const declaredMeta = schema.$schema;
+        const metaId = typeof declaredMeta === "string" ? declaredMeta : defaultMetaId;
+        let metaValidator = metaValidators.get(metaId);
+        if (!metaValidator) {
+          if (!registry.prepared.has(resolveJsonSchemaValidationId(metaId))) {
+            throw new Error(`no schema with key or ref "${metaId}"`);
+          }
+          metaValidator = createJsonSchemaValidator(
+            { $ref: metaId },
+            { context: validatorContext(registry.prepared) },
+          );
+          metaValidators.set(metaId, metaValidator);
+        }
+        if (!metaValidator.check(schema)) {
+          const first = metaValidator.errors(schema)[0];
+          throw new Error(
+            `schema is invalid: data${first?.instancePath ?? ""} ${first?.message ?? "does not match its metaschema"}`,
+          );
+        }
+      }
       return typeof schema === "boolean"
         ? createJsonSchemaValidator(schema)
-        : acquireValidator(registry, schema, modern);
+        : acquireValidator(registry, schema, modern, options.duplicateIds ?? "reuse");
     },
   };
 }

@@ -136,10 +136,7 @@ describe("ClickClack native agent progress", () => {
 
   it("retains a newer completion when an older line drains before its next flush", async () => {
     vi.useFakeTimers();
-    let releaseFirstRequest!: () => void;
-    const firstRequest = new Promise<void>((resolve) => {
-      releaseFirstRequest = resolve;
-    });
+    const { promise: firstRequest, resolve: releaseFirstRequest } = Promise.withResolvers<void>();
     const publishEphemeral = vi
       .fn()
       .mockImplementationOnce(() => firstRequest)

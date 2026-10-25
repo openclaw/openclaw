@@ -1,4 +1,3 @@
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OllamaModelWithContext } from "./provider-models.js";
@@ -9,6 +8,7 @@ import {
   selectAppGuidedOllamaModelFromDiscovery,
 } from "./setup-model-selection.js";
 import { configureOllamaNonInteractive, promptAndConfigureOllama } from "./setup.js";
+import { createLocalPrompter } from "./setup.test-support.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -103,11 +103,7 @@ describe("Ollama onboarding model selection", () => {
       }),
     );
 
-    const prompter = {
-      select: vi.fn().mockResolvedValueOnce("local-only"),
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      note: vi.fn(async () => undefined),
-    } as unknown as WizardPrompter;
+    const prompter = createLocalPrompter();
     const result = await promptAndConfigureOllama({ cfg: {}, prompter });
     const selected = result.config.models?.providers?.ollama?.models?.find(
       (model) => model.id === "deepseek-r1:1b",
@@ -142,12 +138,7 @@ describe("Ollama onboarding model selection", () => {
             : showResponse(),
         ),
       );
-      const prompter = {
-        select: vi.fn().mockResolvedValueOnce("local-only"),
-        text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-        note: vi.fn(async () => undefined),
-        confirm: vi.fn().mockResolvedValue(false),
-      } as unknown as WizardPrompter;
+      const prompter = createLocalPrompter({ confirm: vi.fn().mockResolvedValue(false) });
 
       const result = await promptAndConfigureOllama({ cfg: {}, prompter });
 
@@ -182,12 +173,10 @@ describe("Ollama onboarding model selection", () => {
           : Response.json({}),
       ),
     );
-    const prompter = {
+    const prompter = createLocalPrompter({
       select: vi.fn().mockResolvedValueOnce("cloud-local"),
-      text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-      note: vi.fn(async () => undefined),
       confirm: vi.fn().mockResolvedValue(false),
-    } as unknown as WizardPrompter;
+    });
 
     const result = await promptAndConfigureOllama({ cfg: {}, prompter });
 
@@ -237,12 +226,10 @@ describe("Ollama onboarding model selection", () => {
           return Response.json({});
         }),
       );
-      const prompter = {
+      const prompter = createLocalPrompter({
         select: vi.fn().mockResolvedValueOnce(mode),
-        text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-        note: vi.fn(async () => undefined),
         confirm: vi.fn().mockResolvedValue(false),
-      } as unknown as WizardPrompter;
+      });
 
       const result = await promptAndConfigureOllama({ cfg: {}, prompter });
       const configured = result.config.models?.providers?.ollama?.models.map((model) => model.id);

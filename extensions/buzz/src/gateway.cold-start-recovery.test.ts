@@ -165,15 +165,8 @@ function advanceSeconds(seconds: number): void {
 }
 
 function gateHandler(text: string): { settle: () => void; fail: (error: Error) => void } {
-  let settle = () => {};
-  let fail = (_error: Error) => {};
-  gates.set(
-    text,
-    new Promise<void>((resolve, reject) => {
-      settle = resolve;
-      fail = reject;
-    }),
-  );
+  const { promise, resolve: settle, reject: fail } = Promise.withResolvers<void>();
+  gates.set(text, promise);
   return { settle, fail };
 }
 

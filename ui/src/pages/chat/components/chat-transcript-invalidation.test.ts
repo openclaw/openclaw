@@ -519,6 +519,7 @@ describe("chat transcript invalidation", () => {
       rerender();
       transcript.start();
       await flushDeferredRowPrune();
+      await waitForSolid(() => expect(find(container, ".chat-run-failure__retry")).not.toBeNull());
       const bubble = required(container, ".chat-bubble");
       expect(prepare).toHaveBeenCalled();
       prepare.mockClear();

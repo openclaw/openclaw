@@ -68,10 +68,7 @@ describe("resident Codex catalog", () => {
     await fs.mkdir(root, { recursive: true });
     const existing = idleThread({ id: "existing", source: "cli", recencyAt: 100 });
     const older = idleThread({ id: "older", source: "cli", recencyAt: 99 });
-    let release!: () => void;
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: blocked, resolve: release } = Promise.withResolvers<void>();
     const readNative = vi.fn(async (params: CodexThreadListParams) => {
       if (readNative.mock.calls.length === 3) {
         await blocked;

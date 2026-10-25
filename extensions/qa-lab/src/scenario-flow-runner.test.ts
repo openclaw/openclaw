@@ -84,15 +84,6 @@ async function runWebchatTranscriptWait(
     flow: readWebchatTranscriptWaitFlow(),
     api: {
       readSessionTranscriptSummary,
-      waitForCondition: async <T>(check: () => Promise<T | undefined>) => {
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          const value = await check();
-          if (value !== undefined) {
-            return value;
-          }
-        }
-        throw new Error("test condition was not met");
-      },
       normalizeLowercaseStringOrEmpty,
       formatErrorMessage: coerceErrorMessage,
       liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,

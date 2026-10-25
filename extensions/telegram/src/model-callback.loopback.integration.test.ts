@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
@@ -39,11 +40,7 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) =>
 type TelegramApiRequest = { method: string; payload: Record<string, unknown> };
 
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+  return JSON.parse((await consumeBuffer(request)).toString("utf8")) as Record<string, unknown>;
 }
 
 function sendJson(response: ServerResponse, result: unknown): void {

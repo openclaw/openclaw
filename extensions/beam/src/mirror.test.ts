@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionCatalogTranscriptItem } from "openclaw/plugin-sdk/session-catalog";
@@ -41,21 +42,13 @@ vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) =>
   return { ...actual, listActiveSessionCatalogs: vi.fn(actual.listActiveSessionCatalogs) };
 });
 
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 async function withMirrorServer(
   respond: (req: IncomingMessage, res: ServerResponse, body: string) => void,
   run: (origin: string) => Promise<void>,
 ) {
   await withServer((req, res) => {
-    void readRequestBody(req).then(
-      (body) => respond(req, res, body),
+    void consumeBuffer(req).then(
+      (body) => respond(req, res, body.toString("utf8")),
       (error: unknown) => res.destroy(error instanceof Error ? error : new Error(String(error))),
     );
   }, run);

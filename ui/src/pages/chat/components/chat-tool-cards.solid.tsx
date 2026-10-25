@@ -14,9 +14,10 @@ import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-ident
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
-import { BrowserTabCardHost } from "./browser-tab-card.tsx";
+import "./browser-tab-card.css";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ToolIcon } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
@@ -29,6 +30,9 @@ import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 const ToolCardRow = lazy(() => import("./chat-tool-card-row.solid.tsx"), { export: "ToolCardRow" });
+const BrowserTabCardHost = lazy(() => import("./browser-tab-card.tsx"), {
+  export: "BrowserTabCardHost",
+});
 
 export function BrowserTabPreviews(props: {
   previews: readonly BrowserTabPreview[] | undefined;
@@ -40,11 +44,13 @@ export function BrowserTabPreviews(props: {
       keyed={(item) => browserTabKey(item.preview)}
     >
       {(item) => (
-        <BrowserTabCardHost
-          preview={item().preview}
-          revision={item().revision}
-          latest={item().latest}
-        />
+        <ChatLazyBoundary>
+          <BrowserTabCardHost
+            preview={item().preview}
+            revision={item().revision}
+            latest={item().latest}
+          />
+        </ChatLazyBoundary>
       )}
     </For>
   );
