@@ -166,6 +166,7 @@ const { values } = parseArgs({
     "node-policy-churn": { type: "boolean", default: false },
     "team-stress": { type: "boolean", default: false },
     "team-stress-churn-ms": { type: "string", default: "1000" },
+    "team-stress-list-weight": { type: "string", default: "2" },
     "team-stress-allocation-sampling": { type: "boolean", default: false },
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
@@ -281,9 +282,9 @@ if (values["dashboard-rpc"] && mockPort === port + 1) {
 }
 const scenario = values.scenario;
 const pluginCount = integer(values.plugins, "--plugins", 0);
-if (values["team-stress"] && (pluginCount < 3 || pluginCount > TEAM_STRESS_PLUGIN_IDS.length)) {
+if (values["team-stress"] && (pluginCount < 4 || pluginCount > TEAM_STRESS_PLUGIN_IDS.length)) {
   throw new Error(
-    `--team-stress requires --plugins between 3 and ${TEAM_STRESS_PLUGIN_IDS.length}`,
+    `--team-stress requires --plugins between 4 and ${TEAM_STRESS_PLUGIN_IDS.length}`,
   );
 }
 const syntheticPluginCount = values["team-stress"] ? 0 : pluginCount;
@@ -763,6 +764,14 @@ if (values["poll-between-rounds"] && (!soakScenario || !listIntervalMs)) {
   throw new Error("--poll-between-rounds requires memory-soak and --list-interval-ms");
 }
 const teamStressChurnMs = integer(values["team-stress-churn-ms"], "--team-stress-churn-ms");
+const teamStressListWeight = integer(
+  values["team-stress-list-weight"],
+  "--team-stress-list-weight",
+  1,
+);
+if (teamStressListWeight > 64) {
+  throw new Error("--team-stress-list-weight must not exceed 64");
+}
 if (values["team-stress"] && (!soakScenario || !values["mixed-rpc"])) {
   throw new Error("--team-stress requires memory-soak and --mixed-rpc");
 }
@@ -2990,7 +2999,7 @@ const mixedRpcMethods = [
   "sessions.diff",
   ...(values["worktree-tool-churn"] ? [] : ["connect"]),
   ...(values["node-policy-churn"] ? ["node.list", "node.describe", "node.invoke"] : []),
-  ...(values["team-stress"] ? ["sessions.list"] : []),
+  ...(values["team-stress"] ? Array<string>(teamStressListWeight - 1).fill("sessions.list") : []),
   ...dashboardRpcShapes.map(({ method }) => method),
   ...(values["usage-rpc"] ? ["usage.cost", "sessions.usage"] : []),
 ];

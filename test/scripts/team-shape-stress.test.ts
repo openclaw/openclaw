@@ -14,7 +14,16 @@ const executeFile = promisify(execFile);
 
 it("requires ten-minute evidence windows and marks explicit short runs as smoke", () => {
   const options = parseStressOptions(["--output", "/unused"]);
-  expect(options).toMatchObject({ durationMs: 600_000, smoke: false, clients: 65, pairs: 2 });
+  expect(options).toMatchObject({
+    durationMs: 600_000,
+    smoke: false,
+    clients: 65,
+    pairs: 2,
+    pollMs: 25_000,
+    listWeight: 16,
+    roundMs: 60_000,
+    churnMs: 6_000,
+  });
   expect(parseStressOptions(["--output", "/unused", "--smoke-seconds", "1"])).toMatchObject({
     durationMs: 1_000,
     smoke: true,
@@ -28,6 +37,10 @@ it("requires ten-minute evidence windows and marks explicit short runs as smoke"
     ["--output", "/unused", "--minutes", "Infinity"],
     ["--output", "/unused", "--clients", "1"],
     ["--output", "/unused", "--runs", "0"],
+    ["--output", "/unused", "--plugins", "3"],
+    ["--output", "/unused", "--plugins", "41"],
+    ["--output", "/unused", "--list-weight", "0"],
+    ["--output", "/unused", "--list-weight", "65"],
     ["--output", "/unused", "--pairs", "0"],
     ["--output", "/unused", "--mode", "invalid"],
     ["--output", "/unused", "--port", "18789"],

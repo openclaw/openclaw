@@ -57,9 +57,10 @@ export function parseStressOptions(args: string[]) {
       seed: { type: "string", default: "1711" },
       now: { type: "string", default: String(Date.now()) },
       "transcript-mib": { type: "string", default: "128" },
-      "poll-ms": { type: "string", default: "7000" },
-      "round-ms": { type: "string", default: "15000" },
-      "churn-ms": { type: "string", default: "1000" },
+      "poll-ms": { type: "string", default: "25000" },
+      "list-weight": { type: "string", default: "16" },
+      "round-ms": { type: "string", default: "60000" },
+      "churn-ms": { type: "string", default: "6000" },
       "warmup-ms": { type: "string", default: "60000" },
       mode: { type: "string", default: "both" },
       "smoke-seconds": { type: "string" },
@@ -84,7 +85,11 @@ export function parseStressOptions(args: string[]) {
   const minutes = integer("minutes", 10);
   const smokeSeconds = values["smoke-seconds"] ? integer("smoke-seconds", 1) : undefined;
   const port = integer("port", 40000);
-  const plugins = integer("plugins", 3);
+  const plugins = integer("plugins", 4);
+  const listWeight = integer("list-weight", 1);
+  if (listWeight > 64) {
+    throw new Error("--list-weight must not exceed 64");
+  }
   if (plugins > TEAM_STRESS_PLUGIN_IDS.length) {
     throw new Error(`--plugins must not exceed ${TEAM_STRESS_PLUGIN_IDS.length}`);
   }
@@ -106,6 +111,7 @@ export function parseStressOptions(args: string[]) {
     now: integer("now", 1),
     transcriptMiB: integer("transcript-mib", 1),
     pollMs: integer("poll-ms", 1),
+    listWeight,
     roundMs: integer("round-ms", 1),
     churnMs: integer("churn-ms", 1),
     warmupMs: integer("warmup-ms", 0),
@@ -165,7 +171,7 @@ async function main() {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts
   --base <built-repo> --candidate <built-repo> --output <new-dir>
   [--minutes 10 --pairs 2 --clients 65 --runs 4 --sessions 10800 --plugins 40]
-  [--mode both|timing|allocation --poll-ms 7000 --round-ms 15000 --churn-ms 1000]
+  [--mode both|timing|allocation --poll-ms 25000 --list-weight 16 --round-ms 60000 --churn-ms 6000]
   [--warmup-ms 60000 --seed 1711 --transcript-mib 128]
   --smoke-seconds 30 is setup proof only, never performance evidence.
 Timing and allocation are separate fresh-fixture passes. Pairs run AB then BA.
@@ -285,6 +291,8 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             String(options.pollMs),
             "--team-stress-churn-ms",
             String(options.churnMs),
+            "--team-stress-list-weight",
+            String(options.listWeight),
             "--poll-seed",
             String(options.seed),
             "--memory-interval-ms",

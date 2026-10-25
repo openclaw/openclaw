@@ -4,6 +4,9 @@ Run one fixed workload against two **already-built** revisions from this tooling
 checkout. All state, logs, profiles, and results go under a new output directory.
 The controller creates its own loopback listeners on free ports >=40000. It never
 connects to an existing Gateway, discovers credentials, or drives a real browser.
+Both builds must support the database schemas written by the tooling checkout's
+fixture generator. A schema mismatch is a setup failure; the harness never
+downstamps databases or bypasses Gateway schema admission.
 
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts \
@@ -44,8 +47,14 @@ Clients subscribe to sidebar and transcript events while polling list/search,
 history, startup, diff, and reconnect paths. An independent writer commits
 `chat.inject` timestamp updates and a scraper reads the isolated Gateway's
 Prometheus endpoint. The same mock turns and RPC schedule run in each pass.
-`--poll-ms 7000`, `--round-ms 15000`, `--churn-ms 1000`, `--runs 4`, and
-`--clients 65` tune offered load; compare **achieved** RPC/turn rates too.
+`--poll-ms 25000`, `--list-weight 16`, `--round-ms 60000`, `--churn-ms 6000`,
+`--runs 4`, and `--clients 65` tune offered load; compare **achieved** RPC/turn
+rates too. The list weight is its share of a deterministic cycle with one slot
+each for history, startup, diff, and reconnect: 16 means 16/20 list polls.
+Four turns run concurrently once per minute by default. Faster turn cadence also
+increases the workload's history verification traffic, so calibrate the method
+mix as well as total RPC rate. `--list-weight 2 --round-ms 15000 --churn-ms 2000`
+selects a heavier turn/history workload with the same client and fixture counts.
 
 ## Measurement protocol
 
