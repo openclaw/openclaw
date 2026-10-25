@@ -92,42 +92,25 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
     });
   });
 
-  it("projects summary-only inspection without invoking runtime account hooks", async () => {
-    const inspected = Object.freeze({
-      accountId: "primary",
-      enabled: true,
-      configured: true,
-      tokenStatus: "available",
-      name: "Configured account",
-    });
-    await expect(
-      inspectSnapshot(
-        inspected,
-        { accountId: "primary", running: true, lifecycle: "ready" },
-        "requested-alias",
-      ),
-    ).resolves.toMatchObject({
-      ...inspected,
-      running: true,
-      lifecycle: "ready",
-    });
-  });
-
   it.each([true, undefined])(
     "preserves prepared runtime metadata while filtering raw inspection with configured=%s",
     async (configured) => {
-      const inspected = {
+      const inspected = Object.freeze({
+        accountId: "primary",
         enabled: true,
         configured,
+        tokenStatus: "available",
+        name: "Configured account",
         botToken: "raw-inspection-token",
         publicKey: "raw-inspection-key",
         application: { privateCredential: "raw-inspection-value" },
-      };
+      });
       const cachedProbe = { ok: true, source: "recorded" };
       const freshProbe = configured ? { ok: false, source: "requested" } : undefined;
       const runtime = Object.freeze({
         accountId: "primary",
         running: true,
+        lifecycle: "ready",
         application: { intents: { messageContent: "disabled" } },
         bot: { username: "recorded-bot" },
         audit: { unresolvedChannels: 1 },
@@ -135,11 +118,16 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
         baseUrl: ["https://", "user", ":", "pass", "@chat.example.test/?token=", "secret"].join(""),
       });
 
-      const snapshot = await inspectSnapshot(inspected, runtime, "primary", freshProbe);
+      const snapshot = await inspectSnapshot(inspected, runtime, "requested-alias", freshProbe);
 
       expect(snapshot).toMatchObject({
+        accountId: "primary",
+        enabled: true,
         configured,
         running: true,
+        lifecycle: "ready",
+        tokenStatus: "available",
+        name: "Configured account",
         application: runtime.application,
         bot: runtime.bot,
         audit: runtime.audit,

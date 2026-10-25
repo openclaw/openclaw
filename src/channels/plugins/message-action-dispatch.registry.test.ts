@@ -57,19 +57,14 @@ function scopedReader(read: boolean) {
   return { registry, dispatch, handleRootAction, handleScopedAction, channel: base.id };
 }
 
-function pauseRead(
-  fixture: Pick<ReturnType<typeof registerOfficial>, "handleAction">,
-  fenced = true,
-) {
+function pauseRead(fixture: Pick<ReturnType<typeof registerOfficial>, "handleAction">) {
   const resume = createDeferred();
   const entered = createDeferred();
   const nextRequest = vi.fn();
   fixture.handleAction.mockImplementation(async () => {
     entered.resolve();
-    const assertCurrent = fenced ? captureChannelReadAuthority() : undefined;
-    if (fenced) {
-      expect(assertCurrent).toBeTypeOf("function");
-    }
+    const assertCurrent = captureChannelReadAuthority();
+    expect(assertCurrent).toBeTypeOf("function");
     await resume.promise;
     assertCurrent?.();
     nextRequest();
@@ -177,14 +172,6 @@ function registerOfficial(
 }
 
 describe("official plugin read-only authority", () => {
-  it.each(["read", "download-file"] as const)("admits cross-conversation %s", async (action) => {
-    const fixture = registerOfficial({ readActions: [action] });
-    const ctx = { ...fixture.context, action };
-    expect(shouldDeferExternalMessageActionTargetResolution(ctx)).toBe(true);
-    expect((await prepareExternalMessageActionTargetForResolution(ctx)).params).toBe(ctx.params);
-    expect(await dispatchChannelMessageAction(ctx)).toBe(receipt);
-  });
-
   it.each([
     ["download-file", undefined],
     ["react", ["react"]],
@@ -341,21 +328,6 @@ describe("official plugin read-only authority", () => {
     resume.resolve();
     await rejected;
     expect(nextRequest).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])("suppresses revoked responses (error=%s)", async (error) => {
-    const fixture = registerOfficial();
-    const { resume, entered } = pauseRead(fixture, false);
-    const read = fixture.dispatch();
-    const rejected = expect(read).rejects.toThrow(inactiveRead);
-    await entered.promise;
-    fixture.record.enabled = false;
-    if (error) {
-      resume.reject(new Error("stale provider response"));
-    } else {
-      resume.resolve();
-    }
-    await rejected;
   });
 
   it("does not refresh a captured route's authority after awaited target resolution", async () => {

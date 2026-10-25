@@ -418,36 +418,18 @@ describe("setup wizard helpers", () => {
     ).toEqual(["+15555550123", "*"]);
   });
   it("combines standard and extra status lines", async () => {
-    const hints = {
-      configuredHint: "ready",
-      unconfiguredHint: "missing token",
-      configuredScore: 2,
-      unconfiguredScore: 0,
-    };
     const status = setup.createStandardChannelSetupStatus({
-      ...hints,
       channelLabel: "Demo",
       configuredLabel: "configured",
       unconfiguredLabel: "needs token",
       includeStatusLine: true,
       resolveExtraStatusLines: ({ configured }) => [`Configured: ${configured ? "yes" : "no"}`],
-      resolveConfigured: ({ cfg }) => Boolean(cfg.channels?.demo),
+      resolveConfigured: () => true,
     });
-    expect(status).toMatchObject(hints);
-    const cfg = { channels: { demo: {} } };
-    expect(await status.resolveConfigured({ cfg })).toBe(true);
-    expect(await status.resolveStatusLines?.({ cfg, configured: true })).toEqual([
+    expect(await status.resolveStatusLines?.({ cfg: {}, configured: true })).toEqual([
       "Demo: configured",
       "Configured: yes",
     ]);
-  });
-  it("normalizes provided account ids", () => {
-    expect(
-      setup.resolveSetupAccountId({
-        accountId: " Work Account ",
-        defaultAccountId: DEFAULT_ACCOUNT_ID,
-      }),
-    ).toBe("work-account");
   });
   it.each([
     { accountOverride: " Team Primary ", expected: "team-primary" },

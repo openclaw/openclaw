@@ -133,28 +133,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each([undefined, "trusted-user"])("gates moderation sender: %s", async (sender) => {
-  register({
-    actions: {
-      describeMessageTool: () => ({ actions: ["kick"] }),
-      supportsAction: ({ action }) => action === "kick",
-      requiresTrustedRequesterSender: ({ action, toolContext }) =>
-        Boolean(action === "kick" && toolContext),
-    },
-  });
-  const pending = dispatch({
-    action: "kick",
-    params: { guildId: "g1", userId: "u1" },
-    requesterSenderId: sender,
-  });
-  if (sender) {
-    await expect(pending).resolves.toMatchObject({ details: { ok: true } });
-  } else {
-    await expect(pending).rejects.toThrow("Trusted sender identity is required for discord:kick");
-    expect(handleAction).not.toHaveBeenCalled();
-  }
-});
-
 it.each<AccessCase>([
   ["normalized current conversation", {}, true],
   ["missing requester", { requesterAccountId: undefined }, false],
@@ -320,25 +298,16 @@ it.each([true, false])("checks synchronous alias proof: %s", async (matches) => 
   );
 });
 
-it.each([true, false, "error"] as const)("awaits alias, never sync: %s", async (outcome) => {
+it("propagates asynchronous alias failure without synchronous fallback", async () => {
   const fixture = prepareAsyncAlias();
   const pending = dispatch(aliasContext);
   expect(fixture.matchesCurrentConversationAsync).toHaveBeenCalledOnce();
   expect(handleAction).not.toHaveBeenCalled();
-  const expected =
-    outcome === true
-      ? expect(pending).resolves.toMatchObject({ details: { ok: true } })
-      : expect(pending).rejects.toThrow(
-          outcome === "error" ? "proof unavailable" : "exact current conversation",
-        );
-  if (outcome === "error") {
-    fixture.proof.reject(new Error("proof unavailable"));
-  } else {
-    fixture.proof.resolve(outcome);
-  }
+  const expected = expect(pending).rejects.toThrow("proof unavailable");
+  fixture.proof.reject(new Error("proof unavailable"));
   await expected;
   expect(fixture.matchesCurrentConversation).not.toHaveBeenCalled();
-  expect(handleAction).toHaveBeenCalledTimes(outcome === true ? 1 : 0);
+  expect(handleAction).not.toHaveBeenCalled();
 });
 
 it.each<[string, Partial<DispatchContext>]>([

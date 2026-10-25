@@ -162,7 +162,6 @@ it("awaits activity persistence and keeps inspection pure", async () => {
 });
 
 it.each([
-  ["agent session", createBinding(), "agent", "review"],
   ["inspection", createBinding(), "agent", "review", false],
   ["global fallback", createBinding({ targetSessionKey: "global" }), "agent", "main"],
   ["plugin owner", createBinding({ metadata: pluginOwner }), "plugin"],

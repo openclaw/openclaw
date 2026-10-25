@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { agentsListCommand } from "../../commands/agents.commands.list.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
@@ -16,7 +14,6 @@ import {
   restorePluginMetadataSnapshot,
 } from "../../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { defaultRuntime } from "../../runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -92,49 +89,6 @@ const siblingSetup = {
   setupChannelId: "alpha-chat",
 };
 
-function providerFixture(accounts: Record<string, { name?: string }>, accountIds = ["ops"]) {
-  const fixture = writeBundledSetupChannelPlugin();
-  const { bundledRoot, channelId, pluginId } = fixture;
-  const cfg = {
-    agents: { entries: { main: { workspace: bundledRoot } } },
-    channels: {
-      [channelId]: { enabled: true, name: "Root name is not an account fallback", accounts },
-    },
-    plugins: { allow: [pluginId] },
-    bindings: accountIds.map((accountId) => ({
-      type: "route" as const,
-      agentId: "main",
-      match: { channel: channelId, accountId },
-    })),
-  } satisfies OpenClawConfig;
-  return { ...fixture, cfg };
-}
-
-let providerConfig: OpenClawConfig;
-// mock-isolation: Only the public provider projection receives fixture-owned config, without operator reads.
-vi.mock("../../commands/config-validation.js", () => ({
-  requireValidConfig: async () => providerConfig,
-}));
-// mock-isolation: Synthetic roster is already admitted; no state database is needed for account display.
-vi.mock("../../state/agent-database-admission.js", () => ({
-  hasAgentDatabaseAdmissions: () => true,
-  evaluateAgentDatabaseAdmissions: async () => [],
-  recordAgentDatabaseAdmissions: () => undefined,
-  readAgentDatabaseAdmissionRefusal: () => undefined,
-}));
-// mock-isolation: Synthetic roster has no durable provenance; real plugin discovery stays unmocked.
-vi.mock("../../state/agent-provenance.js", () => ({
-  listAgentProvenance: async () => [],
-  readAgentProvenanceForDisplay: async () => [],
-}));
-
-async function providerLines(cfg: ReturnType<typeof providerFixture>["cfg"]) {
-  providerConfig = cfg;
-  const json = vi.spyOn(defaultRuntime, "writeJson").mockReturnValue(undefined).mockClear();
-  await agentsListCommand({ bindings: true, json: true });
-  return json.mock.calls[0]?.[0];
-}
-
 function manifestFixture(
   channels?: Parameters<typeof externalConfig>[1],
   options: Parameters<typeof writeExternalSetupChannelPlugin>[0] = {},
@@ -198,75 +152,6 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("listReadOnlyChannelPluginsForConfig", () => {
-  it("keeps named and unnamed account labels on the cold adapter", async () => {
-    const { cfg, channelId, setupMarker, fullMarker } = providerFixture(
-      { ops: { name: " Operations desk " }, plain: {}, unbound: { name: "Unbound account" } },
-      ["ops", "plain"],
-    );
-    const originalConfig = JSON.stringify(cfg);
-
-    const output = await providerLines(cfg);
-
-    expect(output).toMatchObject([
-      {
-        providers: [
-          "Bundled Chat ops (Operations desk): configured",
-          "Bundled Chat plain: configured",
-        ],
-      },
-    ]);
-    expect(
-      await providerLines({
-        ...cfg,
-        bindings: [
-          { type: "route", agentId: "main", match: { channel: channelId, accountId: "*" } },
-        ],
-      }),
-    ).toMatchObject([
-      {
-        providers: expect.arrayContaining(["Bundled Chat unbound (Unbound account): configured"]),
-      },
-    ]);
-    const adapter = findPlugin(listReadOnlyChannelPluginsForConfig(cfg), channelId);
-    const account = expectRecordFields(adapter?.config.resolveAccount(cfg, "ops"), {
-      accountId: "ops",
-      name: "Operations desk",
-    });
-    expect(account.config).toBe(cfg.channels[channelId]?.accounts.ops);
-    expect(JSON.stringify(cfg)).toBe(originalConfig);
-    expectMarkers(setupMarker, fullMarker);
-  });
-
-  it("keeps loaded inspector names ahead of manifest config names", async () => {
-    const { cfg, channelId, pluginId, setupMarker, fullMarker } = providerFixture({
-      ops: { name: "Cold config name" },
-    });
-    const resolveAccount = vi.fn(() => {
-      throw new Error("loaded inspector must own account metadata");
-    });
-    const plugin = createChannelTestPluginBase({
-      id: channelId,
-      label: "Loaded Chat",
-      config: {
-        listAccountIds: () => ["ops"],
-        resolveAccount,
-        inspectAccount: (_cfg, accountId) => ({
-          accountId,
-          name: "Inspector name",
-          enabled: true,
-          configured: true,
-        }),
-      },
-    });
-    setActivePluginRegistry(createTestRegistry([{ pluginId, plugin, source: "test" }]));
-
-    expect(await providerLines(cfg)).toMatchObject([
-      { providers: ["Loaded Chat ops (Inspector name): configured"] },
-    ]);
-    expect(resolveAccount).not.toHaveBeenCalled();
-    expectMarkers(setupMarker, fullMarker);
-  });
-
   it("keeps explicitly supplied metadata inventories separate for the same config", () => {
     const { cfg, list } = externalFixture({ setupEntry: false, manifestChannelConfig: true });
     const original = resolvePluginMetadataSnapshot({ config: cfg });
@@ -304,17 +189,25 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     const metadataSnapshot = resolvePluginMetadataSnapshot({ config: cfg });
     const first = findPlugin(list({ metadataSnapshot }));
     const changed = externalConfig(pluginDir, {
-      "external-chat": { accounts: { ops: { token: "changed" } } },
+      "external-chat": {
+        name: "Root is not an account-name fallback",
+        accounts: { ops: { token: "changed", name: " Operations desk " }, plain: {} },
+      },
     });
+    const originalConfig = JSON.stringify(changed);
     const second = findPlugin(listReadOnlyChannelPluginsForConfig(changed, { metadataSnapshot }));
 
     expect(first).toBeDefined();
     expect(second).toBe(first);
-    expect(second?.config.listAccountIds(changed)).toEqual(["ops"]);
-    expect(second?.config.resolveAccount(changed, "ops")).toEqual({
+    expect(second?.config.listAccountIds(changed)).toEqual(["ops", "plain"]);
+    const namedAccount = expectRecordFields(second?.config.resolveAccount(changed, "ops"), {
       accountId: "ops",
-      config: { token: "changed" },
+      name: "Operations desk",
+      config: { token: "changed", name: " Operations desk " },
     });
+    expect(namedAccount.config).toBe(changed.channels?.["external-chat"]?.accounts.ops);
+    expect(second?.config.resolveAccount(changed, "plain").name).toBeUndefined();
+    expect(JSON.stringify(changed)).toBe(originalConfig);
     for (const [channelEnabled, accountEnabled, expected] of [
       [true, false, false],
       [true, true, true],
