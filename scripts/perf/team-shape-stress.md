@@ -14,12 +14,16 @@ node --import ./scripts/tsx.mjs scripts/perf/team-shape-stress.ts \
 
 Defaults are 10,800 deterministic sessions, 65 permanent operator WebSocket
 clients (plus brief reconnect probes), four concurrent mock-provider turns per
-round, and 40 enabled plugins: 37 synthetic startup plugins plus bundled `acpx`,
-`codex`, and `diagnostics-prometheus`. The provider streams text and executes real
+round, and 40 enabled bundled plugins, including `acpx`, `codex`,
+`diagnostics-prometheus`, and model providers. The provider streams text and executes real
 local tool calls and native subagent turns; no external model service is used.
-Synthetic plugin registrations exercise catalog size, not the runtime behavior of
-37 real integrations. The bundled Codex/ACP plugins are present; their external
-backends are not invoked.
+Provider catalog entries keep their normal lazy activation; this is not 40 eager
+integrations. The harness verifies every selected plugin is enabled without a
+runtime error and requires ACP, Codex, Prometheus, and the mock's OpenAI provider
+to be active. `plugin-inventory.json` records the actual activation states,
+including automatically enabled core plugins. External provider and Codex/ACP
+backends are not invoked. Bundled modules avoid the preparation-worker overhead
+that dozens of synthetic external plugins would introduce.
 
 The seeded mix is 4,300 finished unarchived subagents, 4,400 archived dashboards,
 400 active dashboards, 200 explicit sessions, and 1,500 other sessions including
@@ -29,6 +33,12 @@ message content with a skewed size distribution. This reproduces session shape,
 not a byte-for-byte copy of a production database. Four projects, disabled cron
 entries, user profiles, participants, approvals, and delivered run records use
 the existing offline fixture writers.
+
+The campaign captures one clock anchor and reuses it across all fixtures. Pass
+`--now <epoch-ms>` from `campaign.json` to replay that anchor with the same seed.
+Active dashboard timestamps stay within the normal seven-day archive threshold;
+the fixture raises the existing session-count capacity to twice the seeded count.
+Normal maintenance remains enabled in both passes.
 
 Clients subscribe to sidebar and transcript events while polling list/search,
 history, startup, diff, and reconnect paths. An independent writer commits

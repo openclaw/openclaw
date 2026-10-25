@@ -184,7 +184,9 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
                   : startupTarget
                     ? `agent:main:dashboard:${startupUuid}`
                     : `agent:main:${sessionId}`;
-        const updatedAt = options.now - Math.floor(random() ** 2 * 30 * DAY_MS);
+        // Keep the live stress cohort inside normal maintenance age limits for the campaign.
+        const ageDays = stressCategory === "dashboard" ? 6 : stressCategory ? 29 : 30;
+        const updatedAt = options.now - Math.floor(random() ** 2 * ageDays * DAY_MS);
         const createdAt = Math.min(updatedAt - Math.floor(random() * 7 * DAY_MS), latestCreation);
         const profileId = `team-shape-profile-${index % 24}`;
         const visibility = startupTarget

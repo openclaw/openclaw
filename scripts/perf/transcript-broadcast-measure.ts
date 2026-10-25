@@ -110,6 +110,7 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { TEAM_STRESS_PLUGIN_IDS } from "./team-shape-stress-fixture.ts";
 
 const { values } = parseArgs({
   options: {
@@ -280,6 +281,13 @@ if (values["dashboard-rpc"] && mockPort === port + 1) {
 }
 const scenario = values.scenario;
 const pluginCount = integer(values.plugins, "--plugins", 0);
+if (values["team-stress"] && (pluginCount < 3 || pluginCount > TEAM_STRESS_PLUGIN_IDS.length)) {
+  throw new Error(
+    `--team-stress requires --plugins between 3 and ${TEAM_STRESS_PLUGIN_IDS.length}`,
+  );
+}
+const syntheticPluginCount = values["team-stress"] ? 0 : pluginCount;
+const teamStressPlugins = TEAM_STRESS_PLUGIN_IDS.slice(0, pluginCount);
 if (values["plugin-update"] && scenario !== "plugins.reload") {
   throw new Error("--plugin-update requires --scenario plugins.reload");
 }
@@ -1252,7 +1260,7 @@ if (soakScenario) {
   }
 }
 if (values["team-stress"]) {
-  const bundled = ["acpx", "codex", "diagnostics-prometheus"];
+  const bundled = teamStressPlugins;
   cfg.plugins.enabled = true;
   cfg.plugins.allow = [...new Set([...(cfg.plugins.allow ?? []), ...bundled])];
   for (const id of bundled) {
@@ -1389,9 +1397,9 @@ let reloadPluginId: string | undefined;
 let scopePluginId: string | undefined;
 let updateReloadPlugin: (() => number) | undefined;
 const pluginUpdateLatenciesMs: number[] = [];
-if (scenario === "plugins.reload" || scenario === "plugin.scope" || pluginCount > 0) {
+if (scenario === "plugins.reload" || scenario === "plugin.scope" || syntheticPluginCount > 0) {
   const plugin = writePluginFixtures(output, {
-    count: Math.max(1, pluginCount),
+    count: Math.max(1, syntheticPluginCount),
     activationOnStartup: true,
     nodePolicy: values["node-policy-churn"],
   });
@@ -2982,6 +2990,7 @@ const mixedRpcMethods = [
   "sessions.diff",
   ...(values["worktree-tool-churn"] ? [] : ["connect"]),
   ...(values["node-policy-churn"] ? ["node.list", "node.describe", "node.invoke"] : []),
+  ...(values["team-stress"] ? ["sessions.list"] : []),
   ...dashboardRpcShapes.map(({ method }) => method),
   ...(values["usage-rpc"] ? ["usage.cost", "sessions.usage"] : []),
 ];
@@ -5079,25 +5088,24 @@ try {
     if (values["team-stress"]) {
       const plugins =
         isRecord(inventory) && Array.isArray(inventory.plugins) ? inventory.plugins : [];
-      const expected = [
-        "acpx",
-        "codex",
-        "diagnostics-prometheus",
-        ...Array.from(
-          { length: pluginCount },
-          (_, index) => `bench-plugin-${String(index + 1).padStart(2, "0")}`,
-        ),
-      ];
-      if (
-        expected.some(
-          (id) =>
-            !plugins.some(
-              (plugin: unknown) => isRecord(plugin) && plugin.id === id && plugin.enabled === true,
-            ),
-        )
-      ) {
+      // Provider catalog entries deliberately stay lazy; workload capabilities must be live.
+      const requiredActive = new Set(["acpx", "codex", "diagnostics-prometheus", "openai"]);
+      const invalid = [...new Set([...teamStressPlugins, ...requiredActive])].filter(
+        (id) =>
+          !plugins.some(
+            (plugin: unknown) =>
+              isRecord(plugin) &&
+              plugin.id === id &&
+              plugin.enabled === true &&
+              isRecord(plugin.runtime) &&
+              !plugin.runtime.error &&
+              (plugin.runtime.state === "active" ||
+                (!requiredActive.has(id) && plugin.runtime.state === "unloaded")),
+          ),
+      );
+      if (invalid.length) {
         throw new Error(
-          "Team stress plugin inventory did not contain every enabled fixture plugin",
+          `Team stress plugins missing, failed, or required runtime inactive: ${invalid.join(", ")}; inspect plugin-inventory.json`,
         );
       }
     }
@@ -5573,6 +5581,24 @@ try {
     }
   }
   const warmReadyAtEpochMs = Date.now();
+  if (values["team-stress"]) {
+    const shape: Record<string, number> = {};
+    for (const archived of ["all", false, true] as const) {
+      const page = await rpc(sender, "sessions.list", { agentId: "main", archived, limit: 1 });
+      if (!isRecord(page) || typeof page.totalCount !== "number") {
+        throw new Error("Team stress live session census did not return totalCount");
+      }
+      shape[String(archived)] = page.totalCount;
+    }
+    writeFileSync(path.join(output, "stress-shape.json"), JSON.stringify(shape, null, 2));
+    if (
+      shape.all! < fixtureSessionCount ||
+      shape.false! < fixtureSessionCount - Number(fixture.archivedCount) ||
+      shape.true! < Number(fixture.archivedCount)
+    ) {
+      throw new Error("Team stress session shape changed during Gateway startup maintenance");
+    }
+  }
   console.log("PHASE warmed");
   if (values["start-file"]) {
     while (!existsSync(values["start-file"])) {
@@ -6953,7 +6979,7 @@ try {
     output,
     gatewayPreload,
     gatewayReadyMs,
-    syntheticPlugins: Math.max(pluginCount, reloadPluginId || scopePluginId ? 1 : 0),
+    syntheticPlugins: Math.max(syntheticPluginCount, reloadPluginId || scopePluginId ? 1 : 0),
     ...(values["plugin-update"]
       ? {
           pluginUpdate: {

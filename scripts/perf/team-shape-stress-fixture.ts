@@ -2,10 +2,56 @@
 // Reuse the offline session/transcript/registry writers; never copy live state databases.
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
 
+// Bundled modules exercise the real catalog without external-plugin preparation workers.
+// Only the locally configured OpenAI mock receives model requests.
+export const TEAM_STRESS_PLUGIN_IDS = [
+  "acpx",
+  "codex",
+  "diagnostics-prometheus",
+  "openai",
+  "anthropic",
+  "google",
+  "openrouter",
+  "github-copilot",
+  "amazon-bedrock",
+  "amazon-bedrock-mantle",
+  "anthropic-vertex",
+  "arcee",
+  "baseten",
+  "byteplus",
+  "cerebras",
+  "chutes",
+  "cloudflare-ai-gateway",
+  "cohere",
+  "deepinfra",
+  "deepseek",
+  "fal",
+  "featherless",
+  "fireworks",
+  "gmi",
+  "groq",
+  "huggingface",
+  "kilocode",
+  "venice",
+  "longcat",
+  "microsoft-foundry",
+  "minimax",
+  "mistral",
+  "moonshot",
+  "novita",
+  "nvidia",
+  "qianfan",
+  "qwen",
+  "stepfun",
+  "together",
+  "xai",
+] as const;
+
 export async function generateTeamShapeStressFixture(options: {
   stateDir: string;
   port: number;
   seed: number;
+  now: number;
   sessions?: number;
   transcriptMiB?: number;
 }) {
@@ -21,6 +67,8 @@ export async function generateTeamShapeStressFixture(options: {
       String(options.port),
       "--seed",
       String(options.seed),
+      "--now",
+      String(options.now),
       "--sessions",
       String(sessions),
       "--runs",

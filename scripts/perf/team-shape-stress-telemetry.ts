@@ -130,7 +130,7 @@ export async function startTeamStressTelemetry(options: Options) {
   }, 20).unref();
   let previousAllocatedBytes = 0;
   let windows = 0;
-  let failure: unknown;
+  let failure: Error | undefined;
   let stopped: ReturnType<typeof finish> | undefined;
   let lastSample: { memory: NodeJS.MemoryUsage } | undefined;
   const sample = async (partial: boolean) => {
@@ -184,7 +184,7 @@ export async function startTeamStressTelemetry(options: Options) {
     pending = pending
       .then(() => sample(false))
       .catch((error: unknown) => {
-        failure = error;
+        failure = error instanceof Error ? error : new Error(String(error));
         clearInterval(timer);
       });
   }, intervalMs).unref();

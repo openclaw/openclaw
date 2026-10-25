@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { runManagedCommand } from "../lib/managed-child-process.mts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { TEAM_STRESS_PLUGIN_IDS } from "./team-shape-stress-fixture.ts";
 import {
   summarizeStressRun,
   compareStressRuns,
@@ -27,6 +28,18 @@ import {
 } from "./team-shape-stress-report.ts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
+const headlineMetrics = new Set([
+  "mainThreadCpuPercent",
+  "allocationMiBPerSecond",
+  "gcSecondsPerMinute",
+  "eventLoopP99Ms",
+  "sessionsListP99Ms",
+  "rssMiB",
+  "heapMiB",
+  "oldGenerationAfterGcMiB",
+  "workerHeapMiB",
+]);
+const rounded = (value: number | null) => (value === null ? null : Number(value.toFixed(3)));
 
 export function parseStressOptions(args: string[]) {
   const { values } = parseArgs({
@@ -42,6 +55,7 @@ export function parseStressOptions(args: string[]) {
       sessions: { type: "string", default: "10800" },
       plugins: { type: "string", default: "40" },
       seed: { type: "string", default: "1711" },
+      now: { type: "string", default: String(Date.now()) },
       "transcript-mib": { type: "string", default: "128" },
       "poll-ms": { type: "string", default: "7000" },
       "round-ms": { type: "string", default: "15000" },
@@ -70,6 +84,10 @@ export function parseStressOptions(args: string[]) {
   const minutes = integer("minutes", 10);
   const smokeSeconds = values["smoke-seconds"] ? integer("smoke-seconds", 1) : undefined;
   const port = integer("port", 40000);
+  const plugins = integer("plugins", 3);
+  if (plugins > TEAM_STRESS_PLUGIN_IDS.length) {
+    throw new Error(`--plugins must not exceed ${TEAM_STRESS_PLUGIN_IDS.length}`);
+  }
   if (port > 65535) {
     throw new Error("--port must be between 40000 and 65535");
   }
@@ -83,8 +101,9 @@ export function parseStressOptions(args: string[]) {
     clients: integer("clients", 4),
     runs: integer("runs", 1),
     sessions: integer("sessions", 100),
-    plugins: integer("plugins", 3),
+    plugins,
     seed: integer("seed", 0),
+    now: integer("now", 1),
     transcriptMiB: integer("transcript-mib", 1),
     pollMs: integer("poll-ms", 1),
     roundMs: integer("round-ms", 1),
@@ -219,6 +238,8 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             String(port),
             "--seed",
             String(options.seed),
+            "--now",
+            String(options.now),
             "--sessions",
             String(options.sessions),
             "--transcript-mib",
@@ -253,7 +274,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "--runs",
             String(options.runs),
             "--plugins",
-            String(options.plugins - 3),
+            String(options.plugins),
             "--duration-ms",
             String(options.durationMs),
             "--warmup-ms",
@@ -296,13 +317,29 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
           path.join(options.output, "campaign.json"),
           JSON.stringify(manifest, null, 2),
         );
-        console.table([runs.at(-1)!.metrics]);
+        console.table(
+          Object.entries(runs.at(-1)!.metrics)
+            .filter(([metric]) => headlineMetrics.has(metric))
+            .map(([metric, value]) => ({ metric, value: rounded(value) })),
+        );
       }
     }
   }
   const comparison = compareStressRuns(runs);
   writeFileSync(path.join(options.output, "comparison.json"), JSON.stringify(comparison, null, 2));
-  console.table(comparison);
+  console.table(
+    comparison
+      .filter((row) => headlineMetrics.has(row.metric))
+      .map((row) => ({
+        metric: row.metric,
+        mode: row.mode,
+        base: rounded(row.base),
+        candidate: rounded(row.candidate),
+        delta: rounded(row.absolute),
+        percent: rounded(row.percent),
+        pairs: row.pairs,
+      })),
+  );
   console.log(`RESULT ${path.join(options.output, "campaign.json")}`);
 }
 

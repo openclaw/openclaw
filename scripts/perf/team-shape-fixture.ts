@@ -194,7 +194,13 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
       plugins: { enabled: false },
       cron: { enabled: false },
       update: { checkOnStart: false },
+      ...(options.teamStress
+        ? { session: { maintenance: { maxEntries: Math.max(5_000, options.sessions * 2) } } }
+        : {}),
       agents: {
+        ...(options.teamStress
+          ? { ownership: "explicit" as const, defaults: { systemAgent: { agentId: "main" } } }
+          : {}),
         entries: Object.fromEntries(
           (options.teamStress ? ["main", "reviewer", "researcher", "planner"] : ["main"]).map(
             (agentId) => [
