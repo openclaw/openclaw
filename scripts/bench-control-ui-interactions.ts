@@ -37,6 +37,7 @@ import {
   summarizeLongTaskCpuProfiles,
   type InteractionStyleSheet,
 } from "./lib/control-ui-interaction-trace.ts";
+import { launchControlUiObservationBrowser } from "./lib/control-ui-observation-browser.ts";
 import {
   createProjectionBoardResponses,
   disposeProjectionFixture,
@@ -572,12 +573,27 @@ try {
         const startedAt = new Date().toISOString();
         const startLoad = os.loadavg();
         for (const [bundle, slot] of servers.entries()) {
+          const artifactPrefix = `${viewport.name}-${theme}-${scenario.id}-${pair + 1}-${bundle}`;
           const nativeVisibility =
             scenario.visibility === "hidden" && values.headed
               ? await launchNativeVisibilityContext()
               : undefined;
+          const observationBrowser =
+            scenario.observationBrowser && !nativeVisibility
+              ? await launchControlUiObservationBrowser({
+                  viewport: { width: viewport.width, height: viewport.height },
+                  artifactDir,
+                  artifactPrefix,
+                  headless: !values.headed,
+                  colorScheme: theme,
+                  isMobile: viewport.name === "mobile",
+                  hasTouch: viewport.name === "mobile",
+                })
+              : undefined;
+          const ownedBrowserPid = nativeVisibility?.processId ?? observationBrowser?.processId;
           const context =
             nativeVisibility?.context ??
+            observationBrowser?.context ??
             (await browser.newContext({
               viewport: { width: viewport.width, height: viewport.height },
               isMobile: viewport.name === "mobile",
@@ -622,11 +638,11 @@ try {
             }
           } catch (error) {
             await nativeVisibility?.close();
+            await observationBrowser?.close();
             throw error;
           }
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
-          const artifactPrefix = `${viewport.name}-${theme}-${scenario.id}-${pair + 1}-${bundle}`;
           const result: Result = {
             step: scenario.id,
             viewport: viewport.name,
@@ -639,7 +655,7 @@ try {
               ? {
                   processWakeups: {
                     complete: false,
-                    nativeBrowserPid: nativeVisibility?.processId,
+                    nativeBrowserPid: ownedBrowserPid,
                     reason: processWakeupSetupError ?? "Sampling not reached",
                   },
                 }
@@ -656,7 +672,10 @@ try {
           try {
             cdp = await context.newCDPSession(page);
             await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
-            if (nativeVisibility && scenario.fixture?.boardFrameResources) {
+            if (
+              nativeVisibility &&
+              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+            ) {
               // Native default contexts allow service workers, which hide fixture fetches from page.route.
               await cdp.send("Network.enable");
               await cdp.send("Network.setBypassServiceWorker", { bypass: true });
@@ -704,7 +723,10 @@ try {
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
             await waitForControlUiInitialRoster(page, 15_000 * cpuThrottle);
             await scenario.prepare(page, gateway);
-            if (nativeVisibility && scenario.fixture?.boardFrameResources) {
+            if (
+              nativeVisibility &&
+              (scenario.fixture?.boardFrameResources || scenario.fixture?.browserResources)
+            ) {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
               await cdp.send("Network.disable");
             }
@@ -846,7 +868,7 @@ try {
               observation.reason = processWakeupSetupError ?? "Process observation did not finish";
               if (processWakeupReader) {
                 try {
-                  if (nativeVisibility && nativeVisibility.processId === undefined) {
+                  if ((nativeVisibility || observationBrowser) && ownedBrowserPid === undefined) {
                     throw new Error("Native owned Chromium launch did not retain its PID");
                   }
                   const ownedBrowser = context.browser();
@@ -857,7 +879,7 @@ try {
                   observation.before = await readProcessWakeups(
                     processSession,
                     processWakeupReader,
-                    nativeVisibility?.processId,
+                    ownedBrowserPid,
                   );
                 } catch (error) {
                   observation.reason = String(error);
@@ -910,7 +932,7 @@ try {
                 result.processWakeups.after = await readProcessWakeups(
                   processSession,
                   processWakeupReader,
-                  nativeVisibility?.processId,
+                  ownedBrowserPid,
                 );
                 finishProcessWakeups(result.processWakeups);
               } catch (error) {
@@ -1126,7 +1148,13 @@ try {
                 await capture(() => disposeProjectionFixture(page));
               }
               await capture(async () => cdp?.detach());
-              await capture(() => (nativeVisibility ? nativeVisibility.close() : context.close()));
+              await capture(() =>
+                nativeVisibility
+                  ? nativeVisibility.close()
+                  : observationBrowser
+                    ? observationBrowser.close()
+                    : context.close(),
+              );
             }
             if (errors.length) {
               result.status = "failed";

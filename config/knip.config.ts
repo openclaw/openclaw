@@ -225,6 +225,7 @@ const repositoryScriptEntries = [
   "scripts/perf/state-path-resolution-measure.ts!",
   // Maintained guides and source headers invoke these proof commands by exact path.
   "scripts/bench-control-ui-media.ts!",
+  "scripts/bench-control-ui-css.ts!",
   "scripts/bench-control-ui-rich-boot.ts!",
   "scripts/bench-control-ui-wire.ts!",
   "scripts/bench-dynamic-validators.mts!",
