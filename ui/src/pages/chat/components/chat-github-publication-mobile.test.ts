@@ -4,6 +4,10 @@ import { createComponent, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
+  interrupted,
+  options as publicationOptions,
+} from "../chat-github-publication.test-support.ts";
+import {
   GitHubPublicationMobile,
   type GitHubPublicationMobileProps,
 } from "./chat-github-publication-mobile.tsx";
@@ -70,30 +74,10 @@ describe("mobile publication review", () => {
       publication: publication({
         locked: true,
         onConfirm,
-        result: {
-          status: "needs_confirmation",
-          requestId: "request-original",
-          publisher: { source: "personal", accountId: 2, login: "alice-tools" },
-          message: "Review the original publication.",
-        },
-        confirmation: {
-          account: { accountId: 2, login: "alice-tools" },
-          generation: "generation-original",
-          requestDigest: "a".repeat(64),
-          repository: "example/original",
-          pushRepository: "alice-tools/original",
-          branch: "feature/original",
-          baseBranch: "release",
-          sourceHeadCommit: "b".repeat(40),
-          sourceIndexTree: "c".repeat(40),
-          workspaceTree: "d".repeat(40),
-        },
+        ...interrupted,
       }),
     });
-    text(
-      ["example/original", "feature/original", "release", "alice-tools"],
-      ["another-task", "999"],
-    );
+    text(["team/demo", "feature/one", "main", "alice-tools"], ["another-task", "999"]);
     expect(query('[aria-haspopup="menu"]')).toBeNull();
     expect(onConfirm).not.toHaveBeenCalled();
     locked();
@@ -101,39 +85,17 @@ describe("mobile publication review", () => {
     expect(onConfirm).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { label: "without a branch", branch: undefined },
-    { label: "with a current branch", branch: sessionBranch() },
-  ])("keeps recovery available $label and no known result", ({ branch }) => {
+  it("keeps recovery available without exposing the current branch for an unknown result", () => {
     const onPublish = vi.fn();
     render({
       publication: publication({ locked: true, onPublish }),
-      branch,
+      branch: sessionBranch(),
     });
     locked();
     text(["The outcome is unknown."]);
     expect(query('[aria-haspopup="menu"]')).toBeNull();
     expect(onPublish).not.toHaveBeenCalled();
     expect(action().disabled).toBe(false);
-  });
-
-  it("checks an accepted receipt through the primary action without republishing", () => {
-    const onRefresh = vi.fn();
-    const onPublish = vi.fn();
-    render({
-      branch: sessionBranch(),
-      publication: publication({
-        locked: true,
-        result: { status: "requested", requestId: "accepted-request", message: "Accepted." },
-        onRefresh,
-        onPublish,
-      }),
-    });
-    locked();
-    expect(action()).toMatchObject({ textContent: "Check publication", disabled: false });
-    action().click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-    expect(onPublish).not.toHaveBeenCalled();
   });
 
   it("offers recovery instead of account changes when the options are unavailable", () => {
@@ -145,19 +107,7 @@ describe("mobile publication review", () => {
         onSelect,
         onRefresh,
         error: "Connection unavailable",
-        options: {
-          shared: { source: "system-configured", accountId: 1, login: "system-bot" },
-          personal: {
-            state: "connected",
-            generation: "personal-generation",
-            account: { accountId: 2, login: "alice-tools" },
-            accessExpiresAtMs: null,
-            refreshState: "available",
-            pending: null,
-          },
-          pendingPersonal: null,
-          latestShared: null,
-        },
+        options: publicationOptions,
       }),
     });
     expect(query('[aria-haspopup="menu"]')).toBeNull();

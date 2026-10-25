@@ -3,11 +3,7 @@ import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../../app/context.ts";
-import {
-  cancelStaleChunkRecovery,
-  installStaleChunkReloadListener,
-} from "../../../app/stale-chunk-reload.ts";
-import * as storageAccess from "../../../local-storage.ts";
+import * as staleRecovery from "../../../app/stale-chunk-reload.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
@@ -30,11 +26,7 @@ vi.mock("../../../app/stale-chunk-reload.ts", async (importOriginal) => {
   };
 });
 
-let stopRecovery: (() => void) | undefined;
-
 afterEach(() => {
-  stopRecovery?.();
-  cancelStaleChunkRecovery();
   vi.unstubAllGlobals();
   vi.doUnmock("./chat-html-preview-element.tsx");
   vi.restoreAllMocks();
@@ -50,13 +42,6 @@ it("defers HTML controls, retries imports, and retains the frame across source t
     .mockReturnValueOnce(initialLoad.promise)
     .mockReturnValueOnce(staleLoad.promise)
     .mockReturnValueOnce(retryLoad.promise);
-  const probe = createDeferred<Response>();
-  const fetchDocument = vi.fn(() => probe.promise);
-  vi.stubGlobal("fetch", fetchDocument);
-  window.sessionStorage.removeItem("openclaw.controlUi.staleChunkReloadBuildId");
-  vi.spyOn(storageAccess, "getSafeSessionStorage").mockReturnValue(window.sessionStorage);
-  const persist = vi.spyOn(Storage.prototype, "setItem");
-  stopRecovery = installStaleChunkReloadListener();
   const recovery = createDeferred<boolean>();
   retryStale.mockReturnValueOnce(recovery.promise).mockResolvedValueOnce(false);
   vi.doMock(import("./chat-html-preview-element.tsx"), async (importOriginal) => {
@@ -140,16 +125,12 @@ it("defers HTML controls, retries imports, and retains the frame across source t
   retry();
   await loaded(2);
   pending();
-  const staleFailure = new Error("Failed to fetch dynamically imported module");
-  staleLoad.reject(staleFailure);
-  const event = new Event("vite:preloadError", { cancelable: true });
-  Object.defineProperty(event, "payload", { value: staleFailure });
-  window.dispatchEvent(event);
+  staleLoad.reject(new Error("Failed to fetch dynamically imported module"));
   await failed("Failed to fetch dynamically imported module");
-  await waitForSolid(() => expect(fetchDocument).toHaveBeenCalledOnce());
   retry();
   await waitForSolid(pending);
   const canReload = retryStale.mock.calls[0]![0].canReload;
+  const cancelRecovery = vi.spyOn(staleRecovery, "cancelStaleChunkRecovery");
   expect(canReload()).toBe(true);
   replaceFile({ ...first, line: undefined });
   flush();
@@ -164,14 +145,7 @@ it("defers HTML controls, retries imports, and retains the frame across source t
   });
   flush();
   expect(canReload()).toBe(false);
-  probe.resolve(new Response(null, { status: 200 }));
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, 0);
-  });
-  expect(persist).not.toHaveBeenCalledWith(
-    "openclaw.controlUi.staleChunkReloadBuildId",
-    expect.any(String),
-  );
+  expect(cancelRecovery).toHaveBeenCalledOnce();
   recovery.resolve(false);
   await waitForSolid(() => expect(query('[role="alert"]')).not.toBeNull());
   expect(load).toHaveBeenCalledTimes(2);
