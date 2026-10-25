@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { BuzzInboundMessage } from "../message-event.js";
-import { parseBuzzQaCredentialPayload, type BuzzQaCredentials } from "./credentials.js";
+import { parseBuzzQaCredentialPayload } from "./credentials.js";
 
 const sent = { eventId: "native-inbound", timestamp: 1_750_000_000_000 };
 const credentialPayload = {
@@ -21,11 +21,9 @@ const credentialPayload = {
 const credentials = parseBuzzQaCredentialPayload(credentialPayload);
 const tempDirs: string[] = [];
 
-afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0).map(async (dir) => await fs.rm(dir, { force: true, recursive: true })),
-  );
-});
+afterEach(() =>
+  Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true }))),
+);
 
 type RelayHandler = (message: Omit<BuzzInboundMessage, "kind" | "diff">) => Promise<void>;
 const release = vi.hoisted(() => vi.fn(async () => {}));
@@ -36,24 +34,23 @@ const closeRelay = vi.hoisted(() => vi.fn(async () => {}));
 const relayDriverState = vi.hoisted(() => ({
   onMessage: undefined as RelayHandler | undefined,
 }));
-const acquireQaCredentialLease = vi.fn(async (_options: unknown) => ({
-  source: "env" as const,
-  kind: "buzz",
-  payload: credentials,
-  heartbeatIntervalMs: 0,
-  leaseTtlMs: 0,
-  heartbeat: vi.fn(async () => {}),
-  release,
-}));
+type AdapterContext = Parameters<typeof createBuzzQaTransportAdapter>[0];
+const acquireQaCredentialLease = vi.fn(
+  async (_options: Parameters<AdapterContext["credentials"]["acquire"]>[0]) => ({
+    source: "env" as const,
+    kind: "buzz",
+    payload: credentials,
+    heartbeatIntervalMs: 0,
+    leaseTtlMs: 0,
+    heartbeat: vi.fn(async () => {}),
+    release,
+  }),
+);
 vi.mock("./relay-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./relay-client.js")>()),
   createBuzzQaRelayDriver: async (params: { onMessage: RelayHandler }) => {
     relayDriverState.onMessage = params.onMessage;
-    return {
-      assertHealthy: vi.fn(),
-      close: closeRelay,
-      sendMessage,
-    };
+    return { assertHealthy: vi.fn(), close: closeRelay, sendMessage };
   },
 }));
 
@@ -64,12 +61,10 @@ vi.mock("./credentials.js", async (importOriginal) => ({
 
 import { createBuzzQaTransportAdapter } from "./adapter.runtime.js";
 
-const credentialHost: Parameters<typeof createBuzzQaTransportAdapter>[0]["credentials"] = {
+const credentialHost: AdapterContext["credentials"] = {
   acquire: async (options) => (await acquireQaCredentialLease(options)) as never,
   startHeartbeat: () => ({ getFailure: () => null, stop: heartbeatStop, throwIfFailed: vi.fn() }),
 };
-
-type AdapterContext = Parameters<typeof createBuzzQaTransportAdapter>[0];
 
 function createMessages() {
   let inboundIndex = 0;
@@ -121,7 +116,12 @@ async function emitRelay(threadId: string, replyToId = threadId) {
   });
 }
 
-function createAdapter(adapterOptions: AdapterContext["adapterOptions"]) {
+function createAdapter(
+  adapterOptions: AdapterContext["adapterOptions"] = {
+    credentialSource: "convex",
+    sutAccountId: "sut",
+  },
+) {
   return createBuzzQaTransportAdapter({
     adapterOptions,
     channelId: "buzz",
@@ -140,91 +140,45 @@ beforeEach(() => {
   readBuzzQaCredentialFile.mockResolvedValue(credentials);
 });
 
-it.each([
-  { source: "env", options: { credentialFile: "private/buzz-qa.json", repoRoot: "/repo" } },
-  { source: undefined, options: {} },
-])("routes credentials to $source", async ({ source, options }) => {
-  await createAdapter(options);
-  if (source) {
-    expect(readBuzzQaCredentialFile).toHaveBeenCalledWith({
-      filePath: "private/buzz-qa.json",
-      repoRoot: "/repo",
-    });
-  } else {
-    expect(readBuzzQaCredentialFile).not.toHaveBeenCalled();
-  }
-  expect(acquireQaCredentialLease.mock.lastCall?.[0]).toMatchObject({ kind: "buzz", source });
+it("leaves credential source selection to the host when no file is configured", async () => {
+  await createAdapter({});
+  expect(readBuzzQaCredentialFile).not.toHaveBeenCalled();
+  expect(acquireQaCredentialLease.mock.lastCall?.[0]).toMatchObject({
+    kind: "buzz",
+    source: undefined,
+  });
 });
 
 it("selects the literal file when its name has surrounding whitespace", async () => {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-buzz-qa-"));
   tempDirs.push(repoRoot);
-  const neighbor = path.join(repoRoot, "buzz.json");
-  const literal = path.join(repoRoot, " buzz.json ");
   const neighborPayload = {
     ...credentialPayload,
     roomId: "123e4567-e89b-42d3-a456-426614174001",
   };
-  await fs.writeFile(neighbor, JSON.stringify(neighborPayload), { mode: 0o600 });
-  await fs.writeFile(literal, JSON.stringify(credentialPayload), { mode: 0o600 });
+  await fs.writeFile(path.join(repoRoot, "buzz.json"), JSON.stringify(neighborPayload), {
+    mode: 0o600,
+  });
+  await fs.writeFile(path.join(repoRoot, " buzz.json "), JSON.stringify(credentialPayload), {
+    mode: 0o600,
+  });
 
   const { readBuzzQaCredentialFile: realReader } =
     await vi.importActual<typeof import("./credentials.js")>("./credentials.js");
   readBuzzQaCredentialFile.mockImplementation(realReader);
-  acquireQaCredentialLease.mockImplementationOnce(async (options: unknown) => {
-    const payload = (options as { resolveEnvPayload?: () => unknown }).resolveEnvPayload?.() as
-      | BuzzQaCredentials
-      | undefined;
-    return {
-      source: "env" as const,
-      kind: "buzz",
-      payload: payload ?? credentials,
-      heartbeatIntervalMs: 0,
-      leaseTtlMs: 0,
-      heartbeat: vi.fn(async () => {}),
-      release,
-    };
+  await createAdapter({ credentialFile: " buzz.json ", repoRoot });
+  expect(readBuzzQaCredentialFile).toHaveBeenCalledWith({ filePath: " buzz.json ", repoRoot });
+  expect(acquireQaCredentialLease.mock.lastCall?.[0]).toMatchObject({
+    kind: "buzz",
+    source: "env",
   });
-
-  await createAdapter({
-    credentialFile: " buzz.json ",
-    repoRoot,
-  });
-
-  expect(readBuzzQaCredentialFile).toHaveBeenCalledWith({
-    filePath: " buzz.json ",
-    repoRoot,
-  });
-  const acquireCall = acquireQaCredentialLease.mock.calls.at(-1)?.[0] as
-    | { resolveEnvPayload?: () => unknown }
-    | undefined;
-  const resolvedPayload = acquireCall?.resolveEnvPayload?.() as BuzzQaCredentials | undefined;
-  expect(resolvedPayload?.roomId).toBe(credentials.roomId);
-  expect(resolvedPayload?.roomId).not.toBe(neighborPayload.roomId);
+  const resolvedPayload = acquireQaCredentialLease.mock.lastCall?.[0].resolveEnvPayload?.();
+  expect(resolvedPayload).toMatchObject({ roomId: credentials.roomId });
+  expect(resolvedPayload).not.toMatchObject({ roomId: neighborPayload.roomId });
 });
 
-it("sends a portable mentioned message through the native Buzz relay driver", async () => {
-  const { addInboundMessage } = messages;
-  const adapter = await createAdapter({ credentialSource: "convex", sutAccountId: "sut" });
-
-  const text = "@openclaw reply exactly: QA-CHANNEL-CANARY-OK";
-  const message = await adapter.sendInbound({
-    ...inbound,
-    text,
-    conversation: { id: "qa-routing-primary", kind: "group" },
-  });
-
-  expect(sendMessage).toHaveBeenCalledWith({
-    mentionSut: true,
-    text,
-  });
-  expect(addInboundMessage.mock.lastCall?.[0]).toMatchObject({
-    accountId: "sut",
-    senderId: credentials.driverPublicKey,
-    timestamp: 1_750_000_000_000,
-  });
-  expect(message.id).toBe("bus-inbound");
-
+it("waits for the default Buzz gateway account rather than the portable account", async () => {
+  const adapter = await createAdapter();
   const gateway = {
     call: vi.fn(async () => ({
       channelAccounts: { buzz: [{ accountId: "default", running: true }] },
@@ -239,13 +193,19 @@ it("sends a portable mentioned message through the native Buzz relay driver", as
 });
 
 it("maps native Buzz reply relations back to portable thread ids", async () => {
-  const { addOutboundMessage } = messages;
   sendMessage
     .mockResolvedValueOnce({ eventId: "native-root", timestamp: 1_750_000_000_000 })
     .mockResolvedValueOnce({ eventId: "native-follow-up", timestamp: 1_750_000_001_000 });
-  const adapter = await createAdapter({ credentialSource: "convex", sutAccountId: "sut" });
+  const adapter = await createAdapter();
 
   const root = await adapter.sendInbound(inbound);
+  expect(sendMessage).toHaveBeenCalledWith({ mentionSut: true, text: inbound.text });
+  expect(messages.addInboundMessage.mock.lastCall?.[0]).toMatchObject({
+    accountId: "sut",
+    senderId: credentials.driverPublicKey,
+    timestamp: sent.timestamp,
+  });
+  expect(root.id).toBe("bus-inbound");
   await emitRelay("native-root");
   const followUp = await adapter.sendInbound({
     ...inbound,
@@ -259,7 +219,7 @@ it("maps native Buzz reply relations back to portable thread ids", async () => {
     text: "@openclaw follow-up",
     threadId: "native-root",
   });
-  expect(addOutboundMessage.mock.lastCall?.[0]).toMatchObject({
+  expect(messages.addOutboundMessage.mock.lastCall?.[0]).toMatchObject({
     to: "channel:main",
     threadId: root.id,
     replyToId: followUp.id,
@@ -274,7 +234,7 @@ it("waits for a racing inbound id mapping before recording reply relations", asy
     await inboundGate;
     return recordInbound(input);
   });
-  const adapter = await createAdapter({ credentialSource: "convex", sutAccountId: "sut" });
+  const adapter = await createAdapter();
 
   const inboundPromise = adapter.sendInbound({
     ...inbound,
