@@ -285,26 +285,15 @@ describe("MCP app pane actions", () => {
       pending.flush(new Error("test disposed"));
       vi.useRealTimers();
     });
-    const frames: RequestFrame[] = [];
     const dispatched = createDeferred<RequestFrame>();
+    const send = vi.fn((raw: string) => dispatched.resolve(JSON.parse(raw) as RequestFrame));
     let requestSignal: AbortSignal | undefined;
     const requestClient = createTestGatewayClient((method, params, options) => {
       if (method !== "sessions.create") {
         return sessionsResult([]);
       }
       requestSignal = options?.signal;
-      return pending.request(
-        {
-          send(raw) {
-            const frame = JSON.parse(raw) as RequestFrame;
-            frames.push(frame);
-            dispatched.resolve(frame);
-          },
-        },
-        method,
-        params,
-        options,
-      );
+      return pending.request({ send }, method, params, options);
     });
     f.client.request = requestClient.request.bind(requestClient);
     Object.assign(f.context, {
@@ -332,7 +321,7 @@ describe("MCP app pane actions", () => {
     expect(await sent.receipt.promise).toBe(true);
     expect(sent.respond).toHaveBeenCalledExactlyOnceWith(true);
     expect(navigate).not.toHaveBeenCalled();
-    expect(frames).toHaveLength(1);
+    expect(send).toHaveBeenCalledOnce();
     expect(pending.hasPending).toBe(false);
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
   });

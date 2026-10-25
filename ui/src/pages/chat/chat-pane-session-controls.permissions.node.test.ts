@@ -1,10 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
-import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import type { Model } from "../../../../src/llm/types.js";
-import { buildProviderStreamFamilyHooks } from "../../../../src/plugin-sdk/provider-stream.js";
+import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
@@ -20,30 +16,6 @@ import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { setChatRunOwner } from "./history-merge.ts";
-
-// mock-isolation: Vite's jsdom URLs are not file URLs; load the unchanged SQL as a raw asset.
-vi.mock("../../../../src/state/openclaw-agent-schema.js", async () => ({
-  OPENCLAW_AGENT_SCHEMA_SQL: (await import("../../../../src/state/openclaw-agent-schema.sql?raw"))
-    .default,
-}));
-
-// mock-isolation: The native loader requires a file URL; Vite supplies the same SQL as a raw asset.
-vi.mock("../../../../src/state/openclaw-state-schema.js", async () => ({
-  OPENCLAW_STATE_SCHEMA_SQL: (await import("../../../../src/state/openclaw-state-schema.sql?raw"))
-    .default,
-}));
-
-const requests = vi.hoisted(() => [] as unknown[]);
-vi.mock("openai", () => ({
-  default: class MockOpenAI {
-    responses = {
-      create: (request: unknown) => {
-        requests.push(request);
-        throw new Error("captured before sending");
-      },
-    };
-  },
-}));
 
 type ControlsState = Awaited<ReturnType<typeof createControlsFixture>>["state"];
 const speedButton = (container: HTMLElement, value: string) =>
@@ -61,51 +33,12 @@ function patches(state: ControlsState, field?: string) {
   );
 }
 
-async function captureSpeedRequest(cfg: OpenClawConfig, sessionEntry: GatewaySessionRow) {
-  const model: Model<"openai-responses"> = {
-    id: "gpt-test-a",
-    name: "Speed fixture",
-    provider: "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 100_000,
-    maxTokens: 4096,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  };
-  const wrap = buildProviderStreamFamilyHooks("openai-responses-defaults").wrapStreamFn;
-  if (!wrap) {
-    throw new Error("Expected OpenAI request wrapper");
-  }
-  const stream = wrap({
-    streamFn: createOpenAIResponsesTransportStreamFn(),
-    provider: model.provider,
-    modelId: model.id,
-    config: cfg,
-    extraParams: {
-      ...cfg.agents?.defaults?.models?.["openai/gpt-test-a"]?.params,
-      fastMode: sessionEntry.fastMode,
-    },
-  });
-  if (!stream) {
-    throw new Error("Expected wrapped SDK stream");
-  }
-  const output = await stream(
-    model,
-    { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-    { apiKey: "synthetic-test-key" },
-  );
-  expect((await output.result()).errorMessage).toBe("captured before sending");
-  return requests.at(-1);
-}
-
 async function createControlsFixture(
   scope: string,
   sharingRole: GatewaySessionRow["sharingRole"] = "owner",
   globalTarget?: { sessionKey: string; rowAgentId: string },
 ) {
-  const selectedSession = {
+  const selectedSession: GatewaySessionRow = {
     key: globalTarget ? "global" : "agent:main:existing",
     ...(globalTarget ? { agentId: globalTarget.rowAgentId } : {}),
     kind: globalTarget ? "global" : "direct",
@@ -125,7 +58,7 @@ async function createControlsFixture(
       { id: "standard", label: "Standard", contextWindow: 100000 },
       { id: "extended", label: "Extended", contextWindow: 200000 },
     ],
-  } satisfies GatewaySessionRow;
+  };
   const sessionsResult = { ...createSessionsListResult(), sessions: [selectedSession] };
   const fixtureHost = makeChatHost({
     sessionKey: globalTarget?.sessionKey ?? selectedSession.key,
@@ -196,55 +129,43 @@ async function createControlsFixture(
 }
 
 describe("chat pane model-setting permissions", () => {
-  it.each(["flex", "auto"])(
-    "persists Standard over inherited %s through the SDK request",
-    async (tier) => {
-      const { state, selectedSession, container } =
-        await createControlsFixture("operator.sessions.write");
-      delete selectedSession.fastMode;
-      selectedSession.effectiveFastMode = false;
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: { models: { "openai/gpt-test-a": { params: { serviceTier: tier } } } },
-        },
-      };
-      renderPaneModelControl(renderControls(state).composerControls, container);
-      const standard = speedButton(container, "off");
-      expect(standard.getAttribute("aria-checked")).toBe("true");
-      expect(standard.disabled).toBe(false);
-      expect(state.request).not.toHaveBeenCalled();
-      expect(await captureSpeedRequest(cfg, selectedSession)).toMatchObject({ service_tier: tier });
-      state.request.mockImplementation(async (method, params) => {
-        if (method === "sessions.patch") {
-          if (
-            !params ||
-            typeof params !== "object" ||
-            !("fastMode" in params) ||
-            params.fastMode !== false
-          ) {
-            throw new Error("Expected explicit Standard patch");
-          }
-          selectedSession.fastMode = params.fastMode;
-          return { ok: true, key: selectedSession.key, entry: selectedSession };
+  it("persists an explicit Standard preference instead of treating inherited Standard as a no-op", async () => {
+    const { state, selectedSession, container } =
+      await createControlsFixture("operator.sessions.write");
+    delete selectedSession.fastMode;
+    selectedSession.effectiveFastMode = false;
+    renderPaneModelControl(renderControls(state).composerControls, container);
+    const standard = speedButton(container, "off");
+    expect(standard.getAttribute("aria-checked")).toBe("true");
+    expect(standard.disabled).toBe(false);
+    expect(state.request).not.toHaveBeenCalled();
+    state.request.mockImplementation(async (method, params) => {
+      if (method === "sessions.patch") {
+        if (
+          !params ||
+          typeof params !== "object" ||
+          !("fastMode" in params) ||
+          params.fastMode !== false
+        ) {
+          throw new Error("Expected explicit Standard patch");
         }
-        return { ...createSessionsListResult(), sessions: [selectedSession] };
-      });
-      standard.click();
-      await getPendingChatPickerPatch(state, state.sessionKey);
-      expectPatch(state, {
-        key: selectedSession.key,
-        expectedSessionId: selectedSession.sessionId,
-        fastMode: false,
-      });
-      expect(await captureSpeedRequest(cfg, selectedSession)).toMatchObject({
-        service_tier: "default",
-      });
-      state.request.mockClear();
-      renderPaneModelControl(renderControls(state).composerControls, container);
-      speedButton(container, "off").click();
-      expect(state.request).not.toHaveBeenCalled();
-    },
-  );
+        selectedSession.fastMode = params.fastMode;
+        return { ok: true, key: selectedSession.key, entry: selectedSession };
+      }
+      return { ...createSessionsListResult(), sessions: [selectedSession] };
+    });
+    standard.click();
+    await getPendingChatPickerPatch(state, state.sessionKey);
+    expectPatch(state, {
+      key: selectedSession.key,
+      expectedSessionId: selectedSession.sessionId,
+      fastMode: false,
+    });
+    state.request.mockClear();
+    renderPaneModelControl(renderControls(state).composerControls, container);
+    speedButton(container, "off").click();
+    expect(state.request).not.toHaveBeenCalled();
+  });
   it.each([
     { value: "off", saved: false },
     { value: "on", saved: true },

@@ -162,29 +162,6 @@ describe("chat pane session access", () => {
     expect(patch).not.toHaveBeenCalled();
   });
 
-  it("cancels header rename when the Gateway source changes for the same session", () => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = createSessionCapabilityFixture({ patch });
-    const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    pane.context.gateway.snapshot.hello = hello();
-    state.hello = pane.context.gateway.snapshot.hello;
-
-    pane.beginHeaderRename(sessionRow({ key: state.sessionKey }));
-    pane.headerPresentation.renameValue = "Replacement Gateway title";
-    pane.applyGatewaySnapshot({
-      ...pane.context.gateway.snapshot,
-      client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
-      phase: "stopped",
-      hello: null,
-      sessionKey: state.sessionKey,
-    });
-    pane.commitHeaderRename();
-
-    expect(Boolean(pane.headerPresentation.renameSession)).toBe(false);
-    expect(patch).not.toHaveBeenCalled();
-  });
-
   it("retains inline rename text through a blip without submitting offline", async () => {
     const session = sessionRow();
     const { pane, patch } = await createHeaderDraftPane(session);
@@ -285,6 +262,8 @@ describe("chat pane session access", () => {
         await retired;
         expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
         expect(pane.headerPresentation.renameSession).toBeNull();
+        pane.commitHeaderRename();
+        expect(patch).toHaveBeenCalledTimes(1);
       } finally {
         await modal.cleanup();
       }

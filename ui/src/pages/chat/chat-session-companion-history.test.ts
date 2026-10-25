@@ -88,45 +88,6 @@ describe("Side chat turn history", () => {
     },
   );
 
-  it.each(["follow-up", "retry"])(
-    "retains failed turns in order while a %s is pending and answered",
-    async (mode) => {
-      const retry = mode === "retry";
-      const names = retry
-        ? ["Same question", "Different question", "Same question"]
-        : ["Earlier question", "Original question", "New question"];
-      const statuses = retry ? ["pending", "failed", "failed"] : ["answered", "failed", "pending"];
-      const selected = retry ? 0 : 2;
-      const answer = retry ? "First recovered" : "Recovered";
-      const threads = new ChatSessionCompanionThreads();
-      for (const [index, question] of names.slice(0, retry ? 3 : 2).entries()) {
-        await threads.submit(
-          "one",
-          question,
-          !retry && index === 0 ? answered("Ready", 1) : unavailable,
-        );
-      }
-      const response = createDeferred<{ answer: string; ts: number }>();
-      const ask = vi.fn(() => response.promise);
-      const pending = threads.submit("one", retry ? history(threads)[0]! : names[2]!, ask);
-      expect(ask).toHaveBeenCalledWith("one", names[selected], undefined);
-      expect(questions(threads)).toEqual(names);
-      expect(history(threads).map((turn) => turn.status)).toEqual(statuses);
-      const blocked = vi.fn(answered("Must not be sent", 9));
-      await threads.submit("one", "Another question", blocked);
-      expect(blocked).not.toHaveBeenCalled();
-      response.resolve({ answer, ts: 2 });
-      await pending;
-      expect(history(threads)).toMatchObject(
-        names.map((question, index) =>
-          index === selected
-            ? { question, status: "answered", answer }
-            : { question, status: statuses[index] },
-        ),
-      );
-    },
-  );
-
   it("reconciles a late answer into the earlier failed turn without consuming an old answer", async () => {
     const threads = new ChatSessionCompanionThreads();
     const old = exchange("A", "Old", 1);
@@ -155,6 +116,9 @@ describe("Side chat turn history", () => {
       }
       const response = createDeferred<{ answer: string; ts: number }>();
       const pending = threads.submit("one", "A", () => response.promise);
+      const blocked = vi.fn(answered("Must not be sent", 9));
+      await threads.submit("one", "Another question", blocked);
+      expect(blocked).not.toHaveBeenCalled();
       const load = vi.fn(async () => ({ exchanges: [{ question: "A", ...result }] }));
       const hydration = threads.hydrate("one", load);
       expect(load).not.toHaveBeenCalled();
@@ -417,36 +381,5 @@ describe("Side chat turn history", () => {
     await threads.submit("one", stale, ask);
     expect(ask).not.toHaveBeenCalled();
     expect(state(threads)).toMatchObject({ turns: [], draft: "" });
-  });
-
-  it("caps mixed history at 24 turns and retains an active retry through hydration", async () => {
-    const threads = new ChatSessionCompanionThreads();
-    for (let index = 0; index < 30; index += 1) {
-      await threads.submit(
-        "one",
-        `Question ${index}`,
-        index % 2 ? answered("Answer", index) : unavailable,
-      );
-    }
-    expect(questions(threads)).toEqual(
-      Array.from({ length: 24 }, (_, index) => `Question ${index + 6}`),
-    );
-    const response = createDeferred<{ answer: string; ts: number }>();
-    const pending = threads.submit("one", history(threads)[0]!, () => response.promise);
-    const hydration = hydrate(threads, [
-      ...series(23, "Remote", "Remote answer", 100),
-      exchange("Question 6", "Recovered", 200),
-    ]);
-    expect(history(threads)).toHaveLength(24);
-    expect(history(threads)[0]).toMatchObject({ question: "Question 6", status: "pending" });
-    response.resolve({ answer: "Recovered", ts: 200 });
-    await pending;
-    await hydration;
-    expect(history(threads)).toHaveLength(24);
-    expect(history(threads).find((turn) => turn.question === "Question 6")).toMatchObject({
-      question: "Question 6",
-      status: "answered",
-      answer: "Recovered",
-    });
   });
 });

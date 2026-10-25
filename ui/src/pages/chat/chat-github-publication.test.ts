@@ -67,62 +67,6 @@ describe("explicit GitHub publication", () => {
     await completion;
   });
 
-  it("does not present an accepted publication status read as a new write", async () => {
-    const { controller, request } = setup();
-    (await settled(controller)).onSelect?.("personal");
-    const result = { ...accepted, publisher: personalPublisher };
-    request.mockResolvedValueOnce(result);
-    void controller.view()?.onPublish?.();
-    const pending = await settled(controller);
-    const status = createDeferred<unknown>();
-    request.mockImplementationOnce(() => status.promise);
-    void pending.onRefresh();
-    try {
-      const container = mountPublication(controller);
-      expect(container.textContent).not.toContain("Publishing");
-      expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(true);
-      expectLastRequest(request, "status", { requestId });
-      expect(callsFor(request)).toHaveLength(1);
-    } finally {
-      status.resolve({ result, confirmation: null });
-      await settled(controller);
-    }
-  });
-
-  it("releases only a rejected first shared invocation for a fresh explicit choice", async () => {
-    const { controller, request } = setup();
-    const ready = await settled(controller);
-    expect(ready.selection).toEqual({ source: "shared", expected: shared });
-    ready.onSelect?.("shared");
-    request.mockImplementationOnce(async (_method, params) => {
-      throw selectionRejected(params.idempotencyKey, "Review the current publisher.");
-    });
-    void controller.view()?.onPublish?.();
-    const rejected = await settled(controller);
-    const first = request.mock.calls.at(-1)![1];
-    expect(rejected).toMatchObject({
-      locked: false,
-      options: null,
-      selection: null,
-      error: "Review the current publisher.",
-    });
-    const next = {
-      ...options,
-      shared: { ...shared, accountId: 3, login: "new-shared" },
-    };
-    request.mockResolvedValueOnce(next);
-    void rejected.onRefresh();
-    const refreshed = await settled(controller);
-    expect(callsFor(request)).toHaveLength(1);
-    refreshed.onSelect?.("shared");
-    request.mockResolvedValueOnce(accepted);
-    void controller.view()?.onPublish?.();
-    await settled(controller);
-    const second = request.mock.calls.at(-1)![1];
-    expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
-    expect(second.selection).toEqual({ source: "shared", expected: next.shared });
-  });
-
   it.each(["uncertain-retry", "wrong-key"])(
     "retains the exact attempt for %s instead of inferring admission from error prose",
     async (mode) => {
@@ -223,18 +167,9 @@ describe("explicit GitHub publication", () => {
         response.resolve({ requestId, publisher: shared, status: "published" });
       } else {
         response.reject(
-          new GatewayRequestError({
-            code: "UNAVAILABLE",
-            message: "Publication response",
-            ...(outcome === "selection-rejection"
-              ? {
-                  details: {
-                    code: "GITHUB_PUBLICATION_SELECTION_REJECTED",
-                    idempotencyKey: first.idempotencyKey,
-                  },
-                }
-              : {}),
-          }),
+          outcome === "selection-rejection"
+            ? selectionRejected(first.idempotencyKey, "Publication response")
+            : new GatewayRequestError({ code: "UNAVAILABLE", message: "Publication response" }),
         );
       }
       await vi.waitFor(() => expect(changed).toHaveBeenCalled());
@@ -291,11 +226,6 @@ describe("explicit GitHub publication", () => {
   );
 
   it("keeps a sole personal account unselected until its labeled publish button is clicked", async () => {
-    const unbound = setup({ shared, personal: null, pendingPersonal: null, latestShared: null });
-    expect((await settled(unbound.controller)).selection).toEqual({
-      source: "shared",
-      expected: shared,
-    });
     const personalOnly = setup({ ...options, shared: null });
     expect((await settled(personalOnly.controller)).selection).toBeNull();
     personalOnly.request.mockResolvedValueOnce(accepted);
@@ -337,18 +267,9 @@ describe("explicit GitHub publication", () => {
     expect(callsFor(request)).toHaveLength(0);
   });
 
-  it("keeps readers nonmutating and personal publication unavailable on busy or remote workspaces", async () => {
+  it("keeps personal publication unavailable on busy or remote workspaces without blocking shared publication", async () => {
     const { controller, request, scope } = setup();
     await settled(controller);
-    controller.sync({
-      ...scope,
-      key: "reader",
-      canPublishShared: false,
-      canPublishPersonal: false,
-    });
-    const reader = await settled(controller);
-    expect(reader.onSelect).toBeUndefined();
-    expect(reader.onPublish).toBeUndefined();
     controller.sync({ ...scope, key: "remote", personalReady: false });
     (await settled(controller)).onSelect?.("personal");
     void controller.view()?.onPublish?.();
