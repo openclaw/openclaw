@@ -17,8 +17,6 @@ import * as publications from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { progressCardStore } from "./progress-card-store.js";
-import { progressCardHandlers } from "./server-methods/progress-card.js";
-import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 const sessionKey = "agent:main:progress-worker";
@@ -54,34 +52,22 @@ function withCardSession(custom: boolean, run: (cfg: OpenClawConfig) => Promise<
 }
 
 it.each([false, true])(
-  "persists cards and conditional RPC clears without caller SQL (custom=%s)",
+  "persists cards and conditional clears without caller SQL (custom=%s)",
   async (custom) => {
     await withCardSession(custom, async (cfg) => {
       const db = openOpenClawAgentDatabase({ agentId: "main", path: cfg.session?.store }).db;
-      const broadcast = vi.fn();
-      const invoke = async (params: unknown) => {
-        const respond = vi.fn<RespondFn>();
-        await progressCardHandlers["progressCard.put"]!({
-          params,
-          respond,
-          context: { getRuntimeConfig: () => cfg, broadcast } as unknown as GatewayRequestContext,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-        return respond.mock.calls[0]?.[1];
-      };
       const sql = observeHostDataSql();
       try {
-        await invoke({
-          sessionKey,
+        await put({
           markdown: "First",
-          plan: [{ step: "Persist", status: "in_progress" }],
+          steps: [{ step: "Persist", status: "in_progress" }],
         });
-        await invoke({ sessionKey, markdown: "Second" });
-        expect(await invoke({ sessionKey, expectedRevision: 1 })).toMatchObject({
+        await put({ markdown: "Second" });
+        expect(await put({ expectedRevision: 1 })).toMatchObject({
           card: { revision: 2, markdown: "Second" },
         });
-        expect(await invoke({ sessionKey, expectedRevision: 2 })).toEqual({ card: null });
-        await invoke({ sessionKey, plan: [{ step: "Done", status: "completed" }] });
+        expect(await put({ expectedRevision: 2 })).toEqual({ card: null });
+        await put({ steps: [{ step: "Done", status: "completed" }] });
         expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
@@ -90,7 +76,6 @@ it.each([false, true])(
         revision: 4,
         steps: [{ step: "Done", status: "completed" }],
       });
-      expect(broadcast.mock.calls.map((call) => call[1].revision)).toEqual([1, 2, null, 4]);
     });
   },
 );

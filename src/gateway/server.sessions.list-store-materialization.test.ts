@@ -2,18 +2,18 @@ import path from "node:path";
 import { expect, test } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import { createTestProjection } from "./session-row-projection.read-fixture.test-support.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
+  seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -60,21 +60,21 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
     } else {
       sessionAccessor.replaceSessionEntrySync({ agentId, sessionKey, storePath }, entry);
     }
-    await replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
-      { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
-      ...(["user", "assistant"] as const).map((role, turn) => ({
-        type: "message" as const,
-        id: turn ? "reply" : "question",
-        parentId: turn ? "question" : null,
-        timestamp: `2026-06-19T12:00:0${turn + 1}.000Z`,
-        message: { role, content: `${turn ? "Reply" : "Title"} ${agentId}`, timestamp: turn + 1 },
-      })),
-    ]);
+    await seedSessionTranscript({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+      messages: [
+        { role: "user", content: `Title ${agentId}` },
+        { role: "assistant", content: `Reply ${agentId}` },
+      ],
+    });
   }
 
   const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };
   const backfilled = observeSessionRowBackfill(agentIds.map((agentId) => `agent:${agentId}:main`));
-  const projection = await createSessionRowProjection({ cfg });
+  using projection = await createTestProjection({ cfg });
   const context = {
     getRuntimeConfig: () => cfg,
     ...bindSessionRowProjection({}, () => projection),
@@ -85,25 +85,21 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
       { includeDerivedTitles: true, includeLastMessage: true, limit },
       { context },
     );
-  try {
-    const initial = await list(agentIds.length);
-    expect(initial.ok).toBe(true);
-    expect(initial.payload?.sessions).toHaveLength(agentIds.length);
-    await backfilled;
-    await projection.ensureMaterialized();
-    for (const limit of [undefined, 100]) {
-      const result = await list(limit);
-      expect(result.ok).toBe(true);
-      expect(result.payload?.sessions).toMatchObject(
-        agentIds.map((agentId) => ({
-          agentId,
-          derivedTitle: `Title ${agentId}`,
-          lastMessagePreview: `Reply ${agentId}`,
-        })),
-      );
-    }
-  } finally {
-    projection.dispose();
+  const initial = await list(agentIds.length);
+  expect(initial.ok).toBe(true);
+  expect(initial.payload?.sessions).toHaveLength(agentIds.length);
+  await backfilled;
+  await projection.ensureMaterialized();
+  for (const limit of [undefined, 100]) {
+    const result = await list(limit);
+    expect(result.ok).toBe(true);
+    expect(result.payload?.sessions).toMatchObject(
+      agentIds.map((agentId) => ({
+        agentId,
+        derivedTitle: `Title ${agentId}`,
+        lastMessagePreview: `Reply ${agentId}`,
+      })),
+    );
   }
 });
 
@@ -121,7 +117,7 @@ test("sessions.list serves warm rows without reading a malformed raw insertion",
     path: target.path,
   });
   const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
-  const projection = await createSessionRowProjection({ cfg });
+  using projection = await createTestProjection({ cfg });
   let reads: ReturnType<typeof trackSqliteStatementExecutions<"sessionStore">> | undefined;
   try {
     // Warm readers tolerate malformed raw edits; new readers must refuse them during admission.
@@ -150,6 +146,5 @@ test("sessions.list serves warm rows without reading a malformed raw insertion",
     expect(reads.counts.sessionStore).toBe(0);
   } finally {
     reads?.restore();
-    projection.dispose();
   }
 });

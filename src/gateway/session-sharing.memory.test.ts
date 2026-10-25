@@ -2,6 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { memoryStorage } from "../config/sessions/session-actor-memory-publication.test-support.js";
 import {
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
@@ -55,25 +56,18 @@ async function fixture() {
 }
 
 function operations(storage: NonNullable<SessionActorStorageBinding["actor"]["storage"]>) {
-  const mutate = (command: Parameters<typeof storage.mutate>[0]) =>
-    storage.mutate(command, authority);
+  const { commit } = memoryStorage(storage, authority);
   return {
     create: (sessionId: string) =>
-      mutate({
-        type: "session.entry.create",
-        input: { entry: { sessionId, updatedAt: 1 }, cwd: "/synthetic" },
-      }),
+      commit("session.entry.create", { entry: { sessionId, updatedAt: 1 }, cwd: "/synthetic" }),
     add: (identityId: string) =>
-      mutate({
-        type: "session.collaboration.add",
-        input: { params: { identityId, addedBy: "owner", addedAt: 1 } },
+      commit("session.collaboration.add", {
+        params: { identityId, addedBy: "owner", addedAt: 1 },
       }),
-    remove: (identityId: string) =>
-      mutate({ type: "session.collaboration.remove", input: { identityId } }),
+    remove: (identityId: string) => commit("session.collaboration.remove", { identityId }),
     label: (label: string) =>
-      mutate({
-        type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { label } } },
+      commit("session.entry.patch", {
+        operation: { kind: "fields", patch: { label } },
       }),
   };
 }
@@ -94,8 +88,8 @@ it("prepares unbound sharing facts and observes committed creation and membershi
   try {
     expect(prepared.facts.readCurrent(cfg).target).toBeNull();
     expect(prepared.source.target).toBeNull();
-    expect(await ops.create("memory-sharing")).toMatchObject({ kind: "committed" });
-    expect(await ops.add("reader")).toMatchObject({ kind: "committed" });
+    await ops.create("memory-sharing");
+    await ops.add("reader");
     expect(prepared.facts.readCurrent(cfg).target?.entry.sessionId).toBe("memory-sharing");
     expect(prepared.read.readCurrent(cfg).membership).toEqual(new Set(["reader"]));
     expect(prepared.source.members).toEqual(["reader"]);

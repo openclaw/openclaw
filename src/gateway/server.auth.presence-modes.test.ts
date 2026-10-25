@@ -125,41 +125,36 @@ test("keeps multi-client presence compact through heartbeat, activity, and watch
               row.instanceId === "presence-browser-0" && row.watchedSessions?.includes(sessionKey),
           ),
       );
-      const rounds: Observation[][] = [];
       for (let round = 0; round < 3; round += 1) {
         clock.mockReturnValue(Date.now() + 31_000);
         const now = Date.now();
         const watched = round % 2 === 0 ? [] : [sessionKey];
-        rounds.push(
-          await publication(
-            async () => {
-              await Promise.all(
-                clients.map(async ({ ws }) => {
-                  // A pong is the real socket liveness boundary that renews stored presence.ts.
-                  ws.pong();
-                  await request(ws, "presence.activity", {});
-                  await request(ws, "sessions.viewers.set", { sessionKeys: watched });
-                }),
-              );
-            },
-            ({ rows }) =>
-              rows
-                .filter((row) => row.instanceId?.startsWith("presence-browser-"))
-                .every(
-                  (row) =>
-                    row.ts === now &&
-                    row.lastActivityAt === now &&
-                    row.connectionLastActivityAt === now &&
-                    JSON.stringify(row.watchedSessions ?? []) === JSON.stringify(watched),
-                ),
-          ),
+        const latest = await publication(
+          async () => {
+            await Promise.all(
+              clients.map(async ({ ws }) => {
+                // A pong is the real socket liveness boundary that renews stored presence.ts.
+                ws.pong();
+                await request(ws, "presence.activity", {});
+                await request(ws, "sessions.viewers.set", { sessionKeys: watched });
+              }),
+            );
+          },
+          ({ rows }) =>
+            rows
+              .filter((row) => row.instanceId?.startsWith("presence-browser-"))
+              .every(
+                (row) =>
+                  row.ts === now &&
+                  row.lastActivityAt === now &&
+                  row.connectionLastActivityAt === now &&
+                  JSON.stringify(row.watchedSessions ?? []) === JSON.stringify(watched),
+              ),
         );
-      }
-      for (const round of rounds) {
-        for (const [index, observation] of round.entries()) {
+        for (const [index, observation] of latest.entries()) {
           expect(observation.mode).toBe(clients[index]!.capable ? "delta" : "legacy");
           if (clients[index]!.capable) {
-            expect(observation.bytes).toBeLessThan(round[0]!.bytes / 2);
+            expect(observation.bytes).toBeLessThan(latest[0]!.bytes / 2);
           }
         }
       }

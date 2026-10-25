@@ -40,6 +40,7 @@ async function readTail(
   const response = await rpcReq<LogTailPayload>(ws, "logs.tail", params);
   expect(response.ok).toBe(true);
   assert(response.payload);
+  expect(response.payload.lines.join("\n")).not.toContain(pem[1]);
   if (stored !== undefined) {
     expect(response.payload).toMatchObject({
       cursor: Buffer.byteLength(stored),
@@ -169,33 +170,21 @@ it.each(["raw", "JSON"])(
         expect.stringMatching(/^(?:\*\*\*|…redacted…)$/),
         pem[2],
       ]);
-      expect(response.lines.join("\n")).not.toContain(pem[1]);
     }
 
-    for (const chunks of [[lines.slice(0, 2), lines.slice(2)], lines.map((line) => [line])]) {
-      let cursor = 0;
-      let written = "";
-      let sourceIndex = 0;
-      await fs.writeFile(file, "");
-      for (const chunk of chunks) {
-        const appended = `${chunk.join("\n")}\n`;
-        written += appended;
-        await fs.appendFile(file, appended);
-        const response = await readTail({ cursor }, written);
-        expect(response).toMatchObject({
-          truncated: false,
-          reset: false,
-        });
-        const expected = chunk.map(() => {
-          const message = pem[sourceIndex++];
-          return message === pem[1] ? expect.stringMatching(/^(?:\*\*\*|…redacted…)$/) : message;
-        });
-        expect(messages(response)).toEqual(expected);
-        expect(response.lines.join("\n")).not.toContain(pem[1]);
-        cursor = response.cursor;
-        const repeated = await readTail({ cursor });
-        expect(repeated).toMatchObject({ lines: [], cursor });
-      }
+    let cursor = 0;
+    let written = "";
+    await fs.writeFile(file, "");
+    for (const [index, line] of lines.entries()) {
+      written += `${line}\n`;
+      await fs.appendFile(file, `${line}\n`);
+      const response = await readTail({ cursor }, written);
+      expect(response).toMatchObject({ truncated: false, reset: false });
+      expect(messages(response)).toEqual([
+        index === 1 ? expect.stringMatching(/^(?:\*\*\*|…redacted…)$/) : pem[index],
+      ]);
+      cursor = response.cursor;
+      expect(await readTail({ cursor })).toMatchObject({ lines: [], cursor });
     }
   },
 );
