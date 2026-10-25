@@ -151,6 +151,16 @@ async function recover(...args: Parameters<typeof register>) {
   await finished.promise;
 }
 
+const requestNative = (isCurrent = () => true) =>
+  nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent });
+const expectNativeRestart = (request = requestNative()) =>
+  expect(request).resolves.toMatchObject({ status: "restart-requested" });
+const expectNativeRefusal = (reason: string, request = requestNative()) =>
+  expect(request).resolves.toMatchObject({
+    status: "report-only",
+    reason: expect.stringContaining(reason),
+  });
+
 function expectReported(reason: RegExp, noService = false, noProbe = false) {
   expectUnavailable();
   expect(io.restart).not.toHaveBeenCalled();
@@ -280,15 +290,13 @@ it("coalesces unsettled native workers into one forced fresh-process request", a
   io.service.mockReturnValueOnce(service.promise);
   register();
   let firstUnsettled = true;
-  const first = nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({
-    isCurrent: () => firstUnsettled,
-  });
-  const second = nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true });
+  const first = requestNative(() => firstUnsettled);
+  const second = requestNative();
   firstUnsettled = false;
   service.resolve(serviceState);
-  await expect(first).resolves.toMatchObject({ status: "restart-requested" });
-  await expect(second).resolves.toMatchObject({ status: "restart-requested" });
-  await nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true });
+  await expectNativeRestart(first);
+  await expectNativeRestart(second);
+  await requestNative();
   expect(io.service).toHaveBeenCalledOnce();
   expect(io.restart).toHaveBeenCalledExactlyOnceWith("gateway.native-worker-unsettled", {
     force: true,
@@ -305,9 +313,7 @@ it("prepares native systemd inspection before a worker can require recovery", as
   io.systemdSupported.mockImplementation(() => {
     throw new Error("late native initialization would wait for the unsettled worker");
   });
-  await expect(
-    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({ status: "restart-requested" });
+  await expectNativeRestart();
   expect(io.systemdSupported).toHaveBeenCalledOnce();
   expect(io.service).toHaveBeenCalledOnce();
 });
@@ -315,12 +321,7 @@ it("prepares native systemd inspection before a worker can require recovery", as
 it("keeps recovery report-only when native systemd inspection was unavailable at startup", async () => {
   io.systemdSupported.mockReturnValueOnce(false);
   register();
-  await expect(
-    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({
-    status: "report-only",
-    reason: expect.stringContaining("native systemd inspection was unavailable at Gateway startup"),
-  });
+  await expectNativeRefusal("native systemd inspection was unavailable at Gateway startup");
   expect(io.systemdSupported).toHaveBeenCalledOnce();
   expect(io.service).not.toHaveBeenCalled();
   expect(io.probe).not.toHaveBeenCalled();
@@ -334,14 +335,13 @@ it("does not restart for a native worker that settles during service verificatio
     return serviceState;
   });
   register();
-  await expect(
-    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => unsettled }),
-  ).resolves.toMatchObject({ status: "report-only", reason: expect.stringContaining("settled") });
+  await expectNativeRefusal(
+    "settled",
+    requestNative(() => unsettled),
+  );
   expect(io.restart).not.toHaveBeenCalled();
   // A later distinct worker can still request recovery in this lifecycle.
-  await expect(
-    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({ status: "restart-requested" });
+  await expectNativeRestart();
 });
 
 it("refuses native recovery after the registering lifecycle retires during verification", async () => {
@@ -350,15 +350,8 @@ it("refuses native recovery after the registering lifecycle retires during verif
     return serviceState;
   });
   register();
-  await expect(
-    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({ status: "report-only", reason: expect.stringContaining("stopping") });
-  await expect(
-    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({
-    status: "report-only",
-    reason: expect.stringContaining("no Gateway"),
-  });
+  await expectNativeRefusal("stopping");
+  await expectNativeRefusal("no Gateway");
   expect(io.restart).not.toHaveBeenCalled();
 });
 
@@ -370,12 +363,7 @@ it.each([
 ] as const)("refuses automatic native-worker recovery for %s", async (_name, decision, owns) => {
   register(decision, owns);
   expect(io.systemdSupported).not.toHaveBeenCalled();
-  await expect(
-    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({
-    status: "report-only",
-    reason: expect.stringContaining("no verified native service"),
-  });
+  await expectNativeRefusal("no verified native service");
   expect(io.service).not.toHaveBeenCalled();
   expect(io.restart).not.toHaveBeenCalled();
 });
@@ -383,19 +371,12 @@ it.each([
 it("does not claim an unrelated coalesced restart acquired fresh-process authority", async () => {
   io.restart.mockReturnValueOnce({ status: "coalesced" });
   register();
-  await expect(
-    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({ status: "report-only", reason: expect.stringContaining("coalesced") });
+  await expectNativeRefusal("coalesced");
 });
 
 it("reports a failed native service probe instead of rejecting the worker's cleanup", async () => {
   io.service.mockRejectedValueOnce(new Error("fixture service unavailable"));
   register();
-  await expect(
-    nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({
-    status: "report-only",
-    reason: expect.stringContaining("preparation failed"),
-  });
+  await expectNativeRefusal("preparation failed");
   expect(io.restart).not.toHaveBeenCalled();
 });
