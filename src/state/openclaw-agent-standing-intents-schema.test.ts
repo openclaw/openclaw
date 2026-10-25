@@ -87,6 +87,23 @@ it.each(["tables", "creator"] as const)("lazily repairs missing %s idempotently"
       ensureOpenClawAgentStandingIntentsSchema(db);
       ensureOpenClawAgentStandingIntentsSchema(db);
 
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE name IN ('standing_intents', 'standing_intents_fts') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([{ name: "standing_intents" }, { name: "standing_intents_fts" }]);
+      expect(
+        db
+          .prepare(
+            "SELECT name, type, pk FROM pragma_table_info('standing_intents') WHERE name IN ('id', 'intent_key') ORDER BY name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "id", type: "TEXT", pk: 0 },
+        { name: "intent_key", type: "INTEGER", pk: 1 },
+      ]);
       expect(columnNames(db, "standing_intents")).toContain("creator_sender");
       expectAccepted(db, databasePath);
     },
