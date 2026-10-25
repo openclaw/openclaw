@@ -152,29 +152,19 @@ it("returns and caches an empty result list", async () => {
 it("keeps cached searches scoped to the request credential", async () => {
   fetchMock.mockImplementation(async (_url, init) => {
     const credential = new Headers(init?.headers).get("authorization");
-    const account =
-      credential === "Bearer kimi-account-a"
-        ? "account-a"
-        : credential === "Bearer kimi-account-b"
-          ? "account-b"
-          : undefined;
-    if (!account) {
-      throw new Error("Unexpected synthetic Kimi credential");
-    }
+    expect(credential).toMatch(/^Bearer kimi-account-[ab]$/);
     return jsonResponse({
-      search_results: [searchResult(account, `https://example.com/${account}`, account)],
+      search_results: [{ url: `https://example.com/${credential?.slice("Bearer kimi-".length)}` }],
     });
   });
   const accountA = searchTool({}, { apiKey: "kimi-account-a" });
   const accountB = searchTool({}, { apiKey: "kimi-account-b" });
-  const args = { query };
-
-  const first = await accountA.execute(args);
+  const first = await accountA.execute({ query });
   expect(first).toMatchObject({ results: [{ url: "https://example.com/account-a" }] });
-  expect(await accountB.execute(args)).toMatchObject({
+  expect(await accountB.execute({ query })).toMatchObject({
     results: [{ url: "https://example.com/account-b" }],
   });
-  expect(await accountA.execute(args)).toEqual({ ...first, cached: true });
+  expect(await accountA.execute({ query })).toEqual({ ...first, cached: true });
   expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
@@ -269,14 +259,7 @@ it("forwards the execution abort signal to an in-flight Kimi search", async () =
   fetchMock.mockImplementation(
     (_url, init) =>
       new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener(
-          "abort",
-          () => {
-            const reason: unknown = init.signal?.reason;
-            reject(reason instanceof Error ? reason : new Error("Kimi search aborted"));
-          },
-          { once: true },
-        );
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
       }),
   );
   const controller = new AbortController();
