@@ -161,6 +161,7 @@ export function registerCliMcpPreparationTests({
         workspaceDir,
         modelId: "test-model",
         messageProvider: "telegram",
+        requester: { channel: "telegram", senderId: "canonical-sender" },
         accountId: undefined,
         inboundEventKind: "room_event",
         senderIsOwner: false,

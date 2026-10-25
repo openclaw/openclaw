@@ -67,7 +67,7 @@ type ScopedToolsCall = Parameters<typeof resolveGatewayScopedTools>[0] & {
 type BeforeToolCallHookInput = Parameters<typeof runBeforeToolCallHook>[0];
 
 const runBeforeToolCallHookMock = vi.hoisted(() =>
-  vi.fn(async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
+  vi.fn(async (args: BeforeToolCallHookInput): Promise<MockBeforeToolCallHookResult> => ({
     blocked: false,
     params: args.params,
   })),
@@ -180,6 +180,7 @@ import {
   mcpToolCallMessage,
   readMcpPayload,
   readOkMcpPayload,
+  registerMcpRequesterPolicyTests,
   sendLoopbackToolCall,
   sendRaw,
   startLoopbackServerForTest,
@@ -377,18 +378,11 @@ function getScopedToolsCall(index: number): ScopedToolsCall {
 }
 
 function getBeforeToolCallHookInput(index: number): BeforeToolCallHookInput {
-  const call = runBeforeToolCallHookMock.mock.calls[index]?.[0];
-  if (typeof call !== "object" || call === null) {
-    throw new Error(`Expected before-tool-call hook ${index} to receive an input object`);
-  }
-  return call as BeforeToolCallHookInput;
+  return expectDefined(runBeforeToolCallHookMock.mock.calls[index]?.[0], "hook input");
 }
 
 function mockScopedTools(tools: MockGatewayTool[]) {
-  resolveGatewayScopedToolsMock.mockResolvedValue({
-    agentId: "main",
-    tools,
-  });
+  resolveGatewayScopedToolsMock.mockResolvedValue({ agentId: "main", tools });
 }
 
 beforeEach(() => {
@@ -795,6 +789,13 @@ describe("mcp loopback server", () => {
     expect(call.conversationReadOrigin).toBe("delegated");
     expect(call.includeNodeExecTool).toBe(false);
     expect(Array.from(call.excludeToolNames ?? [])).toContain("exec");
+  });
+
+  registerMcpRequesterPolicyTests({
+    createCliGrant,
+    mockScopedTools,
+    runBeforeToolCallHookMock,
+    getBeforeToolCallHookInput,
   });
 
   it("binds a CLI grant's complete context and ignores spoofed scope headers", async () => {
