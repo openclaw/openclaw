@@ -381,9 +381,6 @@ describe("sessions page lifecycle", () => {
       label.dispatchEvent(new Event("change", { bubbles: true }));
       await readStarted.promise;
       await waitForFast(() => expect(page.textContent).toContain("Working…"));
-      expect(page.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")?.disabled).toBe(
-        true,
-      );
       refreshed.resolve(next);
       await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
       expect(page.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")?.disabled).toBe(

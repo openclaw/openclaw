@@ -94,7 +94,11 @@ function findButton(root: ParentNode, label: string) {
 }
 
 function input(page: HTMLElement, label: string) {
-  return control<HTMLInputElement>(page, `input[aria-label="${label}"]`);
+  const element = control(page, `input[aria-label="${label}"]`);
+  if (!(element instanceof HTMLInputElement)) {
+    throw new Error(`Expected Connection input: ${label}`);
+  }
+  return element;
 }
 
 function source(
@@ -208,11 +212,8 @@ function authHello(authMode: "token" | "password" | "trusted-proxy"): GatewayHel
   return { ...gatewayHelloForMethods(["system.info"]), snapshot: { authMode } };
 }
 
-function control<T extends HTMLInputElement | HTMLButtonElement>(
-  page: HTMLElement,
-  selector: string,
-) {
-  const element = page.querySelector<T>(selector);
+function control(page: HTMLElement, selector: string) {
+  const element = page.querySelector<HTMLInputElement | HTMLButtonElement>(selector);
   if (!element) {
     throw new Error(`Missing Connection control: ${selector}`);
   }
