@@ -518,10 +518,6 @@ openclaw-chat-html-preview {
   min-width: 0;
 }
 
-.sidebar-file-view__wrap[aria-pressed="true"] {
-  color: var(--accent);
-}
-
 .sidebar-file-view .cm-line {
   padding: 0 12px 0 8px;
 }
@@ -743,13 +739,6 @@ button.sidebar-image-view__image {
   .sidebar-file-view__compact-action {
     display: inline-flex;
   }
-}
-
-.sidebar-file-view__footer {
-  display: flex;
-  justify-content: flex-end;
-  padding: 8px 10px;
-  border-top: 1px solid var(--border);
 }
 
 .sidebar-markdown-shell {

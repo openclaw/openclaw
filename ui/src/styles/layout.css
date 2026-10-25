@@ -568,13 +568,6 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
     color var(--duration-fast) ease;
 }
 
-.settings-save-indicator__apply {
-  border-radius: 999px;
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
-  background: var(--accent-subtle);
-  color: var(--text);
-}
-
 /* Hidden by default: on desktop the sidebar owns navigation, so no topbar row
    renders. Narrow viewports show it as the drawer/search header
    (layout.mobile.css), and desktop chat split view brings it back as the
