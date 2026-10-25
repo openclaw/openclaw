@@ -19,11 +19,21 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
+const registries: ReturnType<typeof loadOpenClawPlugins>[] = [];
 afterEach(async () => {
-  await resetContextEngineRuntimeQuarantineForTests();
-  resetPluginLoaderTestStateForTest();
-  clearPluginMetadataLifecycleCaches();
-  vi.unstubAllEnvs();
+  try {
+    await registries
+      .splice(0)
+      .reduceRight(
+        (done, registry) => done.finally(() => disposePluginRegistryInstances(registry)),
+        Promise.resolve(),
+      );
+  } finally {
+    await resetContextEngineRuntimeQuarantineForTests();
+    resetPluginLoaderTestStateForTest();
+    clearPluginMetadataLifecycleCaches();
+    vi.unstubAllEnvs();
+  }
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
@@ -35,13 +45,52 @@ beforeEach(() => {
 });
 
 function load(config: OpenClawConfig, previousRegistry?: ReturnType<typeof loadOpenClawPlugins>) {
-  return loadOpenClawPlugins({
+  const registry = loadOpenClawPlugins({
     config,
     workspaceDir,
     cache: false,
     runtimeSideEffects: true,
     previousRegistry,
   });
+  registries.push(registry);
+  return registry;
+}
+
+async function expectEngine(config: OpenClawConfig, id: string, addition?: string) {
+  const { resolveContextEngine } = await import("../context-engine/registry.js");
+  await ensureContextEnginesInitialized();
+  const engine = await resolveContextEngine(config);
+  try {
+    expect(engine.info.id).toBe(id);
+    if (addition) {
+      expect(await engine.assemble({ sessionId: "synthetic", messages: [] })).toMatchObject({
+        systemPromptAddition: addition,
+      });
+    }
+  } finally {
+    await engine.dispose?.();
+  }
+}
+
+async function expectTurn(config: OpenClawConfig, id: string, owner?: string) {
+  const { resolveLogicalTurnContextEngines } = await import("../context-engine/registry.js");
+  const turn = await resolveLogicalTurnContextEngines(config);
+  try {
+    expect(turn.configuredId).toBe(id);
+    expect(turn.configured.ownerPluginId).toBe(owner);
+    expect(turn.configuredFailure).toBeUndefined();
+    if (owner) {
+      expect(
+        await turn.configured.engine.assemble({ sessionId: "synthetic", messages: [] }),
+      ).toMatchObject({ systemPromptAddition: owner });
+    } else {
+      expect(turn.configured).toBe(turn.fallback);
+    }
+  } finally {
+    for (const engine of new Set([turn.configured.engine, turn.fallback.engine])) {
+      await disposeContextEngineSources(engine, turn.sourceResources?.get(engine) ?? []);
+    }
+  }
 }
 
 function configuration(
@@ -105,49 +154,26 @@ it.each([
   const plugin = writeEnginePlugin("MiXeD-demo", [engineId], "context-engine");
   const config = configuration([plugin], engineId, { allow });
   const registry = load(config);
-  try {
-    expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
-      engineId,
-      owner: "plugin:MiXeD-demo",
-    });
-    const record = registry.plugins.find((entry) => entry.id === "MiXeD-demo");
-    expect(record?.error).toBeUndefined();
-    expect(record?.status).toBe("loaded");
-    expect(registry.contextEngines.get(engineId)?.owner).toBe("plugin:MiXeD-demo");
-    const { resolveContextEngine } = await import("../context-engine/registry.js");
-    await ensureContextEnginesInitialized();
-    const engine = await resolveContextEngine(config);
-    try {
-      expect(engine.info.id).toBe(engineId);
-      expect(await engine.assemble({ sessionId: "synthetic", messages: [] })).toMatchObject({
-        systemPromptAddition: "MiXeD-demo",
-      });
-    } finally {
-      await engine.dispose?.();
-    }
-  } finally {
-    await disposePluginRegistryInstances(registry);
-  }
+  expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
+    engineId,
+    owner: "plugin:MiXeD-demo",
+  });
+  expect(registry.contextEngines.get(engineId)?.owner).toBe("plugin:MiXeD-demo");
+  await expectEngine(config, engineId, "MiXeD-demo");
 });
 
 it("keeps canonical denial ahead of mixed-case equal-ID selection", async () => {
   const plugin = writeEnginePlugin("MiXeD-demo", ["MiXeD-demo"], "context-engine");
   const registry = load(configuration([plugin], "MiXeD-demo", { deny: ["mixed-demo"] }));
-  try {
-    expect(registry.plugins.find((record) => record.id === "MiXeD-demo")?.status).toBe("disabled");
-    expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
-      engineId: "MiXeD-demo",
-      owner: null,
-    });
-    expect(registry.contextEngines.has("MiXeD-demo")).toBe(false);
-  } finally {
-    await disposePluginRegistryInstances(registry);
-  }
+  expect(registry.plugins.find((record) => record.id === "MiXeD-demo")?.status).toBe("disabled");
+  expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
+    engineId: "MiXeD-demo",
+    owner: null,
+  });
+  expect(registry.contextEngines.has("MiXeD-demo")).toBe(false);
 });
 
 it("rebuilds declared factories when switching engines on the same owner", async () => {
-  const { resolveContextEngine, resolveLogicalTurnContextEngines } =
-    await import("../context-engine/registry.js");
   const plugins = [
     writeEnginePlugin("secondary-capability", ["second"]),
     writeEnginePlugin("vendor", ["first", "second"], "context-engine"),
@@ -161,92 +187,52 @@ it("rebuilds declared factories when switching engines on the same owner", async
     },
   });
   const initial = load(config);
-  let replacement: ReturnType<typeof loadOpenClawPlugins> | undefined;
-  try {
-    expect(fs.readFileSync(path.join(workspaceDir, "registrations"), "utf8")).toBe(
-      "secondary-capability\nvendor\nordinary\n",
-    );
-    expect(initial.contextEngines.get("first")?.owner).toBe("plugin:vendor");
-    expect(initial.contextEngines.get("second")?.owner).toBe("plugin:secondary-capability");
-    expect(getPluginRuntimeLoadContextState(initial)?.selectedContextEngine).toEqual({
-      engineId: "first",
-      owner: "plugin:vendor",
-    });
-    const nextConfig: OpenClawConfig = {
-      ...config,
-      plugins: { ...config.plugins, slots: { memory: "none", contextEngine: "second" } },
-    };
-    replacement = load(nextConfig, initial);
-    expect(getPluginRuntimeLoadContextState(replacement)?.selectedContextEngine).toEqual({
-      engineId: "second",
-      owner: "plugin:vendor",
-    });
-    expect(replacement.contextEngines.get("second")?.owner).toBe("plugin:vendor");
-    expect(replacement.plugins.find((plugin) => plugin.id === "vendor")).not.toBe(
-      initial.plugins.find((plugin) => plugin.id === "vendor"),
-    );
-    expect(replacement.plugins.find((plugin) => plugin.id === "secondary-capability")).not.toBe(
-      initial.plugins.find((plugin) => plugin.id === "secondary-capability"),
-    );
-    expect(replacement.services.map((entry) => entry.service.id).toSorted()).toEqual([
-      "ordinary-service",
-      "secondary-capability-service",
-      "vendor-service",
-    ]);
+  expect(initial.contextEngines.get("first")?.owner).toBe("plugin:vendor");
+  expect(initial.contextEngines.get("second")?.owner).toBe("plugin:secondary-capability");
+  expect(getPluginRuntimeLoadContextState(initial)?.selectedContextEngine).toEqual({
+    engineId: "first",
+    owner: "plugin:vendor",
+  });
+  const nextConfig: OpenClawConfig = {
+    ...config,
+    plugins: { ...config.plugins, slots: { memory: "none", contextEngine: "second" } },
+  };
+  const replacement = load(nextConfig, initial);
+  expect(getPluginRuntimeLoadContextState(replacement)?.selectedContextEngine).toEqual({
+    engineId: "second",
+    owner: "plugin:vendor",
+  });
+  expect(replacement.contextEngines.get("second")?.owner).toBe("plugin:vendor");
+  expect(replacement.plugins.find((plugin) => plugin.id === "vendor")).not.toBe(
+    initial.plugins.find((plugin) => plugin.id === "vendor"),
+  );
+  expect(replacement.plugins.find((plugin) => plugin.id === "secondary-capability")).not.toBe(
+    initial.plugins.find((plugin) => plugin.id === "secondary-capability"),
+  );
+  expect(replacement.services.map((entry) => entry.service.id).toSorted()).toEqual([
+    "ordinary-service",
+    "secondary-capability-service",
+    "vendor-service",
+  ]);
 
-    // An unchanged follow-up generation may retain the ordinary plugin and selected factory.
-    const unchanged = load(nextConfig, replacement);
-    try {
-      await ensureContextEnginesInitialized();
-      expect(unchanged.plugins.find((plugin) => plugin.id === "ordinary")).toBe(
-        replacement.plugins.find((plugin) => plugin.id === "ordinary"),
-      );
-      expect(unchanged.contextEngines.get("second")?.factory).toBe(
-        replacement.contextEngines.get("second")?.factory,
-      );
-      const engine = await resolveContextEngine(nextConfig);
-      try {
-        expect(await engine.assemble({ sessionId: "synthetic", messages: [] })).toMatchObject({
-          systemPromptAddition: "vendor",
-        });
-      } finally {
-        await engine.dispose?.();
-      }
-      const turn = await resolveLogicalTurnContextEngines(nextConfig);
-      try {
-        expect(turn.configuredId).toBe("second");
-        expect(turn.configured.ownerPluginId).toBe("vendor");
-        expect(turn.configuredFailure).toBeUndefined();
-        expect(
-          await turn.configured.engine.assemble({ sessionId: "synthetic", messages: [] }),
-        ).toMatchObject({ systemPromptAddition: "vendor" });
-      } finally {
-        for (const turnEngine of new Set([turn.configured.engine, turn.fallback.engine])) {
-          await disposeContextEngineSources(
-            turnEngine,
-            turn.sourceResources?.get(turnEngine) ?? [],
-          );
-        }
-      }
-      expect(fs.readFileSync(path.join(workspaceDir, "factories"), "utf8")).toBe(
-        "vendor:second\nvendor:second\n",
-      );
-    } finally {
-      await disposePluginRegistryInstances(unchanged);
-    }
-  } finally {
-    if (replacement) {
-      await disposePluginRegistryInstances(replacement);
-    }
-    await disposePluginRegistryInstances(initial);
-  }
+  // An unchanged follow-up generation may retain the ordinary plugin and selected factory.
+  const unchanged = load(nextConfig, replacement);
+  expect(unchanged.plugins.find((plugin) => plugin.id === "ordinary")).toBe(
+    replacement.plugins.find((plugin) => plugin.id === "ordinary"),
+  );
+  expect(unchanged.contextEngines.get("second")?.factory).toBe(
+    replacement.contextEngines.get("second")?.factory,
+  );
+  await expectEngine(nextConfig, "second", "vendor");
+  await expectTurn(nextConfig, "second", "vendor");
+  expect(fs.readFileSync(path.join(workspaceDir, "factories"), "utf8")).toBe(
+    "vendor:second\nvendor:second\n",
+  );
 });
 
 it.each(["standalone", "logical-turn"] as const)(
   "keeps an unapproved engine inactive despite memory-slot admission via %s",
   async (resolver) => {
-    const { resolveContextEngine, resolveLogicalTurnContextEngines } =
-      await import("../context-engine/registry.js");
     const plugins = [
       writeEnginePlugin("existing-engine", ["existing-engine"], "memory"),
       writeEnginePlugin("claimant", ["existing-engine"], "context-engine"),
@@ -257,46 +243,25 @@ it.each(["standalone", "logical-turn"] as const)(
       slots: { memory: "existing-engine", contextEngine: "existing-engine" },
     });
     const registry = load(config);
-    try {
-      await ensureContextEnginesInitialized();
-      expect(fs.readFileSync(path.join(workspaceDir, "registrations"), "utf8")).toBe(
-        "existing-engine\n",
-      );
-      expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
-        engineId: "existing-engine",
-        owner: null,
-      });
-      expect(registry.plugins.find((plugin) => plugin.id === "existing-engine")?.status).toBe(
-        "loaded",
-      );
-      expect(registry.services.map((entry) => entry.service.id)).toEqual([
-        "existing-engine-service",
-      ]);
-      expect(registry.contextEngines.has("existing-engine")).toBe(false);
-      if (resolver === "standalone") {
-        const engine = await resolveContextEngine(config);
-        try {
-          expect(engine.info.id).toBe("legacy");
-        } finally {
-          await engine.dispose?.();
-        }
-      } else {
-        const turn = await resolveLogicalTurnContextEngines(config);
-        try {
-          expect(turn.configuredId).toBe("legacy");
-          expect(turn.configured).toBe(turn.fallback);
-          expect(turn.configured.ownerPluginId).toBeUndefined();
-          expect(turn.configuredFailure).toBeUndefined();
-        } finally {
-          for (const engine of new Set([turn.configured.engine, turn.fallback.engine])) {
-            await disposeContextEngineSources(engine, turn.sourceResources?.get(engine) ?? []);
-          }
-        }
-      }
-      expect(fs.existsSync(path.join(workspaceDir, "factories"))).toBe(false);
-      expect(config.plugins?.slots?.contextEngine).toBe("existing-engine");
-    } finally {
-      await disposePluginRegistryInstances(registry);
+    await ensureContextEnginesInitialized();
+    expect(fs.readFileSync(path.join(workspaceDir, "registrations"), "utf8")).toBe(
+      "existing-engine\n",
+    );
+    expect(getPluginRuntimeLoadContextState(registry)?.selectedContextEngine).toEqual({
+      engineId: "existing-engine",
+      owner: null,
+    });
+    expect(registry.plugins.find((plugin) => plugin.id === "existing-engine")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.services.map((entry) => entry.service.id)).toEqual(["existing-engine-service"]);
+    expect(registry.contextEngines.has("existing-engine")).toBe(false);
+    if (resolver === "standalone") {
+      await expectEngine(config, "legacy");
+    } else {
+      await expectTurn(config, "legacy");
     }
+    expect(fs.existsSync(path.join(workspaceDir, "factories"))).toBe(false);
+    expect(config.plugins?.slots?.contextEngine).toBe("existing-engine");
   },
 );

@@ -8,6 +8,10 @@ import {
   reconcilePluginPackageUpdateConfig,
 } from "./plugin-package-update.js";
 
+const beforeRoot = "/packages/pack-v1";
+const afterRoot = "/packages/pack-v2";
+const enabled = (...ids: string[]) => Object.fromEntries(ids.map((id) => [id, { enabled: true }]));
+
 function record(
   pluginId: string,
   rootDir: string,
@@ -83,8 +87,6 @@ describe("plugin package update policy reconciliation", () => {
   it.each([false, true])(
     "cleans a retired engine unless ownership transferred: %s",
     (transferred) => {
-      const beforeRoot = "/packages/pack-v1";
-      const afterRoot = "/packages/pack-v2";
       const before = index(beforeRoot, [
         record("pack/retained", beforeRoot),
         record("pack/retired", beforeRoot),
@@ -115,64 +117,65 @@ describe("plugin package update policy reconciliation", () => {
     },
   );
 
-  it("removes retired child policy while preserving retained, new, and unrelated state", () => {
-    const beforeRoot = "/packages/pack-v1";
-    const afterRoot = "/packages/pack-v2";
-    const before = index(beforeRoot, [
-      record("pack/one", beforeRoot, { channels: ["shared"] }),
-      record("pack/two", beforeRoot, { channels: ["two-channel", "shared"] }),
-      record("pack/old", beforeRoot, { channelConfigs: ["old-config"] }),
-    ]);
-    const after = index(afterRoot, [
-      record("pack/one", afterRoot, { channels: ["shared"] }),
-      record("pack/renamed", afterRoot),
-    ]);
-    const config: OpenClawConfig = {
-      plugins: {
-        allow: ["pack/one", "pack/two", "pack/old", "other"],
-        deny: ["pack/two", "pack/old", "other-denied"],
-        entries: {
-          "pack/one": { enabled: true },
-          "pack/two": { enabled: false },
-          "pack/old": { enabled: true },
-          other: { enabled: true },
+  it.each([beforeRoot, afterRoot])(
+    "cleans retired child policy while preserving shared state at %s",
+    (nextRoot) => {
+      const before = index(beforeRoot, [
+        record("pack/one", beforeRoot, { channels: ["shared"] }),
+        record("pack/two", beforeRoot, { channels: ["two-channel", "shared"] }),
+        record("pack/old", beforeRoot, { channelConfigs: ["old-config"] }),
+      ]);
+      const after = index(nextRoot, [
+        record("pack/one", nextRoot, { channels: ["shared"] }),
+        record("pack/renamed", nextRoot),
+      ]);
+      const config: OpenClawConfig = {
+        plugins: {
+          allow: ["pack/one", "pack/two", "pack/old", "other"],
+          deny: ["pack/two", "pack/old", "other-denied"],
+          entries: {
+            ...enabled("pack/one", "pack/old", "other"),
+            "pack/two": { enabled: false },
+          },
+          load: {
+            paths: [
+              beforeRoot,
+              `${beforeRoot}/two.js`,
+              `${beforeRoot}/old.js`,
+              "/plugins/unrelated.js",
+            ],
+          },
+          slots: { memory: "pack/two", contextEngine: "pack/old" },
         },
+        channels: enabled("two-channel", "old-config", "shared", "discord"),
+      };
+
+      const result = reconcile(config, before, after);
+      assert(result.ok);
+      expect(result.config.plugins).toEqual({
+        allow: ["pack/one", "other"],
+        deny: ["other-denied"],
+        entries: enabled("pack/one", "other"),
         load: {
-          paths: [`${beforeRoot}/two.js`, `${beforeRoot}/old.js`, "/plugins/unrelated.js"],
+          paths: [...(nextRoot === beforeRoot ? [beforeRoot] : []), "/plugins/unrelated.js"],
         },
-        slots: { memory: "pack/two", contextEngine: "pack/old" },
-      },
-      channels: {
-        "two-channel": { enabled: true },
-        "old-config": { enabled: true },
-        shared: { enabled: true },
-        discord: { enabled: true },
-      },
-    };
+      });
+      expect(result.config.channels).toEqual(enabled("shared", "discord"));
+    },
+  );
 
-    const result = reconcile(config, before, after);
-    assert(result.ok);
-    expect(result.config.plugins).toEqual({
-      allow: ["pack/one", "other"],
-      deny: ["other-denied"],
-      entries: { "pack/one": { enabled: true }, other: { enabled: true } },
-      load: { paths: ["/plugins/unrelated.js"] },
-    });
-    expect(result.config.channels).toEqual({
-      shared: { enabled: true },
-      discord: { enabled: true },
-    });
-  });
-
-  it("fails closed when the replacement package has no authoritative child rows", () => {
-    const before = index("/packages/pack-v1", [record("pack/one", "/packages/pack-v1")]);
-    const result = reconcile(
-      { plugins: { entries: { "pack/one": { enabled: true } } } },
-      before,
-      index("/packages/pack-v2", []),
-    );
-    expect(result).toMatchObject({ ok: false });
-  });
+  it.each(["package", "tombstone"])(
+    "fails closed when a replacement %s has no authoritative child rows",
+    (kind) => {
+      const before = index(beforeRoot, kind === "package" ? [record("pack/one", beforeRoot)] : []);
+      const result = reconcile(
+        { plugins: { entries: { "pack/one": { enabled: true } } } },
+        before,
+        index(afterRoot, []),
+      );
+      expect(result).toMatchObject({ ok: false });
+    },
+  );
 
   it("skips an exact tombstone while reconciling another package update", () => {
     const orphanRecord = {
@@ -180,8 +183,8 @@ describe("plugin package update policy reconciliation", () => {
       sourcePath: "/missing/orphan-source",
       installPath: "/missing/orphan-install",
     } as const;
-    const beforePack = index("/packages/pack-v1", [record("pack/one", "/packages/pack-v1")]);
-    const afterPack = index("/packages/pack-v2", [record("pack/one", "/packages/pack-v2")]);
+    const beforePack = index(beforeRoot, [record("pack/one", beforeRoot)]);
+    const afterPack = index(afterRoot, [record("pack/one", afterRoot)]);
     const before = {
       ...beforePack,
       installRecords: { orphan: orphanRecord, ...beforePack.installRecords },
@@ -196,24 +199,6 @@ describe("plugin package update policy reconciliation", () => {
     const result = reconcile(config, before, after, { snapshot });
 
     expect(result).toEqual({ ok: true, config });
-  });
-
-  it("fails closed when a tombstone replacement still has no authoritative child rows", () => {
-    const before = index("/packages/pack-v1", []);
-    const after = {
-      ...index("/packages/pack-v2", []),
-      installRecords: {
-        pack: {
-          ...before.installRecords.pack!,
-          installPath: "/packages/pack-v2",
-          version: "2.0.0",
-        },
-      },
-    };
-
-    const result = reconcile({}, before, after);
-
-    expect(result).toMatchObject({ ok: false });
   });
 
   it("follows catalog-alias install-owner migrations without pruning QQ config", () => {
@@ -269,23 +254,6 @@ describe("plugin package update policy reconciliation", () => {
     assert(migrated.ok);
     expect(migrated.config.channels?.qqbot).toEqual(qqbotConfig);
     expect(migrated.config.plugins?.load?.paths).toEqual(["/plugins/unrelated.js"]);
-  });
-
-  it("keeps a shared package root while removing a retired child entry path", () => {
-    const rootDir = "/packages/shared-pack";
-    const before = index(rootDir, [record("pack/one", rootDir), record("pack/old", rootDir)]);
-    const after = index(rootDir, [record("pack/one", rootDir)]);
-    const result = reconcile(
-      {
-        plugins: {
-          load: { paths: [rootDir, `${rootDir}/old.js`, "/plugins/unrelated.js"] },
-        },
-      },
-      before,
-      after,
-    );
-    assert(result.ok);
-    expect(result.config.plugins?.load?.paths).toEqual([rootDir, "/plugins/unrelated.js"]);
   });
 
   it("detects exact entry load-path cleanup before an update starts", () => {

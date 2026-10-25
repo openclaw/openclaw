@@ -240,27 +240,17 @@ describe("bundle manifest parsing", () => {
   });
 
   it.each([
-    {
-      name: "wrong schema falls through to native entry detection",
-      manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "not-agent" },
-      files: { "index.ts": "export default {}" },
-      expected: null,
-    },
-    {
-      name: "missing schema falls through to manifestless Claude markers",
-      manifest: { name: "not-agent" },
-      files: { "skills/example/SKILL.md": "---\ndescription: Example\n---\n" },
-      expected: "claude",
-    },
-    {
-      name: "wrong schema without fallback markers is not a bundle",
-      manifest: { $schema: "https://wrong.example/plugin.schema.json", name: "not-agent" },
-      files: {},
-      expected: null,
-    },
-  ])("$name", ({ manifest, files, expected }) => {
+    ["native entry", "wrong", { "index.ts": "export default {}" }, null],
+    [
+      "Claude markers",
+      undefined,
+      { "skills/example/SKILL.md": "---\ndescription: Example\n---\n" },
+      "claude",
+    ],
+    ["no markers", "wrong", {}, null],
+  ] as const)("falls through invalid Agent schema to %s", (_name, $schema, files, expected) => {
     const rootDir = fixture({
-      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: manifest,
+      [AGENT_BUNDLE_MANIFEST_RELATIVE_PATH]: { name: "not-agent", $schema },
       ...files,
     });
 
