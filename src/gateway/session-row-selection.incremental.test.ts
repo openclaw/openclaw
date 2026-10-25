@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { SessionListFilteredEntries } from "./session-list-filters.js";
-import { create, selectionRow } from "./session-row-projection-record.js";
+import { create, identity, selectionRow } from "./session-row-projection-record.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import { selectSessionEntries } from "./session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
@@ -103,7 +103,7 @@ it("matches fresh selection across churn, archive toggles, filters, and page win
       getRowContext: () => context,
       now: 10_000,
       getModelFacts: () => ({
-        selectedModel: { provider: "openai", model: "synthetic" },
+        selectedModel: { provider: "openai", model: "synthetic", storedOverrideSource: null },
         rowModelIdentity: { provider: "openai", model: "synthetic" },
         thinkingProjection: { acpMeta: undefined, agentRuntime: undefined },
       }),
@@ -124,13 +124,13 @@ it("matches fresh selection across churn, archive toggles, filters, and page win
     }
     // Some consumers lag beyond a partition journal's bound; others read every change.
     for (let change = 0; change < (step % 13 === 0 ? 70 : 1); change++) {
-      const index = random(96);
+      const index = step % 13 === 0 ? 0 : random(96);
       if (random(5) === 0) {
         const previous = targets.get(index);
         if (previous) {
           selection.change({
             kind: "row",
-            id: `${previous.agentId}\0${previous.storeTarget.storePath}\0${previous.key}`,
+            id: identity(previous),
             key: previous.key,
             agentId: previous.agentId,
             row: undefined,
