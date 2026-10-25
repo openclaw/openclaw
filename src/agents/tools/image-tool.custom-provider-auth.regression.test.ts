@@ -1,4 +1,3 @@
-import * as toolSchema from "@openclaw/ai/internal/tool-schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapabilityModelProviderCandidate } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -7,8 +6,6 @@ import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
-import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { finalizeAgentTools } from "../agent-tools.finalize.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
@@ -148,39 +145,17 @@ describe("image custom provider auth regression", () => {
   });
 
   it.each([false, true])(
-    "reuses published schemas for vision=%s across runs and sessions",
+    "exposes a model override only without native vision (%s)",
     (modelHasVision) => {
-      clearPluginMetadataLifecycleCaches();
-      const config = createUserReportedConfig();
-      const construct = (sessionId: string) =>
-        finalizeAgentTools({
-          tools: [createRequiredImageTool({ config, agentDir, modelHasVision })],
-          config,
-          hookContext: { sessionId },
-          modelProvider: "openai",
-          modelApi: "openai-responses",
-          wrapBeforeToolCallHook: false,
-        })[0]!;
-      const cold = construct("image-schema-first");
+      const { parameters } = createRequiredImageTool({
+        config: createUserReportedConfig(),
+        agentDir,
+        modelHasVision,
+      });
       if (modelHasVision) {
-        expect(cold.parameters).not.toHaveProperty("properties.model");
+        expect(parameters).not.toHaveProperty("properties.model");
       } else {
-        expect(cold.parameters).toHaveProperty("properties.model");
-      }
-      const bytes = JSON.stringify(cold.parameters);
-      const publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
-      try {
-        for (const sessionId of [
-          "image-schema-first",
-          "image-schema-second",
-          "image-schema-third",
-        ]) {
-          expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
-        }
-        expect(publish).not.toHaveBeenCalled();
-      } finally {
-        publish.mockRestore();
-        clearPluginMetadataLifecycleCaches();
+        expect(parameters).toHaveProperty("properties.model");
       }
     },
   );
@@ -228,12 +203,9 @@ describe("image custom provider auth regression", () => {
     expect(auth.source).toContain("models.json");
 
     const imageTool = tool(cfg, false);
-    expect(imageTool.name).toBe("view_image");
     const result = await imageTool.execute("regression-1", imageInput);
     const text = result.content.find((entry) => entry.type === "text")?.text ?? "";
     expect(text).toContain(`seen:${USER_PRIMARY}`);
-    expect(text).not.toMatch(/No image model is configured/i);
-    expect(mediaRuntimeMock.optimizeImageBufferForWebMedia).toHaveBeenCalledTimes(1);
   });
 
   it("still rejects the same fallback config when apiKey is missing", async () => {

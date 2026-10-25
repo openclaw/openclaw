@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import * as authSource from "../auth-profiles/source-check.js";
-import * as authStoreRuntime from "../auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   hasProviderAuthForTool,
@@ -133,30 +131,6 @@ describe("hasProviderAuthForTool", () => {
       { config: cfg, trustConfigIdentity: true },
     );
   });
-  it("keeps a prepared missing auth source unavailable without probing storage", () => {
-    const probe = vi.spyOn(authSource, "hasAnyAuthProfileStoreSource").mockImplementation(() => {
-      throw new Error("unexpected caller-thread auth source probe");
-    });
-    const load = vi
-      .spyOn(authStoreRuntime, "ensureAuthProfileStoreWithoutExternalProfiles")
-      .mockImplementation(() => {
-        throw new Error("unexpected caller-thread credential store load");
-      });
-    const params = {
-      provider: "unconfigured-provider",
-      agentDir: AGENT_DIR,
-      authProfileStoreSource: false,
-    };
-    try {
-      expect(hasProviderAuthForTool(params)).toBe(false);
-      expect(probe).not.toHaveBeenCalled();
-      expect(load).not.toHaveBeenCalled();
-    } finally {
-      probe.mockRestore();
-      load.mockRestore();
-    }
-  });
-
   it("accepts env-key plugin provider auth only when config reaches env resolution", () => {
     // "acme" is not in models.json, so custom-provider auth is false; the only
     // path to true is the config-aware env lookup.

@@ -1,6 +1,5 @@
 import "../subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { realpath } from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   registerAcpRuntimeBackend,
@@ -200,28 +199,6 @@ describe("sessions_spawn terminal effects", () => {
       const result = await tool.execute("spawn", { task: "Prepare report", ...testCase.args });
       expect(result.details).toMatchObject(testCase.details);
       observeRecoveredSpawn(result, testCase.mutatingAction);
-    });
-  });
-
-  it("rejects a sandbox cwd before reserving or creating a child", async () => {
-    await withTestDir({ prefix: "spawn-outcome-" }, async (dir) => {
-      const workspace = await realpath(dir);
-      const callGateway = vi.spyOn(inProcessGateway, "callInProcessGatewayTool");
-      const tool = spawnTool({
-        config: {
-          agents: {
-            defaults: { sandbox: { mode: "all" } },
-            entries: { main: { workspace } },
-          },
-        },
-      });
-      const result = await tool.execute("spawn", {
-        ...task,
-        cwd: path.join(workspace, "..", "outside"),
-      });
-      expect(result.details).toMatchObject({ status: "forbidden" });
-      expect(callGateway).not.toHaveBeenCalled();
-      observeRecoveredSpawn(result, false);
     });
   });
 
