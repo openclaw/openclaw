@@ -78,12 +78,15 @@ export function isSkillEnvRequirementSatisfied(params: {
 const BUNDLED_SOURCES = new Set(["openclaw-bundled", "openclaw-custodian"]);
 
 export function resolveBundledAllowlist(config?: OpenClawConfig): ReadonlySet<string> | undefined {
-  const normalized = normalizeStringEntries(config?.skills?.allowBundled);
-  return normalized.length > 0 ? new Set(normalized) : undefined;
+  const raw = config?.skills?.allowBundled;
+  if (raw === undefined) {
+    return undefined;
+  }
+  return new Set(normalizeStringEntries(raw));
 }
 
 export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet<string>): boolean {
-  if (!allowlist || allowlist.size === 0) {
+  if (!allowlist) {
     return true;
   }
   if (!BUNDLED_SOURCES.has(resolveSkillSource(entry.skill))) {

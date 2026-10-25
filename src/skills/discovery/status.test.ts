@@ -565,6 +565,27 @@ describe("buildWorkspaceSkillStatus", () => {
     expectStatusFlags(bundledBlocked, false, false, false);
     expect(bundledBlocked.blockedByAllowlist).toBe(true);
   });
+
+  it("treats an explicit empty allowBundled list as blocking every bundled skill", () => {
+    const report = buildWorkspaceSkillStatus("/tmp/ws", {
+      config: { skills: { allowBundled: [] } },
+      entries: [
+        createEntry("bundled-one", { source: "openclaw-bundled" }),
+        createEntry("custodian-one", { source: "openclaw-custodian" }),
+        createEntry("workspace-one", { source: "openclaw-workspace" }),
+      ],
+    });
+
+    const byName = skillStatusByName(report.skills);
+    const bundledOne = requireSkillStatus(byName, "bundled-one");
+    expect(bundledOne.blockedByAllowlist).toBe(true);
+    expect(bundledOne.modelVisible).toBe(false);
+    const custodianOne = requireSkillStatus(byName, "custodian-one");
+    expect(custodianOne.blockedByAllowlist).toBe(true);
+    expect(custodianOne.modelVisible).toBe(false);
+    const workspaceOne = requireSkillStatus(byName, "workspace-one");
+    expect(workspaceOne.blockedByAllowlist).toBe(false);
+  });
 });
 
 function skillStatusByName(skills: readonly SkillStatus[]): Map<string, SkillStatus> {
