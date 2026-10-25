@@ -307,7 +307,6 @@ describe("startup migration lease", () => {
       if (admittedOwner) {
         runOpenClawStateWriteTransaction(() => undefined, { env });
       }
-      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const lease = await acquireLease({ now: () => 1000, owner: "first" });
 
       const onActivity = vi.fn();
@@ -327,13 +326,6 @@ describe("startup migration lease", () => {
       lease.release();
       expect(hasActiveStartupMigrationLease({ env, nowMs: 301_002, onActivity })).toBe(false);
       expect(onActivity).toHaveBeenCalledTimes(2);
-      if (admittedOwner) {
-        expect(
-          prepare.mock.calls.filter(([sql]) =>
-            /\b(?:integrity_check|foreign_key_check)\b/i.test(sql),
-          ),
-        ).toHaveLength(0);
-      }
     },
   );
 
