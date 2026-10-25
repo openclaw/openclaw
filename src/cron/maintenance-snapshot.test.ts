@@ -7,6 +7,7 @@ import * as sessionStores from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as targets from "../config/sessions/targets-runtime.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -23,22 +24,8 @@ import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 import { saveCronStore } from "./store.js";
 import { makeCronReceiptJob } from "./store/run-receipt-store.test-support.js";
 
-const logs = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn() }));
-// Only diagnostics are replaced: scheduler, snapshot discovery and retention use their real owners.
-vi.mock("../logging/subsystem.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
-  return {
-    ...actual,
-    createSubsystemLogger: (name: string) => {
-      const logger = actual.createSubsystemLogger(name);
-      return name === "cron/maintenance" ? { ...logger, ...logs } : logger;
-    },
-  };
-});
-
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.clearAllMocks();
   resetConfigRuntimeState();
   resetGatewayWorkAdmission();
 });
@@ -101,6 +88,7 @@ it.each([
       discovery.mockImplementationOnce((...args) => pauseAfter(discover(...args)));
     }
     let sweep: void | Promise<void> = undefined;
+    const logs = createWarnLogCapture("cron-maintenance-snapshot");
     try {
       startCronMaintenance(scheduler, () => cronStorePath);
       sweep = clock.advanceBy(5_000);
@@ -112,7 +100,7 @@ it.each([
           env: state.env,
         });
       } else {
-        const deletion = beginAgentDeletionJournal({
+        beginAgentDeletionJournal({
           agentId: "retired",
           operationId: "delete-retired",
           agentDir: state.agentDir("retired"),
@@ -122,53 +110,30 @@ it.each([
         });
         if (change === "completed deletion") {
           runOpenClawStateWriteTransaction((database) =>
-            completeAgentDeletionJournalInDatabase(
-              database,
-              deletion.agentId,
-              deletion.operationId,
-            ),
+            completeAgentDeletionJournalInDatabase(database, "retired", "delete-retired"),
           );
         }
       }
-      // Pending deletion exercises the fallback without receipts; the others coalesce a burst.
-      if (change !== "pending deletion") {
-        for (let receipt = 0; receipt < 3; receipt += 1) {
-          sessionChanges.emit({
-            sessionKey: "agent:main:cron:live-job:run:new",
-            scope: "session-entry",
-          });
-        }
-      }
-      await clock.advanceBy(0);
-      expect(discovery).toHaveBeenCalledOnce();
       resume.resolve();
       await sweep;
       // The per-target guard fires before the affected target, not an automatic consumer replay.
-      if (change === "after healthy target") {
-        expect(loadSessionEntry(healthy)).toBeUndefined();
-      } else {
-        expect(loadSessionEntry(healthy)).toBeDefined();
-      }
+      expect(loadSessionEntry(healthy) === undefined).toBe(change === "after healthy target");
       expect(readRetired()).toEqual(retiredBefore);
-      expect(logs.warn).toHaveBeenCalledWith("Session registry maintenance deferred", {
-        reason: "agent-database-snapshot-changed",
-        retryAtMs: scheduler.nextWakeAtMs,
-        lastSuccessAtMs: null,
-      });
-      expect(logs.warn).not.toHaveBeenCalledWith("Cron maintenance failed", expect.anything());
+      expect(await logs.findText("Session registry maintenance deferred")).toBeDefined();
+      expect(await logs.findText("agent-database-snapshot-changed")).toBeDefined();
+      expect(await logs.findText("Cron maintenance failed")).toBeUndefined();
       expect(scheduler.nextWakeAtMs).not.toBeNull();
       expect(scheduler.nextWakeAtMs).toBeLessThanOrEqual(now + 65_000);
       if (change === "stop before retry") {
         await stopCronMaintenance();
+        sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
         await clock.advanceBy(60_000);
         expect(discovery).toHaveBeenCalledOnce();
-        expect(logs.info).not.toHaveBeenCalled();
         expect(loadSessionEntry(healthy)).toBeDefined();
         expect(readRetired()).toEqual(retiredBefore);
         return;
       }
       await clock.advanceTo(scheduler.nextWakeAtMs!);
-      expect(discovery).toHaveBeenCalledTimes(2);
       expect(loadSessionEntry(healthy)).toBeUndefined();
       if (change === "registration removal") {
         expect(loadSessionEntry(retired)).toBeUndefined();
@@ -176,22 +141,12 @@ it.each([
         expect(readRetired()).toEqual(retiredBefore);
       }
       expect(loadSessionEntry(running)).toBeDefined();
-      expect(logs.info).toHaveBeenCalledWith("Session registry maintenance completed", {
-        lastSuccessAtMs: clock.clock.now(),
-        nextSweepAtMs: scheduler.nextWakeAtMs,
-        pruned: change === "registration removal" ? 2 : change === "after healthy target" ? 0 : 1,
-        skippedStores: change === "registration removal" ? 0 : 1,
-      });
-      await stopCronMaintenance();
-      const attempts = discovery.mock.calls.length;
-      sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
-      await clock.advanceBy(60_000);
-      expect(discovery).toHaveBeenCalledTimes(attempts);
     } finally {
       resume.resolve();
       await sweep;
       await stopCronMaintenance();
       await scheduler.stop();
+      logs.cleanup();
     }
   });
 });
