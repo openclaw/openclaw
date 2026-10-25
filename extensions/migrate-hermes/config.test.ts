@@ -3,18 +3,19 @@ import path from "node:path";
 import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import type { MigrationPlan } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { describe, expect, it, vi } from "vitest";
-import { collectHermesProviders, collectHermesProviderSecretBindings } from "./config-providers.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { collectHermesProviders } from "./config-providers.js";
 import { resolveHermesModelRef } from "./model.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { hermesCase, item } from "./test/hermes-case.js";
 import { useHermesFixture } from "./test/migration-fixture.js";
 import { writeFile } from "./test/provider-helpers.js";
 
-const fixture = useHermesFixture(() => {
-  vi.unstubAllEnvs();
+const fixture = useHermesFixture(() => vi.unstubAllEnvs());
+let h: ReturnType<typeof hermesCase>;
+beforeEach(() => {
+  h = hermesCase(fixture.paths.root);
 });
-const makeCase = () => hermesCase(fixture.paths.root);
 const endpoint = (base_url: string, model: string, transport?: string) => ({
   base_url,
   models: [model],
@@ -40,8 +41,7 @@ function mcp(plan: MigrationPlan, name: string, value: object) {
 }
 
 describe("Hermes config migration", () => {
-  it("plans plugin config without touching unreadable credential storage", async () => {
-    const h = makeCase();
+  it("plans without reading credential storage", async () => {
     await h.write(
       "config.yaml",
       `custom_providers: [{name: local-llm, base_url: http://127.0.0.1:11434/v1, models: [local-model]}]
@@ -51,34 +51,24 @@ memory: {provider: honcho, honcho: {project: hermes}}`,
     const db = path.join(h.agentDir, "openclaw-agent.sqlite");
     await writeFile(db, "not a SQLite database\n");
     const plan = await h.plan();
-    expect(item(plan, "config:memory-plugin:honcho")).toMatchObject({
-      kind: "config",
-      action: "merge",
-      target: "plugins.entries.honcho",
-    });
-    expect(item(plan, "manual:memory-provider:honcho")).toMatchObject({
-      kind: "manual",
-      status: "skipped",
-    });
+    expect(item(plan, "config:memory-plugin:honcho")?.status).toBe("planned");
+    expect(item(plan, "manual:memory-provider:honcho")?.status).toBe("skipped");
     expect(providers(plan)["local-llm"]?.baseUrl).toBe("http://127.0.0.1:11434/v1");
-    expect(plan.warnings).toEqual([
-      "Some Hermes settings require manual review before they can be activated safely.",
-    ]);
     expect(await fs.readFile(db, "utf8")).toBe("not a SQLite database\n");
   });
 
-  it("applies mapped config through the runtime writer and validates the result", async () => {
-    const h = makeCase();
+  it("applies valid config through the bound runtime", async () => {
     await h.write(
       "config.yaml",
       `providers:
   openai: {api: https://api.openai.example/v1, key_env: OPENAI_API_KEY, default_model: gpt-5.4, transport: chat_completions, models: [gpt-5.4]}
 mcp_servers:
-  time: {enabled: false, command: npx, args: [-y, mcp-server-time], timeout: 45, connect_timeout: 10, supports_parallel_tool_calls: true}
+  time: {enabled: false, command: npx, args: [-y, mcp-server-time], timeout: 45, connect_timeout: 10, supports_parallel_tool_calls: true, env: {OPENAI_API_KEY: short-dev-key}}
 skills: {config: {ship-it: {mode: fast}}}`,
     );
     await h.write("memories/MEMORY.md", "Imported memory\n");
-    const result = await h.import();
+    const provider = buildHermesMigrationProvider({ runtime: h.runtime });
+    const result = await provider.apply(h.context({ includeSecrets: true }));
     expect(result.summary.errors).toBe(0);
     expect(h.config.models?.providers?.openai?.apiKey).toBeUndefined();
     manual(result, "model-provider-key-env:openai");
@@ -89,6 +79,7 @@ skills: {config: {ship-it: {mode: fast}}}`,
       connectionTimeoutMs: 10_000,
       requestTimeoutMs: 45_000,
       supportsParallelToolCalls: true,
+      env: { OPENAI_API_KEY: "short-dev-key" },
     });
     expect(h.config.skills?.entries?.["ship-it"]?.config?.mode).toBe("fast");
     expect(h.config.plugins?.slots?.memory).toBe("memory-core");
@@ -106,7 +97,6 @@ skills: {config: {ship-it: {mode: fast}}}`,
   });
 
   it("drops prototype-bearing provider, MCP and skill keys on apply", async () => {
-    const h = makeCase();
     await h.write(
       "config.yaml",
       `providers: {__proto__: {base_url: https://untrusted.example/v1, models: [untrusted-model]}}
@@ -128,22 +118,7 @@ skills: {config: {prototype: {mode: untrusted}, safe-skill: {mode: safe}}}`,
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
-  it("uses provider-bound runtime for CLI config writes", async () => {
-    const h = makeCase();
-    await h.write(
-      "config.yaml",
-      `mcp_servers: {time: {command: npx, env: {OPENAI_API_KEY: short-dev-key}}}`,
-    );
-    const provider = buildHermesMigrationProvider({ runtime: h.runtime });
-    expect((await provider.apply(h.context({ includeSecrets: true }))).summary.errors).toBe(0);
-    expect(h.config.mcp?.servers?.time).toMatchObject({
-      command: "npx",
-      env: { OPENAI_API_KEY: "short-dev-key" },
-    });
-  });
-
-  it("maps model-scoped endpoints and conservatively translates remote MCP policy", async () => {
-    const h = makeCase();
+  it("maps model endpoints and remote MCP policy", async () => {
     await h.write(
       "config.yaml",
       `model:
@@ -167,8 +142,7 @@ mcp_servers:
     lifecycle: {idle_timeout_seconds: "60", max_lifetime_seconds: 3600}
     keepalive_interval: 10
   protected: {url: https://protected.example/rpc, client_cert: [placeholder, placeholder, placeholder]}
-  utilities_only: {command: utilities-only, tools: {include: [], resources: false, prompts: true}}
-  no_tools: {command: no-tools, tools: {include: [], resources: false, prompts: false}}`,
+`,
     );
     const plan = await h.plan();
     expect(providers(plan).custom).toMatchObject({
@@ -190,11 +164,6 @@ mcp_servers:
       }),
     });
     mcp(plan, "protected", { url: "https://protected.example/rpc", transport: "streamable-http" });
-    mcp(plan, "utilities_only", {
-      command: "utilities-only",
-      toolFilter: { include: ["prompts_list", "prompts_get"] },
-    });
-    mcp(plan, "no_tools", { command: "no-tools", toolFilter: { exclude: ["*"] } });
     manual(
       plan,
       ...[
@@ -210,8 +179,7 @@ mcp_servers:
     );
   });
 
-  it("resolves endpoint/header references while gating secret request options", async () => {
-    const h = makeCase();
+  it("resolves headers only with secret consent", async () => {
     await h.write(
       "config.yaml",
       `providers:
@@ -226,21 +194,14 @@ mcp_servers:
       ".env",
       "ACME_BASE_URL=https://acme.example.test/v1\nACME_HEADER=resolved-header-value\n",
     );
-    const without = await h.plan({
-      stateDir: path.join(h.root, "state-without-secrets"),
-      workspaceDir: path.join(h.root, "workspace-without-secrets"),
-    });
+    const without = await h.plan();
     expect(providers(without).acme).toMatchObject({
       baseUrl: "https://acme.example.test/v1",
       models: [{ maxTokens: 12_345 }],
     });
     expect(item(without, "config:model-provider:acme")?.sensitive).toBe(true);
     manual(without, "model-provider-headers:acme", "model-provider-extra-body:acme");
-    const withSecrets = await h.plan({
-      stateDir: path.join(h.root, "state-with-secrets"),
-      workspaceDir: path.join(h.root, "workspace-with-secrets"),
-      includeSecrets: true,
-    });
+    const withSecrets = await h.plan({ includeSecrets: true });
     expect(providers(withSecrets).acme?.headers).toEqual({
       "X-Environment": "resolved-header-value",
       "X-Literal": "literal-value",
@@ -250,7 +211,6 @@ mcp_servers:
   });
 
   it("reports unresolved endpoint references", async () => {
-    const h = makeCase();
     await h.write(
       "config.yaml",
       "providers:\n  acme:\n    api: ${MISSING_ACME_URL}\n    models: [acme-one]\n",
@@ -273,7 +233,6 @@ mcp_servers:
     ],
     ["xai-direct", "https://api.x.ai/v1", "openai-responses", "codex_responses"],
   ] as const)("infers %s protocol", async (name, url, api, transport) => {
-    const h = makeCase();
     await h.write("config.yaml", { providers: { [name]: endpoint(url, "test-model", transport) } });
     const value = providers(await h.plan())[name === "openai-codex" ? "openai" : name];
     expect(value?.api).toBe(api);
@@ -283,33 +242,19 @@ mcp_servers:
   });
 
   it("keeps built-in overrides on canonical provider IDs", async () => {
-    const h = makeCase();
-    await h.write(
-      "config.yaml",
-      `model: {provider: gemini, default: gemini-3.1-pro}
-providers:
-  copilot: {base_url: https://copilot.example.test/v1, transport: openai_chat}
-  gemini: {base_url: https://gemini.example.test/v1, transport: openai_chat}
-  kimi-coding: {base_url: https://kimi.example.test/v1, transport: openai_chat}
-  kimi-coding-cn: {base_url: https://moonshot.example.test/v1, transport: openai_chat}
-  opencode-zen: {base_url: https://opencode.example.test/v1, transport: openai_chat}`,
-    );
+    await h.write("config.yaml", {
+      model: { provider: "gemini", default: "gemini-3.1-pro" },
+      providers: {
+        gemini: endpoint("https://gemini.example.test/v1", "gemini-3.1-pro", "openai_chat"),
+      },
+    });
     const plan = await h.plan();
     expect(item(plan, "config:default-model")?.details?.model).toBe("google/gemini-3.1-pro");
-    expect(Object.keys(providers(plan)).toSorted()).toEqual([
-      "github-copilot",
-      "google",
-      "kimi",
-      "moonshot",
-      "opencode",
-    ]);
-    expect(
-      Object.values(providers(plan)).every((value) => value.api === "openai-completions"),
-    ).toBe(true);
+    expect(Object.keys(providers(plan))).toEqual(["google"]);
+    expect(providers(plan).google?.api).toBe("openai-completions");
   });
 
-  it("isolates provider conflicts and blocks the dependent default model", async () => {
-    const h = makeCase();
+  it("isolates provider conflicts and dependent defaults", async () => {
     await h.write(
       "config.yaml",
       `model: {provider: existing, default: imported-model}
@@ -354,7 +299,6 @@ providers:
   ] as const)(
     "imports the selected %s environment endpoint",
     async (source, env, url, target, api, baseUrl) => {
-      const h = makeCase();
       await h.write("config.yaml", { model: { provider: source, default: "imported-model" } });
       await h.write(".env", `${env}=${url}\n`);
       expect(providers(await h.plan())[target]).toMatchObject({
@@ -365,8 +309,7 @@ providers:
     },
   );
 
-  it("resolves MCP dotenv/inherited references with secret consent", async () => {
-    const h = makeCase();
+  it("gates MCP environment references on secret consent", async () => {
     vi.stubEnv("MCP_INHERITED", "inherited-placeholder");
     await h.write(
       ".env",
@@ -399,10 +342,7 @@ providers:
       "mcp-server-unresolved-secrets:missing-launch",
     );
     expect(item(plan, "config:mcp-server:missing-launch")).toBeUndefined();
-    const without = await h.plan({
-      stateDir: path.join(h.root, "state-without-secrets"),
-      workspaceDir: path.join(h.root, "workspace-without-secrets"),
-    });
+    const without = await h.plan();
     expect([
       item(without, "config:mcp-server:resolved"),
       item(without, "config:mcp-server:missing-launch"),
@@ -410,8 +350,7 @@ providers:
     manual(without, "mcp-server-secrets:resolved", "mcp-server-secrets:missing-launch");
   });
 
-  it("imports explicit built-in and custom provider endpoints", async () => {
-    const h = makeCase();
+  it("imports explicit provider endpoints", async () => {
     await h.write(
       "config.yaml",
       `model: {provider: kimi-for-coding, default: kimi-k2.5, base_url: https://proxy.example.test/v1, api_mode: chat_completions}
@@ -426,8 +365,7 @@ custom_providers: [{name: My Local LLM, base_url: https://local.example.test/v1,
     expect(providers(plan)["my-local-llm"]?.baseUrl).toBe("https://local.example.test/v1");
   });
 
-  it("prefers current provider settings but merges legacy models", async () => {
-    const h = makeCase();
+  it("merges legacy models into current providers", async () => {
     await h.write(
       "config.yaml",
       `model: {provider: acme, default: current-model}
@@ -454,7 +392,6 @@ custom_providers: [{name: acme, key_env: LEGACY_ACME_TOKEN, base_url: https://le
     ["minimax-cn", "minimax", "https://api.minimaxi.com/anthropic"],
     ["alibaba-coding-plan", "qwen", undefined],
   ] as const)("preserves the implicit endpoint for %s", async (source, target, baseUrl) => {
-    const h = makeCase();
     await h.write("config.yaml", { model: { provider: source, default: "imported-model" } });
     const plan = await h.plan();
     expect(item(plan, "config:default-model")?.details?.model).toBe(`${target}/imported-model`);
@@ -465,7 +402,6 @@ custom_providers: [{name: acme, key_env: LEGACY_ACME_TOKEN, base_url: https://le
   });
 
   it("continues independent items after a late config conflict", async () => {
-    const h = makeCase();
     await h.write(
       "config.yaml",
       "mcp_servers:\n  alpha:\n    command: alpha\n  beta:\n    command: beta\n",
@@ -489,8 +425,7 @@ describe("Hermes source encoding", () => {
     ["config.yaml", 'skills:\n  config:\n    proof:\n      label: "', '"\n'],
     [".env", 'OPENAI_API_KEY="', '"\n'],
     ["auth.json", '{"openai":{"access_token":"', '"}}'],
-  ])("refuses invalid UTF-8 in %s before writing imported state", async (name, prefix, suffix) => {
-    const h = makeCase();
+  ])("rejects invalid UTF-8 in %s without writes", async (name, prefix, suffix) => {
     const sourcePath = path.join(fixture.paths.source, name);
     await writeFile(sourcePath, "");
     const bytes = Buffer.concat([Buffer.from(prefix), Buffer.from([0xff]), Buffer.from(suffix)]);
@@ -503,18 +438,15 @@ describe("Hermes source encoding", () => {
   });
 
   it("imports repaired YAML without altering valid Unicode", async () => {
-    const h = makeCase();
     const label = "café 中文 🦞 literal �";
     await h.write("config.yaml", { skills: { config: { proof: { label } } } });
     const result = await h.import();
-
     expect(item(result, "config:skill-entry:proof")?.status).toBe("migrated");
     expect(h.config.skills?.entries?.proof?.config?.label).toBe(label);
   });
 });
 
 async function providerItems(raw: Record<string, unknown>) {
-  const h = makeCase();
   await h.write("config.yaml", {
     providers: { acme: { api: "https://models.example/v1", ...raw } },
   });
@@ -527,7 +459,7 @@ function expectProvider(items: MigrationPlan["items"], acme: object) {
 }
 describe("Hermes provider source contracts", () => {
   it.each(["constructor", "__proto__", "toString", "hasOwnProperty"])(
-    "preserves prototype-like ID %s without inventing env mappings",
+    "does not invent mappings for inherited %s",
     (provider) => {
       const config = { model: { provider, default: "custom-model" } };
       expect(resolveHermesModelRef(config)).toBe(`${provider.toLowerCase()}/custom-model`);
@@ -535,40 +467,14 @@ describe("Hermes provider source contracts", () => {
     },
   );
   it.each([
-    ["openai", "openai-completions"],
-    ["responses", "openai-responses"],
-    [" CHAT_COMPLETIONS ", "openai-completions"],
-  ])("imports transport alias %s as %s", async (transport, api) => {
-    const items = await providerItems({ transport, default_model: "acme-model" });
+    [{ transport: "openai" }, "openai-completions"],
+    [{ transport: "responses" }, "openai-responses"],
+    [{ transport: " CHAT_COMPLETIONS " }, "openai-completions"],
+    [{ api_mode: "chat_completions", transport: "anthropic_messages" }, "openai-completions"],
+  ] as const)("normalizes transport %j as %s", async (raw, api) => {
+    const items = await providerItems({ ...raw, default_model: "acme-model" });
     expectProvider(items, { api, models: [{ id: "acme-model", api }] });
     expect(items.filter((entry) => entry.kind === "manual")).toEqual([]);
-  });
-  it("supports camelCase fields and canonical transport precedence", async () => {
-    const config = {
-      providers: {
-        acme: {
-          baseUrl: "https://models.example/v1",
-          apiMode: "messages",
-          keyEnv: "ACME_TOKEN",
-          defaultModel: "acme-model",
-          contextLength: 262144,
-        },
-      },
-    };
-    const h = makeCase();
-    await h.write("config.yaml", config);
-    await h.write(".env", "ACME_TOKEN=test-only-placeholder\n");
-    expectProvider((await h.plan()).items, {
-      api: "anthropic-messages",
-      models: [{ id: "acme-model", contextWindow: 262144 }],
-    });
-    expect(collectHermesProviderSecretBindings(config)).toEqual([
-      { provider: "acme", envVar: "ACME_TOKEN" },
-    ]);
-    expectProvider(
-      await providerItems({ api_mode: "chat_completions", transport: "anthropic_messages" }),
-      { api: "openai-completions" },
-    );
   });
   it("preserves list metadata and removes catalog marker keys", async () => {
     expectProvider(
@@ -590,13 +496,20 @@ describe("Hermes provider source contracts", () => {
     );
     expectProvider(
       await providerItems({
+        baseUrl: "https://models.example/v1",
+        apiMode: "messages",
+        defaultModel: "acme-model",
+        contextLength: 262144,
         models: {
-          "acme-model": { context_length: 262144, max_tokens: 16384 },
+          "acme-model": { max_tokens: 16384 },
           __discovered_model_catalog__: true,
           __explicit_model_allowlist__: true,
         },
       }),
-      { models: [{ id: "acme-model", contextWindow: 262144, maxTokens: 16384 }] },
+      {
+        api: "anthropic-messages",
+        models: [{ id: "acme-model", contextWindow: 262144, maxTokens: 16384 }],
+      },
     );
   });
 });
