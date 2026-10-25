@@ -29,6 +29,7 @@ const record = (event) =>
 const phase = () => readFileSync(path.join(output, "phase"), "utf8").trim();
 const children = createRequire(import.meta.url)("node:child_process");
 const nativeSpawn = children.spawn;
+const nativeFork = children.fork;
 const profileArgs = process.execArgv.filter(
   (arg) => arg === "--cpu-prof" || arg.startsWith("--cpu-prof-dir="),
 );
@@ -49,6 +50,23 @@ children.spawn = function (command, args, options) {
   if (nodeChild) {
     record({ type: "child-spawn", childPid: child.pid, phase: phase() });
   }
+  return child;
+};
+children.fork = function (modulePath, args, options) {
+  const forkOptions = (Array.isArray(args) ? options : args) ?? {};
+  const execArgv = forkOptions.execArgv ?? process.execArgv;
+  const child = nativeFork(modulePath, Array.isArray(args) ? args : [], {
+    ...forkOptions,
+    execArgv: profileArgs.length
+      ? [
+          ...execArgv,
+          ...profileArgs.filter((arg) => !execArgv.includes(arg)),
+          "--import",
+          path.resolve("scripts/lib/gateway-bench-cpu-profile.mjs"),
+        ]
+      : execArgv,
+  });
+  record({ type: "child-spawn", childPid: child.pid, phase: phase() });
   return child;
 };
 const workers = createRequire(import.meta.url)("node:worker_threads");
