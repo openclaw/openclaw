@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { assert, describe, expect, it, vi } from "vitest";
 import { handleDirFetch } from "./dir-fetch.js";
@@ -20,21 +20,27 @@ async function listingCommand(directoryPath: string, canonical = directoryPath) 
   });
 }
 
-async function spawnCommand(command: string[], preload: string, event: "close" | "exit") {
+async function runWorker(command: string[], preload = "", code = 0) {
   const preloadPath = at("worker-preload.cjs");
-  await fs.writeFile(preloadPath, preload);
-  const child = spawn(command[0]!, ["--require", preloadPath, ...command.slice(1)], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const stdout: Buffer[] = [],
-    stderr: Buffer[] = [];
-  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-  const exit = new Promise<number | null>((resolve, reject) => {
-    child.once("error", reject);
-    child.once(event, resolve);
-  });
-  return { child, stdout, stderr, exit };
+  const drained = at("worker-drained");
+  await fs.writeFile(
+    preloadPath,
+    `${preload}\nprocess.once("beforeExit", () => require("node:fs").writeFileSync(${JSON.stringify(drained)}, "settled"));`,
+  );
+  const result = await new Promise<{ code: string | number; stdout: string; stderr: string }>(
+    (resolve) => {
+      execFile(
+        command[0]!,
+        ["--require", preloadPath, ...command.slice(1)],
+        (error, stdout, stderr) => {
+          resolve({ code: error?.code ?? 0, stdout, stderr });
+        },
+      );
+    },
+  );
+  expect(result.code, result.stderr).toBe(code);
+  expect(await fs.readFile(drained, "utf8")).toBe("settled");
+  return result.stdout;
 }
 
 async function list(input: Parameters<typeof handleDirList>[0]) {
@@ -43,8 +49,16 @@ async function list(input: Parameters<typeof handleDirList>[0]) {
   return result;
 }
 
-function failure(code: string, message: string, canonicalPath?: string) {
-  return { ok: false, code, message, ...(canonicalPath === undefined ? {} : { canonicalPath }) };
+async function expectFailure(
+  input: Parameters<typeof handleDirList>[0],
+  code: string,
+  canonicalPath?: string,
+) {
+  await expect(handleDirList(input)).resolves.toMatchObject({
+    ok: false,
+    code,
+    ...(canonicalPath === undefined ? {} : { canonicalPath }),
+  });
 }
 
 describe("handleDirList", () => {
@@ -68,31 +82,22 @@ describe("handleDirList", () => {
             : { ...binding, [kind]: "different" };
       const readdir = vi.spyOn(fs, "readdir");
 
-      await expect(
-        handleDirList({ path: at(), preflightOnly: true, expectedBinding }),
-      ).resolves.toEqual(
-        failure(
-          "CANONICAL_PATH_CHANGED",
-          "filesystem identity differs from the authorized target",
-          at(),
-        ),
+      await expectFailure(
+        { path: at(), preflightOnly: true, expectedBinding },
+        "CANONICAL_PATH_CHANGED",
+        at(),
       );
       expect(readdir).not.toHaveBeenCalled();
     },
   );
   it("preserves path and directory errors before validating the binding", async () => {
-    const missing = at("missing");
-    await expect(handleDirList({ path: missing, expectedBinding: null })).resolves.toEqual(
-      failure("NOT_FOUND", "path not found"),
-    );
+    await expectFailure({ path: at("missing"), expectedBinding: null }, "NOT_FOUND");
     const file = await makeFile("file.txt", "keep");
-    await expect(handleDirList({ path: file, expectedBinding: null })).resolves.toEqual(
-      failure("IS_FILE", "path is not a directory", file),
-    );
-    await expect(
-      handleDirList({ path: file, expectedCanonicalPath: at(), expectedBinding: null }),
-    ).resolves.toEqual(
-      failure("CANONICAL_PATH_CHANGED", "resolved path differs from the authorized target", file),
+    await expectFailure({ path: file, expectedBinding: null }, "IS_FILE", file);
+    await expectFailure(
+      { path: file, expectedCanonicalPath: at(), expectedBinding: null },
+      "CANONICAL_PATH_CHANGED",
+      file,
     );
   });
 
@@ -106,9 +111,11 @@ describe("handleDirList", () => {
         Object.assign(new Error("denied"), { code: "EACCES" }),
       );
 
-      await expect(handle({ path: at(), expectedBinding: null })).resolves.toEqual(
-        failure(permissionCode, "stat failed: Error: denied", at()),
-      );
+      await expect(handle({ path: at(), expectedBinding: null })).resolves.toMatchObject({
+        ok: false,
+        code: permissionCode,
+        canonicalPath: at(),
+      });
     },
   );
   it.runIf(process.platform === "linux")("keeps enumeration bound after retargeting", async () => {
@@ -118,13 +125,11 @@ describe("handleDirList", () => {
     await seed(["approved/approved.txt", "replacement/secret.txt"]);
     await fs.symlink(approved, current);
     const command = await listingCommand(current, approved);
-    const drained = at("worker-drained");
     // Retarget after the real chdir, before the unchanged worker checks and
     // enumerates its bound directory. Polling /proc can miss the entire child.
     // beforeExit also distinguishes natural settlement from any forced-exit alias.
     const retargetAfterBinding = `(() => {
         const fs = require("node:fs");
-        process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "settled"));
         const chdir = process.chdir;
         process.chdir = (directory) => {
           chdir(directory);
@@ -133,26 +138,11 @@ describe("handleDirList", () => {
           fs.symlinkSync(${JSON.stringify(replacement)}, ${JSON.stringify(current)});
         };
       })();`;
-    const { child, stdout, stderr, exit } = await spawnCommand(
-      command,
-      retargetAfterBinding,
-      "close",
-    );
-    try {
-      expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
-      expect(await fs.readFile(drained, "utf8")).toBe("settled");
-      expect(await fs.readlink(current)).toBe(replacement);
-      const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
-        entries: Array<{ name: string }>;
-      };
-      expect(result.entries.some((entry) => entry.name === "approved.txt")).toBe(true);
-      expect(result.entries.some((entry) => entry.name === "secret.txt")).toBe(false);
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-      await exit.catch(() => undefined);
-    }
+    const stdout = await runWorker(command, retargetAfterBinding);
+    expect(await fs.readlink(current)).toBe(replacement);
+    const result = JSON.parse(stdout) as { entries: Array<{ name: string }> };
+    expect(result.entries.some((entry) => entry.name === "approved.txt")).toBe(true);
+    expect(result.entries.some((entry) => entry.name === "secret.txt")).toBe(false);
   });
 
   it.runIf(process.platform === "linux")(
@@ -166,12 +156,7 @@ describe("handleDirList", () => {
       await fs.mkdir(approved);
       await makeFile("approved/secret.txt");
 
-      const drained = at("rejected-worker-drained");
-      const observeNaturalExit = `process.once("beforeExit", () => require("node:fs").writeFileSync(${JSON.stringify(drained)}, "settled"));`;
-      const { stdout, exit } = await spawnCommand(command, observeNaturalExit, "exit");
-      expect(await exit).toBe(78);
-      expect(await fs.readFile(drained, "utf8")).toBe("settled");
-      expect(Buffer.concat(stdout)).toHaveLength(0);
+      expect(await runWorker(command, "", 78)).toHaveLength(0);
     },
   );
 

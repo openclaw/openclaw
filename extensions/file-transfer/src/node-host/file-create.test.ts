@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { FILE_CREATE_CHUNK_BYTES } from "../shared/file-create-protocol.js";
 import { handleFileCreate } from "./file-create.js";
 import * as fileWrite from "./file-write-path.js";
@@ -33,9 +33,7 @@ async function authorized(filePath: string, data: Buffer) {
   const preflight = await handleFileCreate({ ...params, preflightOnly: true }, peer.io);
   expect(preflight).toMatchObject({ ok: true, binding: { kind: "write" } });
   expect(peer.onMessage).not.toHaveBeenCalled();
-  if (!preflight.ok) {
-    throw new Error(JSON.stringify(preflight));
-  }
+  assert(preflight.ok, JSON.stringify(preflight));
   return { ...params, expectedCanonicalPath: preflight.path, expectedBinding: preflight.binding };
 }
 

@@ -6,20 +6,17 @@ import { handleFileFetch } from "./file-fetch.js";
 import { duplexPeer, observeFileOpen, useFiles } from "./node-host.test-support.js";
 
 const { at, file: makeFile, replacement } = useFiles("file-fetch-test-", vi.restoreAllMocks);
-type FetchResult = Awaited<ReturnType<typeof handleFileFetch>>;
-function expectFailureCode(
-  result: FetchResult,
+async function expectFailure(
+  params: Parameters<typeof handleFileFetch>[0],
   code: string,
-): asserts result is Extract<FetchResult, { ok: false }> {
-  expect(result).toMatchObject({ ok: false, code });
-}
-function expectSuccess(result: FetchResult): asserts result is Extract<FetchResult, { ok: true }> {
-  expect(result.ok).toBe(true);
+  fields = {},
+) {
+  await expect(handleFileFetch(params)).resolves.toMatchObject({ ok: false, code, ...fields });
 }
 async function fetchFile(name: string, content: string | Buffer) {
   const peer = duplexPeer();
   const result = await handleFileFetch({ path: await makeFile(name, content) }, peer.io);
-  expectSuccess(result);
+  assert(result.ok);
   expect(result).not.toHaveProperty("transport");
   expect(peer.send).not.toHaveBeenCalled();
   expect(peer.onMessage).not.toHaveBeenCalled();
@@ -30,14 +27,10 @@ describe("handleFileFetch", () => {
     ["relative/file.txt", /absolute/],
     ["/tmp/foo\0bar", /NUL/],
   ])("rejects invalid path %j", async (path, message) => {
-    const r = await handleFileFetch({ path });
-    expectFailureCode(r, "INVALID_PATH");
-    expect(r.message).toMatch(message);
+    await expectFailure({ path }, "INVALID_PATH", { message: expect.stringMatching(message) });
   });
   it("returns IS_DIRECTORY when the path resolves to a directory", async () => {
-    const r = await handleFileFetch({ path: at() });
-    expectFailureCode(r, "IS_DIRECTORY");
-    expect(r.canonicalPath).toBe(at());
+    await expectFailure({ path: at() }, "IS_DIRECTORY", { canonicalPath: at() });
   });
   it.each([
     ["empty.png", "", "image/png"],
@@ -62,14 +55,13 @@ describe("handleFileFetch", () => {
       const fixture = await replacement("symlink");
       const params = { path: fixture.target, followSymlinks: true };
       const preflight = await handleFileFetch({ ...params, preflightOnly: true });
-      expectSuccess(preflight);
+      assert(preflight.ok);
       await fixture.swap();
-      const result = await handleFileFetch({
-        ...params,
-        expectedCanonicalPath: preflight.path,
-      });
-      expectFailureCode(result, "CANONICAL_PATH_CHANGED");
-      expect(result.canonicalPath).toBe(fixture.canonical);
+      await expectFailure(
+        { ...params, expectedCanonicalPath: preflight.path },
+        "CANONICAL_PATH_CHANGED",
+        { canonicalPath: fixture.canonical },
+      );
     },
   );
 
@@ -77,18 +69,15 @@ describe("handleFileFetch", () => {
     const { target, swap } = await replacement("inode");
     const readFileSpy = vi.spyOn(fs, "readFile");
     const preflight = await handleFileFetch({ path: target, preflightOnly: true });
-    expectSuccess(preflight);
+    assert(preflight.ok);
     expect(preflight).toMatchObject({ base64: "", sha256: "", preflightOnly: true });
     expect(readFileSpy).not.toHaveBeenCalled();
     await swap();
 
-    const result = await handleFileFetch({
-      path: target,
-      expectedCanonicalPath: preflight.path,
-      expectedBinding: preflight.binding,
-    });
-
-    expectFailureCode(result, "CANONICAL_PATH_CHANGED");
+    await expectFailure(
+      { path: target, expectedCanonicalPath: preflight.path, expectedBinding: preflight.binding },
+      "CANONICAL_PATH_CHANGED",
+    );
     expect(await fs.readFile(target, "utf8")).toBe("not approved");
   });
 
@@ -117,29 +106,22 @@ describe("handleFileFetch", () => {
       }
     });
 
-    expectFailureCode(await handleFileFetch({ path: target, maxBytes: 8 }), "FILE_TOO_LARGE");
+    await expectFailure({ path: target, maxBytes: 8 }, "FILE_TOO_LARGE");
     expect(grown).toBe(true);
     expect(bytesRead).toBeGreaterThan(8);
     expect(bytesRead).toBeLessThanOrEqual(9);
   });
 
-  it("clamps maxBytes to the hard ceiling", async () => {
+  it.each([
+    ["hard", [Number.MAX_SAFE_INTEGER], 16 * 1024 * 1024],
+    ["default", [-1, Number.NaN, "8"], 8 * 1024 * 1024],
+  ] as const)("enforces the %s byte limit", async (_kind, budgets, limit) => {
     const target = await makeFile("oversized.bin", "");
-    await fs.truncate(target, 16 * 1024 * 1024 + 1);
-
-    const r = await handleFileFetch({ path: target, maxBytes: Number.MAX_SAFE_INTEGER });
-    expectFailureCode(r, "FILE_TOO_LARGE");
-    expect(r.message).toContain("limit 16777216");
-  });
-
-  it("uses default cap when maxBytes is not finite or non-positive", async () => {
-    const target = await makeFile("above-default.bin", "");
-    await fs.truncate(target, 8 * 1024 * 1024 + 1);
-
-    for (const maxBytes of [-1, Number.NaN, "8"] as unknown[]) {
-      const r = await handleFileFetch({ path: target, maxBytes });
-      expectFailureCode(r, "FILE_TOO_LARGE");
-      expect(r.message).toContain("limit 8388608");
+    await fs.truncate(target, limit + 1);
+    for (const maxBytes of budgets) {
+      await expectFailure({ path: target, maxBytes }, "FILE_TOO_LARGE", {
+        message: expect.stringContaining(`limit ${limit}`),
+      });
     }
   });
   it("refuses to follow a symlink by default (SYMLINK_REDIRECT)", async () => {
@@ -147,12 +129,9 @@ describe("handleFileFetch", () => {
     const link = at("link.txt");
     await fs.symlink(real, link);
 
-    const r = await handleFileFetch({ path: link });
-    expectFailureCode(r, "SYMLINK_REDIRECT");
-    expect(r.canonicalPath).toBe(real);
+    await expectFailure({ path: link }, "SYMLINK_REDIRECT", { canonicalPath: real });
   });
 });
-
 async function binaryFixture(bytes = Buffer.from("output")) {
   const target = await makeFile("output.bin", bytes);
   const params = { path: target, transport: "binary", maxBytes: bytes.length };
@@ -220,6 +199,5 @@ it.each([
 });
 
 it.each([undefined, -1, Number.MAX_SAFE_INTEGER + 1])("invalid budget: %s", async (maxBytes) => {
-  const result = await handleFileFetch({ path: "/unused", transport: "binary", maxBytes });
-  expect(result).toMatchObject({ ok: false, code: "INVALID_PARAMS" });
+  await expectFailure({ path: "/unused", transport: "binary", maxBytes }, "INVALID_PARAMS");
 });
