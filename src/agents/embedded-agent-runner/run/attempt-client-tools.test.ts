@@ -378,16 +378,10 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(await run("gateway")).toEqual({ generation: "gated" });
   });
 
-  it.each(["code-mode", "tool-search"] as const)("hides client tools behind %s catalog", (mode) => {
-    const codeMode = mode === "code-mode";
-    const config = codeMode ? CODE_MODE_CONFIG : TOOL_SEARCH_CONFIG;
-    const catalogRef = seedCatalog(mode, config);
-    // Disable the other config source to prove each mode reads its owner.
+  it("hides client tools behind the Tool Search runtime catalog", () => {
     const result = prepare({
-      codeModeControlsEnabledForRun: codeMode,
-      attemptConfig: codeMode ? config : CATALOGS_DISABLED_CONFIG,
-      toolSearchRuntimeConfig: codeMode ? CATALOGS_DISABLED_CONFIG : config,
-      catalogRef,
+      toolSearchRuntimeConfig: TOOL_SEARCH_CONFIG,
+      catalogRef: seedCatalog("tool-search", TOOL_SEARCH_CONFIG),
     });
     expect(result.clientToolDefs).toEqual([]);
     expect(result.allCustomTools).toEqual([]);
@@ -445,6 +439,7 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       uncompactedEffectiveTools: [...skillTools, trustedPlugin, shadowedPlugin],
       clientTools: [clientTool("llm_task"), clientTool("hidden_owner")],
     });
+    expect(prepared.clientToolDefs).toEqual([]);
     const projection = createCodeModeCatalogProjection(
       (catalogRef.current?.entries ?? []).map((entry) => compactToolSearchCatalogEntry(entry)),
     );
