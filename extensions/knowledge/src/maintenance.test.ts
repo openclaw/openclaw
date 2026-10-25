@@ -46,39 +46,33 @@ function fakeScheduler(start: any) {
   return scheduler;
 }
 
-async function fixture() {
+// Stores: main's own, a named team store for ops, and an unprovisioned idle agent.
+async function fixture(maintenance: object = {}, writesEnabled = true) {
   const base = tempDirs.make("knowledge-maintenance-");
-
-  const policy = {
-    writesEnabled: true,
-    operatorRead: true,
-    maintenance: { schedule: "0 * * * *", timezone: "UTC" },
-  };
   const host = hostApi(base, {
     agents: ["main", "ops", "idle"],
     stores: { team: { label: "Team", agents: ["ops"] } },
-    policy,
+    policy: {
+      writesEnabled,
+      operatorRead: true,
+      maintenance: { schedule: "0 * * * *", timezone: "UTC", ...maintenance },
+    },
   });
   const own = await createVault(base, { name: "own" }),
     team = await createVault(base, { name: "team" });
   adopt(host.stateRoot, "agent:main", own.config);
   adopt(host.stateRoot, "named:team", team.config, "Team");
-  const lifecycles: any = [],
-    logs: any = [];
+  const lifecycles: any = [];
   host.api.registerService = (s) => lifecycles.push(s);
-  host.api.logger = {
-    info: (m: any) => logs.push(m),
-    warn: (m: any) => logs.push(`WARN ${m}`),
-    error() {},
-  };
-  const boot = async (scheduler: any) => {
+  host.api.logger = { info() {}, warn() {}, error() {} };
+  const boot = async (scheduler: any, options = {}) => {
     lifecycles.length = 0;
     const service = createKnowledgeService(host.api);
-    await lifecycles[0].start({ scheduler });
+    await lifecycles[0].start({ scheduler, ...options });
     afterTest(() => lifecycles[0]?.stop());
     return service;
   };
-  return { host, boot, logs, lifecycles };
+  return { host, boot, lifecycles };
 }
 
 const remember = (service: any, context: any, text: any) =>
@@ -205,38 +199,19 @@ it("disabled maintenance, invalid schedules and write-disabled installs schedule
     [{ schedule: "not a cron" }, true, /five fields/],
     [{}, false, /^$/],
   ] as const) {
-    const base = tempDirs.make("knowledge-maintenance-off-");
-
-    const host = hostApi(base, { policy: { writesEnabled, operatorRead: true, maintenance } }),
-      lifecycles: any = [];
-    host.api.registerService = (s) => lifecycles.push(s);
-    host.api.logger = { info() {}, warn() {}, error() {} };
-    const service = createKnowledgeService(host.api),
-      scheduler = fakeScheduler(Date.now());
-    await lifecycles[0].start({ scheduler });
-    afterTest(() => lifecycles[0].stop());
+    const f = await fixture(maintenance, writesEnabled),
+      scheduler = fakeScheduler(Date.now()),
+      service = await f.boot(scheduler);
     expect(scheduler.jobs.size).toBe(0);
-    const status = await service.maintenance_status({}, operatorContext(host.api));
+    const status = await service.maintenance_status({}, operatorContext(f.host.api));
     expect(status.nextRunAt).toBe(null);
     expect(status.configError ?? "").toMatch(expected);
   }
 });
 
 it("a pass that leaves private claims unlinked queues the review automation once, and only then", async () => {
-  const base = tempDirs.make("knowledge-maintenance-review-");
-  const host = hostApi(base, {
-    policy: {
-      writesEnabled: true,
-      operatorRead: true,
-      maintenance: { schedule: "0 * * * *", timezone: "UTC", reviewJobId: "review-job" },
-    },
-  });
-  const own = await createVault(base, { name: "own" });
-  adopt(host.stateRoot, "agent:main", own.config);
-  const lifecycles: any = [];
-  host.api.registerService = (s) => lifecycles.push(s);
-  host.api.logger = { info() {}, warn() {}, error() {} };
-  const service = createKnowledgeService(host.api),
+  const f = await fixture({ reviewJobId: "review-job" }),
+    host = f.host,
     scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
   const calls: any[] = [];
   let answer: any = { ok: true, enqueued: true, runId: "run-1" },
@@ -246,8 +221,7 @@ it("a pass that leaves private claims unlinked queues the review automation once
         return answer;
       },
     };
-  await lifecycles[0].start({ scheduler, getCron: () => cron });
-  afterTest(() => lifecycles[0].stop());
+  const service = await f.boot(scheduler, { getCron: () => cron });
   const main = toolContext(host.api, "main");
   const review = async () => {
     await scheduler.fire("knowledge-maintenance");

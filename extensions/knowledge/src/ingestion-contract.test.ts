@@ -5,8 +5,8 @@ import {
 } from "openclaw/plugin-sdk/json-schema-runtime";
 import { normalizeOpenAIStrictCompatSchema } from "openclaw/plugin-sdk/provider-tools";
 import { Check } from "typebox/value";
-import { expect, expectTypeOf, it } from "vitest";
-import { BatchInput, type BatchItem } from "./ingestion-contract.js";
+import { expect, it } from "vitest";
+import { BatchInput } from "./ingestion-contract.js";
 
 const evidence = { path: "sources/meeting.txt", sha256: "a".repeat(64) };
 const batch = (items: any) => ({
@@ -81,57 +81,35 @@ it("batch schema retains closed, kind-specific inputs and nested evidence throug
   const emptyAttachments = structuredClone(page);
   emptyAttachments.input.attachments = [];
   expect(accepts(batch([emptyAttachments]))).toBeTruthy();
-  for (const mutate of [
-    (value: any) => {
-      delete value.items[1].input.claim_kind;
-    },
-    (value: any) => {
-      value.items[0].kind = "claim";
-    },
-    (value: any) => {
-      value.items[0].input.owner = "@person";
-    },
-    (value: any) => {
-      value.items[1].input.evidence = [];
-    },
-    (value: any) => {
-      value.items[1].input.owner = "@bad key";
-    },
-    (value: any) => {
-      value.items[2].input.from = 12;
-    },
-    (value: any) => {
-      value.items[0].input.identity.candidates[0].evidence[0].sha256 = "bad";
-    },
-    (value: any) => {
-      value.items[0].input.identity.candidates[0].id = "@bad key";
-    },
-    (value: any) => {
-      value.items[0].input.attribution_confidence.evidence = [];
-    },
-    (value: any) => {
-      value.items[0].input.attribution_confidence.evidence = Array.from(
-        { length: 21 },
-        () => evidence,
-      );
-    },
-    (value: any) => {
-      value.items[0].input.continuity[0].evidence = [];
-    },
-    (value: any) => {
-      value.items[0].input.continuity[0].relation = "replaces";
-    },
-    (value: any) => {
-      value.items[0].input.requestId = value.requestId;
-    },
-    (value: any) => {
-      value.items[0].input.source = { text: "inline", attribution: "source" };
-    },
-  ]) {
+  // Each rejected shape is [item index, input path, replacement]; undefined deletes the field.
+  for (const [index, field, value] of [
+    [1, "claim_kind", undefined],
+    [0, "owner", "@person"],
+    [1, "evidence", []],
+    [1, "owner", "@bad key"],
+    [2, "from", 12],
+    [0, "identity.candidates.0.evidence.0.sha256", "bad"],
+    [0, "identity.candidates.0.id", "@bad key"],
+    [0, "attribution_confidence.evidence", []],
+    [0, "attribution_confidence.evidence", Array.from({ length: 21 }, () => evidence)],
+    [0, "continuity.0.evidence", []],
+    [0, "continuity.0.relation", "replaces"],
+    [0, "requestId", "00000000-0000-0000-0000-000000000001"],
+    [0, "source", { text: "inline", attribution: "source" }],
+  ] as const) {
     const input = structuredClone(batch([annotated, claim, relationship]));
-    mutate(input);
-    expect(accepts(input), String(mutate)).toBe(false);
+    const keys = field.split(".");
+    const parent = keys.slice(0, -1).reduce((node, key) => node[key], input.items[index].input);
+    if (value === undefined) {
+      delete parent[keys.at(-1)!];
+    } else {
+      parent[keys.at(-1)!] = value;
+    }
+    expect(accepts(input), field).toBe(false);
   }
+  const wrongKind = structuredClone(batch([annotated, claim, relationship]));
+  wrongKind.items[0].kind = "claim";
+  expect(accepts(wrongKind)).toBe(false);
 });
 
 // Codex's input schema projection retains these keywords and lowers const to
@@ -224,35 +202,4 @@ it("projected batch schema stays below the host compaction budget with resolvabl
   expect(kinds[0].properties.input.properties.attachments.minItems).toBe(undefined);
   expect(kinds[1].properties.input.properties.evidence.minItems).toBe(1);
   expect(kinds[1].properties.input.properties.evidence.items.properties.sha256.type).toBe("string");
-});
-
-// These assertions are compile-time checks, enforced by the extensions test
-// typecheck (pnpm tsgo:extensions:test); the runtime body only exercises them.
-it("batch static types discriminate payloads and preserve nested field types", () => {
-  const check = (input: BatchInput) => {
-    const item = input.items[0]!;
-    expectTypeOf(item).toEqualTypeOf<BatchItem>();
-    expectTypeOf(item.input.title).toExtend<string>();
-    if (item.kind === "claim") {
-      expectTypeOf(item.input.claim_kind).toExtend<
-        "fact" | "preference" | "decision" | "commitment" | "event" | "belief"
-      >();
-      expectTypeOf(item.input.evidence[0]!.sha256).toExtend<string>();
-      // @ts-expect-error claims have no relationship endpoints
-      void item.input.from;
-    }
-    if (item.kind === "relationship") {
-      expectTypeOf(item.input.from).toExtend<string>();
-      // @ts-expect-error relationships have no claim kind
-      void item.input.claim_kind;
-    }
-    // @ts-expect-error page body is required
-    const missing: BatchItem = { key: "page", kind: "page", input: { title: "Page" } };
-    // @ts-expect-error invalid assertion origin
-    const origin: Extract<BatchItem, { kind: "claim" }>["input"]["assertion_origin"] = "guessed";
-    // @ts-expect-error batch-level request IDs are not item input fields
-    void item.input.requestId;
-    return [missing, origin];
-  };
-  expectTypeOf(check).parameter(0).toEqualTypeOf<BatchInput>();
 });

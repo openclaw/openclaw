@@ -49,13 +49,7 @@ it("shared search/get/health roundtrip uses native publication, provenance and r
 it("conversation audiences never acquire private scope", async () => {
   const f = await memoryFixture(tempDirs);
   await f.save("Private sentinel");
-  const conversation = {
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:group",
-    sessionId: f.sessionId,
-  };
-  f.setAudience(conversation);
+  f.setAudience(f.conversation);
   await f.save("Conversation sentinel");
   const { provider } = await f.open();
   const group = await provider.search({ query: "sentinel" });
@@ -66,7 +60,7 @@ it("conversation audiences never acquire private scope", async () => {
   await expect(provider.search({ query: "sentinel" })).rejects.toThrow(/authority/);
   const nonowner = await f.open({
     ...f.context,
-    authority: { ...f.context.authority, audience: conversation },
+    authority: { ...f.context.authority, audience: f.conversation },
   });
   expect((await nonowner.provider.search({ query: "Private" })).hits.length).toBe(0);
 });
@@ -102,12 +96,10 @@ it("host status receives health only and every other host purpose is denied", as
   await f.save("Private status sentinel");
   const host = { ...f.context, authority: { kind: "host", operation: "status" } };
   const { provider } = await f.open(host, "main", "status");
-  const health = await provider.health();
-  expect(Object.keys(health).toSorted(defaultOrder)).toStrictEqual(["message", "status"]);
-  expect(health.status).toBe("ready");
-  expect(JSON.stringify(health)).not.toMatch(
-    /records|issues|scope|sentinel|private|knowledge-memory-/i,
-  );
+  expect(await provider.health()).toStrictEqual({
+    status: "ready",
+    message: "Knowledge vault readiness check.",
+  });
   await expect(provider.search({ query: "sentinel" })).rejects.toThrow(/authority/);
   await expect(
     provider.get({ reference: { providerId: "knowledge", id: "recordid" } }),
@@ -120,50 +112,36 @@ it("host status receives health only and every other host purpose is denied", as
   }
 });
 
-it("host readiness redacts all states and storage errors while preserving lease fences", async () => {
+// Storage runs in a worker, so these drive the provider over a stub storage client
+// (only the Stores members the provider uses): its own fencing must hold.
+async function stubProvider(
+  call: (op: string) => unknown,
+  authority: any,
+  purpose?: "default" | "status" | "cli",
+) {
   const { createKnowledgeMemoryRuntime } = await import("./memory-provider.js");
-  let facts = { ontology: true, issues: 0, records: 42 },
-    failure: any = undefined,
-    active = true;
-  const client = {
-    async call(op: any) {
-      expect(op).toBe("memoryHealth");
-      if (failure) {
-        throw failure;
-      }
-      return facts;
-    },
-  };
+  const caller = { active: true };
   const runtime = {
     vaultId: randomUUID(),
-    client,
+    client: { call: async (op: string) => call(op) },
     enqueue: (check: any, operation: any) => {
       check();
       return operation();
     },
   };
-  // Mirrors the Stores members the provider uses; the stub has no registry or runtimes.
   const stores = {
     policy: { operatorRead: false },
     incarnation: 0,
     assertLive(_epoch: number) {},
     async open(principal: any, _options: { provision: boolean }): Promise<unknown> {
-      return {
-        kind: "ready",
-        runtime,
-        access: {
-          ...principal(),
-          assertCurrent: () => {
-            principal();
-          },
-        },
-      };
+      const access = { ...principal(), assertCurrent: () => principal() };
+      return { kind: "ready", runtime, access };
     },
   };
   const context: any = {
-    authority: { kind: "host", operation: "status" },
+    authority,
     assertCurrent() {
-      if (!active) {
+      if (!caller.active) {
         throw new Error("caller revoked");
       }
     },
@@ -171,28 +149,75 @@ it("host readiness redacts all states and storage errors while preserving lease 
   const { provider } = await createKnowledgeMemoryRuntime(stores as Stores).open({
     cfg: {},
     agentId: "main",
-    purpose: "status",
     context,
+    ...(purpose ? { purpose } : {}),
   });
+  return { provider: provider!, caller };
+}
+
+it("host readiness redacts all states and storage errors while preserving lease fences", async () => {
+  let facts = { ontology: true, issues: 0, records: 42 },
+    failure: any = undefined;
+  const { provider, caller } = await stubProvider(
+    (op) => {
+      expect(op).toBe("memoryHealth");
+      if (failure) {
+        throw failure;
+      }
+      return facts;
+    },
+    { kind: "host", operation: "status" },
+    "status",
+  );
   for (const [ontology, issues, status] of [
     [true, 0, "ready"],
     [true, 1, "degraded"],
     [false, 0, "unavailable"],
   ] as const) {
     facts = { ontology, issues, records: 42 };
-    expect(await provider!.health()).toStrictEqual({
+    expect(await provider.health()).toStrictEqual({
       status,
       message: "Knowledge vault readiness check.",
     });
   }
   failure = new Error("Failed private/secret-record.md in vault-id partition-id");
-  expect(await provider!.health()).toStrictEqual({
+  expect(await provider.health()).toStrictEqual({
     status: "unavailable",
     message: "Knowledge vault readiness unavailable.",
   });
-  active = false;
-  await expect(provider!.health()).rejects.toThrow(/caller revoked/);
-  await provider!.close();
+  caller.active = false;
+  await expect(provider.health()).rejects.toThrow(/caller revoked/);
+  await provider.close();
+});
+
+it("index failure is not empty success and late backend results are fenced", async () => {
+  let reply: any;
+  const { provider, caller } = await stubProvider(
+    (op) => {
+      expect(op).toBe("search");
+      return reply();
+    },
+    {
+      kind: "session",
+      sessionKey: "agent:main:test",
+      sessionId: randomUUID(),
+      sandboxed: false,
+      audience: { kind: "owner-private", agentId: "main" },
+    },
+  );
+  reply = () => ({ index: { state: "unavailable", message: "Index unavailable; retry" } });
+  await expect(provider.search({ query: "Orchid" })).rejects.toThrow(/Index unavailable/);
+  reply = () => {
+    caller.active = false;
+    return {
+      index: { state: "ready", snapshot: "s", message: "" },
+      hits: [],
+      total: 0,
+      nextOffset: null,
+      coverage: { complete: true, message: "" },
+    };
+  };
+  await expect(provider.search({ query: "Orchid" })).rejects.toThrow(/revoked/);
 });
 
 it("queued result release revalidates authority, cancellation and service incarnation", async () => {
@@ -232,11 +257,8 @@ it("cursor preserves query/scope/snapshot and revision fences reject stale reads
   );
   await f.service.save_page(
     {
-      requestId: randomUUID(),
+      ...f.fence(saved),
       expectedVaultId: f.vaultId,
-      id: saved.id,
-      expectedRevision: saved.revision,
-      expectedHash: saved.hash,
       type: "note",
       title: "Orchid one",
       body: "Changed",
@@ -300,7 +322,6 @@ it("unsupported corpus/project filters are explicit, mixed corpus is partial", a
   const mixed = await provider.search({ query: "Orchid", sources: ["sessions", "memory"] });
   expect(mixed.coverage).toBe("partial");
   expect(mixed.warning).toMatch(/not searched/);
-  expect(typeof provider.candidates).toBe("function");
   expect(provider.refresh).toBe(undefined);
   await expect(provider.candidates({ kind: "project", activeProjectKeys: ["x"] })).rejects.toThrow(
     /project-key/,
@@ -313,12 +334,9 @@ it("unsupported corpus/project filters are explicit, mixed corpus is partial", a
 it("knowledge_recall sets and clears service approval with exact replay", async () => {
   const f = await memoryFixture(tempDirs),
     saved = await f.save("Standing preference", "BODY MUST NEVER BE AUTOMATICALLY INJECTED");
-  const before = (await f.service.record({ id: saved.id }, f.tool)).record;
+  const before = await f.current(saved.id);
   const input = {
-    requestId: randomUUID(),
-    id: saved.id,
-    expectedRevision: before!.revision,
-    expectedHash: before!.hash,
+    ...f.fence(before),
     set: {
       summary: "Prefer concise proof reports.",
       triggers: ["proof report"],
@@ -328,45 +346,27 @@ it("knowledge_recall sets and clears service approval with exact replay", async 
   };
   const receipt = await f.service.recall(input, f.tool);
   expect(receipt.state).toBe("published");
-  expect(receipt.revision).toBe(before!.revision + 1);
+  expect(receipt.revision).toBe(before.revision + 1);
   expect(await f.service.recall(input, f.tool)).toStrictEqual(receipt);
-  let current = (await f.service.record({ id: saved.id, includeMetadata: true }, f.tool)).record;
+  let current = await f.current(saved.id, { includeMetadata: true });
   // Envelope keeps authored recall blocks unvalidated; this one is the service-issued approval.
-  const recall = current!.metadata!.recall as Recall;
+  const recall = current.metadata!.recall as Recall;
   expect(recall.approved_by).toBe("owner-private");
   expect(Number.isFinite(Date.parse(recall.approved_at))).toBeTruthy();
   expect(recall.summary).toBe(input.set.summary);
-  const clear: RecallInput = {
-    requestId: randomUUID(),
-    id: saved.id,
-    expectedRevision: current!.revision,
-    expectedHash: current!.hash,
-    clear: true,
-  };
+  const clear: RecallInput = { ...f.fence(current), clear: true };
   const cleared = await f.service.recall(clear, f.tool);
-  expect(cleared.revision).toBe(current!.revision + 1);
+  expect(cleared.revision).toBe(current.revision + 1);
   expect(await f.service.recall(clear, f.tool)).toStrictEqual(cleared);
-  current = (await f.service.record({ id: saved.id, includeMetadata: true }, f.tool)).record;
-  expect(current!.metadata!.recall).toBe(undefined);
+  current = await f.current(saved.id, { includeMetadata: true });
+  expect(current.metadata!.recall).toBe(undefined);
 });
 
 it("knowledge_recall rejects non-owner authority, unavailable writes and invalid metadata", async () => {
   const f = await memoryFixture(tempDirs),
     saved = await f.save("Approval target");
-  const current = (await f.service.record({ id: saved.id }, f.tool)).record;
-  const base = {
-    requestId: randomUUID(),
-    id: saved.id,
-    expectedRevision: current!.revision,
-    expectedHash: current!.hash,
-  };
-  const conversation = {
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:group",
-    sessionId: f.sessionId,
-  };
-  f.setAudience(conversation);
+  const base = f.fence(await f.current(saved.id));
+  f.setAudience(f.conversation);
   await expect(
     f.service.recall({ ...base, set: { summary: "Private context" } }, f.tool),
   ).rejects.toThrow(/conversation audiences/);
@@ -408,13 +408,7 @@ it("knowledge_recall rejects non-owner authority, unavailable writes and invalid
   const readOnly = await memoryFixture(tempDirs, { writesEnabled: false });
   await expect(
     readOnly.service.recall(
-      {
-        requestId: randomUUID(),
-        id: randomUUID(),
-        expectedRevision: 1,
-        expectedHash: "0".repeat(64),
-        clear: true,
-      },
+      { ...readOnly.fence({ id: randomUUID(), revision: 1, hash: "0".repeat(64) }), clear: true },
       readOnly.tool,
     ),
   ).rejects.toThrow(/writes are disabled/);
@@ -464,12 +458,7 @@ it("automatic candidates select by kind, inject summary only and order determini
     await expect(provider.candidates({ kind: "trigger", limit })).rejects.toThrow();
   }
 
-  f.setAudience({
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:group",
-    sessionId: f.sessionId,
-  });
+  f.setAudience(f.conversation);
   const conversationProvider = (await f.open()).provider;
   expect(await conversationProvider.candidates({ kind: "trigger" })).toStrictEqual({
     hits: [],
@@ -482,45 +471,28 @@ it("automatic candidates exclude withdrawn, superseded and invalid recall blocks
   const f = await memoryFixture(tempDirs);
   const withdrawn = await f.save("Withdrawn candidate");
   await f.recall(withdrawn, { summary: "withdrawn", triggers: ["withdrawn"] });
-  let current = (await f.service.record({ id: withdrawn.id }, f.tool)).record;
   await f.service.withdraw(
-    {
-      requestId: randomUUID(),
-      id: current!.id,
-      expectedRevision: current!.revision,
-      expectedHash: current!.hash,
-      reason: "No longer current",
-    },
+    { ...f.fence(await f.current(withdrawn.id)), reason: "No longer current" },
     f.tool,
   );
-  current = (await f.service.record({ id: withdrawn.id }, f.tool)).record;
-  await expect(
-    f.service.recall(
-      {
-        requestId: randomUUID(),
-        id: current!.id,
-        expectedRevision: current!.revision,
-        expectedHash: current!.hash,
-        set: { summary: "cannot restore" },
-      },
-      f.tool,
-    ),
-  ).rejects.toThrow(/unavailable, inactive, invalid, or changed/);
+  await expect(f.recall(withdrawn, { summary: "cannot restore" })).rejects.toThrow(
+    /unavailable, inactive, invalid, or changed/,
+  );
 
   const superseded = await f.save("Superseded candidate");
   await f.recall(superseded, { summary: "superseded", triggers: ["superseded"] });
-  current = (await f.service.record({ id: superseded.id, view: "raw" }, f.tool)).record;
+  let current = await f.current(superseded.id, { view: "raw" });
   await writeFile(
-    path.join(f.root, "private", current!.path),
-    current!.raw!.replace("lifecycle: active", "lifecycle: superseded"),
+    path.join(f.root, "private", current.path),
+    current.raw!.replace("lifecycle: active", "lifecycle: superseded"),
   );
 
   const invalid = await f.save("Invalid recall candidate");
   await f.recall(invalid, { summary: "invalid", triggers: ["invalid"] });
-  current = (await f.service.record({ id: invalid.id, view: "raw" }, f.tool)).record;
+  current = await f.current(invalid.id, { view: "raw" });
   await writeFile(
-    path.join(f.root, "private", current!.path),
-    current!.raw!.replace("approved_by: owner-private", "approved_by: forged"),
+    path.join(f.root, "private", current.path),
+    current.raw!.replace("approved_by: owner-private", "approved_by: forged"),
   );
 
   const { provider } = await f.open();
@@ -536,30 +508,17 @@ it("withdrawn records stay unavailable after external restoration; fixtures are 
   const saved = await f.save("Orchid note");
   const { provider } = await f.open();
   const hit = (await provider.search({ query: "Orchid" })).hits[0];
-  const detail = await f.service.record({ id: saved.id, view: "raw" }, f.tool);
-  await f.service.withdraw(
-    {
-      requestId: randomUUID(),
-      expectedVaultId: f.vaultId,
-      id: saved.id,
-      expectedRevision: saved.revision,
-      expectedHash: saved.hash,
-      reason: "Synthetic withdrawal",
-    },
-    f.tool,
-  );
+  const detail = await f.current(saved.id, { view: "raw" });
+  await f.service.withdraw({ ...f.fence(saved), reason: "Synthetic withdrawal" }, f.tool);
   expect((await provider.search({ query: "Orchid" })).hits.length).toBe(0);
   expect(await provider.get({ reference: hit.reference })).toStrictEqual({ status: "not_found" });
-  await writeFile(path.join(f.root, "private", detail.record!.path), detail.record!.raw!);
+  await writeFile(path.join(f.root, "private", detail.path), detail.raw!);
   expect(await provider.get({ reference: hit.reference })).toStrictEqual({ status: "not_found" });
   const fixtureRecord = await f.save("Synthetic fixture");
-  const fixtureDetail = await f.service.record({ id: fixtureRecord.id, view: "raw" }, f.tool);
+  const fixtureDetail = await f.current(fixtureRecord.id, { view: "raw" });
   await writeFile(
-    path.join(f.root, "private", fixtureDetail.record!.path),
-    fixtureDetail.record!.raw!.replace(
-      "lifecycle: active",
-      "record_class: fixture\nlifecycle: active",
-    ),
+    path.join(f.root, "private", fixtureDetail.path),
+    fixtureDetail.raw!.replace("lifecycle: active", "record_class: fixture\nlifecycle: active"),
   );
   expect((await provider.search({ query: "Synthetic" })).hits.length).toBe(0);
   expect(

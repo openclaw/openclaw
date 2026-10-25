@@ -7,7 +7,7 @@ import { contract } from "./contract.js";
 import { readText } from "./files.js";
 import { inspectRecord } from "./inspection.js";
 import { RECORD_MAX_BYTES } from "./limits.js";
-import { PublicationFiles } from "./publication-files.js";
+import { PublicationFiles, type PublicationRole } from "./publication-files.js";
 import { withinBudget } from "./response-budget.js";
 import { useTestTempDirs } from "./test-support.js";
 import { textWindow } from "./text-window.js";
@@ -121,17 +121,31 @@ it("large full-record keyword matches keep ranking and label non-localized previ
   ).toBe(0);
   const mixed = await f.storage.search({ query: "Capacity needle" }, f.access);
   expect(mixed.hits[0]!.matches).toStrictEqual(["title", "body"]);
+  // A NUL before repeated matches cannot bypass the bounded preview.
+  await writeFile(f.file, prefix + "intro\0" + "needle ".repeat(12000));
+  const nul = await f.storage.search({ query: "needle" }, f.access);
+  expect(nul.index.state).toBe("ready");
+  expect(nul.hits.length).toBe(1);
+  expect(nul.hits[0]!.snippet.matchLocated).toBe(false);
+  expect(nul.hits[0]!.matches).toStrictEqual(["body"]);
 });
 
 it("publication keeps auxiliary and descriptor limits through staging and retained copies", async () => {
   const f = await capacityFixture(tempDirs, 1000),
     files = new PublicationFiles(f.root);
-  const cases: [string, number][] = [
-    ["private/ontology.yaml", 65536],
-    ["private/artifacts/inline.md", 65536],
-    ["private/artifacts/sources/" + "a".repeat(64) + ".json", 8192],
+  // Each role's limit, plus another canonical destination of the same role.
+  const sources = "private/artifacts/sources/";
+  const cases: [string, number, PublicationRole, string][] = [
+    ["private/ontology.yaml", 65536, "auxiliary", "private/other.yaml"],
+    ["private/artifacts/inline.md", 65536, "auxiliary", "private/artifacts/other.md"],
+    [
+      `${sources}${"a".repeat(64)}.json`,
+      8192,
+      "source-descriptor",
+      `${sources}${"b".repeat(64)}.json`,
+    ],
   ];
-  for (const [target, limit] of cases) {
+  for (const [target, limit, role, freshPath] of cases) {
     const before = "x".repeat(limit),
       after = "y".repeat(limit);
     files.exclusive(target, before);
@@ -145,33 +159,21 @@ it("publication keeps auxiliary and descriptor limits through staging and retain
     };
     files.publish(change, () => {});
     expect(files.read(target)).toBe(after);
-    expect(() =>
-      files.exclusive(
-        target + ".other",
-        before + "x",
-        target.includes("/sources/") ? "source-descriptor" : "auxiliary",
-      ),
-    ).toThrow(/byte limit/);
+    expect(() => files.exclusive(target + ".other", before + "x", role)).toThrow(/byte limit/);
     await writeFile(pathFor(f, target), after + "x");
     expect(() => files.read(target)).toThrow(/Unsafe/);
     expect(() => files.publish(change, () => {})).toThrow(/Unsafe/);
     await writeFile(pathFor(f, target), after);
     await writeFile(pathFor(f, change.backup), before + "x");
     expect(() => files.publish(change, () => {})).toThrow(/Unsafe/);
+    // A staged oversize payload for a new destination is refused too.
     const fresh = {
       ...change,
-      path: target + ".fresh",
+      path: freshPath,
       before: null,
       stage: target + ".fresh-stage",
       backup: target + ".fresh-before",
     };
-    // Use another canonical destination of the same role and a staged oversize payload.
-    fresh.path = target.includes("/sources/")
-      ? target.replace("aaaa", "bbbb")
-      : target.replace("ontology.yaml", "other.yaml");
-    if (fresh.path === target) {
-      fresh.path = target.replace("inline.md", "other.md");
-    }
     await writeFile(pathFor(f, fresh.stage), after + "x");
     expect(() => files.publish(fresh, () => {})).toThrow(/Unsafe/);
     await writeFile(pathFor(f, fresh.stage), after);
@@ -186,15 +188,3 @@ it("publication keeps auxiliary and descriptor limits through staging and retain
 function pathFor(f: any, relative: any) {
   return f.root + "/" + relative;
 }
-
-it("NUL before repeated matches cannot bypass the bounded search preview", async () => {
-  const f = await capacityFixture(tempDirs, 1000),
-    current = await f.record();
-  const prefix = current!.raw.slice(0, -current!.body.length);
-  await writeFile(f.file, prefix + "intro\0" + "needle ".repeat(12000));
-  const result = await f.storage.search({ query: "needle" }, f.access);
-  expect(result.index.state).toBe("ready");
-  expect(result.hits.length).toBe(1);
-  expect(result.hits[0]!.snippet.matchLocated).toBe(false);
-  expect(result.hits[0]!.matches).toStrictEqual(["body"]);
-});

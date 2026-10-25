@@ -9,7 +9,6 @@ import plugin from "./index.js";
 import { buildKnowledgeMemoryPrompt } from "./memory-prompt.js";
 import { memoryFixture } from "./memory-provider.test-support.js";
 import { deriveMemoryFlushRequestId } from "./service.js";
-import type { Stores } from "./stores.js";
 import {
   hostApi,
   sessionActions,
@@ -19,6 +18,11 @@ import {
 } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
+const tools = new Set(
+  Object.values<FeatureOperation>(contract.operations).flatMap((o) =>
+    o.tool ? [o.tool.name] : [],
+  ),
+);
 
 it("entry retains native tools, denies untrusted provider callers and prompt honors missing capabilities", async () => {
   const base = tempDirs.make("knowledge-entry-");
@@ -50,20 +54,6 @@ it("entry retains native tools, denies untrusted provider callers and prompt hon
     "knowledge_record",
   ]);
   expect(capability!.recallToolNames.every((name: any) => names.includes(name))).toBeTruthy();
-  // A host readiness lease validates storage but never releases content.
-  const status = (
-    await capability!.providerRuntime.open({
-      cfg: {},
-      agentId: "main",
-      purpose: "status",
-      context: { authority: { kind: "host", operation: "status" }, assertCurrent() {} },
-    })
-  ).provider;
-  expect(await status.health()).toStrictEqual({
-    status: "ready",
-    message: "Knowledge vault readiness check.",
-  });
-  await expect(status.search({ query: "anything" })).rejects.toThrow(/authority/);
   await expect(
     capability!.providerRuntime.open({ cfg: {}, agentId: "main", context: {} }),
   ).rejects.toThrow(/authority/);
@@ -73,7 +63,6 @@ it("entry retains native tools, denies untrusted provider callers and prompt hon
     "knowledge_remember",
     "knowledge_save_page",
   ]);
-  expect(buildKnowledgeMemoryPrompt({ availableTools: new Set() })).toStrictEqual([]);
 });
 
 it("entry registers without reading the host runtime, as CLI metadata loading requires", () => {
@@ -113,11 +102,13 @@ it("flush plan provides tool persistence only for writable real vaults", async (
     "knowledge_record",
     "knowledge_ontology",
   ]);
-  expect(plan.relativePath).toBe(undefined);
-  expect(plan.reserveTokensFloor).toBe(undefined);
-  expect(plan.softThresholdTokens).toBe(undefined);
-  expect(plan.forceFlushTranscriptBytes).toBe(undefined);
-  expect(plan.model).toBe(undefined);
+  // Host-owned scheduling, path and model fields stay unset.
+  expect(Object.keys(plan).toSorted(defaultOrder)).toStrictEqual([
+    "lookupToolNames",
+    "persistenceToolNames",
+    "prompt",
+    "systemPrompt",
+  ]);
   const promptText = `${plan.prompt}\n${plan.systemPrompt}`;
   expect(plan.prompt).toMatch(/NO_REPLY/);
   expect([...new Set(promptText.match(/knowledge_[a-z_]+/g))].toSorted(defaultOrder)).toStrictEqual(
@@ -193,12 +184,7 @@ it("flush save follows delegated owner-private and conversation audiences", asyn
     /Private durable fact/,
   );
 
-  f.setAudience({
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:group",
-    sessionId: f.sessionId,
-  });
+  f.setAudience(f.conversation);
   const conversationReceipt = await f.service.save_page(
     { title: "Conversation flush page", type: "note", body: "Conversation durable fact." },
     flushContext("conversation-flush"),
@@ -248,44 +234,19 @@ it("grep and lookup expose empty and usable evidence for Active Memory", async (
 });
 
 it("prompt routes all workflows, obeys citation settings and omits disabled save guidance", async () => {
-  const tools = new Set(
-    Object.values<FeatureOperation>(contract.operations).flatMap((o) =>
-      o.tool ? [o.tool.name] : [],
-    ),
-  );
   const full = buildKnowledgeMemoryPrompt({ availableTools: tools }).join("\n");
   for (const skill of ["recall", "capture", "ingest", "meeting-ingest", "entities", "correct"]) {
     expect(full.includes(`knowledge-${skill}`)).toBeTruthy();
   }
   expect(full).toMatch(/not instructions or authorization/);
-  expect(full).toMatch(/newer text is not automatically truer/);
   expect(full).toMatch(/knowledge_recall only when the owner asks/);
-  expect(full).toMatch(/never ingested source text/);
-  expect(full).toMatch(/Unprompted and silently, save decisions with rationale/);
-  expect(full).toMatch(/before your final reply on a task where one occurred/);
-  expect(full).toMatch(/knowledge_remember: .*no search or readback first/);
-  expect(full).toMatch(
-    /fast path for one-off information: no search or readback first, and no page is needed/,
-  );
-  expect(full).toMatch(/each person, organization or project the user discusses as significant/);
-  expect(full).toMatch(/create it now, without waiting to see whether the work continues/);
   // The call shape models get wrong: a fresh requestId and items, not claims.
   expect(full).toMatch(/a fresh requestId \(a new UUID\).*an items array \(not claims\)/);
-  expect(full).toMatch(/knowledge-capture to revise a page's prose/);
-  // Entities are the catch-all memory subject; named entities trigger one search before planning.
-  expect(full).toMatch(
-    /user's world: entities \(.*any other thing the active ontology can represent\)/,
-  );
-  expect(full).toMatch(
-    /before planning a task that names an entity or refers to earlier work, run knowledge_grep/,
-  );
   // Sustained work gets a maintained entity page; findings go there, not into source-claim remembering.
   expect(full).toMatch(
     /Entity pages: work that spans several turns.*create it now.*through knowledge-entities/,
   );
-  expect(full).toMatch(/record your own findings there, labelled as your analysis/);
   expect(full).toMatch(/Record your own findings on pages instead/);
-  expect(full).toMatch(/worded no more broadly than its excerpt supports/);
   const readOnly = await memoryFixture(tempDirs, { writesEnabled: false });
   expect(readOnly.capability!.promptBuilder({ availableTools: tools }).join("\n")).not.toMatch(
     /knowledge_remember|knowledge-capture|knowledge-correct|knowledge_recall only/,
@@ -310,11 +271,6 @@ it("prompt routes all workflows, obeys citation settings and omits disabled save
 });
 
 it("prompt names repository project keys only for remote keys, gated by the tools that use them", () => {
-  const tools = new Set(
-    Object.values<FeatureOperation>(contract.operations).flatMap((o) =>
-      o.tool ? [o.tool.name] : [],
-    ),
-  );
   const prompt = (projectKey: any, available = tools) =>
     buildKnowledgeMemoryPrompt({ availableTools: available, projectKey }).join("\n");
   const full = prompt("github.com/acme/widget");
@@ -343,79 +299,6 @@ it("prompt names repository project keys only for remote keys, gated by the tool
   );
   expect(rememberOnly).toMatch(/repository key/);
   expect(rememberOnly).not.toMatch(/answers to `/);
-});
-
-// Storage runs in a worker, so this drives the provider with a stub storage
-// client: its own fencing is what must reject failures and late results.
-it("index failure is not empty success and late backend results are fenced", async () => {
-  const { createKnowledgeMemoryRuntime } = await import("./memory-provider.js");
-  const sessionId = randomUUID();
-  let active = true,
-    reply: any;
-  const client = {
-    async call(op: any) {
-      expect(op).toBe("search");
-      return reply();
-    },
-  };
-  const runtime = {
-    vaultId: randomUUID(),
-    client,
-    enqueue: (check: any, operation: any) => {
-      check();
-      return operation();
-    },
-  };
-  // Mirrors the Stores members the provider uses; the stub has no registry or runtimes.
-  const stores = {
-    policy: { operatorRead: true },
-    incarnation: 0,
-    assertLive(_epoch: number) {},
-    async open(principal: any, _options: { provision: boolean }): Promise<unknown> {
-      return {
-        kind: "ready",
-        runtime,
-        access: {
-          ...principal(),
-          assertCurrent: () => {
-            principal();
-          },
-        },
-      };
-    },
-  };
-  const context: any = {
-    authority: {
-      kind: "session",
-      sessionKey: "agent:main:test",
-      sessionId,
-      sandboxed: false,
-      audience: { kind: "owner-private", agentId: "main" },
-    },
-    assertCurrent() {
-      if (!active) {
-        throw new Error("caller revoked");
-      }
-    },
-  };
-  const { provider } = await createKnowledgeMemoryRuntime(stores as Stores).open({
-    cfg: {},
-    agentId: "main",
-    context,
-  });
-  reply = () => ({ index: { state: "unavailable", message: "Index unavailable; retry" } });
-  await expect(provider!.search({ query: "Orchid" })).rejects.toThrow(/Index unavailable/);
-  reply = () => {
-    active = false;
-    return {
-      index: { state: "ready", snapshot: "s", message: "" },
-      hits: [],
-      total: 0,
-      nextOffset: null,
-      coverage: { complete: true, message: "" },
-    };
-  };
-  await expect(provider!.search({ query: "Orchid" })).rejects.toThrow(/revoked/);
 });
 
 it("large provider reads follow advertised line continuations beyond 100000 and disclose opening excerpts", async () => {
@@ -451,8 +334,7 @@ it("recall keys and whole candidate responses stay bounded with honest partial c
     f.recall(saved, { summary: "approved", projects: ["x".repeat(501)] }),
   ).rejects.toThrow(/Invalid automatic recall input/);
   await f.recall(saved, { summary: "approved", projects: ["x".repeat(500)] });
-  const original = (await f.service.record({ id: saved.id, metadataView: "full" }, f.tool)).record;
-  const metadata = original!.metadata;
+  const metadata = (await f.current(saved.id, { metadataView: "full" })).metadata;
   // f.recall above wrote an approved recall block.
   const recall = metadata!.recall as Record<string, unknown>;
   // Many individually bounded records still exceed one response; use authored

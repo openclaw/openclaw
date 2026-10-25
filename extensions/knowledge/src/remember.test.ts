@@ -1,48 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { contract } from "./contract.js";
 import type { RememberInput } from "./remember-contract.js";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, useTestTempDirs, defaultOrder } from "./test-support.js";
+import { storeFixture, toolContext, useTestTempDirs, defaultOrder } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
 async function fixture() {
-  const base = tempDirs.make("knowledge-remember-");
-
-  const root = path.join(base, "vault");
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    operatorRead: true,
-    writesEnabled: true,
-  };
-  const api = apiFor(base, config),
-    service = createKnowledgeService(api);
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
+  const { api } = await storeFixture(tempDirs.make("knowledge-remember-"), {
+    policy: { writesEnabled: true, operatorRead: true },
+  });
+  const service = createKnowledgeService(api),
+    owner = toolContext(api);
   const page = (title: any, extra = {}) =>
     service.save_page(
       { requestId: randomUUID(), title, type: "project", body: "Project page.\n", ...extra },

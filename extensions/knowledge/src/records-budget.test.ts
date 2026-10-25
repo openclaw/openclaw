@@ -11,17 +11,20 @@ it("real host JSON boundary is checked", async () => {
   expect(await isHostJson({ text: "x".repeat(2 * 1024 * 1024) })).toBe(false);
 });
 
-async function fixture(count: any, evidenceCount: any, body: any, quote = "") {
-  const vault = new SampleVault(),
-    data = await vault.scan();
-  const template = data.records.find((r) => r.id === "sample_claim_pilot");
-  const evidence = Array.from({ length: evidenceCount }, () => ({
+// Synthetic evidence entries; a quote adds payload bytes.
+const evidenceList = (count: number, quote = "") =>
+  Array.from({ length: count }, () => ({
     path: "sources/sample.txt",
     sha256: "a".repeat(64),
     start_line: 1,
     end_line: 2,
     ...(quote ? { quote } : {}),
   }));
+async function fixture(count: any, evidenceCount: any, body: any, quote = "") {
+  const vault = new SampleVault(),
+    data = await vault.scan();
+  const template = data.records.find((r) => r.id === "sample_claim_pilot");
+  const evidence = evidenceList(evidenceCount, quote);
   const claims = Array.from({ length: count }, (_, i): LoadedRecord => ({
     ...template!,
     id: i === 0 ? template!.id : `claim_${String(i).padStart(3, "0")}`,
@@ -98,13 +101,7 @@ it("relationship endpoint payload participates in the Browse budget", async () =
     r.metadata.attribution_confidence = {
       level: "low",
       basis: "Synthetic uncertainty",
-      evidence: Array.from({ length: 20 }, () => ({
-        path: "sources/sample.txt",
-        sha256: "b".repeat(64),
-        start_line: 1,
-        end_line: 2,
-        quote: "界".repeat(4000),
-      })),
+      evidence: evidenceList(20, "界".repeat(4000)),
     };
   }
   const edge = data.records.find((r) => r.kind === "relationship");

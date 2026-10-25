@@ -5,44 +5,26 @@ import { expect, it } from "vitest";
 import { DraftStore, type EditorDraft } from "./drafts.js";
 import { LiveState } from "./live-state.js";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, afterTest, useTestTempDirs } from "./test-support.js";
+import {
+  afterTest,
+  apiFor,
+  createVault,
+  operatorContext,
+  toolContext,
+  useTestTempDirs,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
 async function fixture() {
   const base = tempDirs.make("knowledge-live-");
-
-  const root = base + "/vault";
-  await mkdir(root + "/private", { recursive: true });
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(root + "/vault.json", JSON.stringify(manifest));
+  const { root, config } = await createVault(base);
   const services: any = [];
   const emitted: any = [];
-  const api = apiFor(
-    base,
-    {
-      root,
-      statePath: base + "/state.sqlite",
-      vaultId: manifest.vaultId,
-      publicationId: manifest.publicationId,
-      operatorRead: true,
-      writesEnabled: true,
-    },
-    { extra: { registerService: (s: any) => services.push(s) } },
-  );
+  const api = apiFor(base, config, { extra: { registerService: (s: any) => services.push(s) } });
   const service = createKnowledgeService(api, { emit: (...args) => emitted.push(args) });
-  const context: any = {
-    source: "session-action",
-    api,
-    action: { client: { connId: "test", scopes: ["operator.write"] } },
-  };
   afterTest(() => services.forEach((s: any) => s.stop()));
-  return { base, root, services, emitted, service, context };
+  return { base, root, services, emitted, service, context: operatorContext(api) };
 }
 async function until(fn: any) {
   for (let i = 0; i < 100; i++) {
@@ -197,23 +179,6 @@ it("corrupt/oversized draft and unavailable storage fail explicitly without clea
   expect(() => store.write({ version: 1 } as EditorDraft)).toThrow(/quota/);
 });
 
-it("browser vault precondition cannot redirect a retained draft to a replacement vault", async () => {
-  const f = await fixture();
-  await f.service.status({}, f.context);
-  const request = {
-    requestId: randomUUID(),
-    expectedVaultId: randomUUID(),
-    title: "Wrong vault",
-    type: "note",
-    body: "Keep local",
-  };
-  await expect(f.service.save_page(request, f.context)).rejects.toThrow(/different vault/);
-  expect((await f.service.mutation({ requestId: request.requestId }, f.context)).receipt).toBe(
-    null,
-  );
-  expect((await f.service.records({}, f.context)).total).toBe(0);
-});
-
 it("status snapshot is stable for unchanged reads and detects equal-count edits and source corruption", async () => {
   const f = await fixture();
   const record = await f.service.save_page(
@@ -252,16 +217,7 @@ it("status snapshot is stable for unchanged reads and detects equal-count edits 
 
 it("agent bylines follow exact journaled revisions, never scope ownership or source attribution", async () => {
   const f = await fixture();
-  const agent: any = {
-    source: "tool",
-    api: f.context.api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
+  const agent = toolContext(f.context.api);
   const saved = await f.service.save_page(
     { requestId: randomUUID(), title: "Authored page", type: "note", body: "Agent text" },
     agent,

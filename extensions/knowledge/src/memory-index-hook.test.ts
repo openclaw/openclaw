@@ -20,12 +20,26 @@ const hookContext = (f: Awaited<ReturnType<typeof memoryFixture>>, overrides = {
 
 it("appends a byte-stable index for owner-private sessions until the cutoff moves", async () => {
   const f = await memoryFixture(tempDirs);
-  await f.save("Brightpath analysis playbook");
+  const saved = await f.save("Brightpath analysis playbook");
   const hook = f.hooks.before_prompt_build;
   const messages = [{ role: "user", timestamp: Date.now(), content: "hi" }];
   const first = await hook({ prompt: "hi", messages }, hookContext(f));
   expect(first.appendSystemContext).toContain("- note: Brightpath analysis playbook");
+  // Neither a new record nor renaming a listed one changes the index mid-session.
   await f.save("Saved during the session");
+  const current = (await f.service.record({ id: saved.id }, f.tool)).record!;
+  await f.service.save_page(
+    {
+      requestId: randomUUID(),
+      id: current.id,
+      expectedRevision: current.revision,
+      expectedHash: current.hash,
+      type: "note",
+      title: "Renamed playbook title",
+      body: "Evidence-backed durable note",
+    },
+    f.tool,
+  );
   const second = await hook({ prompt: "again", messages }, hookContext(f));
   expect(second.appendSystemContext).toBe(first.appendSystemContext);
   // A new session or compaction moves the first retained message, refreshing the index.
@@ -65,30 +79,6 @@ it("pins the index per physical store, so a binding moved to a fresh store rende
   expect(await readMemoryIndex(stores as Stores, ctx, 1)).toBe("index of vault-shared");
   vaultId = "vault-own";
   expect(await readMemoryIndex(stores as Stores, ctx, 1)).toBe("index of vault-own");
-});
-
-it("keeps the rendered index byte-stable when a record is renamed mid-session", async () => {
-  const f = await memoryFixture(tempDirs);
-  const saved = await f.save("Original playbook title");
-  const hook = f.hooks.before_prompt_build;
-  const messages = [{ role: "user", timestamp: Date.now(), content: "hi" }];
-  const first = await hook({ prompt: "hi", messages }, hookContext(f));
-  expect(first.appendSystemContext).toContain("Original playbook title");
-  const current = (await f.service.record({ id: saved.id }, f.tool)).record!;
-  await f.service.save_page(
-    {
-      requestId: randomUUID(),
-      id: current.id,
-      expectedRevision: current.revision,
-      expectedHash: current.hash,
-      type: "note",
-      title: "Renamed playbook title",
-      body: "Evidence-backed durable note",
-    },
-    f.tool,
-  );
-  const second = await hook({ prompt: "again", messages }, hookContext(f));
-  expect(second.appendSystemContext).toBe(first.appendSystemContext);
 });
 
 it("omits the index for conversation, missing and sandboxed audiences and revoked callers", async () => {

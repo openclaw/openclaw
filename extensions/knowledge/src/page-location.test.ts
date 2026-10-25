@@ -30,7 +30,7 @@ it("page addresses round-trip stable identity, filters, pagination and encoded t
   expect(restored).toStrictEqual(input);
 });
 
-it("malformed URL filters never produce out-of-contract pagination or cursor input", () => {
+it("malformed URL filters and unsupported views never produce out-of-contract input or routes", () => {
   for (const offset of ["-1", "501", "1e2", "NaN", "1.5", "9007199254740992"]) {
     expect(readLocation({ offset }).offset).toBe(0);
   }
@@ -40,6 +40,10 @@ it("malformed URL filters never produce out-of-contract pagination or cursor inp
   ).toBe("recent");
   expect(
     locationParams(readLocation({ record: "x".repeat(97), q: "x".repeat(201) })),
+  ).toStrictEqual({});
+  expect(readLocation({ view: "timeline" }).tab).toBe("recent");
+  expect(
+    locationParams(readLocation({ entity: "person-1", snapshot: "old", offset: "720" })),
   ).toStrictEqual({});
 });
 
@@ -58,13 +62,6 @@ it("Browse back trail survives remount and rejects invalid or looping cursors", 
     expect(readLocation({ offset: "40", back }).back).toStrictEqual([]);
   }
   expect(readLocation({ offset: "0", back: "0,20" }).back).toStrictEqual([]);
-});
-
-it("unsupported views and fields do not create a timeline route", () => {
-  expect(readLocation({ view: "timeline" }).tab).toBe("recent");
-  expect(
-    locationParams(readLocation({ entity: "person-1", snapshot: "old", offset: "720" })),
-  ).toStrictEqual({});
 });
 
 it("Search date filters round trip while invalid bounded date text remains visible for validation", () => {

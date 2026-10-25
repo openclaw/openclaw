@@ -1,9 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, stopAtTestEnd, useTestTempDirs } from "./test-support.js";
+import {
+  apiFor,
+  createVault,
+  stopAtTestEnd,
+  toolContext,
+  useTestTempDirs,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -11,46 +17,30 @@ const tempDirs = useTestTempDirs();
 // by the main thread. Revoking there must stop the write before it publishes.
 it("authority revoked during a worker operation fails the write and publishes nothing", async () => {
   const base = tempDirs.make("knowledge-worker-");
-
-  const root = path.join(base, "vault");
-  await mkdir(root);
-  const vaultId = randomUUID(),
-    publicationId = randomUUID(),
-    sessionId = randomUUID();
-  await mkdir(path.join(root, "private"));
-  await writeFile(
-    path.join(root, "vault.json"),
-    JSON.stringify({ format: "knowledge-vault-v2", vaultId, generation: 0, publicationId }),
-  );
-  const statePath = path.join(base, "state.sqlite");
-  const api = apiFor(
-    base,
-    { root, statePath, vaultId, publicationId, operatorRead: true, writesEnabled: true },
-    { extra: { registerService: stopAtTestEnd } },
-  );
+  const { root, config } = await createVault(base);
+  const api = apiFor(base, config, { extra: { registerService: stopAtTestEnd } });
   const service = createKnowledgeService(api);
   let checks = 0,
     allowed = Infinity;
-  const assertCurrent = () => {
-    if (++checks > allowed) {
-      throw new Error("invocation revoked");
-    }
-  };
-  const tool: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      sessionKey: "agent:main:test",
-      sessionId,
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent: assertCurrent,
-      assertMemoryAudienceCurrent() {},
+  const tool = toolContext(api);
+  Object.assign(tool.tool, {
+    sessionKey: "agent:main:test",
+    sessionId: randomUUID(),
+    assertInvocationCurrent: () => {
+      if (++checks > allowed) {
+        throw new Error("invocation revoked");
+      }
     },
-  };
+  });
   const save = (title: any) =>
     service.save_page(
-      { requestId: randomUUID(), expectedVaultId: vaultId, type: "note", title, body: "Body" },
+      {
+        requestId: randomUUID(),
+        expectedVaultId: config.vaultId,
+        type: "note",
+        title,
+        body: "Body",
+      },
       tool,
     );
 

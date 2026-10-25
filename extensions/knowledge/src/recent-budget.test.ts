@@ -6,11 +6,8 @@ import { recentActivity } from "./recent-activity.js";
 import { RecentOutput } from "./recent.js";
 import { afterTest, jsonRoundTrip } from "./test-support.js";
 // Exercise the host's actual boundary through the SDK, not a copy of our budget helper.
+// records-budget.test.ts proves this boundary rejects oversized values.
 const isHostJson = hostJsonBoundary();
-it("real host JSON boundary is checked", async () => {
-  expect(await isHostJson({ ok: true })).toBe(true);
-  expect(await isHostJson({ text: "x".repeat(2 * 1024 * 1024) })).toBe(false);
-});
 
 function fixture(
   groups: any,

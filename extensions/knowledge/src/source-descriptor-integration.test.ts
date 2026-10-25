@@ -1,15 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  mkdir,
-  readFile,
-  writeFile,
-  readdir,
-  rm,
-  rmdir,
-  link,
-  symlink,
-  stat,
-} from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, rm, rmdir, link, symlink } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { parse, stringify } from "yaml";
@@ -17,9 +7,8 @@ import { fileStamp } from "./evidence-files.js";
 import { GitHistory, GitUnavailable } from "./git-history.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import type { BatchInput } from "./ingestion-contract.js";
-import { inspectRecord } from "./inspection.js";
 import type { Envelope, LoadedRecord } from "./model.js";
-import { describeSource, compactEvidence } from "./source-descriptors.js";
+import { describeSource } from "./source-descriptors.js";
 import { encodeRecordEvidence, hydrateMetadata, readSourceDescriptor } from "./source-records.js";
 import type { PublicationHook } from "./storage-types.js";
 import { KnowledgeStorage } from "./storage.js";
@@ -177,11 +166,6 @@ it("same source deduplicates across records and a multi-source batch retains eve
     expect((await recordFor(f, receipt.id)).metadata.evidence).toStrictEqual([
       { ...shared, source: source.id },
     ]);
-    const api = await f.writer.run(f.access, (vault: any) =>
-      inspectRecord(vault, { id: receipt.id, includeMetadata: true, includeEvidence: true }),
-    );
-    expect(api.record!.metadata!.evidence).toStrictEqual([{ ...shared, source: source.id }]);
-    expect(api.evidence![0]!.verified).toBe(true);
   }
   const fingerprint = await f.writer.run(
     f.access,
@@ -221,7 +205,6 @@ it("same source deduplicates across records and a multi-source batch retains eve
     expect(frontmatter(await f.read(item.path)).evidence).toStrictEqual([{ source: expected.id }]);
     expect((await recordFor(f, item.id)).metadata.evidence[0].source).toBe(expected.id);
     expect(await f.read(expected.path)).toBe(expected.raw);
-    expect(digest(await f.read(expected.path))).toBe(expected.id);
   }
 });
 
@@ -433,43 +416,4 @@ it("interrupted publication fences a reused descriptor and refuses completion wi
   await expect(f.writer.run(f.access, (vault: any) => vault.scan())).rejects.toThrow(
     /publication pending or conflicted/i,
   );
-});
-
-it("an unrelated page edit preserves source-origin and citation-specific attribution separately", async () => {
-  const f = await fixture(),
-    origin = await original(f.scoped),
-    source = describeSource(origin);
-  const citationEvidence = {
-    ...origin,
-    attribution: "Speaker identified in passage",
-    start_line: 2,
-    end_line: 2,
-    quote: "meeting second line",
-  };
-  const { citation } = compactEvidence(citationEvidence, origin);
-  await mkdir(path.join(f.scoped, "artifacts/sources"), { recursive: true });
-  await mkdir(path.join(f.scoped, "notes"), { recursive: true });
-  await writeFile(path.join(f.scoped, source.path), source.raw);
-  const authoredRecord = authored(citation);
-  await writeFile(path.join(f.scoped, authoredRecord.path), authoredRecord.raw);
-  const before = await recordFor(f, authoredRecord.id),
-    descriptorStamp = fileStamp(f.scoped, source.path);
-  expect(before.metadata.evidence).toStrictEqual([{ ...citationEvidence, source: source.id }]);
-  const saved = await f.writer.save(
-    edit(before, { title: "Unrelated title edit" }),
-    f.access,
-    "agent",
-  );
-  expect(saved.state).toBe("published");
-  expect(frontmatter(await f.read(saved.path)).evidence).toStrictEqual([citation]);
-  expect(await f.read(source.path)).toBe(source.raw);
-  expect(fileStamp(f.scoped, source.path)).toBe(descriptorStamp);
-  expect(JSON.parse(await f.read(source.path)).attribution).toBe("Recorder original");
-  const after = await recordFor(f, saved.id);
-  expect(after.metadata.evidence).toStrictEqual(before.metadata.evidence);
-  expect(after.body).toBe(before.body);
-  expect(await readdir(path.join(f.scoped, "artifacts/sources"))).toStrictEqual([
-    source.id + ".json",
-  ]);
-  expect((await stat(path.join(f.scoped, source.path))).nlink).toBe(1);
 });

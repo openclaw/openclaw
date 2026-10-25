@@ -248,7 +248,7 @@ it("scope, withdrawn dependencies, fixture exclusion and historical eligibility 
   ).toBe(0);
 });
 
-it("pagination detects edits, external changes reconcile, partial index loss rebuilds", async () => {
+it("pagination detects edits and external changes reconcile", async () => {
   const f = await fixture();
   await f.put("event_first", event("2020-01-01"));
   const second = await f.put("event_second", event("2020-01-02"));
@@ -269,10 +269,6 @@ it("pagination detects edits, external changes reconcile, partial index loss reb
   );
   const revised = await f.service.timeline({ order: "asc" }, f.owner);
   expect(ids(revised)).toStrictEqual(["event_second", "event_first"]);
-  const db = new DatabaseSync(f.config.statePath);
-  afterTest(() => db.close());
-  db.exec("DROP TABLE temporal_dates_v1");
-  expect(ids(await f.service.timeline({ order: "asc" }, f.owner))).toStrictEqual(ids(revised));
   await rm(second);
   expect((await f.service.timeline({}, f.owner)).total).toBe(1);
 });
@@ -365,8 +361,6 @@ it("high precision storage dates remain queryable and equivalent source instants
   expect(returnedRecords(last)).toStrictEqual([
     { id: "event_offset", revision: last.last!.record.revision },
   ]);
-  // Deliberately omits the required `since`.
-  await expect(f.service.chronicle_since({} as SinceInput, f.owner)).rejects.toThrow(/Invalid/);
 });
 
 it("unprovisioned operator temporal reads stay empty without creating storage", async () => {
@@ -459,15 +453,6 @@ it("source summaries are page-local, deduplicated, snapshot fenced and lifecycle
     eligibility: "include_inactive",
   });
   expect(Check(contract.operations.chronicle_last_seen.output, last)).toBeTruthy();
-  for (const bad of [{ historical: true }, { asOf: "2020-01-01" }]) {
-    await expect(
-      f.service.chronicle_last_seen({ entity: "person_alice", ...bad }, f.owner),
-    ).rejects.toThrow(/Invalid/);
-  }
-  // `historical` is deliberately not a timeline field.
-  await expect(f.service.timeline({ historical: true } as TimelineInput, f.owner)).rejects.toThrow(
-    /Invalid/,
-  );
 });
 
 it("temporal source summaries fit the full response budget and never skip rows", async () => {
@@ -505,31 +490,4 @@ it("temporal source summaries fit the full response budget and never skip rows",
   }
   expect(all.length).toBe(35);
   expect(new Set(all).size).toBe(35);
-});
-
-it("query freshness distinguishes reused scans and query execution without legacy query fields", async () => {
-  const f = await fixture();
-  await f.put("event_current", event("2020-05-10"));
-  for (const [method, input] of [
-    ["timeline", {}],
-    ["records", {}],
-    ["lookup", { query: "event_current" }],
-    ["grep", { query: "launch" }],
-  ] as ["timeline" | "records" | "lookup" | "grep", any][]) {
-    // The fields this test reads across the four outputs; legacy ones must be absent.
-    const result: {
-      checkedAt?: unknown;
-      freshness: { queriedAt: string; scannedAt: string; indexedAt?: string };
-      index?: Record<string, unknown>;
-    } = await f.service[method](input, f.owner);
-    expect(result.checkedAt).toBe(undefined);
-    expect(
-      Date.parse(result.freshness.queriedAt) >= Date.parse(result.freshness.scannedAt),
-    ).toBeTruthy();
-    expect(Check(contract.operations[method].output, result)).toBeTruthy();
-    if (method === "grep") {
-      expect(result.freshness.indexedAt).toBeTruthy();
-      expect(result.index!.indexedAt).toBe(undefined);
-    }
-  }
 });

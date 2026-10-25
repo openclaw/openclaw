@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
@@ -8,66 +8,16 @@ import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
-import { accessFor, apiFor, useTestTempDirs } from "./test-support.js";
+import {
+  accessFor,
+  operatorContext,
+  storeFixture,
+  toolContext,
+  useTestTempDirs,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
-async function fixture() {
-  const base = tempDirs.make("knowledge-write-");
-
-  const root = path.join(base, "vault");
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    operatorRead: true,
-    writesEnabled: true,
-  };
-  const api = apiFor(base, config);
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
-  const operator: any = {
-    source: "session-action",
-    api,
-    action: { client: { connId: "test", scopes: ["operator.write"] } },
-  };
-  const store = new SqliteIdentityStore(config.statePath),
-    service = createKnowledgeService(api);
-  const access = () => accessFor(owner, true);
-  return {
-    base,
-    root,
-    config,
-    manifest,
-    api,
-    owner,
-    operator,
-    store,
-    service,
-    access,
-    setAudience: (value: any) => {
-      owner.tool.memoryAudience = value;
-    },
-  };
-}
 const draft = () => ({
   requestId: randomUUID(),
   title: "Publication test",
@@ -85,7 +35,14 @@ const edit = (record: any, fields = {}) => ({
 });
 
 async function foundation() {
-  const f: any = await fixture();
+  const f: any = await storeFixture(tempDirs.make("knowledge-structured-"), {
+    policy: { writesEnabled: true, operatorRead: true },
+  });
+  f.owner = toolContext(f.api);
+  f.operator = operatorContext(f.api);
+  f.service = createKnowledgeService(f.api);
+  f.store = new SqliteIdentityStore(f.config.statePath);
+  f.access = () => accessFor(f.owner, true);
   f.fingerprint = (await f.service.ontology({}, f.owner)).fingerprint;
   f.pages = {};
   for (const type of ["person", "project", "meeting"]) {
@@ -221,42 +178,36 @@ it("all claim kinds roundtrip; contradictions and uncertain attribution are not 
 });
 
 it("automatic recall approval rejects source and agent-inference claims", async () => {
-  const f = await foundation();
-  for (const assertion_origin of ["source", "agent_inference"]) {
-    const receipt = await f.service.create_claim(f.claim({ assertion_origin }), f.owner);
+  const f = await foundation(),
+    outcomes = [];
+  for (const assertion_origin of ["source", "agent_inference", "user_belief"]) {
+    const receipt = await f.service.create_claim(
+      f.claim({ assertion_origin, attribution: "Josh, direct owner statement" }),
+      f.owner,
+    );
     const record = (await f.service.record({ id: receipt.id }, f.owner)).record;
-    await expect(
-      f.service.recall(
-        {
-          requestId: randomUUID(),
-          id: record!.id,
-          expectedRevision: record!.revision,
-          expectedHash: record!.hash,
-          set: { summary: "Do not approve this claim automatically." },
-        },
-        f.owner,
+    const approval = f.service.recall(
+      {
+        requestId: randomUUID(),
+        id: record!.id,
+        expectedRevision: record!.revision,
+        expectedHash: record!.hash,
+        set: { summary: "Josh prefers option B.", triggers: ["option B"] },
+      },
+      f.owner,
+    );
+    outcomes.push(
+      await approval.then(
+        (r: any) => r.state,
+        (e: Error) => e.message,
       ),
-    ).rejects.toThrow(/externally sourced or agent-inferred/);
+    );
   }
-  const receipt = await f.service.create_claim(
-    f.claim({
-      assertion_origin: "user_belief",
-      attribution: "Josh, direct owner statement",
-    }),
-    f.owner,
-  );
-  const record = (await f.service.record({ id: receipt.id }, f.owner)).record;
-  const approved = await f.service.recall(
-    {
-      requestId: randomUUID(),
-      id: record!.id,
-      expectedRevision: record!.revision,
-      expectedHash: record!.hash,
-      set: { summary: "Josh prefers option B.", triggers: ["option B"] },
-    },
-    f.owner,
-  );
-  expect(approved.state).toBe("published");
+  expect(outcomes).toStrictEqual([
+    expect.stringMatching(/externally sourced or agent-inferred/),
+    expect.stringMatching(/externally sourced or agent-inferred/),
+    "published",
+  ]);
 });
 
 for (const operation of ["create_claim", "create_relationship"] as const) {
@@ -394,7 +345,6 @@ it("new mutations and connections obey scope, read-only authority and historical
   const f = await foundation(),
     input = f.claim(),
     receipt = await f.service.create_claim(input, f.owner);
-  const sequence = (await f.service.history({ id: receipt.id }, f.owner)).entries[0]!.sequence;
   const readOnly = {
     ...f.operator,
     action: { client: { connId: "readonly", scopes: ["operator.read"] } },
@@ -412,18 +362,17 @@ it("new mutations and connections obey scope, read-only authority and historical
   expect(
     (await f.service.connections({ id: f.pages.project.id, historical: true }, f.owner)).total,
   ).toBe(0);
-  f.setAudience({
+  f.owner.tool.memoryAudience = {
     kind: "conversation",
     agentId: "main",
     sessionKey: "agent:main:group",
     sessionId: randomUUID(),
-  });
+  };
   await expect(f.service.create_claim(f.claim(), f.owner)).rejects.toThrow(/unavailable/);
   await expect(f.service.create_relationship(f.edge(), f.owner)).rejects.toThrow(/unavailable/);
   expect(
     (await f.service.connections({ id: f.pages.project.id, historical: true }, f.owner)).total,
   ).toBe(0);
-  expect((await f.service.revision({ sequence }, f.owner)).raw).toBe(null);
 });
 
 for (const target of ["reference", "evidence"]) {

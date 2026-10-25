@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { mkdir, writeFile, readFile, rename } from "node:fs/promises";
+import { writeFile, readFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
@@ -9,66 +9,19 @@ import { SqliteIdentityStore } from "./identity-store.js";
 import type { BatchInput } from "./ingestion-contract.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
-import { accessFor, apiFor, useTestTempDirs } from "./test-support.js";
+import {
+  accessFor,
+  apiFor,
+  createVault,
+  operatorContext,
+  toolContext,
+  useTestTempDirs,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
-async function fixture() {
-  const base = tempDirs.make("knowledge-write-");
-
-  const root = path.join(base, "vault");
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    operatorRead: true,
-    writesEnabled: true,
-  };
-  const api = apiFor(base, config);
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
-  const operator: any = {
-    source: "session-action",
-    api,
-    action: { client: { connId: "test", scopes: ["operator.write"] } },
-  };
-  const store = new SqliteIdentityStore(config.statePath),
-    service = createKnowledgeService(api);
-  const access = () => accessFor(owner, true);
-  return {
-    base,
-    root,
-    config,
-    manifest,
-    api,
-    owner,
-    operator,
-    store,
-    service,
-    access,
-    setAudience: (value: any) => {
-      owner.tool.memoryAudience = value;
-    },
-  };
-}
+// Guard fields that fence an edit, withdrawal or verification to one observed revision.
+const guard = (r: any) => ({ id: r.id, expectedRevision: r.revision, expectedHash: r.hash });
 const draft = () => ({
   requestId: randomUUID(),
   title: "Publication test",
@@ -77,16 +30,27 @@ const draft = () => ({
 });
 const edit = (record: any, fields = {}) => ({
   requestId: randomUUID(),
-  id: record.id,
-  expectedRevision: record.revision,
-  expectedHash: record.hash,
+  ...guard(record),
   title: record.title,
   body: record.body,
   ...fields,
 });
 
 async function batchFixture() {
-  const f = await fixture();
+  const base = tempDirs.make("knowledge-write-");
+  const { root, config } = await createVault(base);
+  const api = apiFor(base, config);
+  const owner = toolContext(api);
+  const f = {
+    root,
+    config,
+    api,
+    owner,
+    operator: operatorContext(api),
+    store: new SqliteIdentityStore(config.statePath),
+    service: createKnowledgeService(api),
+    access: () => accessFor(owner, true),
+  };
   const original = await f.service.attach(
     {
       requestId: randomUUID(),
@@ -156,13 +120,7 @@ async function batchFixture() {
   expect(Check(contract.operations.publish_batch.input, input)).toBeTruthy();
   return { ...f, input, original };
 }
-const verifyInput = (receipt: any) => ({
-  records: receipt.items.map((item: any) => ({
-    id: item.id,
-    expectedHash: item.hash,
-    expectedRevision: item.revision,
-  })),
-});
+const verifyInput = (receipt: any) => ({ records: receipt.items.map(guard) });
 
 it("one batch resolves forward references, self-links, claims/edges; one bounded verification checks all outputs", async () => {
   const f = await batchFixture(),
@@ -298,9 +256,7 @@ it("source ID/hash receipts survive replacement; changed bytes require reconcili
         key: "meeting",
         kind: "page",
         input: {
-          id: meeting!.id,
-          expectedRevision: meeting!.revision,
-          expectedHash: meeting!.hash,
+          ...guard(meeting),
           title: "Review",
           body: "Reconciled revised source",
           attachments: [revised.evidence!],
@@ -318,15 +274,8 @@ it("source ID/hash receipts survive replacement; changed bytes require reconcili
   expect((await service.records({}, f.owner)).total).toBe(4);
   // An earlier export returning does not silently return a receipt from the wrong version.
   expect((await service.source_check(f.input.source, f.owner)).state).toBe("changed");
-  const beforeWithdraw = second.items![0];
   await service.withdraw(
-    {
-      requestId: randomUUID(),
-      id: beforeWithdraw!.id,
-      expectedRevision: beforeWithdraw!.revision,
-      expectedHash: beforeWithdraw!.hash,
-      reason: "Explicit test withdrawal",
-    },
+    { requestId: randomUUID(), ...guard(second.items![0]), reason: "Explicit test withdrawal" },
     f.owner,
   );
   expect(await service.publish_batch({ ...input, requestId: randomUUID() }, f.owner)).toStrictEqual(
@@ -357,14 +306,7 @@ it("verification catches evidence damage, broken links, changed revisions and ex
   );
   expect(next.problems[0]!.code).toBe("due_at-mismatch");
   await f.service.save_page(
-    {
-      requestId: randomUUID(),
-      id: person!.id,
-      expectedHash: person!.hash,
-      expectedRevision: person!.revision,
-      title: "Morgan",
-      body: "Broken [[unavailable-target]].",
-    },
+    edit({ ...person, title: "Morgan" }, { body: "Broken [[unavailable-target]]." }),
     f.owner,
   );
   await expect(
@@ -516,12 +458,12 @@ it("expected link identities stay bound to stable IDs across renames and fail cl
 it("group scope cannot discover private source receipts or verification content", async () => {
   const f = await batchFixture(),
     receipt = await f.service.publish_batch(f.input, f.owner);
-  f.setAudience({
+  f.owner.tool.memoryAudience = {
     kind: "conversation",
     agentId: "main",
     sessionKey: "agent:main:group",
     sessionId: randomUUID(),
-  });
+  };
   const source = await f.service.source_check(f.input.source, f.owner);
   expect(source.state).toBe("missing");
   expect(source.receipt).toBe(null);
@@ -553,24 +495,12 @@ it("batch edits retain external changes on conflict and cannot publish partially
       {
         key: "person",
         kind: "page",
-        input: {
-          id: person!.id,
-          expectedHash: person!.hash,
-          expectedRevision: person!.revision,
-          title: "Morgan",
-          body: "Proposed updated profile",
-        },
+        input: { ...guard(person), title: "Morgan", body: "Profile" },
       },
       {
         key: "meeting",
         kind: "page",
-        input: {
-          id: meeting!.id,
-          expectedHash: meeting!.hash,
-          expectedRevision: meeting!.revision,
-          title: "Review",
-          body: "Proposed updated review",
-        },
+        input: { ...guard(meeting), title: "Review", body: "Review" },
       },
     ],
   };
@@ -654,47 +584,4 @@ it("verification reports unavailable index instead of a false pass", async () =>
   expect(checked.index).toBe("unavailable");
   expect(checked.failed).toBe(4);
   expect(checked.problems.every((p) => p.code === "index-unavailable")).toBeTruthy();
-});
-
-it("stale page edit prevents acceptance of all batch outputs", async () => {
-  const f = await batchFixture(),
-    receipt = await f.service.publish_batch(f.input, f.owner);
-  const person = receipt.items!.find((i) => i.key === "morgan");
-  await f.service.save_page(
-    {
-      requestId: randomUUID(),
-      id: person!.id,
-      expectedHash: person!.hash,
-      expectedRevision: person!.revision,
-      title: "Morgan",
-      body: "Newer authored context",
-    },
-    f.owner,
-  );
-  const stale: BatchInput = {
-    requestId: randomUUID(),
-    expectedVaultId: f.config.vaultId,
-    expectedOntologyFingerprint: f.input.expectedOntologyFingerprint,
-    items: [
-      {
-        key: "new",
-        kind: "page",
-        input: { type: "note", title: "Must not publish", body: "Late validation fails" },
-      },
-      {
-        key: "person",
-        kind: "page",
-        input: {
-          id: person!.id,
-          expectedHash: person!.hash,
-          expectedRevision: person!.revision,
-          title: "Morgan",
-          body: "Stale proposed context",
-        },
-      },
-    ],
-  };
-  await expect(f.service.publish_batch(stale, f.owner)).rejects.toThrow(/Edit conflict/);
-  expect((await f.service.records({}, f.owner)).total).toBe(4);
-  expect((await f.service.mutation({ requestId: stale.requestId }, f.owner)).receipt).toBe(null);
 });

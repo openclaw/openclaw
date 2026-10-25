@@ -5,7 +5,6 @@ import { mkdir, writeFile, readFile, rm, rename, symlink } from "node:fs/promise
 import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it, vi } from "vitest";
-import type { VaultAccess } from "./access.js";
 import { GitHistory } from "./git-history.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { Receipt, GitStatus } from "./mutation-contract.js";
@@ -13,6 +12,8 @@ import { KnowledgeStorage } from "./storage.js";
 import {
   afterTest,
   childEvalArgs,
+  createVault,
+  plainAccess,
   sourceModule,
   useTestTempDirs,
   defaultOrder,
@@ -33,30 +34,8 @@ const draft = () => ({
 });
 async function fixture() {
   const base = tempDirs.make("knowledge-git-");
-
-  const root = path.join(base, "vault");
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    operatorRead: true,
-    writesEnabled: true,
-  };
-  const access: VaultAccess = {
-    scope: { visibility: "private" },
-    agentId: "main",
-    assertCurrent() {},
-  };
+  const { root, config } = await createVault(base);
+  const access = plainAccess();
   const store = new SqliteIdentityStore(config.statePath);
   const service = new KnowledgeStorage(config, store);
   const read = async (id: any) =>
@@ -223,11 +202,7 @@ it("scope isolation: shared reads checkpoint neither private files nor private p
     new GitHistory(f.root, path.join(f.base, "missing-git")),
   );
   const secret = await offline.save(draft(), f.access, "agent");
-  const shared: VaultAccess = {
-    scope: { visibility: "conversation", sessionId: randomUUID() },
-    agentId: "main",
-    assertCurrent() {},
-  };
+  const shared = plainAccess({ visibility: "conversation", sessionId: randomUUID() });
   const receipt = await f.service.save(draft(), shared, "agent");
   expect(receipt.git!.state).toBe("committed");
   expect(git(f.root, "ls-tree", "-r", "--name-only", "HEAD")).not.toMatch(/private/);

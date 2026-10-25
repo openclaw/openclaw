@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, writeFile, symlink } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile, symlink } from "node:fs/promises";
 import path from "node:path";
 import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import { Check } from "typebox/value";
@@ -123,21 +123,14 @@ it("custom local extension participates in inspection, aliases, filing, fields, 
   expect((await vault.list({ type: "organization" })).records[0]!.type).toBe("company");
   expect((await vault.list({ type: "advises" })).total).toBe(1);
   expect(await hashes(root)).toStrictEqual(before);
-  await writeFile(
-    path.join(root, "researchers/researcher.md"),
-    record.replace("specialty: ecology", "specialty: 42"),
-  );
-  expect((await vault.scan()).issues.some((i) => i.code === "field-type")).toBeTruthy();
-  await writeFile(
-    path.join(root, "researchers/researcher.md"),
-    record.replace("  specialty: ecology\n", ""),
-  );
-  expect((await vault.scan()).issues.some((i) => i.code === "required-field")).toBeTruthy();
-  await writeFile(
-    path.join(root, "researchers/researcher.md"),
-    record.replace("specialty: ecology", "specialty: music"),
-  );
-  expect((await vault.scan()).issues.some((i) => i.code === "field-type")).toBeTruthy();
+  for (const [from, to, code] of [
+    ["specialty: ecology", "specialty: 42", "field-type"],
+    ["  specialty: ecology\n", "", "required-field"],
+    ["specialty: ecology", "specialty: music", "field-type"],
+  ]) {
+    await writeFile(path.join(root, "researchers/researcher.md"), record.replace(from!, to!));
+    expect((await vault.scan()).issues.some((i) => i.code === code)).toBeTruthy();
+  }
   await writeFile(path.join(root, "researchers/researcher.md"), record);
   await writeFile(
     path.join(root, "relationships/advises.md"),
@@ -383,8 +376,13 @@ it("path inference never overwrites explicit type or original metadata", async (
   expect(r.issues.some((i) => i.code === "filing")).toBeTruthy();
 });
 
-it("unsafe active ontology cannot silently fall back; legacy schemas are explicitly rejected", async () => {
+it("unsafe or directory active ontology cannot silently fall back; legacy schemas are explicitly rejected", async () => {
   const { root, vault } = await fixture();
+  await mkdir(path.join(root, "ontology.yaml"));
+  expect((await vault.scan()).ontology, "a directory is invalid, not an absent selection").toBe(
+    null,
+  );
+  await rm(path.join(root, "ontology.yaml"), { recursive: true });
   await symlink("/etc/passwd", path.join(root, "ontology.yaml"));
   expect((await vault.scan()).ontology).toBe(null);
   await cp(
@@ -412,12 +410,6 @@ it("unrestricted relationships still require endpoints with declared page types"
       (i) => i.path === "relationships/alex-leads-garden.md" && i.code === "endpoint-type",
     ),
   ).toBeTruthy();
-});
-
-it("an active ontology directory is invalid, not an absent selection", async () => {
-  const { root, vault } = await fixture();
-  await mkdir(path.join(root, "ontology.yaml"));
-  expect((await vault.scan()).ontology).toBe(null);
 });
 
 it("valid compact manifests remain inspectable after effective-definition formatting", async () => {

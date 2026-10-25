@@ -52,7 +52,10 @@ async function fixture() {
       ...extra,
     };
   };
-  return { ...f, db, storage, access, scoped, scan, record, input };
+  // Accepted mutation journal rows; rejected reconciliations must not add one.
+  const mutations = () =>
+    db.withDatabase((d) => d.prepare("SELECT count(*) AS n FROM mutations").get()!.n);
+  return { ...f, db, storage, access, scoped, scan, record, input, mutations };
 }
 
 async function retained(
@@ -192,9 +195,7 @@ it("stale revision/hash, ontology/vault and scope fences reject before mutation"
     ),
   ).rejects.toThrow(/unavailable|scope/i);
   expect((await f.record(saved.id))!.hash).toBe(before!.hash);
-  expect(
-    f.db.withDatabase((db) => db.prepare("SELECT count(*) AS n FROM mutations").get()!.n),
-  ).toBe(1);
+  expect(f.mutations()).toBe(1);
 });
 
 it("expanded dry run refuses an oversized rollback without discarding compact support", async () => {
@@ -248,7 +249,5 @@ it("deleting a reused descriptor before acceptance rejects without publication",
   );
   expect(await readFile(path.join(f.scoped, before!.path), "utf8")).toBe(before!.raw);
   await expect(readFile(descriptor)).rejects.toThrow(/ENOENT/);
-  expect(
-    f.db.withDatabase((db) => db.prepare("SELECT count(*) AS n FROM mutations").get()!.n),
-  ).toBe(1);
+  expect(f.mutations()).toBe(1);
 });

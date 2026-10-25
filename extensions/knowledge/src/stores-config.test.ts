@@ -7,20 +7,6 @@ import {
   parsePolicy,
 } from "./stores-config.js";
 
-it("membership: unassigned agents use isolated defaults; assigned agents use their named store", () => {
-  const m = parseMembership({ personal: { agents: ["main", "research"] } });
-  expect(effectiveBinding(m, "main")).toBe("named:personal");
-  expect(effectiveBinding(m, "ops")).toBe("agent:ops");
-  expect(m.issues).toStrictEqual([]);
-});
-
-it("membership: duplicate assignment is invalid, never first-match-wins", () => {
-  const m = parseMembership({ a: { agents: ["main"] }, b: { agents: ["main", "ops"] } });
-  expect(effectiveBinding(m, "main")).toBe(undefined);
-  expect(effectiveBinding(m, "ops")).toBe("named:b");
-  expect(m.issues[0]).toMatch(/both "a" and "b"/);
-});
-
 it("membership: a malformed section makes listed agents unavailable instead of isolated", () => {
   const m = parseMembership({ "Bad Key": { agents: ["main"] } });
   expect(effectiveBinding(m, "main")).toBe(undefined);

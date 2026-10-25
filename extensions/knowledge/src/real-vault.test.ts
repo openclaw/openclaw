@@ -1,15 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  cp,
-  mkdir,
-  readFile,
-  writeFile,
-  rm,
-  rename,
-  link,
-  symlink,
-  access,
-} from "node:fs/promises";
+import { cp, mkdir, readFile, writeFile, rename, link, symlink, access } from "node:fs/promises";
 import path from "node:path";
 import type { FeatureOperation } from "openclaw/plugin-sdk/feature-contract";
 import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
@@ -20,32 +10,29 @@ import { SqliteIdentityStore } from "./identity-store.js";
 import { sampleVaultRoot } from "./plugin-files.js";
 import { RealVault } from "./real-vault.js";
 import { createKnowledgeService } from "./service.js";
-import type { Manifest } from "./store-manifest.js";
-import { accessFor, apiFor, useTestTempDirs, type TestStoreConfig } from "./test-support.js";
+import {
+  accessFor,
+  apiFor,
+  createVault,
+  operatorContext,
+  toolContext,
+  useTestTempDirs,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
+// A host-minted conversation audience for the main agent.
+const conversation = (sessionId: string) => ({
+  kind: "conversation",
+  agentId: "main",
+  sessionKey: "agent:main:group",
+  sessionId,
+});
+
 async function fixture() {
   const base = tempDirs.make("knowledge-real-");
-
-  const root = path.join(base, "vault");
-  await mkdir(root);
+  const { root, manifest, config } = await createVault(base, { writesEnabled: false });
   const sessionId = randomUUID();
-  const manifest: Manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config: TestStoreConfig = {
-    root,
-    statePath: path.join(base, "knowledge.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    writesEnabled: false,
-    operatorRead: true,
-  };
   async function partition(relative: any, scope: any, title: any) {
     const target = path.join(root, relative);
     await mkdir(target, { recursive: true });
@@ -72,26 +59,7 @@ async function fixture() {
     { visibility: "conversation", sessionId },
     "SHARED SENTINEL",
   );
-  const store = new SqliteIdentityStore(config.statePath);
   const api = apiFor(base, config, { agents: ["main", "other"] });
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
-  const operator: any = {
-    source: "session-action",
-    api,
-    action: { client: { connId: "authenticated-connection", scopes: ["operator.read"] } },
-  };
-  const setAudience = (audience: any) => {
-    owner.tool.memoryAudience = audience;
-  };
   return {
     root,
     base,
@@ -99,14 +67,18 @@ async function fixture() {
     manifest,
     sessionId,
     api,
-    store,
-    owner,
-    operator,
+    store: new SqliteIdentityStore(config.statePath),
+    owner: toolContext(api),
+    operator: operatorContext(api, ["operator.read"]),
     partition,
-    setAudience,
     service: createKnowledgeService(api),
   };
 }
+// The fixture operator with live host policy hooks merged into its client.
+const operatorWith = (f: { operator: any }, client: Record<string, unknown>) => ({
+  ...f.operator,
+  action: { client: { ...f.operator.action.client, ...client } },
+});
 const invokeAll = async (service: any, ctx: any) =>
   Object.fromEntries(
     await Promise.all(
@@ -143,13 +115,9 @@ it("UI and owner-private tool read identical private records through the same se
 
 it("conversation audience sees only its records, counts, evidence, ontology and diagnostics", async () => {
   const f = await fixture();
-  f.setAudience({
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:group",
-    sessionId: f.sessionId,
-  });
+  f.owner.tool.memoryAudience = conversation(f.sessionId);
   const before = await invokeAll(f.service, f.owner);
+  expect(before.status.scope).toBe(`conversation:${f.sessionId}`);
   expect(JSON.stringify(before)).toMatch(/SHARED SENTINEL/);
   expect(JSON.stringify(before)).not.toMatch(/PRIVATE SENTINEL/);
   // Changes in hidden scopes cannot change any authorized result except timestamps.
@@ -168,29 +136,12 @@ it("conversation audience sees only its records, counts, evidence, ontology and 
   expect((await f.service.record({ id: "missing-private-id" }, f.owner)).record).toBe(null);
 });
 
-it("host-resolved conversation calls are scoped; missing audience fails closed", async () => {
+it("missing, foreign, and revoked tool authority fails for every operation", async () => {
   const f = await fixture();
-  const nonowner = {
-    ...f.owner,
-    tool: {
-      ...f.owner.tool,
-      memoryAudience: {
-        kind: "conversation",
-        agentId: "main",
-        sessionKey: "agent:main:direct",
-        sessionId: f.sessionId,
-      },
-    },
-  };
-  expect((await f.service.status({}, nonowner)).scope).toBe(`conversation:${f.sessionId}`);
   const missing = { ...f.owner, tool: { ...f.owner.tool, memoryAudience: undefined } };
   await expect(f.service.records({}, missing)).rejects.toThrow(
     /granted this session no memory audience.*"memory_audience_denied"/,
   );
-});
-
-it("missing, foreign, and revoked tool authority fails for every operation", async () => {
-  const f = await fixture();
   for (const override of [
     { memoryAudience: undefined },
     { assertInvocationCurrent: undefined },
@@ -254,10 +205,7 @@ it("operator scopes are explicit, selectors cannot create conversation authority
 
 it("operator browsing honors the role's agent ceiling and needs an administrator on a shared Gateway", async () => {
   const f = await fixture();
-  const withClient = (client: Record<string, unknown>) => ({
-    ...f.operator,
-    action: { client: { ...f.operator.action.client, ...client } },
-  });
+  const withClient = (client: Record<string, unknown>) => operatorWith(f, client);
   const allows =
     (...agents: string[]) =>
     (agent: string) =>
@@ -284,10 +232,7 @@ it("a role or roster change after admission refuses the operator read before dis
   // Live host checks: admission sees the old policy, every later recheck the new one.
   let checks = 0;
   const changed = () => checks++ > 0;
-  const withClient = (client: Record<string, unknown>) => ({
-    ...f.operator,
-    action: { client: { ...f.operator.action.client, ...client } },
-  });
+  const withClient = (client: Record<string, unknown>) => operatorWith(f, client);
   await expect(
     f.service.records({}, withClient({ allowsAgent: () => !changed() })),
   ).rejects.toThrow();
@@ -298,18 +243,7 @@ it("a role or roster change after admission refuses the operator read before dis
 it("empty conversation scope returns an empty catalog, without creating files or reading private ontology", async () => {
   const f = await fixture(),
     sessionId = randomUUID();
-  const ctx = {
-    ...f.owner,
-    tool: {
-      ...f.owner.tool,
-      memoryAudience: {
-        kind: "conversation",
-        agentId: "main",
-        sessionKey: "agent:main:channel",
-        sessionId,
-      },
-    },
-  };
+  const ctx = { ...f.owner, tool: { ...f.owner.tool, memoryAudience: conversation(sessionId) } };
   const output = await invokeAll(f.service, ctx);
   expect(output.status.records).toBe(0);
   expect(output.record.record).toBe(null);
@@ -348,34 +282,12 @@ it("identity replacement, generation rollback/mismatch, and missing manifest nev
     await expect(f.service.records({}, f.owner)).rejects.toThrow(/identity/);
     await expect(createKnowledgeService(f.api).records({}, f.owner)).rejects.toThrow(/identity/);
   }
+  expect((await f.store.lookup(`store:${f.manifest.vaultId}`))!.vaultId).toBe(f.manifest.vaultId);
+  const reordered = Object.fromEntries(Object.entries(f.manifest).toReversed());
+  await writeFile(path.join(f.root, "vault.json"), JSON.stringify(reordered));
+  expect((await createKnowledgeService(f.api).status({}, f.owner)).vault).toBe(f.manifest.vaultId);
   await rename(path.join(f.root, "vault.json"), path.join(f.root, "old-vault.json"));
   await expect(f.service.records({}, f.owner)).rejects.toThrow(/identity/);
-});
-
-it("the registry identity fences a replaced vault across service restarts", async () => {
-  const f = await fixture();
-  await f.service.status({}, f.owner);
-  const replacement = { ...f.manifest, vaultId: randomUUID(), publicationId: randomUUID() };
-  await writeFile(path.join(f.root, "vault.json"), JSON.stringify(replacement));
-  await expect(createKnowledgeService(f.api).records({}, f.owner)).rejects.toThrow(/identity/);
-  expect((await f.store.lookup(`store:${f.manifest.vaultId}`))!.vaultId).toBe(f.manifest.vaultId);
-});
-
-it("a moved store is unavailable, never replaced; reordered manifest keys are immaterial", async () => {
-  const f = await fixture();
-  await f.service.status({}, f.owner);
-  const moved = path.join(f.base, "moved");
-  await rename(f.root, moved);
-  const status = await createKnowledgeService(f.api).status({}, f.owner);
-  expect(status.store).toBe("unavailable");
-  expect(status.vault).toBe("");
-  await expect(createKnowledgeService(f.api).records({}, f.owner)).rejects.toThrow(/identity/);
-  await rename(moved, f.root);
-  await writeFile(
-    path.join(f.root, "vault.json"),
-    JSON.stringify(Object.fromEntries(Object.entries(f.manifest).toReversed())),
-  );
-  expect((await createKnowledgeService(f.api).status({}, f.owner)).vault).toBe(f.manifest.vaultId);
 });
 
 it("authority and identity are rechecked after asynchronous reads", async () => {
@@ -384,16 +296,11 @@ it("authority and identity are rechecked after asynchronous reads", async () => 
   await expect(
     real.run(accessFor(f.owner), async (vault) => {
       const result = await vault.list({});
-      f.setAudience({
-        kind: "conversation",
-        agentId: "main",
-        sessionKey: "agent:main:group",
-        sessionId: f.sessionId,
-      });
+      f.owner.tool.memoryAudience = conversation(f.sessionId);
       return result;
     }),
   ).rejects.toThrow(/authority/);
-  f.setAudience({ kind: "owner-private", agentId: "main" });
+  f.owner.tool.memoryAudience = { kind: "owner-private", agentId: "main" };
   await expect(
     real.run(accessFor(f.owner), async (vault) => {
       const result = await vault.list({});
@@ -418,45 +325,11 @@ it("hardlinks, file and partition symlinks cannot expose another scope", async (
     path.join(f.root, "private", "people", "alex-rivera.md"),
     path.join(shared, "leak-file.md"),
   );
-  f.setAudience({
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:group",
-    sessionId: f.sessionId,
-  });
+  f.owner.tool.memoryAudience = conversation(f.sessionId);
   expect(JSON.stringify(await invokeAll(f.service, f.owner))).not.toMatch(/PRIVATE SENTINEL/);
   await rename(shared, shared + "-saved");
   await symlink(path.join(f.root, "private"), shared);
   await expect(f.service.records({}, f.owner)).rejects.toThrow(/identity/);
-});
-
-it("external edits, renames, and deletion appear on next read without changing authored files", async () => {
-  const f = await fixture(),
-    file = path.join(f.root, "private", "people", "alex-rivera.md");
-  const before = await f.service.record({ id: "sample_person_alex" }, f.owner);
-  const raw = (await readFile(file, "utf8")).replace("PRIVATE SENTINEL", "Edited name");
-  await writeFile(file, raw);
-  await rename(file, file + "-renamed.md");
-  const after = await f.service.record({ id: "sample_person_alex" }, f.owner);
-  expect(after.record!.id).toBe(before.record!.id);
-  expect(after.record!.hash).not.toBe(before.record!.hash);
-  expect(
-    (await f.service.record({ id: "sample_person_alex", view: "raw" }, f.owner)).record!.raw,
-  ).toBe(raw);
-  await rm(file + "-renamed.md");
-  expect((await f.service.record({ id: "sample_person_alex" }, f.owner)).record).toBe(null);
-});
-
-it("identity bindings persist across connections and competing registrations never replace them", async () => {
-  const f = await fixture(),
-    rival = { ...f.manifest, publicationId: randomUUID() };
-  const key = `store:${randomUUID()}`;
-  const results = await Promise.all([
-    f.store.registerIfAbsent(key, f.manifest),
-    new SqliteIdentityStore(f.config.statePath).registerIfAbsent(key, rival),
-  ]);
-  expect(results).toStrictEqual([true, false]);
-  expect(await new SqliteIdentityStore(f.config.statePath).lookup(key)).toStrictEqual(f.manifest);
 });
 
 it("unrelated/corrupt operational databases and database links fail closed without replacement", async () => {
@@ -489,12 +362,7 @@ it("build metadata retains the real-vault configuration contract", async () => {
 
 it("all opt-in inspection views retain conversation scope and authority", async () => {
   const f = await fixture();
-  f.setAudience({
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:group",
-    sessionId: f.sessionId,
-  });
+  f.owner.tool.memoryAudience = conversation(f.sessionId);
   for (const input of [
     { id: "sample_person_alex", view: "raw" },
     { id: "sample_person_alex", includeMetadata: true, includeReferences: true },

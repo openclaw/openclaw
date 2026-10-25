@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readdir, readFile, rename, access, mkdir, writeFile } from "node:fs/promises";
+import { readdir, readFile, rename, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { Check } from "typebox/value";
@@ -44,8 +44,8 @@ async function fixture(options = {}) {
   const admin = operatorContext(host.api, ["operator.admin"]),
     reader = operatorContext(host.api, ["operator.read"]);
   const as = (agent: any) => toolContext(host.api, agent);
-  const save = (agent: any, title: any) =>
-    service.save_page(
+  const save = (agent: any, title: any, via = service) =>
+    via.save_page(
       { requestId: randomUUID(), title, type: "note", body: `${title} body.` },
       as(agent),
     );
@@ -67,6 +67,10 @@ async function fixture(options = {}) {
     ).toBeTruthy();
     return { input, result };
   };
+  const share = (agent: string, agents: string[], label = "Team") =>
+    change(agent, { kind: "share_existing", label, agents });
+  const outcome = async (agent: string, requested: any, expectedRevision?: string) =>
+    (await change(agent, requested, expectedRevision)).result.outcome;
   const storesDir = () => readdir(path.join(host.stateRoot, "stores")).catch(() => []);
   // The fixture host types plugin config loosely; these tests only author valid store sections.
   const storesSection = () =>
@@ -82,12 +86,17 @@ async function fixture(options = {}) {
     titles,
     snapshot,
     change,
+    share,
+    outcome,
     storesDir,
     storesSection,
   };
 }
 const entry = (snapshot: any, binding: any) =>
   snapshot.stores.find((s: any) => s.binding === binding);
+// An operator's proxied read of the research agent's store.
+const query = (f: Awaited<ReturnType<typeof fixture>>, operation: string, input = {}) =>
+  f.service.agent_query({ agent: "research", operation, input }, f.reader);
 
 it("two unassigned agents get separate stores on first use and cannot read each other", async () => {
   const f = await fixture();
@@ -98,8 +107,25 @@ it("two unassigned agents get separate stores on first use and cannot read each 
   expect((await f.storesDir()).length).toBe(2);
 });
 
-it("passive discovery never creates storage", async () => {
+it("passive discovery, including operator provider reads, never creates storage", async () => {
   const f = await fixture();
+  let runtime: any;
+  createKnowledgeService({
+    ...f.api,
+    registerMemoryCapability(c) {
+      runtime = c.providerRuntime;
+    },
+  });
+  const { provider } = await runtime.open({
+    cfg: {},
+    agentId: "research",
+    context: {
+      authority: { kind: "operator", connId: "x", scopes: ["operator.read"] },
+      assertCurrent() {},
+    },
+  });
+  await expect(provider.search({ query: "anything" })).rejects.toThrow(/first authorized use/);
+  expect((await provider.health()).status).toBe("ready");
   const snap = await f.snapshot();
   expect(Check(contract.operations.stores_snapshot.output, snap)).toBeTruthy();
   expect(snap.agents.map((a) => [a.id, a.binding])).toStrictEqual([
@@ -110,22 +136,8 @@ it("passive discovery never creates storage", async () => {
   expect(snap.stores.every((s) => s.state === "unprovisioned")).toBeTruthy();
   const status = await f.service.status({}, f.reader);
   expect(status.store).toBe("unprovisioned");
-  expect(
-    (
-      (await f.service.agent_query(
-        { agent: "research", operation: "records", input: {} },
-        f.reader,
-      )) as Output<"records">
-    ).total,
-  ).toBe(0);
-  expect(
-    (
-      (await f.service.agent_query(
-        { agent: "research", operation: "status", input: {} },
-        f.reader,
-      )) as Output<"status">
-    ).store,
-  ).toBe("unprovisioned");
+  expect(((await query(f, "records")) as Output<"records">).total).toBe(0);
+  expect(((await query(f, "status")) as Output<"status">).store).toBe("unprovisioned");
   expect(await f.storesDir()).toStrictEqual([]);
 });
 
@@ -180,38 +192,34 @@ it("a provisioned store that disappears is unavailable, never recreated empty", 
   const [dir] = await f.storesDir();
   await rename(path.join(f.stateRoot, "stores", dir!), path.join(f.base, "moved-away"));
   const fresh = createKnowledgeService(f.api);
-  await expect(
-    fresh.save_page(
-      { requestId: randomUUID(), title: "Must not land", type: "note", body: "x" },
-      f.as("main"),
-    ),
-  ).rejects.toThrow(/identity|unavailable/);
+  await expect(f.save("main", "Must not land", fresh)).rejects.toThrow(/identity|unavailable/);
   expect(entry(await fresh.stores_snapshot({}, f.admin), "agent:main").state).toBe("unavailable");
   expect(await f.storesDir()).toStrictEqual([]);
 });
 
-it("a missing registry beside existing stores requires recovery", async () => {
-  const f = await fixture();
-  await f.save("main", "Kept");
-  await rename(path.join(f.stateRoot, "registry.sqlite"), path.join(f.base, "registry.bak"));
-  const fresh = createKnowledgeService(f.api);
-  await expect(
-    fresh.save_page({ requestId: randomUUID(), title: "x", type: "note", body: "x" }, f.as("main")),
-  ).rejects.toThrow(/registry/);
-  const snap = await fresh.stores_snapshot({}, f.admin);
-  expect(snap.canChange).toBe(false);
-  expect(snap.issues[0]).toMatch(/registry/);
-});
+it.each([
+  ["missing", (file: string, base: string) => rename(file, path.join(base, "registry.bak"))],
+  ["emptied", (file: string) => writeFile(file, "")],
+])(
+  "a %s registry beside existing stores requires recovery, never fresh empty stores",
+  async (_case, damage) => {
+    const f = await fixture();
+    await f.save("main", "Kept");
+    await damage(path.join(f.stateRoot, "registry.sqlite"), f.base);
+    const fresh = createKnowledgeService(f.api);
+    await expect(f.save("main", "x", fresh)).rejects.toThrow(/registry/);
+    const snap = await fresh.stores_snapshot({}, f.admin);
+    expect(snap.canChange).toBe(false);
+    expect(snap.issues[0]).toMatch(/registry/);
+    expect((await f.storesDir()).length).toBe(1);
+  },
+);
 
 it("share existing: same identity and records; members read and update through one store", async () => {
   const f = await fixture();
   await f.save("main", "Before sharing");
   const before = await f.service.status({}, f.as("main"));
-  const { result } = await f.change("main", {
-    kind: "share_existing",
-    label: "Personal",
-    agents: ["research"],
-  });
+  const { result } = await f.share("main", ["research"], "Personal");
   expect(result.outcome, result.message).toBe("applied");
   const shared = entry(result.snapshot, "named:personal");
   expect(shared.members).toStrictEqual(["main", "research"]);
@@ -239,15 +247,7 @@ it("use own after sharing: joiner resumes its old store; originating sharer gets
   const f = await fixture();
   await f.save("main", "Shared seed");
   await f.save("research", "Research own");
-  expect(
-    (
-      await f.change("main", {
-        kind: "share_existing",
-        label: "Team",
-        agents: ["research"],
-      })
-    ).result.outcome,
-  ).toBe("applied");
+  expect((await f.share("main", ["research"])).result.outcome).toBe("applied");
   expect(await f.titles("research")).toStrictEqual(["Shared seed"]);
   const back = await f.change("research", { kind: "use_own" });
   expect(back.result.outcome, back.result.message).toBe("applied");
@@ -260,9 +260,7 @@ it("use own after sharing: joiner resumes its old store; originating sharer gets
   expect(team.members).toStrictEqual([]);
   expect(team.state).toBe("ready");
   expect(await f.titles("main")).toStrictEqual([]);
-  expect((await f.change("ops", { kind: "use_named", store: "team" })).result.outcome).toBe(
-    "applied",
-  );
+  expect(await f.outcome("ops", { kind: "use_named", store: "team" })).toBe("applied");
   expect(await f.titles("ops")).toStrictEqual(["Shared seed"]);
 });
 
@@ -270,12 +268,8 @@ it("switching named stores leaves one assignment and the former store untouched"
   const f = await fixture();
   await f.save("main", "Alpha");
   await f.save("ops", "Beta");
-  await f.change("main", { kind: "share_existing", label: "A", agents: ["research"] });
-  const b = await f.change("ops", {
-    kind: "share_existing",
-    label: "B",
-    agents: ["main"],
-  });
+  await f.share("main", ["research"], "A");
+  const b = await f.share("ops", ["main"], "B");
   expect(b.result.outcome, b.result.message).toBe("applied");
   const stores = f.storesSection();
   expect(stores.a!.agents).toStrictEqual(["research"]);
@@ -332,11 +326,7 @@ it("an operator whose access ends before the config write changes nothing", asyn
   expect(f.writes).toHaveLength(writes);
   expect(f.host.config).toStrictEqual(before);
   // The refused request does not block a current administrator.
-  const next = await f.change("main", {
-    kind: "share_existing",
-    label: "A",
-    agents: ["research"],
-  });
+  const next = await f.share("main", ["research"], "A");
   expect(next.result.outcome, next.result.message).toBe("applied");
 });
 
@@ -344,36 +334,14 @@ it("validation, stale revisions and non-admin callers never partially apply", as
   const f = await fixture();
   await f.save("main", "Seed");
   const stale = (await f.snapshot()).revision;
-  expect(
-    (
-      await f.change("research", {
-        kind: "share_existing",
-        label: "Nope",
-        agents: ["main"],
-      })
-    ).result.outcome,
-    "unprovisioned source",
-  ).toBe("invalid");
-  expect((await f.change("main", { kind: "use_named", store: "missing" })).result.outcome).toBe(
+  expect((await f.share("research", ["main"])).result.outcome, "unprovisioned source").toBe(
     "invalid",
   );
-  expect((await f.change("main", { kind: "use_own" })).result.outcome).toBe("invalid");
-  expect(
-    (await f.change("main", { kind: "share_existing", label: "Team", agents: ["ghost"] })).result
-      .outcome,
-  ).toBe("invalid");
-  expect(
-    (
-      await f.change("main", {
-        kind: "share_existing",
-        label: "Team",
-        agents: ["research"],
-      })
-    ).result.outcome,
-  ).toBe("applied");
-  expect((await f.change("ops", { kind: "use_named", store: "team" }, stale)).result.outcome).toBe(
-    "conflict",
-  );
+  expect(await f.outcome("main", { kind: "use_named", store: "missing" })).toBe("invalid");
+  expect(await f.outcome("main", { kind: "use_own" })).toBe("invalid");
+  expect((await f.share("main", ["ghost"])).result.outcome).toBe("invalid");
+  expect((await f.share("main", ["research"])).result.outcome).toBe("applied");
+  expect(await f.outcome("ops", { kind: "use_named", store: "team" }, stale)).toBe("conflict");
   const denied = await f.service.stores_change(
     {
       requestId: randomUUID(),
@@ -398,11 +366,7 @@ it("a concurrent config edit inside the write is a conflict, not an overwrite", 
     f.host.config.plugins.entries.knowledge.config.stores = { other: { agents: ["ops"] } };
     return original(params);
   };
-  const { result } = await f.change("main", {
-    kind: "share_existing",
-    label: "Team",
-    agents: ["research"],
-  });
+  const { result } = await f.share("main", ["research"]);
   expect(result.outcome).toBe("conflict");
   expect(f.host.config.plugins.entries.knowledge.config.stores).toStrictEqual({
     other: { agents: ["ops"] },
@@ -412,11 +376,7 @@ it("a concurrent config edit inside the write is a conflict, not an overwrite", 
 it("repeated request IDs replay the outcome; reuse for another change is rejected", async () => {
   const f = await fixture();
   await f.save("main", "Seed");
-  const { input, result } = await f.change("main", {
-    kind: "share_existing",
-    label: "Team",
-    agents: ["research"],
-  });
+  const { input, result } = await f.share("main", ["research"]);
   expect(result.outcome).toBe("applied");
   expect((await f.service.stores_change(input, f.admin)).outcome).toBe("applied");
   expect(
@@ -439,11 +399,7 @@ it("a crash between the config write and registry settlement reconciles to one o
     await original(params);
     throw new Error("process died");
   };
-  const { input, result } = await f.change("main", {
-    kind: "share_existing",
-    label: "Team",
-    agents: ["research"],
-  });
+  const { input, result } = await f.share("main", ["research"]);
   f.api.runtime.config.mutateConfigFile = original;
   expect(result.outcome, "the persisted write is recognized as applied").toBe("applied");
   const restarted = createKnowledgeService(f.api);
@@ -467,11 +423,7 @@ it("a journaled change whose write never landed settles as not applied after res
     );
     throw new Error("disk full");
   };
-  const { input, result } = await f.change("main", {
-    kind: "share_existing",
-    label: "Team",
-    agents: ["research"],
-  });
+  const { input, result } = await f.share("main", ["research"]);
   expect(result.outcome, result.message).toBe("not-applied");
   expect(
     (await f.service.stores_change_status({ requestId: input.requestId }, f.admin)).outcome,
@@ -482,15 +434,7 @@ it("a journaled change whose write never landed settles as not applied after res
 it("host publication lag after a save is not mistaken for an external edit", async () => {
   const f = await fixture({ lag: true });
   await f.save("main", "Seed");
-  expect(
-    (
-      await f.change("main", {
-        kind: "share_existing",
-        label: "Team",
-        agents: ["research"],
-      })
-    ).result.outcome,
-  ).toBe("applied");
+  expect((await f.share("main", ["research"])).result.outcome).toBe("applied");
   // config.current() still shows the previous section until the host publishes.
   expect(await f.titles("research")).toStrictEqual(["Seed"]);
   f.publish();
@@ -500,7 +444,7 @@ it("host publication lag after a save is not mistaken for an external edit", asy
 it("external configuration edits apply in-process; invalid membership makes affected agents unavailable", async () => {
   const f = await fixture();
   await f.save("main", "Seed");
-  await f.change("main", { kind: "share_existing", label: "Team", agents: ["research"] });
+  await f.share("main", ["research"]);
   f.host.config = structuredClone(f.host.config);
   f.storesSection().team!.agents.push("ops");
   expect(await f.titles("ops")).toStrictEqual(["Seed"]);
@@ -555,13 +499,8 @@ it("the cutover fences old-assignment access before applying and after", async (
 it("operator proxy is operator-only and validates inner operations", async () => {
   const f = await fixture();
   await f.save("research", "Visible to operator");
-  const rows = await f.service.agent_query(
-    { agent: "research", operation: "records", input: {} },
-    f.reader,
-  );
-  expect((rows as Output<"records">).records.map((r) => r.title)).toStrictEqual([
-    "Visible to operator",
-  ]);
+  const rows = (await query(f, "records")) as Output<"records">;
+  expect(rows.records.map((r) => r.title)).toStrictEqual(["Visible to operator"]);
   expect(
     (await f.service.records({}, f.reader)).total,
     "default operator view is the default agent",
@@ -569,22 +508,13 @@ it("operator proxy is operator-only and validates inner operations", async () =>
   await expect(
     f.service.agent_query({ agent: "research", operation: "records", input: {} }, f.as("main")),
   ).rejects.toThrow(/operator/);
-  await expect(
-    f.service.agent_query({ agent: "research", operation: "save_page", input: {} }, f.reader),
-  ).rejects.toThrow(/Unknown query/);
-  await expect(
-    f.service.agent_query({ agent: "research", operation: "stores_snapshot", input: {} }, f.reader),
-  ).rejects.toThrow(/Unknown query/);
+  for (const operation of ["save_page", "stores_snapshot"]) {
+    await expect(query(f, operation)).rejects.toThrow(/Unknown query/);
+  }
   await expect(
     f.service.agent_query({ agent: "ghost", operation: "records", input: {} }, f.reader),
   ).rejects.toThrow(/Unknown agent/);
-  await expect(
-    f.service.agent_query(
-      { agent: "research", operation: "records", input: { bogus: 1 } },
-      f.reader,
-    ),
-  ).rejects.toThrow(/Invalid input/);
-  await expect(access(path.join(f.stateRoot, "stores", "nothing"))).rejects.toThrow();
+  await expect(query(f, "records", { bogus: 1 })).rejects.toThrow(/Invalid input/);
 });
 
 it("recovery keeps a shared store bound to its data even when other edits conflict", async () => {
@@ -598,11 +528,7 @@ it("recovery keeps a shared store bound to its data even when other edits confli
     f.storesSection().other = { agents: ["ops"] };
     throw new Error("process died");
   };
-  const { result } = await f.change("main", {
-    kind: "share_existing",
-    label: "Team",
-    agents: ["research"],
-  });
+  const { result } = await f.share("main", ["research"]);
   f.api.runtime.config.mutateConfigFile = original;
   expect(result.outcome).toBe("conflict");
   expect(
@@ -625,35 +551,6 @@ it("an interrupted sentinel write is completed; a sentinel naming another regist
   await expect(createKnowledgeService(f.api).records({}, f.as("main"))).rejects.toThrow(/registry/);
 });
 
-it("an emptied registry is recovery, never a fresh set of empty stores", async () => {
-  const f = await fixture();
-  await f.save("main", "Kept");
-  await writeFile(path.join(f.stateRoot, "registry.sqlite"), "");
-  await expect(createKnowledgeService(f.api).records({}, f.as("main"))).rejects.toThrow(/registry/);
-  expect((await f.storesDir()).length).toBe(1);
-});
-
-it("operator provider reads never create storage", async () => {
-  const f = await fixture();
-  let runtime;
-  const base = f.api;
-  const service = createKnowledgeService({
-    ...base,
-    registerMemoryCapability(c) {
-      runtime = c.providerRuntime;
-    },
-  });
-  const context = {
-    authority: { kind: "operator", connId: "x", scopes: ["operator.read"] },
-    assertCurrent() {},
-  };
-  const { provider } = await runtime!.open({ cfg: {}, agentId: "research", context });
-  await expect(provider.search({ query: "anything" })).rejects.toThrow(/first authorized use/);
-  expect((await provider.health()).status).toBe("ready");
-  expect(await f.storesDir()).toStrictEqual([]);
-  void service;
-});
-
 it("several agents without a default: operators must choose; tools are unaffected", async () => {
   const f = await fixture();
   // No agent entry is marked default, as on installs with several agents.
@@ -664,13 +561,6 @@ it("several agents without a default: operators must choose; tools are unaffecte
   const snap = await f.snapshot();
   expect(snap.defaultAgent).toBe(undefined);
   await expect(f.service.status({}, f.reader)).rejects.toThrow(/choose which agent/);
-  expect(
-    (
-      (await f.service.agent_query(
-        { agent: "research", operation: "records", input: {} },
-        f.reader,
-      )) as Output<"records">
-    ).total,
-  ).toBe(1);
+  expect(((await query(f, "records")) as Output<"records">).total).toBe(1);
   expect((await f.service.status({}, f.as("main"))).store).toBe("unprovisioned");
 });

@@ -5,6 +5,7 @@ import { contract } from "./contract.js";
 import { jsonRoundTrip } from "./test-support.js";
 import { SampleVault } from "./vault.js";
 
+const ids = (rows: any[]) => rows.map((r) => r.id);
 const checked = (op: keyof typeof contract.operations, result: any) => {
   expect(Check(contract.operations[op].output, result)).toBeTruthy();
   expect(result, "Card responses must be JSON-safe before host serialization").toStrictEqual(
@@ -127,7 +128,7 @@ it("relationship browse batches deduplicated eligible endpoints in one scan per 
   expect(scans).toBe(1);
   expect(first.records.length).toBe(50);
   expect(first.nextOffset).toBe(50);
-  expect(new Set(first.endpoints.map((r: any) => r.id))).toStrictEqual(
+  expect(new Set(ids(first.endpoints))).toStrictEqual(
     new Set([edge!.metadata.from, edge!.metadata.to]),
   );
   for (const endpoint of first.endpoints) {
@@ -152,19 +153,18 @@ it("relationship browse batches deduplicated eligible endpoints in one scan per 
     await vault.list({ kind: "relationship", lifecycle: "all", includeEndpoints: true }),
   );
   expect(historical.records.length).toBe(50);
-  expect(
-    !historical.endpoints.some((r: any) => r.id === target!.id),
-    "History must not leak unavailable endpoint content",
-  ).toBeTruthy();
+  // History must not leak unavailable endpoint content.
+  expect(ids(historical.endpoints)).not.toContain(target!.id);
   target!.lifecycle = "active";
   target!.metadata.lifecycle = "active";
   data.records.push({ ...target!, path: "duplicate.md" });
-  expect(
-    !(
-      await vault.list({ kind: "relationship", lifecycle: "all", includeEndpoints: true })
-    ).endpoints!.some((r) => r.id === target!.id),
-    "Ambiguous endpoint identities are withheld",
-  ).toBeTruthy();
+  // Ambiguous endpoint identities are withheld.
+  const ambiguous = await vault.list({
+    kind: "relationship",
+    lifecycle: "all",
+    includeEndpoints: true,
+  });
+  expect(ids(ambiguous.endpoints!)).not.toContain(target!.id);
   const pages = checked("records", await vault.list({ kind: "page", includeEndpoints: true }));
   expect(pages.endpoints, "Only relationships on this page contribute endpoints").toStrictEqual([]);
 });
@@ -179,7 +179,7 @@ it("connection pages batch only current unambiguous endpoints on the requested p
     limit: 1,
   } as const;
   const first = checked("connections", connections(data, input));
-  expect(new Set(first.endpoints.map((r: any) => r.id))).toStrictEqual(
+  expect(new Set(ids(first.endpoints))).toStrictEqual(
     new Set([edge!.metadata.from, edge!.metadata.to]),
   );
   expect(
@@ -190,17 +190,11 @@ it("connection pages batch only current unambiguous endpoints on the requested p
   const target = data.records.find((r) => r.id === edge!.metadata.to);
   target!.lifecycle = "withdrawn";
   target!.metadata.lifecycle = "withdrawn";
-  expect(
-    !checked("connections", connections(data, { ...input, historical: true })).endpoints.some(
-      (r: any) => r.id === target!.id,
-    ),
-  ).toBeTruthy();
+  const historical = () =>
+    checked("connections", connections(data, { ...input, historical: true }));
+  expect(ids(historical().endpoints)).not.toContain(target!.id);
   target!.lifecycle = "active";
   target!.metadata.lifecycle = "active";
   data.records.push({ ...target!, path: "duplicate.md" });
-  expect(
-    !checked("connections", connections(data, { ...input, historical: true })).endpoints.some(
-      (r: any) => r.id === target!.id,
-    ),
-  ).toBeTruthy();
+  expect(ids(historical().endpoints)).not.toContain(target!.id);
 });

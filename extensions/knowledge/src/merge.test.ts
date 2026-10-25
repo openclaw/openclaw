@@ -1,48 +1,22 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { FeatureInput } from "openclaw/plugin-sdk/feature-contract";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { contract } from "./contract.js";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, useTestTempDirs, defaultOrder } from "./test-support.js";
+import { storeFixture, toolContext, useTestTempDirs, defaultOrder } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
 // One private vault with two person pages that turn out to be one person.
 async function fixture() {
-  const base = tempDirs.make("knowledge-merge-");
-
-  const root = path.join(base, "vault");
-  await mkdir(path.join(root, "private"), { recursive: true });
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    operatorRead: true,
-    writesEnabled: true,
-  };
-  const api = apiFor(base, config),
-    service = createKnowledgeService(api);
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
+  const { api, root } = await storeFixture(tempDirs.make("knowledge-merge-"), {
+    policy: { writesEnabled: true, operatorRead: true },
+  });
+  const service = createKnowledgeService(api),
+    owner = toolContext(api);
   const call = async <K extends keyof typeof service>(
     op: K,
     input: FeatureInput<typeof contract, K>,
@@ -91,7 +65,15 @@ async function fixture() {
     const r = (await record(id)).record!;
     return { id, expectedRevision: r.revision, expectedHash: r.hash };
   };
-  return { root, call, page, claim, record, fence, evidence, source, fingerprint };
+  const merge = async (survivor: string, absorbed: string, extra = {}) =>
+    call("merge", {
+      requestId: randomUUID(),
+      reason: "Owner confirmed both pages are one person.",
+      survivor: await fence(survivor),
+      absorbed: await fence(absorbed),
+      ...extra,
+    });
+  return { root, call, page, claim, record, fence, merge, evidence, source, fingerprint };
 }
 
 async function merged() {
@@ -109,12 +91,7 @@ async function merged() {
   f.linker = await f.page("Standup notes", {
     body: `Attended by [[${f.absorbed.id}]] and [[Jacob (standup participant)]].\n`,
   });
-  f.receipt = await f.call("merge", {
-    requestId: randomUUID(),
-    reason: "Owner confirmed both pages are Jacob Tomlinson.",
-    survivor: await f.fence(f.survivor.id),
-    absorbed: await f.fence(f.absorbed.id),
-  });
+  f.receipt = await f.merge(f.survivor.id, f.absorbed.id);
   return f;
 }
 
@@ -122,32 +99,33 @@ it("a merge publishes both pages once and reports what changed", async () => {
   const f = await merged(),
     r = f.receipt;
   expect(Check(contract.operations.merge.output, r)).toBeTruthy();
-  expect(r.state).toBe("published");
-  expect(r.operation).toBe("merge");
-  expect(r.id).toBe(f.survivor.id);
-  expect(r.targetId).toBe(f.absorbed.id);
-  expect(r.merge.aliases).toStrictEqual(["Jacob (standup participant)", "jacob-standup"]);
-  expect(r.merge.redirectedRecords, "the owned claim named the absorbed page").toBe(1);
-  const survivor = (await f.record(f.survivor.id)).record.metadata;
-  expect(survivor.aliases).toStrictEqual([
-    "discord:111",
-    "Jacob (standup participant)",
-    "jacob-standup",
-  ]);
-  expect(survivor.tags).toStrictEqual(["maintainer", "standup"]);
-  expect(survivor.merged_from[0].id).toBe(f.absorbed.id);
-  const absorbed = await f.record(f.absorbed.id);
-  expect(absorbed.record.lifecycle).toBe("merged");
-  expect(absorbed.record.metadata.merged_into).toBe(f.survivor.id);
-  expect(absorbed.mergedInto.id, "exact reads of the old page say where it went").toBe(
-    f.survivor.id,
-  );
-  expect(absorbed.record.body, "the absorbed body stays readable").toBe(
-    "Jacob (standup participant) notes.\n",
-  );
-  expect((await f.record(f.survivor.id)).mergedFrom.map((p: any) => p.id)).toStrictEqual([
-    f.absorbed.id,
-  ]);
+  // redirectedRecords counts the owned claim that named the absorbed page.
+  expect(r).toMatchObject({
+    state: "published",
+    operation: "merge",
+    id: f.survivor.id,
+    targetId: f.absorbed.id,
+    merge: { aliases: ["Jacob (standup participant)", "jacob-standup"], redirectedRecords: 1 },
+  });
+  expect(await f.record(f.survivor.id)).toMatchObject({
+    record: {
+      metadata: {
+        aliases: ["discord:111", "Jacob (standup participant)", "jacob-standup"],
+        tags: ["maintainer", "standup"],
+        merged_from: [{ id: f.absorbed.id }],
+      },
+    },
+    mergedFrom: [{ id: f.absorbed.id }],
+  });
+  // Exact reads of the old page say where it went, and its body stays readable.
+  expect(await f.record(f.absorbed.id)).toMatchObject({
+    record: {
+      lifecycle: "merged",
+      metadata: { merged_into: f.survivor.id },
+      body: "Jacob (standup participant) notes.\n",
+    },
+    mergedInto: { id: f.survivor.id },
+  });
 });
 
 it("reads follow the redirect without rewriting claims", async () => {
@@ -219,14 +197,7 @@ it("stale references to a merged page are rejected with the survivor named", asy
       body: "y",
     }),
   ).rejects.toThrow(/was merged into/);
-  await expect(
-    f.call("merge", {
-      requestId: randomUUID(),
-      reason: "again",
-      survivor: await f.fence(f.survivor.id),
-      absorbed: await f.fence(f.absorbed.id),
-    }),
-  ).rejects.toThrow(/already merged/);
+  await expect(f.merge(f.survivor.id, f.absorbed.id)).rejects.toThrow(/already merged/);
 });
 
 it("merges refuse different types, self merges and stale fences", async () => {
@@ -238,30 +209,11 @@ it("merges refuse different types, self merges and stale fences", async () => {
       type: "project",
       body: "x\n",
     });
-  await expect(
-    f.call("merge", {
-      requestId: randomUUID(),
-      reason: "r",
-      survivor: await f.fence(a.id),
-      absorbed: await f.fence(b.id),
-    }),
-  ).rejects.toThrow(/same type/);
-  await expect(
-    f.call("merge", {
-      requestId: randomUUID(),
-      reason: "r",
-      survivor: await f.fence(a.id),
-      absorbed: await f.fence(a.id),
-    }),
-  ).rejects.toThrow(/into itself/);
+  await expect(f.merge(a.id, b.id)).rejects.toThrow(/same type/);
+  await expect(f.merge(a.id, a.id)).rejects.toThrow(/into itself/);
   const c = await f.page("Colin B");
   await expect(
-    f.call("merge", {
-      requestId: randomUUID(),
-      reason: "r",
-      survivor: await f.fence(a.id),
-      absorbed: { ...(await f.fence(c.id)), expectedRevision: 9 },
-    }),
+    f.merge(a.id, c.id, { absorbed: { ...(await f.fence(c.id)), expectedRevision: 9 } }),
   ).rejects.toThrow(/changed/);
 });
 
@@ -269,11 +221,7 @@ it("a merge can rename the survivor and replace its body; renamed titles stay re
   const f = await fixture();
   const a = await f.page("Shakker"),
     b = await f.page("Gideon Adegbesan", { fields: {} });
-  const r = await f.call("merge", {
-    requestId: randomUUID(),
-    reason: "Self-introduction in #maintainer-whois",
-    survivor: await f.fence(a.id),
-    absorbed: await f.fence(b.id),
+  const r = await f.merge(a.id, b.id, {
     title: "Gideon Adegbesan",
     body: "Gideon Adegbesan, known as Shakker on Discord.\n",
     evidence: [{ ...f.evidence, start_line: 2, end_line: 2, quote: "I am Gideon." }],
@@ -293,18 +241,8 @@ it("chained merges resolve to the final page", async () => {
     b = await f.page("Jacob B"),
     c = await f.page("Jacob C");
   const owned = await f.claim({ owner: a.id });
-  await f.call("merge", {
-    requestId: randomUUID(),
-    reason: "same",
-    survivor: await f.fence(b.id),
-    absorbed: await f.fence(a.id),
-  });
-  await f.call("merge", {
-    requestId: randomUUID(),
-    reason: "same",
-    survivor: await f.fence(c.id),
-    absorbed: await f.fence(b.id),
-  });
+  await f.merge(b.id, a.id);
+  await f.merge(c.id, b.id);
   expect((await f.record(owned.id)).record!.owner!.id).toBe(c.id);
   expect((await f.call("lookup", { query: a.id })).hits[0]!.record.id).toBe(c.id);
   expect(

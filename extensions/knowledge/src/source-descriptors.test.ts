@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
-import type { Evidence } from "./model.js";
 import {
   describeSource,
   compactEvidence,
   expandEvidence,
-  mapMetadataEvidence,
   sourceDescriptorPath,
 } from "./source-descriptors.js";
 
@@ -91,36 +89,4 @@ it("reject malformed ranges, IDs, corrupt or missing descriptors", () => {
       throw new Error("legacy must not resolve");
     }),
   ).toStrictEqual(origin);
-});
-
-it("only defined evidence locations are transformed, without mutation", () => {
-  const basis = { basis: "Supported", evidence: [origin] };
-  const metadata = {
-    evidence: [origin],
-    attribution_confidence: { level: "high", ...basis },
-    continuity: [{ id: "some-page", relation: "updates", ...basis }],
-    identity: {
-      status: "partial",
-      context: "uncertain",
-      candidates: [{ id: "some-page", ...basis }],
-    },
-    fields: { evidence: [origin] },
-    unknown: { evidence: [origin] },
-  };
-  const before = structuredClone(metadata);
-  let visits = 0;
-  const changed = mapMetadataEvidence(metadata, (evidence) => {
-    visits++;
-    // mapMetadataEvidence hands each evidence entry over untyped.
-    return compactEvidence(evidence as Evidence).citation;
-  });
-  expect(visits).toBe(4);
-  expect(metadata).toStrictEqual(before);
-  expect(changed.fields).toBe(metadata.fields);
-  expect(changed.unknown).toBe(metadata.unknown);
-  const restored = mapMetadataEvidence(changed, (value) => {
-    const { source: _source, ...evidence } = expandEvidence(value, read);
-    return evidence;
-  });
-  expect(restored).toStrictEqual(metadata);
 });

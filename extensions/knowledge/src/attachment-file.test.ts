@@ -7,36 +7,23 @@ import { ATTACHMENT_CHUNK_BYTES } from "./attachment-contract.js";
 import { attachWorkspaceFile } from "./attachment-file.js";
 import plugin from "./index.js";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, sessionActions, toolContext, useTestTempDirs } from "./test-support.js";
+import {
+  apiFor,
+  createVault,
+  sessionActions,
+  toolContext,
+  useTestTempDirs,
+} from "./test-support.js";
 
 const dirs = useTestTempDirs();
 
 // Register the production tool adapter with an isolated store and host workspace.
 async function fixture() {
   const base = dirs.make("knowledge-attach-file-");
-  const root = path.join(base, "vault");
+  const { root, config } = await createVault(base);
   const workspace = path.join(base, "workspace");
-  await mkdir(path.join(root, "private"), { recursive: true });
   await mkdir(workspace);
-  const vaultId = randomUUID(),
-    publicationId = randomUUID();
-  await writeFile(
-    path.join(root, "vault.json"),
-    JSON.stringify({
-      format: "knowledge-vault-v2",
-      vaultId,
-      publicationId,
-      generation: 0,
-    }),
-  );
-  const api = apiFor(base, {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId,
-    publicationId,
-    operatorRead: true,
-    writesEnabled: true,
-  });
+  const api = apiFor(base, config);
   const factories = new Map<string, OpenClawPluginToolFactory>();
   plugin.register({
     ...api,
@@ -69,7 +56,7 @@ async function fixture() {
   await writeFile(filePath, bytes);
   const input = {
     requestId: randomUUID(),
-    expectedVaultId: vaultId,
+    expectedVaultId: config.vaultId,
     filePath: "source.bin",
     filename: "original.bin",
     attribution: "Synthetic original",

@@ -48,34 +48,35 @@ it("record defaults return content once and compact metadata without evidence", 
   }
 });
 
-it("record text pages reassemble the exact observed body; raw is an alternative representation", async () => {
+it("record text and raw pages reassemble the exact observed content within the byte limit", async () => {
   const { root, vault } = await fixture(),
     file = path.join(root, "people/alex-rivera.md");
-  await writeFile(file, (await readFile(file, "utf8")) + "\n" + "A long paragraph. ".repeat(1800));
-  const original = await vault.detail("sample_person_alex");
-  let offset = 0,
-    body = "",
-    hash;
-  do {
-    const r = checked(
-      "record",
-      await inspectRecord(vault, { id: "sample_person_alex", maxChars: 1000, offset }),
-    );
-    body += r.record.body;
-    expect(r.record.body.length <= 1000).toBeTruthy();
-    hash ??= r.record.hash;
-    expect(r.record.hash).toBe(hash);
-    offset = r.content.nextOffset;
-  } while (offset !== null);
-  expect(body).toBe(original.record!.body);
-  const raw = checked(
-    "record",
-    await inspectRecord(vault, { id: "sample_person_alex", view: "raw", maxChars: 65536 }),
-  );
-  expect(raw.record.raw).toBe(original.record!.raw.slice(0, raw.record.raw.length));
-  expect(raw.content.nextOffset).toBeTruthy();
-  expect(raw.record.body).toBe(undefined);
-  expect(raw.evidence).toBe(undefined);
+  // Long prose crosses the character limit; escaped Unicode crosses the JSON byte limit.
+  const appended = "A long paragraph. ".repeat(1800) + '🦞"\\\n'.repeat(9000);
+  await writeFile(file, (await readFile(file, "utf8")) + "\n" + appended);
+  const original = (await vault.detail("sample_person_alex")).record!;
+  const pages = async (input: object) => {
+    const result = [];
+    let offset = 0;
+    do {
+      const page = checked(
+        "record",
+        await inspectRecord(vault, { id: "sample_person_alex", ...input, offset }),
+      );
+      expect(Buffer.byteLength(JSON.stringify(page)) <= RECORD_RESPONSE_BYTES).toBeTruthy();
+      expect(page.content.nextOffset === null || page.content.nextOffset > offset).toBeTruthy();
+      expect(page.record.hash).toBe(original.hash);
+      result.push(page);
+      offset = page.content.nextOffset;
+    } while (offset !== null);
+    return result;
+  };
+  const body = await pages({ maxChars: 4000 });
+  expect(body.every((page) => page.record.body.length <= 4000)).toBeTruthy();
+  expect(body.map((page) => page.record.body).join("")).toBe(original.body);
+  const raw = await pages({ view: "raw", metadataView: "none", maxChars: 65536 });
+  expect(raw.every((page) => page.record.body === undefined && !page.evidence)).toBeTruthy();
+  expect(raw.map((page) => page.record.raw).join("")).toBe(original.raw);
   const summary = checked(
     "record",
     await inspectRecord(vault, {
@@ -158,20 +159,27 @@ it("ontology catalog is concise; definition detail is structured and filtered", 
   expect(checked("ontology", await inspectOntology(vault, { name: "missing" })).total).toBe(0);
 });
 
-it("ontology pages are exhaustive and the UI follows all pages", async () => {
+it("ontology definition pages are exhaustive and JSON-safe; the UI follows all pages", async () => {
   const vault = new SampleVault();
   let offset = 0;
   const names = [];
   do {
     const page = checked(
       "ontology",
-      await inspectOntology(vault, { kind: "page", offset, limit: 3 }),
+      await inspectOntology(vault, {
+        view: "definitions",
+        includeRecords: true,
+        offset,
+        limit: 10,
+      }),
     );
+    // The feature transport rejects undefined properties, including on relationships without behaviors.
+    expect(page).toStrictEqual(jsonRoundTrip(page));
     names.push(...page.definitions.map((d: any) => d.name));
     offset = page.nextOffset;
   } while (offset !== null);
-  expect(names.length).toBe(19);
-  expect(new Set(names).size).toBe(19);
+  expect(names.length).toBe(38);
+  expect(new Set(names).size).toBe(38);
   // Force a small page size to exercise the real UI continuation helper.
   // loadVocabulary only calls invoke("ontology"); the fake serves it from the sample vault.
   const feature = {
@@ -244,67 +252,6 @@ it("inspection inputs reject invalid budgets and authority selectors", () => {
   }
 });
 
-it("every ontology definition is JSON-safe before host serialization, including relationships without behaviors", async () => {
-  const vault = new SampleVault();
-  let offset = 0,
-    total = 0;
-  do {
-    const result = checked(
-      "ontology",
-      await inspectOntology(vault, {
-        view: "definitions",
-        includeRecords: true,
-        limit: 10,
-        offset,
-      }),
-    );
-    expect(result, "Undefined properties are rejected by the feature transport").toStrictEqual(
-      jsonRoundTrip(result),
-    );
-    total += result.definitions.length;
-    offset = result.nextOffset;
-  } while (offset !== null);
-  expect(total).toBe(38);
-});
-
-it("record byte limit traverses escaped Unicode text losslessly", async () => {
-  const { root, vault } = await fixture(),
-    file = path.join(root, "people/alex-rivera.md");
-  await writeFile(file, (await readFile(file, "utf8")) + "\n" + '🦞"\\\n'.repeat(9000));
-  const original = (await vault.detail("sample_person_alex")).record!.raw;
-  let offset = 0,
-    raw = "";
-  do {
-    const page = checked(
-      "record",
-      await inspectRecord(vault, {
-        id: "sample_person_alex",
-        view: "raw",
-        metadataView: "none",
-        maxChars: 65536,
-        offset,
-      }),
-    );
-    expect(Buffer.byteLength(JSON.stringify(page)) <= RECORD_RESPONSE_BYTES).toBeTruthy();
-    raw += page.record.raw;
-    expect(page.content.nextOffset === null || page.content.nextOffset > offset).toBeTruthy();
-    offset = page.content.nextOffset;
-  } while (offset !== null);
-  expect(raw).toBe(original);
-});
-
-const fake2 = (detail: any, extra: any) =>
-  detailVault(async () => ({
-    ...structuredClone(detail),
-    record: {
-      ...structuredClone(detail.record),
-      metadata: JSON.stringify({
-        ...JSON.parse(detail.record.metadata),
-        fields: undefined,
-        ...extra,
-      }),
-    },
-  }));
 it("compact metadata preserves uncertainty without nested evidence; explicit selectors and oversized full metadata", async () => {
   const vault = new SampleVault(),
     detail = await vault.detail("sample_claim_pilot");
@@ -326,9 +273,13 @@ it("compact metadata preserves uncertainty without nested evidence; explicit sel
     ],
   };
   metadata.fields = { huge: "x".repeat(40000) };
-  detail.record!.metadata = JSON.stringify(metadata);
   detail.record!.attributionConfidence = metadata.attribution_confidence;
-  const fake = detailVault(async () => structuredClone(detail));
+  const withMetadata = (m: object) =>
+    detailVault(async () => ({
+      ...structuredClone(detail),
+      record: { ...structuredClone(detail.record!), metadata: JSON.stringify(m) },
+    }));
+  const fake = withMetadata(metadata);
   const result = checked("record", await inspectRecord(fake, { id: detail.record!.id }));
   expect(result.record.metadata.attribution_confidence.level).toBe("low");
   expect(result.record.metadata.identity.candidates[0].basis).toBe("Unresolved match");
@@ -349,20 +300,18 @@ it("compact metadata preserves uncertainty without nested evidence; explicit sel
     inspectRecord(fake, { id: detail.record!.id, view: "summary", metadataView: "full" }),
   ).rejects.toThrow(/exceeds response budget/);
   // Expanded evidence descriptors drop from full metadata instead of failing the read.
-  const many = JSON.parse(detail.record!.metadata);
-  delete many.fields;
-  many.evidence = Array.from({ length: 120 }, (_, i) => ({
-    path: `sources/meeting-${i}.md`,
-    sha256: "b".repeat(64),
-    filename: `meeting-${i}.md`,
-    attribution: "Granola meeting transcript",
-    start_line: i + 1,
-    end_line: i + 2,
-  }));
-  const evidenceHeavy = detailVault(async () => ({
-    ...structuredClone(detail),
-    record: { ...structuredClone(detail.record), metadata: JSON.stringify(many) },
-  }));
+  const evidenceHeavy = withMetadata({
+    ...metadata,
+    fields: undefined,
+    evidence: Array.from({ length: 120 }, (_, i) => ({
+      path: `sources/meeting-${i}.md`,
+      sha256: "b".repeat(64),
+      filename: `meeting-${i}.md`,
+      attribution: "Granola meeting transcript",
+      start_line: i + 1,
+      end_line: i + 2,
+    })),
+  });
   const heavy = checked(
     "record",
     await inspectRecord(evidenceHeavy, {
@@ -376,9 +325,12 @@ it("compact metadata preserves uncertainty without nested evidence; explicit sel
   expect(heavy.record.metadata.identity.status).toBe("partial");
   const small = checked(
     "record",
-    await inspectRecord(fake2(detail, { aliases: ["Pilot"], fields: { role: "Lead" } }), {
-      id: detail.record!.id,
-    }),
+    await inspectRecord(
+      withMetadata({ ...metadata, aliases: ["Pilot"], fields: { role: "Lead" } }),
+      {
+        id: detail.record!.id,
+      },
+    ),
   );
   expect(small.record.metadata.aliases).toStrictEqual(["Pilot"]);
   expect(small.record.metadata.fields).toStrictEqual({ role: "Lead" });

@@ -89,19 +89,18 @@ export async function memoryFixture(tempDirs: { make(prefix: string): string }, 
       { requestId: randomUUID(), expectedVaultId: vaultId, type: "note", title, body },
       ctx,
     );
-  const recall = async (target: any, set: any, ctx = tool) => {
-    const current = (await service.record({ id: target.id }, ctx)).record;
-    return service.recall(
-      {
-        requestId: randomUUID(),
-        id: current!.id,
-        expectedRevision: current!.revision,
-        expectedHash: current!.hash,
-        set,
-      },
-      ctx,
-    );
-  };
+  // Read one record as the owner; extra selects views such as raw or full metadata.
+  const current = async (id: string, extra = {}, ctx = tool) =>
+    (await service.record({ id, ...extra }, ctx)).record!;
+  // Optimistic-concurrency fields for a mutation of the record's current revision.
+  const fence = (record: { id: string; revision: number; hash: string }) => ({
+    requestId: randomUUID(),
+    id: record.id,
+    expectedRevision: record.revision,
+    expectedHash: record.hash,
+  });
+  const recall = async (target: any, set: any, ctx = tool) =>
+    service.recall({ ...fence(await current(target.id, {}, ctx)), set }, ctx);
   return {
     api,
     service,
@@ -110,9 +109,17 @@ export async function memoryFixture(tempDirs: { make(prefix: string): string }, 
     open,
     save,
     recall,
+    current,
+    fence,
     tool,
     context,
     sessionId,
+    conversation: {
+      kind: "conversation",
+      agentId: "main",
+      sessionKey: "agent:main:group",
+      sessionId,
+    },
     vaultId,
     root,
     capability,

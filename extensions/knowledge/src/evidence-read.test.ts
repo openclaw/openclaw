@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile, rm, symlink, link, rename } from "node:fs/promises";
+import { mkdir, readFile, writeFile, symlink, rename } from "node:fs/promises";
 import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
@@ -17,7 +17,10 @@ async function fixture() {
   const base = tempDirs.make("knowledge-evidence-read-");
 
   const f = await storeFixture(base, { policy: { writesEnabled: true, operatorRead: true } });
-  return { ...f, base, owner: toolContext(f.api), service: createKnowledgeService(f.api) };
+  const owner = toolContext(f.api),
+    service = createKnowledgeService(f.api);
+  const read = (input: any, context: any = owner) => service.evidence_read(input, context);
+  return { ...f, base, owner, service, read };
 }
 
 // Upload original bytes through real service operations, including chunking.
@@ -61,6 +64,16 @@ async function publish(f: any, attachments: any, context = f.owner) {
   );
 }
 
+// Optimistic-concurrency fields for a mutation of the record's current revision.
+function fence(record: any) {
+  return {
+    requestId: randomUUID(),
+    id: record.id,
+    expectedRevision: record.revision,
+    expectedHash: record.hash,
+  };
+}
+
 // Build immutable source identity for every continuation.
 function inputFor(record: any, evidence: any, extra = {}) {
   return { id: record.id, path: evidence.path, sha256: evidence.sha256, ...extra };
@@ -100,13 +113,13 @@ async function collect(f: any, input: any, context = f.owner, service = f.servic
   return expect.fail("cursor did not terminate within bounded fixture size");
 }
 
-it("short passages expose exact identity, inclusive lines, normalization and completion", async () => {
+it("short and empty passages expose exact identity, inclusive lines, normalization and completion", async () => {
   const f = await fixture(),
     original = "one 🌱\r\ntwo\r\nthree\r\n";
   const evidence = await upload(f, original),
     saved = await publish(f, [evidence]);
   const inspected = (await f.service.record({ id: saved.id }, f.owner)).record;
-  const whole = await f.service.evidence_read(inputFor(saved, evidence), f.owner);
+  const whole = await f.read(inputFor(saved, evidence));
   checkPage(whole);
   expect(whole.record).toStrictEqual({
     id: saved.id,
@@ -128,7 +141,7 @@ it("short passages expose exact identity, inclusive lines, normalization and com
     [{ startLine: 3 }, "three\n", { startLine: 3, endLine: 4 }],
     [{ startLine: 4, endLine: 4 }, "", { startLine: 4, endLine: 4 }],
   ]) {
-    const page = await f.service.evidence_read(inputFor(saved, evidence, bounds), f.owner);
+    const page = await f.read(inputFor(saved, evidence, bounds));
     checkPage(page);
     expect(page.text).toBe(expected);
     expect(page.range).toStrictEqual(range);
@@ -137,18 +150,11 @@ it("short passages expose exact identity, inclusive lines, normalization and com
   expect(await readFile(path.join(f.root, "private", evidence.path))).toStrictEqual(
     Buffer.from(original),
   );
-});
-
-it("empty source is a complete empty passage", async () => {
-  const f = await fixture(),
-    evidence = await upload(f, ""),
-    saved = await publish(f, [evidence]);
-  const page = await f.service.evidence_read(inputFor(saved, evidence), f.owner);
-  checkPage(page);
-  expect(page.text).toBe("");
-  expect(page.offset).toBe(0);
-  expect(page.range).toStrictEqual({ startLine: 1, endLine: 1 });
-  expect(page.nextCursor).toBe(null);
+  const empty = await upload(f, ""),
+    blank = await f.read(inputFor(await publish(f, [empty]), empty));
+  checkPage(blank);
+  expect(blank).toMatchObject({ text: "", offset: 0, range: { startLine: 1, endLine: 1 } });
+  expect(blank.nextCursor).toBe(null);
 });
 
 it("long Unicode lines paginate in UTF-16 units without scalar splits or range leakage", async () => {
@@ -157,7 +163,7 @@ it("long Unicode lines paginate in UTF-16 units without scalar splits or range l
   const evidence = await upload(f, "before\r\n" + passage + "\r\nafter must not leak");
   const saved = await publish(f, [evidence]),
     input = inputFor(saved, evidence, { startLine: 2, endLine: 2, maxChars: 256 });
-  const first = await f.service.evidence_read(input, f.owner);
+  const first = await f.read(input);
   checkPage(first, 256);
   expect(first.text).toBe("a".repeat(255));
   expect(first.nextCursor).toBeTruthy();
@@ -223,14 +229,10 @@ it("invalid schema bounds and nonexistent or reversed line ranges fail closed", 
     { extra: true },
   ]) {
     expect(Check(contract.operations.evidence_read.input, { ...input, ...extra })).toBe(false);
-    await expect(f.service.evidence_read({ ...input, ...extra }, f.owner)).rejects.toThrow(
-      /Invalid evidence passage input/i,
-    );
+    await expect(f.read({ ...input, ...extra })).rejects.toThrow(/Invalid evidence passage input/i);
   }
   for (const extra of [{ startLine: 2, endLine: 1 }, { startLine: 3 }, { endLine: 3 }]) {
-    await expect(f.service.evidence_read({ ...input, ...extra }, f.owner)).rejects.toThrow(
-      /range/i,
-    );
+    await expect(f.read({ ...input, ...extra })).rejects.toThrow(/range/i);
   }
 });
 
@@ -241,7 +243,7 @@ it("malformed, cross-source, cross-record and changed-range cursors are rejected
     saved = await publish(f, [evidence, other]);
   const otherRecord = await publish(f, [evidence]);
   const input = inputFor(saved, evidence, { startLine: 2, endLine: 2, maxChars: 256 });
-  const first = await f.service.evidence_read(input, f.owner),
+  const first = await f.read(input),
     cursor = first.nextCursor;
   expect(cursor).toBeTruthy();
   for (const invalid of [
@@ -251,9 +253,7 @@ it("malformed, cross-source, cross-record and changed-range cursors are rejected
     cursor + "=",
     cursor!.slice(0, -1),
   ]) {
-    await expect(f.service.evidence_read({ ...input, cursor: invalid }, f.owner)).rejects.toThrow(
-      /cursor/i,
-    );
+    await expect(f.read({ ...input, cursor: invalid })).rejects.toThrow(/cursor/i);
   }
   for (const changed of [
     { startLine: 1 },
@@ -261,9 +261,7 @@ it("malformed, cross-source, cross-record and changed-range cursors are rejected
     { id: otherRecord.id },
     { path: other.path, sha256: other.sha256 },
   ]) {
-    await expect(
-      f.service.evidence_read({ ...input, cursor: cursor!, ...changed }, f.owner),
-    ).rejects.toThrow(/cursor/i);
+    await expect(f.read({ ...input, cursor: cursor!, ...changed })).rejects.toThrow(/cursor/i);
   }
   // Cursors select positions, never authority: malformed offsets and positions
   // halfway through a surrogate pair must fail even with valid source identity.
@@ -278,9 +276,7 @@ it("malformed, cross-source, cross-record and changed-range cursors are rejected
     { unexpected: true },
   ]) {
     const forged = Buffer.from(JSON.stringify({ ...position, ...changed })).toString("base64url");
-    await expect(f.service.evidence_read({ ...input, cursor: forged }, f.owner)).rejects.toThrow(
-      /cursor|range|Unicode/i,
-    );
+    await expect(f.read({ ...input, cursor: forged })).rejects.toThrow(/cursor|range|Unicode/i);
   }
 });
 
@@ -298,10 +294,10 @@ it("only a source referenced by the authorized record can be read", async () => 
     inputFor(saved, evidence, { path: "artifacts/../../vault.json" }),
     inputFor(saved, evidence, { path: path.join(f.root, "private", evidence.path) }),
   ]) {
-    await expect(f.service.evidence_read(input, f.owner)).rejects.toThrow(/unavailable|Invalid/i);
+    await expect(f.read(input)).rejects.toThrow(/unavailable|Invalid/i);
   }
   const noAuthority = { ...f.owner, tool: { ...f.owner.tool, memoryAudience: undefined } };
-  await expect(f.service.evidence_read(inputFor(saved, evidence), noAuthority)).rejects.toThrow(
+  await expect(f.read(inputFor(saved, evidence), noAuthority)).rejects.toThrow(
     /authority|unavailable/i,
   );
 });
@@ -315,33 +311,15 @@ it("private and conversation passages cannot share access or continuation cursor
     sessionKey: "agent:main:passages",
     sessionId,
   });
-  const otherGroup = toolContext(f.api, "main", {
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:other-passages",
-    sessionId: randomUUID(),
-  });
   const evidence = await upload(f, "PRIVATE ".repeat(100)),
     saved = await publish(f, [evidence]);
   const input = inputFor(saved, evidence, { maxChars: 256 }),
-    first = await f.service.evidence_read(input, f.owner);
+    first = await f.read(input);
   expect(first.nextCursor).toBeTruthy();
-  for (const context of [group, otherGroup]) {
-    await expect(
-      f.service.evidence_read({ ...input, cursor: first.nextCursor! }, context),
-    ).rejects.toThrow(/unavailable/i);
-  }
-  const shared = await upload(f, "SHARED ".repeat(100), {}, group),
-    sharedSaved = await publish(f, [shared], group);
-  const sharedInput = inputFor(sharedSaved, shared, { maxChars: 256 });
-  const sharedPage = await f.service.evidence_read(sharedInput, group);
-  checkPage(sharedPage, 256);
-  expect(sharedPage.text.startsWith("SHARED")).toBeTruthy();
-  await expect(f.service.evidence_read(sharedInput, f.owner)).rejects.toThrow(/unavailable/i);
-  await expect(f.service.evidence_read(sharedInput, otherGroup)).rejects.toThrow(/unavailable/i);
-  await expect(
-    f.service.evidence_read({ ...sharedInput, cursor: first.nextCursor! }, group),
-  ).rejects.toThrow(/cursor/i);
+  // Plain partition isolation is proven for attachment reads; passages add cursor binding.
+  await expect(f.read({ ...input, cursor: first.nextCursor! }, group)).rejects.toThrow(
+    /unavailable/i,
+  );
   // Retain record/source identity but author valid conversation metadata.
   // Simply copying private metadata is correctly rejected before cursor checks.
   const record = (await f.service.record({ id: saved.id, view: "raw" }, f.owner)).record;
@@ -361,17 +339,15 @@ it("private and conversation passages cannot share access or continuation cursor
     await writeFile(target, bytes);
   }
   // A digest is not authority: the receiving partition must retain its descriptor too.
-  await expect(f.service.evidence_read(input, group)).rejects.toThrow(/unavailable/i);
+  await expect(f.read(input, group)).rejects.toThrow(/unavailable/i);
   const descriptorPath = `artifacts/sources/${evidence.source}.json`;
   await mkdir(path.join(scopeRoot, "artifacts/sources"), { recursive: true });
   await writeFile(
     path.join(scopeRoot, descriptorPath),
     await readFile(path.join(f.root, "private", descriptorPath)),
   );
-  expect((await f.service.evidence_read(input, group)).text).toBe(first.text);
-  await expect(
-    f.service.evidence_read({ ...input, cursor: first.nextCursor! }, group),
-  ).rejects.toThrow(/cursor/i);
+  expect((await f.read(input, group)).text).toBe(first.text);
+  await expect(f.read({ ...input, cursor: first.nextCursor! }, group)).rejects.toThrow(/cursor/i);
 });
 
 it("every continuation rechecks live invocation and audience authority", async () => {
@@ -379,7 +355,7 @@ it("every continuation rechecks live invocation and audience authority", async (
     evidence = await upload(f, "live authority ".repeat(100)),
     saved = await publish(f, [evidence]);
   const input = inputFor(saved, evidence, { maxChars: 256 }),
-    first = await f.service.evidence_read(input, f.owner);
+    first = await f.read(input);
   for (const method of ["assertInvocationCurrent", "assertMemoryAudienceCurrent"]) {
     const revoked = {
       ...f.owner,
@@ -390,11 +366,11 @@ it("every continuation rechecks live invocation and audience authority", async (
         },
       },
     };
-    await expect(
-      f.service.evidence_read({ ...input, cursor: first.nextCursor! }, revoked),
-    ).rejects.toThrow(/revoked/);
+    await expect(f.read({ ...input, cursor: first.nextCursor! }, revoked)).rejects.toThrow(
+      /revoked/,
+    );
   }
-  const next = await f.service.evidence_read({ ...input, cursor: first.nextCursor! }, f.owner);
+  const next = await f.read({ ...input, cursor: first.nextCursor! });
   expect(next.offset).toBe(first.text.length);
 });
 
@@ -404,21 +380,12 @@ it("withdrawal blocks new and continuing reads even after stale record restorati
     saved = await publish(f, [evidence]);
   const before = (await f.service.record({ id: saved.id, view: "raw" }, f.owner)).record;
   const input = inputFor(saved, evidence, { maxChars: 256 }),
-    first = await f.service.evidence_read(input, f.owner);
-  await f.service.withdraw(
-    {
-      requestId: randomUUID(),
-      id: saved.id,
-      expectedRevision: before!.revision,
-      expectedHash: before!.hash,
-      reason: "Synthetic withdrawal",
-    },
-    f.owner,
-  );
+    first = await f.read(input);
+  await f.service.withdraw({ ...fence(before), reason: "Synthetic withdrawal" }, f.owner);
   for (const cursor of [undefined, first.nextCursor]) {
-    await expect(
-      f.service.evidence_read({ ...input, ...(cursor ? { cursor } : {}) }, f.owner),
-    ).rejects.toThrow(/unavailable/i);
+    await expect(f.read({ ...input, ...(cursor ? { cursor } : {}) })).rejects.toThrow(
+      /unavailable/i,
+    );
   }
   // Durable tombstones must dominate an externally restored pre-withdrawal file.
   await writeFile(path.join(f.root, "private", before!.path), before!.raw!);
@@ -426,9 +393,6 @@ it("withdrawal blocks new and continuing reads even after stale record restorati
   await expect(
     restarted.evidence_read({ ...input, cursor: first.nextCursor! }, f.owner),
   ).rejects.toThrow(/unavailable/i);
-  expect(await readFile(path.join(f.root, "private", evidence.path))).toStrictEqual(
-    Buffer.from("withdraw me ".repeat(100)),
-  );
 });
 
 it("source tampering beyond the requested range invalidates first and continuation pages", async () => {
@@ -437,18 +401,14 @@ it("source tampering beyond the requested range invalidates first and continuati
   const evidence = await upload(f, original),
     saved = await publish(f, [evidence]);
   const input = inputFor(saved, evidence, { startLine: 1, endLine: 1, maxChars: 256 });
-  const first = await f.service.evidence_read(input, f.owner),
+  const first = await f.read(input),
     file = path.join(f.root, "private", evidence.path);
   await writeFile(file, original.slice(0, -4) + "FAIL");
   for (const extra of [{}, { cursor: first.nextCursor! }]) {
-    await expect(f.service.evidence_read({ ...input, ...extra }, f.owner)).rejects.toThrow(
-      /hash|unavailable/i,
-    );
+    await expect(f.read({ ...input, ...extra })).rejects.toThrow(/hash|unavailable/i);
   }
   await writeFile(file, original);
-  expect(
-    (await f.service.evidence_read({ ...input, cursor: first.nextCursor! }, f.owner)).offset,
-  ).toBe(256);
+  expect((await f.read({ ...input, cursor: first.nextCursor! })).offset).toBe(256);
 });
 
 it("binary and malformed UTF-8 are rejected even beyond a selected passage", async () => {
@@ -462,36 +422,23 @@ it("binary and malformed UTF-8 are rejected even beyond a selected passage", asy
   for (const [bytes, metadata] of cases) {
     const evidence = await upload(f, bytes, metadata),
       saved = await publish(f, [evidence]);
-    await expect(
-      f.service.evidence_read(inputFor(saved, evidence, { startLine: 1, endLine: 1 }), f.owner),
-    ).rejects.toThrow(/text|binary|encoded|encoding|UTF-8/i);
+    await expect(f.read(inputFor(saved, evidence, { startLine: 1, endLine: 1 }))).rejects.toThrow(
+      /text|binary|encoded|encoding|UTF-8/i,
+    );
   }
 });
 
-it("symlinks, hardlinks and linked parent directories cannot expose retained bytes", async () => {
+// Final-file symlinks and hardlinks are rejected by the shared evidence-file opener,
+// proven through attachment reads; a linked parent directory is the passage-specific case.
+it("a linked parent directory cannot expose retained bytes", async () => {
   const f = await fixture(),
-    original = "link isolation ".repeat(100);
-  const evidence = await upload(f, original),
+    evidence = await upload(f, "link isolation ".repeat(100)),
     saved = await publish(f, [evidence]);
-  const input = inputFor(saved, evidence),
-    file = path.join(f.root, "private", evidence.path);
-  const outside = path.join(f.base, "outside.txt");
-  await writeFile(outside, original);
-  await rm(file);
-  await symlink(outside, file);
-  await expect(f.service.evidence_read(input, f.owner)).rejects.toThrow(/Unsafe|unavailable|link/i);
-  await rm(file);
-  await link(outside, file);
-  await expect(f.service.evidence_read(input, f.owner)).rejects.toThrow(/Unsafe|unavailable|link/i);
-  await rm(file);
-  await writeFile(file, original);
-  // An ordinary final file under a linked directory is unsafe as well.
-  const directory = path.dirname(file),
+  const directory = path.dirname(path.join(f.root, "private", evidence.path)),
     moved = path.join(f.base, "moved-artifacts");
   await rename(directory, moved);
   await symlink(moved, directory);
-  await expect(f.service.evidence_read(input, f.owner)).rejects.toThrow(/Unsafe|unavailable|link/i);
-  expect(await readFile(outside, "utf8")).toBe(original);
+  await expect(f.read(inputFor(saved, evidence))).rejects.toThrow(/Unsafe|unavailable|link/i);
 });
 
 it("missing optional filename uses a retained basename longer than 200 characters", async () => {
@@ -510,7 +457,7 @@ it("missing optional filename uses a retained basename longer than 200 character
     path.join(f.root, "private", evidence.path),
   );
   const saved = await publish(f, [evidence]);
-  const page = await f.service.evidence_read(inputFor(saved, evidence), f.owner);
+  const page = await f.read(inputFor(saved, evidence));
   expect(page.source.filename, "fallback basename is not truncated").toBe(filename);
   expect(page.source.sha256).toBe(evidence.sha256);
   expect(page.text).toBe(original);
@@ -541,24 +488,13 @@ it("annotation-only identity and attribution sources are readable", async () => 
     },
   ] satisfies AnnotateInput["annotations"][]) {
     const before = (await f.service.record({ id: saved.id }, f.owner)).record;
-    await f.service.annotate(
-      {
-        requestId: randomUUID(),
-        id: saved.id,
-        expectedRevision: before!.revision,
-        expectedHash: before!.hash,
-        reason: "Synthetic annotation coverage",
-        annotations,
-      },
-      f.owner,
-    );
-    const result = await f.service.evidence_read(inputFor(saved, evidence), f.owner);
+    const input = { ...fence(before), reason: "Synthetic annotation coverage", annotations };
+    await f.service.annotate(input, f.owner);
+    const result = await f.read(inputFor(saved, evidence));
     checkPage(result);
     expect(result.text).toBe("Annotation-only retained source.");
   }
-  await expect(f.service.evidence_read(inputFor(candidate, evidence), f.owner)).rejects.toThrow(
-    /unavailable/,
-  );
+  await expect(f.read(inputFor(candidate, evidence))).rejects.toThrow(/unavailable/);
 });
 
 it("ranged UTF-8 sources need no recognized extension or media type", async () => {
@@ -580,10 +516,7 @@ it("ranged UTF-8 sources need no recognized extension or media type", async () =
   const saved = await publish(f, [evidence]);
   const inspected = await f.service.record({ id: saved.id, includeEvidence: true }, f.owner);
   expect(inspected.evidence![0]!.verified).toBe(true);
-  const result = await f.service.evidence_read(
-    inputFor(saved, evidence, { startLine: 1, endLine: 2 }),
-    f.owner,
-  );
+  const result = await f.read(inputFor(saved, evidence, { startLine: 1, endLine: 2 }));
   checkPage(result);
   expect(result.text).toBe("first\nsecond");
   expect(result.nextCursor).toBe(null);

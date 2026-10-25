@@ -10,6 +10,7 @@ import { SqliteIdentityStore } from "./identity-store.js";
 import { isFullHit } from "./retrieval-contract.js";
 import { loadSearch, type SearchState } from "./retrieval-view.js";
 import { keywordExpression } from "./retrieval.js";
+import { AGENT_HIT_LIMIT, COMPACT_SNIPPET_CHARS } from "./search-detail.js";
 import { createKnowledgeService } from "./service.js";
 import { apiFor, useTestTempDirs, defaultOrder, type TestStoreConfig } from "./test-support.js";
 
@@ -80,6 +81,9 @@ async function fixture() {
     return target;
   }
   return {
+    // Total keyword hits and exact-lookup outcome for the current owner audience.
+    total: async (input: any) => (await service.grep(input, owner)).total,
+    outcome: async (input: any) => (await service.lookup(input, owner)).outcome,
     root,
     base,
     config,
@@ -135,23 +139,12 @@ it("UI and tool share FTS title/alias/body retrieval, literal modes and stable c
     expect(result.hits.find(isFullHit)!.citation.hash).toBe(current!.hash);
     expect(result.hits.find(isFullHit)!.citation.revision).toBe(current!.revision);
   }
-  expect((await f.service.grep({ query: "orchid nonexistent", mode: "all" }, f.owner)).total).toBe(
-    0,
-  );
-  expect((await f.service.grep({ query: "orchid nonexistent", mode: "any" }, f.owner)).total).toBe(
-    1,
-  );
-  expect((await f.service.grep({ query: "distinctive body", mode: "phrase" }, f.owner)).total).toBe(
-    1,
-  );
-  expect((await f.service.grep({ query: "body distinctive", mode: "phrase" }, f.owner)).total).toBe(
-    0,
-  );
-  expect((await f.service.grep({ query: "flower", tag: "wrong" }, f.owner)).total).toBe(0);
-  expect(
-    (await f.service.grep({ query: "flower", tag: "botany", kind: "page", type: "note" }, f.owner))
-      .total,
-  ).toBe(1);
+  expect(await f.total({ query: "orchid nonexistent", mode: "all" })).toBe(0);
+  expect(await f.total({ query: "orchid nonexistent", mode: "any" })).toBe(1);
+  expect(await f.total({ query: "distinctive body", mode: "phrase" })).toBe(1);
+  expect(await f.total({ query: "body distinctive", mode: "phrase" })).toBe(0);
+  expect(await f.total({ query: "flower", tag: "wrong" })).toBe(0);
+  expect(await f.total({ query: "flower", tag: "botany", kind: "page", type: "note" })).toBe(1);
 });
 
 it("exact ID/name/alias lookup normalizes names, exposes ambiguity and never selects arbitrarily", async () => {
@@ -164,8 +157,8 @@ it("exact ID/name/alias lookup normalizes names, exposes ambiguity and never sel
     expect(result.outcome).toBe("found");
     expect(ids(result)).toStrictEqual(["record_alpha"]);
   }
-  expect((await f.service.lookup({ query: "Full" }, f.owner)).outcome).toBe("missing");
-  expect((await f.service.lookup({ query: "RECORD_ALPHA" }, f.owner)).outcome).toBe("missing");
+  expect(await f.outcome({ query: "Full" })).toBe("missing");
+  expect(await f.outcome({ query: "RECORD_ALPHA" })).toBe("missing");
   const ambiguous = await f.service.lookup({ query: "shared alias", limit: 1 }, f.owner);
   expect(ambiguous.outcome).toBe("ambiguous");
   expect(ambiguous.total).toBe(2);
@@ -183,8 +176,8 @@ it("all saved records are discoverable regardless of legacy approval metadata; l
   expect(
     ids(await f.service.grep({ query: "orbit", lifecycle: "superseded" }, f.owner)),
   ).toStrictEqual(["historical_one"]);
-  expect((await f.service.grep({ query: "orbit", lifecycle: "all" }, f.owner)).total).toBe(3);
-  expect((await f.service.lookup({ query: "candidate_one" }, f.owner)).outcome).toBe("found");
+  expect(await f.total({ query: "orbit", lifecycle: "all" })).toBe(3);
+  expect(await f.outcome({ query: "candidate_one" })).toBe("found");
   expect((await f.service.records({}, f.owner)).total).toBe(2);
   expect((await f.service.records({ lifecycle: "all" }, f.owner)).total).toBe(3);
 });
@@ -202,7 +195,7 @@ it("scope isolates results, counts, exact identity, snippets, corpus statistics 
   const after = await createKnowledgeService(f.api).grep({ query: "comet" }, f.owner);
   expect(stable(after)).toStrictEqual(stable(before));
   expect(JSON.stringify(after)).not.toMatch(/PRIVATE|private_record|private_second/);
-  expect((await f.service.lookup({ query: "PRIVATE SENTINEL" }, f.owner)).outcome).toBe("missing");
+  expect(await f.outcome({ query: "PRIVATE SENTINEL" })).toBe("missing");
   await f.put(
     "foreign_scope",
     "PRIVATE SENTINEL",
@@ -239,7 +232,7 @@ it("invalid, duplicate, broken evidence and unavailable dependent records cannot
     "EVIDENCE SENTINEL",
     "DEPENDENT SENTINEL",
   ]) {
-    expect((await f.service.lookup({ query }, f.owner)).outcome).toBe("missing");
+    expect(await f.outcome({ query })).toBe("missing");
   }
 });
 
@@ -248,7 +241,7 @@ it("observed withdrawals persist across stale-file reappearance, restart and pro
     target = await f.put("withdrawn_one", "Withdraw this", "secretword");
   const stale = await readFile(target, "utf8");
   await f.put("dependent_one", "Derived prose", "secretword", { dependencies: ["withdrawn_one"] });
-  expect((await f.service.grep({ query: "secretword" }, f.owner)).total).toBe(2);
+  expect(await f.total({ query: "secretword" })).toBe(2);
   await writeFile(target, stale.replace("lifecycle: active", "lifecycle: withdrawn"));
   // Any normal scoped scan records the operational safeguard, not only search.
   await f.service.records({}, f.owner);
@@ -275,26 +268,26 @@ it("external edits, rename, deletion, malformed replacement and ontology changes
   await writeFile(target, (await readFile(target, "utf8")).replace("oldword", "newword"));
   await rename(target, target + "-renamed.md");
   target += "-renamed.md";
-  expect((await f.service.grep({ query: "oldword" }, f.owner)).total).toBe(0);
+  expect(await f.total({ query: "oldword" })).toBe(0);
   const changed = await f.service.grep({ query: "newword", detail: "full" }, f.owner);
   expect(changed.index.snapshot).not.toBe(before.index.snapshot);
   expect(changed.hits.find(isFullHit)!.citation.path).toMatch(/renamed/);
   expect(changed.hits.find(isFullHit)!.citation.revision).toBe(2);
   await writeFile(target, "malformed newword");
-  expect((await f.service.grep({ query: "newword" }, f.owner)).total).toBe(0);
+  expect(await f.total({ query: "newword" })).toBe(0);
   await f.put("editable_two", "Newname", "newword");
-  expect((await f.service.grep({ query: "newword" }, f.owner)).total).toBe(1);
+  expect(await f.total({ query: "newword" })).toBe(1);
   await writeFile(path.join(f.root, "private", "ontology.yaml"), "not: a valid ontology");
-  expect((await f.service.grep({ query: "newword" }, f.owner)).total).toBe(0);
+  expect(await f.total({ query: "newword" })).toBe(0);
   await rm(path.join(f.root, "private", "ontology.yaml"));
   await rm(path.join(f.root, "private", "notes", "editable_two.md"));
-  expect((await f.service.grep({ query: "newword" }, f.owner)).total).toBe(0);
+  expect(await f.total({ query: "newword" })).toBe(0);
 });
 
 it("failed index updates return unavailable, not empty/stale; exact lookup and listing still work; retry rebuilds", async () => {
   const f = await fixture(),
     target = await f.put("editable_one", "Known identity", "oldword");
-  expect((await f.service.grep({ query: "oldword" }, f.owner)).total).toBe(1);
+  expect(await f.total({ query: "oldword" })).toBe(1);
   f.store.withDatabase((db) =>
     db.exec(
       "CREATE TRIGGER fail_keyword BEFORE INSERT ON keyword_state_v1 BEGIN SELECT RAISE(ABORT,'injected indexing failure'); END",
@@ -306,14 +299,15 @@ it("failed index updates return unavailable, not empty/stale; exact lookup and l
   expect(failed.index.state).toBe("unavailable");
   expect(failed.total).toBe(null);
   expect(failed.hits).toStrictEqual([]);
-  expect((await f.service.lookup({ query: "Known identity" }, f.owner)).outcome).toBe("found");
+  expect(await f.outcome({ query: "Known identity" })).toBe("found");
   expect((await f.service.records({}, f.owner)).total).toBe(1);
   f.store.withDatabase((db) => db.exec("DROP TRIGGER fail_keyword"));
-  expect((await f.service.grep({ query: "newword" }, f.owner)).total).toBe(1);
-  expect((await f.service.grep({ query: "oldword" }, f.owner)).total).toBe(0);
+  expect(await f.total({ query: "newword" })).toBe(1);
+  expect(await f.total({ query: "oldword" })).toBe(0);
 });
 
-it("identity mismatch and revoked authority reject retrieval without cached fallback", async () => {
+// Manifest identity mismatch after a cached index is covered by the restored-generation case below.
+it("revoked authority rejects retrieval without cached fallback", async () => {
   const f = await fixture();
   await f.put("private_record", "PRIVATE SENTINEL", "secretword");
   await f.service.grep({ query: "secretword" }, f.owner);
@@ -328,13 +322,6 @@ it("identity mismatch and revoked authority reject retrieval without cached fall
   };
   for (const op of ["grep", "lookup"] as const) {
     await expect(f.service[op]({ query: "secretword" }, revoked)).rejects.toThrow(/revoked/);
-  }
-  await writeFile(
-    path.join(f.root, "vault.json"),
-    JSON.stringify({ ...f.manifest, generation: 1, publicationId: randomUUID() }),
-  );
-  for (const op of ["grep", "lookup"] as const) {
-    await expect(f.service[op]({ query: "secretword" }, f.owner)).rejects.toThrow(/identity/);
   }
 });
 
@@ -372,22 +359,40 @@ it("bounded contextual snippets have truthful original Markdown lines", async ()
       .includes(snippet.text),
   ).toBeTruthy();
   expect(Check(contract.operations.grep.output, result)).toBeTruthy();
+  // Agent calls default to compact hits whose short snippet still keeps the match.
+  const compact = (await f.service.grep({ query: "rareword" }, f.owner)).hits[0]!;
+  expect(Object.keys(compact).toSorted(defaultOrder)).toStrictEqual([
+    "matches",
+    "record",
+    "snippet",
+  ]);
+  expect(Object.keys(compact.record).toSorted(defaultOrder)).toStrictEqual([
+    "id",
+    "kind",
+    "lifecycle",
+    "path",
+    "revision",
+    "title",
+    "type",
+    "valid",
+  ]);
+  expect(compact.snippet.text).toMatch(/rareword/);
+  // The cut never splits the emoji tail's surrogate pairs.
+  expect(compact.snippet.text.length <= COMPACT_SNIPPET_CHARS).toBeTruthy();
+  expect(compact.snippet.text.isWellFormed()).toBe(true);
 });
 
 it("FTS operators are literal words, malformed/oversized input is rejected, Unicode terms work", async () => {
   const f = await fixture();
   await f.put("unicode_record", "Café project", "alpha OR beta 東京");
-  expect((await f.service.grep({ query: "cafe" }, f.owner)).total).toBe(1);
-  expect((await f.service.grep({ query: "東京" }, f.owner)).total).toBe(1);
+  expect(await f.total({ query: "cafe" })).toBe(1);
+  expect(await f.total({ query: "東京" })).toBe(1);
   expect(keywordExpression({ query: "alpha OR beta" })).toBe('"alpha" AND "OR" AND "beta"');
   for (const query of ["", "   ", "***", "a ".repeat(65), "a".repeat(501)]) {
     await expect(f.service.grep({ query }, f.owner)).rejects.toThrow(/input|tokens/);
   }
-  for (const query of ['"', "column:missing", "NEAR(alpha)", 'alpha") OR 1=1 --']) {
-    if (query === '"') {
-      await expect(f.service.grep({ query }, f.owner)).rejects.toThrow();
-      continue;
-    }
+  await expect(f.service.grep({ query: '"' }, f.owner)).rejects.toThrow();
+  for (const query of ["column:missing", "NEAR(alpha)", 'alpha") OR 1=1 --']) {
     expect((await f.service.grep({ query }, f.owner)).index.state).toBe("ready");
   }
   for (const field of [
@@ -404,6 +409,9 @@ it("ranking emphasizes titles, deterministic pagination and scoped index reuse",
   const f = await fixture();
   await f.put("title_record", "Needle", "text");
   await f.put("body_record", "Other", "needle");
+  for (let n = 0; n <= AGENT_HIT_LIMIT; n++) {
+    await f.put(`haystack_${n}`, "Other", "haystack");
+  }
   const first = await f.service.grep({ query: "needle", limit: 1 }, f.owner);
   expect(ids(first)).toStrictEqual(["title_record"]);
   expect(first.total).toBe(2);
@@ -413,6 +421,10 @@ it("ranking emphasizes titles, deterministic pagination and scoped index reuse",
   expect(next.nextOffset).toBe(null);
   expect(next.index.snapshot).toBe(first.index.snapshot);
   expect(next.freshness.indexedAt).toBe(first.freshness.indexedAt);
+  // Agent calls that omit limit get the agent page size, not the storage default.
+  const agentPage = await f.service.grep({ query: "haystack" }, f.owner);
+  expect(agentPage.hits.length).toBe(AGENT_HIT_LIMIT);
+  expect(agentPage.nextOffset).toBe(AGENT_HIT_LIMIT);
 });
 
 it("native search client passes explicit typed mode and filters to the shared operations", async () => {
@@ -435,11 +447,11 @@ it("native search client passes explicit typed mode and filters to the shared op
   };
   await loadSearch(feature, state);
   await loadSearch(feature, { ...state, mode: "exact" });
-  expect(calls[0].name).toBe("grep");
-  expect(calls[0].input.mode).toBe("phrase");
+  expect(calls).toMatchObject([
+    { name: "grep", input: { mode: "phrase", offset: 20 } },
+    { name: "lookup" },
+  ]);
   expect(calls[0].input.acceptance).toBe(undefined);
-  expect(calls[0].input.offset).toBe(20);
-  expect(calls[1].name).toBe("lookup");
   expect(calls[1].input.mode).toBe(undefined);
   for (const { name, input } of calls) {
     expect(
@@ -489,7 +501,7 @@ it("empty conversations return a ready empty scope without materializing a direc
   expect(result.index.state).toBe("ready");
   expect(result.total).toBe(0);
   expect(result.coverage.complete).toBe(true);
-  expect((await f.service.lookup({ query: "PRIVATE" }, f.owner)).outcome).toBe("missing");
+  expect(await f.outcome({ query: "PRIVATE" })).toBe("missing");
   await expect(readFile(path.join(f.root, "conversations", f.sessionId))).rejects.toMatchObject({
     code: "ENOENT",
   });
@@ -536,7 +548,7 @@ it("editing a legacy page removes approval metadata through journaled publicatio
 it("an index built before row tracking is repopulated, never left empty and ready", async () => {
   const f = await fixture();
   await f.put("upgrade_note_1", "Upgrade sentinel", "lanternword body");
-  expect((await f.service.grep({ query: "lanternword" }, f.owner)).total).toBe(1);
+  expect(await f.total({ query: "lanternword" })).toBe(1);
   // Simulate the previous version: FTS rows and a matching state row, no tracking table.
   f.store.withDatabase((db) => {
     for (const { name } of db
@@ -545,5 +557,5 @@ it("an index built before row tracking is repopulated, never left empty and read
       db.exec(`DROP TABLE ${String(name)}`);
     }
   });
-  expect((await f.service.grep({ query: "lanternword" }, f.owner)).total).toBe(1);
+  expect(await f.total({ query: "lanternword" })).toBe(1);
 });

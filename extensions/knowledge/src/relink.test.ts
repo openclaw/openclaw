@@ -1,53 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { contract } from "./contract.js";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, useTestTempDirs } from "./test-support.js";
+import { operatorContext, storeFixture, toolContext, useTestTempDirs } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
-async function fixture(extraConfig = {}) {
-  const base = tempDirs.make("knowledge-relink-");
-
-  const root = path.join(base, "vault");
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    operatorRead: true,
-    writesEnabled: true,
-    ...extraConfig,
-  };
-  const api = apiFor(base, config),
-    service = createKnowledgeService(api);
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
-  const operator: any = {
-    source: "session-action",
-    api,
-    action: { client: { connId: "test", scopes: ["operator.write"] } },
-  };
+async function fixture() {
+  const { api } = await storeFixture(tempDirs.make("knowledge-relink-"), {
+    policy: { writesEnabled: true, operatorRead: true },
+  });
+  const service = createKnowledgeService(api),
+    owner = toolContext(api),
+    operator = operatorContext(api);
   const page = (title: any, type = "project", extra = {}) =>
     service.save_page({ requestId: randomUUID(), title, type, body: "Page.\n", ...extra }, owner);
   // Saved unlinked: inference is off, as when the subject page did not exist yet.

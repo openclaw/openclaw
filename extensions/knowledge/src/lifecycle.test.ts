@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { writeFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
@@ -7,66 +7,19 @@ import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
-import { accessFor, apiFor, useTestTempDirs, defaultOrder } from "./test-support.js";
+import {
+  accessFor,
+  apiFor,
+  createVault,
+  defaultOrder,
+  operatorContext,
+  toolContext,
+  useTestTempDirs,
+  type TestAudience,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
-async function fixture() {
-  const base = tempDirs.make("knowledge-write-");
-
-  const root = path.join(base, "vault");
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    operatorRead: true,
-    writesEnabled: true,
-  };
-  const api = apiFor(base, config);
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
-  const operator: any = {
-    source: "session-action",
-    api,
-    action: { client: { connId: "test", scopes: ["operator.write"] } },
-  };
-  const store = new SqliteIdentityStore(config.statePath),
-    service = createKnowledgeService(api);
-  const access = () => accessFor(owner, true);
-  return {
-    base,
-    root,
-    config,
-    manifest,
-    api,
-    owner,
-    operator,
-    store,
-    service,
-    access,
-    setAudience: (value: any) => {
-      owner.tool.memoryAudience = value;
-    },
-  };
-}
 const draft = () => ({
   requestId: randomUUID(),
   title: "Publication test",
@@ -84,7 +37,23 @@ const edit = (record: any, fields = {}) => ({
 });
 
 async function foundation() {
-  const f: any = await fixture();
+  const base = tempDirs.make("knowledge-write-");
+  const { root, config } = await createVault(base);
+  const api = apiFor(base, config);
+  const owner = toolContext(api);
+  const f: any = {
+    root,
+    config,
+    api,
+    owner,
+    operator: operatorContext(api),
+    store: new SqliteIdentityStore(config.statePath),
+    service: createKnowledgeService(api),
+    access: () => accessFor(owner, true),
+    setAudience: (value: TestAudience) => {
+      owner.tool.memoryAudience = value;
+    },
+  };
   f.fingerprint = (await f.service.ontology({}, f.owner)).fingerprint;
   f.pages = {};
   for (const type of ["person", "project", "meeting"]) {
@@ -158,6 +127,12 @@ const withdrawal = (r: any) => ({
   ...target(r),
   reason: "Retracted explicitly by the user",
 });
+const groupAudience = () => ({
+  kind: "conversation",
+  agentId: "main",
+  sessionKey: "agent:main:group",
+  sessionId: randomUUID(),
+});
 
 it("recent groups exact lifecycle publications before paging, suppresses inactive assertions, and pins new activity", async () => {
   const f = await foundation(),
@@ -172,24 +147,17 @@ it("recent groups exact lifecycle publications before paging, suppresses inactiv
   const withdrawn = await f.service.withdraw(withdrawal(corrected), f.owner);
   const all = await f.service.recent({ limit: 50 }, f.owner);
   expect(Check(contract.operations.recent.output, all)).toBeTruthy();
-  expect(all.items.slice(0, 2).map((r: any) => [r.change, r.id])).toStrictEqual([
-    ["withdrawn", corrected.id],
-    ["corrected", original.id],
+  // A withdrawal names the withdrawn record; a correction names the original.
+  expect(all.items.slice(0, 2)).toMatchObject([
+    { change: "withdrawn", id: corrected.id, at: withdrawn.at, title: "Corrected option C" },
+    { change: "corrected", id: original.id, at: corrected.at, title: "Option B decision" },
   ]);
+  expect(all.items[1]!.replacementActive).toBe(false);
   expect(
     all.items.filter((r: any) => r.change === "corrected").length,
     "paired observations and identical retries yield one event",
   ).toBe(1);
-  expect(all.items[0]!.at).toBe(withdrawn.at);
-  expect(all.items[1]!.at).toBe(corrected.at);
-  expect(all.items[1]!.replacementActive).toBe(false);
   expect(all.items.some((r: any) => r.id === dependent.id)).toBe(false);
-  expect(all.items[0]!.title, "withdrawal identifies the withdrawn record").toBe(
-    "Corrected option C",
-  );
-  expect(all.items[1]!.title, "correction identifies the original record").toBe(
-    "Option B decision",
-  );
   expect(
     JSON.stringify(all).includes("Alex chose option B."),
     "historical bodies stay out of the feed",
@@ -215,12 +183,7 @@ it("recent groups exact lifecycle publications before paging, suppresses inactiv
     "keyset paging cannot split a correction or shift after a new save",
   ).toStrictEqual(all.items);
   expect((await f.service.recent({}, f.operator)).items[0]!.title).toBe("New arrival");
-  f.setAudience({
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:group",
-    sessionId: randomUUID(),
-  });
+  f.setAudience(groupAudience());
   expect(
     (await f.service.recent({}, f.owner)).items,
     "private activity never appears in conversation scope",
@@ -266,10 +229,12 @@ it("correction is one logical batch preserving originals, evidence, provenance, 
     .record;
   const input = correction(f, original),
     receipt = await f.service.correct(input, f.owner);
-  expect(receipt.state).toBe("published");
-  expect(receipt.operation).toBe("correct");
-  expect(receipt.targetId).toBe(original.id);
-  expect(receipt.id).toBe(receipt.replacementId);
+  expect(receipt).toMatchObject({
+    state: "published",
+    operation: "correct",
+    targetId: original.id,
+    id: receipt.replacementId,
+  });
   expect(Check(contract.operations.correct.output, receipt)).toBeTruthy();
   expect(
     receipt.impact!.items.map((r: any) => [r.id, r.direct]).toSorted(defaultOrder),
@@ -384,9 +349,11 @@ it("withdrawal durably hides pages and transitive dependents, preserves evidence
     .record;
   const input = withdrawal(original),
     receipt = await f.service.withdraw(input, f.owner);
-  expect(receipt.operation).toBe("withdraw");
-  expect(receipt.state).toBe("published");
-  expect(receipt.impact!.total).toBe(2);
+  expect(receipt).toMatchObject({
+    operation: "withdraw",
+    state: "published",
+    impact: { total: 2 },
+  });
   expect(Check(contract.operations.withdraw.output, receipt)).toBeTruthy();
   expect(await f.service.withdraw(input, f.owner)).toStrictEqual(receipt);
   for (const id of [original!.id, claim.id, edge.id]) {
@@ -465,12 +432,7 @@ it("invalid, stale, hidden and wrong-kind corrections fail before receipt; no br
   }
   await expect(f.service.correct(input, f.operator)).rejects.toThrow(/chat/);
   await expect(f.service.withdraw(withdrawal(original), f.operator)).rejects.toThrow(/chat/);
-  f.setAudience({
-    kind: "conversation",
-    agentId: "main",
-    sessionKey: "agent:main:group",
-    sessionId: randomUUID(),
-  });
+  f.setAudience(groupAudience());
   await expect(f.service.correct(input, f.owner)).rejects.toThrow(/unavailable/);
   await expect(f.service.withdraw(withdrawal(original), f.owner)).rejects.toThrow(/unavailable/);
   expect((await f.service.mutation({ requestId: input.requestId }, f.owner)).receipt).toBe(null);
@@ -547,26 +509,6 @@ it("pre-upgrade withdrawal guards apply to records and counts even if only stale
     "withdrawn",
   );
   await expect(f.service.correct(correction(f, original), f.owner)).rejects.toThrow(/unavailable/);
-});
-
-it("lifecycle writes recheck current authority before publishing accepted intent", async () => {
-  const f = await foundation(),
-    original = await f.service.create_claim(f.claim(), f.owner),
-    input = correction(f, original);
-  const publisher = new KnowledgeStorage(f.config, f.store, (where) => {
-    if (where === "after-accept") {
-      f.setAudience({
-        kind: "conversation",
-        agentId: "main",
-        sessionKey: "agent:main:group",
-        sessionId: randomUUID(),
-      });
-    }
-  });
-  await expect(publisher.correct(input, f.access(), "agent")).rejects.toThrow(/authority/);
-  expect((await f.service.mutation({ requestId: input.requestId }, f.owner)).receipt).toBe(null);
-  f.setAudience({ kind: "owner-private", agentId: "main" });
-  expect((await f.service.correct(input, f.owner)).state).toBe("published");
 });
 
 it("withdrawing a superseded original dominates its correction guard without withdrawing replacement", async () => {

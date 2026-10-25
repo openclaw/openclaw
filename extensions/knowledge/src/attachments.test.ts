@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID, createHash } from "node:crypto";
-import { mkdir, writeFile, readFile, rm, symlink, link } from "node:fs/promises";
+import { writeFile, readFile, rm, symlink, link } from "node:fs/promises";
 import path from "node:path";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
@@ -12,42 +12,47 @@ import { KnowledgeStorage } from "./storage.js";
 import {
   accessFor,
   apiFor,
-  sessionActions,
-  useTestTempDirs,
+  createVault,
   jsonRoundTrip,
+  operatorContext,
+  sessionActions,
+  toolContext,
+  useTestTempDirs,
 } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
 async function fixture() {
   const base = tempDirs.make("knowledge-files-");
-
-  const root = path.join(base, "vault");
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    operatorRead: true,
-    writesEnabled: true,
-  };
+  const { root, config } = await createVault(base);
   const api = apiFor(base, config);
-  const owner: any = {
-    source: "session-action",
+  return {
+    base,
+    root,
+    config,
     api,
-    action: { client: { connId: "files", scopes: ["operator.write"] } },
+    owner: operatorContext(api),
+    service: createKnowledgeService(api),
   };
-  const service = createKnowledgeService(api);
-  return { base, root, config, api, owner, service };
+}
+
+// Register the plugin on the fixture API, capturing session actions and tool factories.
+async function register(f: any) {
+  const actions = new Map(),
+    factories = new Map();
+  const { default: plugin } = await import("./index.js");
+  const controls = sessionActions((action) => {
+    actions.set(action.id, action);
+  }).session.controls;
+  plugin.register({
+    ...f.api,
+    id: "knowledge",
+    session: { ...f.api.session, controls: { ...f.api.session?.controls, ...controls } },
+    registerTool(factory: any, options: any) {
+      factories.set(options!.name, factory);
+    },
+  });
+  return { actions, factories };
 }
 const draft = (attachments: any) => ({
   requestId: randomUUID(),
@@ -253,10 +258,9 @@ for (const stage of ["attachment-after-link", "attachment-before-receipt"]) {
   it(`file installation interruption at ${stage} recovers without overwriting the original`, async () => {
     const f = await fixture(),
       input = uploadInput({ data: Buffer.from("Original bytes").toString("base64") });
-    const config = f.config;
     const storage = new KnowledgeStorage(
-      config,
-      new SqliteIdentityStore(config.statePath),
+      f.config,
+      new SqliteIdentityStore(f.config.statePath),
       (where) => {
         if (where === stage) {
           throw new Error("interrupted");
@@ -276,21 +280,12 @@ for (const stage of ["attachment-after-link", "attachment-before-receipt"]) {
 it("conversation uploads and downloads cannot reach private originals or receipts", async () => {
   const f = await fixture(),
     sessionId = randomUUID();
-  const group: any = {
-    source: "tool",
-    api: f.api,
-    tool: {
-      agentId: "main",
-      memoryAudience: {
-        kind: "conversation",
-        agentId: "main",
-        sessionKey: "agent:main:group-files",
-        sessionId,
-      },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
+  const group = toolContext(f.api, "main", {
+    kind: "conversation",
+    agentId: "main",
+    sessionKey: "agent:main:group-files",
+    sessionId,
+  });
   const input = uploadInput({ data: Buffer.from("PRIVATE").toString("base64") });
   const privateFile = await f.service.attach(input, f.owner),
     privatePage = await f.service.save_page(draft([privateFile.evidence]), f.owner);
@@ -326,22 +321,7 @@ it("conversation uploads and downloads cannot reach private originals or receipt
 // fit host JSON validation on both upload and download.
 it("native feature adapter accepts full-size upload and download chunks", async () => {
   const f = await fixture(),
-    actions = new Map();
-  const { default: plugin } = await import("./index.js");
-  plugin.register({
-    ...f.api,
-    id: "knowledge",
-    registerTool() {},
-    session: {
-      ...f.api.session,
-      controls: {
-        ...f.api.session?.controls,
-        ...sessionActions((action) => {
-          actions.set(action.id, action);
-        }).session.controls,
-      },
-    },
-  });
+    { actions } = await register(f);
   const invoke = async (name: any, payload: any) => {
     const response = await actions.get(name).handler({ ...f.owner.action, payload });
     expect(response.ok, response.error).toBe(true);
@@ -376,23 +356,10 @@ it("native feature adapter accepts full-size upload and download chunks", async 
 
 it("agent download JSON survives the dynamic-tool response budget with continuation intact", async () => {
   const f = await fixture(),
-    factories = new Map(),
-    sessionId = randomUUID();
-  const { default: plugin } = await import("./index.js");
-  plugin.register({
-    ...f.api,
-    id: "knowledge",
-    session: {
-      ...f.api.session,
-      controls: { ...f.api.session?.controls, ...sessionActions().session.controls },
-    },
-    registerTool(factory: any, options: any) {
-      factories.set(options!.name, factory);
-    },
-  });
+    { factories } = await register(f);
   const tool = factories.get("knowledge_attachment")({
     agentId: "main",
-    sessionId,
+    sessionId: randomUUID(),
     sessionKey: "agent:main:download-budget",
     memoryAudience: { kind: "owner-private", agentId: "main" },
     assertInvocationCurrent() {},
