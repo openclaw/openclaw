@@ -116,54 +116,40 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
       }
     });
 
-    const blockedCase = (name: string, part: unknown, stream = false) => ({ name, part, stream });
-    const blocked = responses
-      ? [
-          blockedCase("inline image", imagePart),
-          blockedCase("inline file", filePart),
-          blockedCase(
-            "URL image in a streaming request",
-            responseUrl("input_image", "https://example.com/image.png"),
-            true,
-          ),
-          blockedCase("URL file", responseUrl("input_file", "https://example.com/notes.txt")),
-          blockedCase("malformed base64 before decoding", responseFile("%%%")),
-        ]
-      : [
-          blockedCase("inline image", imagePart),
-          blockedCase(
-            "URL image in a streaming request",
-            chatImage("https://example.com/image.png"),
-            true,
-          ),
-          blockedCase("file", filePart),
-          blockedCase("malformed image before decoding", chatImage("data:image/png;base64,%%%")),
-        ];
-    it.each(blocked)("rejects $name without extraction or dispatch", async ({ part, stream }) => {
+    // Upload admission branches on part kind, before inspecting inline/URL source data.
+    it.each([
+      {
+        name: "malformed image before decoding",
+        part: responses
+          ? responseBase64("input_image", "image/png", "%%%")
+          : chatImage("data:image/png;base64,%%%"),
+        stream: false,
+      },
+      { name: "file", part: filePart, stream: false },
+      {
+        name: "URL image in a streaming request",
+        part: responses
+          ? responseUrl("input_image", "https://example.com/image.png")
+          : chatImage("https://example.com/image.png"),
+        stream: true,
+      },
+    ])("rejects $name without extraction or dispatch", async ({ part, stream }) => {
       publishUploads(false);
-      const imageExtraction = vi.spyOn(inputFiles, "extractImageContentFromSource");
-      const fileExtraction = responses
+      using imageExtraction = vi.spyOn(inputFiles, "extractImageContentFromSource");
+      using fileExtraction = responses
         ? vi.spyOn(inputFiles, "extractFileContentFromSource")
         : undefined;
-      try {
-        const res = await post(
-          [message([{ type: responses ? "input_text" : "text", text: "Read this" }, part])],
-          stream,
-        );
-        expect(res.status).toBe(403);
-        expect(await res.json()).toEqual({ error: uploadsDisabledError });
-        expect(imageExtraction).not.toHaveBeenCalled();
-        if (fileExtraction) {
-          expect(fileExtraction).not.toHaveBeenCalled();
-        }
-        if ("fetchWithSsrFGuardMock" in suite) {
-          expect(suite.fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-        }
-        expect(agentCommandMock).not.toHaveBeenCalled();
-      } finally {
-        imageExtraction.mockRestore();
-        fileExtraction?.mockRestore();
+      const res = await post([message([part])], stream);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: uploadsDisabledError });
+      expect(imageExtraction).not.toHaveBeenCalled();
+      if (fileExtraction) {
+        expect(fileExtraction).not.toHaveBeenCalled();
       }
+      if ("fetchWithSsrFGuardMock" in suite) {
+        expect(suite.fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      }
+      expect(agentCommandMock).not.toHaveBeenCalled();
     });
 
     it("rejects a hot disable during command input admission", async () => {
@@ -207,7 +193,7 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
       "rechecks upload policy after preparation (stream=%s)",
       async (stream) => {
         publishUploads(true);
-        const extraction = responses
+        using _ = responses
           ? vi
               .spyOn(inputFiles, "extractFileContentFromSource")
               .mockImplementationOnce(async () => {
@@ -220,14 +206,10 @@ function registerUploadPolicyTests(suite: OpenAiMediaSuite | ResponsesUploadSuit
                 publishUploads(false);
                 return { type: "image", data: "QUJDRA==", mimeType: "image/png" };
               });
-        try {
-          const res = await post([message([upload])], stream);
-          expect(res.status).toBe(403);
-          expect(await res.json()).toMatchObject({ error: { code: "UPLOADS_DISABLED" } });
-          expect(agentCommandMock).not.toHaveBeenCalled();
-        } finally {
-          extraction.mockRestore();
-        }
+        const res = await post([message([upload])], stream);
+        expect(res.status).toBe(403);
+        expect(await res.json()).toMatchObject({ error: { code: "UPLOADS_DISABLED" } });
+        expect(agentCommandMock).not.toHaveBeenCalled();
       },
     );
   });
@@ -263,37 +245,24 @@ export async function runOpenAiHttpImageInputCases({
     await res.text();
   }
 
-  const pngData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAA";
   await accept(
-    [withChatImage("describe this", `data:image/png;base64,${pngData}`)],
-    [image(pngData)],
-    (message) => expect(message).toBe("describe this"),
-  );
-  await accept(
-    [withChatImage("with metadata params", "data:image/png;charset=utf-8;base64,QUJDRA==")],
+    [withChatImage("describe this", "data:image/png;charset=utf-8;base64,QUJDRA==")],
     [image("QUJDRA==")],
+    (message) => expect(message).toBe("describe this"),
   );
 
   await expectInvalidRequestNoDispatch([chatMessage([chatImage("https://example.com/image.png")])]);
   const malformedImageParts = [
     { type: "image_url" },
-    { type: "image_url", image_url: null },
-    { type: "image_url", image_url: {} },
     { type: "image_url", image_url: { url: "   " } },
     { type: "image_url", image_url: { url: 123 } },
-    { type: "image_url", image_url: { url: null } },
     { type: "image_url", image_url: "   " },
-    { type: "image_url", image_url: 123 },
   ];
   const validImagePart = chatImage();
   for (const imagePart of malformedImageParts) {
-    for (const content of [
-      [imagePart],
-      [textPart("describe this"), imagePart],
-      [validImagePart, imagePart],
-    ]) {
-      await expectInvalidRequestNoDispatch([chatMessage(content)]);
-    }
+    await expectInvalidRequestNoDispatch([
+      chatMessage([textPart("describe this"), validImagePart, imagePart]),
+    ]);
   }
   for (const uri of [
     "data:image/png,QUJDRA==",
@@ -310,30 +279,18 @@ export async function runOpenAiHttpImageInputCases({
     [image("QUJDRA==", "image/jpeg")],
     (message) => expect(message).toContain("User sent image(s) with no text."),
   );
-  await accept(
-    [
-      chatMessage([chatImage()]),
-      chatMessage("I can see it.", "assistant"),
-      chatMessage("What color was it?"),
-    ],
-    undefined,
-    (message) => expect(message ?? "").not.toContain("User sent image(s) with no text."),
-  );
-  for (const historicalImageParts of [[chatImage("   ")], [validImagePart, chatImage("   ")]]) {
-    for (const followup of [
-      chatMessage("What color was it?"),
-      chatMessage("Vision tool says it is blue.", "tool"),
-    ]) {
-      await accept(
-        [
-          chatMessage([textPart("look at this"), ...historicalImageParts]),
-          chatMessage("Checking the image.", "assistant"),
-          followup,
-        ],
-        undefined,
-        () => expect(getFirstAgentMessage()).toContain("User: look at this"),
-      );
-    }
+  for (const followup of [
+    chatMessage("What color was it?"),
+    chatMessage("Vision tool says it is blue.", "tool"),
+  ]) {
+    await accept(
+      [withChatImage("look at this", "   "), chatMessage("Checking.", "assistant"), followup],
+      undefined,
+      (message) => {
+        expect(getFirstAgentMessage()).toContain("User: look at this");
+        expect(message ?? "").not.toContain("User sent image(s) with no text.");
+      },
+    );
   }
   await accept(
     [

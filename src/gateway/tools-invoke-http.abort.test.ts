@@ -1,6 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -78,48 +81,27 @@ function authorizedRequest(overrides: Partial<RequestAuth> = {}): RequestAuth {
   };
 }
 
-let server: ReturnType<typeof createServer> | undefined;
-let serverPort = 0;
+let origin: string;
 let resolveGatewayContext: GatewayContextResolver | undefined;
-
-beforeAll(async () => {
-  server = createServer((req, res) => {
-    void handleToolsInvokeHttpRequest(req, res, {
-      auth: { mode: "none", allowTailscale: false },
-      resolveGatewayContext,
+const server = createServer((req, res) => {
+  void handleToolsInvokeHttpRequest(req, res, {
+    auth: { mode: "none", allowTailscale: false },
+    resolveGatewayContext,
+  })
+    .then(() => {
+      lifecycle.handled();
     })
-      .then(() => {
-        lifecycle.handled();
-      })
-      .catch((error: unknown) => {
-        if (!res.destroyed && !res.writableEnded) {
-          res.statusCode = 500;
-          res.end(String(error));
-        }
-      });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server?.once("error", reject);
-    server?.listen(0, "127.0.0.1", () => {
-      const address = server?.address() as AddressInfo | null;
-      serverPort = address?.port ?? 0;
-      resolve();
+    .catch((error: unknown) => {
+      if (!res.destroyed && !res.writableEnded) {
+        res.statusCode = 500;
+        res.end(String(error));
+      }
     });
-  });
 });
-
-afterAll(async () => {
-  const activeServer = server;
-  if (!activeServer) {
-    return;
-  }
-  activeServer.closeAllConnections();
-  await new Promise<void>((resolve) => {
-    activeServer.close(() => resolve());
-  });
-  server = undefined;
+beforeAll(async () => {
+  origin = await listenLoopback(server);
 });
+afterAll(() => closeHttpServer(server));
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
@@ -139,7 +121,7 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 function invokeAbortProbe(signal?: AbortSignal): Promise<Response> {
-  return fetch(`http://127.0.0.1:${serverPort}/tools/invoke`, {
+  return fetch(`${origin}/tools/invoke`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ tool: "abort_probe", args: {} }),
@@ -233,29 +215,6 @@ describe("POST /tools/invoke request cancellation", () => {
     });
   });
 
-  it("revokes the tool signal after a successful request and releases its disconnect watcher", async () => {
-    const revoked = vi.fn();
-    lifecycle.execute.mockImplementationOnce(async (_toolCallId, _args, signal) => {
-      // Observe while the tool owns the signal: Node 24 composites retain weak
-      // sources until subscribed, so a later getter can lose an aborted source to GC.
-      signal?.addEventListener("abort", revoked, { once: true });
-      return { ok: true };
-    });
-    const response = await invokeAbortProbe();
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, result: { ok: true } });
-    expect(lifecycle.execute).toHaveBeenCalledTimes(1);
-
-    const toolSignal = lifecycle.execute.mock.calls[0]?.[2];
-    expect(toolSignal).toBeInstanceOf(AbortSignal);
-    expect(revoked).toHaveBeenCalledTimes(1);
-    expect(toolSignal?.aborted).toBe(true);
-    expect(lifecycle.beforeHook).toHaveBeenCalledWith(
-      expect.objectContaining({ signal: toolSignal }),
-    );
-  });
-
   it("retains each child's original grant after HTTP completion without adopting a replacement", async () => {
     const stateOptions = { label: "http-tool-child-authority", prepareProfileCatalog: true };
     await withOpenClawTestState(stateOptions, async () => {
@@ -287,7 +246,7 @@ describe("POST /tools/invoke request cancellation", () => {
         scope: NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>;
         admitted: AdmittedRunContext;
       }[] = [];
-      lifecycle.execute.mockImplementation(async () => {
+      lifecycle.execute.mockImplementation(async (_toolCallId, _args, signal) => {
         const scope = getPluginRuntimeGatewayRequestScope();
         const authority = scope?.client?.internal?.operatorRunAuthority;
         if (!scope?.signal || !scope.hasCurrentClientAuthority || !authority) {
@@ -296,7 +255,11 @@ describe("POST /tools/invoke request cancellation", () => {
         expect(scope.context).toBe(context);
         expect(scope.resolveGatewayContext).toBe(resolveGatewayContext);
         expect(scope.hasCurrentClientAuthority()).toBe(true);
-        scope.signal.addEventListener("abort", requestEnded, { once: true });
+        expect(signal).toBe(scope.signal);
+        expect(signal).toBeInstanceOf(AbortSignal);
+        expect(lifecycle.beforeHook).toHaveBeenCalledWith(expect.objectContaining({ signal }));
+        // Subscribe while the tool owns the composite signal, before weak sources can be GC'd.
+        signal?.addEventListener("abort", requestEnded, { once: true });
         const admission = prepareSystemAgentRunAdmission(
           cfg,
           `http-tool-child-${admissions.length}`,

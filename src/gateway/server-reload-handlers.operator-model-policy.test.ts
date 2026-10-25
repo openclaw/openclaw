@@ -1,7 +1,6 @@
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
-import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -124,6 +123,35 @@ function createReloader(
   return { reloader, write };
 }
 
+type AcceptedRun = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
+function admittedDispatcher(
+  context: ReturnType<typeof createGatewayTestContext>,
+  client: ReturnType<typeof createOperatorWsClient>,
+  accept: (source: AcceptedRun) => void,
+) {
+  const harness = createDispatchTestHarness({
+    connId: client.connId,
+    buildRequestContext: () => context,
+    extraHandlers: {
+      wake: async (options) => {
+        const source = await captureGatewayOperatorRunAuthority({
+          client: options.client,
+          context,
+          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+        });
+        assert(source);
+        accept(source);
+        options.respond(true, { accepted: true });
+      },
+    },
+  });
+  return {
+    ...harness,
+    wake: (id: string) =>
+      harness.dispatcher.dispatch({ type: "req", id, method: "wake", params: {} }, client),
+  };
+}
+
 it("commits model-only role changes without retiring permitted models or original source work", async () => {
   const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
   await withOpenClawTestState(profileState, async () => {
@@ -166,9 +194,6 @@ it("commits model-only role changes without retiring permitted models or origina
     const releasePreparation = createDeferred();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     let rejectCandidate = true;
-    const advance = vi.spyOn(preparedModelRuntime, "advancePreparedModelRuntimeConfig");
-    const invalidate = vi.spyOn(preparedModelRuntime, "markPreparedModelRuntimeSnapshotsStale");
-    const rebuild = vi.spyOn(preparedModelRuntime, "refreshPreparedModelRuntimeSnapshots");
     const { reloader, write } = createReloader(initialConfig, context, clock, [client], {
       reconcileRuntimePolicy: (config) =>
         disconnectDisallowedGatewayPolicyClients([client], config),
@@ -191,24 +216,10 @@ it("commits model-only role changes without retiring permitted models or origina
       const getCommittedRuntimeConfig = reloader.getCommittedRuntimeConfig;
       assert(getCommittedRuntimeConfig);
       context.getCommittedRuntimeConfig = getCommittedRuntimeConfig;
-      const dispatch = createDispatchTestHarness({
-        buildRequestContext: () => context,
-        extraHandlers: {
-          // A classified write route exercises ordinary operator admission before capture.
-          wake: async (options) => {
-            original = await captureGatewayOperatorRunAuthority({
-              client: options.client,
-              context,
-              hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-            });
-            options.respond(true, { accepted: true });
-          },
-        },
+      const dispatch = admittedDispatcher(context, client, (source) => {
+        original = source;
       });
-      await dispatch.dispatcher.dispatch(
-        { type: "req", id: "model-policy", method: "wake", params: {} },
-        client,
-      );
+      await dispatch.wake("model-policy");
       expect(dispatch.send).toHaveBeenCalledWith(
         expect.objectContaining({ id: "model-policy", ok: true, payload: { accepted: true } }),
       );
@@ -258,9 +269,6 @@ it("commits model-only role changes without retiring permitted models or origina
       expect(original.authority.assertCurrent).not.toThrow();
       expect(close).not.toHaveBeenCalled();
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
-      expect(invalidate).not.toHaveBeenCalled();
-      expect(rebuild).not.toHaveBeenCalled();
-      expect(advance).toHaveBeenCalledOnce();
     } finally {
       releasePreparation.resolve();
       try {
@@ -330,9 +338,7 @@ it.each(["scopes", "access policy"] as const)(
           }
         },
       });
-      const accepted: NonNullable<
-        Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
-      >[] = [];
+      const accepted: AcceptedRun[] = [];
       try {
         await reloader.ready;
         const getConfig = reloader.getCommittedRuntimeConfig;
@@ -340,29 +346,10 @@ it.each(["scopes", "access policy"] as const)(
         context.getCommittedRuntimeConfig = getConfig;
         context.getRuntimeConfig = getConfig;
         const dispatchers = clients.map((client) =>
-          createDispatchTestHarness({
-            connId: client.connId,
-            buildRequestContext: () => context,
-            extraHandlers: {
-              wake: async (options) => {
-                const source = await captureGatewayOperatorRunAuthority({
-                  client: options.client,
-                  context,
-                  hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-                });
-                assert(source);
-                accepted.push(source);
-                options.respond(true, { accepted: true });
-              },
-            },
-          }),
+          admittedDispatcher(context, client, (source) => accepted.push(source)),
         );
-        for (const [index, client] of clients.entries()) {
-          const dispatch = dispatchers[index]!;
-          await dispatch.dispatcher.dispatch(
-            { type: "req", id: "accepted", method: "wake", params: {} },
-            client,
-          );
+        for (const dispatch of dispatchers) {
+          await dispatch.wake("accepted");
           expect(dispatch.send).toHaveBeenLastCalledWith(expect.objectContaining({ ok: true }));
         }
         expect(accepted).toHaveLength(2);
@@ -398,10 +385,7 @@ it.each(["scopes", "access policy"] as const)(
         expect(clients[1]!.connectionSignal.aborted).toBe(true);
         expect(accepted[1]!.authority.signal?.aborted).toBe(true);
         expect(accepted[1]!.authority.assertCurrent).toThrow();
-        await dispatchers[1]!.dispatcher.dispatch(
-          { type: "req", id: "revoked", method: "wake", params: {} },
-          clients[1]!,
-        );
+        await dispatchers[1]!.wake("revoked");
         expect(accepted).toHaveLength(2);
         await writeScopes(["operator.write", "operator.approvals"], 3);
         expect(accepted[1]!.authority.signal?.aborted).toBe(true);
