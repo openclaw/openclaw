@@ -11,7 +11,10 @@ import {
   selectChromeMcpOption,
   takeChromeMcpSnapshot,
 } from "./chrome-mcp.js";
-import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
+import {
+  flattenChromeMcpSnapshotToAriaResult,
+  type ChromeMcpSnapshotNode,
+} from "./chrome-mcp.snapshot.js";
 import { getFreePort } from "./test-port.js";
 
 async function act(routes: ReturnType<typeof fixture.mcpRoutes>, body: Record<string, unknown>) {
@@ -20,15 +23,13 @@ async function act(routes: ReturnType<typeof fixture.mcpRoutes>, body: Record<st
 }
 
 function snapshotRef(root: ChromeMcpSnapshotNode, role: string, name: string): string {
-  const nodes = [root];
-  while (nodes.length) {
-    const node = nodes.pop()!;
-    if (node.role?.toLowerCase() === role && node.name === name && node.id) {
-      return node.id;
-    }
-    nodes.push(...(node.children ?? []));
+  const node = flattenChromeMcpSnapshotToAriaResult(root).nodes.find(
+    (candidate) => candidate.role === role && candidate.name === name,
+  );
+  if (!node?.ref) {
+    throw new Error(`Snapshot has no ${role} named "${name}"`);
   }
-  throw new Error(`Snapshot has no ${role} named "${name}"`);
+  return node.ref;
 }
 
 describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
@@ -220,24 +221,18 @@ describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
         const snapshot = await takeChromeMcpSnapshot(target);
         const topRef = snapshotRef(snapshot, "button", "Top 0");
         const frameRef = snapshotRef(snapshot, "button", "Frame 0");
-        const cssArgs =
-          (ref: string) => (session: Parameters<typeof resolveChromeMcpSnapshotRef>[0]) => ({
+        const styles = (ref: string) =>
+          callTargetTool(target, "get_css_styles", (session) => ({
             uid: resolveChromeMcpSnapshotRef(session, target.targetId, ref).uid,
             pageSize: 10,
             pageIdx: 0,
-          });
+          }));
 
-        await expect(
-          callTargetTool(target, "get_css_styles", cssArgs(topRef)),
-        ).resolves.toBeDefined();
-        await expect(callTargetTool(target, "get_css_styles", cssArgs(frameRef))).rejects.toThrow(
-          /detached or no longer exists/,
-        );
+        await expect(styles(topRef)).resolves.toBeDefined();
+        await expect(styles(frameRef)).rejects.toThrow(/detached or no longer exists/);
 
         await page.goto(replacementUrl);
-        await expect(callTargetTool(target, "get_css_styles", cssArgs(topRef))).rejects.toThrow(
-          /no longer exists/,
-        );
+        await expect(styles(topRef)).rejects.toThrow(/no longer exists/);
       });
     }, 120_000);
 

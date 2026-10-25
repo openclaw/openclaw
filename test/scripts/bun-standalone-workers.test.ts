@@ -50,6 +50,23 @@ it("refuses missing declared outputs before producing an incomplete image", () =
   ).toThrow("Missing standalone worker outputs: dist/commands/doctor.worker.js");
 });
 
+it("requires every declared worker and child entry in the compiler outputs", () => {
+  const runtimeRoot = fixture({});
+  const outputRoot = path.join(runtimeRoot, "build");
+  const prepared = prepareStandaloneWorkers({
+    runtimeRoot,
+    outputRoot,
+    runtimeBootstrap: path.join(outputRoot, "bootstrap.mjs"),
+    workerEntries: ["dist/commands/doctor.worker.js", "dist/recovery.mjs"],
+  });
+  const doctor = path.join(outputRoot, "modules/standalone-workers/dist/commands/doctor.worker.js");
+  const recovery = path.join(outputRoot, "modules/standalone-workers/dist/recovery.js");
+  expect(() => prepared.validateOutputs([doctor])).toThrow(
+    "Missing embedded standalone worker outputs: dist/recovery.mjs",
+  );
+  expect(() => prepared.validateOutputs([doctor, recovery])).not.toThrow();
+});
+
 it("routes declared physical worker paths through their embedded bootstrap", () => {
   const runtimeRoot = fixture({ "dist/commands/doctor.worker.js": "export {};" });
   const outputRoot = path.join(runtimeRoot, "build");
@@ -60,6 +77,7 @@ it("routes declared physical worker paths through their embedded bootstrap", () 
     outputRoot,
     runtimeBootstrap: bootstrap,
     workerEntries: ["dist/commands/doctor.worker.js"],
+    sourceWorkerAliases: { "/typed/doctor.worker.ts": "dist/commands/doctor.worker.js" },
   });
   expect(fs.readFileSync(prepared.entrypoints[0]!, "utf8")).toBe(
     `import ${JSON.stringify(bootstrap)};\nawait import(${JSON.stringify(path.join(runtimeRoot, "dist/commands/doctor.worker.js"))});\n`,
@@ -82,6 +100,12 @@ it("routes declared physical worker paths through their embedded bootstrap", () 
   expect(new exported.exports!.Worker(physical).filename.toString()).toBe(
     "file:///$bunfs/root/standalone-workers/dist/commands/doctor.worker.js",
   );
+  expect(new exported.exports!.Worker("/typed/doctor.worker.ts").filename.toString()).toBe(
+    "file:///$bunfs/root/standalone-workers/dist/commands/doctor.worker.js",
+  );
+  expect(() =>
+    prepared.updateSourceWorkerAliases({ "/typed/unknown.ts": "dist/unknown.js" }),
+  ).toThrow("Unknown standalone worker alias target");
   expect(
     () => new exported.exports!.Worker(path.join(runtimeRoot, "..", "runtime", "dist/missing.js")),
   ).toThrow("Undeclared standalone worker: dist/missing.js");

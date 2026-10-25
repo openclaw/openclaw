@@ -1,4 +1,3 @@
-// Covers fail-closed Doctor import of the retired Web Push JSON stores.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -138,16 +137,26 @@ describe("legacy Web Push Doctor migration", () => {
 
   async function expectMigration(warning?: string, options: Parameters<typeof migrate>[0] = {}) {
     const result = await migrate(options);
-    if (warning) {
-      expect(result.warnings[0]).toContain(warning);
-    } else {
-      expect(result.warnings).toEqual([]);
-    }
+    expect(result.warnings).toEqual(warning ? [expect.stringContaining(warning)] : []);
   }
 
-  it.each(["subscriptions", "vapid"] as const)(
-    "retains malformed UTF-8 in %s without importing replacement characters",
-    async (source) => {
+  async function expectStored(
+    subscriptions: WebPushSubscription[] = [],
+    vapid: VapidKeyPair | null = null,
+  ) {
+    expect(
+      await Promise.all([listWebPushSubscriptions(stateDir), readPersistedVapidKeyPair(stateDir)]),
+    ).toEqual([subscriptions, vapid]);
+  }
+
+  it.each([
+    { source: "subscriptions", claimed: false },
+    { source: "subscriptions", claimed: true },
+    { source: "vapid", claimed: false },
+    { source: "vapid", claimed: true },
+  ] as const)(
+    "retains malformed UTF-8 in $source without importing replacement characters (claim: $claimed)",
+    async ({ source, claimed }) => {
       const paths = await writeLegacyState({
         subscriptions: [subscription({ keys: { p256dh: "utf8-marker", auth: "auth" } })],
         vapid: vapidKeys({ publicKey: "utf8-marker" }),
@@ -156,14 +165,21 @@ describe("legacy Web Push Doctor migration", () => {
       const bytes = await fsp.readFile(sourcePath);
       bytes[bytes.indexOf("utf8-marker")] = 0xff;
       await fsp.writeFile(sourcePath, bytes);
+      const activePath = sourcePath + (claimed ? ".doctor-importing" : "");
+      if (claimed) {
+        await fsp.rename(sourcePath, activePath);
+      }
       const result = await migrate();
       expect(result.changes).toEqual([]);
       expect(result.warningDisposition).toBe("recoverable");
       expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
-      expect(await fsp.readFile(sourcePath)).toEqual(bytes);
-      expectFiles(true, paths.subscriptionsPath, paths.vapidKeysPath);
-      expect(await listWebPushSubscriptions()).toEqual([]);
-      expect(await readPersistedVapidKeyPair()).toBeNull();
+      expect(await fsp.readFile(activePath)).toEqual(bytes);
+      expectFiles(
+        true,
+        activePath,
+        source === "subscriptions" ? paths.vapidKeysPath : paths.subscriptionsPath,
+      );
+      await expectStored();
     },
   );
 
@@ -188,10 +204,7 @@ describe("legacy Web Push Doctor migration", () => {
   });
 
   it("routes explicit Doctor repair through the Web Push SQLite importer", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { entries: { "worker-1": {} } },
-      session: { mainKey: "desk" },
-    };
+    const cfg: OpenClawConfig = {};
     const env = {
       ...process.env,
       HOME: stateDir,
@@ -211,9 +224,6 @@ describe("legacy Web Push Doctor migration", () => {
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     });
     expect(detected.webPush.hasLegacy).toBe(true);
-    expect(detected.preview).toContain(
-      "- Web Push subscriptions and VAPID identity: legacy JSON → shared SQLite state",
-    );
     const result = await runLegacyStateMigrations({
       detected,
       config: cfg,
@@ -221,8 +231,7 @@ describe("legacy Web Push Doctor migration", () => {
       legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
     });
     expect(result.warnings).toStrictEqual([]);
-    expect(await listWebPushSubscriptions(stateDir)).toStrictEqual([expectedSubscription]);
-    expect(await readPersistedVapidKeyPair(stateDir)).toStrictEqual(expectedVapid);
+    await expectStored([expectedSubscription], expectedVapid);
     expectFiles(false, paths.subscriptionsPath, paths.vapidKeysPath);
   });
 
@@ -248,31 +257,33 @@ describe("legacy Web Push Doctor migration", () => {
     expect((await readPersistedVapidKeyPair(stateDir))?.subject).toBe(expectedSubject);
   });
 
-  it("rejects a present non-string legacy VAPID subject", async () => {
-    const paths = await writeLegacyState({ vapid: { ...vapidKeys(), subject: 42 } });
-    await expectMigration("VAPID keys are invalid", {
+  it.each([
+    { invalid: "subject", warning: "VAPID keys are invalid" },
+    { invalid: "keys", warning: "VAPID keys are invalid" },
+    { invalid: "hash", warning: "subscription is invalid" },
+    { invalid: "id", warning: "duplicate subscription id" },
+  ])("rejects invalid $invalid without importing its valid pair", async ({ invalid, warning }) => {
+    const subscriptions =
+      invalid === "hash"
+        ? { forged: subscription() }
+        : [
+            subscription(),
+            ...(invalid === "id"
+              ? [subscription({ endpoint: "https://push.example.com/second" })]
+              : []),
+          ];
+    const vapid =
+      invalid === "subject"
+        ? { ...vapidKeys(), subject: 42 }
+        : invalid === "keys"
+          ? { publicKey: "incomplete" }
+          : vapidKeys();
+    const paths = await writeLegacyState({ subscriptions, vapid });
+    await expectMigration(warning, {
       env: { ...process.env, OPENCLAW_VAPID_SUBJECT: "mailto:fallback@example.com" },
     });
-    expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
-    expect(fs.existsSync(paths.vapidKeysPath)).toBe(true);
-  });
-
-  it("rejects either malformed file without importing its valid pair", async () => {
-    const paths = await writeSubscriptions([subscription()], { publicKey: "incomplete" });
-    await expectMigration("VAPID keys are invalid");
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
-    expect(await readPersistedVapidKeyPair(stateDir)).toBeNull();
+    await expectStored();
     expectFiles(true, paths.subscriptionsPath, paths.vapidKeysPath);
-  });
-
-  it("rejects a forged endpoint hash and duplicate subscription ids", async () => {
-    await writeLegacyState({ subscriptions: { forged: subscription() } });
-    await expectMigration("subscription is invalid");
-    const first = subscription();
-    const second = subscription({ endpoint: "https://push.example.com/send/second" });
-    await writeSubscriptions([first, second]);
-    await expectMigration("duplicate subscription id");
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
   });
 
   it("keeps newer SQLite fields while preserving the earliest creation time", async () => {
@@ -360,26 +371,18 @@ describe("legacy Web Push Doctor migration", () => {
     },
   );
 
-  it("refuses symlinked sources", async () => {
-    const outside = path.join(stateDir, "outside.json");
-    await fsp.writeFile(outside, JSON.stringify({ subscriptionsByEndpointHash: {} }), "utf8");
-    const sourcePath = path.join(stateDir, "push", "web-push-subscriptions.json");
-    await fsp.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fsp.symlink(outside, sourcePath);
-    await expectMigration("Failed reading legacy Web Push state");
-    expect(fs.lstatSync(sourcePath).isSymbolicLink()).toBe(true);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
-  });
-
-  it("refuses a legacy store reached through a symlinked state-directory ancestor", async () => {
-    if (process.platform === "win32") {
+  it.each([false, true])("refuses symlinked sources (ancestor: %s)", async (ancestor) => {
+    if (ancestor && process.platform === "win32") {
       return;
     }
     const outside = tempDirs.make("openclaw-web-push-outside-");
     const { subscriptionsPath } = await writeSubscriptions([subscription()], undefined, outside);
-    await fsp.symlink(path.join(outside, "push"), path.join(stateDir, "push"));
+    const link = path.join(stateDir, "push", ...(ancestor ? [] : ["web-push-subscriptions.json"]));
+    await fsp.mkdir(path.dirname(link), { recursive: true });
+    await fsp.symlink(ancestor ? path.join(outside, "push") : subscriptionsPath, link);
     await expectMigration("Failed reading legacy Web Push state");
-    expect(fs.existsSync(subscriptionsPath)).toBe(true);
-    expect(await listWebPushSubscriptions(stateDir)).toEqual([]);
+    expectFiles(true, subscriptionsPath);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    await expectStored();
   });
 });

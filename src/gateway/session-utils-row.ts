@@ -113,7 +113,7 @@ export function readSessionRowInputs(params: {
     GatewaySessionRow,
     "derivedTitle" | "lastMessagePreview" | "lastAssistantMessage"
   >;
-  childLinks?: SessionChildLink[];
+  childLinks?: readonly SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
   configuredAgentIds?: ReadonlySet<string>;

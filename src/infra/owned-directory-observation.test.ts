@@ -117,7 +117,7 @@ it("shares recursive watches while preserving each consumer's recovery interval"
   expect(frequent).toHaveBeenCalledTimes(10);
   expect(quiet).not.toHaveBeenCalled();
   watch.mock.calls[0]![2]("change", "nested/resource.txt");
-  expect(quiet).toHaveBeenCalledWith("nested/resource.txt");
+  expect(quiet).toHaveBeenCalledWith("nested/resource.txt", "change");
   quiet.mockClear();
   vi.advanceTimersByTime(25 * 60_000);
   expect(quiet).toHaveBeenCalledOnce();
@@ -187,14 +187,14 @@ it("creates long-lived observations outside importer and caller authority", () =
   expect(scopes).toEqual([undefined]);
 });
 
-it("shares one watcher and reconciles a separate process's atomic replacement", async () => {
+it("shares one watcher, forwards invalidation and reconciles an atomic replacement", async () => {
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
   const directory = tempDirs.make("owned-directory-external-");
   const filename = path.join(directory, "profiles");
   fs.writeFileSync(filename, "before");
-  const watch = vi.spyOn(fs, "watch");
+  const watch = vi.spyOn(nativeWatchFs, "watch");
   const listener = vi.fn(() => fs.readFileSync(filename, "utf8"));
   const otherListener = vi.fn();
   observe(directory, listener);
@@ -207,20 +207,15 @@ it("shares one watcher and reconciles a separate process's atomic replacement", 
   ]);
   vi.advanceTimersByTime(300_000);
   expect(listener).toHaveLastReturnedWith("after");
-  expect(otherListener).toHaveBeenCalledWith(undefined);
+  expect(otherListener).toHaveBeenCalledWith(undefined, undefined);
   expect(watch).toHaveBeenCalledTimes(1);
-});
-
-it("forwards native file invalidation without replacing the shared directory watch", () => {
-  const directory = tempDirs.make("owned-directory-events-");
-  const watch = vi.spyOn(nativeWatchFs, "watch");
-  const listener = observe(directory);
+  listener.mockClear();
   const resolve = vi.spyOn(path, "resolve");
   watch.mock.calls[0]![2]("rename", "profiles");
-  expect(listener).toHaveBeenCalledWith("profiles");
+  expect(listener).toHaveBeenCalledWith("profiles", "rename");
   listener.mockClear();
   watch.mock.calls[0]![2]("change", path.basename(directory));
-  expect(listener).toHaveBeenCalledWith(path.basename(directory));
+  expect(listener).toHaveBeenCalledWith(path.basename(directory), "change");
   expect(watch).toHaveBeenCalledTimes(1);
   expect(resolve).not.toHaveBeenCalled();
 });
@@ -240,7 +235,7 @@ it("watches the long form of a Windows 8.3 short path", () => {
   expect(watch).toHaveBeenCalledOnce();
   expect(watch.mock.calls[0]![0]).toBe(longPath);
   watch.mock.calls[0]![2]("change", "auth.json");
-  expect(listener).toHaveBeenCalledWith("auth.json");
+  expect(listener).toHaveBeenCalledWith("auth.json", "change");
 });
 
 it("ignores ancestor activity while observing missing subtree creation and replacement", () => {
@@ -282,8 +277,8 @@ it("re-admits an absent directory and invalidates after missed notifications", (
   const listener = observe(directory);
   fs.mkdirSync(directory);
   vi.advanceTimersByTime(30_000);
-  expect(listener).toHaveBeenCalledWith(undefined);
+  expect(listener).toHaveBeenCalledWith(undefined, undefined);
   listener.mockClear();
   vi.advanceTimersByTime(30_000);
-  expect(listener).toHaveBeenCalledWith(undefined);
+  expect(listener).toHaveBeenCalledWith(undefined, undefined);
 });

@@ -37,7 +37,7 @@ import {
   createRenderTestChatPane,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
 const repository = { owner: "openclaw", repo: "openclaw" };

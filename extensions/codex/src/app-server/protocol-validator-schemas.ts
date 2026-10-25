@@ -16,11 +16,26 @@ export function createCodexValidationSchemas() {
   const normalize = (schema: Record<string, unknown>, name: string) =>
     normalizeJsonSchemaForTypeBox({ ...schema, $id: new URL(name, schemaBaseUrl).href });
 
+  const codexErrorInfoSchema = sharedDefinitionsSchema.definitions.CodexErrorInfo;
+  // Preserve known variant constraints when the upstream open enum accepts future errors.
+  const knownErrorVariantConstraints = codexErrorInfoSchema.anyOf.flatMap((variant) =>
+    "required" in variant
+      ? [{ anyOf: [{ not: { type: "object", required: variant.required } }, variant] }]
+      : [],
+  );
+
   return {
     context: {
       [sharedDefinitionsId]: normalizeJsonSchemaForTypeBox({
         ...sharedDefinitionsSchema,
         $id: sharedDefinitionsId,
+        definitions: {
+          ...sharedDefinitionsSchema.definitions,
+          CodexErrorInfo: {
+            ...codexErrorInfoSchema,
+            allOf: knownErrorVariantConstraints,
+          },
+        },
       }),
     },
     schemas: {

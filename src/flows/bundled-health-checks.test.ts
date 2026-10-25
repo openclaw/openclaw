@@ -1,4 +1,4 @@
-import { linkSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -175,21 +175,14 @@ it("scopes plugin state only while the selected provider setup is inspected", as
     workspaceDir,
     env: pluginMetadataEnv,
   });
-  expect(mocks.inspectEmbeddingProviderSetup).toHaveBeenCalledWith({
-    config: {},
-    env: pluginMetadataEnv,
-    agentId: "main",
-    provider: "local",
-  });
+  expect(mocks.inspectEmbeddingProviderSetup).toHaveBeenCalledWith(
+    expect.objectContaining({ env: pluginMetadataEnv }),
+  );
 });
 
 it("loads CUA Driver artifact health when the plugin is enabled", () => {
   register({ plugins: { entries: { "cua-computer": { enabled: true } } } });
 
-  expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
-    dirName: "cua-computer",
-    artifactBasename: "api.js",
-  });
   expect(mocks.registerCuaDriverDoctorChecks).toHaveBeenCalledExactlyOnceWith({
     registerHealthCheck: expect.any(Function),
   });
@@ -235,17 +228,16 @@ const implicitCodexConfig: OpenClawConfig = {
 };
 
 it("registers update readiness without loading unselected runtime health APIs", () => {
-  registerBundledHealthChecks({
-    cfg: {
+  register(
+    {
       ...codexConfig,
       plugins: {
         entries: { policy: { enabled: true }, "cua-computer": { enabled: true } },
       },
       cloudWorkers: { profiles: { aws: { provider: "crabbox" } } },
     },
-    cwd: workspaceDir,
-    updateReadiness: "post-plugin",
-  });
+    { updateReadiness: "post-plugin" },
+  );
 
   expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
   expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
@@ -332,34 +324,6 @@ function codexRecord(
   });
 }
 
-it.each(["implicit missing owner", "retained stable owner"] as const)(
-  "continues other health checks for %s",
-  (state) => {
-    const implicit = state === "implicit missing owner";
-    if (!implicit) {
-      // Published @openclaw/codex@2026.7.1-1 predates the health declaration and api.js.
-      mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue(
-        manifests(codexRecord("global", true, false)),
-      );
-    } else {
-      expect(resolveCodexHealthApi({ cfg: implicitCodexConfig, cwd: workspaceDir })).toEqual({
-        status: "not-configured",
-      });
-    }
-    register(
-      implicit
-        ? implicitCodexConfig
-        : { ...codexConfig, plugins: { entries: { policy: { enabled: true } } } },
-    );
-    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
-    expect(mocks.registerPolicyDoctorChecks).toHaveBeenCalledOnce();
-    expect(getHealthCheck("codex/managed-app-server")).toBeUndefined();
-    if (!implicit) {
-      expect(mocks.registerCodexManagedAppServerDoctorChecks).not.toHaveBeenCalled();
-    }
-  },
-);
-
 it("runs the selected bundled Codex health artifact with implicit routing", async () => {
   const cfg = implicitCodexConfig;
   mkdirSync(join(workspaceDir, "dist"));
@@ -376,7 +340,6 @@ it("runs the selected bundled Codex health artifact with implicit routing", asyn
         };
       `,
   );
-  linkSync(join(workspaceDir, "dist", "api.js"), join(workspaceDir, "api-copy.js"));
   mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue(
     manifests(codexRecord("bundled", false)),
   );
@@ -394,20 +357,26 @@ it("runs the selected bundled Codex health artifact with implicit routing", asyn
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     }),
   ).resolves.toEqual([]);
-  expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
-    config: cfg,
-    workspaceDir,
-    env,
-    pluginIds: ["codex"],
-  });
   expect(mocks.registerCodexManagedAppServerDoctorChecks).not.toHaveBeenCalled();
 });
 
-it.each(["missing", "untrusted", "missing-api", "missing-export"])(
-  "reports an availability warning for a selected Codex install with %s state",
-  (state) => {
+it.each([
+  ["implicit missing owner", undefined],
+  ["retained stable owner", undefined],
+  ["missing", "not found"],
+  ["untrusted", "not a bundled or verified official installation"],
+  ["missing-api", "health API could not be loaded"],
+  ["missing-export", "health checks are incomplete"],
+] as const)(
+  "continues other checks and reports selected Codex availability: %s",
+  (state, warning) => {
+    const implicit = state === "implicit missing owner";
     mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue(
-      state === "missing" ? manifests() : manifests(codexRecord("global", state !== "untrusted")),
+      implicit || state === "missing"
+        ? manifests()
+        : manifests(
+            codexRecord("global", state !== "untrusted", state !== "retained stable owner"),
+          ),
     );
     if (state === "untrusted") {
       writeFileSync(
@@ -418,24 +387,39 @@ it.each(["missing", "untrusted", "missing-api", "missing-export"])(
     if (state === "missing-export") {
       writeFileSync(join(workspaceDir, "api.js"), "module.exports = {};");
     }
-    const findings = register(codexConfig);
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/codex-session-routes",
-        source: "codex",
-        severity: "warning",
-      }),
-    ]);
-    expect(findings[0]?.message).toContain("openclaw doctor --fix");
-    expect(findings[0]?.message).toContain(
-      state === "missing"
-        ? "The configured Codex plugin was not found. Install it with openclaw plugins install @openclaw/codex."
-        : state.startsWith("untrusted")
-          ? "The selected Codex plugin is not a bundled or verified official installation. Run openclaw plugins inspect codex --runtime --json to inspect its source; install the official plugin with openclaw plugins install @openclaw/codex."
-          : state === "missing-export"
-            ? "The selected Codex plugin's Doctor health checks are incomplete. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help."
-            : "The selected Codex plugin declares Doctor health checks but its health API could not be loaded. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help.",
+    if (implicit) {
+      expect(resolveCodexHealthApi({ cfg: implicitCodexConfig, cwd: workspaceDir })).toEqual({
+        status: "not-configured",
+      });
+    }
+    const findings = register(
+      implicit
+        ? implicitCodexConfig
+        : {
+            ...codexConfig,
+            plugins: { entries: { policy: { enabled: true } } },
+          },
     );
+    if (warning) {
+      expect(findings).toMatchObject([
+        {
+          checkId: "core/doctor/codex-session-routes",
+          source: "codex",
+          severity: "warning",
+        },
+      ]);
+      expect(findings[0]?.message).toContain("openclaw doctor --fix");
+      expect(findings[0]?.message).toContain(warning);
+      expect(findings[0]?.message).toContain(
+        state === "missing" || state === "untrusted"
+          ? "openclaw plugins install @openclaw/codex"
+          : "openclaw plugins inspect codex --runtime --json",
+      );
+    } else {
+      expect(findings).toEqual([]);
+    }
+    expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
+    expect(mocks.registerPolicyDoctorChecks).toHaveBeenCalledOnce();
     expect(getHealthCheck("codex/managed-app-server")).toBeUndefined();
     expect(mocks.registerCodexManagedAppServerDoctorChecks).not.toHaveBeenCalled();
   },

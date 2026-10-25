@@ -47,6 +47,7 @@ export function createKeyedListMotion(input: {
       active: input.active(),
       ready: input.ready(),
       reduced: reduced(),
+      retained: retained(),
     }),
     (next) => {
       if (!next) {

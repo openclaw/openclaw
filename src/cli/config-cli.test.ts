@@ -16,6 +16,7 @@ import {
   createPluginManifestRecordFixture as createPluginManifestRecord,
   createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata.test-support.js";
+import { mockCall } from "../test-utils/mock-call-assertions.js";
 import { configCliMutationRejectionCases } from "./config-cli-rejections.test-support.js";
 import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-support.js";
 import { registerConfigMutationSchemaTests } from "./config-cli.mutation-schema.test-support.js";
@@ -254,32 +255,15 @@ function makeInvalidSnapshot(params: {
   };
 }
 
-function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("expected mock to have at least one call");
-  }
-  return call[0];
-}
-
-function lastMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
-  const calls = mock.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error("expected mock to have at least one call");
-  }
-  return call[0];
-}
-
 function parseLastLogPayload(): unknown {
-  const raw = lastMockArg(mockLog);
+  const raw = mockCall(mockLog, -1)[0];
   expect(typeof raw).toBe("string");
   return JSON.parse(String(raw)) as unknown;
 }
 
 async function runValidateJsonAndGetPayload() {
   await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow(ExitError);
-  const raw = firstMockArg(mockLog);
+  const raw = mockCall(mockLog)[0];
   expect(typeof raw).toBe("string");
   return JSON.parse(String(raw)) as {
     valid: boolean;
@@ -294,7 +278,7 @@ async function runValidateJsonAndGetPayload() {
 }
 
 function firstWrittenConfig(): OpenClawConfig {
-  const written = firstMockArg(mockWriteConfigFile);
+  const written = mockCall(mockWriteConfigFile)[0];
   if (!written) {
     throw new Error("expected written config");
   }
@@ -988,7 +972,7 @@ describe("config cli", () => {
           await run;
         } else {
           await expect(run).rejects.toThrow(ExitError);
-          const payload = lastMockArg(defaultRuntime.writeJson) as ConfigSetDryRunResult;
+          const payload = mockCall(defaultRuntime.writeJson, -1)[0] as ConfigSetDryRunResult;
           const messages = payload.errors?.map((error) => error.message) ?? [];
           expect(messages).toEqual(
             expect.arrayContaining([

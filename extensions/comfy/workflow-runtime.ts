@@ -120,12 +120,6 @@ type ComfyGeneratedAsset = {
   metadata: { nodeId: string; promptId: string };
 };
 
-type ComfyWorkflowResult = {
-  assets: ComfyGeneratedAsset[];
-  model: string;
-  metadata: { promptId: string; outputNodeIds: string[] };
-};
-
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
   const value = config[key];
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
@@ -425,7 +419,7 @@ export async function runComfyWorkflow(params: {
   timeoutMs?: number;
   capability: ComfyCapability;
   inputImage?: ComfySourceImage;
-}): Promise<ComfyWorkflowResult> {
+}) {
   const { config, path: configPath } = getComfyConfig(params.cfg);
   const capabilityConfig = getComfyCapabilityConfig(config, params.capability);
   const mode = resolveComfyMode(capabilityConfig);

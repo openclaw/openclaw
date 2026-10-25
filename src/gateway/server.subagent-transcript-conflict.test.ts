@@ -52,6 +52,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "./server-plugin-in-process-authority.js";
 import { subagentToolCallEvents } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayBackgroundTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 for (const scenario of [
@@ -71,16 +72,7 @@ for (const scenario of [
       const token = "conflict-fixture-token";
       const state = await createOpenClawTestState({
         label: "completion-conflict",
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: token,
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
+        env: createGatewayBackgroundTestEnv(token),
       });
       const sessionKey = "agent:main:main",
         sessionId = "conflict-parent-" + scenario,

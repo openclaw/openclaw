@@ -5,7 +5,7 @@ import { setupExecutionSuite } from "./agent-runner-execution-suite.test-support
 import {
   createRunResult,
   createFollowupRun,
-  initialFallbackAttemptOptions,
+  runFallbackCandidate,
   requireRecord,
   requireMockCall,
   expectMockCallArgFields,
@@ -27,12 +27,9 @@ const cliBackend = () => ({
 });
 
 function selectFallback(provider: string, model: string) {
-  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-    result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-    provider,
-    model,
-    attempts: [],
-  }));
+  state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+    runFallbackCandidate(params, provider, model),
+  );
 }
 
 function opaqueCliTurn(chatType: "group" | "direct", currentChatType?: string) {
@@ -60,7 +57,7 @@ function opaqueCliTurn(chatType: "group" | "direct", currentChatType?: string) {
   };
 }
 
-it("prepares OpenAI thinking capability for the concrete Codex runtime", async () => {
+it("prepares OpenAI thinking and forwards turn context for the concrete Codex runtime", async () => {
   const provider = "openai",
     model = "gpt-5.6-luna",
     agentRuntime = "codex";
@@ -82,7 +79,11 @@ it("prepares OpenAI thinking capability for the concrete Codex runtime", async (
   loadProviderScopedThinkingCatalog.mockResolvedValue([catalogEntry]);
   selectFallback(provider, model);
   state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("final"));
-  const followupRun = createFollowupRun();
+  const turnContext = { start: 0, text: "Current conversation." };
+  const followupRun = createFollowupRun({
+    extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
+    extraSystemPromptTurnContext: turnContext,
+  });
   followupRun.run.provider = provider;
   followupRun.run.model = model;
   followupRun.run.thinkLevel = thinkLevel;
@@ -109,6 +110,8 @@ it("prepares OpenAI thinking capability for the concrete Codex runtime", async (
     forceCodeModeTools: true,
     toolsAllow: ["message"],
     modelThinkingCapability: { provider, modelId: model, agentRuntime, compat },
+    extraSystemPrompt: "Current conversation.\n\nPersistent policy.",
+    extraSystemPromptTurnContext: turnContext,
   });
   expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ provider, model, agentRuntime: "codex" }),

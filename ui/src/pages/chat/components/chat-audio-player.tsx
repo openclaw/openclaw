@@ -4,6 +4,7 @@ import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-compo
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { observeResize } from "../../../lib/reactive/observers.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
@@ -456,17 +457,11 @@ function ChatAudioPlayerContent(
         if (typeof ResizeObserver === "undefined") {
           return undefined;
         }
-        let current: HTMLDivElement | null = waveform;
-        const observer = new ResizeObserver(([entry]) => {
-          if (entry && current === entry.target) {
+        return observeResize([waveform], ([entry]) => {
+          if (entry) {
             updateWaveformWidth(entry.contentRect.width);
           }
         });
-        observer.observe(waveform);
-        return () => {
-          observer.disconnect();
-          current = null;
-        };
       });
       return (
         <div class="chat-audio-player__waveform" ref={[waveformRef]}>

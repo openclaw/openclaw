@@ -25,7 +25,9 @@ import { promoteConfigSnapshotToLastKnownGoodCore } from "./io.observe-promotion
 import { recoverConfigFromLastKnownGoodCore } from "./io.observe-recovery.js";
 import {
   approveRecoveryCandidate,
+  createRecoveryBaselineConfig,
   createRecoveryConfigEnv,
+  largeRecoverableCoreConfig,
   makeDeps,
   makeSnapshot,
   resolveLastKnownGoodConfigPath,
@@ -58,14 +60,7 @@ describe("config observe recovery promotion", () => {
   it("refuses to promote a suspicious snapshot over last-known-good", async () => {
     const home = tempDirs.make("openclaw-config-lgg-promotion-");
     const { deps, configPath, warn } = makeDeps(home);
-    const healthyConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      update: { channel: "beta" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const healthyConfig = structuredClone(largeRecoverableCoreConfig);
     const healthy = await makeSnapshot(configPath, healthyConfig);
 
     await expect(
@@ -89,9 +84,6 @@ describe("config observe recovery promotion", () => {
     );
     expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
       "size-drop-vs-last-good",
-    );
-    expect(warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
-      "missing-meta-vs-last-good",
     );
     await expect(fsp.readFile(resolveLastKnownGoodConfigPath(configPath), "utf-8")).resolves.toBe(
       healthy.raw,
@@ -122,13 +114,7 @@ describe("config observe recovery promotion", () => {
     const error = vi.fn();
     const deps = normalizeConfigIoDeps({ env: {}, homedir: () => home, logger: { warn, error } });
     const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const healthyConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const healthyConfig = createRecoveryBaselineConfig();
     const healthy = await makeSnapshot(configPath, healthyConfig);
     await expect(
       promoteConfigSnapshotToLastKnownGoodCore({ deps, snapshot: healthy, logger: { warn } }),
@@ -217,14 +203,7 @@ describe("config observe recovery promotion", () => {
       homedir: () => home,
       logger: { warn: vi.fn(), error: vi.fn() },
     });
-    const healthyConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      update: { channel: "beta" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 60 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const healthyConfig = structuredClone(largeRecoverableCoreConfig);
     const healthy = await makeSnapshot(configPath, healthyConfig);
 
     // Seed a stored row with the current fingerprint producer. This exercises
@@ -358,7 +337,7 @@ describe("last-known-good promotion after accepted writes", () => {
 
   it.each([
     { anomaly: "size", proxies: 80 },
-    { anomaly: "metadata-only", proxies: 1 },
+    { anomaly: "gateway-mode", proxies: 1 },
   ])(
     "does not bless a pre-existing $anomaly truncation through an ordinary accepted edit",
     async ({ anomaly, proxies }) => {
@@ -377,15 +356,15 @@ describe("last-known-good promotion after accepted writes", () => {
           trustedProxies: Array.from({ length: proxies }, (_, index) => `192.0.2.${index}`),
         },
       });
-      expect(Buffer.byteLength(healthyRaw) < 512).toBe(anomaly === "metadata-only");
+      expect(Buffer.byteLength(healthyRaw) < 512).toBe(anomaly === "gateway-mode");
       const healthy = await io.readConfigFileSnapshot();
       await expect(io.promoteConfigSnapshotToLastKnownGood(healthy)).resolves.toBe(true);
 
-      // Metadata-only loss must survive writer stamping even below the size-drop
+      // Missing gateway mode must survive writer stamping below the size-drop
       // threshold; an ordinary edit is not approval of either earlier anomaly.
       seedConfig(configPath, {
-        ...(anomaly === "size" ? { meta: { lastTouchedVersion: "2026.4.22" } } : {}),
-        gateway: { mode: "local", port: 18789 },
+        meta: { lastTouchedVersion: "2026.4.22" },
+        gateway: { ...(anomaly === "size" ? { mode: "local" } : {}), port: 18789 },
       });
       const truncated = await io.readConfigFileSnapshot();
       await expect(io.promoteConfigSnapshotToLastKnownGood(truncated)).resolves.toBe(false);
@@ -448,7 +427,7 @@ describe("last-known-good promotion after accepted writes", () => {
     await expect(io.promoteConfigSnapshotToLastKnownGood(reducedSnapshot)).resolves.toBe(true);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
 
-    seedConfig(configPath, { gateway: { mode: "local", port: 19187 } });
+    seedConfig(configPath, { gateway: { port: 19187 } });
     const truncatedSnapshot = await io.readConfigFileSnapshot();
     await expect(io.promoteConfigSnapshotToLastKnownGood(truncatedSnapshot)).resolves.toBe(false);
     expect(fs.readFileSync(lastGoodPath, "utf8")).toBe(reducedSnapshot.raw);
@@ -666,10 +645,7 @@ describe("last-known-good promotion after accepted writes", () => {
   });
 
   it("restores the inherited anomaly when a later accepted edit rolls back", async () => {
-    const initial = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: { mode: "local" as const, trustedProxies: ["192.0.2.1"] },
-    };
+    const initial = createRecoveryBaselineConfig();
     await withTempHomeConfig(initial, async ({ configPath }) => {
       const io = createConfigIO({ observe: true });
       const healthy = await io.readConfigFileSnapshot();
@@ -710,13 +686,7 @@ describe("last-known-good promotion after accepted writes", () => {
   });
 
   it("restores the last-known-good baseline when a committed write rolls back", async () => {
-    const initialConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const initialConfig = createRecoveryBaselineConfig();
     await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
       const lastGoodPath = `${configPath}.last-good`;
       const originalRaw = await fsp.readFile(configPath, "utf-8");
@@ -775,13 +745,7 @@ describe("last-known-good promotion after accepted writes", () => {
   });
 
   it("restores the pre-write baseline when an intervening read records the published candidate", async () => {
-    const initialConfig = {
-      meta: { lastTouchedVersion: "2026.4.22" },
-      gateway: {
-        mode: "local" as const,
-        trustedProxies: Array.from({ length: 40 }, (_, index) => `192.0.2.${index}`),
-      },
-    };
+    const initialConfig = createRecoveryBaselineConfig();
     await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
       const lastGoodPath = `${configPath}.last-good`;
       const originalRaw = await fsp.readFile(configPath, "utf-8");

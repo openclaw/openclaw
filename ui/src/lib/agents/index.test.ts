@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -559,12 +560,9 @@ describe("agent creation", () => {
 
   it("shows a pending agent immediately and publishes the verified receipt without another roster read", async () => {
     const creation = deferred<unknown>();
-    const roster = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
+    const roster = makeBootRoster({
       agents: [{ id: "main", name: "Molty" }],
-    };
+    });
     const request = vi
       .fn<TestRequest>()
       .mockResolvedValueOnce(roster)

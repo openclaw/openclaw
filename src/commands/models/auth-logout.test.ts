@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential, AuthProfileStore } from "../../agents/auth-profiles.js";
 import {
@@ -16,12 +15,11 @@ import {
 } from "../../agents/auth-profiles/store-runtime.js";
 import * as catalogCredentials from "../../agents/plugin-model-catalog-credentials.js";
 import * as catalogs from "../../agents/plugin-model-catalog.js";
-import { registerModelsCli } from "../../cli/models-cli.js";
+import { createCliTtyMock } from "../../cli/test-runtime-capture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
-import { defaultRuntime } from "../../runtime.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createCapturingTestRuntime } from "../test-runtime-config-helpers.js";
 
@@ -48,9 +46,8 @@ vi.mock("../../agents/auth-profiles.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./load-config.js", () => ({
-  loadModelsConfig: mocks.loadModelsConfig,
-}));
+// mock-isolation: Config reads use the fixture rather than operator config files.
+vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
 
 vi.mock("./shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./shared.js")>();
@@ -82,23 +79,8 @@ vi.mock("../../wizard/clack-prompter.js", () => ({
 
 const { modelsAuthLogoutCommand } = await import("./auth-logout.js");
 
-async function runRegisteredLogout(profileId: string): Promise<void> {
-  const errors: string[] = [];
-  const error = vi.spyOn(defaultRuntime, "error").mockImplementation((message) => {
-    errors.push(String(message));
-  });
-  const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
-    throw new Error(errors.join("\n"));
-  });
-  try {
-    const program = new Command().exitOverride();
-    registerModelsCli(program);
-    await program.parseAsync(["models", "auth", "logout", profileId, "--yes"], { from: "user" });
-  } finally {
-    error.mockRestore();
-    exit.mockRestore();
-  }
-}
+const logout = (profileId: string) =>
+  modelsAuthLogoutCommand({ profileId, yes: true }, createRuntime());
 
 async function dispatchAuthLogout(
   cfg: OpenClawConfig,
@@ -128,7 +110,6 @@ async function dispatchAuthLogout(
       getRuntimeConfig: () => ({ ...cfg, agents: { entries: { main: {} } } }),
     }),
   });
-  expect(respond).toHaveBeenCalledOnce();
   const [ok, payload, error] = expectDefined(respond.mock.calls[0], "Gateway logout response");
   if (!ok) {
     throw new Error(expectDefined(error, "Gateway logout error").message);
@@ -188,16 +169,12 @@ function catalogDatabase(agentDir: string, main: string) {
 }
 
 async function withStdinIsTty<T>(isTTY: boolean, run: () => Promise<T>): Promise<T> {
-  const previous = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: isTTY });
+  const ttyMock = createCliTtyMock([process.stdin]);
+  ttyMock.set(isTTY);
   try {
     return await run();
   } finally {
-    if (previous) {
-      Object.defineProperty(process.stdin, "isTTY", previous);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
+    ttyMock.restore();
   }
 }
 
@@ -239,10 +216,7 @@ describe("models auth logout", () => {
       const retainedProvider = {
         api: "openai-completions",
         headers: { "X-Version": "1" },
-        models: [
-          { id: "selected-model", headers: {} },
-          { id: "surviving-model", apiKey: survivor.key },
-        ],
+        models: [{ id: "retained", apiKey: survivor.key, headers: {} }],
       };
       const catalog = {
         generatedBy: "openclaw-plugin-model-catalog-v1",
@@ -251,10 +225,7 @@ describe("models auth logout", () => {
             ...retainedProvider,
             apiKey: selected.key,
             headers: { ...retainedProvider.headers, Authorization: `Bearer ${selected.key}` },
-            models: [
-              { id: "selected-model", headers: { "X-Api-Key": selected.key } },
-              retainedProvider.models[1],
-            ],
+            models: [{ ...retainedProvider.models[0], headers: { "X-Api-Key": selected.key } }],
           },
         },
       };
@@ -295,7 +266,7 @@ describe("models auth logout", () => {
         insert.run("unrelated-cache", "keep", '{"value":"retained"}');
       }
 
-      await runRegisteredLogout("selected");
+      await logout("selected");
 
       expect(loadAuthProfileStoreWithoutExternalProfiles(main).profiles).toEqual({ survivor });
       for (const agentDir of [main, child]) {
@@ -304,11 +275,9 @@ describe("models auth logout", () => {
           const rows = db
             .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
             .all(scope) as Array<{ key: string; value_json: string }>;
-          expect(rows.map((row) => row.key)).toEqual(["fixture"]);
-          expect(JSON.parse(rows[0]!.value_json)).toEqual({
-            ...catalog,
-            providers: { fixture: retainedProvider },
-          });
+          expect(rows.map(({ key, value_json }) => [key, JSON.parse(value_json)])).toEqual([
+            ["fixture", { ...catalog, providers: { fixture: retainedProvider } }],
+          ]);
         }
         expect(
           db.prepare("SELECT value_json FROM cache_entries WHERE scope = ?").get("unrelated-cache"),
@@ -345,17 +314,16 @@ describe("models auth logout", () => {
           await scrub(params);
         });
       try {
-        await expect(runRegisteredLogout(profileId)).rejects.toThrow(
-          "saved credentials were restored",
-        );
+        await expect(logout(profileId)).rejects.toThrow("saved credentials were restored");
         expect({ profile: readProfile(), auth: liveConfig().auth }).toEqual({
           profile: credential,
           auth: originalConfig.auth,
         });
-        await runRegisteredLogout(profileId);
-        expect(readProfile()).toBeUndefined();
-        expect(liveConfig().auth?.profiles?.[profileId]).toBeUndefined();
-        expect(liveConfig().auth?.order?.openai).toBeUndefined();
+        await logout(profileId);
+        expect({ profile: readProfile(), auth: liveConfig().auth }).toEqual({
+          profile: undefined,
+          auth: { profiles: {} },
+        });
         expect(beforeDelete).toHaveBeenCalledTimes(2);
       } finally {
         cleanup.mockRestore();

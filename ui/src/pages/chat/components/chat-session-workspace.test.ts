@@ -1,9 +1,10 @@
 import { createComponent, createSignal, flush } from "solid-js";
-import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import { useFakeClock } from "../../../test-helpers/fake-clock.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
@@ -167,13 +168,6 @@ function nextWorkspaceUpdate(state: SessionWorkspaceHost, ready: () => boolean) 
     }
   });
   return next.promise.finally(stop);
-}
-
-function useFakeClock() {
-  vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
 }
 
 describe("session workspace state", () => {

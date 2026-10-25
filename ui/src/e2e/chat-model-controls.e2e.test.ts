@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
@@ -171,21 +172,16 @@ suite.define(() => {
           },
         ];
         const sessionKey = "agent:main:main";
-        const sessionList = {
-          count: 1,
-          path: "",
-          ts: 1,
-          defaults: { model: "gpt-5.5", modelProvider: "openai", contextTokens: 200_000 },
-          sessions: [
-            {
-              key: sessionKey,
-              kind: "direct",
-              model: "gpt-5.5",
-              modelProvider: "openai",
-              updatedAt: 1,
-            },
-          ],
-        };
+        const sessionList = modelSessionList(
+          {
+            key: sessionKey,
+            kind: "direct",
+            model: "gpt-5.5",
+            modelProvider: "openai",
+            updatedAt: 1,
+          },
+          { model: "gpt-5.5", modelProvider: "openai", contextTokens: 200_000 },
+        );
         const gateway = await installMockGateway(page, {
           agentModel: "openai/gpt-5.5",
           models,
@@ -470,30 +466,25 @@ suite.define(() => {
             },
           ],
           methodResponses: {
-            "sessions.list": {
-              count: 1,
-              path: "",
-              ts: 1,
-              defaults: {
+            "sessions.list": modelSessionList(
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                model: "gpt-5.6-luna",
+                modelProvider: "openai",
+                updatedAt: 1,
+                contextTokens: 200_000,
+                totalTokens: 46_000,
+                totalTokensFresh: true,
+              },
+              {
                 model: "gpt-5.6-luna",
                 modelProvider: "openai",
                 thinkingDefault: "high",
                 thinkingLevels,
                 contextTokens: 200_000,
               },
-              sessions: [
-                {
-                  key: "agent:main:main",
-                  kind: "direct",
-                  model: "gpt-5.6-luna",
-                  modelProvider: "openai",
-                  updatedAt: 1,
-                  contextTokens: 200_000,
-                  totalTokens: 46_000,
-                  totalTokensFresh: true,
-                },
-              ],
-            },
+            ),
           },
         });
         await page.goto(`${suite.server.baseUrl}${route}`);
@@ -698,32 +689,27 @@ suite.define(() => {
             },
           ],
           methodResponses: {
-            "sessions.list": {
-              count: 1,
-              path: "",
-              ts: 1,
-              defaults: {
+            "sessions.list": modelSessionList(
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                model: "basic",
+                modelProvider: provider,
+                thinkingLevels: [],
+                thinkingDefault: "off",
+                contextTokens: 200_000,
+                totalTokens: 46_000,
+                totalTokensFresh: true,
+                updatedAt: 1,
+              },
+              {
                 model: "basic",
                 modelProvider: provider,
                 thinkingLevels: [],
                 thinkingDefault: "off",
                 contextTokens: 200_000,
               },
-              sessions: [
-                {
-                  key: "agent:main:main",
-                  kind: "direct",
-                  model: "basic",
-                  modelProvider: provider,
-                  thinkingLevels: [],
-                  thinkingDefault: "off",
-                  contextTokens: 200_000,
-                  totalTokens: 46_000,
-                  totalTokensFresh: true,
-                  updatedAt: 1,
-                },
-              ],
-            },
+            ),
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
