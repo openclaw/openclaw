@@ -342,7 +342,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       mediaUrls: undefined,
       idempotencyKey: "run-1:internal-source-reply:0",
       expectedSessionId: "s1",
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -406,7 +406,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       mediaUrls: ["https://example.com/redacted.png"],
       idempotencyKey: "run-1:internal-source-reply:rewritten",
       expectedSessionId: "s1",
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -972,7 +972,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
       agentId: "main",
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       sessionKey: parentSessionKey,
       readConsistency: "latest",
       clone: false,

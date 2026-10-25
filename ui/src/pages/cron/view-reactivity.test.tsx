@@ -1,11 +1,11 @@
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createCronViewJob, createCronViewProps, getElement } from "./view.test-support.ts";
 import { CronView } from "./view.tsx";
 
-it("keeps the edited input and focus while its form and validation update", () => {
+it("keeps the edited input and focus while its form and validation update", async () => {
   const initial = createCronViewProps({ createOpen: true });
   const [props, setProps] = createSignal(initial);
   initial.onFormChange = (patch) =>
@@ -15,6 +15,8 @@ it("keeps the edited input and focus while its form and validation update", () =
       fieldErrors: { name: "cron.errors.nameRequired" },
     }));
   const view = mountSolid(() => <CronView {...props()} />);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => expect(view.container.querySelector("#cron-name")).not.toBeNull());
   const input = getElement(view.container, "#cron-name", HTMLInputElement);
   input.focus();
   input.value = "Daily check";
@@ -63,7 +65,7 @@ it("does not reread retained jobs while typing and still dispatches current row 
   expect(onSelectJob).toHaveBeenCalledExactlyOnceWith(job);
 });
 
-it("publishes refreshed runtime facts from the mutable selected job", () => {
+it("publishes refreshed runtime facts from the mutable selected job", async () => {
   const job = createCronViewJob("job-runtime", {
     trigger: { script: "json({ fire: false })" },
     state: { triggerEvalCount: 1 },
@@ -72,6 +74,10 @@ it("publishes refreshed runtime facts from the mutable selected job", () => {
     createCronViewProps({ editingJob: job, detailTab: "history" }),
   );
   const view = mountSolid(() => <CronView {...props()} />);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".cron-condition-activity dd")).not.toBeNull(),
+  );
   const counts = () =>
     [...view.container.querySelectorAll(".cron-condition-activity dd")].map(
       (node) => node.textContent,
@@ -114,11 +120,15 @@ it("keeps pagination current while a query is pending without mounting editor su
   expect(view.container.querySelector("datalist")).toBeNull();
 });
 
-it("retains live suggestions only while the editor is presented", () => {
+it("retains live suggestions only while the editor is presented", async () => {
   const [props, setProps] = createSignal(
     createCronViewProps({ createOpen: true, timezoneSuggestions: ["UTC", "Europe/Vienna"] }),
   );
   const view = mountSolid(() => <CronView {...props()} />);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(view.container.querySelector("#cron-tz-suggestions")).not.toBeNull(),
+  );
   const timezones = getElement(view.container, "#cron-tz-suggestions", HTMLDataListElement);
   const options = [...timezones.querySelectorAll("option")];
   expect(options.map((option) => option.value)).toEqual(["UTC", "Europe/Vienna"]);
