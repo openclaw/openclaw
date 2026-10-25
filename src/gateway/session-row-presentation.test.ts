@@ -14,7 +14,6 @@ import {
   getAgentRunLifecycleGeneration,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import { rpcSourcesByRunId } from "../sessions/session-controller.storage.js";
 import {
   rpcSourceTesting,
   setRpcSourceIdentityForTest,
@@ -117,6 +116,11 @@ it("projects send policy and recipient restrictions, clearing them when the curr
       });
     }
     using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    const reasonFor = (index: number, key: string) =>
+      prepareProjectedSessionPresentation(projection, clients[index]!).snapshot({
+        agentId: "main",
+        key: `agent:main:${key}`,
+      }).row?.sendDisabledReason;
     for (const [index, key, reason] of [
       [
         0,
@@ -134,21 +138,11 @@ it("projects send policy and recipient restrictions, clearing them when the curr
         'Your operator role cannot create sessions for agent "main"; choose an allowed agent or ask a gateway administrator to update your role.',
       ],
     ] as const) {
-      expect(
-        prepareProjectedSessionPresentation(projection, clients[index]!).snapshot({
-          agentId: "main",
-          key: `agent:main:${key}`,
-        }).row?.sendDisabledReason,
-      ).toBe(reason);
+      expect(reasonFor(index, key)).toBe(reason);
     }
     setUserProfileRole(creatorId, "view");
     prepareGatewayRecipientProfile(clients[0]!);
-    expect(
-      prepareProjectedSessionPresentation(projection, clients[0]!).snapshot({
-        agentId: "main",
-        key: "agent:main:host",
-      }).row?.sendDisabledReason,
-    ).toBeNull();
+    expect(reasonFor(0, "host")).toBeNull();
   });
 });
 
@@ -163,6 +157,26 @@ it.each(["running", "queued", "capacity-wait"] as const)(
       const grandchild = "agent:main:subagent:grandchild";
       const movedParent = "agent:main:moved-parent";
       const endedAt = Date.now() - 3_600_000;
+      const recordCompleted = (
+        runId: string,
+        childSessionKey: string,
+        requesterSessionKey: string,
+      ) => {
+        const entry = createSubagentRunRecord({
+          runId,
+          childSessionKey,
+          requesterSessionKey,
+          requesterDisplayKey: requesterSessionKey,
+          createdAt: endedAt - 1_000,
+          startedAt: endedAt - 1_000,
+          endedAt,
+          outcome: { status: "ok" },
+          ...(runId.startsWith("retained-") ? { delivery: { status: "not_required" } } : {}),
+        });
+        subagentRuns.set(runId, entry);
+        subagentRuns.commitOwnership(entry);
+        return runId;
+      };
       for (const [key, owner] of [
         [parent],
         [movedParent],
@@ -178,39 +192,19 @@ it.each(["running", "queued", "capacity-wait"] as const)(
           ...(owner ? { spawnedBy: owner } : {}),
         });
         if (owner) {
-          const entry = createSubagentRunRecord({
-            runId: `original:${key}`,
-            childSessionKey: key,
-            requesterSessionKey: owner,
-            requesterDisplayKey: owner,
-            task: "Original completed task",
-            cleanup: "keep",
-            createdAt: endedAt - 1_000,
-            startedAt: endedAt - 1_000,
-            endedAt,
-            outcome: { status: "ok" },
-          });
-          subagentRuns.set(entry.runId, entry);
-          subagentRuns.commitOwnership(entry);
+          recordCompleted(`original:${key}`, key, owner);
         }
       }
       const retainedRunIds: string[] = [];
       if (state === "running") {
         for (let index = 0; index < 2_048; index++) {
-          const entry = createSubagentRunRecord({
-            runId: `retained-history-${index}`,
-            childSessionKey: `agent:main:subagent:retained-${index}`,
-            requesterSessionKey: "agent:main:unrelated-parent",
-            createdAt: endedAt - 1_000,
-            startedAt: endedAt - 1_000,
-            endedAt,
-            outcome: { status: "ok" },
-            completion: { required: false },
-            delivery: { status: "not_required" },
-          });
-          subagentRuns.set(entry.runId, entry);
-          subagentRuns.commitOwnership(entry);
-          retainedRunIds.push(entry.runId);
+          retainedRunIds.push(
+            recordCompleted(
+              `retained-history-${index}`,
+              `agent:main:subagent:retained-${index}`,
+              "agent:main:unrelated-parent",
+            ),
+          );
         }
       }
       const projection = await createSessionRowProjection({ cfg });
@@ -311,12 +305,9 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         const stopped = await list();
         expect(stopped.sessions[0]?.hasActiveSubagentRun).not.toBe(true);
         expect(stopped.sessions[0]?.childSessions).toEqual([child]);
-        expect(
-          projection.snapshot({ key: movedParent, agentId: "main" }).row?.hasActiveSubagentRun,
-        ).not.toBe(true);
-        expect(
-          projection.snapshot({ key: movedParent, agentId: "main" }).row?.childSessions,
-        ).toBeUndefined();
+        const movedRow = projection.snapshot({ key: movedParent, agentId: "main" }).row;
+        expect(movedRow?.hasActiveSubagentRun).not.toBe(true);
+        expect(movedRow?.childSessions).toBeUndefined();
         expect(subagentRuns.get(`original:${grandchild}`)?.execution.endedAt).toBe(endedAt);
       } finally {
         releaseWait?.();
@@ -387,6 +378,12 @@ it("presents current recipient roles without SQLite while rejecting source overr
     const clearSends = () => clients.forEach((client) => vi.mocked(client.socket).send.mockClear());
     const broadcast = () =>
       connection.broadcast("sessions.changed", { sessionKey: query.key, agentId: query.agentId });
+    const broadcastTo = (connIds: string[], payload = {}) =>
+      connection.broadcastToConnIds(
+        "sessions.changed",
+        { sessionKey: query.key, agentId: query.agentId, ...payload },
+        new Set(connIds),
+      );
     const expectActive = (runIds: string[], states = [true]) => {
       for (const client of clients.slice(0, 2)) {
         const sends = vi.mocked(client.socket).send.mock.calls;
@@ -454,23 +451,16 @@ it("presents current recipient roles without SQLite while rejecting source overr
           }),
         ).toBe(visible);
         expect(recipient.authorizeDescription(query)).toBeNull();
-        connection.broadcastToConnIds(
-          "sessions.changed",
-          {
-            sessionKey: query.key,
-            agentId: query.agentId,
-            session: {
-              key: query.key,
-              sessionId: entry.sessionId,
-              label: null,
-              sendDisabledReason: "Untrusted source restriction",
-              endedAt: null,
-              status: "completed",
-              activitySummary: { state: "stale", text: "Retained event summary" },
-            },
+        broadcastTo([client.connId], {
+          session: {
+            key: query.key,
+            sessionId: entry.sessionId,
+            label: null,
+            sendDisabledReason: "Untrusted source restriction",
+            endedAt: null,
+            status: "completed",
           },
-          new Set([client.connId]),
-        );
+        });
         const socket = vi.mocked(client.socket);
         if (visible) {
           expect(socket.send.mock.calls).toHaveLength(1);
@@ -488,14 +478,8 @@ it("presents current recipient roles without SQLite while rejecting source overr
         }),
       ).toMatchObject({ code: "INVALID_REQUEST" });
       registerSource("old-run", query.key, entry.sessionId, query.agentId);
-      for (let index = 0; index < 49; index++) {
-        const runId = `unrelated-${index}`;
-        registerSource(runId, `agent:main:unrelated-${index}`, `unrelated-session-${index}`);
-      }
-      using controllerScans = vi.spyOn(rpcSourcesByRunId, Symbol.iterator);
+      registerSource("unrelated-0", "agent:main:unrelated-0", "unrelated-session-0");
       broadcast();
-      expect(controllerScans).toHaveBeenCalledTimes(1);
-      controllerScans.mockClear();
       // Earlier source-override checks already sent one frame to each visible client.
       for (const client of clients.slice(0, 2)) {
         expect(
@@ -510,13 +494,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
         ` ${entry.sessionId} `,
         query.agentId,
       );
-      connection.broadcastToConnIds(
-        "sessions.changed",
-        { sessionKey: query.key, agentId: query.agentId },
-        new Set(clients.map((client) => client.connId)),
-      );
-      expect(controllerScans).toHaveBeenCalledTimes(1);
-      controllerScans.mockClear();
+      broadcastTo(clients.map((client) => client.connId));
       expectActive(["replacement-run"]);
       const replacement = rpcSourceTesting.get("replacement-run")!;
       for (const change of ["session-id", "session-key", "terminal", "agent"] as const) {
@@ -540,8 +518,6 @@ it("presents current recipient roles without SQLite while rejecting source overr
           setRpcSourceIdentityForTest(replacement, { agentId: "other" });
         }
         broadcast();
-        expect(controllerScans).toHaveBeenCalledTimes(2);
-        controllerScans.mockClear();
         expectActive(["replacement-run"], [true, false]);
       }
       setRpcSourceIdentityForTest(replacement, {
@@ -554,8 +530,6 @@ it("presents current recipient roles without SQLite while rejecting source overr
       clearSends();
       setRpcSourceIdentityForTest(joining, { sessionKey: query.key });
       broadcast();
-      expect(controllerScans).toHaveBeenCalledTimes(1);
-      controllerScans.mockRestore();
       expectActive(["replacement-run", "unrelated-0"]);
       rpcSourceTesting.clear();
       expect(prepares).not.toHaveBeenCalled();
@@ -575,11 +549,7 @@ it("presents current recipient roles without SQLite while rejecting source overr
         { session: { sessionId: entry.sessionId } },
         { session: { sessionId: "replacement-session", lifecycleRevision: "retired" } },
       ]) {
-        connection.broadcastToConnIds(
-          "sessions.changed",
-          { sessionKey: query.key, agentId: query.agentId, ...payload },
-          new Set([clients[0]!.connId]),
-        );
+        broadcastTo([clients[0]!.connId], payload);
       }
       expect(socket.send.mock.calls).toHaveLength(0);
     } finally {

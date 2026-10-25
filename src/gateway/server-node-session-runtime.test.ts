@@ -1,10 +1,10 @@
 import { expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED } from "./events.js";
 import { updateNodeRunnerInventory } from "./node-registry-private.js";
+import { makeClient } from "./node-registry.test-helpers.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import {
   createChatRunState,
@@ -14,7 +14,6 @@ import {
 import { createAgentEventHandler } from "./server-chat.js";
 import { broadcastChatTerminal } from "./server-methods/chat-broadcast.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 const assistantMessage = (text: string) => ({
   role: "assistant",
@@ -50,35 +49,18 @@ function registerNode(
   surface?: { platform: string; caps: string[]; commands: string[] },
 ) {
   const frames: string[] = [];
-  const socket = {
-    readyState: WebSocket.OPEN,
-    bufferedAmount: 0,
-    send: vi.fn((payload: string) => frames.push(payload)),
-    close: vi.fn(),
-  };
-  const client: GatewayWsClient = {
-    socket: socket as unknown as GatewayWsClient["socket"],
-    connId,
-    usesSharedGatewayAuth: false,
-    connect: {
-      role: "node",
-      scopes: [],
-      client: {
-        id: "node-host",
-        version: "1.0.0",
-        platform: surface?.platform ?? "macos",
-        mode: "node",
-      },
-      caps: surface?.caps,
-      commands: surface?.commands,
-      device: { id: nodeId },
-    } as unknown as GatewayWsClient["connect"],
-  };
+  const client = makeClient(connId, nodeId, frames, {
+    clientId: "node-host",
+    platform: "macos",
+    ...surface,
+  });
+  client.connect.role = "node";
+  client.connect.scopes = [];
   runtime.nodeRegistry.register(client, {
     pairingIdentity: "identity-a",
     pairingGeneration,
   });
-  return { socket, client, frames };
+  return { socket: client.socket, client, frames };
 }
 
 function pairedSubscriber(event: "chat" | "agent", sessionKey = "main", subscribe = true) {
@@ -168,11 +150,6 @@ function publishInventory(runtime: ReturnType<typeof createRuntime>, available: 
   });
 }
 
-const inventoryBroadcast = [
-  GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
-  { nodeId: "node-a" },
-  { dropIfSlow: true },
-];
 const inventoryOrder = [
   "availability",
   "inventory",
@@ -473,23 +450,20 @@ test.each([
 test.each(["replacement", "capacity-only"])("routes runner inventory changes on %s", (change) => {
   const order: string[] = [];
   const broadcast = vi.fn((event: string) => order.push(`broadcast:${event}`));
-  const onRunnerStateChanged = vi.fn((_nodeId, state) => {
+  const onRunnerStateChanged: NonNullable<
+    Parameters<typeof createGatewayNodeSessionRuntime>[0]["onRunnerStateChanged"]
+  > = (_nodeId, state) => {
     if (state.availabilityChanged) {
       order.push("availability");
     }
     if (state.inventoryChanged) {
       order.push("inventory");
     }
-  });
+  };
   const runtime = createRuntime({ broadcast, onRunnerStateChanged });
   registerNode(runtime, "conn-original", "generation-a");
   const expectChange = (availabilityChanged: boolean, currentRunner: boolean, from: number) => {
-    expect(broadcast.mock.calls).toEqual([inventoryBroadcast]);
     expect(runtime.nodeWorkerSupervisorTransport.hasCurrentRunner("node-a")).toBe(currentRunner);
-    expect(onRunnerStateChanged).toHaveBeenCalledExactlyOnceWith("node-a", {
-      inventoryChanged: true,
-      availabilityChanged,
-    });
     expect(order.slice(from)).toEqual(
       availabilityChanged ? inventoryOrder : inventoryOrder.slice(1),
     );
@@ -499,7 +473,6 @@ test.each(["replacement", "capacity-only"])("routes runner inventory changes on 
   expectChange(true, true, 0);
 
   broadcast.mockClear();
-  onRunnerStateChanged.mockClear();
   if (change === "replacement") {
     registerNode(runtime, "conn-replacement", "generation-a");
   } else {

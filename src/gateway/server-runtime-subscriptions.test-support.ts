@@ -190,6 +190,12 @@ export function registerAuditSubscriptionTests(params: {
   it("owns channel evidence collection without retiring host routing on audit changes", async () => {
     const unsubs = start();
     const participant = { channelId: "test", participantId: "person-1" };
+    const bindContext = (context: object) =>
+      bindTestChannelParticipantAdmissionEvidence({
+        audit: unsubs.channelAdmissionAudit,
+        context,
+        ...participant,
+      });
     const evidenceFor = (subscription = unsubs) =>
       createChannelParticipantAdmissionEvidence({
         audit: subscription.channelAdmissionAudit,
@@ -200,13 +206,7 @@ export function registerAuditSubscriptionTests(params: {
       unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     };
     const context = {};
-    expect(
-      bindTestChannelParticipantAdmissionEvidence({
-        audit: unsubs.channelAdmissionAudit,
-        context,
-        ...participant,
-      }),
-    ).toBeUndefined();
+    expect(bindContext(context)).toBeUndefined();
     const resolveGateway = readChannelContextGatewayContextResolver(context);
     expect(resolveGateway).toBeTypeOf("function");
     const gateway = resolveGateway?.();
@@ -232,13 +232,7 @@ export function registerAuditSubscriptionTests(params: {
     expect(retired).toBeDefined();
     setPolicy(false);
     const disabledContext = {};
-    expect(
-      bindTestChannelParticipantAdmissionEvidence({
-        audit: unsubs.channelAdmissionAudit,
-        context: disabledContext,
-        ...participant,
-      }),
-    ).toBeUndefined();
+    expect(bindContext(disabledContext)).toBeUndefined();
     expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
     expect(resolveGateway?.()).toBe(gateway);
     expect(
@@ -367,13 +361,9 @@ export function registerSubscriptionRegistrationTests(
       const sessionKey = "agent:main:main";
       const sessionId = "terminal-cleanup-session";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const identity = { runId, sessionId, sessionKey, lifecycleGeneration };
       const resolveGatewayContext = () => undefined;
-      const registration = registerSubscriptionChatRun(params, {
-        runId,
-        sessionId,
-        sessionKey,
-        lifecycleGeneration,
-      });
+      const registration = registerSubscriptionChatRun(params, identity);
       bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
       const terminal = createDeferred();
       const failure = new Error("terminal write failed");
@@ -387,11 +377,8 @@ export function registerSubscriptionRegistrationTests(
         >();
       try {
         emitAgentEvent({
-          runId,
+          ...identity,
           stream: "lifecycle",
-          sessionKey,
-          sessionId,
-          lifecycleGeneration,
           data: { phase: "end", endedAt: Date.now() },
         });
         const persistence = registration.entry.adapter.projectSessionTerminalPersistence;
@@ -541,13 +528,11 @@ export function registerAssistantTailSubscriptionTests({
       const sessionKey = "agent:main:main";
       const sessionId = "session-persisted-tail";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const registration = registerSubscriptionChatRun(params, {
-        runId,
-        sessionId,
-        sessionKey,
-        lifecycleGeneration,
-      });
-      claimAgentRunContext(runId, { lifecycleGeneration, sessionId, sessionKey });
+      const identity = { lifecycleGeneration, sessionId, sessionKey };
+      const registration = registerSubscriptionChatRun(params, { runId, ...identity });
+      claimAgentRunContext(runId, identity);
+      const emitAssistant = (itemId: string, text: string, delta?: string) =>
+        emitAgentEvent({ runId, stream: "assistant", data: { itemId, text, delta } });
       const delivered = createDeferred();
       installHandlerFactory((options) => {
         const handler = actual.createAgentEventHandler(options);
@@ -563,15 +548,15 @@ export function registerAssistantTailSubscriptionTests({
       });
       try {
         start(params);
-        emitAgentEvent(
-          initial === undefined
-            ? { runId, stream: "lifecycle", data: { phase: "start", startedAt: Date.now() } }
-            : {
-                runId,
-                stream: "assistant",
-                data: { itemId: "saved-paragraph-0", text: initial, delta: initial },
-              },
-        );
+        if (initial === undefined) {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: { phase: "start", startedAt: Date.now() },
+          });
+        } else {
+          emitAssistant("saved-paragraph-0", initial, initial);
+        }
         for (const [index, text] of committed.entries()) {
           emitSessionTranscriptUpdate({
             sessionKey,
@@ -587,17 +572,9 @@ export function registerAssistantTailSubscriptionTests({
           });
         }
         for (const [index, text] of committed.entries()) {
-          emitAgentEvent({
-            runId,
-            stream: "assistant",
-            data: { itemId: `saved-paragraph-${index}`, text },
-          });
+          emitAssistant(`saved-paragraph-${index}`, text);
         }
-        emitAgentEvent({
-          runId,
-          stream: "assistant",
-          data: { itemId: "new-paragraph", text: "Unpersisted tail." },
-        });
+        emitAssistant("new-paragraph", "Unpersisted tail.");
         await delivered.promise;
         expect(params.chatRunState.resolveBuffer(runId).text.trim()).toBe("Unpersisted tail.");
         expect(params.chatRunState.resolveBuffer(runId, { final: true }).text).toBe(
