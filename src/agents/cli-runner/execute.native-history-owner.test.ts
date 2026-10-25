@@ -67,6 +67,61 @@ function nativeContext(writer: CliExecutionHistoryWriter, calls: string[], histo
 }
 
 describe("native login history owner at execution", () => {
+  it.each(["claude-cli", "google-gemini-cli"] as const)(
+    "keeps %s catch-up out of fresh, foreign, and forked attempts",
+    async (provider) => {
+      const prompts: string[] = [];
+      const context = buildPreparedCliRunContext({
+        provider,
+        prompt: "CURRENT_REQUEST",
+        workspaceDir: process.cwd(),
+        backend: {
+          command: "/bin/sh",
+          args: [],
+          resumeArgs: ["--resume", "{sessionId}"],
+          forkArg: "--fork-session",
+          input: "stdin",
+          output: "json",
+          systemPromptFileArg: undefined,
+          sessionIdFields: ["session_id"],
+        },
+      });
+      context.resumeContext = "SAME_CONVERSATION_HANDOFF";
+      context.openClawHistoryPrompt = "FRESH_REQUEST";
+      context.reusableCliSession = { mode: "reuse", sessionId: "bound-native" };
+      supervisorSpawnMock.mockImplementation(async (spawn) => {
+        if (spawn.mode !== "child") {
+          throw new Error("Expected CLI child process");
+        }
+        prompts.push(spawn.input ?? "");
+        return createManagedRun({
+          ...createSuccessfulProcessExit(),
+          stdout: JSON.stringify({
+            result: "done",
+            session_id: spawn.argv.includes("--fork-session")
+              ? "fork-successor"
+              : spawn.argv.includes("--resume")
+                ? spawn.argv[spawn.argv.indexOf("--resume") + 1]
+                : "fresh-native",
+          }),
+        });
+      });
+      await executePreparedCliRun(context, "bound-native");
+      await executePreparedCliRun(context);
+      await executePreparedCliRun(context, "foreign-native");
+      context.params.forkCliSessionOnResume = true;
+      context.params.claimCliSessionFork = async () => true;
+      context.params.persistCliSessionForkSuccessor = async () => {};
+      await executePreparedCliRun(context, "bound-native");
+      expect(prompts).toEqual([
+        "SAME_CONVERSATION_HANDOFF\n\nCURRENT_REQUEST",
+        "FRESH_REQUEST",
+        "CURRENT_REQUEST",
+        "CURRENT_REQUEST",
+      ]);
+    },
+  );
+
   it.each(["ambient", "configured", "prepared", "mixed-case"])(
     "removes %s host credentials before binding native-only history and spawning",
     async (source) => {
