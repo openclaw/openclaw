@@ -8,7 +8,6 @@ import {
 } from "../config/runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { requireActivePluginChannelRegistry } from "../plugins/runtime.js";
-import { captureEnv } from "../test-utils/env.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronState } from "./server-cron-contract.js";
 import type {
@@ -54,12 +53,20 @@ export function makePluginReloadResult(
 }
 
 export function enableChannelReloadsForTest() {
-  const keys = ["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"];
-  const snapshot = captureEnv(keys);
-  for (const key of keys) {
+  const previous = ["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"].map((key) => {
+    const value = process.env[key];
     delete process.env[key];
-  }
-  return snapshot.restore;
+    return { key, value };
+  });
+  return () => {
+    for (const { key, value } of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
 }
 
 export function createTestConfigRevisionProjector(): ManagedGatewayConfigReloaderParams["configRevisionProjector"] {

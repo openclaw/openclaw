@@ -88,20 +88,16 @@ function foreground() {
   admissions.push(admission);
   return admission;
 }
-function schedule(options: Partial<PrewarmOptions> = {}, kind = "handlers") {
-  const params: PrewarmOptions = {
+function prewarmOptions(options: Partial<PrewarmOptions> = {}): PrewarmOptions {
+  return {
     scheduler: createTestGatewayScheduler("fake-timers"),
     getConfig: () => ({}),
     log: { warn: vi.fn() },
     ...options,
   };
-  const handles =
-    kind === "handlers" ? [scheduleGatewayHandlerPrewarm(params)] : scheduleGatewayPrewarm(params);
-  const sidecar = {
-    stop: async () => {
-      await Promise.all(handles.map((handle) => handle.stop()));
-    },
-  };
+}
+function schedule(options: Partial<PrewarmOptions> = {}) {
+  const sidecar = scheduleGatewayHandlerPrewarm(prewarmOptions(options));
   sidecars.push(sidecar);
   return sidecar;
 }
@@ -125,7 +121,7 @@ afterEach(async () => {
   for (const admission of admissions.splice(0)) {
     admission.release();
   }
-  await Promise.all(sidecars.splice(0).map((sidecar) => sidecar.stop()));
+  await Promise.all(sidecars.splice(0).map((sidecar) => Promise.resolve(sidecar.stop())));
   vi.useRealTimers();
   resetGatewayWorkAdmission();
 });
@@ -158,6 +154,7 @@ it("prewarms modules and Memory Core in order without executing requests", async
   expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledExactlyOnceWith(cfg, {
     isCancelled: expect.any(Function),
   });
+  expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledOnce();
   expect(mocks.prewarmMemorySearchWorker).toHaveBeenCalledExactlyOnceWith(cfg);
   expect(mocks.listManagedPlugins).toHaveBeenCalledWith({ config: cfg });
 });
@@ -183,6 +180,8 @@ it("does not wait for an elapsed prewarm deadline", async () => {
   schedule();
   await drainPrewarm();
 
+  expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+  expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
   expect(contextStartedAt).toBe(startedAt + 6_000);
 });
 
@@ -201,7 +200,8 @@ it.each([
         ? mocks.prewarmGatewaySessionHistory
         : mocks.prewarmLocalWorkspaceTemplates;
     const options = { waitForPostReadyWork: () => ready.promise, log: { warn } };
-    const sidecar = schedule(options, kind);
+    const sidecar =
+      kind === "handlers" ? schedule(options) : scheduleDependencyPreparation(options);
     await vi.advanceTimersByTimeAsync(0);
     expect(observed).not.toHaveBeenCalled();
     if (stopped) {
@@ -243,9 +243,25 @@ it("logs a failed prewarm and continues to later items", async () => {
   expect(warn).toHaveBeenCalledWith(
     "post-ready gateway data prewarm failed for session-history-worker: Error: cold read failed",
   );
+  expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
   expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledOnce();
 });
 
+it("stops before scheduling another event-loop turn", async () => {
+  const firstDone = createDeferred();
+  mocks.prewarmGatewaySessionHistory.mockImplementationOnce(() => firstDone.promise);
+  const sidecar = schedule();
+
+  await vi.advanceTimersToNextTimerAsync();
+  await vi.dynamicImportSettled();
+  expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
+  const stopping = sidecar.stop();
+  firstDone.resolve();
+  await stopping;
+  await drainPrewarm();
+
+  expect(mocks.events).not.toContain("handlers");
+});
 it("delays context prewarm and uses current config after foreground work", async () => {
   mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
   let current: OpenClawConfig = { agents: { entries: {} } };
@@ -294,6 +310,17 @@ it("skips optional discovery if foreground work arrives after admission", async 
   expect(mocks.prewarmGatewaySessionHistory).toHaveBeenCalledOnce();
 });
 
+function scheduleDependencyPreparation(options: Partial<PrewarmOptions> = {}) {
+  const handles = scheduleGatewayPrewarm(prewarmOptions(options));
+  const sidecar = {
+    stop: async () => {
+      await Promise.all(handles.map((handle) => Promise.resolve(handle.stop())));
+    },
+  };
+  sidecars.push(sidecar);
+  return sidecar;
+}
+
 it.each(["close", "restart"] as const)(
   "cancels dependency preparation on %s and joins installer cleanup",
   async (kind) => {
@@ -304,7 +331,7 @@ it.each(["close", "restart"] as const)(
       await cleanup.promise;
     });
     const request = expectDefined(tryBeginGatewayRootWorkAdmission(), "foreground request");
-    const handle = schedule({}, "dependencies");
+    const handle = scheduleDependencyPreparation();
     let stopping: Promise<void> | undefined;
     try {
       await vi.advanceTimersByTimeAsync(0);
