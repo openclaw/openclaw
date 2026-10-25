@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("public session share token", () => {
-  it("round-trips an exact locator without exposing any identifier", async () => {
+  it("round-trips opaque locators with fresh nonces and a stable cached identity", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
@@ -36,6 +36,9 @@ describe("public session share token", () => {
       expect(loadCodec()).toBe(codec);
       const token = codec.mint(LOCATOR);
       expect(codec.resolve(token)).toEqual(LOCATOR);
+      const secondToken = codec.mint(LOCATOR);
+      expect(secondToken).not.toBe(token);
+      expect(codec.resolve(secondToken)).toEqual(LOCATOR);
       for (const identifier of Object.values(LOCATOR)) {
         expect(token).not.toContain(identifier);
       }
@@ -43,18 +46,6 @@ describe("public session share token", () => {
       expect(isSecretValueRegisteredForRedaction(LOCATOR.shareId)).toBe(true);
       expect(prepare).not.toHaveBeenCalled();
       expect(exec).not.toHaveBeenCalled();
-    });
-  });
-
-  it("uses fresh nonces while retaining the same restart-stable identity", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const first = await loadCodec();
-      const firstToken = first.mint(LOCATOR);
-      const secondToken = first.mint(LOCATOR);
-      const second = await loadCodec();
-      expect(secondToken).not.toBe(firstToken);
-      expect(second.resolve(firstToken)).toEqual(LOCATOR);
-      expect(second.resolve(secondToken)).toEqual(LOCATOR);
     });
   });
 
