@@ -123,9 +123,11 @@ const repositoryScriptEntries = [
   // Maintained guides, source headers, and paired drivers invoke these roots by path.
   "scripts/perf/node-worker-journal-measure.ts!",
   "scripts/perf/orphan-recovery-observer.mjs!",
+  "scripts/perf/pairing-channel-attribution.mts!",
   "scripts/perf/session-actor-residency-snapshot.mjs!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
+  "scripts/perf/tool-result-hash-measure.ts!",
   "scripts/perf/ws-counter-stress-preload.ts!",
   "scripts/perf/ws-counter-stress.ts!",
   // The source header documents this GitHub reader benchmark's Node command.
