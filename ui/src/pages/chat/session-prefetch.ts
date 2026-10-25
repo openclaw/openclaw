@@ -218,18 +218,18 @@ class SessionPrefetcher {
     // Hydration and cursor removal are synchronous owned writes. Renew
     // only after checking the previous claim, before another await.
     let ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
-    const isCurrent = () => this.isCurrent(snapshot, candidate) && ownsCache();
+    const isCurrent = () => this.isCurrent(snapshot, candidate) && ownsCache.isCurrent();
     // Every network request re-reads readiness: a presented pane can start
     // loading during the persisted snapshot read or between history pages.
     const mayRequest = () => isCurrent() && mayPrefetchHistory(this.snapshot, candidate.sessionKey);
-    if (!mayRequest() || this.isOpen(candidate.snapshotKey)) {
-      return;
-    }
     const target = { sessionKey: candidate.canonicalSessionKey };
     const readSnapshot = () => readChatSessionSnapshot(this.cache, snapshot.snapshotHost, target);
     const cacheSnapshot = (value: ChatSessionSnapshot) =>
       cacheChatSessionSnapshot(this.cache, snapshot.snapshotHost, target, value);
     try {
+      if (!mayRequest() || this.isOpen(candidate.snapshotKey)) {
+        return;
+      }
       let existing = readSnapshot();
       if (!existing && this.snapshotStore.readSavedAt(candidate.snapshotKey) !== null) {
         existing = await this.snapshotStore.read(candidate.snapshotKey);
@@ -238,6 +238,7 @@ class SessionPrefetcher {
         }
         if (existing) {
           cacheSnapshot(existing);
+          ownsCache.dispose();
           ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
         }
       }
@@ -259,6 +260,7 @@ class SessionPrefetcher {
           const { deltaCursor: _deltaCursor, ...withoutCursor } = existing;
           cacheSnapshot(withoutCursor);
           existing = withoutCursor;
+          ownsCache.dispose();
           ownsCache = this.snapshotStore.captureReadScope(candidate.snapshotKey);
         }
         if (!mayRequest()) {
@@ -312,6 +314,8 @@ class SessionPrefetcher {
         `[chat-session-prefetch] history fetch failed for ${candidate.canonicalSessionKey}`,
         error,
       );
+    } finally {
+      ownsCache.dispose();
     }
   }
 

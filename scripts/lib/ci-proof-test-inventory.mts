@@ -4706,7 +4706,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/infra/outbound/deliver.queue-integration.test.ts",
   "src/infra/outbound/deliver.session-generation.integration.test.ts",
   "src/infra/outbound/delivery-queue-entry-state.test.ts",
-  "src/infra/outbound/delivery-queue-state-context.test.ts",
   "src/infra/outbound/message-action-runner.plugin-dispatch.test.ts",
   "src/infra/outbound/session-binding-routing.worker.test.ts",
   "src/infra/push-apns.store.test.ts",

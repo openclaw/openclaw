@@ -147,7 +147,25 @@ export class GatewaySessionMessageSubscriptionCoordinator {
           await (provisional.plainFallback ?? provisional.ready).catch(() => undefined);
           continue;
         }
-        entry = this.#createEntry(normalizedKey, agentId);
+        entry = {
+          subscriptionId: generateUUID(),
+          key: normalizedKey,
+          requestedKeys: new Set([normalizedKey]),
+          agentId,
+          scopeAgentId: normalizedAgentScope(agentId),
+          ownerAgentId: null,
+          ready: Promise.resolve({ key: normalizedKey }),
+          approvalRequest: null,
+          plainFallback: null,
+          wireRequest: null,
+          includeApprovals: false,
+          canonicalSettled: false,
+          handles: new Set(),
+          pendingOwners: 0,
+          pendingFullOwners: 0,
+          release: null,
+        };
+        this.#entries.add(entry);
         created = true;
         break;
       }
@@ -292,29 +310,6 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     this.#entries.clear();
   }
 
-  #createEntry(key: string, agentId: string | null): SessionMessageSubscriptionEntry {
-    const entry: SessionMessageSubscriptionEntry = {
-      subscriptionId: generateUUID(),
-      key,
-      requestedKeys: new Set([key]),
-      agentId,
-      scopeAgentId: normalizedAgentScope(agentId),
-      ownerAgentId: null,
-      ready: Promise.resolve({ key }),
-      approvalRequest: null,
-      plainFallback: null,
-      wireRequest: null,
-      includeApprovals: false,
-      canonicalSettled: false,
-      handles: new Set(),
-      pendingOwners: 0,
-      pendingFullOwners: 0,
-      release: null,
-    };
-    this.#entries.add(entry);
-    return entry;
-  }
-
   #acquireCapability(
     entry: SessionMessageSubscriptionEntry,
     includeApprovals: boolean,
@@ -369,11 +364,50 @@ export class GatewaySessionMessageSubscriptionCoordinator {
 
   #requestSubscribe(
     entry: SessionMessageSubscriptionEntry,
-    includeApprovals: boolean,
-    mode?: "full" | "narration",
+    requestedApprovals: boolean,
+    requestedMode?: "full" | "narration",
     initialHistory?: GatewaySessionMessageSubscriptionOptions["initialHistory"],
   ): Promise<SessionMessageSubscriptionResponse> {
-    const send = () => this.#sendSubscribe(entry, includeApprovals, mode, initialHistory);
+    const send = async (): Promise<SessionMessageSubscriptionResponse> => {
+      if (this.#retired) {
+        throw new Error("Session message subscription belongs to a replaced Gateway connection");
+      }
+      // A preceding queued request may already have upgraded every full owner.
+      if (requestedMode === "full" && entry.mode !== "narration") {
+        return { key: entry.key };
+      }
+      const includeApprovals =
+        requestedApprovals || (requestedMode !== undefined && entry.includeApprovals);
+      const mode =
+        requestedMode === "narration" ||
+        (requestedMode !== "full" &&
+          entry.pendingFullOwners === 0 &&
+          [...entry.handles].every((handle) => handle.mode === "narration"))
+          ? "narration"
+          : undefined;
+      // A lost acknowledgment can leave stale observation until a fresh subscribe or reconnect.
+      const result = await this.#requestMessages(entry, { mode, includeApprovals, initialHistory });
+      const response = result ?? null;
+      const responseKey = response && "key" in response ? response.key : undefined;
+      entry.key =
+        typeof responseKey === "string" && responseKey.trim() ? responseKey.trim() : entry.key;
+      entry.canonicalSettled = true;
+      const responseAgentId = response && "agentId" in response ? response.agentId : undefined;
+      entry.ownerAgentId = normalizedAgentScope(
+        (typeof responseAgentId === "string" ? responseAgentId : null) ??
+          entry.ownerAgentId ??
+          entry.scopeAgentId,
+      );
+      entry.mode = mode;
+      entry.includeApprovals = includeApprovals;
+      return {
+        key: entry.key,
+        ...(response && "approvalReplay" in response
+          ? { approvalReplay: response.approvalReplay }
+          : {}),
+        ...(response?.initialHistory ? { initialHistory: response.initialHistory } : {}),
+      };
+    };
     // Approval replay and stream-mode changes replace the same wire observer.
     // Serializing them prevents a slow narration replay from undoing a full upgrade.
     const request = entry.wireRequest ? entry.wireRequest.then(send, send) : send();
@@ -407,52 +441,6 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       },
       { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
     );
-  }
-
-  async #sendSubscribe(
-    entry: SessionMessageSubscriptionEntry,
-    requestedApprovals: boolean,
-    requestedMode?: "full" | "narration",
-    initialHistory?: GatewaySessionMessageSubscriptionOptions["initialHistory"],
-  ): Promise<SessionMessageSubscriptionResponse> {
-    if (this.#retired) {
-      throw new Error("Session message subscription belongs to a replaced Gateway connection");
-    }
-    // A preceding queued request may already have upgraded every full owner.
-    if (requestedMode === "full" && entry.mode !== "narration") {
-      return { key: entry.key };
-    }
-    const includeApprovals =
-      requestedApprovals || (requestedMode !== undefined && entry.includeApprovals);
-    const mode =
-      requestedMode === "narration" ||
-      (requestedMode !== "full" &&
-        entry.pendingFullOwners === 0 &&
-        [...entry.handles].every((handle) => handle.mode === "narration"))
-        ? "narration"
-        : undefined;
-    // A lost acknowledgment can leave stale observation until a fresh subscribe or reconnect.
-    const result = await this.#requestMessages(entry, { mode, includeApprovals, initialHistory });
-    const response = result ?? null;
-    const responseKey = response && "key" in response ? response.key : undefined;
-    entry.key =
-      typeof responseKey === "string" && responseKey.trim() ? responseKey.trim() : entry.key;
-    entry.canonicalSettled = true;
-    const responseAgentId = response && "agentId" in response ? response.agentId : undefined;
-    entry.ownerAgentId = normalizedAgentScope(
-      (typeof responseAgentId === "string" ? responseAgentId : null) ??
-        entry.ownerAgentId ??
-        entry.scopeAgentId,
-    );
-    entry.mode = mode;
-    entry.includeApprovals = includeApprovals;
-    return {
-      key: entry.key,
-      ...(response && "approvalReplay" in response
-        ? { approvalReplay: response.approvalReplay }
-        : {}),
-      ...(response?.initialHistory ? { initialHistory: response.initialHistory } : {}),
-    };
   }
 
   #finishRelease(

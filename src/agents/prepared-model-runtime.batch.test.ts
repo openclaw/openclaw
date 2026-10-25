@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
+  getPreparedModelRuntimeMocks,
   getPreparedModelRuntimeTestApi,
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
@@ -29,6 +30,17 @@ import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.s
 import { observeSettlement } from "./promise-settlement.test-support.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const { createMockSubsystemLogger } = await import("../../test/helpers/mock-subsystem-logger.js");
+  return {
+    ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+    createSubsystemLogger: (subsystem: string) =>
+      createMockSubsystemLogger(subsystem, {
+        warn: (...args) => getPreparedModelRuntimeMocks().warn(...args),
+      }),
+  };
+});
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-fleet-batch" });
 const { mocks } = fixture;

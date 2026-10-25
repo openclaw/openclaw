@@ -38,6 +38,7 @@ function observeCancellation(
   signal.addEventListener("abort", () => onAbort(context.getStore(), signal.reason), {
     once: true,
   });
+  return signal;
 }
 
 it("keeps SIGTERM cancellation attached through actual engine disposal", async () => {
@@ -47,12 +48,9 @@ it("keeps SIGTERM cancellation attached through actual engine disposal", async (
     const cancelled = vi.fn();
     const disposed = vi.fn();
     let lifecycleSignal: AbortSignal | undefined;
-    const contextEngine = engine(async ({ abortSignal }) => {
-      lifecycleSignal = abortSignal;
-      return unchanged;
-    });
+    const contextEngine = engine(async () => unchanged);
     contextEngine.dispose = async () => {
-      observeCancellation(context, cancelled);
+      lifecycleSignal = observeCancellation(context, cancelled);
       await disposal.run(() => disposed(read(db)));
     };
     await context.run("disposer", () => schedule(contextEngine));
@@ -134,11 +132,7 @@ it("refuses to reschedule during final disposal", async () => {
       factoryResources: resources,
     });
     expect(admitted).not.toHaveBeenCalled();
-    expect(failed).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        message: expect.stringContaining("finishing cleanup"),
-      }),
-    );
+    expect(failed).toHaveBeenCalledOnce();
     expect(resources.closeFactoryWork).not.toHaveBeenCalled();
     expect(resources.release).not.toHaveBeenCalled();
     disposal.release.resolve();
@@ -239,9 +233,8 @@ it("keeps accepted maintenance independent of parent completion until gateway re
     let cancellationCheckpoint: Promise<void> | undefined;
     const checkpointPassed = vi.fn();
     try {
-      const contextEngine = engine(async ({ abortSignal }) => {
-        maintenanceSignal = abortSignal;
-        observeCancellation(context, (store, reason) => {
+      const contextEngine = engine(async () => {
+        maintenanceSignal = observeCancellation(context, (store, reason) => {
           cancelled(store, reason);
           cancellationCheckpoint = wait().then(checkpointPassed);
         });

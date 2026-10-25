@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 270274,
-  "reason": "Settings first-visit reads and rendering reduce measured remote readiness by 21.06%, scripting by 51.31% and task CPU by 39.23%. Integrated with current main c9db73543a4: same-host startup 270076 to 270274 B gzip (+198 B), five JS requests and one CSS request; Chat and New Session gzip decrease. Ratchet to the measured integrated head.",
+  "startupJsGzipBytes": 270371,
+  "reason": "Settings demand loading previously reduced remote readiness by 20.77% and scripting by 49.68%, deferring 1702960 reply bytes. Integrated with main ba9f1eacbd0: same-host startup 270216 to 270371 B gzip (+155 B), five JS and one CSS request; Chat +225 B, New Session +50 B. Ratchet to the measured integrated head.",
   "updatedAt": "2026-10-25"
 }

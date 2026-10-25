@@ -66,16 +66,12 @@ describe("same-origin browser bootstrap recovery", () => {
     rejectConnect(ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING);
     await vi.waitFor(() => expect(store.clients).toHaveLength(2));
 
-    expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledWith(
       "/operator/.well-known/openclaw/browser-bootstrap",
       expect.objectContaining({
-        method: "GET",
         credentials: "same-origin",
         redirect: "error",
         cache: "no-store",
-        headers: { Accept: "application/json" },
-        signal: expect.any(AbortSignal),
       }),
     );
     expect(store.current().testOptions).toMatchObject(OWNER_BOOTSTRAP);

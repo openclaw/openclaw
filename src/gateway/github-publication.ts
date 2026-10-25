@@ -36,6 +36,7 @@ import {
 import {
   readGitHubPublicationRequestInWorker,
   reconcileGitHubPublication,
+  type GitHubPublicationRecoveryBackoff,
 } from "./github-publication-recovery.js";
 import { insertGitHubPublicationRequestAsync } from "./github-publication-request-async.js";
 import {
@@ -104,6 +105,10 @@ export function createGitHubPublicationCoordinator(params: {
   getCommittedRuntimeConfig: () => OpenClawConfig;
   assertCurrent?: () => void;
   signal?: AbortSignal;
+  recovery?: {
+    shared: GitHubPublicationRecoveryBackoff;
+    repository: GitHubPublicationRecoveryBackoff;
+  };
 }) {
   const instanceId = params.placements.workspaceResultInstanceId();
   const scope = createGitHubPublicationWorkerScope(captureOpenClawStateWorkerContext());
@@ -449,6 +454,7 @@ export function createGitHubPublicationCoordinator(params: {
 
   const repository = createRepositoryGitHubPublicationCoordinator({
     ...params,
+    recovery: params.recovery?.repository,
     assertCurrent,
     signal,
   });
@@ -463,6 +469,7 @@ export function createGitHubPublicationCoordinator(params: {
   const requestingRuns = new Map<string, string>();
   const methods = createGitHubPublicationCoordinatorMethods({
     placements: params.placements,
+    recovery: params.recovery,
     assertCurrent,
     requestForClaimV2: requestForClaim,
     getCommittedRuntimeConfig: params.getCommittedRuntimeConfig,

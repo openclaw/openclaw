@@ -17,6 +17,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { hasErrnoCode } from "../infra/errors.js";
 
 function makeResponseHeaderStallingFetch() {
@@ -415,10 +416,7 @@ describe("readRemoteMediaBuffer", () => {
 
   it("keeps the parent abort active while saving the response body", async () => {
     const parent = new AbortController();
-    let bodyStarted!: () => void;
-    const bodyReady = new Promise<void>((resolve) => {
-      bodyStarted = resolve;
-    });
+    const { promise: bodyReady, resolve: bodyStarted } = createDeferred();
     const fetchImpl = abortableBodyFetch(bodyStarted);
     const result = saveMedia({
       url: "https://example.com/download",

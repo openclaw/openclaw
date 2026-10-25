@@ -31,7 +31,6 @@ registerRouteSubtitlesEnglish();
 export type { ConfigPageId } from "./config-sections.ts";
 
 const Mcp = lazy(() => import("./mcp.tsx"), { export: "Mcp" });
-const McpIntro = lazy(() => import("./mcp.tsx"), { export: "McpIntro" });
 const MeetingCaptureSettings = lazy(() => import("./meeting-capture.tsx"), {
   export: "MeetingCaptureSettings",
 });
@@ -60,7 +59,7 @@ export function preloadConfigPage(
   }
   return Promise.all([
     preloadConfigSection(section),
-    ...(pageId === "mcp" ? [Mcp.preload(), McpIntro.preload()] : []),
+    ...(pageId === "mcp" ? [Mcp.preload()] : []),
     ...(pageId === "security" ? [Security.preload()] : []),
     ...(pageId === "communications" && section === "transcripts"
       ? [MeetingCaptureSettings.preload()]
@@ -79,7 +78,11 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
         </>
       );
     case "mcp":
-      return <McpIntro />;
+      return (
+        <>
+          {t("mcpPage.intro")} <LearnMoreLink url="https://docs.openclaw.ai/tools/mcp" />
+        </>
+      );
     case "security":
       return (
         <>
