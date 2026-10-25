@@ -1,7 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -56,6 +63,7 @@ import {
 } from "./session-accessor.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import type { SessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeCount = (storePath: string) =>
@@ -87,76 +95,103 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
 });
 
-it("archives durable history under age pressure", () =>
-  withOpenClawTestState({}, async (state) => {
-    const storePath = path.join(state.sessionsDir(), "sessions.json");
-    const run = await configuredCleanup(state, {
-      mode: "enforce",
-      archiveDashboardAfter: false,
-      maxDiskBytes: false,
-      maxEntries: 5,
-      pruneAfter: "30d",
+it.each(["age", "count"] as const)(
+  "archives durable history under %s pressure",
+  async (pressure) => {
+    await withOpenClawTestState({}, async (state) => {
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      const run = await configuredCleanup(state, {
+        mode: "enforce",
+        archiveDashboardAfter: false,
+        maxDiskBytes: false,
+        maxEntries: pressure === "count" ? 1 : 5,
+        pruneAfter: pressure === "age" ? "30d" : "365d",
+      });
+      const now = Date.now();
+      const old = now - 31 * 24 * 60 * 60_000;
+      const scope = (name: string) => sessionScope(storePath, name);
+      const conversation = scope("conversation");
+      for (const [name, updatedAt, archivedAt] of [
+        ["existing-archive", old - 2, old],
+        ["hook:disposable", old - 1, undefined],
+        ["conversation", old, undefined],
+        ["recent", now, undefined],
+      ] as const) {
+        replaceSessionEntrySync(scope(name), { sessionId: name, updatedAt, archivedAt });
+      }
+      appendUserMessage(conversation, "retained-message", "Keep my conversation");
+      const history = loadTranscriptEventsSync(conversation);
+      expect(activeCount(storePath)).toBe(3);
+      const preview = await run(true);
+      const sql = observeHostDataSql();
+      const result = await run().finally(sql.restore);
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      expect(activeCount(storePath)).toBe(1);
+      const expected = {
+        beforeCount: 4,
+        afterCount: 3,
+        archived: pressure === "age" ? 1 : 0,
+        capArchived: pressure === "count" ? 1 : 0,
+        pruned: pressure === "age" ? 1 : 0,
+        capped: pressure === "count" ? 2 : 0,
+        wouldMutate: true,
+      };
+      expect(preview.previewResults[0]?.summary).toMatchObject(expected);
+      expect(result.previewResults).toEqual([]);
+      expect(result.appliedSummaries[0]).toMatchObject(expected);
+      expect(loadSessionEntry(scope("hook:disposable"))).toBeUndefined();
+      let resourceRetired = false;
+      registerOpenClawAgentDatabaseAsyncResource({
+        agentId: "main",
+        path: resolveSqliteTargetFromSessionStorePath(storePath).path,
+        revoke: () => {},
+        close: async () => {
+          await Promise.resolve();
+          resourceRetired = true;
+        },
+      });
+      // Reopening must follow native retirement, not only synchronous revocation.
+      await closeOpenClawAgentDatabasesAsync(state.root);
+      closeOpenClawAgentDatabasesForTest(state.root);
+      expect(resourceRetired).toBe(true);
+      expect(loadSessionEntry(conversation)).toMatchObject({
+        sessionId: "conversation",
+        archivedAt: expect.any(Number),
+        archiveReason: pressure === "age" ? "age-retention" : "active-session-cap",
+      });
+      expect(loadTranscriptEventsSync(conversation)).toEqual(history);
+      const repeated = await run();
+      expect(repeated.appliedSummaries[0]).toMatchObject({
+        beforeCount: 3,
+        afterCount: 3,
+        archived: 0,
+        pruned: 0,
+        capped: 0,
+        wouldMutate: false,
+      });
+      expect(loadTranscriptEventsSync(conversation)).toEqual(history);
     });
-    const now = Date.now();
-    const old = now - 31 * 24 * 60 * 60_000;
-    const scope = (name: string) => sessionScope(storePath, name);
-    const conversation = scope("conversation");
-    for (const [name, updatedAt, archivedAt] of [
-      ["existing-archive", old - 2, old],
-      ["hook:disposable", old - 1, undefined],
-      ["conversation", old, undefined],
-      ["recent", now, undefined],
-    ] as const) {
-      replaceSessionEntrySync(scope(name), { sessionId: name, updatedAt, archivedAt });
-    }
-    appendUserMessage(conversation, "retained-message", "Keep my conversation");
-    const history = loadTranscriptEventsSync(conversation);
-    expect(activeCount(storePath)).toBe(3);
-    const preview = await run(true);
-    const result = await run();
-    expect(activeCount(storePath)).toBe(1);
-    const expected = {
-      beforeCount: 4,
-      afterCount: 3,
-      archived: 1,
-      capArchived: 0,
-      pruned: 1,
-      capped: 0,
-      wouldMutate: true,
-    };
-    expect(preview.previewResults[0]?.summary).toMatchObject(expected);
-    expect(result.previewResults).toEqual([]);
-    expect(result.appliedSummaries[0]).toMatchObject(expected);
-    expect(loadSessionEntry(scope("hook:disposable"))).toBeUndefined();
-    await closeOpenClawAgentDatabasesAsync(state.root);
-    closeOpenClawAgentDatabasesForTest(state.root);
-    expect(loadSessionEntry(conversation)).toMatchObject({
-      sessionId: "conversation",
-      archivedAt: expect.any(Number),
-      archiveReason: "age-retention",
-    });
-    expect(loadTranscriptEventsSync(conversation)).toEqual(history);
-    const repeated = await run();
-    expect(repeated.appliedSummaries[0]).toMatchObject({
-      beforeCount: 3,
-      afterCount: 3,
-      wouldMutate: false,
-    });
-    expect(loadTranscriptEventsSync(conversation)).toEqual(history);
-  }));
+  },
+);
 
-it("protects routed conversations and restores usable history under continuing cap pressure", () =>
-  withOpenClawTestState({}, async (state) => {
+it("skips protected conversations and restores usable history under continuing cap pressure", async () => {
+  await withOpenClawTestState({}, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const old = Date.now() - 31 * 24 * 60 * 60_000;
-    const protectedEntries = {
+    const protectedEntries: Record<string, Partial<SessionEntry>> = {
       main: {},
+      running: {},
+      pinned: { pinnedAt: old },
+      locked: { modelSelectionLocked: true },
+      "custom:direct:peer": {},
+      "direct:peer": {},
       routed: {
         delivery: normalizeSessionDeliveryState({
           context: { channel: "custom", to: "peer" },
           origin: { chatType: "direct" },
         }),
       },
+      admitted: {},
     };
     const scope = (name: string) => sessionScope(storePath, name);
     const conversation = scope("conversation");
@@ -165,54 +200,67 @@ it("protects routed conversations and restores usable history under continuing c
     }
     appendUserMessage(conversation, "original-message", "Original conversation");
     const history = loadTranscriptEventsSync(conversation);
+    const admission = await beginSessionEffect({
+      scope: storePath,
+      identities: [scope("admitted").sessionKey],
+      assertAllowed: () => {},
+    });
+    registerAgentRunContext("cleanup-protected-live", {
+      agentId: "main",
+      sessionKey: scope("running").sessionKey,
+      projectSessionActive: true,
+    });
     const maintenanceOverride = {
       mode: "enforce" as const,
       maxEntries: 1,
       archiveDashboardAfterMs: null,
     };
-    expect(activeCount(storePath)).toBe(3);
-    const result = await applySessionEntryLifecycleMutation({ storePath, maintenanceOverride });
-    expect(activeCount(storePath)).toBe(2);
-    expect(result).toMatchObject({
-      archived: 1,
-      pruned: 0,
-      capped: 0,
-      beforeCount: 3,
-      afterCount: 3,
-    });
-    for (const name of Object.keys(protectedEntries)) {
-      expect(
-        resolveSessionWorkStartError(scope(name).sessionKey, loadSessionEntry(scope(name))),
-      ).toBeUndefined();
+    try {
+      expect(activeCount(storePath)).toBe(9);
+      const result = await applySessionEntryLifecycleMutation({ storePath, maintenanceOverride });
+      expect(activeCount(storePath)).toBe(8);
+      expect(result).toMatchObject({
+        archived: 1,
+        pruned: 0,
+        capped: 0,
+        beforeCount: 9,
+        afterCount: 9,
+      });
+      for (const name of Object.keys(protectedEntries)) {
+        expect(
+          resolveSessionWorkStartError(scope(name).sessionKey, loadSessionEntry(scope(name))),
+        ).toBeUndefined();
+      }
+      const archived = loadSessionEntry(conversation)!;
+      expect(archived.archivedAt).toEqual(expect.any(Number));
+      await applySessionEntryLifecycleMutation({
+        storePath,
+        activeSessionKey: conversation.sessionKey,
+        upserts: [
+          {
+            sessionKey: conversation.sessionKey,
+            entry: { ...archived, archivedAt: undefined, updatedAt: Date.now() },
+          },
+        ],
+        maintenanceOverride,
+      });
+      const restored = loadSessionEntry(conversation);
+      expect(resolveSessionWorkStartError(conversation.sessionKey, restored)).toBeUndefined();
+      expect([restored?.archiveReason, restored?.archivedBy]).toEqual([undefined, undefined]);
+      appendUserMessage(conversation, "restored-message", "Continue after restore");
+      expect(loadTranscriptEventsSync(conversation)).toEqual([
+        ...history,
+        expect.objectContaining({ id: "restored-message" }),
+      ]);
+    } finally {
+      clearAgentRunContext("cleanup-protected-live");
+      admission.release();
     }
-    const archived = loadSessionEntry(conversation)!;
-    expect(archived).toMatchObject({
-      archivedAt: expect.any(Number),
-      archiveReason: "active-session-cap",
-    });
-    await applySessionEntryLifecycleMutation({
-      storePath,
-      activeSessionKey: conversation.sessionKey,
-      upserts: [
-        {
-          sessionKey: conversation.sessionKey,
-          entry: { ...archived, archivedAt: undefined, updatedAt: Date.now() },
-        },
-      ],
-      maintenanceOverride,
-    });
-    const restored = loadSessionEntry(conversation);
-    expect(resolveSessionWorkStartError(conversation.sessionKey, restored)).toBeUndefined();
-    expect([restored?.archiveReason, restored?.archivedBy]).toEqual([undefined, undefined]);
-    appendUserMessage(conversation, "restored-message", "Continue after restore");
-    expect(loadTranscriptEventsSync(conversation)).toEqual([
-      ...history,
-      expect.objectContaining({ id: "restored-message" }),
-    ]);
-  }));
+  });
+});
 
-it.each([true, false])("reports a sole empty orphan as a mutation (dryRun=%s)", (dryRun) =>
-  withOpenClawTestState({}, async (state) => {
+it.each([true, false])("reports a sole empty orphan as a mutation (dryRun=%s)", async (dryRun) => {
+  await withOpenClawTestState({}, async (state) => {
     const run = await configuredCleanup(state, {
       mode: "enforce",
       maxDiskBytes: false,
@@ -243,11 +291,11 @@ it.each([true, false])("reports a sole empty orphan as a mutation (dryRun=%s)", 
       ]);
       await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
     }
-  }),
-);
+  });
+});
 
-it("cleans the selected agent without pruning a sibling behind the same selector", () =>
-  withOpenClawTestState({ layout: "state-only" }, async (state) => {
+it("cleans the selected agent without pruning a sibling behind the same selector", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
     const storePath = state.statePath("shared.json");
     const cfg = {
       agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
@@ -265,6 +313,7 @@ it("cleans the selected agent without pruning a sibling behind the same selector
         sessionId: `${scope.agentId}-stale`,
         updatedAt,
       });
+      expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
     }
 
     const result = await runSessionsCleanup({ cfg, opts: { agent: "beta", enforce: true } });
@@ -278,10 +327,11 @@ it("cleans the selected agent without pruning a sibling behind the same selector
     });
     expect(loadSessionEntry(scopes[0]!)).toMatchObject({ sessionId: "main-stale" });
     expect(loadSessionEntry(scopes[1]!)).toBeUndefined();
-  }));
+  });
+});
 
-it("preserves sessions when cleanup authority is revoked after classification", () =>
-  withOpenClawTestState({}, async (state) => {
+it("preserves sessions when cleanup authority is revoked after classification", async () => {
+  await withOpenClawTestState({}, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const scope = { sessionKey: "agent:main:hook:guard", storePath };
     await replaceSessionEntry(scope, { sessionId: "guarded-cleanup", updatedAt: Date.now() });
@@ -309,7 +359,8 @@ it("preserves sessions when cleanup authority is revoked after classification", 
       },
     });
     expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "guarded-cleanup" });
-  }));
+  });
+});
 
 it.each([
   { fault: "before commit", lifecycleCommitted: false },
@@ -329,7 +380,9 @@ it.each([
     const stores = [main, failing];
     if (!lifecycleCommitted) {
       setCleanupDeleteFault({
-        databasePath: resolveSqliteTargetFromSessionStorePath(failing.storePath, failing).path!,
+        databasePath: resolveSqliteTargetFromSessionStorePath(failing.storePath, {
+          agentId: failing.agentId,
+        }).path!,
         sessionId: failing.sessionId,
         message: "injected second-store lifecycle failure",
       });
