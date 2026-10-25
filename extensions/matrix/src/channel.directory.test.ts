@@ -116,7 +116,10 @@ describe("matrix directory", () => {
 
   it("resolves group mention policy from account config", () => {
     const cfg = config({
-      groups: { "!room:example.org": { requireMention: true } },
+      groups: {
+        "!room:example.org": { requireMention: true },
+        "#ops:example.org": { requireMention: false },
+      },
       accounts: { Assistant: { groups: { "!room:example.org": { requireMention: false } } } },
     });
 
@@ -124,11 +127,6 @@ describe("matrix directory", () => {
     for (const groupId of ["!room:example.org", "matrix:room:!room:example.org"]) {
       expect(requireMention({ cfg, accountId: "assistant", groupId })).toBe(false);
     }
-  });
-
-  it("does not trust prefixed Matrix aliases in group context", () => {
-    const cfg = config({ groups: { "#ops:example.org": { requireMention: false } } });
-
     expect(
       requireMention({
         cfg,

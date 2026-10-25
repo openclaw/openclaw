@@ -78,7 +78,6 @@ function createRecordingMatrixClient(recorder: WireRecorder): Partial<MatrixClie
         type: "m.room.message",
         origin_server_ts: Date.now(),
         content: payload,
-        unsigned: {},
       });
       recorder.recordWireCall({
         method: "sendMessage",
@@ -158,15 +157,9 @@ async function setupMatrixTrace(recorder: WireRecorder) {
   let capturedOnIdle: (() => void) | undefined;
   let capturedReplyOptions: MatrixTraceReplyOptions | undefined;
   const { promise: captured, resolve: resolveCaptured } = Promise.withResolvers<void>();
-  const notifyCaptured = () => {
-    if (capturedDeliver && capturedReplyOptions) {
-      resolveCaptured?.();
-    }
-  };
 
   // Hold dispatch until final/cancel so the handler owns draft cleanup ordering.
-  type DispatchResult = { queuedFinal: boolean; counts: { final: number; block: number } };
-  const { promise: runGate, resolve: releaseRun } = Promise.withResolvers<DispatchResult>();
+  const { promise: runGate, resolve: releaseRun } = Promise.withResolvers<boolean>();
 
   const { handler } = createMatrixHandlerTestHarness({
     streaming: "partial",
@@ -177,7 +170,6 @@ async function setupMatrixTrace(recorder: WireRecorder) {
       capturedDeliver = options?.deliver as MatrixTraceDeliver | undefined;
       capturedOnReplyStart = options?.onReplyStart as typeof capturedOnReplyStart;
       capturedOnIdle = options?.onIdle as typeof capturedOnIdle;
-      notifyCaptured();
       return {
         dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
         replyOptions: {},
@@ -187,9 +179,9 @@ async function setupMatrixTrace(recorder: WireRecorder) {
     },
     dispatchInboundMessage: (async (args: { replyOptions?: MatrixTraceReplyOptions }) => {
       capturedReplyOptions = args?.replyOptions;
-      notifyCaptured();
-      const result = await runGate;
-      return { queuedFinal: result.queuedFinal, counts: { ...result.counts, tool: 0 } };
+      resolveCaptured();
+      const queuedFinal = await runGate;
+      return { queuedFinal, counts: { final: queuedFinal ? 1 : 0, block: 0, tool: 0 } };
     }) as never,
   });
 
@@ -239,19 +231,12 @@ async function setupMatrixTrace(recorder: WireRecorder) {
         }
         break;
       case "final":
-        await capturedDeliver?.(
-          {
-            ...(step.text !== undefined ? { text: step.text } : {}),
-            ...(step.mediaUrls ? { mediaUrls: step.mediaUrls } : {}),
-            ...(step.isError ? { isError: true } : {}),
-          },
-          { kind: "final" },
-        );
-        releaseRun?.({ queuedFinal: true, counts: { final: 1, block: 0 } });
+        await capturedDeliver?.({ text: step.text }, { kind: "final" });
+        releaseRun(true);
         await handlerDone;
         break;
       case "cancel":
-        releaseRun?.({ queuedFinal: false, counts: { final: 0, block: 0 } });
+        releaseRun(false);
         await handlerDone;
         break;
       case "idle":
@@ -263,15 +248,9 @@ async function setupMatrixTrace(recorder: WireRecorder) {
   };
 }
 
-const GEN_ONE_PARTIAL = "Build check:";
 const GEN_ONE_BLOCK = "Build check: all suites green.";
-const GEN_TWO_PARTIAL = "Deploying to production now.";
 const GEN_TWO_PREVIEW = "Deploying to production now. Watching health checks.";
 const GEN_TWO_FINAL = "Deploying to production now. Health checks green.";
-const IN_PLACE_PARTIAL = "Ship checklist complete.";
-const IN_PLACE_FINAL = "Ship checklist complete. Tagging the release.";
-const MENTION_PARTIAL = "Paging @oncall:example.org";
-const MENTION_FINAL = "Paging @oncall:example.org for the deploy review.";
 
 // Cross the 1000ms edit throttle once per generation.
 function previewSteps(first: string, last: string): DeliveryTraceInStep[] {
@@ -301,32 +280,36 @@ const MATRIX_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
     name: "streaming-happy-multi-generation",
     steps: [
       { kind: "reply-start" },
-      ...previewSteps(GEN_ONE_PARTIAL, GEN_ONE_BLOCK),
+      ...previewSteps("Build check:", GEN_ONE_BLOCK),
       { kind: "block-final", text: GEN_ONE_BLOCK },
       { kind: "tool-progress", name: "deploy", phase: "start" },
       { kind: "tool-progress", name: "deploy", phase: "result" },
-      ...previewSteps(GEN_TWO_PARTIAL, GEN_TWO_PREVIEW),
+      ...previewSteps("Deploying to production now.", GEN_TWO_PREVIEW),
       { kind: "final", text: GEN_TWO_FINAL },
       { kind: "idle" },
     ],
   },
   // Clear only the live marker when final text equals the preview.
-  finalScenario("final-in-place", IN_PLACE_PARTIAL, IN_PLACE_FINAL),
+  finalScenario(
+    "final-in-place",
+    "Ship checklist complete.",
+    "Ship checklist complete. Tagging the release.",
+  ),
   // Mention-bearing finals must be sent fresh before redacting the quiet preview.
-  finalScenario("final-mentions-fresh", MENTION_PARTIAL, MENTION_FINAL),
+  finalScenario(
+    "final-mentions-fresh",
+    "Paging @oncall:example.org",
+    "Paging @oncall:example.org for the deploy review.",
+  ),
   deliveryTraceScenarios["cancel-mid-stream"],
 ];
 
 describe("matrix delivery trace goldens", () => {
   for (const scenario of MATRIX_TRACE_SCENARIOS) {
     it(`records ${scenario.name}`, async () => {
-      const events = await runDeliveryTraceScenario({
-        scenario,
-        setup: setupMatrixTrace,
-      });
       expectDeliveryTraceMatchesGolden({
         goldenUrl: new URL(`./__traces__/${scenario.name}.trace.jsonl`, import.meta.url),
-        events,
+        events: await runDeliveryTraceScenario({ scenario, setup: setupMatrixTrace }),
       });
     });
   }

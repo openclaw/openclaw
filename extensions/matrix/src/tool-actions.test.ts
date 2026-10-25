@@ -351,9 +351,8 @@ describe("Matrix action composition", () => {
   ) => runMatrixAction(action, params, config, context);
 
   it.each([
-    {
-      name: "public precedence and dropped fields",
-      params: {
+    [
+      {
         ...discarded("content", "replyToId", "accountId", "account_id"),
         message: "    indented",
         media: " first.png ",
@@ -362,17 +361,12 @@ describe("Matrix action composition", () => {
         asVoice: false,
         audioAsVoice: true,
       },
-      context: { ...mediaContext, accountId: " ops " },
-      message: "    indented",
-      options: {
-        mediaUrl: " first.png ",
-        replyToId: "$reply",
-        audioAsVoice: false,
-      },
-    },
-    {
-      name: "shadowed snake-case fields and private aliases",
-      params: {
+      "    indented",
+      { mediaUrl: " first.png ", replyToId: "$reply", audioAsVoice: false },
+      { ...mediaContext, accountId: " ops " },
+    ],
+    [
+      {
         ...discarded("media_url", "file_path", "replyToId", "thread_id", "accountId"),
         mediaUrl: undefined,
         filePath: "kept.png",
@@ -380,28 +374,19 @@ describe("Matrix action composition", () => {
         as_voice: true,
         audio_as_voice: true,
       },
-      context: undefined,
-      message: undefined,
-      options: { mediaUrl: "kept.png" },
-    },
-    {
-      name: "media-only path, voice flag and thread",
-      params: {
-        path: "/tmp/clip.mp3",
-        asVoice: true,
-        threadId: "$thread",
-      },
-      context: mediaContext,
-      message: undefined,
-      options: {
-        mediaUrl: "/tmp/clip.mp3",
-        threadId: "$thread",
-        audioAsVoice: true,
-      },
-    },
-  ])(
-    "preserves send $name and optional property presence",
-    async ({ params, context, message, options }) => {
+      undefined,
+      { mediaUrl: "kept.png" },
+      undefined,
+    ],
+    [
+      { path: "/tmp/clip.mp3", asVoice: true, threadId: "$thread" },
+      undefined,
+      { mediaUrl: "/tmp/clip.mp3", threadId: "$thread", audioAsVoice: true },
+      mediaContext,
+    ],
+  ] as const)(
+    "preserves send parameter precedence for %j",
+    async (params, message, options, context) => {
       await run("send", { to: " room:!room:example ", ...params }, context);
       const call = mocks.sendMatrixMessage.mock.lastCall;
       expect(call).toStrictEqual([

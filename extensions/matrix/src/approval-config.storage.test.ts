@@ -127,7 +127,17 @@ async function expectPolicy(
       });
     }
     for (const senderId of denied) {
-      expect(await authorize!({ ...context, senderId })).toMatchObject({ authorized: false });
+      const result = await authorize!({ ...context, senderId });
+      if (approvalKind === "plugin") {
+        expect(result).toEqual({
+          authorized: false,
+          reason: allowed.length
+            ? "❌ You are not authorized to approve plugin requests on Matrix."
+            : "❌ Matrix plugin approvals are not enabled for this bot account.",
+        });
+      } else {
+        expect(result).toMatchObject({ authorized: false });
+      }
     }
   });
 }
@@ -160,6 +170,16 @@ it.each([{ entries: [] }, { entries: ["*"] }])(
     }
   },
 );
+
+it("never falls back to exec approvers when plugin DM approvers are empty", async () => {
+  await expectPolicy(
+    { ...account("default"), dm: { allowFrom: [] } },
+    undefined,
+    "plugin",
+    [],
+    ["@default-exec:example.org"],
+  );
+});
 
 it.each(["exec", "plugin"] as const)(
   "authorizes %s reactions against a persisted anchor without credential SQL",
