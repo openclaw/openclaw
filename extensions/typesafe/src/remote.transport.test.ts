@@ -85,6 +85,12 @@ const answer = {
   answers: { q: { type: "noul", noul: 0.75 } },
   usage: { input_tokens: 8, output_tokens: 1 },
 };
+const tls = { ca: PROXY_FIXTURE_CERTIFICATE };
+const endpointRef = {
+  source: "store",
+  provider: "default",
+  id: "SYNTHETIC_SYSTEM_ONE_TOKEN",
+} as const;
 const received: Array<{
   url?: string;
   host?: string;
@@ -99,27 +105,20 @@ let baseUrl: string;
 let pinnedAddress = "10.123.0.5";
 
 beforeAll(async () => {
-  fixture = await listen(
-    createServer(
-      { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE },
-      (request, response) => {
-        collectRequest(request, (body) => {
-          const {
-            url,
-            headers: { host, authorization, "x-api-key": apiKey },
-          } = request;
-          received.push({ url, host, authorization, apiKey, body: JSON.parse(body) });
-          if (redirect) {
-            response.writeHead(302, { location: redirect });
-            response.end();
-          } else {
-            response.setHeader("content-type", "application/json");
-            response.end(responsePayload);
-          }
-        });
-      },
-    ),
-  );
+  const server = createServer({ key: PROXY_FIXTURE_KEY, cert: tls.ca }, (request, response) => {
+    collectRequest(request, (body) => {
+      const { host, authorization, "x-api-key": apiKey } = request.headers;
+      received.push({ url: request.url, host, authorization, apiKey, body: JSON.parse(body) });
+      if (redirect) {
+        response.writeHead(302, { location: redirect });
+        response.end();
+      } else {
+        response.setHeader("content-type", "application/json");
+        response.end(responsePayload);
+      }
+    });
+  });
+  fixture = await listen(server);
   baseUrl = `https://files.proxy.test:${fixture.port}`;
   // Network proof starts after host-policy/loader initialization, as on a running
   // Gateway. Cold import and deadline admission have separate registration.lazy tests.
@@ -144,11 +143,9 @@ beforeEach(() => {
     ProxyAgent,
     fetch: undiciFetch,
   });
-  vi.mocked(getPreparedPluginSecretInput).mockReset();
-  vi.mocked(getPreparedPluginSecretInput).mockReturnValue({
-    revision: 1,
-    value: "synthetic-hosted-key",
-  });
+  vi.mocked(getPreparedPluginSecretInput)
+    .mockReset()
+    .mockReturnValue({ revision: 1, value: "synthetic-hosted-key" });
   stubAmbientProxies();
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
 });
@@ -159,26 +156,21 @@ afterEach(() => {
 });
 
 function provider(source: ModelProviderConfig | (() => ModelProviderConfig)) {
-  const config = {
-    get apiKey(): never {
-      throw new Error("hosted key read");
-    },
-  };
   return registeredDecisionProvider(() => ({
     models: { providers: { typesafe: typeof source === "function" ? source() : source } },
-    plugins: { entries: { typesafe: { config } } },
+    plugins: { entries: { typesafe: { config: hostedConfig } } },
   }));
 }
+const hostedConfig = {
+  get apiKey(): never {
+    throw new Error("hosted key read");
+  },
+};
 const context = () => decisionContext("nemotron-deciffusion", 3000);
-const endpointRef = {
-  source: "store",
-  provider: "default",
-  id: "SYNTHETIC_SYSTEM_ONE_TOKEN",
-} as const;
 const settings = (overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig => ({
   baseUrl,
   models: [],
-  request: { tls: { ca: PROXY_FIXTURE_CERTIFICATE } },
+  request: { tls },
   ...overrides,
 });
 const evaluate = (overrides: Partial<ModelProviderConfig> = {}) =>
@@ -191,7 +183,6 @@ async function expectUnavailable(
   await expect(pending).resolves.toEqual({ status: "unavailable", reason });
   expect(received).toHaveLength(requests);
 }
-const tls = { ca: PROXY_FIXTURE_CERTIFICATE };
 const bearer = (token: string) => ({ mode: "authorization-bearer" as const, token });
 const header = (value: string) => ({
   mode: "header" as const,
@@ -265,14 +256,11 @@ it("honors private-network opt-out and opt-in", async () => {
 it.each(["untrusted certificate", "hostname mismatch", "insecure override"])(
   "enforces TLS verification: %s",
   async (failure) => {
-    const config = settings(
+    const config =
       failure === "hostname mismatch"
         ? { baseUrl: baseUrl.replace("files.proxy.test", "other.proxy.test") }
-        : { request: failure === "insecure override" ? { tls: { insecureSkipVerify: true } } : {} },
-    );
-    await expect(provider(config).evaluate(batch, context())).resolves.toMatchObject({
-      status: "unavailable",
-    });
+        : { request: failure === "insecure override" ? { tls: { insecureSkipVerify: true } } : {} };
+    await expect(evaluate(config)).resolves.toMatchObject({ status: "unavailable" });
     expect(received).toHaveLength(0);
   },
 );
@@ -383,9 +371,7 @@ it.each([
     if (escaped) {
       responsePayload = responsePayload.replaceAll("-", "\\u002d");
     }
-    const result = await evaluate(config);
-    expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
-    expect(JSON.stringify(result)).not.toContain(reflected);
+    await expectUnavailable(evaluate(config), "invalid-response", 1);
     if (name.endsWith("headers")) {
       expect(received).toHaveLength(1);
       expect(received[0]?.apiKey).toBe(reflected);

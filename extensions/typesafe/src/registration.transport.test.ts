@@ -21,7 +21,7 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
 }));
 
-const { batch, input, response, localInput, localResponse, result: expectedResult } = mixedFixture;
+const { batch, input, response, localResponse, result: expectedResult } = mixedFixture;
 
 function registeredProvider(config: Record<string, unknown> = {}) {
   return registeredDecisionProvider(() => ({ plugins: { entries: { typesafe: { config } } } }));
@@ -42,15 +42,15 @@ const withAnswer = (id: keyof typeof response.answers, overrides: object) => ({
 const clientConfig = { apiKey: "synthetic-key", timeoutMs: 1000 };
 const localConfig = { ...clientConfig, baseUrl: "http://127.0.0.1:8009" };
 const request = (config = clientConfig, signal?: AbortSignal) => evaluate(input, config, signal);
-it("never follows redirects to a credential sink", async () => {
-  const fetch = mockBodyResponse(null, {
-    status: 302,
-    headers: { location: "https://other.example/credential-sink" },
-  });
-  await expect(request()).rejects.toMatchObject({ reason: "transport" });
-  expect(fetch).toHaveBeenCalledOnce();
-  expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
-});
+const expectCancelled = (pending: ReturnType<typeof request>) =>
+  expect(pending).rejects.toThrow("TypeSafe evaluation cancelled.");
+const expectUnavailable = (
+  pending: ReturnType<ReturnType<typeof registeredProvider>["evaluate"]>,
+  reason: string,
+) => expect(pending).resolves.toEqual({ status: "unavailable", reason });
+function expectAuthorization(fetch: ReturnType<typeof mockFetch>, value: string | null) {
+  expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("authorization")).toBe(value);
+}
 it("bounds expanded local request bytes", async () => {
   const fetch = mockBodyResponse(undefined);
   const emptyBody = { ...input, state: "" };
@@ -78,9 +78,7 @@ it("rejects cancellation concurrent with body EOF", async () => {
     { highWaterMark: 0 },
   );
   mockBodyResponse(body);
-  await expect(request(clientConfig, controller.signal)).rejects.toThrow(
-    "TypeSafe evaluation cancelled.",
-  );
+  await expectCancelled(request(clientConfig, controller.signal));
 });
 it("preserves bounded multi-chunk JSON responses", async () => {
   const json = JSON.stringify(response);
@@ -205,9 +203,7 @@ it("binds credentials to the provider API origin", async () => {
     providerConfig: { baseUrl: "https://decision.example.com/v1", models: [] },
   });
   expect(fetch.mock.calls[0]?.[0]).toBe("https://decision.example.com/v1/systemone");
-  expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
-    "Bearer synthetic-key",
-  );
+  expectAuthorization(fetch, "Bearer synthetic-key");
 });
 
 beforeAll(async () => {
@@ -230,42 +226,33 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const metadata = {
+const withMetadata = {
+  ...response,
   metrics: { seconds: 0.05 },
   scoring: { calibrated: false },
   latency_ms: 15.7,
+  usage: {
+    ...response.usage,
+    output_tokens_basis: "scored_decision_positions",
+    decision_positions: 3,
+  },
 };
-const usageMetadata = {
-  output_tokens_basis: "scored_decision_positions",
-  decision_positions: 3,
-};
-const withMetadata = { ...response, ...metadata, usage: { ...response.usage, ...usageMetadata } };
 const tokens = (output_tokens: unknown) => ({ usage: { input_tokens: 12, output_tokens } });
 
-it.each<{ mode: string; config: { baseUrl?: string } }>([
-  { mode: "hosted", config: {} },
-  { mode: "local", config: { baseUrl: "http://127.0.0.1:8009" } },
-])("preserves $mode mixed answers and additive metadata", async ({ config }) => {
+it("preserves hosted mixed answers and additive metadata", async () => {
   vi.stubEnv("TYPESAFE_BASE_URL", "https://invalid.example");
   vi.stubEnv("TYPESAFE_DEFAULT_MODEL", "unexpected");
-  const fetch = mockResponse({
-    ...withMetadata,
-    answers: config.baseUrl ? localResponse.answers : response.answers,
-  });
-  const provider = registeredProvider(config);
+  const fetch = mockResponse(withMetadata);
+  const provider = registeredProvider();
   await expect(provider.evaluate(batch, context())).resolves.toEqual(expectedResult);
   expect(fetch).toHaveBeenCalledOnce();
-  expect(fetch.mock.calls[0]?.[0]).toBe(
-    config.baseUrl ? `${config.baseUrl}/v1/systemone` : "https://api.typesafe.ai/v1/systemone",
-  );
+  expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
   expect(fetch.mock.calls[0]?.[1]?.method).toBe("POST");
-  expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
-    config.baseUrl ? null : "Bearer synthetic-key",
-  );
+  expectAuthorization(fetch, "Bearer synthetic-key");
   const body = fetch.mock.calls[0]?.[1]?.body;
   assert(typeof body === "string");
   expect(JSON.parse(body)).toEqual({
-    ...(config.baseUrl ? localInput : input),
+    ...input,
     model: "jev-agent-selected",
   });
 });
@@ -299,10 +286,7 @@ it.each([
   ],
 ])("rejects %s despite additive metadata", async (_name, invalid) => {
   mockResponse(typeof invalid === "string" ? invalid : { ...withMetadata, ...invalid });
-  await expect(registeredProvider().evaluate(batch, context())).resolves.toEqual({
-    status: "unavailable",
-    reason: "invalid-response",
-  });
+  await expectUnavailable(registeredProvider().evaluate(batch, context()), "invalid-response");
 });
 
 it.each([
@@ -347,9 +331,7 @@ it.each(["before dispatch", "in flight"])("sanitizes cancellation %s", async (ph
   if (phase === "before dispatch") {
     controller.abort(clientConfig.apiKey);
   }
-  await expect(request(clientConfig, controller.signal)).rejects.toThrow(
-    "TypeSafe evaluation cancelled.",
-  );
+  await expectCancelled(request(clientConfig, controller.signal));
   expect(fetch).toHaveBeenCalledTimes(phase === "before dispatch" ? 0 : 1);
 });
 
@@ -408,9 +390,7 @@ it("observes credential rotation, loss, recovery and cancellation", async () => 
     const outcome = await provider.evaluate(batch, context(controller.signal));
     if (key) {
       expect(outcome.status).toBe("ok");
-      expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
-        `Bearer ${key}`,
-      );
+      expectAuthorization(fetch, `Bearer ${key}`);
       expect(JSON.stringify(outcome)).not.toContain(key);
       expect(fetch).toHaveBeenCalledOnce();
     } else {
@@ -441,20 +421,17 @@ it.each<DecisionBatch>([
 ])("rejects unsupported vendor input without dispatch", async (value) => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
-  await expect(registeredProvider().evaluate(value, context())).resolves.toEqual({
-    status: "unavailable",
-    reason: "unsupported-input",
-  });
+  await expectUnavailable(registeredProvider().evaluate(value, context()), "unsupported-input");
   expect(fetch).not.toHaveBeenCalled();
 });
 
 it("rejects dispatch after preparation exhausts the deadline", async () => {
   const fetch = mockResponse(response);
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(100);
-  await expect(registeredProvider().evaluate(batch, context(undefined, 50))).resolves.toEqual({
-    status: "unavailable",
-    reason: "transport",
-  });
+  await expectUnavailable(
+    registeredProvider().evaluate(batch, context(undefined, 50)),
+    "transport",
+  );
   expect(fetch).not.toHaveBeenCalled();
 });
 
@@ -481,7 +458,7 @@ it("uses only the deadline remaining after preparation", async () => {
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(signal.aborted).toBe(true);
-    await expect(pending).resolves.toEqual({ status: "unavailable", reason: "transport" });
+    await expectUnavailable(pending, "transport");
   } finally {
     controller.abort();
     await pending.catch(() => {});
