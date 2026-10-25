@@ -20,7 +20,6 @@ import {
   NODE_WORKER_PRIVATE_COMMANDS,
   isPrivateNodeInvokeCommand,
 } from "../infra/node-commands.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   getActivePluginGatewayNodePolicyRegistry,
   getPluginRegistryVersion,
@@ -217,7 +216,10 @@ type PreparedPluginNodePolicy = {
   defaults: Map<PlatformId, string[]>;
   foregroundRestricted: Set<string>;
 };
-const pluginPolicies = new WeakMap<PluginRegistry, PreparedPluginNodePolicy>();
+const pluginPolicies = new WeakMap<
+  NonNullable<ReturnType<typeof getActivePluginGatewayNodePolicyRegistry>>,
+  PreparedPluginNodePolicy
+>();
 
 function getPreparedPluginNodePolicy(): PreparedPluginNodePolicy | undefined {
   const registry = getActivePluginGatewayNodePolicyRegistry();
