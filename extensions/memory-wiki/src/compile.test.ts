@@ -51,9 +51,10 @@ describe("compileMemoryWikiVault", () => {
   it("preserves source page bytes while rebuilding derived artifacts", async () => {
     const { rootDir, config } = await createVault({ render: { createDashboards: false } });
     const sourcePath = path.join(rootDir, "sources", "preserved.md");
+    const notesLine = "- 中文 🦀 \uFFFD tail";
     const source = renderWikiMarkdown({
       frontmatter: { pageType: "source", id: "source.preserved", title: "Preserved" },
-      body: "# Preserved\n",
+      body: `# Preserved\n\n## Human Notes\n\n${notesLine}\n`,
     });
     await fs.writeFile(sourcePath, source, "utf8");
 
@@ -75,6 +76,7 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(
       "<!-- openclaw:wiki:related:start -->",
     );
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(notesLine);
   });
 
   it("rejects directory-index syntax-error frontmatter without changing its bytes", async () => {
@@ -241,12 +243,13 @@ describe("compileMemoryWikiVault", () => {
 
     await compileMemoryWikiVault(config);
 
-    const summary = toWikiPageSummary({
-      absolutePath: path.join(rootDir, "entities/brad.md"),
-      relativePath: "entities/brad.md",
-      raw: await read("entities/brad.md"),
-    });
-    expect(summary).toMatchObject({
+    expect(
+      toWikiPageSummary({
+        absolutePath: path.join(rootDir, "entities/brad.md"),
+        relativePath: "entities/brad.md",
+        raw: await read("entities/brad.md"),
+      }),
+    ).toMatchObject({
       ...metadata,
       personCard: {
         handles: ["@bgroux"],
@@ -254,10 +257,8 @@ describe("compileMemoryWikiVault", () => {
         lane: "Microsoft Teams",
         privacyTier: "confirm-before-use",
       },
+      claims: [expect.objectContaining({ id: "claim.brad.teams", evidence })],
     });
-    expect(summary?.relationships).toEqual(relationships);
-    expect(summary?.claims[0]?.id).toBe("claim.brad.teams");
-    expect(summary?.claims[0]?.evidence).toEqual(evidence);
 
     const expectReport = async (name: string, content: string) =>
       expect(read(`reports/${name}.md`)).resolves.toContain(content);
@@ -306,20 +307,4 @@ describe("compileMemoryWikiVault", () => {
       expect(await fs.readFile(pagePath)).toEqual(malformed);
     },
   );
-
-  it("compiles valid non-ASCII pages including a literal replacement character", async () => {
-    const { config, page, read } = await createVault();
-    const notesLine = "- 中文 🦀 \uFFFD tail";
-    await page(
-      "entities/router.md",
-      { pageType: "entity", id: "entity.router", title: "Router" },
-      `# Router\n\n## Human Notes\n\n${notesLine}\n`,
-    );
-
-    await compileMemoryWikiVault(config);
-
-    const after = await read("entities/router.md");
-    expect(after).toContain(notesLine);
-    expect(after).toContain("<!-- openclaw:wiki:related:start -->");
-  });
 });

@@ -66,6 +66,14 @@ async function createPersistentVault(
   return vault;
 }
 
+async function createBackedUpVault() {
+  const vault = await createPersistentVault();
+  const parentId = await publishSnapshot(vault.config, snapshot("backup"));
+  const logPath = path.join(vault.rootDir, ".openclaw-wiki", "log.jsonl");
+  const backupLog = await fs.readFile(logPath, "utf8");
+  return { ...vault, parentId, restore: () => fs.writeFile(logPath, backupLog, "utf8") };
+}
+
 function snapshot(text: string): MemoryWikiCompiledCacheSnapshot {
   return {
     ...createCompiledSnapshot({
@@ -431,13 +439,10 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   });
 
   it("rejects claims newer than a restored vault after lifecycle refresh", async () => {
-    const { rootDir, config } = await createPersistentVault();
-    await publishSnapshot(config, snapshot("backup"));
-    const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
-    const backupLog = await fs.readFile(logPath, "utf8");
+    const { config, restore } = await createBackedUpVault();
     const newerSnapshot = snapshot("Private post-backup claim.");
     const preRestorePublicationId = await publishSnapshot(config, newerSnapshot);
-    await fs.writeFile(logPath, backupLog, "utf8");
+    await restore();
 
     restartCache();
     await activateExistingMemoryWikiVault(config);
@@ -458,22 +463,13 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   });
 
   it("rejects a reserved publication when its identical parent was restored", async () => {
-    const { rootDir, config } = await createPersistentVault();
-    await publishSnapshot(config, snapshot("backup"));
-    const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
-    const backupLog = await fs.readFile(logPath, "utf8");
-    const parentPublicationId = (await loadMemoryWikiVaultIdentity(rootDir))
-      .compiledCachePublicationId;
-    const reserved = candidate(
-      config,
-      snapshot("Private content scanned after backup."),
-      parentPublicationId,
-    );
+    const { rootDir, config, parentId, restore } = await createBackedUpVault();
+    const reserved = candidate(config, snapshot("Private content scanned after backup."), parentId);
     await recordCompile(rootDir, {
       ...reserved.reservation,
-      compiledCacheParentPublicationId: parentPublicationId,
+      compiledCacheParentPublicationId: parentId,
     });
-    await fs.writeFile(logPath, backupLog, "utf8");
+    await restore();
 
     await expect(reserved.write(reserved.commit)).rejects.toThrow("vault changed");
     await expect(loadMemoryWikiCompiledCache(config)).resolves.toBeNull();
@@ -535,12 +531,9 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   });
 
   it("keeps a restored owner closed when its durable identity cannot be loaded", async () => {
-    const { rootDir, config } = await createPersistentVault();
-    await publishSnapshot(config, snapshot("backup"));
-    const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
-    const backupLog = await fs.readFile(logPath, "utf8");
+    const { config, restore } = await createBackedUpVault();
     await publishSnapshot(config, snapshot("Private newer claim."));
-    await fs.writeFile(logPath, backupLog, "utf8");
+    await restore();
 
     restartCache();
     const open = vi.spyOn(fs, "open").mockRejectedValueOnce(new Error("transient journal failure"));
