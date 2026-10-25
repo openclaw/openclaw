@@ -103,7 +103,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   rmSync(stateDir, { recursive: true, force: true });
 });
-function network(handler: (url: URL, init?: RequestInit) => Promise<Response>) {
+function network(handler: () => Promise<Response>, beforeValidate = () => {}) {
   const tokenPosts: string[] = [];
   vi.stubGlobal(
     "fetch",
@@ -118,9 +118,10 @@ function network(handler: (url: URL, init?: RequestInit) => Promise<Response>) {
         expect(form.get("client_secret")).toBe(initial.clientSecret);
         expect(form.get("grant_type")).toBe("refresh_token");
         tokenPosts.push(form.get("refresh_token")!);
-        return await handler(url, init);
+        return await handler();
       }
       expect(url.href).toBe("https://id.twitch.tv/oauth2/validate");
+      beforeValidate();
       return Response.json({
         client_id: initial.clientId,
         login: initial.username,
@@ -138,15 +139,11 @@ it("restores an undispatched grant after DNS failure at the real request guard",
     .mockRejectedValueOnce(
       Object.assign(new Error("synthetic DNS offline"), { code: "EAI_AGAIN" }),
     );
-  const originalFetch = globalThis.fetch;
-  let posts = 0;
-  vi.stubGlobal("fetch", (...args: Parameters<typeof fetch>) => {
-    posts++;
-    return originalFetch(...args);
-  });
+  const fetch = vi.fn(globalThis.fetch);
+  vi.stubGlobal("fetch", fetch);
   try {
     await expect(connect()).rejects.toThrow();
-    expect(posts).toBe(0);
+    expect(fetch).not.toHaveBeenCalled();
     expect(lookup).toHaveBeenCalled();
   } finally {
     lookup.mockRestore();
@@ -155,7 +152,6 @@ it("restores an undispatched grant after DNS failure at the real request guard",
   await connect();
   expect(attempts).toEqual([initial.refreshToken]);
 });
-
 it("uses a fresh configured access token for chat scopes without consuming its refresh grant", async () => {
   const fresh = { ...initial, expiresIn: 3600, obtainmentTimestamp: Date.now() };
   current = { channels: { twitch: fresh } };
@@ -169,20 +165,14 @@ it("uses a fresh configured access token for chat scopes without consuming its r
   expect(posts).toEqual([]);
 });
 it("retains a completed rotation when token validation is transiently unavailable", async () => {
-  const posts = network(async () => Response.json(rotated));
-  const realFetch = globalThis.fetch;
   let validations = 0;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async (input, init) => {
-      if (
-        new URL(resolveRequestUrl(input)).pathname === "/oauth2/validate" &&
-        ++validations === 1
-      ) {
+  const posts = network(
+    async () => Response.json(rotated),
+    () => {
+      if (++validations === 1) {
         throw new TypeError("synthetic validation offline");
       }
-      return await realFetch(input, init);
-    }),
+    },
   );
   await expect(connect()).rejects.toThrow();
   await reopenState();
@@ -191,7 +181,6 @@ it("retains a completed rotation when token validation is transiently unavailabl
   expect((await provider.getAccessTokenForIntent!("chat"))?.accessToken).toBe(rotated.access_token);
   expect(posts).toEqual([initial.refreshToken]);
 });
-
 it("persists the initial rotation before chat and reopens the replacement for the next refresh", async () => {
   const posts = network(async () => Response.json(rotated));
   await connect();
@@ -226,14 +215,11 @@ it.each([{ refreshToken: "synthetic-new-login" }, { enabled: false }])(
       await release.promise;
       return Response.json(rotated);
     });
-    const outcome = connect().then(
-      () => "published",
-      () => "changed",
-    );
+    const outcome = expect(connect()).rejects.toThrow();
     await entered.promise;
     current = { channels: { twitch: { ...initial, ...change } } };
     release.resolve();
-    expect(await outcome).toBe("changed");
+    await outcome;
     if ("enabled" in change) {
       await expect(connect()).rejects.toThrow();
     }
