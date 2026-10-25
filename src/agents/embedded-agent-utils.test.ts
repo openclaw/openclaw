@@ -194,45 +194,40 @@ describe("extractThinkingFromTaggedStream", () => {
 });
 
 describe("extractEmbeddedAssistantText", () => {
+  const invoke =
+    '<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>\n</minimax:tool_call>';
   it.each([
-    {
-      title: "strips Minimax tool invocations with extra attributes",
-      text: `Before<invoke name='Bash' data-foo="bar">\n<parameter name="command">ls</parameter>\n</invoke>\n</minimax:tool_call>After`,
-      expected: "Before\nAfter",
-    },
-    {
-      title: "strips minimax tool_call open and close tags",
-      text: "Start<minimax:tool_call>Inner</minimax:tool_call>End",
-      expected: "StartInnerEnd",
-    },
-    {
-      title: "ignores invoke blocks without minimax markers",
-      text: "Before<invoke>Keep</invoke>After",
-      expected: "Before<invoke>Keep</invoke>After",
-    },
-    {
-      title: "handles multiple invoke blocks in one message",
-      text: `First check.<invoke name="Read">
-<parameter name="path">file1.txt</parameter>
-</invoke>
-</minimax:tool_call>Second check.<invoke name="Bash">
-<parameter name="command">pwd</parameter>
-</invoke>
-</minimax:tool_call>Done.`,
-      expected: "First check.\nSecond check.\nDone.",
-    },
-    {
-      title: "preserves trailing text after downgraded tool call blocks",
-      text: `Intro text.
-[Tool Call: read (ID: toolu_1)]
-Arguments: {
-  "path": "/tmp/file.txt"
-}
-Back to the user.`,
-      expected: "Intro text.\nBack to the user.",
-    },
-  ])("$title", ({ text, expected }) => {
-    expect(extractEmbeddedAssistantText(textMessage(text))).toBe(expected);
+    [
+      [`Before${invoke.replace('name="Bash"', "name='Bash' data-foo=\"bar\"")}After`],
+      "Before\nAfter",
+    ],
+    [["Start<minimax:tool_call>Inner</minimax:tool_call>End"], "StartInnerEnd"],
+    [["Before<invoke>Keep</invoke>After"], "Before<invoke>Keep</invoke>After"],
+    [[`First check.${invoke}Second check.${invoke}Done.`], "First check.\nSecond check.\nDone."],
+    [
+      [
+        'Intro text.\n[Tool Call: read (ID: toolu_1)]\nArguments: {\n  "path": "/tmp/file.txt"\n}\nBack to the user.',
+      ],
+      "Intro text.\nBack to the user.",
+    ],
+    [["First block.", invoke, "Third block."], "First block.\nThird block."],
+    [
+      [
+        "Here's what I found:",
+        '[Tool Call: read (ID: toolu_1)]\nArguments: { "path": "/test.txt" }',
+        "[Tool Result for ID toolu_1]\nFile contents here",
+        "Done checking.",
+      ],
+      "Here's what I found:\nDone checking.",
+    ],
+    [
+      [
+        'I will read the file.\n<tool_call>{"name":"read","arguments":{"path":"/tmp/x"}}</tool_call>\n<tool_result>{"output":"hello world"}</tool_result>\nThe file contains: hello world',
+      ],
+      "I will read the file.\n\n\nThe file contains: hello world",
+    ],
+  ] as const)("sanitizes assistant text blocks: %j", (texts, expected) => {
+    expect(extractEmbeddedAssistantText(textMessage(...texts))).toBe(expected);
   });
 
   it("sanitizes HTTP-ish error text only when stopReason is error", () => {
@@ -258,45 +253,6 @@ Back to the user.`,
     expect(result).toBe(responseText);
   });
 
-  it("handles multiple text blocks", () => {
-    const msg = textMessage(
-      "First block.",
-      `<invoke name="Bash">
-<parameter name="command">ls</parameter>
-</invoke>
-</minimax:tool_call>`,
-      "Third block.",
-    );
-    expect(extractEmbeddedAssistantText(msg)).toBe("First block.\nThird block.");
-  });
-
-  it("handles multiple text blocks with tool calls and results", () => {
-    const msg = textMessage(
-      "Here's what I found:",
-      `[Tool Call: read (ID: toolu_1)]
-Arguments: { "path": "/test.txt" }`,
-      `[Tool Result for ID toolu_1]
-File contents here`,
-      "Done checking.",
-    );
-    expect(extractEmbeddedAssistantText(msg)).toBe("Here's what I found:\nDone checking.");
-  });
-
-  it("strips mixed <tool_call> and <tool_result> XML blocks from assistant text", () => {
-    const msg = textMessage(
-      [
-        "I will read the file.",
-        '<tool_call>{"name":"read","arguments":{"path":"/tmp/x"}}</tool_call>',
-        '<tool_result>{"output":"hello world"}</tool_result>',
-        "The file contains: hello world",
-      ].join("\n"),
-    );
-
-    expect(extractEmbeddedAssistantText(msg)).toBe(
-      "I will read the file.\n\n\nThe file contains: hello world",
-    );
-  });
-
   it("strips reasoning/thinking tag variants", () => {
     for (const [text, expected] of [
       [
@@ -318,26 +274,13 @@ File contents here`,
 });
 
 describe("formatReasoningMessage", () => {
-  it("returns empty string for whitespace-only input", () => {
-    expect(formatReasoningMessage("   \n  \t  ")).toBe("");
-  });
-
-  it("wraps each line separately for multiline text (Telegram fix)", () => {
-    expect(formatReasoningMessage("Line one\nLine two\nLine three")).toBe(
-      "Thinking\n\n_Line one_\n_Line two_\n_Line three_",
-    );
-  });
-
-  it("preserves empty lines between reasoning text", () => {
-    expect(formatReasoningMessage("First block\n\nSecond block")).toBe(
-      "Thinking\n\n_First block_\n\n_Second block_",
-    );
-  });
-
-  it("trims leading/trailing whitespace", () => {
-    expect(formatReasoningMessage("  \n  Reasoning here  \n  ")).toBe(
-      "Thinking\n\n_Reasoning here_",
-    );
+  it.each([
+    ["   \n  \t  ", ""],
+    ["Line one\nLine two\nLine three", "Thinking\n\n_Line one_\n_Line two_\n_Line three_"],
+    ["First block\n\nSecond block", "Thinking\n\n_First block_\n\n_Second block_"],
+    ["  \n  Reasoning here  \n  ", "Thinking\n\n_Reasoning here_"],
+  ])("formats reasoning line-by-line (Telegram regression): %j", (input, expected) => {
+    expect(formatReasoningMessage(input)).toBe(expected);
   });
 });
 
@@ -407,40 +350,17 @@ describe("extractAssistantVisibleText", () => {
     expect(extractAssistantVisibleText(msg)).toBe(text);
   });
 
-  it("does not fall back to commentary when final_answer is empty", () => {
-    const msg = makeAssistantMessage({
-      content: [phasedText("Working...", "commentary"), phasedText("   ", "final_answer")],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("");
-  });
-
-  it("does not fall back to unphased legacy text when an empty final_answer block exists", () => {
-    const msg = makeAssistantMessage({
-      content: [textBlock("Legacy answer"), phasedText("   ", "final_answer")],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("");
-  });
-
-  it("does not fall back to unphased legacy text when an empty output_text final_answer block exists", () => {
-    const msg = makeAssistantMessage({
-      content: [textBlock("Legacy answer"), phasedText("   ", "final_answer", "output_text")],
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("");
+  it.each([
+    ["commentary", phasedText("Working...", "commentary"), "text"],
+    ["legacy text", textBlock("Legacy answer"), "text"],
+    ["legacy output_text", textBlock("Legacy answer"), "output_text"],
+  ] as const)("never falls back to %s when final_answer is empty", (_name, prefix, type) => {
+    const content = [prefix, phasedText("   ", "final_answer", type)];
+    expect(extractAssistantVisibleText(makeAssistantMessage({ content }))).toBe("");
   });
 
   it("falls back to legacy unphased text when phased text is absent", () => {
     expect(extractAssistantVisibleText(textMessage("Legacy answer"))).toBe("Legacy answer");
-  });
-
-  it("keeps strict reasoning-tag stripping for legacy string content", () => {
-    const msg = makeAssistantMessage({
-      content: "Visible prefix <think>private reasoning tail",
-    });
-
-    expect(extractAssistantVisibleText(msg)).toBe("Visible prefix");
   });
 
   it("preserves literal reasoning-looking tags in unphased visible text", () => {

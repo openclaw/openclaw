@@ -56,6 +56,11 @@ const model = {
   contextWindow: 8192,
   maxTokens: 1024,
 };
+const providerCatalog = {
+  api: "openai-completions" as const,
+  baseUrl: "https://fixture.invalid/v1",
+  models: [{ id: model.id, name: model.name, input: model.input }],
+};
 
 type Registration = {
   id: string;
@@ -138,23 +143,12 @@ async function withRunFixture(
           channels: [],
           channelConfigs: {},
           providerAuthChoices: [],
-          ...(options.catalog && id === providerId
-            ? { providerCatalogEntry: "./catalog.cjs" }
-            : {}),
-          ...(!options.catalog
-            ? {
-                modelCatalog: {
-                  providers: {
-                    [id]: {
-                      discovery: "static",
-                      api: "openai-completions",
-                      baseUrl: "https://fixture.invalid/v1",
-                      models: [{ id: "model", name: "Fixture model", input: ["text"] }],
-                    },
-                  },
-                },
-              }
-            : {}),
+          providerCatalogEntry: options.catalog && id === providerId ? "./catalog.cjs" : undefined,
+          modelCatalog: options.catalog
+            ? undefined
+            : {
+                providers: { [id]: { discovery: "static", ...providerCatalog } },
+              },
         },
       });
       fs.writeFileSync(
@@ -209,9 +203,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           [providerId, siblingId].map((id) => [
             id,
             {
-              api: "openai-completions" as const,
+              ...providerCatalog,
               apiKey: "synthetic-run-key",
-              baseUrl: "https://fixture.invalid/v1",
               models: options.catalog && id === providerId ? [] : [structuredClone(model)],
             },
           ]),

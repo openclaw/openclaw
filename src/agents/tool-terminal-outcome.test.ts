@@ -54,6 +54,15 @@ const makeToolCall = (id: string, name = "exec", args = {}) => ({
   arguments: args,
 });
 
+type Observation = Parameters<ReturnType<typeof createToolTerminalObserver>>[0];
+function failed(
+  toolName: string,
+  error: string,
+  fields: Omit<Observation, "toolName" | "outcome" | "failure"> = {},
+): Observation {
+  return { ...fields, toolName, outcome: "failure", failure: { error } };
+}
+
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
 
@@ -253,12 +262,11 @@ describe("tool terminal outcome observer", () => {
       result: { details: { status: "suppressed", reason: "cancelled_by_message_sending_hook" } },
     };
     expect(observe(suppression).lastToolError).toBeUndefined();
-    observe({
-      toolName: "message",
-      arguments: { action: "send", target: "123", message: "failed" },
-      outcome: "failure",
-      failure: { error: "Telegram transport failed" },
-    });
+    observe(
+      failed("message", "Telegram transport failed", {
+        arguments: { action: "send", target: "123", message: "failed" },
+      }),
+    );
     const afterSuppression = observe(suppression);
     expect(afterSuppression.lastToolError).toMatchObject({ error: "Telegram transport failed" });
     expect(buildPayloads({ lastToolError: afterSuppression.lastToolError })).toEqual([
@@ -276,21 +284,16 @@ describe("tool terminal outcome observer", () => {
 
   it("keeps the latest failure when a different tool succeeds", () => {
     const observe = createToolTerminalObserver("run-1");
-    const actionA = { action: "send", to: "channel:a", message: "A" };
-    const actionB = { action: "send", to: "channel:b", message: "B" };
-
-    observe({
-      toolName: "message",
-      arguments: actionA,
-      outcome: "failure",
-      failure: { error: "A failed" },
-    });
-    observe({
-      toolName: "message",
-      arguments: actionB,
-      outcome: "failure",
-      failure: { error: "B failed" },
-    });
+    observe(
+      failed("message", "A failed", {
+        arguments: { action: "send", to: "channel:a", message: "A" },
+      }),
+    );
+    observe(
+      failed("message", "B failed", {
+        arguments: { action: "send", to: "channel:b", message: "B" },
+      }),
+    );
     const afterRead = observe({ toolName: "read", arguments: {}, outcome: "success" });
 
     expect(afterRead.lastToolError).toMatchObject({ error: "B failed" });
@@ -336,39 +339,18 @@ describe("tool terminal outcome observer", () => {
   );
 
   it.each([
-    [
-      "pre-execution rejection",
-      "message",
-      "send",
-      "failure",
-      "uncertain",
-      { executionStarted: false },
-    ],
-    ["completed read", "message", "read", "success", "read_completed", {}],
-    ["failed read", "message", "read", "failure", "failed_no_effect", {}],
-    ["completed computer observation", "computer", "list_windows", "success", "read_completed", {}],
-    [
-      "failed computer observation",
-      "computer",
-      "get_cursor_position",
-      "failure",
-      "failed_no_effect",
-      {},
-    ],
-    [
-      "owner-declared replay-safe failure",
-      "plugin_read",
-      undefined,
-      "failure",
-      "failed_no_effect",
-      { replaySafe: true },
-    ],
-    ["completed mutation", "message", "send", "success", "mutation_committed", {}],
-    ["completed unknown operation", "plugin_unknown", undefined, "success", "uncertain", {}],
-    ["failed mutation", "message", "send", "failure", "uncertain", {}],
+    ["message", "send", "failure", "uncertain", { executionStarted: false }],
+    ["message", "read", "success", "read_completed", {}],
+    ["message", "read", "failure", "failed_no_effect", {}],
+    ["computer", "list_windows", "success", "read_completed", {}],
+    ["computer", "get_cursor_position", "failure", "failed_no_effect", {}],
+    ["plugin_read", undefined, "failure", "failed_no_effect", { replaySafe: true }],
+    ["message", "send", "success", "mutation_committed", {}],
+    ["plugin_unknown", undefined, "success", "uncertain", {}],
+    ["message", "send", "failure", "uncertain", {}],
   ] as const)(
-    "records a host-owned effect receipt for %s",
-    (_name, toolName, action, outcome, state, options) => {
+    "records a host-owned effect receipt for %s/%s/%s",
+    (toolName, action, outcome, state, options) => {
       const input = {
         toolName,
         arguments: action ? { action } : {},
@@ -384,11 +366,7 @@ describe("tool terminal outcome observer", () => {
 
   it("clears a failure after the same normalized tool succeeds", () => {
     const observe = createToolTerminalObserver("run-normalized-recovery");
-    observe({
-      toolName: " Write ",
-      outcome: "failure",
-      failure: { error: "write failed" },
-    });
+    observe(failed(" Write ", "write failed"));
     expect(observe({ toolName: "WRITE", outcome: "success" }).lastToolError).toBeUndefined();
   });
 
@@ -402,13 +380,12 @@ describe("tool terminal outcome observer", () => {
     // The retry the model actually issues: drops the rejected cwd and rewords the task.
     const retryArgs = { task: "Investigate the flaky gateway test in repo scope" };
 
-    observe({
-      toolName: "sessions_spawn",
-      arguments: failedArgs,
-      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
-      outcome: "failure",
-      failure: { error: "cwd is outside the workspace" },
-    });
+    observe(
+      failed("sessions_spawn", "cwd is outside the workspace", {
+        arguments: failedArgs,
+        meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
+      }),
+    );
     const afterRetry = observe({
       toolName: "sessions_spawn",
       arguments: retryArgs,
@@ -476,16 +453,11 @@ describe("tool terminal outcome observer", () => {
   );
 
   it("treats the assistant reply as authoritative after a failed persistence call", () => {
-    const observation = {
-      toolName: "memory_store",
+    const observation = failed("memory_store", "429 insufficient_quota", {
       arguments: { text: "The user prefers metric units." },
       executionStarted: true,
-      outcome: "failure",
-      failure: { error: "429 insufficient_quota" },
-      ownerMutation: {
-        ownerKey: '["memory-lancedb","memory_store"]',
-      },
-    } as const;
+      ownerMutation: { ownerKey: '["memory-lancedb","memory_store"]' },
+    });
     const terminal = createToolTerminalObserver("run-memory-store")(observation);
 
     const payloads = buildPayloads({
@@ -500,29 +472,26 @@ describe("tool terminal outcome observer", () => {
   });
 
   it("does not treat an unowned same-name tool as a persistence mutation", () => {
-    const terminal = createToolTerminalObserver("run-third-party-store")({
-      toolName: "memory_store",
-      arguments: { text: "The user prefers metric units." },
-      executionStarted: true,
-      outcome: "failure",
-      failure: { error: "store unavailable" },
-    });
+    const terminal = createToolTerminalObserver("run-third-party-store")(
+      failed("memory_store", "store unavailable", {
+        arguments: { text: "The user prefers metric units." },
+        executionStarted: true,
+      }),
+    );
 
     expect(terminal.lastToolError).toMatchObject({ mutatingAction: false });
   });
 
   it("clears a failed persistence action after the same tool succeeds", () => {
     const observe = createToolTerminalObserver("run-memory-store-retry");
-    const ownerKey = '["memory-lancedb","memory_store"]';
-    const ownerMutation = { ownerKey };
+    const ownerMutation = { ownerKey: '["memory-lancedb","memory_store"]' };
 
-    observe({
-      toolName: "memory_store",
-      arguments: { text: "The user prefers metric units." },
-      outcome: "failure",
-      failure: { error: "store unavailable" },
-      ownerMutation,
-    });
+    observe(
+      failed("memory_store", "store unavailable", {
+        arguments: { text: "The user prefers metric units." },
+        ownerMutation,
+      }),
+    );
     expect(
       observe({
         toolName: "memory_store",
