@@ -99,7 +99,8 @@ AOT artifacts select the `embedded-aot` [runtime execution profile](/concepts/ru
 Host Code Mode using the Node executor, QA expressions, and plugins fetched after
 the build run interpreted. Each feature emits one performance notice per process;
 use a JIT build for full speed. Fetched CJS/TypeScript plugins load from disk
-through the normal loader against the compiled SDK. Missing runtime modules and
+through the normal loader against the compiled SDK in both emitted-JavaScript
+and original-TypeScript AOT builds. Missing runtime modules and
 builds with `--disallow-code-generation-from-strings=strict` still report actionable
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
 does not silently switch executors.

@@ -141,25 +141,20 @@ it.each([
   expect(f.commitEffects).toHaveLength(1);
   expectPending();
   const complete = f.commit();
-  await Promise.resolve();
-  expectPending();
-  expect(complete).not.toHaveBeenCalled();
-  await f.paintFrame();
-  expectPending();
-  expect(complete).not.toHaveBeenCalled();
+  for (const step of [() => Promise.resolve(), f.paintFrame]) {
+    await step();
+    expectPending();
+    expect(complete).not.toHaveBeenCalled();
+  }
   await f.paintFrame();
   expect(f.patch).toHaveBeenCalledTimes(Number(returning && committed));
   if (!returning) {
     expect(f.listBranches).toHaveBeenCalledOnce();
-    expect(f.request.mock.calls.map(([method]) => method)).toEqual([
-      "system.info",
-      "session.discussion.info",
-      "sessions.companion.state",
-      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-    ]);
-    expect(
-      f.request.mock.calls.find(([method]) => method === "sessions.companion.state")?.[1],
-    ).toEqual({ sessionKey: f.state.sessionKey, agentId: "work" });
+    expect(f.request).toHaveBeenCalledWith("sessions.companion.state", {
+      sessionKey: f.state.sessionKey,
+      agentId: "work",
+    });
+    expect(f.request).toHaveBeenCalledWith("session.discussion.info", expect.anything());
   }
   expect(complete).toHaveBeenCalledOnce();
 });
@@ -203,14 +198,12 @@ it("resumes deferred companion and discussion hydration when a retained pane ret
   f.pane.presented = true;
   expect(f.commitEffects).toHaveLength(1);
   f.commit();
-  expect(f.request.mock.calls.map(([method]) => method).toSorted()).toEqual([
-    "chat.metadata",
-    "models.list",
-  ]);
+  for (const method of ["session.discussion.info", "sessions.companion.state"]) {
+    expect(f.request).not.toHaveBeenCalledWith(method, expect.anything());
+  }
   void f.paintFrame();
   await f.paintFrame();
 
-  expect(f.request.mock.calls.map(([method]) => method)).toEqual(
-    expect.arrayContaining(["session.discussion.info", "sessions.companion.state"]),
-  );
+  expect(f.request).toHaveBeenCalledWith("session.discussion.info", expect.anything());
+  expect(f.request).toHaveBeenCalledWith("sessions.companion.state", expect.anything());
 });

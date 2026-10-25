@@ -2980,7 +2980,7 @@ openclaw-chat-ci-details {
     min-width: var(--chat-composer-send-size);
     height: var(--chat-composer-send-size);
     background: var(--primary);
-    color: var(--primary-foreground);
+    color: var(--chat-send-foreground);
   }
 
   .agent-chat__input--chat .chat-mobile-primary-action .chat-send-btn {
@@ -2993,10 +2993,6 @@ openclaw-chat-ci-details {
     .agent-chat__composer-footer
     :is(.chat-controls__permission-icon svg, .chat-controls__permission-lock svg) {
     stroke-width: var(--chat-mobile-row-permission-stroke);
-  }
-
-  .agent-chat__input--chat :is(.chat-send-btn--send, .chat-send-btn--talk-mode) > svg {
-    color: var(--primary-foreground);
   }
 
   .agent-chat__input--chat
@@ -3018,7 +3014,7 @@ openclaw-chat-ci-details {
   .agent-chat__input--chat .chat-send-btn--stop > svg {
     width: var(--chat-mobile-row-stop-icon-size);
     height: var(--chat-mobile-row-stop-icon-size);
-    color: var(--danger);
+    color: inherit;
     fill: currentColor;
     stroke: none;
   }

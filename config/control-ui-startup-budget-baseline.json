@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 271987,
-  "reason": "CLS space reservations hold all 32 production-HTTP reload cells below 0.013. Twenty interleaved base/A-A/head triples per mobile theme show script/task CPU medians improve 1.6–3.4% and p95 improve 5.5–9.6%; raw readiness remains noisy. Same-host main77 and candidate builds measure startup 271869 to 271987 B gzip (+118 B), with unchanged 5 JS and 1 CSS requests and unchanged startup raw JS. Accept this measured CLS win and record the complete head size.",
+  "startupJsGzipBytes": 271935,
+  "reason": "Same-host uncached 8937cb4 to 92174fc builds measure startup 271947 to 271935 B gzip (-12 B), Chat +1451 B and New Session +29 B (within build variance), with unchanged CSS bytes and JS/CSS request counts. The lazy highlighting worker cuts 5000-line code/diff CPU by 18-70%; avoiding leaf-subtree table scans cuts dense-code CPU median/p95 by 65.9%/64.3%. Record the measured integrated startup head.",
   "updatedAt": "2026-10-25"
 }

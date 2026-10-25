@@ -1044,16 +1044,16 @@ describe("provider-runtime", () => {
     }
   });
 
-  it("does not scan provider plugins after bundled policy surface handles config", () => {
+  it.each([true, false])("keeps config normalization local (%s)", (hasNormalizer) => {
     const providerConfig: ModelProviderConfig = {
       baseUrl: "https://api.openai.com/v1",
       api: "openai-completions",
       models: [],
     };
     const normalizeConfig = vi.fn(() => providerConfig);
-    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
-      normalizeConfig,
-    });
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue(
+      hasNormalizer ? { normalizeConfig } : {},
+    );
 
     expect(
       runtime.normalizeProviderConfigWithPlugin({
@@ -1065,7 +1065,7 @@ describe("provider-runtime", () => {
       }),
     ).toBeUndefined();
 
-    expect(normalizeConfig).toHaveBeenCalledTimes(1);
+    expect(normalizeConfig).toHaveBeenCalledTimes(hasNormalizer ? 1 : 0);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,7 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import * as normalization from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {
@@ -379,12 +381,16 @@ describe("session tool surface", () => {
   const routeKey = "openai/gpt-6-sol/openai-responses";
   const fixture = promptFixture("tool-surface", routeKey);
   const names = (tools: { name: string }[]) => tools.map(({ name }) => name).toSorted();
-  const tool = (name: string, description = `${name} tool`) =>
+  const tool = (
+    name: string,
+    description = `${name} tool`,
+    parameters: unknown = { type: "object", properties: { [name]: { type: "string" } } },
+  ) =>
     ({
       name,
       label: name,
       description,
-      parameters: { type: "object", properties: { [name]: { type: "string" } } },
+      parameters,
       execute: async () => ({
         content: [{ type: "text" as const, text: `${name} ran` }],
         details: {},
@@ -504,6 +510,44 @@ describe("session tool surface", () => {
     expect(changed.map((entry) => entry.description)).toEqual([description]);
     expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(changed));
   });
+
+  it.each([false, true])(
+    "reuses published schema facts while preserving pin equality (restored=%s)",
+    async (restored) => {
+      const entries: SessionEntry[] = [];
+      const original = publishRuntimeToolInputSchema({
+        type: "object",
+        properties: { read: { type: "string" } },
+      }).schema;
+      const reordered = publishRuntimeToolInputSchema({
+        properties: { read: { type: "string" } },
+        type: "object",
+      }).schema;
+      const changed = publishRuntimeToolInputSchema({
+        type: "object",
+        properties: { read: { type: "number" } },
+      }).schema;
+      surface([tool("read", "Pinned description", original)]);
+      await persist(entries);
+      if (restored) {
+        fixture.reload();
+      }
+      const stringify = vi.spyOn(normalization, "stableStringify");
+      try {
+        const unchanged = surface([tool("read", "New guidance", reordered)], entries);
+        expect(unchanged[0]?.description).toBe("Pinned description");
+        expect(fixture.state.pendingToolSurface).toBeUndefined();
+        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
+        stringify.mockClear();
+        const replacement = surface([tool("read", "Changed schema", changed)], entries);
+        expect(replacement[0]?.description).toBe("Changed schema");
+        expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
+        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
+      } finally {
+        stringify.mockRestore();
+      }
+    },
+  );
 });
 
 describe("embedded session active project keys", () => {

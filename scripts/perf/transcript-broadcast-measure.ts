@@ -184,6 +184,7 @@ const { values } = parseArgs({
     "usage-rpc": { type: "boolean", default: false },
     "node-policy-churn": { type: "boolean", default: false },
     "team-stress": { type: "boolean", default: false },
+    "operator-model-policy": { type: "boolean", default: false },
     "team-stress-churn-ms": { type: "string", default: "1000" },
     "team-stress-list-weight": { type: "string", default: "2" },
     "team-stress-allocation-sampling": { type: "boolean", default: false },
@@ -1633,6 +1634,7 @@ const authorityEmail = "operator@authority.example.test";
 const authorityOrigin = "https://authority.example.test";
 const fixtureDirectPassword = "synthetic-connected-github-local-caller";
 const trustedProxyScenario =
+  values["operator-model-policy"] ||
   values["operator-access-policy"] ||
   values["github-options-connected"] ||
   values["presence-deltas"];
@@ -1748,6 +1750,15 @@ if (trustedProxyScenario) {
           scopes: ["operator.admin"],
           agents: "*",
           sessions: { others: "write" },
+          ...(values["operator-model-policy"]
+            ? {
+                modelPolicy: {
+                  sourceAgent: "main",
+                  allow: ["openai/*"],
+                  deny: ["openai/blocked-*"],
+                },
+              }
+            : {}),
           ...(values["operator-access-policy"]
             ? { accessPolicyPlugin: "synthetic-operator-access" }
             : {}),
@@ -2753,6 +2764,9 @@ const env = {
     : {}),
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
+  ...(values["operator-model-policy"] && values["team-stress-allocation-sampling"]
+    ? { OPENCLAW_BENCH_OPERATOR_MODEL_POLICY_COUNTS: "1" }
+    : {}),
   ...(values["github-options-connected"]
     ? {
         GH_TOKEN: "synthetic-github-options",
@@ -5137,6 +5151,18 @@ try {
       validateDashboardRpc(method, await rpc(sender, method, params));
     }
   }
+  if (values["operator-model-policy"]) {
+    const catalog = await rpc(sender, "models.list", { agentId: "main" });
+    if (
+      !isRecord(catalog) ||
+      !isRecord(catalog.modelSelectionPolicy) ||
+      catalog.modelSelectionPolicy.restricted !== true ||
+      catalog.modelSelectionPolicy.defaultModel !== "openai/gpt-4.1"
+    ) {
+      throw new Error("Synthetic operator did not acquire its model policy");
+    }
+    writeFileSync(path.join(output, "operator-model-policy.json"), JSON.stringify(catalog));
+  }
   if (reloadPluginId || scopePluginId || values["team-stress"]) {
     const inventory = await rpc(sender, "plugins.list", {});
     writeFileSync(path.join(output, "plugin-inventory.json"), JSON.stringify(inventory, null, 2));
@@ -5975,6 +6001,9 @@ try {
               }
               const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
                 signal: AbortSignal.timeout(10_000),
+                ...(trustedProxyScenario
+                  ? { headers: { ...clientConnection.headers, origin: authorityOrigin } }
+                  : {}),
               });
               if (!response.ok) {
                 throw new Error(`Team stress Prometheus scrape failed: HTTP ${response.status}`);

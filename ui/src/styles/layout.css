@@ -693,7 +693,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   padding: 0;
   border: 0;
   border-radius: var(--radius-md);
-  background: var(--accent);
+  background: var(--sidebar-rail-action-bg);
   color: var(--accent-foreground);
   text-decoration: none;
 }
@@ -704,7 +704,7 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
 }
 
 .header-new-session:hover:not(:disabled, [aria-disabled="true"]) {
-  background: var(--accent-hover);
+  background: var(--sidebar-rail-action-hover-bg);
   color: var(--accent-foreground);
 }
 
