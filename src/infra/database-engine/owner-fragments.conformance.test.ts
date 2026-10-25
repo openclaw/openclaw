@@ -23,14 +23,12 @@ import { NodeWorkerJournalWorker } from "../../node-host/node-worker-journal-wor
 import { NodeWorkerLaunchStore } from "../../node-host/node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "../../node-host/node-worker-process-identity.js";
 import { NodeWorkerTurnStore } from "../../node-host/node-worker-turn-store.js";
-import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
@@ -118,18 +116,11 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         // A predecessor only knows the physical journal; the next read settles its turn.
         admit(() =>
           runOpenClawStateWriteTransaction(({ db }) =>
-            executeSqliteQuerySync(
-              db,
-              getNodeSqliteKysely<StateDatabase>(db)
-                .updateTable("node_worker_launches")
-                .set({
-                  state: "failed",
-                  error_text: "synthetic predecessor",
-                  completed_at_ms: now + 1,
-                  updated_at_ms: now + 1,
-                })
-                .where("launch_id", "=", claim.launchId),
-            ),
+            db
+              .prepare(`UPDATE node_worker_launches SET state = 'failed',
+              error_text = 'synthetic predecessor', completed_at_ms = ?, updated_at_ms = ?
+              WHERE launch_id = ?`)
+              .run(now + 1, now + 1, claim.launchId),
           ),
         );
         const recovered = await turns.get(next.launchId);
@@ -169,46 +160,43 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const predecessor = { pid: 2_147_483_647, startTime: 1 };
       const claim = launchClaim("postimage");
       const now = Date.now();
+      const expectPostimage = async (
+        result: Awaited<ReturnType<typeof launches.claim>>,
+        action: "start" | "replay",
+        receipt: object,
+      ) => {
+        expect(result).toMatchObject({ action, receipt });
+        expect(result).toEqual({
+          action,
+          nonterminalCount: 1,
+          receipt: await launches.get(claim.launchId),
+        });
+      };
       try {
         const created = await launches.claim(claim, predecessor, 1, now + 7);
-        expect(created).toMatchObject({
-          action: "start",
-          receipt: { supervisor: predecessor, state: "pending", updatedAtMs: now + 7 },
-        });
-        expect(created).toEqual({
-          action: "start",
-          nonterminalCount: 1,
-          receipt: await launches.get(claim.launchId),
+        await expectPostimage(created, "start", {
+          supervisor: predecessor,
+          state: "pending",
+          updatedAtMs: now + 7,
         });
         const reclaimed = await launches.claim(claim, supervisor, 1, now);
-        expect(reclaimed).toMatchObject({
-          action: "start",
-          receipt: { supervisor, state: "pending", updatedAtMs: now + 7 },
-        });
-        expect(reclaimed).toEqual({
-          action: "start",
-          nonterminalCount: 1,
-          receipt: await launches.get(claim.launchId),
+        await expectPostimage(reclaimed, "start", {
+          supervisor,
+          state: "pending",
+          updatedAtMs: now + 7,
         });
         const bootId = (await launches.get(claim.launchId))?.bootId;
         admit(() =>
           runOpenClawStateWriteTransaction(({ db }) => {
-            executeSqliteQuerySync(
-              db,
-              getNodeSqliteKysely<StateDatabase>(db)
-                .updateTable("node_worker_launches")
-                .set({
-                  supervisor_pid: predecessor.pid,
-                  supervisor_start_time: predecessor.startTime,
-                })
-                .where("launch_id", "=", claim.launchId),
+            db.prepare(`UPDATE node_worker_launches SET supervisor_pid = ?,
+              supervisor_start_time = ? WHERE launch_id = ?`).run(
+              predecessor.pid,
+              predecessor.startTime,
+              claim.launchId,
             );
-            executeSqliteQuerySync(
-              db,
-              getNodeSqliteKysely<StateDatabase>(db)
-                .updateTable("node_worker_launch_boots")
-                .set({ boot_id: "synthetic-old-boot" })
-                .where("launch_id", "=", claim.launchId),
+            db.prepare("UPDATE node_worker_launch_boots SET boot_id = ? WHERE launch_id = ?").run(
+              "synthetic-old-boot",
+              claim.launchId,
             );
             // Exercise an actual zero-row write while preserving every launch constraint.
             db.exec(
@@ -224,19 +212,11 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           }),
         );
         const noClaim = await launches.claim(claim, supervisor, 1, now + 20);
-        expect(noClaim).toMatchObject({
-          action: "replay",
-          receipt: {
-            supervisor: predecessor,
-            worker: null,
-            state: "pending",
-            updatedAtMs: now + 7,
-          },
-        });
-        expect(noClaim).toEqual({
-          action: "replay",
-          nonterminalCount: 1,
-          receipt: await launches.get(claim.launchId),
+        await expectPostimage(noClaim, "replay", {
+          supervisor: predecessor,
+          worker: null,
+          state: "pending",
+          updatedAtMs: now + 7,
         });
         if (bootId) {
           expect(noClaim).toHaveProperty("receipt.bootId", bootId);

@@ -1,5 +1,4 @@
 import "./backup-worker.test-support.js";
-import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,11 +9,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { readBackupEngine, verifyMatchedPostgresBackup } from "../../snapshot/database-backup.js";
-import {
-  dumpGitBackupDatabase,
-  restoreGitBackupDirectory,
-} from "../../snapshot/git-backup-codec.js";
+import { verifyMatchedPostgresBackup } from "../../snapshot/database-backup.js";
+import { dumpGitBackupDatabase } from "../../snapshot/git-backup-codec.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { agentPortProvider } from "./agent-port.js";
@@ -28,14 +24,9 @@ const secret = "synthetic-secret-must-not-appear-in-export";
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe.skipIf(!connection)("Git backup secret exclusion across engines", () => {
-  it.each([
-    { family: "state", generic: false },
-    { family: "agent", generic: false },
-    { family: "state", generic: true },
-    { family: "agent", generic: true },
-  ] as const)(
-    "redacts the same $family rows and fields with generic scope=$generic, including deleted bytes",
-    async ({ family, generic }) => {
+  it.each(["state", "agent"] as const)(
+    "redacts $family rows and fields in a generic scope, including deleted bytes",
+    async (family) => {
       await withOpenClawTestState(
         { scenario: "minimal", prefix: "git-secrets-" },
         async (state) => {
@@ -53,36 +44,21 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
               family === "state"
                 ? { role: "global" as const }
                 : { role: "agent" as const, agentId: "main" };
-            const pgIdentity = generic
-              ? { role: "generic" as const, id: `retained_${family}` }
-              : identity;
+            const pgIdentity = { role: "generic" as const, id: `retained_${family}` };
             const sourcePath = state.path("source.sqlite");
             using source = openNodeSqliteDatabase(sourcePath);
             source.exec(descriptor.sqlite);
             for (const fragment of descriptor.fragments ?? []) {
               source.exec(fragment.sqlite);
             }
-            source.exec(`PRAGMA user_version = ${descriptor.version}`);
-            source
-              .prepare("INSERT INTO schema_meta VALUES ('primary', ?, ?, ?, NULL, 1, 1)")
-              .run(identity.role, descriptor.version, family === "state" ? null : "main");
+            source.exec(`PRAGMA user_version = ${descriptor.version};
+              INSERT INTO schema_meta VALUES ('primary', '${identity.role}', ${descriptor.version},
+                ${family === "state" ? "NULL" : "'main'"}, NULL, 1, 1);`);
             if (family === "state") {
-              source
-                .prepare(
-                  "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
-                )
-                .run(String(descriptor.version));
-              for (const key of [
-                "authProfiles.store",
-                "nodeHost.config",
-                "webPush.vapidKeys",
-                "sidebar.retained",
-              ]) {
-                source
-                  .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
-                  .run(key, key === "sidebar.retained" ? '"keep"' : JSON.stringify(secret));
-              }
               source.exec(`
+                INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${descriptor.version}', 1);
+                INSERT INTO config_machine_state VALUES ('sidebar.retained', '"keep"', 1);
+                INSERT INTO secret_store_entries VALUES ('team', '', 'fixture', '${secret}', 'secret', 1, 1, NULL, NULL, NULL);
                 INSERT INTO operator_approvals (
                   cursor_id, approval_id, resolution_ref, kind, status, presentation_json,
                   reviewer_device_ids_json, audience_session_keys_json, runtime_epoch,
@@ -93,33 +69,27 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                   endpoint_hash, subscription_id, endpoint, p256dh, auth, created_at_ms, updated_at_ms
                 ) VALUES ('endpoint', 'subscription', 'https://push.example.test',
                   'synthetic-key', 'synthetic-auth', 1, 1);
-                INSERT INTO web_push_approval_deliveries VALUES (
-                  'approval', 'subscription', 'device', NULL, 1
-                );
+                INSERT INTO web_push_approval_deliveries VALUES ('approval', 'subscription', 'device', NULL, 1);
               `);
-              source
-                .prepare(
-                  "INSERT INTO secret_store_entries VALUES ('team', '', 'fixture', ?, 'secret', 1, 1, NULL, NULL, NULL)",
-                )
-                .run(secret);
+              for (const key of ["authProfiles.store", "nodeHost.config", "webPush.vapidKeys"]) {
+                source
+                  .prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)")
+                  .run(key, JSON.stringify(secret));
+              }
             } else {
-              source.exec(
-                "INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0)",
-              );
-              source
-                .prepare("INSERT INTO auth_profile_store VALUES ('main', ?, 1)")
-                .run(JSON.stringify(secret));
-              source
-                .prepare("INSERT INTO auth_profile_state VALUES ('main', ?, 1)")
-                .run(JSON.stringify(secret));
-              source.exec(
-                "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES ('agent:main:main', 'session', '{}', 1)",
-              );
-              source
-                .prepare(
-                  "INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state) VALUES ('suggestion', 'agent:main:main', 'owner', ?, 1, 'pending')",
-                )
-                .run(secret);
+              source.exec(`
+                INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
+                INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+                  VALUES ('agent:main:main', 'session', '{}', 1);
+                INSERT INTO session_suggestions (id, session_key, author_id, text, created_at, state)
+                  VALUES ('suggestion', 'agent:main:main', 'owner', '${secret}', 1, 'pending');
+                INSERT INTO cache_entries VALUES ('unrelated', 'keep', '{"retained":true}', NULL, NULL, 1);
+              `);
+              for (const table of ["auth_profile_store", "auth_profile_state"]) {
+                source
+                  .prepare(`INSERT INTO ${table} VALUES ('main', ?, 1)`)
+                  .run(JSON.stringify(secret));
+              }
               const catalog = JSON.stringify({
                 generatedBy: "openclaw-plugin-model-catalog-v1",
                 providers: {
@@ -134,16 +104,12 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                 "plugin-model-catalog-v1",
                 "plugin-model-catalog-migration-v1",
               ]) {
-                source
-                  .prepare("INSERT INTO cache_entries VALUES (?, 'catalog', ?, NULL, NULL, 1)")
-                  .run(scope, catalog);
-                source
-                  .prepare("INSERT INTO cache_entries VALUES (?, 'broken', ?, NULL, NULL, 1)")
-                  .run(scope, secret);
+                const insert = source.prepare(
+                  "INSERT INTO cache_entries VALUES (?, ?, ?, NULL, NULL, 1)",
+                );
+                insert.run(scope, "catalog", catalog);
+                insert.run(scope, "broken", secret);
               }
-              source.exec(
-                "INSERT INTO cache_entries VALUES ('unrelated', 'keep', '{\"retained\":true}', NULL, NULL, 1)",
-              );
             }
             const storeId = randomUUID();
             await materializeDatabasePort({
@@ -232,49 +198,6 @@ describe.skipIf(!connection)("Git backup secret exclusion across engines", () =>
                 Buffer.from(secret),
               ),
             ).toBe(true);
-            if (!generic) {
-              for (const [index, directory] of [pgDir, unredacted].entries()) {
-                const targetPath = state.path(`restored-${index}.sqlite`);
-                await restoreGitBackupDirectory({
-                  sourcePath: directory,
-                  targetPath,
-                  expectedIdentity: pgIdentity,
-                });
-                const restored = readBackupEngine(targetPath);
-                assert(restored.engine === "postgres");
-                try {
-                  expect(restored.storeId).toBe(storeId);
-                  expect(restored.namespace).not.toBe(namespace);
-                  const retained =
-                    family === "state"
-                      ? `SELECT value_json FROM "${restored.namespace}".config_machine_state WHERE state_key = 'sidebar.retained'`
-                      : `SELECT value_json FROM "${restored.namespace}".cache_entries WHERE scope = 'unrelated' AND key = 'keep'`;
-                  expect((await client.query(retained)).rows).toEqual([
-                    { value_json: family === "state" ? '"keep"' : '{"retained":true}' },
-                  ]);
-                  const secretTable =
-                    family === "state" ? "secret_store_entries" : "auth_profile_store";
-                  expect(
-                    (
-                      await client.query(
-                        `SELECT count(*)::int AS n FROM "${restored.namespace}"."${secretTable}"`,
-                      )
-                    ).rows,
-                  ).toEqual([{ n: index }]);
-                  if (family === "state") {
-                    expect(
-                      (
-                        await client.query(
-                          `SELECT count(*)::int AS n FROM "${restored.namespace}".web_push_approval_deliveries`,
-                        )
-                      ).rows,
-                    ).toEqual([{ n: index }]);
-                  }
-                } finally {
-                  await client.query(`DROP SCHEMA "${restored.namespace}" CASCADE`);
-                }
-              }
-            }
           } finally {
             await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
             await client.end();

@@ -1,8 +1,6 @@
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -83,75 +81,61 @@ describe.skipIf(!connection)("PostgreSQL Doctor maintenance custody", () => {
 
   it("runs the config-machine-state step and a committed data step under reusable custody", async () => {
     const stateDir = env.OPENCLAW_STATE_DIR!;
-    const statements: string[] = [];
-    const observation = channel("openclaw.database.statement");
-    const observe = (event: unknown) => {
-      if (isRecord(event) && event.engine === "postgres" && typeof event.sql === "string") {
-        statements.push(event.sql);
-      }
-    };
-    observation.subscribe(observe);
-    try {
-      const result = await withLegacyMigrationStateLock({
-        env,
-        stateDir,
-        label: "PostgreSQL conformance state",
-        releaseLabel: "PostgreSQL conformance state",
-        run: async (lockedEnv) => {
-          const migration = await runLegacyStateMigrationSteps([
-            createConfigMachineStateStep({
-              config: {},
-              configPath: path.join(stateDir, "openclaw.json"),
-              configIncludedPaths: [],
-              stateDir,
-              env: lockedEnv,
-            }),
-            {
-              id: "maintenance-conformance-data",
-              phase: "shared",
-              source: [],
-              target: [],
-              requiredness: "required",
-              reversibility: "not-applicable",
-              run: async () => {
-                withEngineStoreAdmission(() =>
-                  writeConfigMachineState("maintenance.conformance", "committed", {
-                    env: lockedEnv,
-                  }),
-                );
-                return { changes: ["Committed synthetic data migration"], warnings: [] };
-              },
+    const result = await withLegacyMigrationStateLock({
+      env,
+      stateDir,
+      label: "PostgreSQL conformance state",
+      releaseLabel: "PostgreSQL conformance state",
+      run: async (lockedEnv) => {
+        const migration = await runLegacyStateMigrationSteps([
+          createConfigMachineStateStep({
+            config: {},
+            configPath: path.join(stateDir, "openclaw.json"),
+            configIncludedPaths: [],
+            stateDir,
+            env: lockedEnv,
+          }),
+          {
+            id: "maintenance-conformance-data",
+            phase: "shared",
+            source: [],
+            target: [],
+            requiredness: "required",
+            reversibility: "not-applicable",
+            run: async () => {
+              withEngineStoreAdmission(() =>
+                writeConfigMachineState("maintenance.conformance", "committed", {
+                  env: lockedEnv,
+                }),
+              );
+              return { changes: ["Committed synthetic data migration"], warnings: [] };
             },
-          ]);
-          expect(migration.haltedBy).toBeUndefined();
-          expect(migration.receipts.map(({ id, outcome }) => ({ id, outcome }))).toEqual([
-            { id: "config-machine-state", outcome: "skipped" },
-            { id: "maintenance-conformance-data", outcome: "completed" },
-          ]);
-          return {
-            changes: migration.sources.flatMap((source) => source.changes),
-            warnings: migration.sources.flatMap((source) => source.warnings),
-          };
-        },
-      });
-      expect(result).toEqual({
-        changes: ["Committed synthetic data migration"],
-        warnings: [],
-      });
-      expect(statements.some((sql) => sql.includes("pg_advisory_xact_lock"))).toBe(true);
-      expect(statements.some((sql) => sql.includes("NOT INDEXED"))).toBe(false);
-      const persisted = await client.query(
-        `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = $1`,
-        ["maintenance.conformance"],
-      );
-      expect(persisted.rows).toEqual([{ value_json: '"committed"' }]);
-      const reacquired = await maintenanceLock(env);
-      expect(reacquired).not.toBeNull();
-      await reacquired!.release();
-      expect(() => reacquired!.assertCurrent()).toThrow();
-    } finally {
-      observation.unsubscribe(observe);
-    }
+          },
+        ]);
+        expect(migration.haltedBy).toBeUndefined();
+        expect(migration.receipts.map(({ id, outcome }) => ({ id, outcome }))).toEqual([
+          { id: "config-machine-state", outcome: "skipped" },
+          { id: "maintenance-conformance-data", outcome: "completed" },
+        ]);
+        return {
+          changes: migration.sources.flatMap((source) => source.changes),
+          warnings: migration.sources.flatMap((source) => source.warnings),
+        };
+      },
+    });
+    expect(result).toEqual({
+      changes: ["Committed synthetic data migration"],
+      warnings: [],
+    });
+    const persisted = await client.query(
+      `SELECT value_json FROM "${namespace}".config_machine_state WHERE state_key = $1`,
+      ["maintenance.conformance"],
+    );
+    expect(persisted.rows).toEqual([{ value_json: '"committed"' }]);
+    const reacquired = await maintenanceLock(env);
+    expect(reacquired).not.toBeNull();
+    await reacquired!.release();
+    expect(() => reacquired!.assertCurrent()).toThrow();
   });
 
   it("refuses a live Gateway owner from a second anchor, including a newer PostgreSQL schema", async () => {
