@@ -373,16 +373,25 @@ describe("bundle LSP runtime", () => {
     });
   });
 
-  it("rejects pending and future LSP requests when stdout fails", async () => {
-    const child = pendingChild("initialize");
-    const { tool: hoverTool } = await startTool(child);
-
-    const request = hoverTool.execute("call-1", position);
-    child.stdout.emit("error", new Error("stdout failed"));
-
-    await expect(request).rejects.toThrow("stdout failed");
-    await expect(hoverTool.execute("call-2", position)).rejects.toThrow("stdout failed");
-  });
+  it.each(["stdout error", "closed process"] as const)(
+    "rejects pending and future LSP requests after %s",
+    async (failure) => {
+      const child = pendingChild("initialize");
+      const { tool: hoverTool } = await startTool(child);
+      const request = hoverTool.execute("call-1", position);
+      const error =
+        failure === "stdout error" ? "stdout failed" : 'LSP server "typescript" exited (1)';
+      if (failure === "stdout error") {
+        child.stdout.emit("error", new Error(error));
+      } else {
+        child.exitCode = 1;
+        child.emit("exit", 1, null);
+        child.emit("close", 1, null);
+      }
+      await expect(request).rejects.toThrow(error);
+      await expect(hoverTool.execute("call-2", position)).rejects.toThrow(error);
+    },
+  );
 
   it("blocks new LSP requests on exit while allowing a final stdout response to drain", async () => {
     const child = pendingChild("initialize");
@@ -400,18 +409,6 @@ describe("bundle LSP runtime", () => {
       details: { lspServer: "typescript", lspMethod: "hover" },
     });
     child.emit("close", 1, null);
-  });
-
-  it("rejects undrained LSP requests when the exited process closes", async () => {
-    const child = pendingChild("initialize");
-    const { tool: hoverTool } = await startTool(child);
-    const request = hoverTool.execute("call-1", position);
-
-    child.exitCode = 1;
-    child.emit("exit", 1, null);
-    child.emit("close", 1, null);
-
-    await expect(request).rejects.toThrow('LSP server "typescript" exited (1)');
   });
 
   it("cancels pending references requests when the tool signal aborts", async () => {

@@ -99,6 +99,13 @@ function createTextModel(id: string, name: string) {
   return modelDefinition(id, { name, reasoning: false, contextWindow: 128000 });
 }
 
+function catalogModels(ids: string[], baseUrl: string) {
+  return catalogConfig(
+    baseUrl,
+    ids.map((id) => createTextModel(id, id)),
+  );
+}
+
 let state: OpenClawTestState;
 let ambientHome: MockInstance<typeof os.homedir>;
 
@@ -317,9 +324,7 @@ it.each(["timeout", "secret-unavailable"] as const)(
 );
 
 it("never runs live catalogs in entries-only mode", async () => {
-  await discover({
-    providerDiscoveryEntriesOnly: true,
-  });
+  await discover({ providerDiscoveryEntriesOnly: true });
 
   expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
   expect(mocks.runProviderStaticCatalog).not.toHaveBeenCalled();
@@ -541,10 +546,7 @@ it.each([
       });
       return {
         providers: {
-          openai: catalogConfig(
-            "https://catalog.example.test/v1",
-            modelIds.map((id) => createTextModel(id, id)),
-          ),
+          openai: catalogModels(modelIds, "https://catalog.example.test/v1"),
         },
       };
     });
@@ -553,13 +555,9 @@ it.each([
     try {
       const result = discover({
         providerDiscoveryTimeoutMs: timeoutMs,
-        config: {
-          models: {
-            providers: {
-              openai: { ...catalogConfig("https://catalog.example.test/v1"), timeoutSeconds },
-            },
-          },
-        },
+        config: configForProviders({
+          openai: { ...catalogConfig("https://catalog.example.test/v1"), timeoutSeconds },
+        }),
       });
       await requested.promise;
       await vi.advanceTimersByTimeAsync(6_100);
@@ -605,24 +603,15 @@ it.each(["rows", "generic"] as const)(
               keyParts: ["provider-timeout-regression"],
               load: () => fetchLiveProviderModelIds(params),
             });
-      return {
-        provider: catalogConfig(
-          params.endpoint,
-          ids.map((id) => createTextModel(id, id)),
-        ),
-      };
+      return { provider: catalogModels(ids, params.endpoint) };
     });
     const read = (seconds: number) =>
       discover({
         providerDiscoveryTimeoutMs: 180_000,
-        config: {
-          models: {
-            providers: {
-              openai: { ...catalogConfig("https://cache.example.test"), timeoutSeconds: 1 },
-              sibling: { ...catalogConfig("https://cache.example.test"), timeoutSeconds: seconds },
-            },
-          },
-        },
+        config: configForProviders({
+          openai: { ...catalogConfig("https://cache.example.test"), timeoutSeconds: 1 },
+          sibling: { ...catalogConfig("https://cache.example.test"), timeoutSeconds: seconds },
+        }),
       });
     const short = read(2);
     const long = read(15);

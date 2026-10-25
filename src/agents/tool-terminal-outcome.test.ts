@@ -32,6 +32,28 @@ const steeringModel: Model = {
   maxTokens: 1_000,
 };
 
+function responseStream(content: Parameters<typeof makeAgentAssistantMessage>[0]["content"]) {
+  const message = makeAgentAssistantMessage({
+    content,
+    stopReason: content?.length ? "toolUse" : "stop",
+  });
+  const stream = createAssistantMessageEventStream();
+  stream.push({
+    type: "done",
+    reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+    message,
+  });
+  stream.end();
+  return stream;
+}
+
+const makeToolCall = (id: string, name = "exec", args = {}) => ({
+  type: "toolCall" as const,
+  id,
+  name,
+  arguments: args,
+});
+
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
 
@@ -65,25 +87,17 @@ describe("tool terminal outcome observer", () => {
         },
         streamFn: () => {
           const first = requests++ === 0;
-          const message = makeAgentAssistantMessage({
-            content: first
+          return responseStream(
+            first
               ? [
-                  {
-                    type: "toolCall",
-                    id: "call-validation",
-                    name: "browser",
-                    arguments: blocked
-                      ? { target: "PRIVATE_TARGET" }
-                      : { query: "PRIVATE_ARGUMENT" },
-                  },
+                  makeToolCall(
+                    "call-validation",
+                    "browser",
+                    blocked ? { target: "PRIVATE_TARGET" } : { query: "PRIVATE_ARGUMENT" },
+                  ),
                 ]
               : [],
-            stopReason: first ? "toolUse" : "stop",
-          });
-          const stream = createAssistantMessageEventStream();
-          stream.push({ type: "done", reason: first ? "toolUse" : "stop", message });
-          stream.end();
-          return stream;
+          );
         },
         beforeToolCall: async () =>
           blocked ? { block: true, reason: "PRIVATE_POLICY_REASON" } : undefined,
@@ -139,36 +153,16 @@ describe("tool terminal outcome observer", () => {
         },
         streamFn: (_model, context) => {
           providerRequests.push(context.messages.slice());
-          const message = makeAgentAssistantMessage(
+          return responseStream(
             providerRequests.length === 1
-              ? {
-                  content: [
-                    // A blocked call does not start the plan, so an executed call precedes it.
-                    ...(firstOutcome === "blocked"
-                      ? [
-                          {
-                            type: "toolCall" as const,
-                            id: "call-started",
-                            name: "exec",
-                            arguments: {},
-                          },
-                        ]
-                      : []),
-                    { type: "toolCall", id: "call-first", name: "exec", arguments: {} },
-                    { type: "toolCall", id: "call-second", name: "exec", arguments: {} },
-                  ],
-                  stopReason: "toolUse",
-                }
-              : { content: [] },
+              ? [
+                  // A blocked call does not start the plan, so an executed call precedes it.
+                  ...(firstOutcome === "blocked" ? [makeToolCall("call-started")] : []),
+                  makeToolCall("call-first"),
+                  makeToolCall("call-second"),
+                ]
+              : [],
           );
-          const stream = createAssistantMessageEventStream();
-          stream.push({
-            type: "done",
-            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-            message,
-          });
-          stream.end();
-          return stream;
         },
         toolExecution: "sequential",
         beforeToolCall: async ({ toolCall }) =>
@@ -305,154 +299,88 @@ describe("tool terminal outcome observer", () => {
     expect(payloads[0]).toMatchObject({ isError: true });
   });
 
-  it("uses host execution and adjusted-argument evidence before fallback facts", () => {
-    const runId = "run-2";
-    const toolCallId = "call-1";
-    recordToolExecutionTracked(toolCallId, runId);
-    recordAdjustedParamsForToolCall(toolCallId, { action: "send", to: "channel:adjusted" }, runId);
-
-    const resolution = createToolTerminalObserver(runId)({
-      toolCallId,
-      toolName: "message",
-      arguments: { action: "send", to: "channel:original" },
-      executionStarted: true,
-      outcome: "failure",
-      failure: { error: "blocked before execution" },
-    });
-
-    expect(resolution).toMatchObject({
-      executionStarted: false,
-      executedArguments: { action: "send", to: "channel:adjusted" },
-      sideEffectEvidence: false,
-      lastToolError: { mutatingAction: false },
-    });
-    expect(peekAdjustedParamsForToolCall(toolCallId, runId)).toEqual({
-      action: "send",
-      to: "channel:adjusted",
-    });
-  });
-
-  it("resolves active wrapper truth when a racing runtime omits conservative facts", () => {
-    const runId = "run-racing-timeout";
-    const toolCallId = "call-racing-timeout";
-    recordToolExecutionStarted(toolCallId, runId);
-    recordAdjustedParamsForToolCall(toolCallId, { action: "send", to: "channel:adjusted" }, runId);
-
-    const resolution = createToolTerminalObserver(runId)({
-      toolCallId,
-      toolName: "message",
-      arguments: { action: "send", to: "channel:original" },
-      outcome: "failure",
-      failure: { error: "timed out during execution", executionStarted: false },
-    });
-
-    expect(resolution).toMatchObject({
-      executionStarted: true,
-      executedArguments: { action: "send", to: "channel:adjusted" },
-      sideEffectEvidence: true,
-      lastToolError: { executionStarted: true, mutatingAction: true },
-    });
-  });
-
-  it("uses settled pre-execution evidence after active tracking is released", () => {
-    const runId = "run-3";
-    const toolCallId = "call-blocked";
-    preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
-
-    const resolution = createToolTerminalObserver(runId)({
-      toolCallId,
-      toolName: "message",
-      arguments: { action: "send", to: "channel:blocked" },
-      executionStarted: true,
-      outcome: "failure",
-      failure: { error: "blocked" },
-    });
-
-    expect(resolution).toMatchObject({
-      executionStarted: false,
-      sideEffectEvidence: false,
-      lastToolError: { executionStarted: false, mutatingAction: false },
-    });
-  });
+  it.each(["tracked", "started", "settled blocked"] as const)(
+    "prefers %s host evidence to fallback execution facts",
+    (mode) => {
+      const runId = "run-host-evidence";
+      const toolCallId = "call-host-evidence";
+      const adjusted = { action: "send", to: "channel:adjusted" };
+      if (mode === "settled blocked") {
+        preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+      } else {
+        (mode === "started" ? recordToolExecutionStarted : recordToolExecutionTracked)(
+          toolCallId,
+          runId,
+        );
+        recordAdjustedParamsForToolCall(toolCallId, adjusted, runId);
+      }
+      const started = mode === "started";
+      const resolution = createToolTerminalObserver(runId)({
+        toolCallId,
+        toolName: "message",
+        arguments: { action: "send", to: "channel:original" },
+        ...(started ? {} : { executionStarted: true }),
+        outcome: "failure",
+        failure: { error: "execution failed", ...(started ? { executionStarted: false } : {}) },
+      });
+      expect(resolution).toMatchObject({
+        executionStarted: started,
+        sideEffectEvidence: started,
+        lastToolError: { executionStarted: started, mutatingAction: started },
+        ...(mode === "settled blocked" ? {} : { executedArguments: adjusted }),
+      });
+      if (mode !== "settled blocked") {
+        expect(peekAdjustedParamsForToolCall(toolCallId, runId)).toEqual(adjusted);
+      }
+    },
+  );
 
   it.each([
-    {
-      name: "pre-execution rejection",
-      input: {
-        toolName: "message",
-        arguments: { action: "send" },
-        executionStarted: false,
-        outcome: "failure",
-        failure: { error: "blocked" },
-      },
-      state: "uncertain",
+    [
+      "pre-execution rejection",
+      "message",
+      "send",
+      "failure",
+      "uncertain",
+      { executionStarted: false },
+    ],
+    ["completed read", "message", "read", "success", "read_completed", {}],
+    ["failed read", "message", "read", "failure", "failed_no_effect", {}],
+    ["completed computer observation", "computer", "list_windows", "success", "read_completed", {}],
+    [
+      "failed computer observation",
+      "computer",
+      "get_cursor_position",
+      "failure",
+      "failed_no_effect",
+      {},
+    ],
+    [
+      "owner-declared replay-safe failure",
+      "plugin_read",
+      undefined,
+      "failure",
+      "failed_no_effect",
+      { replaySafe: true },
+    ],
+    ["completed mutation", "message", "send", "success", "mutation_committed", {}],
+    ["completed unknown operation", "plugin_unknown", undefined, "success", "uncertain", {}],
+    ["failed mutation", "message", "send", "failure", "uncertain", {}],
+  ] as const)(
+    "records a host-owned effect receipt for %s",
+    (_name, toolName, action, outcome, state, options) => {
+      const input = {
+        toolName,
+        arguments: action ? { action } : {},
+        outcome,
+        ...(outcome === "failure" ? { failure: { error: "operation failed" } } : {}),
+        ...options,
+      };
+      expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
+        state,
+      });
     },
-    {
-      name: "completed read",
-      input: { toolName: "message", arguments: { action: "read" }, outcome: "success" },
-      state: "read_completed",
-    },
-    {
-      name: "failed read",
-      input: {
-        toolName: "message",
-        arguments: { action: "read" },
-        outcome: "failure",
-        failure: { error: "read failed" },
-      },
-      state: "failed_no_effect",
-    },
-    {
-      name: "completed computer observation",
-      input: { toolName: "computer", arguments: { action: "list_windows" }, outcome: "success" },
-      state: "read_completed",
-    },
-    {
-      name: "failed computer observation",
-      input: {
-        toolName: "computer",
-        arguments: { action: "get_cursor_position" },
-        outcome: "failure",
-        failure: { error: "observation unavailable" },
-      },
-      state: "failed_no_effect",
-    },
-    {
-      name: "owner-declared replay-safe failure",
-      input: {
-        toolName: "plugin_read",
-        arguments: {},
-        replaySafe: true,
-        outcome: "failure",
-        failure: { error: "read failed" },
-      },
-      state: "failed_no_effect",
-    },
-    {
-      name: "completed mutation",
-      input: { toolName: "message", arguments: { action: "send" }, outcome: "success" },
-      state: "mutation_committed",
-    },
-    {
-      name: "completed unknown operation",
-      input: { toolName: "plugin_unknown", arguments: {}, outcome: "success" },
-      state: "uncertain",
-    },
-    {
-      name: "failed mutation",
-      input: {
-        toolName: "message",
-        arguments: { action: "send" },
-        outcome: "failure",
-        failure: { error: "send failed" },
-      },
-      state: "uncertain",
-    },
-  ] as const)("records a host-owned effect receipt for $name", ({ input, state }) => {
-    expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
-      state,
-    });
-  });
+  );
 
   it("clears a failure after the same normalized tool succeeds", () => {
     const observe = createToolTerminalObserver("run-normalized-recovery");
@@ -514,44 +442,14 @@ describe("tool terminal outcome observer", () => {
   });
 
   it.each([
-    {
-      name: "keyword fallback",
-      timedOut: true,
-      timeoutMs: 30_000,
-      results: [{ path: "memory/one.md" }, { path: "memory/two.md" }],
-      expected: "⚠️ Memory Search timed out after 30s; 2 partial results are available.",
-    },
-    {
-      name: "one keyword match",
-      timedOut: true,
-      timeoutMs: 30_000,
-      results: [{ path: "memory/one.md" }],
-      expected: "⚠️ Memory Search timed out after 30s; 1 partial result is available.",
-    },
-    {
-      name: "no fallback",
-      timedOut: true,
-      timeoutMs: 30_000,
-      results: [],
-      expected: "⚠️ Memory Search timed out after 30s.",
-    },
-    {
-      name: "provider error with timeout wording",
-      timedOut: false,
-      timeoutMs: 30_000,
-      results: [],
-      expected: "⚠️ Memory Search failed",
-    },
-    {
-      name: "invalid timeout metadata",
-      timedOut: true,
-      timeoutMs: -1,
-      results: [],
-      expected: "⚠️ Memory Search failed",
-    },
-  ])(
-    "preserves $name in the final timeout warning",
-    ({ timedOut, timeoutMs, results, expected }) => {
+    [true, 30_000, 2, "⚠️ Memory Search timed out after 30s; 2 partial results are available."],
+    [true, 30_000, 1, "⚠️ Memory Search timed out after 30s; 1 partial result is available."],
+    [true, 30_000, 0, "⚠️ Memory Search timed out after 30s."],
+    [false, 30_000, 0, "⚠️ Memory Search failed"],
+    [true, -1, 0, "⚠️ Memory Search failed"],
+  ] as const)(
+    "preserves timeout metadata (%s, %s ms, %s results) in the final warning",
+    (timedOut, timeoutMs, count, expected) => {
       const terminal = createToolTerminalObserver("run-memory-timeout")({
         toolName: "memory_search",
         arguments: { query: "project notes" },
@@ -561,7 +459,7 @@ describe("tool terminal outcome observer", () => {
             timedOut,
             timeoutMs,
             partial: true,
-            results,
+            results: Array.from({ length: count }, (_, index) => ({ path: `memory/${index}.md` })),
             error: "memory_search timed out after 30s: PRIVATE_PROVIDER_DIAGNOSTIC",
           },
         },
