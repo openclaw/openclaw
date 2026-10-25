@@ -75,20 +75,16 @@ function expectSingleToolCallContent(content: unknown[], name: string) {
   expect(content).toEqual([expect.objectContaining({ type: "toolCall", name })]);
 }
 
-describe("composeSystemPromptWithHookContext", () => {
-  it("normalizes hook system context block line endings and trailing whitespace", () => {
-    expect(
-      composeSystemPromptWithHookContext({
-        baseSystemPrompt: "  base system  ",
-        prependSystemContext: wrapPluginSystemContextSection(
-          "  prepend line  \r\nsecond line\t\r\n",
-        ),
-        appendSystemContext: wrapPluginSystemContextSection("  append  \t\r\n"),
-      }),
-    ).toBe(
-      `${wrapPluginSystemContextSection("  prepend line\nsecond line")}\n\nbase system\n\n${wrapPluginSystemContextSection("  append")}`,
-    );
-  });
+it("normalizes hook system context block line endings and trailing whitespace", () => {
+  expect(
+    composeSystemPromptWithHookContext({
+      baseSystemPrompt: "  base system  ",
+      prependSystemContext: wrapPluginSystemContextSection("  prepend line  \r\nsecond line\t\r\n"),
+      appendSystemContext: wrapPluginSystemContextSection("  append  \t\r\n"),
+    }),
+  ).toBe(
+    `${wrapPluginSystemContextSection("  prepend line\nsecond line")}\n\nbase system\n\n${wrapPluginSystemContextSection("  append")}`,
+  );
 });
 
 describe("mergeOrphanedTrailingUserPrompt", () => {
@@ -241,11 +237,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     const final = calls(["qualified/write<parameter=path"]);
     const finalMessage = sparseAssistant(final);
     const baseFn = fakeBaseStream(finalMessage, [
-      {
-        type: "toolcall_delta",
-        partial: sparseAssistant(partial),
-        message: sparseAssistant(message),
-      },
+      { ...toolDelta("partial", partial), message: sparseAssistant(message) },
     ]);
     const wrapped = wrapStreamFnTrimToolCallNames(
       baseFn as never,
