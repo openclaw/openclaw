@@ -58,6 +58,30 @@ const probeTimeout = () => ({
   ok: false as const,
   error: { code: "TIMEOUT", message: "node invoke timed out" },
 });
+const successfulProbe = (bin: string) => ({ ok: true as const, payload: { bins: [bin] } });
+function registryFor(
+  nodeId: string,
+  invoke: NodeRegistry["invoke"],
+  overrides: Partial<NodeRegistry> = {},
+) {
+  setTestSkillsRemoteRegistry(nodeId, {
+    get: () => testRemoteSession(nodeId),
+    invoke,
+    ...overrides,
+  });
+}
+function deferredProbe(bin: string) {
+  const started = createDeferred();
+  const result = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
+  const invoke = vi
+    .fn<NodeRegistry["invoke"]>()
+    .mockImplementationOnce(async () => {
+      started.resolve();
+      return await result.promise;
+    })
+    .mockResolvedValueOnce(successfulProbe(bin));
+  return { started, result, invoke };
+}
 const probe = (
   nodeId: string,
   cfg: Parameters<typeof refreshRemoteNodeBins>[0]["cfg"],
@@ -122,31 +146,14 @@ describe("skills-remote", () => {
   });
 
   it("ignores non-mac and non-system.run nodes for eligibility", () => {
-    const linuxNodeId = `node-${randomUUID()}`;
-    const noRunNodeId = `node-${randomUUID()}`;
+    const linuxNodeId = newNode();
+    const noRunNodeId = newNode();
     const bin = `bin-${randomUUID()}`;
-    try {
-      recordRemoteNodeInfo({
-        nodeId: linuxNodeId,
-        displayName: "Linux Box",
-        platform: "linux",
-        commands: ["system.run"],
-      });
-      recordRemoteNodeBins(linuxNodeId, [bin], TEST_PAIRING_GENERATION);
-
-      recordRemoteNodeInfo({
-        nodeId: noRunNodeId,
-        displayName: "Remote Mac",
-        platform: "darwin",
-        commands: ["system.which"],
-      });
-      recordRemoteNodeBins(noRunNodeId, [bin], TEST_PAIRING_GENERATION);
-
-      expect(getRemoteSkillEligibility()).toBeUndefined();
-    } finally {
-      removeRemoteNodeInfo(linuxNodeId);
-      removeRemoteNodeInfo(noRunNodeId);
-    }
+    recordRemoteNodeInfo({ nodeId: linuxNodeId, platform: "linux", commands: ["system.run"] });
+    recordRemoteNodeBins(linuxNodeId, [bin], TEST_PAIRING_GENERATION);
+    recordMac(noRunNodeId, { commands: ["system.which"] });
+    recordRemoteNodeBins(noRunNodeId, [bin], TEST_PAIRING_GENERATION);
+    expect(getRemoteSkillEligibility()).toBeUndefined();
   });
 
   it("aggregates bins and note labels across eligible mac nodes", () => {
@@ -200,24 +207,22 @@ describe("skills-remote", () => {
     async ({ command, failure }) => {
       await closeSkillsWatchers(true);
       const { nodeId, bin, cfg, workspaceDir } = remoteFixture();
-      const invokeCalls: string[] = [];
-      setTestSkillsRemoteRegistry(nodeId, {
+      const invoke = vi.fn<NodeRegistry["invoke"]>(async () => {
+        if (failure === "throw") {
+          throw new Error("node invoke timed out");
+        }
+        return probeTimeout();
+      });
+      registryFor(nodeId, invoke, {
         get: () => testRemoteSession(nodeId, { commands: [command] }),
-        invoke: async (params: { command: string }) => {
-          invokeCalls.push(params.command);
-          if (failure === "throw") {
-            throw new Error("node invoke timed out");
-          }
-          return probeTimeout();
-        },
-      } as unknown as NodeRegistry);
+      });
       recordRemoteMacWithSystemWhich(nodeId);
       recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
       const before = getSkillsSnapshotVersion(workspaceDir);
 
       await probe(nodeId, cfg);
 
-      expect(invokeCalls).toEqual([command]);
+      expect(invoke.mock.calls.map(([params]) => params.command)).toEqual([command]);
       expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
       expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
     },
@@ -226,29 +231,20 @@ describe("skills-remote", () => {
   it("skips remote bin probes when the node connectivity preflight fails", async () => {
     await closeSkillsWatchers(true);
     const { nodeId, bin, cfg, workspaceDir } = remoteFixture();
-    const invokeCalls: string[] = [];
-    setTestSkillsRemoteRegistry(nodeId, {
-      get: () => testRemoteSession(nodeId),
+    const invoke = vi.fn<NodeRegistry["invoke"]>(async () => successfulProbe(bin));
+    registryFor(nodeId, invoke, {
       checkConnectivity: async () => ({
         ok: false,
         error: { code: "TIMEOUT", message: "node connectivity check timed out" },
       }),
-      invoke: async (params: { command: string }) => {
-        invokeCalls.push(params.command);
-        return { ok: true, payloadJSON: JSON.stringify({ bins: [bin] }) };
-      },
-    } as unknown as NodeRegistry);
-    recordMac(nodeId, {
-      pairingGeneration: TEST_PAIRING_GENERATION,
-      displayName: "Remote Mac",
-      commands: ["system.run", "system.which"],
     });
+    recordRemoteMacWithSystemWhich(nodeId);
     recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
     const before = getSkillsSnapshotVersion(workspaceDir);
 
     await probe(nodeId, cfg);
 
-    expect(invokeCalls).toEqual([]);
+    expect(invoke).not.toHaveBeenCalled();
     expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
     expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
   });
@@ -258,8 +254,11 @@ describe("skills-remote", () => {
     const { nodeId, bin, cfg } = remoteFixture();
     let connId = "conn-old";
     const connectivityCalls: string[] = [];
-    const invokeCalls: string[] = [];
-    setTestSkillsRemoteRegistry(nodeId, {
+    const invoke = vi.fn<NodeRegistry["invoke"]>(async () => ({
+      ok: true,
+      payloadJSON: JSON.stringify({ bins: [bin] }),
+    }));
+    registryFor(nodeId, invoke, {
       get: () => testRemoteSession(nodeId, { connId }),
       checkConnectivity: async () => {
         connectivityCalls.push(connId);
@@ -273,17 +272,13 @@ describe("skills-remote", () => {
         }
         return { ok: true };
       },
-      invoke: async (params: { command: string }) => {
-        invokeCalls.push(params.command);
-        return { ok: true, payloadJSON: JSON.stringify({ bins: [bin] }) };
-      },
-    } as unknown as NodeRegistry);
+    });
     recordRemoteNodeInfo(testRemoteSession(nodeId, { connId, displayName: "Remote Mac" }));
 
     await probe(nodeId, cfg);
 
     expect(connectivityCalls).toEqual(["conn-old", "conn-new"]);
-    expect(invokeCalls).toEqual(["system.which"]);
+    expect(invoke.mock.calls.map(([params]) => params.command)).toEqual(["system.which"]);
     expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
   });
 
@@ -305,15 +300,8 @@ describe("skills-remote", () => {
       return probeTimeout();
     });
     try {
-      setTestSkillsRemoteRegistry(nodeId, {
-        get: () => testRemoteSession(nodeId),
-        invoke,
-      });
-      recordMac(nodeId, {
-        pairingGeneration: TEST_PAIRING_GENERATION,
-        displayName: "Remote Mac",
-        commands: ["system.run", "system.which"],
-      });
+      registryFor(nodeId, invoke);
+      recordRemoteMacWithSystemWhich(nodeId);
 
       first = refresh(firstLifetime.signal);
       await probeStarted.promise;
@@ -338,11 +326,8 @@ describe("skills-remote", () => {
     await closeSkillsWatchers(true);
     const { nodeId, bin, cfg, workspaceDir } = remoteFixture();
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    const invoke = vi.fn(async () => ({ ok: true, payload: { bins: [bin] } }));
-    setTestSkillsRemoteRegistry(nodeId, {
-      get: () => testRemoteSession(nodeId),
-      invoke,
-    } as unknown as NodeRegistry);
+    const invoke = vi.fn(async () => successfulProbe(bin));
+    registryFor(nodeId, invoke);
     recordRemoteMacWithSystemWhich(nodeId);
     await probe(nodeId, cfg);
 
@@ -369,10 +354,7 @@ describe("skills-remote", () => {
     const { cfg: changedCfg } = workspaceForBin(secondBin);
     vi.spyOn(Date, "now").mockReturnValue(2_000_000);
     const invoke = vi.fn(async () => probeTimeout());
-    setTestSkillsRemoteRegistry(nodeId, {
-      get: () => testRemoteSession(nodeId),
-      invoke,
-    } as unknown as NodeRegistry);
+    registryFor(nodeId, invoke);
     recordRemoteMacWithSystemWhich(nodeId);
     const refresh = (config = cfg) => probe(nodeId, config);
 
@@ -392,7 +374,7 @@ describe("skills-remote", () => {
       let session: ReturnType<NodeRegistry["get"]> = testRemoteSession(nodeId, {
         commands: ["system.run"],
       });
-      const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
+      const invoke = vi.fn(async () => successfulProbe(bin));
       let refresh: Promise<void> | undefined;
       try {
         setTestSkillsRemoteRegistry(nodeId, { get: () => session, invoke });
@@ -437,7 +419,7 @@ describe("skills-remote", () => {
     const { nodeId, bin, cfg } = remoteFixture();
     const owner = new GatewayConnectionWork();
     const checkConnectivity = vi.fn(async () => ({ ok: true as const }));
-    const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
+    const invoke = vi.fn(async () => successfulProbe(bin));
     const params = {
       nodeId,
       platform: "linux",
@@ -497,19 +479,10 @@ describe("skills-remote", () => {
     const { nodeId, bin, cfg } = remoteFixture();
     vi.spyOn(Date, "now").mockReturnValue(2_000_000);
     let connId = "conn-old";
-    const firstInvoke = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
-    const firstInvokeStarted = createDeferred();
-    const invoke = vi
-      .fn()
-      .mockImplementationOnce(async () => {
-        firstInvokeStarted.resolve();
-        return await firstInvoke.promise;
-      })
-      .mockResolvedValueOnce({ ok: true as const, payload: { bins: [bin] } });
-    setTestSkillsRemoteRegistry(nodeId, {
+    const { result: firstInvoke, started: firstInvokeStarted, invoke } = deferredProbe(bin);
+    registryFor(nodeId, invoke, {
       get: () => testRemoteSession(nodeId, { connId }),
-      invoke,
-    } as unknown as NodeRegistry);
+    });
     recordRemoteNodeInfo(testRemoteSession(nodeId, { connId }));
     const refresh = () => probe(nodeId, cfg);
 
@@ -537,19 +510,12 @@ describe("skills-remote", () => {
         connId: "conn-a",
         pairingGeneration: "generation-a",
       });
-      const retiredProbe = createDeferred<Awaited<ReturnType<NodeRegistry["invoke"]>>>();
-      const retiredProbeStarted = createDeferred();
-      const invoke = vi
-        .fn()
-        .mockImplementationOnce(async () => {
-          retiredProbeStarted.resolve();
-          return await retiredProbe.promise;
-        })
-        .mockResolvedValueOnce({ ok: true as const, payload: { bins: [currentBin] } });
-      setTestSkillsRemoteRegistry(nodeId, {
-        get: () => session,
+      const {
+        result: retiredProbe,
+        started: retiredProbeStarted,
         invoke,
-      } as unknown as NodeRegistry);
+      } = deferredProbe(currentBin);
+      registryFor(nodeId, invoke, { get: () => session });
       recordRemoteNodeInfo(session);
       const firstRefresh = probe(nodeId, cfg);
       await retiredProbeStarted.promise;
@@ -591,12 +557,11 @@ describe("skills-remote", () => {
     let pairingGeneration = "generation-before-approval";
     const session = () =>
       testRemoteSession(nodeId, { connId: "conn-current", pairingGeneration, commands });
-    const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
-    setTestSkillsRemoteRegistry(nodeId, {
+    const invoke = vi.fn(async () => successfulProbe(bin));
+    registryFor(nodeId, invoke, {
       get: session,
       checkConnectivity: async () => ({ ok: true }),
-      invoke,
-    } as unknown as NodeRegistry);
+    });
     recordRemoteNodeInfo(session());
 
     const connectRefresh = probe(nodeId, cfg, {
@@ -625,24 +590,18 @@ describe("skills-remote", () => {
   it("records bins from system.which object-map responses", async () => {
     await closeSkillsWatchers(true);
     const { nodeId, bin, cfg, workspaceDir } = remoteFixture();
-    const invokeCalls: string[] = [];
-    setTestSkillsRemoteRegistry(nodeId, {
-      get: () => testRemoteSession(nodeId),
-      invoke: async (params: { command: string }) => {
-        invokeCalls.push(params.command);
-        return {
-          ok: true,
-          payload: { bins: { [bin]: `/opt/homebrew/bin/${bin}`, missing: "" } },
-          payloadJSON: JSON.stringify({ bins: { [bin]: `/opt/homebrew/bin/${bin}` } }),
-        };
-      },
-    } as unknown as NodeRegistry);
+    const invoke = vi.fn<NodeRegistry["invoke"]>(async () => ({
+      ok: true,
+      payload: { bins: { [bin]: `/opt/homebrew/bin/${bin}`, missing: "" } },
+      payloadJSON: JSON.stringify({ bins: { [bin]: `/opt/homebrew/bin/${bin}` } }),
+    }));
+    registryFor(nodeId, invoke);
     recordRemoteMacWithSystemWhich(nodeId);
     const before = getSkillsSnapshotVersion(workspaceDir);
 
     await probe(nodeId, cfg);
 
-    expect(invokeCalls).toEqual(["system.which"]);
+    expect(invoke.mock.calls.map(([params]) => params.command)).toEqual(["system.which"]);
     expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
     expect(getRemoteSkillEligibility()?.hasBin("missing")).toBe(false);
     expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
