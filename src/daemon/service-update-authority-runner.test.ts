@@ -83,6 +83,32 @@ it("expires a queued deadline without invoking it or releasing its predecessor",
   }
 });
 
+it("keeps a queued deadline on the monotonic clock across wall-clock jumps", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
+  const monotonic = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+  const { entered, release, commands, run } = blockedNative();
+  try {
+    await run(async () => {
+      const runner = nativeRunner();
+      const first = runner(["first"], {});
+      await entered.promise;
+      // Submit a queued command; its deadline is captured from the current clock.
+      const queued = runner(["survives"], { timeoutMs: 20 });
+      // Wall clock jumps far past the timeout while the command is still queued.
+      vi.setSystemTime(60_000);
+      release.resolve();
+      // The queued command must succeed; its deadline tracks monotonic time.
+      await expect(queued).resolves.toMatchObject({ code: 0 });
+      expect(commands).toEqual(["first", "survives"]);
+      await first;
+    });
+  } finally {
+    release.resolve();
+  }
+});
+
 it("closes unstarted submissions but joins the already running native call", async () => {
   const { entered, release, commands, run } = blockedNative();
   let done = false;
