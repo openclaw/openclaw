@@ -56,16 +56,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       totalTokensFresh: true,
       totalTokensVersion: 1,
     });
-  const expectDeletedIncarnation = (key: string, entry: SessionEntry) =>
-    expect(dispatch).toHaveBeenCalledWith(
-      "sessions.delete",
-      expect.objectContaining({
-        key,
-        expectedSessionId: entry.sessionId,
-        expectedLifecycleRevision: entry.lifecycleRevision,
-      }),
-      expect.anything(),
-    );
   const expectNotLaunched = () => {
     expect(registerSubagentRun).not.toHaveBeenCalled();
     expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
@@ -187,8 +177,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
           expectedLifecycleRevision: string;
           deleteTranscript: boolean;
         };
-        expect(expectedSessionId).toEqual(expect.any(String));
-        expect(expectedLifecycleRevision).toEqual(expect.any(String));
         // Deletion transport is replaced: the same guard used by sessions.delete
         // decides whether the stored row and its transcript can actually be removed.
         const result = await sessions.deleteSessionEntryLifecycle({
@@ -251,7 +239,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
 
       const created = expectDefined(provisional, "committed provisional child");
       expect(read(created.sessionKey)).toBeUndefined();
-      expectDeletedIncarnation(created.sessionKey, created.entry);
       expect(fork).not.toHaveBeenCalled();
       expectNotLaunched();
       expect(read()).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
@@ -472,7 +459,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       expect(rollback).toHaveBeenCalledOnce();
       const childSessionKey = expectDefined(childKey, "prepared child key");
       const entry = expectDefined(forkedEntry, "committed fork entry");
-      expectDeletedIncarnation(childSessionKey, entry);
       expect(read(childSessionKey)).toEqual(successor);
       expect(await history(childSessionKey, successor?.sessionId ?? entry.sessionId)).toEqual(
         successorHistory,

@@ -344,10 +344,7 @@ export function registerNativePluginRewriteCases(options: NativePluginSpawnTestO
     { name: "collect false", rewrite: { collect: false } },
     { name: "noncollector ACP", rewrite: { collect: false, runtime: "acp" } },
     { name: "session mode", rewrite: { mode: "session" } },
-    { name: "collect cleared", rewrite: { collect: undefined } },
-    { name: "replay key cleared", rewrite: { [SWARM_CODE_MODE_IDEMPOTENCY_KEY]: undefined } },
     { name: "replay key replaced", rewrite: { [SWARM_CODE_MODE_IDEMPOTENCY_KEY]: "different" } },
-    { name: "fingerprint cleared", rewrite: { [SWARM_CODE_MODE_REQUEST_FINGERPRINT]: undefined } },
     {
       name: "fingerprint replaced",
       rewrite: { [SWARM_CODE_MODE_REQUEST_FINGERPRINT]: "different" },

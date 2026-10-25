@@ -17,7 +17,7 @@ import type { GatewayRequestContext } from "../../../gateway/server-methods/type
 import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { placementTurnOwner } from "../../../gateway/worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
-import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-environments/placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "../../../gateway/worker-environments/placement-test-fixtures.js";
 import {
   bindWorkerTurnOwner,
   getWorkerTurnExecutionIdentityCapability,
@@ -215,46 +215,16 @@ export async function createBoundWorker(
   const database = openOpenClawStateDatabase();
   const store = createWorkerSessionPlacementStore({ database });
   const session = { sessionId: "parent-session", agentId: "main", sessionKey: parentSessionKey };
-  let placement = await store.startDispatch({ ...session, executionMode: "worker-turn" });
-  placement = await store.transition({
-    sessionId: session.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: "queued-worker-environment" },
-  });
-  placement = await store.transition({
-    sessionId: session.sessionId,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: "a".repeat(64) },
-  });
-  placement = await store.transition({
-    sessionId: session.sessionId,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
-      workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+  const placement = await advancePlacementFixtureToActive(
+    store,
+    database,
+    { ...session, executionMode: "worker-turn" },
+    {
+      environmentId: "queued-worker-environment",
+      ownerEpoch: 1,
       remoteWorkspaceDir: "/workspace/queued-worker",
     },
-  });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId: "queued-worker-environment",
-    sessionId: session.sessionId,
-    ownerEpoch: 1,
-  });
-  placement = await store.transition({
-    sessionId: session.sessionId,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: 1 },
-  });
-  if (placement.state !== "active") {
-    throw new Error("expected the active worker placement");
-  }
+  );
   const claim = await store.claimTurn({
     ...session,
     owner: placementTurnOwner(placement),
