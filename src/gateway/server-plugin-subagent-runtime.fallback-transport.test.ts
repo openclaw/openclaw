@@ -2,8 +2,13 @@ import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+  respondJson,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import {
@@ -40,25 +45,20 @@ function providerModel(id: string): ModelDefinitionConfig {
   return modelDefinition(id, { reasoning: false, contextWindow: 8192, maxTokens: 1024 });
 }
 
-async function waitForHit(arrival: Promise<void>, work: Promise<unknown>, label: string) {
-  await Promise.race([
-    arrival,
-    work.then((value) => {
-      throw new Error(`${label} settled before the provider request: ${JSON.stringify(value)}`);
-    }),
-  ]);
-}
+const waitForHit = (arrival: Promise<void>, work: Promise<unknown>, label: string) =>
+  awaitGateBeforeSettlement(arrival, work, `${label} settled before the provider request`);
 
 function writeAuthFailure(response: ServerResponse) {
-  response.writeHead(401, { "content-type": "application/json" });
-  response.end(
-    JSON.stringify({
+  respondJson(
+    response,
+    {
       error: {
         message: "ExpiredTokenException: The security token included in the request is expired",
         type: "authentication_error",
         code: "invalid_api_key",
       },
-    }),
+    },
+    401,
   );
 }
 
@@ -125,17 +125,7 @@ describe("plugin background completion transport", () => {
       write(response);
     };
     try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
-        });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("transport fixture has no TCP port");
-      }
+      const origin = await listenLoopback(server);
       const cfg: OpenClawConfig = {
         agents: {
           defaults: { workspace: root, model: `${fixture.providerId}/fallback-model` },
@@ -153,7 +143,7 @@ describe("plugin background completion transport", () => {
             [fixture.providerId]: {
               api: "openai-completions",
               apiKey: PINNED_KEY,
-              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              baseUrl: `${origin}/v1`,
               request: { allowPrivateNetwork: true },
               models: [providerModel("primary-model"), providerModel("fallback-model")],
             },
@@ -201,9 +191,7 @@ describe("plugin background completion transport", () => {
           response.destroy();
         }
       }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeHttpServer(server);
       roots.cleanup();
     }
   }

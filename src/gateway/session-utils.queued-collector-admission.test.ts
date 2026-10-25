@@ -4,7 +4,7 @@ import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import * as registryMemory from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-registry-read.js";
@@ -141,14 +141,11 @@ it.each([
     try {
       const spawned = await spawnCollector("Pending native collector");
       expect(spawned.status).toBe("accepted");
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        dispatched.promise.then(() => {
-          throw new Error(
-            `Native admission ended before runtime gate: ${JSON.stringify(agentResponse.mock.calls)}`,
-          );
-        }),
-      ]);
+        dispatched.promise,
+        "Native admission ended before runtime gate",
+      );
       const entry = expectDefined(registryMemory.subagentRuns.get(spawned.runId!), "collector");
       const admission = expectDefined(rpcSourceTesting.get(entry.runId), "controller");
       expect(admission.adapter.kind).toBe("agent");
@@ -182,14 +179,11 @@ it.each([
       });
       const { respond } = options;
       stopping = Promise.resolve(sessionAbortHandlers["sessions.abort"]!(options));
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         Promise.all([dispatched.promise, killWriteEntered.promise, cleanupWaiting.promise]),
-        stopping.then(() => {
-          throw new Error(
-            `Stop settled before its kill write: ${JSON.stringify(respond.mock.calls)}`,
-          );
-        }),
-      ]);
+        stopping,
+        "Stop settled before its kill write",
+      );
       expect(order).toEqual([]);
       expect(registration).toHaveBeenCalledOnce();
       await expect(registration.mock.results[0]?.value).resolves.toBe(false);

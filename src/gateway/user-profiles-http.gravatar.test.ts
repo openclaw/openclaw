@@ -3,6 +3,10 @@ import { createServer, request, type ClientRequest, type ServerResponse } from "
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listenLoopback,
+  closeHttpServer,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
@@ -30,6 +34,8 @@ vi.mock("../state/user-profiles-avatar.js", () => ({
 
 describe("Gravatar HTTP waiter lifetimes", () => {
   const imageBytes = new Uint8Array([7, 8, 9]);
+  const imageResponse = () =>
+    new Response(imageBytes, { headers: { "content-type": "image/png" } });
   const clients: ClientRequest[] = [];
   const handled = new Map<string, { response: ServerResponse; promise: Promise<boolean> }>();
   const producers: Array<ReturnType<typeof createDeferred<Response>>> = [];
@@ -52,20 +58,10 @@ describe("Gravatar HTTP waiter lifetimes", () => {
   let origin: string;
 
   beforeAll(async () => {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected loopback HTTP listener");
-    }
-    origin = `http://127.0.0.1:${address.port}`;
+    origin = await listenLoopback(server);
   });
 
-  afterAll(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
+  afterAll(() => closeHttpServer(server));
 
   beforeEach(() => {
     fetchImpl.mockReset();
@@ -80,7 +76,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
 
   afterEach(async () => {
     for (const producer of producers) {
-      producer.resolve(new Response(imageBytes, { headers: { "content-type": "image/png" } }));
+      producer.resolve(imageResponse());
     }
     await Promise.allSettled([...handled.values()].map(({ promise }) => promise));
     for (const client of clients) {
@@ -115,8 +111,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     const deferred = createDeferred<Response>();
     producers.push(deferred);
     return {
-      resolve: () =>
-        deferred.resolve(new Response(imageBytes, { headers: { "content-type": "image/png" } })),
+      resolve: () => deferred.resolve(imageResponse()),
       fetch: (signal: AbortSignal | null | undefined) =>
         new Promise<Response>((resolve, reject) => {
           const abort = () => reject(new Error("upstream request aborted"));
@@ -226,9 +221,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
       id: "disconnected-before-lookup",
       emails: ["disconnected-before-lookup@example.test"],
     });
-    fetchImpl.mockResolvedValue(
-      new Response(imageBytes, { headers: { "content-type": "image/png" } }),
-    );
+    fetchImpl.mockResolvedValue(imageResponse());
     const disconnected = startRequest("disconnected-before-lookup");
     try {
       await vi.waitFor(() => expect(handled.has(disconnected.pathname)).toBe(true));
