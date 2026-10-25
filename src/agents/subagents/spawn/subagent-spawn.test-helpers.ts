@@ -286,6 +286,12 @@ function identityDeliveryContext(value: unknown) {
   return value;
 }
 
+async function mutateEmptyStore(_storePath: string, mutator: SessionStoreMutator) {
+  const store: SessionStore = {};
+  await mutator(store);
+  return store;
+}
+
 /** Install an updateSessionStore mock that captures mutations in memory. */
 export function installSessionStoreCaptureMock(
   updateSessionStoreMock: {
@@ -338,6 +344,12 @@ type SpawnTestConversation = {
   conversationId: string;
   parentConversationId?: string;
 };
+type SpawnTestBinding = {
+  targetSessionKey: string;
+  targetKind?: string;
+  status?: string;
+  conversation: SpawnTestConversation;
+};
 
 /** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
@@ -372,22 +384,15 @@ export async function loadSubagentSpawnModuleForTest(params: {
       bindSupported: boolean;
       placements: Array<"current" | "child">;
     };
-    bind?: (params: {
-      targetSessionKey: string;
-      targetKind?: string;
-      conversation: SpawnTestConversation;
-      placement: "current" | "child";
-      metadata?: Record<string, unknown>;
-    }) => Promise<{
-      targetSessionKey: string;
-      targetKind?: string;
-      status?: string;
-      conversation: SpawnTestConversation;
-    }>;
-    listBySession: (targetSessionKey: string) => Array<{
-      status?: string;
-      conversation: SpawnTestConversation;
-    }>;
+    bind?: (
+      params: Omit<SpawnTestBinding, "status"> & {
+        placement: "current" | "child";
+        metadata?: Record<string, unknown>;
+      },
+    ) => Promise<SpawnTestBinding>;
+    listBySession: (
+      targetSessionKey: string,
+    ) => Array<Pick<SpawnTestBinding, "status" | "conversation">>;
   };
   workspaceDir?: string;
   sessionStorePath?: string;
@@ -460,13 +465,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       scope: { storePath?: string; sessionKey: string },
       patch: Record<string, unknown>,
     ) => {
-      const updateSessionStore =
-        params.updateSessionStoreMock ??
-        (async (_storePath: string, mutator: SessionStoreMutator) => {
-          const store: SessionStore = {};
-          await mutator(store);
-          return store;
-        });
+      const updateSessionStore = params.updateSessionStoreMock ?? mutateEmptyStore;
       let updated: Record<string, unknown> | undefined;
       const storePath =
         scope.storePath ?? params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json";
