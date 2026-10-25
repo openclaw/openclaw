@@ -28,17 +28,27 @@ beforeEach(() => {
   live = new SessionCatalogLiveState();
   progressId = live.beginRequest(1).progressId;
 });
-function apply(
-  incoming: SessionCatalog,
-  catalogs: SessionCatalog[],
-  pages = new Map<string, number>(),
-) {
+function apply(incoming: SessionCatalog, catalogs: SessionCatalog[], depth = 0) {
   return live.applyHost({
     payload: { progressId, agentId: "main", catalog: incoming },
     agentId: "main",
     catalogs,
-    pageDepths: pages,
+    pageDepths: new Map([[sessionCatalogHostKey(incoming.id, incoming.hosts[0]!.hostId), depth]]),
   });
+}
+async function refetchWithoutRequests(catalogs: SessionCatalog[], previous: SessionCatalog) {
+  const request = vi.fn();
+  const result = await refetchExpandedSessionCatalogPages({
+    catalogs,
+    previousCatalogs: [previous],
+    client: { request } as unknown as GatewayBrowserClient,
+    agentId: "main",
+    pageDepths: new Map([[sessionCatalogHostKey(previous.id, previous.hosts[0]!.hostId), 1]]),
+    isCurrent: () => true,
+    canRequestPage: () => true,
+  });
+  expect(request).not.toHaveBeenCalled();
+  return result;
 }
 
 it("retains failure status while pending and applies catalog pending changes", () => {
@@ -80,30 +90,9 @@ it.each(["final", "incremental"] as const)(
     });
     // A final response still removes genuinely absent hosts.
     expect(catalogs[0]?.hosts).toHaveLength(publication === "final" ? 1 : 2);
-    const request = vi.fn();
-    expect(
-      await refetchExpandedSessionCatalogPages({
-        catalogs,
-        previousCatalogs: [current],
-        client: { request } as unknown as GatewayBrowserClient,
-        agentId: "main",
-        pageDepths: new Map([[sessionCatalogHostKey("codex", pending.hostId), 1]]),
-        isCurrent: () => true,
-        canRequestPage: () => true,
-      }),
-    ).toEqual(catalogs);
-    expect(request).not.toHaveBeenCalled();
+    expect(await refetchWithoutRequests(catalogs, current)).toEqual(catalogs);
   },
 );
-
-it("does not replace a settled progressive host with its pending final response", () => {
-  const current = catalog("codex", 1);
-  const pending = { ...current.hosts[0]!, pending: true, sessions: [] };
-  const published = apply(current, [{ ...current, hosts: [pending] }])!;
-  expect(live.mergeFinal([{ ...current, hosts: [pending] }], published.catalogs)).toEqual([
-    current,
-  ]);
-});
 
 it.each([0, 1])(
   "retains failed hosts without losing another host (expanded pages: %s)",
@@ -119,11 +108,7 @@ it.each([0, 1])(
       sessions: [],
       error: { code: "offline", message: "Offline" },
     };
-    const result = apply(
-      { ...current, hosts: [changed] },
-      [current],
-      new Map([[sessionCatalogHostKey("codex", changed.hostId), depth]]),
-    );
+    const result = apply({ ...current, hosts: [changed] }, [current], depth);
     expect(result?.catalogs[0]?.hosts.map((host) => host.canStartTerminal)).toEqual([false, true]);
     expect(result?.catalogs[0]?.hosts[1]).toEqual(current.hosts[1]);
     expect(result?.catalogs[0]?.hosts[0]?.sessions).toEqual(current.hosts[0]?.sessions);
@@ -146,33 +131,14 @@ it("retains catalog-level pending hosts and failure until settled enumeration wi
   current.error = { code: "catalog_stale", message: "Last enumeration failed" };
   current.hosts[0]!.nextCursor = "expanded";
   const incoming = { ...catalog("codex", 0), pending: true };
-  const request = vi.fn();
-  const refreshed = await refetchExpandedSessionCatalogPages({
-    catalogs: live.mergeFinal([incoming], [current]),
-    previousCatalogs: [current],
-    client: { request } as unknown as GatewayBrowserClient,
-    agentId: "main",
-    pageDepths: new Map([[sessionCatalogHostKey("codex", current.hosts[0]!.hostId), 1]]),
-    isCurrent: () => true,
-    canRequestPage: () => true,
-  });
+  const refreshed = await refetchWithoutRequests(live.mergeFinal([incoming], [current]), current);
   expect(refreshed[0]?.error).toEqual(current.error);
   expect(refreshed[0]?.hosts).toEqual(current.hosts.map((host) => ({ ...host, pending: true })));
-  expect(request).not.toHaveBeenCalled();
   const withdrawn = { ...current.hosts[0]!, sessions: [], nextCursor: undefined };
-  const partial = await refetchExpandedSessionCatalogPages({
-    catalogs: [{ ...incoming, hosts: [withdrawn] }],
-    previousCatalogs: [current],
-    client: { request } as unknown as GatewayBrowserClient,
-    agentId: "main",
-    pageDepths: new Map([[sessionCatalogHostKey("codex", withdrawn.hostId), 1]]),
-    isCurrent: () => true,
-    canRequestPage: () => true,
-  });
+  const partial = await refetchWithoutRequests([{ ...incoming, hosts: [withdrawn] }], current);
   expect(partial[0]?.hosts[0]?.sessions).toEqual([]);
   expect(partial[0]?.hosts[0]?.pending).toBeUndefined();
   expect(partial[0]?.hosts[1]).toEqual({ ...current.hosts[1], pending: true });
-  expect(request).not.toHaveBeenCalled();
   expect(live.mergeFinal([catalog("codex", 0)], refreshed)).toEqual([catalog("codex", 0)]);
 });
 
@@ -190,11 +156,7 @@ it.each([
     if (truncated) {
       fresh.hosts[0]!.error = { code: "DISCOVERY_TRUNCATED", message: "Search by exact ID" };
     }
-    const update = apply(
-      fresh,
-      [current],
-      new Map([[sessionCatalogHostKey("codex", fresh.hosts[0]!.hostId), 2]]),
-    );
+    const update = apply(fresh, [current], 2);
     expect(update?.catalogs).toEqual([fresh]);
     const pendingFinal = { ...fresh, hosts: [{ ...fresh.hosts[0]!, pending: true, sessions: [] }] };
     expect(live.mergeFinal([pendingFinal], update!.catalogs)).toEqual([fresh]);
