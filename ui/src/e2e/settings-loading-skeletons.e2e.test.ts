@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -305,10 +306,7 @@ suite.define(() => {
 
   it("renders the lazy Settings sidebar as navigation skeletons", async () => {
     await withPage(async (page) => {
-      let releaseSidebar: (() => void) | undefined;
-      const sidebarRelease = new Promise<void>((resolve) => {
-        releaseSidebar = resolve;
-      });
+      const { promise: sidebarRelease, resolve: releaseSidebar } = createDeferred();
       await page.route("**/src/components/settings-sidebar.ts*", async (route) => {
         await sidebarRelease;
         await route.continue();
