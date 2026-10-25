@@ -33,6 +33,17 @@ import { runLegacyStateMigrationSteps } from "./state-migrations.steps.js";
 const tempDirs: string[] = [];
 afterEach(() => cleanupMediaPersistenceFixtures(tempDirs));
 const content = (event: unknown) => JSON.parse(String(event)).message.content;
+const makeEvent = (id: string, extra: Record<string, unknown> = {}, text = id) =>
+  createEvent({
+    id,
+    parentId: null,
+    timestamp: 1,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: `[[reply_to_current]] ${text}` }],
+      ...extra,
+    },
+  });
 
 function withMaintenance<T>(env: NodeJS.ProcessEnv, run: () => Promise<T>) {
   return withDoctorSqliteMaintenanceLock({
@@ -199,16 +210,7 @@ it.each([
     schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     eventsBySession: {
       "index-original": [
-        createEvent({
-          id: "index-original",
-          parentId: null,
-          timestamp: 1,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "[[reply_to_current]] recovered" }],
-            MediaPath: "/media/recovered.png",
-          },
-        }),
+        makeEvent("index-original", { MediaPath: "/media/recovered.png" }, "recovered"),
       ],
     },
   });
@@ -288,17 +290,6 @@ it("keeps unrelated legacy content and planner maintenance outside a version mig
   openOpenClawStateDatabase({ env });
   const pathname = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
-  const makeEvent = (id: string, extra: Record<string, unknown> = {}) =>
-    createEvent({
-      id,
-      parentId: null,
-      timestamp: 1,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: `[[reply_to_current]] ${id}` }],
-        ...extra,
-      },
-    });
   const event = JSON.stringify(makeEvent("retained", { MediaPath: "/media/retained.png" }));
   const trajectory = JSON.stringify({
     data: { messagesSnapshot: [{ role: "user", MediaPath: "/media/retained.png" }] },

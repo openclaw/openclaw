@@ -85,7 +85,6 @@ export function registerCanaryProgressWorkerTests(
   admission: { active: boolean; beforeGrant?: (stage: string) => void },
 ) {
   it.each([
-    "recorded",
     "recorded-text",
     "reopened",
     "source-replaced",

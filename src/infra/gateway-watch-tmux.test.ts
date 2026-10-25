@@ -37,31 +37,9 @@ vi.mock("node:process", async (importOriginal) => {
 
 type RuntimeParams = NonNullable<Parameters<typeof runGatewayWatchTmuxMainNative>[0]>;
 type RuntimeFixture = RuntimeParams & {
-  spawnSync: SpawnSyncFixture;
-  nodePath?: string;
-  stderr?: { write(message: string): unknown };
-  stdout?: { write(message: string): unknown };
   stdinIsTTY?: boolean;
   stdoutIsTTY?: boolean;
 };
-
-function runNativeBoundary(run: (params: RuntimeParams) => number, fixture: RuntimeFixture) {
-  const { spawnSync, nodePath, stderr, stdout, stdinIsTTY, stdoutIsTTY, ...params } = fixture;
-  const output = stdout ?? process.stdout;
-  native.overrides = {
-    execPath: nodePath ?? process.execPath,
-    stderr: stderr ?? process.stderr,
-    stdin: { isTTY: stdinIsTTY ?? false },
-    stdout: { write: (message: string) => output.write(message), isTTY: stdoutIsTTY ?? false },
-  };
-  native.spawnSync.mockImplementation(spawnSync);
-  try {
-    return run(params);
-  } finally {
-    native.overrides = {};
-    native.spawnSync.mockReset();
-  }
-}
 
 const createOutput = () => {
   const chunks: string[] = [];
@@ -109,20 +87,29 @@ describe("gateway-watch tmux wrapper", () => {
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
       .mockReturnValue({ status: 0, stdout: "", stderr: "" });
   });
-  const run = (overrides: Partial<RuntimeFixture> = {}, handoff = false) =>
-    runNativeBoundary(
-      handoff ? runGatewayWatchServiceHandoffNative : runGatewayWatchTmuxMainNative,
-      {
+  const run = (
+    { stdinIsTTY = false, stdoutIsTTY = false, ...params }: RuntimeFixture = {},
+    handoff = false,
+  ) => {
+    native.overrides = {
+      execPath: handoff ? "/opt/node" : "/node",
+      stderr: stderr.stream,
+      stdin: { isTTY: stdinIsTTY },
+      stdout: { ...stdout.stream, isTTY: stdoutIsTTY },
+    };
+    native.spawnSync.mockImplementation(spawnSync);
+    try {
+      return (handoff ? runGatewayWatchServiceHandoffNative : runGatewayWatchTmuxMainNative)({
         args: ["gateway", "--force"],
         cwd: "/repo",
         env: { SHELL: "/bin/zsh" },
-        nodePath: handoff ? "/opt/node" : "/node",
-        spawnSync,
-        stdout: stdout.stream,
-        stderr: stderr.stream,
-        ...overrides,
-      },
-    );
+        ...params,
+      });
+    } finally {
+      native.overrides = {};
+      native.spawnSync.mockReset();
+    }
+  };
   const runHandoff = (overrides: Partial<RuntimeFixture> = {}) => run(overrides, true);
   const serviceStatus = (service: object, portCli?: object) => ({
     status: 0,

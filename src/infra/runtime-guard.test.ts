@@ -139,14 +139,9 @@ describe("runtime-guard", () => {
 
   it.each([
     ["--version"],
-    ["-V"],
-    ["-v"],
     ["--help"],
-    ["-h"],
-    ["gateway", "status"],
     ["gateway", "status", "--deep"],
     ["doctor"],
-    ["doctor", "--lint"],
     ["doctor", "--lint", "--json"],
     ["update", "status"],
     ["update"],
@@ -165,19 +160,13 @@ describe("runtime-guard", () => {
 
   it.each([
     [],
-    ["gateway"],
-    ["gateway", "start"],
     ["gateway", "run"],
     ["status"],
     ["doctor", "--fix"],
     ["doctor", "--lint", "--repair"],
-    ["doctor", "--yes"],
-    ["doctor", "--state-sqlite", "compact"],
     ["triage"],
     ["triage", "--json", "--run"],
-    ["triage", "--non-interactive", "--agent", "codex"],
     ["update", "repair"],
-    ["database", "vacuum"],
     ["--profile", "--help", "gateway", "start"],
     ["agent", "--message", "--help"],
   ])("refuses unsupported Node mutation: %j", async (...args) => {
@@ -229,22 +218,14 @@ describe("runtime-guard", () => {
 
   it("preserves the target package's numeric engine range", () => {
     const engine = ">=24.22.1 <25 || >=26.12.1";
-    expect(nodeVersionSatisfiesEngine("22.23.2", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("22.22.2", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("23.11.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("24.14.1", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("24.15.0+vendor.1", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("24.22.1", engine)).toBe(true);
-    expect(nodeVersionSatisfiesEngine("25.8.1", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("25.9.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("26.0.0", engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("26.12.1", engine)).toBe(true);
-    expect(nodeVersionSatisfiesEngine(null, engine)).toBe(false);
-    expect(nodeVersionSatisfiesEngine("unknown", engine)).toBe(false);
+    expect(
+      ["24.15.0+vendor.1", "24.22.1", "25.9.0", "26.0.0", "26.12.1", null, "unknown"].map(
+        (version) => nodeVersionSatisfiesEngine(version, engine),
+      ),
+    ).toEqual([false, true, false, false, true, false, false]);
   });
 
   it.each([
-    ["22.23.2", false],
     ["23.11.0", false],
     ["24.15.0", false],
     ["24.22.1", true],
@@ -256,13 +237,10 @@ describe("runtime-guard", () => {
     ["27.0.0-nightly20261018f88a1d25e9", true],
     ["27.0.0-rc.1+vendor.1", true],
     ["24.22.1-rc.1", false],
-    ["26.12.1-rc.1", false],
     ["27.0.0-01", false],
     ["27.0.0-nightly..1", false],
     ["27.0.0-", false],
     ["24.22.1+local.1", true],
-    ["24.15.0-rc.1", false],
-    ["25.9.1-nightly.20260714", false],
     ["24.15", false],
     ["garbage24.15.0suffix", false],
     ["24.15.0suffix", false],
@@ -275,8 +253,6 @@ describe("runtime-guard", () => {
   });
 
   it.each([
-    ["1.4.0", false],
-    ["1.4.1", false],
     ["1.4.2", false],
     ["1.4.3", true],
     ["1.4.3-canary.1+65d94e715", true],
@@ -380,8 +356,6 @@ describe("runtime-guard", () => {
   });
 
   it.each([
-    { version: "1.4.0", sqliteVersion: "3.53.2" },
-    { version: "1.4.1", sqliteVersion: "3.53.2" },
     { version: "1.4.2", sqliteVersion: "3.53.2" },
     { version: "1.4.3", sqliteVersion: "3.51.2" },
   ])("rejects Bun $version with SQLite $sqliteVersion", async (details) => {

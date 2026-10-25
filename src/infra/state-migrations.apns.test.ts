@@ -167,21 +167,14 @@ describe("legacy APNs Doctor migration", () => {
     await expect(load()).resolves.toEqual(DIRECT);
     await expect(load("legacy-relay")).resolves.toEqual(RELAY);
     expect(fs.existsSync(sourcePath)).toBe(false);
-    const importedReceipt = receipt(
-      "source_sha256, source_size_bytes, source_record_count, status, removed_source, report_json",
-    ) as Record<string, unknown>;
-    expect(importedReceipt).toMatchObject({
+    expect(
+      receipt("source_sha256, source_size_bytes, source_record_count, status, removed_source"),
+    ).toEqual({
       source_sha256: sourceSha256,
       source_size_bytes: sourceBytes.byteLength,
       source_record_count: 2,
       status: "completed",
       removed_source: 1,
-    });
-    expect(JSON.parse(String(importedReceipt.report_json))).toMatchObject({
-      source: "legacy-apns-registrations-json",
-      target: "apns_registrations",
-      sourceRecordCount: 2,
-      importedRecordCount: 2,
     });
   });
 

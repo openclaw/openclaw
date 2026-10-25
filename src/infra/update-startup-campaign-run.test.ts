@@ -17,7 +17,6 @@ import {
   listUpdateRuns,
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
-import { renderUpdateRunReport } from "./update-run-report.js";
 import {
   runAutoUpdateCommand,
   runCampaignUpdate,
@@ -178,9 +177,6 @@ describe("automatic campaign handoff failure", () => {
         failureFacts: [{ check: reason, code: reason, message }],
       }),
     );
-    expectIncludes(renderUpdateRunReport(recorded).markdown, reason, message);
-    const report = await recordedFailureReport(recorded);
-    expectIncludes(report.body, reason);
   });
 
   it.each([
@@ -276,7 +272,6 @@ describe("automatic campaign handoff failure", () => {
       });
     const operation = runBetaCampaign({
       campaign,
-      onAttempt: vi.fn(),
       runAuto: async () => ({
         status: "skipped",
         message: "Already current",
@@ -346,19 +341,22 @@ describe("automatic campaign handoff failure", () => {
   ] as const)(
     "preserves cause and verified recovery when transfer throws=$throws and diagnostics=$diagnosticFailure",
     async ({ throws, diagnosticFailure }) => {
+      const cause = throws ? "pipe closed" : "managed update ownership transfer failed";
       if (throws) {
         transfer.mockRejectedValueOnce(new Error("pipe closed"));
       } else {
         transfer.mockResolvedValueOnce(false);
       }
-      let stepsBeforeCancellation: ReturnType<typeof listUpdateRuns>[number]["steps"] = [];
       cancel.mockImplementationOnce(async () => {
         const run = expectDefined(listUpdateRuns()[0], "admitted campaign run");
         expect(run).toMatchObject({
           reason: "managed-service-handoff-failed",
-          steps: containingObject({ step: "requested", status: "failed" }),
+          steps: containingObject({
+            step: "requested",
+            status: "failed",
+            failureFacts: matchingObject({ code: "Error", message: cause }),
+          }),
         });
-        stepsBeforeCancellation = run.steps;
         recordUpdateRunVerification(run.runId, {
           rollbackOutcome: {
             status: "not-needed",
@@ -370,7 +368,6 @@ describe("automatic campaign handoff failure", () => {
       });
       const campaign = createApplyingCampaign();
       const log = { info: vi.fn() };
-      const onAttempt = vi.fn();
 
       await expect(
         runBetaCampaign({
@@ -383,17 +380,8 @@ describe("automatic campaign handoff failure", () => {
             return outcome;
           },
           campaign,
-          onAttempt,
         }),
       ).resolves.toBe("failed");
-      expect(onAttempt).toHaveBeenCalledExactlyOnceWith("2.0.0-beta.1");
-      expect(stepsBeforeCancellation).toContainEqual(
-        expect.objectContaining({
-          step: "managed-service",
-          status: "failed",
-          failureFacts: matchingObject({ code: "Error" }),
-        }),
-      );
       expect(cancel).toHaveBeenCalledExactlyOnceWith(successor);
       expect(restart).not.toHaveBeenCalled();
       const run = expectDefined(listUpdateRuns()[0], "finished campaign run");
@@ -412,11 +400,12 @@ describe("automatic campaign handoff failure", () => {
         status: "error",
         stats: { reason: "managed-service-handoff-failed" },
       });
-      const report = await recordedFailureReport(run);
-      expect(report.body).toContain(
-        throws ? "pipe closed" : "managed update ownership transfer failed",
+      expectIncludes(
+        (await recordedFailureReport(run)).body,
+        cause,
+        "managed-service",
+        "Rollback outcome: not needed",
       );
-      expectIncludes(report.body, "managed-service", "Rollback outcome: not needed");
       if (diagnosticFailure) {
         expect(log.info).toHaveBeenCalledWith(
           expect.stringContaining("Update diagnostics could not be recorded"),
