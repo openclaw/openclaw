@@ -234,7 +234,7 @@ it.each<AuditCliCase>([
     _name,
     source,
     broken,
-    { anchors = false, diagnostics, files = {}, navigation = [], redirects } = {},
+    { anchors = false, diagnostics, files = {}, navigation = [], redirects }: AuditOptions = {},
   ) => {
     const fixtureRoot = tempDirs.make("docs-link-audit-cli-");
     const docsRoot = path.join(fixtureRoot, "docs");

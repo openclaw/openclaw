@@ -106,7 +106,7 @@ describe("setOcPath", () => {
     ['{"items":[1,2]}', "items/+", "3", '{"items":[1,2,3]}', false],
     ['{"items":[1,3]}', "items/+1", "2", '{"items":[1,2,3]}', false],
   ])("edits JSONC %s at %s", (raw, path, value, expected, valueJson) => {
-    const result = edit(parseJsonc(raw), "oc://config/" + path, value, { valueJson });
+    const result = edit(parseJsonc(raw), "oc://openclaw.json/" + path, value, { valueJson });
     expect(JSON.parse(result.raw)).toEqual(JSON.parse(expected));
   });
 

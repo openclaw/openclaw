@@ -9,6 +9,7 @@ import {
   reserveSessionControllerSource,
 } from "../../../sessions/session-controller.mailbox.js";
 import { observe, queueFixture } from "./lifecycle.test-support.js";
+import { getExistingFollowupQueue } from "./state.js";
 import type { FollowupRun } from "./types.js";
 
 const queue = queueFixture("steer");
@@ -44,7 +45,8 @@ it.each([true, false])(
   "retains the canonical receipt after acceptance=%s until outcome",
   async (accepted) => {
     const first = source("first");
-    const lifecycle = { onAdopted: async () => {}, onSettled: vi.fn(), onAbandoned: vi.fn() };
+    const onAbandoned = vi.fn();
+    const lifecycle = { onAdopted: async () => {}, onSettled: vi.fn(), onAbandoned };
     first.turnAdoptionLifecycle = lifecycle;
     const reservation = await queue.admit(first);
     const input = first.controllerInput!;
@@ -70,7 +72,7 @@ it.each([true, false])(
     await expect(nextAdmission).resolves.toBe(true);
     await settleSource(input);
     expect(receiptSettled).toHaveBeenCalledWith(true);
-    expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+    expect(onAbandoned).not.toHaveBeenCalled();
     expect(lifecycle.onSettled).toHaveBeenCalledOnce();
     const nextReceipt = next.injection;
     reservation.fallback();
@@ -132,7 +134,8 @@ it("rechecks channel execution authority after waiting for native settlement", a
   second.operatorAuthority = authority(() => current, "source authority revoked");
   const firstReservation = await queue.admit(first);
   const secondReservation = queue.reserve(second);
-  const rejected = expect(secondReservation.admit()).rejects.toThrow("source authority revoked");
+  const secondAdmission = secondReservation.admit();
+  const rejected = expect(secondAdmission).rejects.toThrow("source authority revoked");
   current = false;
   firstReservation.consume("consumed");
   await rejected;
@@ -202,8 +205,10 @@ it.each(["summarize", "new", "old"] as const)(
     if (dropPolicy === "old") {
       first.operatorAuthority = authority(() => firstCurrent, "queued source authority expired");
     }
-    const disposition = (newer.onQueueDisposition = vi.fn());
-    const lifecycle = { onAdopted: () => undefined, onAbandoned: vi.fn(), onSettled: vi.fn() };
+    const disposition = vi.fn();
+    newer.onQueueDisposition = disposition;
+    const onAbandoned = vi.fn();
+    const lifecycle = { onAdopted: () => undefined, onAbandoned, onSettled: vi.fn() };
     newer.turnAdoptionLifecycle = lifecycle;
     const { gate, drained, delivered } = recordDelivery(dropPolicy === "summarize" ? 3 : 2, active);
     queue.enqueue(active);
@@ -214,13 +219,18 @@ it.each(["summarize", "new", "old"] as const)(
       const newerReservation = await queue.admit(newer);
       const newerInput = newer.controllerInput!;
       const newerSettlement = settleSource(newerInput);
+      expect(getExistingFollowupQueue(queue.key)?.items).toEqual([active, first, newer]);
       expect(disposition).not.toHaveBeenCalled();
       firstCurrent = false;
       newerReservation.fallback();
+      expect(getExistingFollowupQueue(queue.key)?.items).toEqual([
+        active,
+        dropPolicy === "new" ? first : newer,
+      ]);
       expect(disposition.mock.calls).toEqual(dropPolicy === "new" ? [["queue-cap-new"]] : []);
       if (dropPolicy === "new") {
         expect(newerInput).toMatchObject({ phase: "consumed", payload: "unbound" });
-        expect(lifecycle.onAbandoned).toHaveBeenCalledOnce();
+        expect(onAbandoned).toHaveBeenCalledOnce();
         expect(lifecycle.onSettled).toHaveBeenCalledOnce();
         await expect(newerSettlement).resolves.toBeUndefined();
       }
