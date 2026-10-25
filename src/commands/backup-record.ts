@@ -26,8 +26,8 @@ export async function backupRecordCommand(
   if (bytes === undefined && opts.bytes !== undefined) {
     throw new Error("--bytes must be a nonnegative integer.");
   }
-  const outcome = {
-    kind: "external" as const,
+  const outcome: Parameters<typeof recordBackupOutcomeBestEffort>[1] = {
+    kind: "external",
     archivePath: target,
     target,
     status: opts.status,
