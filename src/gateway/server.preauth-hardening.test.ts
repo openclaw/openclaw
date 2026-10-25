@@ -1,12 +1,8 @@
 import { once } from "node:events";
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket } from "ws";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -17,16 +13,14 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { captureEnv, setTestEnvValue, withEnv } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
-import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import {
   classifyGatewayStaleInstall,
   registerGatewayInstallationReplacementHandler,
 } from "./stale-install.js";
 import { testState } from "./test-helpers.runtime-state.js";
+import { createGatewayRuntimeStateForTest } from "./test-helpers.server-runtime-state.js";
 import {
   createGatewaySuiteHarness,
   installGatewayTestHooks,
@@ -41,7 +35,7 @@ afterEach(resetGatewayWorkAdmission);
 
 async function withUpgradeServer(
   options: Pick<
-    Parameters<typeof attachGatewayUpgradeHandler>[0],
+    NonNullable<Parameters<typeof createGatewayRuntimeStateForTest>[1]>,
     "workerIngressEnabled" | "isStartupPending"
   >,
   run: (
@@ -50,27 +44,16 @@ async function withUpgradeServer(
   ) => Promise<void>,
   onConnection: (socket: WebSocket) => void = (socket) => socket.close(),
 ) {
-  setRuntimeConfigSnapshot({});
-  const clients = new GatewayClientRegistry();
   const resolvedAuth = { mode: "none" as const, allowTailscale: false };
-  const httpServer = http.createServer();
-  const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
-  const accepted = vi.fn(onConnection);
-  wss.on("connection", accepted);
-  attachGatewayUpgradeHandler({
-    httpServer,
-    wss,
-    clients,
+  const { httpServer, wss, startListening } = await createGatewayRuntimeStateForTest(undefined, {
     resolvedAuth,
-    preauthConnectionBudget: withEnv(
-      { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "1" },
-      createPreauthConnectionBudget,
-    ),
+    getResolvedAuth: () => resolvedAuth,
     ...options,
   });
+  const accepted = vi.fn(onConnection);
+  wss.on("connection", accepted);
   try {
-    httpServer.listen(0, "127.0.0.1");
-    await once(httpServer, "listening");
+    await startListening();
     const address = httpServer.address();
     const port = typeof address === "object" && address ? address.port : 0;
     await run(port, accepted);
@@ -78,10 +61,6 @@ async function withUpgradeServer(
     const closed = once(wss, "close");
     wss.close();
     await closed;
-    await new Promise<void>((resolve, reject) => {
-      httpServer.close((error) => (error ? reject(error) : resolve()));
-    });
-    clearRuntimeConfigSnapshot();
   }
 }
 

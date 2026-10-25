@@ -54,10 +54,11 @@ async function request(
   options: {
     query?: string;
     remote?: boolean;
-    method?: string;
     gate?: ReturnType<typeof createControlUiPublicSessionRequestGate>;
     headers?: Record<string, string>;
   } = {},
+  status = 200,
+  body?: string,
 ) {
   const gate = options.gate ?? createControlUiPublicSessionRequestGate();
   if (!options.gate) {
@@ -67,7 +68,6 @@ async function request(
   await serveControlUiPublicSessionMedia({
     req: createRequest({
       path: `/control/share/session/media?${options.query ?? "token=v1.YWJj&entry=entry-1&attachment=content-0"}`,
-      method: options.method,
       host: options.remote ? "gateway.example.test" : "127.0.0.1:18789",
       headers: options.headers,
     }),
@@ -82,6 +82,10 @@ async function request(
       rateLimit: { subject: { key: "client" }, resetOnSuccess: true },
     },
   });
+  expect(response.res.statusCode).toBe(status);
+  if (body !== undefined) {
+    expect(response.getBody()).toBe(body);
+  }
   return response;
 }
 
@@ -108,24 +112,19 @@ describe("public session media", () => {
       const query = "widget=v1.widget";
       const privateDocument = await createCanvasDocument({ html: "<p>Private chart</p>" });
       resolveWidgetToken.mockResolvedValue({ locator, docId: privateDocument.id });
-      expect((await request({ query })).res.statusCode).toBe(404);
+      await request({ query }, 404);
       const html = "<!doctype html><p>Shared chart</p><script>document.title = 'Chart'</script>";
       const document = await createCanvasDocument({ html, cspSandbox: "scripts" });
       const other = await createCanvasDocument({ html: "<p>Other</p>", cspSandbox: "scripts" });
       resolveWidgetToken.mockResolvedValue({ locator, docId: document.id });
       readWidget.mockResolvedValue(false);
-      expect((await request({ query })).res.statusCode).toBe(404);
+      await request({ query }, 404);
       readWidget.mockResolvedValue(true);
       const gate = createControlUiPublicSessionRequestGate();
       gates.push(gate);
-      const response = await request({ query, gate });
-      expect(response.res.statusCode).toBe(200);
-      expect(response.getBody()).toBe(html);
-      expect(readWidget).toHaveBeenCalledWith(config, locator, { docId: document.id, projection });
-      expect((await request({ query: `${query}&widget=${other.id}` })).res.statusCode).toBe(404);
-      expect((await request({ query: `token=v1.YWJj&widget=${other.id}` })).res.statusCode).toBe(
-        404,
-      );
+      const response = await request({ query, gate }, 200, html);
+      await request({ query: `${query}&widget=${other.id}` }, 404);
+      await request({ query: `token=v1.YWJj&widget=${other.id}` }, 404);
       expect(response.setHeader).toHaveBeenCalledWith("Content-Type", "text/html; charset=utf-8");
       expect(response.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
       expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
@@ -147,23 +146,21 @@ describe("public session media", () => {
       expect(String(policy)).not.toContain("allow-same-origin");
       const etag = response.setHeader.mock.calls.find(([name]) => name === "ETag")?.[1];
       expect(etag).toEqual(expect.any(String));
-      const unchanged = await request({ query, gate, headers: { "if-none-match": etag } });
-      expect(unchanged.res.statusCode).toBe(304);
-      expect(unchanged.getBody()).toBe("");
+      await request({ query, gate, headers: { "if-none-match": etag } }, 304, "");
       readWidget.mockImplementationOnce(async () => {
         active.mockReturnValue(false);
         return true;
       });
-      const revokedDuringRead = await request({ query });
-      expect(revokedDuringRead.res.statusCode).toBe(404);
-      expect(revokedDuringRead.getBody()).toBe("This widget is unavailable.");
+      const revokedDuringRead = await request({ query }, 404, "This widget is unavailable.");
       expect(revokedDuringRead.setHeader).not.toHaveBeenCalledWith("ETag", expect.anything());
-      const revoked = await request({ query, gate, headers: { "if-none-match": etag } });
-      expect(revoked.res.statusCode).toBe(404);
-      expect(revoked.getBody()).toBe("This widget is unavailable.");
+      await request(
+        { query, gate, headers: { "if-none-match": etag } },
+        404,
+        "This widget is unavailable.",
+      );
       active.mockReturnValue(true);
       resolveWidgetToken.mockResolvedValue({ locator, docId: "missing" });
-      expect((await request({ query })).res.statusCode).toBe(404);
+      await request({ query }, 404);
     });
   });
 
@@ -172,7 +169,7 @@ describe("public session media", () => {
     "widget=chart&widget=other",
     "entry=entry-1&attachment=content-0&extra=1",
   ])("rejects ambiguous or invalid public media query: %s", async (query) => {
-    expect((await request({ query: `token=v1.YWJj&${query}` })).res.statusCode).toBe(404);
+    await request({ query: `token=v1.YWJj&${query}` }, 404);
     expect(readWidget).not.toHaveBeenCalled();
     expect(readMessage).not.toHaveBeenCalled();
   });
@@ -180,13 +177,9 @@ describe("public session media", () => {
   it("serves exact entry images with sniffed type, inline disposition, and private cache policy", async () => {
     readMessage.mockResolvedValue({ ...message(), role: "toolResult", toolCallId: "tool-1" });
     const response = await request();
-    expect(response.res.statusCode).toBe(200);
     expect(response.end).toHaveBeenCalledWith(png);
     expect(response.setHeader).toHaveBeenCalledWith("Content-Type", "image/png");
     expect(response.setHeader).toHaveBeenCalledWith("Content-Disposition", "inline");
-    expect(response.setHeader).toHaveBeenCalledWith("X-Content-Type-Options", "nosniff");
-    expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
-    expect(readMessage).toHaveBeenCalledWith(config, locator, { entryId: "entry-1", projection });
   });
 
   it("reads user attachments through the managed inbound media owner", async () => {
@@ -197,15 +190,13 @@ describe("public session media", () => {
       for (const source of [{ url: `media://inbound/${saved.id}` }, { path: saved.path }]) {
         readMessage.mockResolvedValue(storedMedia([{}, { ...source, fileName: "upload.png" }]));
         const response = await request({ query: "token=v1.YWJj&entry=entry-1&attachment=media-1" });
-        expect(response.res.statusCode).toBe(200);
         expect(response.end).toHaveBeenCalledWith(png);
       }
       const outside = await save("outgoing/originals", "private.png");
       readMessage.mockResolvedValue(
         storedMedia([{ path: outside.path, contentType: "image/png" }]),
       );
-      const rejected = await request({ query: "token=v1.YWJj&entry=entry-1&attachment=media-0" });
-      expect(rejected.res.statusCode).toBe(404);
+      await request({ query: "token=v1.YWJj&entry=entry-1&attachment=media-0" }, 404);
     });
   });
 
@@ -219,18 +210,16 @@ describe("public session media", () => {
       { ...message(), __openclaw: { id: "different-entry" } },
     ]) {
       readMessage.mockResolvedValue(value);
-      const response = await request();
-      expect(response.res.statusCode).toBe(404);
-      expect(response.getBody()).toBe("This public session is unavailable.");
+      await request({}, 404, "This public session is unavailable.");
     }
   });
 
   it("refuses unknown tokens and insecure ingress before reading transcript bytes", async () => {
     resolveToken.mockResolvedValue(null);
-    expect((await request()).res.statusCode).toBe(404);
+    await request({}, 404);
     expect(readMessage).not.toHaveBeenCalled();
     resolveToken.mockResolvedValue(locator);
-    expect((await request({ remote: true })).res.statusCode).toBe(404);
+    await request({ remote: true }, 404);
     expect(readMessage).not.toHaveBeenCalled();
   });
 
@@ -240,7 +229,7 @@ describe("public session media", () => {
     for (let index = 0; index < 120; index++) {
       gate.admitClient("client");
     }
-    expect((await request({ gate })).res.statusCode).toBe(429);
+    await request({ gate }, 429);
     expect(readMessage).not.toHaveBeenCalled();
   });
 

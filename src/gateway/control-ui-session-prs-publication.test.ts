@@ -25,15 +25,10 @@ const tree = "b".repeat(40);
 function originalPull({ baseId = 1, headId = 2, branch = "original" } = {}) {
   return pullListItem({
     state: "closed",
-    head: { ref: branch, sha: head, repo: { id: headId, full_name: "contributor/openclaw" } },
+    head: { ref: branch, sha: head, repo: { id: headId } },
     base: {
       ref: "main",
-      repo: {
-        id: baseId,
-        name: "openclaw",
-        full_name: "openclaw/openclaw",
-        owner: { login: "openclaw" },
-      },
+      repo: { id: baseId, name: "openclaw", owner: { login: "openclaw" } },
     },
   });
 }
