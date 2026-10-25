@@ -196,7 +196,8 @@ of identical prepared inputs share that identity; changing compiled code or nati
 resources invalidates it.
 For reproducible preparation, set the same `OPENCLAW_BUILD_TIMESTAMP` when running
 `pnpm build` in each checkout. Local cache freshness stamps are omitted from the
-standalone runtime. Compare executable hashes before timestamped signing;
+standalone runtime, and retained plugin-loader bytes omit staging directory names.
+Compare executable hashes before timestamped signing;
 a matching build identity alone does not prove byte-identical executables.
 
 For breakpoints, the companion also retains the selected input runtime, its

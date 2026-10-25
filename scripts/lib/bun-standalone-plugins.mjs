@@ -275,7 +275,8 @@ const STANDALONE_PLUGIN_LOADER_DIRECTORY = "node_modules/@openclaw/plugin-loader
 /**
  * Keep the dynamic loader, including Jiti's lazy transform, in one host-owned disk package.
  * @param {{runtimeRoot: string, outputRoot: string, build: (options: {
- *   entrypoints: string[], outdir: string, naming: string, target: "bun", format: "cjs"
+ *   entrypoints: string[], outdir: string, naming: string, target: "bun", format: "cjs",
+ *   minify: {whitespace: boolean, syntax: boolean, identifiers: boolean}
  * }) => Promise<{success: boolean, logs: Iterable<unknown>}>}} options
  */
 export async function stageStandalonePluginLoader({ runtimeRoot, outputRoot, build }) {
@@ -299,6 +300,8 @@ exports.createJiti = (...args) => require(${JSON.stringify(jiti)}).createJiti(..
       naming: "index.cjs",
       target: "bun",
       format: "cjs",
+      // Generated source comments otherwise include the random staging directory.
+      minify: { whitespace: true, syntax: false, identifiers: false },
     });
     if (!result.success) {
       throw new AggregateError(result.logs, "Could not bundle the standalone plugin loader");
