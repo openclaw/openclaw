@@ -63,7 +63,7 @@ const makeRecorder = async (runId: string) => {
 const warm = await makeRecorder("warmup");
 warm.recordEvent("session.started");
 await warm.flush();
-const recorders = [];
+const recorders: Awaited<ReturnType<typeof makeRecorder>>[] = [];
 for (let index = 0; index < count; index++) {
   recorders.push(await makeRecorder(`synthetic-${index}`));
 }
@@ -115,21 +115,21 @@ if (values.phase === "flushed") {
 await collect();
 const observedHeap = process.memoryUsage().heapUsed;
 const { profile } = await inspector.post("HeapProfiler.getSamplingProfile");
-const ownerIds = new Set<number>();
+let sampledLiveOwnerBytes = 0;
+let ownerAllocationNodes = 0;
 function visit(node: typeof profile.head, inOwner = false) {
   const owned = inOwner || node.callFrame.functionName === "recordEvent";
   if (owned) {
-    ownerIds.add(node.id);
+    sampledLiveOwnerBytes += node.selfSize;
+    ownerAllocationNodes += Number(node.selfSize > 0);
   }
   for (const child of node.children) {
     visit(child, owned);
   }
 }
 visit(profile.head);
-const samples = profile.samples.filter((sample) => ownerIds.has(sample.nodeId));
 const survivingInputs = inputs.filter((input) => input.deref()).length;
 assert.equal(survivingInputs, 0, "The recorder retained original preparation objects");
-const sampledLiveOwnerBytes = samples.reduce((sum, sample) => sum + sample.size, 0);
 if (values.phase === "pending") {
   assert(sampledLiveOwnerBytes > 0, "Sampling did not observe the pending payload owner");
 } else {
@@ -190,7 +190,8 @@ console.log(
     inputObjects: inputs.length,
     survivingInputs,
     sampledLiveOwnerBytes,
-    ownerAllocationSamples: samples.length,
+    ownerAllocationNodes,
+    profileSamples: profile.samples.length,
     heapDeltaBytes: observedHeap - heapBefore,
     payloadHash,
     scope: "Same-source lifecycle observation; recorder handles retained through verification",
