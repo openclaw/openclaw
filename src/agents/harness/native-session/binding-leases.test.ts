@@ -688,4 +688,85 @@ it("refuses revocation at native commit without publishing a prepared binding", 
     expect({ refusedCommit, entered }).toEqual({ refusedCommit: true, entered: true });
     expect(await asyncState.lookup("binding")).toMatchObject({ value: "before" });
   });
+
+  describe("comparison conflicts", () => {
+    // The guard throws so a missing bound fails fast instead of spinning forever.
+    const refuseComparisons = (
+      state: ReturnType<typeof createBindingTestState>["state"],
+      shouldRefuse: (attempt: number, intent: { action: string }) => boolean,
+    ) => {
+      const counter = { attempts: 0 };
+      const withCurrent = state.withCurrent.bind(state);
+      state.withCurrent = (authority) => {
+        const store = withCurrent(authority);
+        return {
+          ...store,
+          async compareAndApply(...args) {
+            counter.attempts += 1;
+            if (counter.attempts > 1_000) {
+              throw new Error("conflict retries ignored the lease wait budget");
+            }
+            if (shouldRefuse(counter.attempts, args[2])) {
+              return { status: "conflict", current: await store.observe(args[0]) };
+            }
+            return store.compareAndApply(...args);
+          },
+        };
+      };
+      return counter;
+    };
+
+    it("times out once repeated conflicts spend the lease wait budget", async () => {
+      vi.useFakeTimers();
+      const { state, owner } = createLeaseFixture();
+      const counter = refuseComparisons(state, () => true);
+      const outcome = owner
+        .transact("contended", () => ({ next: { value: "late" }, result: true }))
+        .catch((error: unknown) => error);
+      const { waitMs, retryIntervalMs } = bindingTestOptions.lease;
+      await vi.advanceTimersByTimeAsync(waitMs + retryIntervalMs);
+      expect(await outcome).toEqual(new Error("Binding lease timed out: contended"));
+      expect(counter.attempts).toBeGreaterThan(1);
+      expect(counter.attempts).toBeLessThanOrEqual(waitMs / retryIntervalMs + 1);
+    });
+
+    it("retries transient conflicts after the retry interval", async () => {
+      vi.useFakeTimers();
+      const { state, values, owner } = createLeaseFixture();
+      const counter = refuseComparisons(state, (attempt) => attempt <= 2);
+      const mutation = owner.transact("transient", () => ({
+        next: { value: "applied" },
+        result: true,
+      }));
+      await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.retryIntervalMs * 2);
+      await expect(mutation).resolves.toBe(true);
+      expect(counter.attempts).toBe(3);
+      expect(values.get("transient")).toEqual({ value: "applied" });
+    });
+
+    it("gives up releasing a lease that keeps conflicting", async () => {
+      vi.useFakeTimers();
+      const { state, values } = createBindingTestState();
+      const onReleaseFailure = vi.fn();
+      const owner = createNativeSessionBindingLeases(state, {
+        ...bindingTestOptions,
+        onReleaseFailure,
+      });
+      // Admission applies, then every release attempt loses its comparison.
+      const counter = refuseComparisons(state, (attempt) => attempt > 1);
+      const released = owner.withLease("release", async () => "done", {
+        prepareLease: prepareBindingTestLease,
+      });
+      const { waitMs, retryIntervalMs } = bindingTestOptions.lease;
+      await vi.advanceTimersByTimeAsync(waitMs + retryIntervalMs);
+      await expect(released).resolves.toBe("done");
+      expect(onReleaseFailure).toHaveBeenCalledExactlyOnceWith(
+        "release",
+        new Error("Binding lease timed out: release"),
+      );
+      expect(counter.attempts).toBeLessThanOrEqual(waitMs / retryIntervalMs + 2);
+      // The bounded lease expires on its own once release gives up.
+      expect(values.get("release")?.lease).toBeDefined();
+    });
+  });
 });
