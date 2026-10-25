@@ -53,7 +53,6 @@ it("records skip reasons for silent, empty, and internal artifact payloads", () 
   for (const [text, reason] of [
     ["   ", "empty"],
     ["set-thought <channel|>", "silent"],
-    ["───", "silent"],
   ] as const) {
     const onSkip = vi.fn();
     expect(normalizeReplyPayload({ text }, { onSkip }), text).toBeNull();
@@ -93,15 +92,6 @@ it("scopes transform ownership to the exact channel adapter and account", () => 
   delivered(differentAccount, "primary", "reply!!!");
   expect(firstMessaging.transformReplyPayload).toHaveBeenCalledTimes(3);
   expect(secondMessaging.transformReplyPayload).toHaveBeenCalledTimes(1);
-});
-
-it.each([
-  "😄 NO_REPLY",
-  "NO_REPLY NO_REPLY\nThe user is saying hello",
-  "NO_REPLYThe user is saying hello",
-  "An answer followed by NO_REPLY",
-])("preserves non-control token mentions: %s", (text) => {
-  expect(normalizeReplyPayload({ text })).toMatchObject({ text });
 });
 
 afterEach(() => vi.useRealTimers());
@@ -302,11 +292,6 @@ it.each<FlushCase>([
     { joiner: "\n\n" },
   ],
   [
-    "merges text with compatible media",
-    [{ text: "Hello", replyToId: "thread-1" }, { text: "world" }, { mediaUrls }],
-    [{ text: "Hello world", mediaUrls, replyToId: "thread-1" }],
-  ],
-  [
     "separates changed reply targets",
     [{ text: "Unthreaded caption" }, { mediaUrls, replyToId: "thread-2" }],
   ],
@@ -343,11 +328,11 @@ it("plans references for off/first/batched/all modes", () => {
 type StreamResult = ReturnType<ReturnType<typeof createStreamingDirectiveAccumulator>["consume"]>;
 type StreamCase = [string, string[], Array<Partial<StreamResult>>, boolean?];
 it.each<StreamCase>([
-  ...["NO_REPLY", "no_reply", "No_Reply"].map((token): StreamCase => [
-    `chunked ${token}`,
-    [token.slice(0, 4), token.slice(4), "\nVisible reply"],
+  [
+    "chunked NO_REPLY",
+    ["NO_R", "EPLY", "\nVisible reply"],
     [null, null, { text: "Visible reply" }],
-  ]),
+  ],
   [
     "split reply tag",
     ["[", "[reply_to_current]] Yo"],

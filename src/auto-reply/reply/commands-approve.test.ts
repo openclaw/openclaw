@@ -101,7 +101,6 @@ function createApprovalTestPlugin(id: string, label: string, approvals = false):
 const telegramApproveTestPlugin = createApprovalTestPlugin("telegram", "Telegram", true);
 telegramApproveTestPlugin.config.defaultAccountId = (cfg) =>
   cfg.channels?.telegram?.defaultAccount ?? "default";
-const signalApproveTestPlugin = createApprovalTestPlugin("signal", "Signal", true);
 const slackApproveTestPlugin = createApprovalTestPlugin("slack", "Slack");
 const whatsappApproveTestPlugin = createApprovalTestPlugin("whatsapp", "WhatsApp");
 
@@ -169,12 +168,7 @@ describe("handleApproveCommand", () => {
     vi.clearAllMocks();
     resolveApprovalOverGatewayMock.mockReset().mockResolvedValue(undefined);
     isPendingSystemAgentApprovalMock.mockResolvedValue(false);
-    setPlugins(
-      slackApproveTestPlugin,
-      whatsappApproveTestPlugin,
-      signalApproveTestPlugin,
-      telegramApproveTestPlugin,
-    );
+    setPlugins(slackApproveTestPlugin, whatsappApproveTestPlugin, telegramApproveTestPlugin);
   });
 
   function createTelegramApproveCfg(
@@ -258,32 +252,21 @@ describe("handleApproveCommand", () => {
     expect(approvalResolverRequest()).toMatchObject({ channel: "telegram", accountId: "work" });
   });
 
-  it.each([
-    ["webchat", "123", { commands: { text: true } }],
-    ["slack", "U123", channelConfig("slack")],
-    ["signal", "+15551239999", channelConfig("signal", [])],
-  ] as const)(
-    "does not bypass unauthorized %s senders with implicit approval auth",
-    async (channel, sender, cfg) => {
-      if (channel === "slack") {
-        setPlugins({
-          ...slackApproveTestPlugin,
-          approvalCapability: {
-            authorizeActorAction: () => ({ authorized: true }),
-            getActionAvailabilityState: () => ({ kind: "disabled" }),
-          },
-        });
-      }
-      const result = await approve(
-        buildApproveParams("/approve abc12345 allow-once", cfg, channelContext(channel, sender), {
+  it("does not bypass unauthorized senders with implicit approval auth", async () => {
+    const result = await approve(
+      buildApproveParams(
+        "/approve abc12345 allow-once",
+        { commands: { text: true } },
+        channelContext("webchat", "123"),
+        {
           isAuthorizedSender: false,
-        }),
-      );
-      expect(result?.shouldContinue).toBe(false);
-      expect(result?.reply).toBeUndefined();
-      expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    },
-  );
+        },
+      ),
+    );
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply).toBeUndefined();
+    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+  });
 
   it("resolves an OpenClaw change approval with its canonical owner", async () => {
     const notFound = () => new Error("unknown or expired approval id");

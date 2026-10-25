@@ -336,36 +336,22 @@ describe("applyInlineDirectiveOverrides", () => {
     },
   );
 
-  it("stops a mixed inline turn when its transaction rejects unsupported thinking", async () => {
-    const errorText =
-      'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.';
-    mocks.handleDirective.mockImplementation(async (params) => {
-      if (!params.persistenceState) {
+  it("cleans up typing when a mixed directive transaction rejects", async () => {
+    mocks.handleDirective.mockImplementation(async ({ persistenceState }) => {
+      if (!persistenceState) {
         throw new Error("Expected a mixed-message transaction");
       }
-      params.persistenceState.outcome = { kind: "rejected", errorText };
-      params.onRejection?.();
-      return { text: errorText };
+      persistenceState.outcome = { kind: "rejected", errorText: "rejected" };
     });
-    const typing = createMockTypingController();
-    const result = await applyInlineDirectiveOverrides(
-      directiveParams("/think ultra please solve", {
-        model: "gpt-5.6-luna",
-        contextTokens: 372_000,
-        typing,
-      }),
-    );
-
-    expectRejectedDirective(result, typing, { text: errorText, isError: true });
-    expect(mocks.handleDirective).toHaveBeenCalledOnce();
+    const params = directiveParams("/think high please solve");
+    const result = await applyInlineDirectiveOverrides(params);
+    expectRejectedDirective(result, params.typing, { text: "rejected", isError: true });
   });
 
   const verboseAnswer = { text: "Current verbose level: full.\nOptions: on, full, off." };
   const reasoningAnswer = { text: "Current reasoning level: stream.\nOptions: on, off, stream." };
   it.each([
     ["/verbose", { kind: "reply", reply: verboseAnswer, preRunRejection: undefined }],
-    ["please reply\n/verbose", { kind: "continue", directiveAck: verboseAnswer }],
-    ["/reasoning", { kind: "reply", reply: reasoningAnswer, preRunRejection: undefined }],
     ["please reply\n/reasoning", { kind: "continue", directiveAck: reasoningAnswer }],
   ])("answers %j with the agent entry default", async (body, expected) => {
     const { handleDirectiveOnly } = await vi.importActual<

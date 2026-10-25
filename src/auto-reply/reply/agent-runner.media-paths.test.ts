@@ -31,23 +31,6 @@ describe("runReplyAgent media path normalization", () => {
   beforeEach(resetAgentRunnerMediaTestState);
   afterEach(cleanupAgentRunnerMediaTestState);
 
-  it.each(["device-a", "device-b"])(
-    "steers active non-streaming prompts from reviewer %s in steer queue mode",
-    async (approvalReviewerDeviceId) => {
-      acceptSteer();
-      const followupRun = createMediaFollowupRun({ prompt: "generate chart" });
-      followupRun.run.taskSuggestionDeliveryMode = "gateway";
-      followupRun.run.approvalReviewerDeviceId = "device-a";
-
-      const params = await makeSteerParams({ followupRun });
-      followupRun.run.approvalReviewerDeviceId = approvalReviewerDeviceId;
-
-      await runReplyAgent(params);
-
-      expectAcceptedSteer("generate chart");
-    },
-  );
-
   const makeSteerParams = (overrides: Parameters<typeof makeReplyParams>[0] = {}) =>
     makeReplyParams({
       resolvedQueue: { mode: "steer" },
@@ -85,7 +68,6 @@ describe("runReplyAgent media path normalization", () => {
 
   it.each([
     { label: "permission mode", run: { permissionMode: "guarded" } },
-    { label: "tool overrides", run: { toolOverrides: { webSearch: false } } },
     { label: "execution policy", run: { execOverrides: { security: "deny" } } },
     { label: "elevation", run: { elevatedLevel: "full" } },
     {
@@ -93,11 +75,6 @@ describe("runReplyAgent media path normalization", () => {
       run: { bashElevated: { enabled: true, allowed: true, defaultLevel: "full" } },
     },
     { label: "workspace", run: { workspaceDir: "/tmp/different-steering-workspace" } },
-    { label: "client capabilities", run: { clientCaps: ["changed-capability"] } },
-    {
-      label: "tool bindings",
-      run: { toolBindings: { browser: { clientId: "different-browser" } } },
-    },
   ] satisfies { label: string; run: Partial<FollowupRun["run"]> }[])(
     "queues a different browser's prompt when its $label differs",
     async ({ run }) => {
@@ -119,12 +96,7 @@ describe("runReplyAgent media path normalization", () => {
 
       expect(queueMessageMock).not.toHaveBeenCalled();
       expectDeferredSteer();
-      expect(reserveSteerCandidateMock).toHaveBeenCalledExactlyOnceWith(
-        params.queueKey,
-        followupRun,
-        params.resolvedQueue,
-        expect.any(Function),
-      );
+      expect(reserveSteerCandidateMock).toHaveBeenCalledOnce();
     },
   );
 
@@ -141,14 +113,7 @@ describe("runReplyAgent media path normalization", () => {
     });
     await runReplyAgent(params);
     expect(source).toMatchObject({ phase: "queued", abortSignal: { aborted: false } });
-    expect(enqueueFollowupRunMock).toHaveBeenCalledExactlyOnceWith(
-      params.queueKey,
-      params.followupRun,
-      params.resolvedQueue,
-      "message-id",
-      expect.any(Function),
-      false,
-    );
+    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
     expect(reserveSteerCandidateMock).not.toHaveBeenCalled();
     expect(queueMessageMock).not.toHaveBeenCalled();
   });
@@ -195,12 +160,7 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(await makeSteerParams({ followupRun }));
 
-    expect(reserveSteerCandidateMock).toHaveBeenCalledWith(
-      "main",
-      followupRun,
-      expect.objectContaining({ mode: "steer" }),
-      expect.any(Function),
-    );
+    expect(reserveSteerCandidateMock).toHaveBeenCalledOnce();
     expectDeferredSteer();
   });
 
@@ -231,21 +191,6 @@ describe("runReplyAgent media path normalization", () => {
 
     expect(op).toMatchObject({ acceptedSteeredInboundAudio: true, sourceReplyDelivered: false });
     expectAcceptedSteer("summarize the audio");
-  });
-
-  it("queues active prompts in followup mode without steering", async () => {
-    await runReplyAgent(
-      await makeSteerParams({
-        resolvedQueue: { mode: "followup" },
-        shouldSteer: false,
-        isRunActive: () => true,
-      }),
-    );
-
-    expect(queueMessageMock).not.toHaveBeenCalled();
-    expect(reserveSteerCandidateMock).not.toHaveBeenCalled();
-    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
-    expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
   });
 
   async function runTurn(

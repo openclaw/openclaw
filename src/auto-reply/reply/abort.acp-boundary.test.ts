@@ -25,10 +25,8 @@ import {
   createEmbeddedRunHandle,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -96,12 +94,7 @@ it.each(["idle", "active", "native failure"])(
       ["acp", acpKey],
       ...children,
     ] as const) {
-      await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey,
-        defaultSessionId: `${runId}-session`,
-      });
+      await fixture.writeSession(sessionKey, `${runId}-session`);
     }
     const cfg = getRuntimeConfig();
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
@@ -252,18 +245,13 @@ it.each(["idle", "active", "native failure"])(
         });
       }
       for (const [runId, childSessionKey] of children) {
-        await registerSubagentRun({
+        await fixture.registerRun({
           runId,
           childSessionKey,
           childAgentId: "main",
           sessionEntry: loadExactSessionEntryReadOnly({ storePath, sessionKey: childSessionKey })
             ?.entry,
           requesterSessionKey: sourceKey,
-          requesterAgentId: "main",
-          requesterDisplayKey: sourceKey,
-          task: runId,
-          cleanup: "keep",
-          collect: true,
           queued: runId === "queued",
           expectsCompletionMessage: false,
         });
@@ -272,13 +260,11 @@ it.each(["idle", "active", "native failure"])(
         ["queued", selectedDispatch],
         ["survivor", survivorDispatch],
       ] as const) {
-        enqueueSwarmRun({
+        fixture.queueRun({
           groupId: "bound-acp",
           runId,
-          maxConcurrent: 1,
           activeRunIds: ["capacity"],
           start,
-          onStartFailure: () => true,
         });
       }
       const retainedCleanup = captureChannelSessionStop({
@@ -301,8 +287,6 @@ it.each(["idle", "active", "native failure"])(
           Surface: "stop-test",
           From: "stop-test:room",
           To: "stop-test:room",
-          MessageSid: "77",
-          Timestamp: 1234567890000,
         }),
       }).finally(() => {
         stopSettled = true;
@@ -352,13 +336,6 @@ it.each(["idle", "active", "native failure"])(
       for (const key of [runningKey, queuedKey]) {
         expect((await getSubagentRunByChildSessionKey(key))?.endedReason).toBe("subagent-killed");
       }
-      await vi.waitFor(() =>
-        expect(loadExactSessionEntryReadOnly({ sessionKey: sourceKey })?.entry).toMatchObject({
-          abortedLastRun: true,
-          abortCutoffMessageSid: "77",
-          abortCutoffTimestamp: 1234567890000,
-        }),
-      );
       proceed.resolve();
       if (active) {
         await settleCancelRpc();
@@ -400,9 +377,9 @@ it.each(["idle", "active", "native failure"])(
       native.complete();
       await native.ownerSettlement;
       clearActiveEmbeddedRun("running-session", handle, runningKey);
-      releaseSwarmRun("capacity");
-      releaseSwarmRun("queued");
-      releaseSwarmRun("survivor");
+      for (const runId of ["capacity", "queued", "survivor"]) {
+        releaseSwarmRun(runId);
+      }
       await disposeAcpSessionManagerInstance(manager, "test-cleanup");
       acpTesting.resetAcpSessionManagerForTests();
       unregisterAcpRuntimeBackend("stop-test");

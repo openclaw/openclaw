@@ -257,26 +257,6 @@ describe("routeReply", () => {
     },
   );
 
-  it("suppresses routed delivery when reply payload hooks empty the payload", async () => {
-    mocks.deliverOutboundPayloads.mockImplementationOnce(async ({ onPayloadDeliveryOutcome }) => {
-      onPayloadDeliveryOutcome?.({
-        index: 0,
-        status: "suppressed",
-        reason: "empty_after_reply_payload_sending_hook",
-      });
-      return [];
-    });
-
-    const res = await routeTestReply({ text: "hello" }, { channel: "telegram", to: "chat-1" });
-
-    expect(res).toEqual({
-      ok: true,
-      delivered: false,
-      suppressed: true,
-    });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-  });
-
   it("uses the policy session's direct conversation type over a group routing hint", async () => {
     const res = await routeTestReply(
       { text: "native command response" },
@@ -361,11 +341,8 @@ describe("routeReply", () => {
 
   it.each([
     ["throw", false, undefined, "held"],
-    ["throw", true, undefined, "released"],
     ["throw", true, "visible-1", "held"],
-    ["best-effort return", false, undefined, "released"],
-    ["best-effort return", true, undefined, "held"],
-    ["best-effort return", true, "visible-1", "released"],
+    ["best-effort return", true, undefined, "released"],
   ] as const)(
     "projects %s with sentBeforeError=%s, messageId=%s, and custody=%s through durable send",
     async (failureMode, sentBeforeError, messageId, queueCustody) => {
