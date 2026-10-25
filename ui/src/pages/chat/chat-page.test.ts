@@ -445,18 +445,13 @@ describe("chat page split layout host", () => {
 
   it("replaces into the canonical face namespace without adding history", async () => {
     window.history.replaceState({}, "", "/chat");
-    const page = document.createElement("openclaw-chat-page");
-    const navigation = setNavigationContext(page);
-    // The loader resolved this session to its stored dashboard face while the route was
-    // matched under /chat, so the replacement has to be routed by the resolved face.
-    page.data = {
+    // A dashboard resolved from /chat must replace into the resolved face namespace.
+    const { navigation } = await mountPage({
       sessionKey: WORK_SESSION_KEY,
       face: "dashboard",
       canonicalLocation: location("/dashboard/main/deploy-monitor-12345678"),
       canonicalLocationSource: location("/chat"),
-    };
-    document.body.append(page);
-    await settleChatPage(page);
+    });
 
     expect(navigation.replace).toHaveBeenCalledWith(
       "dashboard",
@@ -474,14 +469,11 @@ describe("chat page split layout host", () => {
   it("keeps catalog identity when consuming a route draft", async () => {
     const expectedSearch = catalogSessionSearch(CATALOG_KEY);
     window.history.replaceState({}, "", `/chat/research${expectedSearch}&draft=ship`);
-    const page = document.createElement("openclaw-chat-page");
-    const navigation = setNavigationContext(page);
-    page.data = {
+    const { navigation } = await mountPage({
       sessionKey: CATALOG_SESSION_KEY,
       agentId: "research",
       draft: "one-shot catalog draft",
-    };
-    document.body.append(page);
+    });
     await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
@@ -501,15 +493,12 @@ describe("chat page split layout host", () => {
 
   it("preserves a resolved long prefix through drafts and face changes", async () => {
     window.history.replaceState({}, "", "/chat/main/1234567890?draft=ship");
-    const page = document.createElement("openclaw-chat-page");
-    const navigation = setNavigationContext(page);
-    page.data = {
+    const { page, navigation } = await mountPage({
       sessionKey: WORK_SESSION_KEY,
       shortId: "1234567890",
       draft: "ship",
       face: "chat",
-    };
-    document.body.append(page);
+    });
     await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
     expect(navigation.replace).toHaveBeenCalledWith("chat", location("/chat/main/1234567890"));
@@ -676,13 +665,8 @@ describe("chat page split layout host", () => {
   });
 
   it("does not reuse a sibling's drop indicator over an unbound target", async () => {
-    const page = document.createElement("openclaw-chat-page");
-    page.data = { sessionKey: "main" };
-    setNavigationContext(page);
     const layout = setPaneSession(createSplitLayout("main"), "p1", "global");
-    patchSettings({ chatSplitLayout: layout });
-    document.body.append(page);
-    await settleChatPage(page);
+    const { page } = await mountPage(undefined, layout);
     const bound = expectDefined(
       page.querySelector<RenderedPane>("openclaw-chat-pane.chat-pane-cache__pane--visible"),
       "openclaw-chat-pane.chat-pane-cache__pane--visible",

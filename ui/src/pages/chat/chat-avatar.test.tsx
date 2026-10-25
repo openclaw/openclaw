@@ -71,6 +71,8 @@ function expectBearerFetch(
   );
 }
 
+const viewer = { name: "Viewer", avatar: "/api/users/gateway-owner/avatar" };
+
 function nativeSender(accountId = "sample-bot") {
   return {
     name: "Riley Adams",
@@ -107,17 +109,7 @@ function identityCapability(host: ReturnType<typeof makeChatHost>) {
   });
 }
 
-function renderAvatar(
-  params: [
-    role: string,
-    assistant?: ChatAvatarProps["assistant"],
-    user?: ChatAvatarProps["user"],
-    sender?: ChatAvatarProps["sender"],
-    channelAvatar?: ChatAvatarProps["channelAvatar"],
-  ],
-) {
-  const [role, assistant, user, sender, channelAvatar] = params;
-  const props = { role, assistant, user, sender, channelAvatar };
+function renderAvatar(props: ChatAvatarProps) {
   const view = mountSolid(() => <ChatAvatar {...props} />);
   return view.container.querySelector<HTMLElement>(".chat-avatar");
 }
@@ -203,13 +195,12 @@ it("binds footer portraits to the account and sender under a base path", () => {
 it("renders a source-bound native portrait without borrowing the viewer's profile", () => {
   const sender = nativeSender();
   const identity = { ...sender.identity };
-  const avatar = renderAvatar([
-    "user",
-    undefined,
-    { name: "Viewer", avatar: "/api/users/gateway-owner/avatar" },
+  const avatar = renderAvatar({
+    role: "user",
+    user: viewer,
     sender,
-    channelPortrait(),
-  ]);
+    channelAvatar: channelPortrait(),
+  });
   const image = avatar?.querySelector<HTMLElement & { routeUrl: string }>(
     "openclaw-channel-avatar",
   );
@@ -219,13 +210,12 @@ it("renders a source-bound native portrait without borrowing the viewer's profil
 });
 
 it("keeps sender initials when a channel portrait belongs to another account", () => {
-  const avatar = renderAvatar([
-    "user",
-    undefined,
-    { name: "Viewer", avatar: "/api/users/gateway-owner/avatar" },
-    nativeSender("another-bot"),
-    channelPortrait(),
-  ]);
+  const avatar = renderAvatar({
+    role: "user",
+    user: viewer,
+    sender: nativeSender("another-bot"),
+    channelAvatar: channelPortrait(),
+  });
   expect(avatar?.querySelector("openclaw-channel-avatar")).toBeNull();
   expect(avatar?.querySelector("img")).toBeNull();
   expect(avatar?.textContent?.trim()).toBe("RA");
@@ -322,10 +312,10 @@ describe("ChatAvatar", () => {
   });
 
   it.each(["openclaw"])("keeps the product mark for system agent %s", (agentId) => {
-    const image = renderAvatar([
-      "assistant",
-      { agentId, name: "System", avatar: "blob:configured-image", textAvatar: "🦉" },
-    ]);
+    const image = renderAvatar({
+      role: "assistant",
+      assistant: { agentId, name: "System", avatar: "blob:configured-image", textAvatar: "🦉" },
+    });
     expect(image?.matches("img.chat-avatar.assistant")).toBe(true);
     expect(image?.getAttribute("src")).toBe("/favicon.svg");
     expect(image?.getAttribute("alt")).toBe("System");
@@ -379,7 +369,7 @@ describe("ChatAvatar", () => {
   });
 
   it("renders local user text avatars", () => {
-    const textAvatar = renderAvatar(["user", undefined, { name: "Buns", avatar: "AB" }]);
+    const textAvatar = renderAvatar({ role: "user", user: { name: "Buns", avatar: "AB" } });
     expect(textAvatar?.tagName).toBe("DIV");
     expect(textAvatar?.textContent?.trim()).toBe("AB");
   });

@@ -177,6 +177,7 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
     operations,
     reads,
     sessions,
+    primaryRow: () => sessions.state.result?.sessions.find((row) => row.key === key),
     managedRow: () => sessions.listSnapshot(query).result?.sessions.find((row) => row.key === key),
     refreshManaged: (row: GatewaySessionRow) => {
       managed = sessionsResult([row, sibling], 30);
@@ -258,8 +259,7 @@ describe("history descriptor observation order", () => {
       h.reads[0]!.pending.resolve(history({ ...base, ...profile }));
       await loaded;
       const expectedIds = ids ?? previousIds;
-      const primaryRow = () => h.sessions.state.result?.sessions.find((row) => row.key === key);
-      expect(primaryRow()?.thinkingLevels?.map(({ id }) => id)).toEqual(expectedIds);
+      expect(h.primaryRow()?.thinkingLevels?.map(({ id }) => id)).toEqual(expectedIds);
       expect(state.sessionsResult).toBe(h.sessions.state.result);
       const thinking = resolveChatThinkingSelectState({
         session: selectedChatSessionRow(state),
@@ -271,14 +271,14 @@ describe("history descriptor observation order", () => {
         ids === undefined ? previousIds : [],
       );
       expect(thinking.inherited.value).toBe(thinkingDefault ?? "");
-      expect(primaryRow()?.thinkingDefault).toBe(thinkingDefault);
+      expect(h.primaryRow()?.thinkingDefault).toBe(thinkingDefault);
 
       oldList.resolve(sessionsResult([prepared, sibling], 10));
       await oldList.refresh;
-      expect(primaryRow()?.thinkingLevels?.map(({ id }) => id)).toEqual(expectedIds);
-      expect(h.managedRow()?.thinkingLevels?.map(({ id }) => id)).toEqual(expectedIds);
-      expect(primaryRow()?.thinkingDefault).toBe(thinkingDefault);
-      expect(h.managedRow()?.thinkingDefault).toBe(thinkingDefault);
+      for (const row of [h.primaryRow(), h.managedRow()]) {
+        expect(row?.thinkingLevels?.map(({ id }) => id)).toEqual(expectedIds);
+        expect(row?.thinkingDefault).toBe(thinkingDefault);
+      }
     },
   );
 
@@ -299,63 +299,105 @@ describe("history descriptor observation order", () => {
       deltaCursor: "cursor-current",
     });
     await delta;
-    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-      fresh.label,
-    );
+    expect(h.primaryRow()?.label).toBe(fresh.label);
     h.reads[0]!.pending.resolve(
       history({ ...initial, updatedAt: null, label: "Earlier full read" }),
     );
     await full;
-    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-      fresh.label,
-    );
+    expect(h.primaryRow()?.label).toBe(fresh.label);
   });
 
-  it("uses the successful chat.startup retry's observation for shared consumers", async () => {
-    const method = "chat.startup";
-    const h = await fixture();
-    const firstState = h.makeState();
-    const first = h.begin(firstState, method === "chat.startup");
-    expect(h.reads).toHaveLength(1);
-    expect(h.reads[0]!.method).toBe(method);
-    h.reads[0]!.pending.reject(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "session history is rebuilding; retry shortly",
-        details: { method },
-        retryable: true,
-        retryAfterMs: 250,
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    const between = { ...initial, label: "Roster read between attempts" };
-    await h.refreshManaged(between);
-    expect(h.managedRow()?.label).toBe(between.label);
-
-    const joinedState = h.makeState();
-    const joined = h.begin(joinedState, method === "chat.startup");
-    expect(h.reads).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(499);
-    expect(h.reads).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(h.reads).toHaveLength(2);
-    expect(h.reads[1]!.method).toBe(method);
-    expect(h.reads[1]!.params).toEqual(h.reads[0]!.params);
-    const recovered = { ...initial, label: "Descriptor from successful retry" };
-    h.reads[1]!.pending.resolve(history(recovered));
-    await Promise.all([first, joined]);
-
-    for (const state of [firstState, joinedState]) {
-      expect(state.chatMessages).toHaveLength(1);
-      expect(state.currentSessionId).toBe(initial.sessionId);
-      expect(state.chatLoading).toBe(false);
-    }
-    expect(h.reads).toHaveLength(2);
-    expect.soft(h.managedRow()?.label).toBe(recovered.label);
-    expect
-      .soft(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label)
-      .toBe(recovered.label);
-  });
+  it.each([false, true])(
+    "orders a shared startup retry by its issuance (short route: %s)",
+    async (shortRoute) => {
+      const h = await fixture(
+        shortRoute ? { ...initial, key: "agent:main:unrelated", sessionId: "unrelated" } : initial,
+      );
+      if (shortRoute) {
+        const lifecycle = new AbortController();
+        const router = createRouter<RouteId, ApplicationContext, null, ChatRouteData>({
+          routes: [
+            definePage({
+              id: "chat",
+              path: "/chat",
+              component: () => null,
+              loader: (context, { location, signal }) =>
+                loadChatRoute(context, location, "chat", signal),
+            }),
+          ],
+        });
+        onTestFinished(() => {
+          lifecycle.abort();
+          router.stop();
+        });
+        const navigation = router.navigate(
+          "chat",
+          {
+            ...h.context,
+            router,
+            lifecycleAbortSignal: lifecycle.signal,
+          },
+          undefined,
+          { pathname: "/chat/main/observed-session-12345678", search: "", hash: "" },
+        );
+        h.operations.push(navigation);
+        await navigation;
+        expect(router.getState().matches[0]?.data).toMatchObject({
+          kind: "session",
+          sessionKey: key,
+        });
+        expect(h.reads).toHaveLength(0);
+      }
+      const firstState = h.makeState();
+      const first = h.begin(firstState, true);
+      expect(h.reads).toHaveLength(1);
+      expect(h.reads[0]!.method).toBe("chat.startup");
+      expect(h.reads[0]!.params).toMatchObject({ sessionKey: key });
+      h.reads[0]!.pending.reject(
+        new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "session history is rebuilding; retry shortly",
+          details: { method: "chat.startup" },
+          retryable: true,
+          retryAfterMs: 250,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      const between = {
+        ...initial,
+        updatedAt: shortRoute ? 5 : initial.updatedAt,
+        label: "Roster read between attempts",
+      };
+      await h.refreshManaged(between);
+      expect(h.managedRow()?.label).toBe(between.label);
+      const joinedState = h.makeState();
+      const joined = h.begin(joinedState, true);
+      expect(h.reads).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(h.reads).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(h.reads).toHaveLength(2);
+      expect(h.reads[1]!.method).toBe("chat.startup");
+      expect(h.reads[1]!.params).toEqual(h.reads[0]!.params);
+      const recovered = {
+        ...initial,
+        updatedAt: shortRoute ? 50 : initial.updatedAt,
+        label: "Descriptor from successful retry",
+      };
+      h.reads[1]!.pending.resolve(history(recovered));
+      await Promise.all([first, joined]);
+      for (const state of [firstState, joinedState]) {
+        expect(state).toMatchObject({
+          chatMessages: [{ role: "assistant", content: "Observed transcript" }],
+          currentSessionId: initial.sessionId,
+          chatLoading: false,
+        });
+      }
+      expect(h.reads).toHaveLength(2);
+      expect.soft(h.managedRow()?.label).toBe(recovered.label);
+      expect.soft(h.primaryRow()?.label).toBe(recovered.label);
+    },
+  );
 
   it("starts a distinct history read when the capability changes on the same client", async () => {
     const h = await fixture();
@@ -378,9 +420,7 @@ describe("history descriptor observation order", () => {
     expect(replacement.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
       "Current capability",
     );
-    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
-      initial.label,
-    );
+    expect(h.primaryRow()?.label).toBe(initial.label);
   });
 
   it("observes a reset fallback page at that page read's issuance", async () => {
@@ -399,80 +439,6 @@ describe("history descriptor observation order", () => {
     await loaded;
 
     expect(h.managedRow()?.label).toBe("Fallback page read");
-  });
-
-  it("orders short-route pane history by the retried request issuance", async () => {
-    const h = await fixture({ ...initial, key: "agent:main:unrelated", sessionId: "unrelated" });
-    const lifecycle = new AbortController();
-    const router = createRouter<RouteId, ApplicationContext, null, ChatRouteData>({
-      routes: [
-        definePage({
-          id: "chat",
-          path: "/chat",
-          component: () => null,
-          loader: (context, { location, signal }) =>
-            loadChatRoute(context, location, "chat", signal),
-        }),
-      ],
-    });
-    const context: ApplicationContext = {
-      ...h.context,
-      router,
-      lifecycleAbortSignal: lifecycle.signal,
-    };
-    onTestFinished(() => {
-      lifecycle.abort();
-      router.stop();
-    });
-    const navigation = router.navigate("chat", context, undefined, {
-      pathname: "/chat/main/observed-session-12345678",
-      search: "",
-      hash: "",
-    });
-    h.operations.push(navigation);
-    await navigation;
-    expect(router.getState().matches[0]?.data).toMatchObject({
-      kind: "session",
-      sessionKey: key,
-    });
-    expect(h.reads).toHaveLength(0);
-    const pane = h.makeState();
-    const loaded = h.begin(pane, true);
-    await vi.waitFor(() => expect(h.reads).toHaveLength(1));
-    expect(h.reads[0]!.method).toBe("chat.startup");
-    expect(h.reads[0]!.params).toMatchObject({ sessionKey: key });
-    h.reads[0]!.pending.reject(
-      new GatewayRequestError({
-        code: "UNAVAILABLE",
-        message: "session history is rebuilding; retry shortly",
-        details: { method: "chat.startup" },
-        retryable: true,
-        retryAfterMs: 250,
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    await h.refreshManaged({ ...initial, updatedAt: 5, label: "Between startup attempts" });
-    expect(h.managedRow()?.label).toBe("Between startup attempts");
-    await vi.advanceTimersByTimeAsync(499);
-    expect(h.reads).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(h.reads).toHaveLength(2);
-    expect(h.reads[1]!.method).toBe("chat.startup");
-    expect(h.reads[1]!.params).toEqual(h.reads[0]!.params);
-    const startupRow = {
-      ...initial,
-      updatedAt: 50,
-      label: "Startup retry descriptor",
-    };
-    h.reads[1]!.pending.resolve(history(startupRow));
-    await loaded;
-
-    expect(h.reads).toHaveLength(2);
-    expect(pane.chatMessages).toHaveLength(1);
-    expect(pane.currentSessionId).toBe(initial.sessionId);
-    expect(pane.chatLoading).toBe(false);
-    expect.soft(h.managedRow()?.label).toBe(startupRow.label);
-    expect.soft(h.sessions.state.result?.sessions.some((row) => row.key === key)).toBe(true);
   });
 });
 
@@ -545,17 +511,13 @@ it.each([false, true])(
     renderCurrent();
     expect(container.querySelector(".chat-history-error")).toBeNull();
     expect(state.chatMessages).toEqual([{ role: "assistant", content: "Observed transcript" }]);
-    expect
-      .soft(h.sessions.state.result?.sessions.find((row) => row.key === key))
-      .toMatchObject(fresh);
-    expect.soft(h.managedRow()).toMatchObject(fresh);
-    expect.soft(selectedChatSessionRow(state)).toMatchObject(fresh);
+    for (const row of [h.primaryRow(), h.managedRow(), selectedChatSessionRow(state)]) {
+      expect.soft(row).toMatchObject(fresh);
+    }
 
     older.resolve(sessionsResult([initial, sibling], 10));
     await older.refresh;
-    expect
-      .soft(h.sessions.state.result?.sessions.find((row) => row.key === key))
-      .toMatchObject(fresh);
+    expect.soft(h.primaryRow()).toMatchObject(fresh);
     expect.soft(h.managedRow()).toMatchObject(fresh);
     expect.soft(selectedChatSessionRow(state)).toMatchObject(fresh);
     expect(h.sessions.state.result?.sessions.map((row) => row.key).toSorted()).toEqual(
