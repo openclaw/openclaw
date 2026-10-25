@@ -3,6 +3,7 @@
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
+// This mode keeps a fixed viewer set instead of adding reconnect churn.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -2736,7 +2737,7 @@ const mixedRpcMethods = [
   "sessions.list",
   "chat.history",
   "sessions.diff",
-  "connect",
+  ...(values["worktree-tool-churn"] ? [] : ["connect"]),
   ...dashboardRpcShapes.map(({ method }) => method),
 ];
 const stressParentKey = "agent:main:transcript-broadcast-measure-native-parent";
