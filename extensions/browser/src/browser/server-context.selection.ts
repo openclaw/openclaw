@@ -5,10 +5,12 @@ import { fetchOk, normalizeCdpHttpBaseForJsonEndpoints } from "./cdp.helpers.js"
 import { appendCdpPath } from "./cdp.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { BrowserTabNotFoundError } from "./errors.js";
+import { BrowserError, BrowserTabNotFoundError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
+  CLOSE_TAB_VERIFY_POLL_MS,
+  CLOSE_TAB_VERIFY_WINDOW_MS,
   OPEN_TAB_DISCOVERY_POLL_MS,
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
@@ -188,6 +190,37 @@ export function createProfileSelectionOps({
     return resolveBrowserTabOrThrow(targetId, tabs, options?.exactTargetId).targetId;
   };
 
+  // /json/close answers 200 "Target is closing" once Chrome has requested the close,
+  // not once the page is gone, so confirm the target left the list before reporting success.
+  const assertTabClosed = async (
+    targetId: string,
+    options?: BrowserTabTargetOptions,
+  ): Promise<void> => {
+    const deadline = Date.now() + CLOSE_TAB_VERIFY_WINDOW_MS;
+    for (;;) {
+      let stillOpen: boolean;
+      try {
+        stillOpen = (await listTabs(options)).some((tab) => tab.targetId === targetId);
+      } catch {
+        options?.signal?.throwIfAborted();
+        // Accepted edge: a browser that stops answering right after the close (for example
+        // one that exited with its last tab) has no tab left to observe, as before this check.
+        return;
+      }
+      if (!stillOpen) {
+        return;
+      }
+      if (Date.now() >= deadline) {
+        throw new BrowserError(
+          `Browser did not close tab ${targetId}: it is still open after the close request. ` +
+            "A page prompt such as a beforeunload dialog may be blocking it; resolve the prompt " +
+            "in the browser (or ask the user to), then retry close.",
+        );
+      }
+      await sleepWithAbort(CLOSE_TAB_VERIFY_POLL_MS, options?.signal);
+    }
+  };
+
   const prepareTabOperation = async (
     action: "focus" | "close",
     resolvedTargetId: string,
@@ -222,8 +255,8 @@ export function createProfileSelectionOps({
       }
     }
 
-    return () =>
-      fetchOk(
+    return async () => {
+      await fetchOk(
         appendCdpPath(
           cdpHttpBase,
           `/json/${action === "focus" ? "activate" : "close"}/${resolvedTargetId}`,
@@ -232,6 +265,10 @@ export function createProfileSelectionOps({
         options?.signal ? { signal: options.signal } : undefined,
         getCdpControlPolicy(),
       );
+      if (action === "close") {
+        await assertTabClosed(resolvedTargetId, options);
+      }
+    };
   };
 
   const focusTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
