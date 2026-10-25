@@ -135,6 +135,8 @@ describe("deferred logical-turn lifecycle", () => {
         await owner[settle]();
         completed.push(owner);
       }
+      // Count after the last awaited cleanup frame leaves the current job.
+      await nextTurn();
       expect(queryObjects(SessionPayload)).toBe(1);
       await active[settle]();
       await nextTurn();
