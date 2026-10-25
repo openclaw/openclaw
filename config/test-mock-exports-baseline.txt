@@ -5631,7 +5631,6 @@
 ["src/hooks/bundled/boot-md/handler.test.ts","../../../agents/agent-scope.js","f92f8b79e57491eef491e281ead1a7731da0417a14c5586ae4f109603979e703",1]
 ["src/hooks/bundled/boot-md/handler.test.ts","../../../gateway/boot.js","ac6fb9fd961599dc00464217bbe81ebb1de021aabdb4a22b884ec94c075be946",1]
 ["src/hooks/bundled/boot-md/handler.test.ts","../../../logging/subsystem.js","de8da543c5e4d972c723b59fadd208e2ab02b99155d6daec646070ff9382129b",1]
-["src/hooks/bundled/session-memory/handler.test.ts","../../../memory/memory-artifact-provenance.js","a4e36f0eabae215d7f2c3844b037191f3b086c291d7dc51b1109da307db10f0c",1]
 ["src/hooks/gmail-ops.test.ts","../infra/executable-path.js","625aee5af957f1060d67195ea629eaa08e6317f57859fcd289b13270c345ed72",1]
 ["src/hooks/gmail-ops.test.ts","../logging/subsystem.js","d17c3862508ffbacdbe6e956bf308efc72f675b1371cfc49a6009b39826fa074",1]
 ["src/hooks/gmail-ops.test.ts","./gmail-setup-utils.js","3519d74a41409f865df8b4916335ea7c335907f32cfedd5ef06abde1ade81775",1]

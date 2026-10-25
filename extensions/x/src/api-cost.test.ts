@@ -64,17 +64,27 @@ it.each([
   expect(api.request).not.toHaveBeenCalled();
 });
 
-it("keeps reloaded-ledger budget refusals non-retryable and subscription management free", async () => {
+it("keeps reloaded-ledger budget refusals non-retryable", async () => {
   vi.resetModules();
   const { createXTestSpend: reloadedSpend } = await import("./test-support/spend.js");
-  const body = { data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }] };
-  const api = client(async () => Response.json(body), 0, reloadedSpend({ dailyUsd: 0 }));
+  const api = client(
+    async () => {
+      throw new Error("Unexpected request");
+    },
+    0,
+    reloadedSpend({ dailyUsd: 0 }),
+  );
   await refused(api.getMentions({ userId: "9" }));
   await refused(api.getUserByUsername("author"));
   const rejected = reply(api);
   await expect(rejected).rejects.toMatchObject(notDispatched);
   await expect(rejected).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
   expect(api.request).not.toHaveBeenCalled();
+});
+
+it("keeps subscription management free", async () => {
+  const body = { data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }] };
+  const api = client(async () => Response.json(body), 0);
   await api.ensureActivitySubscriptions("9");
   expect(api.request).toHaveBeenCalledOnce();
 });

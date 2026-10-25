@@ -36,6 +36,7 @@ vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Observe provenance ordering and failures without writing the real provenance store.
 vi.mock("../../../memory/memory-artifact-provenance.js", () => ({
   normalizeMemoryArtifactRelativePath: (relativePath: string) => relativePath,
   recordMemoryArtifactWriteProvenance: recordProvenance,

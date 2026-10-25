@@ -37,7 +37,7 @@ async function mediaFixture(scenario = "image") {
     "base64",
   );
   const file = await write("proof.png", bytes);
-  const variants: Record<string, () => Promise<string[]>> = {
+  const variants: Record<string, () => Promise<[string, ...string[]]>> = {
     unsupported: async () => [await write("private.txt", "not an image")],
     video: async () => [await write("proof.mp4", videoBytes)],
     mixed: async () => [file, await write("proof.mp4", videoBytes)],
@@ -46,7 +46,7 @@ async function mediaFixture(scenario = "image") {
     ],
     many: async () => [file, ...[1, 2, 3, 4].map((i) => path.join(root, i + ".png"))],
   };
-  const urls = await (variants[scenario]?.() ?? Promise.resolve([file]));
+  const urls = await (variants[scenario]?.() ?? Promise.resolve<[string, ...string[]]>([file]));
   const mention = {
     ...post("501", "10"),
     entities: { mentions: [{ id: "100", username: "roboclawbot" }] },
