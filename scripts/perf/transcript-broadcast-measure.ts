@@ -5922,9 +5922,6 @@ try {
         : undefined;
       try {
         streamStart = await runScenario(round);
-        if (!values["dashboard-rpc"]) {
-          await drainEvents();
-        }
         if (values["dashboard-rpc"] || pollBetweenRounds) {
           // Keep polling between bursts of agent work.
           const pacedUntil = Math.min(
@@ -5956,9 +5953,9 @@ try {
         }
         measuring = true;
         await workload();
-        // Polling RPCs can publish after workload's first drain. Freeze counters
-        // at a quiet boundary, rather than midway through their recipient fanout.
-        if (turnScenario) {
+        // Polling has stopped and in-flight RPCs have completed; drain their
+        // remaining events before freezing measured counters.
+        if (turnScenario || !values["dashboard-rpc"]) {
           const beforeDrain = perClientCounters.map((counts) => Object.fromEntries(counts));
           const drainStarted = performance.now();
           await drainEvents();
