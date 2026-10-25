@@ -95,6 +95,14 @@ builds with `--disallow-code-generation-from-strings=strict` still report action
 guidance. Guest runtimes keep their own qualification requirements; OpenClaw
 does not silently switch executors.
 
+The sidecar retains the canonical worker deployment archive for transfer to paired
+nodes. It does not retain loose host worker modules. A standalone node uses the
+same executable's generic Bun runner to prewarm and execute a transferred worker
+bundle, preserving its normal bundle and protocol checks. In a run-only AOT build,
+that portable worker graph runs interpreted; embedded host worker threads still
+execute their compiled entries. Qualify this child path on the exact signed
+artifact without adding JIT entitlements or substituting a host runtime.
+
 ### Original TypeScript and compiler options
 
 `--compile-aot` compiles the completed JavaScript runtime build. `--aot-source` resolves

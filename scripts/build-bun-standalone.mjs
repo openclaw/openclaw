@@ -126,6 +126,9 @@ console.log(`Building ${mode} standalone in ${outputRoot}`);
 
 copyStandaloneRuntime(sourceRoot, runtimeRoot);
 pruneStandalonePluginDirectories(runtimeRoot, plugins);
+// Transfer the canonical portable graph; host workers remain embedded in the image.
+const { preparePackagedWorkerBundle } = await import("./package-worker-bundle.mts");
+await preparePackagedWorkerBundle(runtimeRoot);
 const declaredPluginAssets = new Set(
   listPackagedStaticExtensionAssetOutputs({ rootDir: runtimeRoot }),
 );

@@ -20,7 +20,7 @@ import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveRuntimeDeployEntrypointUrl } from "../infra/runtime-process-url.js";
-import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerEnv } from "../infra/runtime-worker-url.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -377,17 +377,14 @@ export class NodeWorkerBundleInstaller {
     if (this.#prewarmedBundles.has(bundleDir)) {
       return;
     }
+    const entry = resolveRuntimeDeployEntrypointUrl("worker", bundleDir);
     try {
       await execFileAsync(
         process.execPath,
-        [
-          ...resolveRuntimeArgs(),
-          fileURLToPath(resolveRuntimeDeployEntrypointUrl("worker", bundleDir)),
-          "--internal-worker-prewarm",
-        ],
+        [...resolveRuntimeArgs(), fileURLToPath(entry), "--internal-worker-prewarm"],
         {
           cwd: bundleDir,
-          env: this.#workerEnv,
+          env: resolveRuntimeWorkerEnv(entry, this.#workerEnv),
           timeout: WORKER_PREWARM_TIMEOUT_MS,
           windowsHide: true,
           ...(signal ? { signal } : {}),
