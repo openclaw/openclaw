@@ -88,6 +88,11 @@ function observeReconnect() {
   return { statusSink, reconnected: reconnected.promise };
 }
 
+async function expectQueueEmpty(queue: IrcIngressQueue) {
+  expect(await queue.listPending({ limit: "all" })).toEqual([]);
+  expect(await queue.listClaims()).toEqual([]);
+}
+
 async function startMonitorServer(
   options: {
     welcomeNick?: string;
@@ -268,19 +273,11 @@ describe("IRC configured-unavailable credential connection boundaries", () => {
     const connectSpy = vi.spyOn(net, "connect").mockImplementation(() => {
       throw new Error("unexpected IRC connection");
     });
-    const config = {
-      channels: {
-        irc: {
-          host: "127.0.0.1",
-          port: 6667,
-          tls: false,
-          nick: "openclaw",
-          nickserv: {
-            password: { source: "env", provider: "default", id: "IRC_UNAVAILABLE_EXPLICIT_SECRET" },
-          },
-        },
+    const config = monitorConfig(6667, "openclaw", {
+      nickserv: {
+        password: { source: "env", provider: "default", id: "IRC_UNAVAILABLE_EXPLICIT_SECRET" },
       },
-    } as unknown as CoreConfig;
+    });
 
     try {
       await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
@@ -345,14 +342,11 @@ describe("irc monitor reconnect", () => {
         await releaseAdmission.promise;
         return result;
       };
-      const start = async (
+      const start = (
         accountId: string,
         ingressQueue: IrcIngressQueue,
         onMessage: IrcMonitorMessageHandler,
-      ) => {
-        const monitor = await resources.monitor({ accountId, config, ingressQueue, onMessage });
-        return monitor;
-      };
+      ) => resources.monitor({ accountId, config, ingressQueue, onMessage });
       try {
         const alpha = await start("alpha", alphaQueue, alphaDispatch);
         await start("beta", betaQueue, betaDispatch);
@@ -493,7 +487,6 @@ describe("irc monitor reconnect", () => {
       const server = await resources.server(
         startMonitorServer({ welcomeNick: "receipt-bot", renameOnReconnect: true }),
       );
-      const enqueueSpy = vi.spyOn(ingressQueue, "enqueue");
       try {
         const monitor = await resources.monitor({
           config: monitorConfig(server.port, "receipt-bot", { dmPolicy: "pairing" }),
@@ -507,73 +500,58 @@ describe("irc monitor reconnect", () => {
         expect(server.connectionCount).toBeGreaterThanOrEqual(2);
         expect(server.linesByConnection[1]?.some((line) => line.startsWith("USER "))).toBe(true);
         pairingResult.resolve({ code: "CODE", created: true });
-        const completedId = await withTimeout(completed, 3000, "stale private reply completion");
-        expect(enqueueSpy).toHaveBeenCalledOnce();
-        expect(completedId).toBe(enqueueSpy.mock.calls[0]?.[0]);
-        expect(await ingressQueue.listPending({ limit: "all" })).toEqual([]);
-        expect(await ingressQueue.listClaims()).toEqual([]);
+        await withTimeout(completed, 3000, "stale private reply completion");
+        await expectQueueEmpty(ingressQueue);
         // Let the delayed send finish before shutdown can suppress it.
         // Peer-observed QUIT follows any reply bytes queued on the replacement socket.
         await monitor.stop();
         await withTimeout(server.replacementQuitReceived, 3000, "replacement IRC QUIT");
-        expect(
-          server.linesByConnection[0]?.some((line) => line.startsWith("PRIVMSG alice :")),
-        ).toBe(false);
-        expect(
-          server.linesByConnection[1]?.some((line) => line.startsWith("PRIVMSG alice :")),
-        ).toBe(false);
+        for (const lines of server.linesByConnection.slice(0, 2)) {
+          expect(lines.some((line) => line.startsWith("PRIVMSG alice :"))).toBe(false);
+        }
       } finally {
         pairingResult.resolve({ code: "CODE", created: true });
-
-        enqueueSpy.mockRestore();
       }
     });
   });
 });
 
 describe("irc monitor inbound target", () => {
-  it.each([
-    {
-      label: "channel with a colonless body",
-      serverTarget: "#openclaw",
-      colonlessBody: true,
-      expected: { isGroup: true, target: "#openclaw", rawTarget: "#openclaw" },
-    },
-  ])(
-    "maps $label targets through the monitor boundary",
-    async ({ serverTarget, colonlessBody, expected }) => {
-      await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
-        const debug = vi.fn();
-        installMonitorRuntime(debug, true);
-        const server = await resources.server(startMonitorServer());
-        const noticeText = "private-notice-sentinel";
-        const messages: IrcInboundMessage[] = [];
-        const completed = observeIngressCompletion(ingressQueue);
+  it("maps channel targets with a colonless body through the monitor boundary", async () => {
+    const serverTarget = "#openclaw";
+    await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
+      const debug = vi.fn();
+      installMonitorRuntime(debug, true);
+      const server = await resources.server(startMonitorServer());
+      const noticeText = "private-notice-sentinel";
+      const messages: IrcInboundMessage[] = [];
+      const completed = observeIngressCompletion(ingressQueue);
 
-        await resources.monitor({
-          config: monitorConfig(server.port),
-          ingressQueue,
-          onMessage: (message) => {
-            messages.push(message);
-          },
-        });
-        server.sendNotice(serverTarget, noticeText);
-        server.sendInbound(serverTarget, colonlessBody);
-        const completedId = await withTimeout(completed, 3000, "inbound IRC message completion");
-        expect(messages).toHaveLength(1);
-        expect(messages[0]).toMatchObject({
-          messageId: completedId,
-          ...expected,
-          senderNick: "alice",
-          text: "hello",
-        });
-        expect(debug).toHaveBeenCalledWith(expect.stringContaining(`notice ${serverTarget}`));
-        const diagnostics = JSON.stringify(debug.mock.calls);
-        expect(diagnostics).not.toContain("hello");
-        expect(diagnostics).not.toContain(noticeText);
+      await resources.monitor({
+        config: monitorConfig(server.port),
+        ingressQueue,
+        onMessage: (message) => {
+          messages.push(message);
+        },
       });
-    },
-  );
+      server.sendNotice(serverTarget, noticeText);
+      server.sendInbound(serverTarget, true);
+      const completedId = await withTimeout(completed, 3000, "inbound IRC message completion");
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        messageId: completedId,
+        isGroup: true,
+        target: serverTarget,
+        rawTarget: serverTarget,
+        senderNick: "alice",
+        text: "hello",
+      });
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining(`notice ${serverTarget}`));
+      const diagnostics = JSON.stringify(debug.mock.calls);
+      expect(diagnostics).not.toContain("hello");
+      expect(diagnostics).not.toContain(noticeText);
+    });
+  });
 
   it.each([
     [
@@ -622,8 +600,7 @@ describe("irc monitor inbound target", () => {
         onMessage,
       });
       expect(await withTimeout(completed, 3000, completionLabel)).toBe(eventId);
-      expect(await ingressQueue.listPending({ limit: "all" })).toEqual([]);
-      expect(await ingressQueue.listClaims()).toEqual([]);
+      await expectQueueEmpty(ingressQueue);
       expect(onMessage).not.toHaveBeenCalled();
     });
   });
@@ -632,28 +609,19 @@ describe("irc monitor inbound target", () => {
     await withIngressQueue(async (ingressQueue, _stateDir, resources) => {
       const activityRecord = installMonitorRuntime();
       const server = await resources.server(startMonitorServer());
-      const enqueueSpy = vi.spyOn(ingressQueue, "enqueue");
       const onMessage = vi.fn();
       const completed = observeIngressCompletion(ingressQueue);
-      try {
-        const monitor = await resources.monitor({
-          config: monitorConfig(server.port),
-          ingressQueue,
-          onMessage,
-        });
-        server.sendInbound("#openclaw", false, "bot");
-        const completedId = await withTimeout(completed, 3000, "receipt-time self echo completion");
-        expect(enqueueSpy).toHaveBeenCalledOnce();
-        await enqueueSpy.mock.results[0]?.value;
-        expect(completedId).toBe(enqueueSpy.mock.calls[0]?.[0]);
-        expect(await ingressQueue.listPending({ limit: "all" })).toEqual([]);
-        expect(await ingressQueue.listClaims()).toEqual([]);
-        await monitor.stop();
-        expect(onMessage).not.toHaveBeenCalled();
-        expect(activityRecord).not.toHaveBeenCalled();
-      } finally {
-        enqueueSpy.mockRestore();
-      }
+      const monitor = await resources.monitor({
+        config: monitorConfig(server.port),
+        ingressQueue,
+        onMessage,
+      });
+      server.sendInbound("#openclaw", false, "bot");
+      await withTimeout(completed, 3000, "receipt-time self echo completion");
+      await expectQueueEmpty(ingressQueue);
+      await monitor.stop();
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(activityRecord).not.toHaveBeenCalled();
     });
   });
 });

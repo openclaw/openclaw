@@ -571,9 +571,24 @@ describe("IRC formatted text on the wire", () => {
   let cfg: CoreConfig;
   const messages = () => server.lines.filter((line) => line.startsWith(prefix));
   const send = async (text: string, options: SendOptions = {}) => {
-    const results = await sendFormattedIrcText({ cfg, to: "#room", text, ...options });
+    const onDeliveryResult = vi.fn(),
+      onPlatformSendDispatch = vi.fn();
+    const results = await sendFormattedIrcText({
+      cfg,
+      to: "#room",
+      text,
+      onDeliveryResult,
+      onPlatformSendDispatch,
+      ...options,
+    });
     await server.socketClosed;
     expect(results).toHaveLength(messages().length);
+    for (const callback of [onDeliveryResult, onPlatformSendDispatch]) {
+      expect(callback).toHaveBeenCalledTimes(results.length);
+    }
+    for (const command of ["USER ", "JOIN #room", "QUIT :"]) {
+      expect(server.lines.filter((line) => line.startsWith(command))).toHaveLength(1);
+    }
     expect(server.openSocketCount()).toBe(0);
     return results;
   };
@@ -637,7 +652,6 @@ describe("IRC formatted text on the wire", () => {
         .map((line) => line.slice(prefix.length))
         .join(" "),
     ).toBe(expected);
-    expect(server.lines.filter((line) => line.startsWith("USER "))).toHaveLength(1);
   });
 
   it.each([

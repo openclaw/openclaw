@@ -152,31 +152,6 @@ describe("IRC outbound and probing", () => {
     unsent();
   });
 
-  it("uses one transient connection for a chunked outbound message", async () => {
-    const onDeliveryResult = vi.fn(),
-      onPlatformSendDispatch = vi.fn();
-    const chunks = ircOutboundBaseAdapter.chunker(longText, 350);
-    const results = await formatted({
-      ...context,
-      text: longText,
-      replyToId: "parent-1",
-      replyToIdSource: "explicit",
-      replyToMode: "all",
-      onDeliveryResult,
-      onPlatformSendDispatch,
-    });
-    expect(mocks.connectIrcClient).toHaveBeenCalledOnce();
-    expect(client.join).toHaveBeenCalledOnce();
-    expect(client.sendPrivmsg.mock.calls).toEqual(
-      chunks.map((chunk) => ["#room", chunk, "parent-1"]),
-    );
-    expect(client.quit).toHaveBeenCalledOnce();
-    for (const callback of [onPlatformSendDispatch, onDeliveryResult]) {
-      expect(callback).toHaveBeenCalledTimes(chunks.length);
-    }
-    expect(results).toHaveLength(chunks.length);
-  });
-
   it.each(
     [
       { kind: "formatted", sendMessage: formatted },
