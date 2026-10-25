@@ -2,6 +2,34 @@
 import AVFAudio
 import Foundation
 
+/// Realtime voice providers send speech near -22 LUFS, well under the level phones normally play
+/// speech at. Lift each 20 ms frame, and hold peaks under the ceiling: the gain drops at once for a
+/// loud frame and recovers about 1 dB per frame.
+struct RealtimePCMLoudness {
+    // One fixed gain, measured on xAI voice (-21.9 LUFS in, -13.6 out). Make it per provider if
+    // another provider arrives hotter.
+    static let gain: Float = 2.82 // +9 dB
+    static let ceiling: Float = 29204 // -1 dBFS
+    private static let release: Float = 1.12
+    private var current = Self.gain
+
+    mutating func apply(to frame: Data) -> Data {
+        var samples = frame.withUnsafeBytes { raw in
+            stride(from: 0, to: raw.count - 1, by: 2).map { raw.loadUnaligned(fromByteOffset: $0, as: Int16.self) }
+        }
+        let peak = samples.reduce(Float(1)) { max($0, abs(Float($1))) }
+        let previous = self.current
+        self.current = min(Self.gain, Self.ceiling / peak, previous * Self.release)
+        // Ramp while recovering so the level does not step; a drop applies to the whole frame.
+        let start = min(previous, self.current)
+        let step = (self.current - start) / Float(max(samples.count, 1))
+        for index in samples.indices {
+            samples[index] = Int16((Float(samples[index]) * (start + step * Float(index))).rounded())
+        }
+        return samples.withUnsafeBufferPointer { Data(buffer: $0) }
+    }
+}
+
 /// The lock guards playback/generation state; backend closures run on backendQueue without it.
 /// Completion callbacks are queued, including callbacks invoked synchronously by node.stop.
 public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudioPlaying,
@@ -56,8 +84,10 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
         let commonFormat: AVAudioCommonFormat = ownsEngine ? .pcmFormatInt16 : .pcmFormatFloat32
         #endif
         var format: AVAudioFormat?
+        var loudness = RealtimePCMLoudness()
         self.init(
             preparePlayback: { sampleRate in
+                loudness = RealtimePCMLoudness()
                 node.stop()
                 if ownsEngine { engine.stop() }
                 engine.disconnectNodeOutput(node)
@@ -86,10 +116,11 @@ public final nonisolated class RealtimePCMStreamingAudioPlayer: PCMStreamingAudi
                     node.scheduleBuffer(pad)
                 }
             },
-            scheduleFrame: { data, _, completion in
+            scheduleFrame: { frame, _, completion in
                 guard let format else {
                     throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 2)
                 }
+                let data = loudness.apply(to: frame)
                 let frames = AVAudioFrameCount(data.count / MemoryLayout<Int16>.size)
                 guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else {
                     throw NSError(domain: "RealtimePCMStreamingAudioPlayer", code: 3)
