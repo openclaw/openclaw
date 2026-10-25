@@ -73,17 +73,19 @@ function fixture<T>(targets: readonly T[], timed = false) {
   };
 }
 
+async function inspectNumbered(
+  pending: ReturnType<typeof createDeferred>[],
+  target: number,
+  inspection: OpenClawDatabaseSchemaPreflight,
+) {
+  await pending[target]!.promise;
+  inspection.indeterminate.push({ kind: "agent", path: `agent-${target}`, reason: "fixture" });
+}
+
 it("shares one foreground wait across active and queued agent inspections", async () => {
   await using f = fixture([0, 1, 2, 3], true);
   void f.run(
-    async (target, inspection) => {
-      await f.pending[target]!.promise;
-      inspection.indeterminate.push({
-        kind: "agent",
-        path: `agent-${target}`,
-        reason: "fixture",
-      });
-    },
+    (target, inspection) => inspectNumbered(f.pending, target, inspection),
     () => true,
   );
   await vi.advanceTimersByTimeAsync(4_000);
@@ -196,14 +198,7 @@ it("bounds active inspections to the host's CPUs", async () => {
 
 it("preserves input result order when inspections finish out of order", async () => {
   await using f = fixture([0, 1, 2]);
-  const run = f.run(async (target, inspection) => {
-    await f.pending[target]!.promise;
-    inspection.indeterminate.push({
-      kind: "agent",
-      path: `agent-${target}`,
-      reason: `result-${target}`,
-    });
-  });
+  const run = f.run((target, inspection) => inspectNumbered(f.pending, target, inspection));
   await Promise.resolve();
   f.pending[1]!.resolve();
   await Promise.resolve();
