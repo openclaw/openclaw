@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import {
@@ -15,13 +16,10 @@ import { holdFirstCompactRead } from "./subagent-registry-state.read.test-suppor
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return {
+  return createSubagentRunRecord({
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
     task: "collector task",
-    cleanup: "keep",
     createdAt: 100,
     execution: { status: "terminal", endedAt: 200 },
     completion: { required: false, resultText: `result-${runId}` },
@@ -30,7 +28,7 @@ function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): S
     swarmRequesterSessionKey: "agent:main:main",
     collectorCompletion: { status: "done" },
     ...overrides,
-  };
+  });
 }
 
 function createReadApi(runs = new Map<string, SubagentRunRecord>()) {
@@ -130,20 +128,15 @@ describe("subagent registry known-run reads", () => {
         const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
         try {
           await prepareSubagentSessionListReadCache();
-          expect(
-            api.countActiveRunsForSession("agent:main:main", {
-              collect: false,
-              requesterAgentId: "main",
-            }),
-          ).toBe(activeChildren);
-          expect(read.mock.calls.map(([, command]) => command.type)).toEqual([
-            "subagents.sessionList",
-          ]);
           const count = () =>
             api.countActiveRunsForSession("agent:main:main", {
               collect: false,
               requesterAgentId: "main",
             });
+          expect(count()).toBe(activeChildren);
+          expect(read.mock.calls.map(([, command]) => command.type)).toEqual([
+            "subagents.sessionList",
+          ]);
           const settled = createRun("active-0", { collect: false, requesterAgentId: "main" });
           memory.set(settled.runId, settled);
           expect(count()).toBe(activeChildren - 1);
@@ -191,20 +184,22 @@ describe("subagent registry known-run reads", () => {
       const api = createReadApi(memory);
 
       const original = await api.prepareSubagentRunsByRunIds(["collector"]);
-      expect(
-        original.consume((selected) => {
-          expect(selected.get("collector")?.runId).toBe("collector");
-        }),
-      ).toEqual({ ready: true, value: undefined });
+      expect(original.consume((selected) => selected.get("collector")?.runId)).toEqual({
+        ready: true,
+        value: "collector",
+      });
 
       const live = createRun("live", { swarmRunId: "collector", execution: { status: "queued" } });
       memory.set(live.runId, live);
       const current = await api.prepareSubagentRunsByRunIds(["collector"]);
-      expect(
-        current.consume((selected) => {
-          expect(selected.get("collector")).toBe(live);
-        }),
-      ).toEqual({ ready: true, value: undefined });
+      const expectCurrent = () => {
+        expect(
+          current.consume((selected) => {
+            expect(selected.get("collector")).toBe(live);
+          }),
+        ).toEqual({ ready: true, value: undefined });
+      };
+      expectCurrent();
       const different = await api.prepareSubagentRunsByRunIds(["different-collector"]);
       expect(
         different.consume((selected) => {
@@ -213,10 +208,7 @@ describe("subagent registry known-run reads", () => {
       ).toEqual({ ready: true, value: undefined });
 
       memory.set(moved.runId, { ...moved, swarmRunId: "collector" });
-      expect(current.consume((selected) => selected.get("collector"))).toEqual({
-        ready: true,
-        value: live,
-      });
+      expectCurrent();
       memory.delete(live.runId);
       expect(current.consume((selected) => selected.get("collector")?.runId)).toEqual({
         ready: true,
