@@ -217,7 +217,7 @@ suite.define(() => {
     async ({ route, selector }) => {
       await suite.withPage(contextOptions, async ({ page }) => {
         const endMarker = "End of the attached note.";
-        const text =
+        const pasteText =
           route === "new"
             ? `${pastedText}\n${"Keep this line reachable in the attachment reader.\n".repeat(60)}${endMarker}`
             : pastedText;
@@ -226,14 +226,14 @@ suite.define(() => {
         const composer = page.locator(selector);
         await composer.waitFor({ state: "visible" });
         await composer.fill("");
-        await page.evaluate((text) => navigator.clipboard.writeText(text), text);
+        await page.evaluate((text) => navigator.clipboard.writeText(text), pasteText);
         await composer.focus();
         await page.keyboard.press(nativePasteShortcut);
         await page.waitForFunction((inputSelector) => {
           const input = document.querySelector<HTMLTextAreaElement>(inputSelector);
           return Boolean(input?.value || document.querySelector("openclaw-chat-pasted-text"));
         }, selector);
-        await expect.poll(() => composer.inputValue()).toBe(text);
+        await expect.poll(() => composer.inputValue()).toBe(pasteText);
         expect(
           await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
         ).toBe(0);
@@ -248,7 +248,7 @@ suite.define(() => {
           const scrollport = preview.locator(".sidebar-content");
           await expect
             .poll(() => preview.locator(".sidebar-attachment-preview__text").textContent())
-            .toBe(text);
+            .toBe(pasteText);
           await scrollport.evaluate((element) => {
             element.scrollTop = element.scrollHeight;
           });
@@ -274,7 +274,7 @@ suite.define(() => {
           await expect.poll(() => preview.count()).toBe(0);
         }
         await button(page, "Show in text field").click();
-        await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${text}`);
+        await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pasteText}`);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       });
