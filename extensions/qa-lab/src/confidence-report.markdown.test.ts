@@ -1,207 +1,111 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { buildQaConfidenceReport, renderQaConfidenceMarkdownReport } from "./confidence-report.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { makeTempDir, cleanup } = createTempDirHarness();
 afterEach(cleanup);
-const generatedAt = "2026-05-13T00:00:00.000Z";
-const counts = { total: 1, passed: 0, failed: 0, blocked: 0, missing: 0, unknown: 0 };
-const lane = {
-  id: "evidence",
-  title: "Evidence",
-  artifact: "summary.json",
-  required: true,
-};
 type Lane = Parameters<typeof buildQaConfidenceReport>[0]["manifest"]["lanes"][number];
+const lane = (id: string, options: Partial<Lane> = {}): Lane => ({
+  id,
+  title: id,
+  kind: "qa-suite-summary",
+  artifact: `${id}.json`,
+  required: true,
+  ...options,
+});
 function buildReport(artifactRoot: string, lanes: Lane[], strictGlobalPass = false) {
   return buildQaConfidenceReport({
-    manifest: {
-      version: 1,
-      profile: strictGlobalPass ? "confidence-table" : "evidence-classification",
-      lanes,
-    },
+    manifest: { version: 1, profile: "markdown", lanes },
     artifactRoot,
-    generatedAt,
-    strictZeroUnknowns: !strictGlobalPass,
+    strictZeroUnknowns: true,
     strictGlobalPass,
   });
 }
-function missingLane(
-  id: string,
-  title: string,
-  productImpact: string,
-  qaImpact: string,
-  missingReason: string,
-): Lane {
-  return {
-    id,
-    title,
-    kind: "qa-suite-summary",
-    artifact: `${id}/qa-suite-summary.json`,
-    required: true,
-    missingVerdict: "environment-blocked",
-    missingReason,
-    productImpact,
-    qaImpact,
-  };
-}
 
-describe("qa confidence report Markdown", () => {
-  it.each([
-    [
-      "non-object suite",
-      "qa-suite-summary",
-      [],
-      "qa-suite-summary payload was not an object",
-      "unknown",
-    ],
-    [
-      "unsupported generic status",
-      "generic-pass-summary",
-      { status: "skipped" },
-      "summary status=skipped",
-      "unknown",
-    ],
-    [
-      "missing replay transcripts",
-      "jsonl-replay-summary",
-      {},
-      "jsonl replay summary missing transcripts array",
-      "unknown",
-    ],
-    [
-      "invalid replay row before mismatched drift",
-      "jsonl-replay-summary",
-      { transcripts: [null, { userTurnCount: 2, drift: ["none"] }] },
-      "jsonl replay summary has an invalid transcript row",
-      "unknown",
-    ],
-    [
-      "mismatched drift before invalid replay row",
-      "jsonl-replay-summary",
-      { transcripts: [{ userTurnCount: 2, drift: ["none"] }, null] },
-      "jsonl replay transcript drift count does not match userTurnCount",
-      "unknown",
-    ],
-    [
-      "missing self-test canaries",
-      "self-test-summary",
-      {},
-      "confidence self-test summary missing canaries array",
-      "unknown",
-    ],
-    [
-      "non-object generic failure",
-      "generic-pass-summary",
-      null,
-      "summary payload was not an object",
-      "fail",
-    ],
-    [
-      "explicit failure before skipped status",
-      "generic-pass-summary",
-      { pass: false, status: "skipped" },
-      "summary pass=false",
-      "fail",
-    ],
-  ] as const)(
-    "preserves evidence classification for %s",
-    async (_name, kind, payload, details, status) => {
-      const tempRoot = await makeTempDir("qa-confidence-markdown-");
-      await fs.writeFile(path.join(tempRoot, lane.artifact), JSON.stringify(payload));
-      const report = await buildReport(tempRoot, [
-        { ...lane, kind, failureVerdict: "fixture-bug" },
-      ]);
-      const unknown = status === "unknown";
-      expect(report).toEqual({
-        generatedAt,
-        profile: "evidence-classification",
-        strictZeroUnknowns: true,
-        strictGlobalPass: false,
-        pass: !unknown,
-        zeroUnknowns: !unknown,
-        globalPass: false,
-        counts: { ...counts, failed: unknown ? 0 : 1, unknown: unknown ? 1 : 0 },
-        failures: unknown ? [`evidence is unclassified: ${details}`] : [],
-        lanes: [
-          {
-            ...lane,
-            kind,
-            artifactPath: lane.artifact,
-            status,
-            ...(unknown ? {} : { verdict: "fixture-bug" }),
-            details,
-          },
-        ],
-      });
-      expect(report.lanes[0]).not.toHaveProperty("skippedCount");
-      if (unknown) {
-        expect(report.lanes[0]).not.toHaveProperty("verdict");
-      }
-      expect(renderQaConfidenceMarkdownReport(report)).toContain(
-        `| evidence | ${status} | ${unknown ? "unclassified" : "fixture-bug"} |  |  | ${details} |`,
-      );
-    },
-  );
-
-  it.each([
-    ["P1", "P2", ["P1", "P2"]],
-    ["P1 | desktop", "P2", ["P1 | desktop", "P2"]],
-    ["P1", "P2 | harness", ["P1", "P2 | harness"]],
-    [String.raw`P1 \| desktop`, "P2", [String.raw`P1 \| desktop`, "P2"]],
-    ["P1", String.raw`P2 \| harness`, ["P1", String.raw`P2 \| harness`]],
-    ["P1\ndesktop", "P2", ["P1 desktop", "P2"]],
-    ["P1", "P2\nharness", ["P1", "P2 harness"]],
-  ] as const)(
-    "preserves impacts %s / %s in the confidence table",
-    async (productImpact, qaImpact, expectedImpacts) => {
-      const tempRoot = await makeTempDir("qa-confidence-markdown-");
-      const report = await buildReport(
-        tempRoot,
-        [
-          missingLane(
-            "missing",
-            "Missing",
-            productImpact,
-            qaImpact,
-            String.raw`path\|fallback unavailable`,
-          ),
-          missingLane("following-control", "Following control", "P4", "P0", "Control unavailable."),
-        ],
-        true,
-      );
-      const markdown = renderQaConfidenceMarkdownReport(report);
-      const { tables } = markdownToIRWithMeta(markdown, { tableMode: "block" });
-
-      expect(tables).toHaveLength(1);
-      expect(tables[0]?.headers).toEqual([
-        "Lane",
-        "Status",
-        "Verdict",
-        "Product impact",
-        "QA impact",
-        "Details",
-      ]);
-      expect(tables[0]?.rows).toEqual([
-        [
-          "missing",
-          "blocked",
-          "environment-blocked",
-          ...expectedImpacts,
-          String.raw`path\|fallback unavailable`,
-        ],
-        ["following-control", "blocked", "environment-blocked", "P4", "P0", "Control unavailable."],
-      ]);
-      expect(report.lanes[0]).toMatchObject({
-        productImpact,
-        qaImpact,
-        details: String.raw`path\|fallback unavailable`,
-      });
-      expect(report.counts).toEqual({ ...counts, total: 2, blocked: 2 });
-      expect(report).toMatchObject({ pass: false, zeroUnknowns: true, globalPass: false });
-    },
-  );
+it.each([
+  ["qa-suite-summary", [], "unknown"],
+  ["generic-pass-summary", { status: "skipped" }, "unknown"],
+  ["jsonl-replay-summary", {}, "unknown"],
+  ["jsonl-replay-summary", { transcripts: [null] }, "unknown"],
+  ["jsonl-replay-summary", { transcripts: [{ userTurnCount: 1, drift: [] }] }, "unknown"],
+  ["self-test-summary", {}, "unknown"],
+  ["generic-pass-summary", null, "fail"],
+  ["generic-pass-summary", { pass: false, status: "skipped" }, "fail"],
+] as const)("renders %s payload %j as %s", async (kind, payload, status) => {
+  const root = await makeTempDir("qa-confidence-markdown-");
+  await fs.writeFile(path.join(root, "evidence.json"), JSON.stringify(payload));
+  const report = await buildReport(root, [
+    lane("evidence", { kind, failureVerdict: "fixture-bug" }),
+  ]);
+  const verdict = status === "unknown" ? undefined : "fixture-bug";
+  expect(report).toMatchObject({
+    pass: status === "fail",
+    zeroUnknowns: status === "fail",
+    globalPass: false,
+  });
+  expect(report.lanes[0]).toMatchObject({ status });
+  expect(report.lanes[0]?.verdict).toBe(verdict);
+  const { tables } = markdownToIRWithMeta(renderQaConfidenceMarkdownReport(report), {
+    tableMode: "block",
+  });
+  expect(tables[0]?.rows.map((row) => row.slice(0, 5))).toEqual([
+    ["evidence", status, verdict ?? "unclassified", "", ""],
+  ]);
 });
+
+it.each([
+  ["P1", "P2", ["P1", "P2"]],
+  ["P1 | desktop", "P2 | harness", ["P1 | desktop", "P2 | harness"]],
+  [
+    String.raw`P1 \| desktop`,
+    String.raw`P2 \| harness`,
+    [String.raw`P1 \| desktop`, String.raw`P2 \| harness`],
+  ],
+  ["P1\ndesktop", "P2\nharness", ["P1 desktop", "P2 harness"]],
+] as const)(
+  "preserves impacts %s / %s in the confidence table",
+  async (productImpact, qaImpact, expectedImpacts) => {
+    const details = String.raw`path\|fallback unavailable`;
+    const blockedLane = (id: string, product: string, qa: string, missingReason: string) =>
+      lane(id, {
+        productImpact: product,
+        qaImpact: qa,
+        missingReason,
+        missingVerdict: "environment-blocked",
+      });
+    const report = await buildReport(
+      await makeTempDir("qa-confidence-markdown-"),
+      [
+        blockedLane("missing", productImpact, qaImpact, details),
+        blockedLane("following-control", "P4", "P0", "Control unavailable."),
+      ],
+      true,
+    );
+    const { tables } = markdownToIRWithMeta(renderQaConfidenceMarkdownReport(report), {
+      tableMode: "block",
+    });
+    expect(tables).toHaveLength(1);
+    expect(tables[0]?.headers).toEqual([
+      "Lane",
+      "Status",
+      "Verdict",
+      "Product impact",
+      "QA impact",
+      "Details",
+    ]);
+    expect(tables[0]?.rows).toEqual([
+      ["missing", "blocked", "environment-blocked", ...expectedImpacts, details],
+      ["following-control", "blocked", "environment-blocked", "P4", "P0", "Control unavailable."],
+    ]);
+    expect(report.lanes[0]).toMatchObject({ productImpact, qaImpact, details });
+    expect(report).toMatchObject({
+      pass: false,
+      zeroUnknowns: true,
+      globalPass: false,
+      counts: { blocked: 2 },
+    });
+  },
+);

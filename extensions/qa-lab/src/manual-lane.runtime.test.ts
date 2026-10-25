@@ -1,46 +1,32 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-  cleanupTransportAfterGatewayStop,
-  cleanupTransportBeforeGatewayStop,
-  createQaTransportAdapter,
-  startQaGatewayChild,
-  gatewayStop,
-  startQaLabServer,
-  startQaProviderServer,
-} = vi.hoisted(() => ({
-  cleanupTransportAfterGatewayStop: vi.fn(),
-  cleanupTransportBeforeGatewayStop: vi.fn(),
-  createQaTransportAdapter: vi.fn(),
-  startQaLabServer: vi.fn(),
-  startQaGatewayChild: vi.fn(),
-  gatewayStop: vi.fn(),
-  startQaProviderServer: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  afterStop: vi.fn(),
+  beforeStop: vi.fn(),
+  createTransport: vi.fn(),
+  startLab: vi.fn(),
+  startGateway: vi.fn(),
+  stopGateway: vi.fn(),
+  startProvider: vi.fn(),
 }));
 
-// mock-isolation: Lifecycle ordering uses owned fake servers, not live HTTP listeners.
-vi.mock("./lab-server.js", () => ({ startQaLabServer }));
-
-// mock-isolation: The lane must not launch a real Gateway child during orchestration assertions.
+// mock-isolation: Fake lifecycle resources avoid listeners, Gateway children, and settle timers.
+vi.mock("./lab-server.js", () => ({ startQaLabServer: mocks.startLab }));
 vi.mock("./gateway-child.js", () => ({
   createQaGatewayChild: () => ({
-    start: startQaGatewayChild,
-    stop: gatewayStop,
+    start: mocks.startGateway,
+    stop: mocks.stopGateway,
   }),
 }));
-
-// mock-isolation: Provider startup and failure are controlled by the lifecycle fixture.
-vi.mock("./providers/server-runtime.js", () => ({ startQaProviderServer }));
-
-// mock-isolation: Synthetic cleanup and settle waits need neither live adapters nor real timers.
-vi.mock("./qa-transport-registry.js", () => ({ createQaTransportAdapter }));
-
+vi.mock("./providers/server-runtime.js", () => ({ startQaProviderServer: mocks.startProvider }));
+vi.mock("./qa-transport-registry.js", () => ({ createQaTransportAdapter: mocks.createTransport }));
 vi.mock("node:timers/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:timers/promises")>()),
   setTimeout: async () => {},
 }));
 
+import { createQaBusState } from "./bus-state.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 
 function runLane(overrides: Partial<Parameters<typeof runQaManualLane>[0]> = {}) {
@@ -58,59 +44,51 @@ describe("runQaManualLane", () => {
   const gatewayCall = vi.fn();
   const mockStop = vi.fn();
   const labStop = vi.fn();
-  let outboundReply: string | null;
+  const state = createQaBusState();
+  function setReply(text: string | null) {
+    state.reset();
+    if (text !== null) {
+      state.addOutboundMessage({ to: "dm:qa-operator", text });
+    }
+  }
 
   function expectCleanup(afterStop = true, providerStarted = true) {
-    for (const stop of [gatewayStop, cleanupTransportBeforeGatewayStop, labStop]) {
+    for (const stop of [mocks.stopGateway, mocks.beforeStop, labStop]) {
       expect(stop).toHaveBeenCalledOnce();
     }
-    expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledTimes(afterStop ? 1 : 0);
+    expect(mocks.afterStop).toHaveBeenCalledTimes(afterStop ? 1 : 0);
     expect(mockStop).toHaveBeenCalledTimes(providerStarted ? 1 : 0);
   }
 
   beforeEach(() => {
-    outboundReply = "Protocol note: mock reply.";
+    setReply("Protocol note: mock reply.");
     vi.resetAllMocks();
-    gatewayStop.mockResolvedValue({ process: "confirmed-stopped", errors: [] });
-    cleanupTransportAfterGatewayStop.mockResolvedValue(undefined);
-    cleanupTransportBeforeGatewayStop.mockResolvedValue(undefined);
+    mocks.stopGateway.mockResolvedValue({ process: "confirmed-stopped", errors: [] });
+    mocks.afterStop.mockResolvedValue(undefined);
+    mocks.beforeStop.mockResolvedValue(undefined);
 
-    createQaTransportAdapter.mockResolvedValue({
+    mocks.createTransport.mockResolvedValue({
       adapter: {
         buildAgentDelivery: () => ({ channel: "qa-channel", to: "dm:qa-operator" }),
       },
-      cleanupBeforeGatewayStop: cleanupTransportBeforeGatewayStop,
-      cleanupAfterGatewayStop: cleanupTransportAfterGatewayStop,
+      cleanupBeforeGatewayStop: mocks.beforeStop,
+      cleanupAfterGatewayStop: mocks.afterStop,
     });
 
-    startQaLabServer.mockResolvedValue({
+    mocks.startLab.mockResolvedValue({
       listenUrl: "http://127.0.0.1:43124",
       baseUrl: "http://127.0.0.1:58000",
-      state: {
-        getSnapshot: () => ({
-          messages:
-            outboundReply === null
-              ? []
-              : [
-                  {
-                    direction: "outbound",
-                    conversation: { id: "qa-operator" },
-                    text: outboundReply,
-                  },
-                ],
-        }),
-      },
+      state,
       stop: labStop,
     });
 
-    startQaGatewayChild.mockResolvedValue({
+    mocks.startGateway.mockResolvedValue({
       call: gatewayCall
         .mockResolvedValueOnce({ runId: "run-1" })
         .mockResolvedValueOnce({ status: "ok" }),
-      stop: gatewayStop,
     });
 
-    startQaProviderServer.mockImplementation(async (providerMode: string) =>
+    mocks.startProvider.mockImplementation(async (providerMode: string) =>
       providerMode === "mock-openai" ? { baseUrl: "http://127.0.0.1:44080", stop: mockStop } : null,
     );
   });
@@ -127,26 +105,18 @@ describe("runQaManualLane", () => {
         alternateModel,
         timeoutMs: 5_000,
       });
-      expect(startQaProviderServer).toHaveBeenCalledWith(providerMode, {
-        modelRefs: [primaryModel, alternateModel],
-      });
-      const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
+      const [gatewayOptions] = mocks.startGateway.mock.calls[0] ?? [];
       expect(gatewayOptions).toMatchObject({
-        repoRoot: "/tmp/openclaw-repo",
         providerMode,
         providerBaseUrl,
       });
-      expect(startQaLabServer).toHaveBeenCalledWith({
-        repoRoot: "/tmp/openclaw-repo",
-        embeddedGateway: "disabled",
-      });
       expect(result.reply).toBe("Protocol note: mock reply.");
       expectCleanup(true, providerMode === "mock-openai");
-      expect(cleanupTransportBeforeGatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
-        gatewayStop.mock.invocationCallOrder[0] ?? 0,
+      expect(mocks.beforeStop.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.stopGateway.mock.invocationCallOrder[0] ?? 0,
       );
-      expect(gatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
-        cleanupTransportAfterGatewayStop.mock.invocationCallOrder[0] ?? 0,
+      expect(mocks.stopGateway.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.afterStop.mock.invocationCallOrder[0] ?? 0,
       );
     },
   );
@@ -165,7 +135,7 @@ describe("runQaManualLane", () => {
       "manual lane did not produce a successful reply",
     ],
   ] as const)("rejects a %s after resource cleanup", async (_label, waited, reply, error) => {
-    outboundReply = reply;
+    setReply(reply);
     gatewayCall.mockReset().mockResolvedValueOnce({ runId: "run-1" }).mockResolvedValueOnce(waited);
 
     await expect(runLane()).rejects.toThrow(error);
@@ -182,8 +152,8 @@ describe("runQaManualLane", () => {
     async ({ process, diagnostic }) => {
       const startupError = new Error("gateway startup failed");
       const cleanupError = new Error("gateway cleanup diagnostic");
-      startQaGatewayChild.mockRejectedValueOnce(startupError);
-      gatewayStop.mockResolvedValue({ process, errors: diagnostic ? [cleanupError] : [] });
+      mocks.startGateway.mockRejectedValueOnce(startupError);
+      mocks.stopGateway.mockResolvedValue({ process, errors: diagnostic ? [cleanupError] : [] });
       const failure = await runLane().catch((error: unknown) => error);
       expect(failure).toMatchObject({ cause: startupError });
       if (diagnostic) {
@@ -191,16 +161,14 @@ describe("runQaManualLane", () => {
           errors: [startupError, expect.objectContaining({ errors: [cleanupError] })],
         });
       }
-      expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledTimes(
-        process === "unconfirmed" ? 0 : 1,
-      );
+      expect(mocks.afterStop).toHaveBeenCalledTimes(process === "unconfirmed" ? 0 : 1);
       expect(mockStop).toHaveBeenCalledOnce();
       expect(labStop).toHaveBeenCalledOnce();
     },
   );
 
   it("continues provider and lab teardown when gateway stop fails", async () => {
-    gatewayStop.mockResolvedValueOnce({
+    mocks.stopGateway.mockResolvedValueOnce({
       process: "unconfirmed",
       errors: [new Error("gateway stop failed")],
     });

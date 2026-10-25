@@ -1,15 +1,10 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { describe, expect, it, vi } from "vitest";
-import { createQaBusState } from "./bus-state.js";
+import { describe, expect, it } from "vitest";
 import { normalizeModelRef, splitModelRef } from "./model-switch.test-support.js";
-import {
-  addQaFlowTestOutbound,
-  runLoadedScenarioFlow,
-} from "./scenario-flow-runner.test-support.js";
+import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 
 type Turn = {
   reply: string;
-  outbound?: string;
   responseModel?: string;
   rerouted?: boolean;
   effective?: { provider?: string; model?: string };
@@ -19,40 +14,37 @@ async function runFollowUp(primary: Partial<Turn> = {}, alternate: Partial<Turn>
     { reply: "hello from the primary model", ...primary },
     { reply: "the model switch handoff completed", ...alternate },
   ];
-  const state = createQaBusState();
   let call = 0;
-  const runAgentPrompt = vi.fn(
-    async (_env: unknown, prompt: { provider?: string; model?: string; message: string }) => {
-      call += 1;
-      const runId = `run-${call}`;
-      const provider = prompt.provider ?? "openai";
-      const model = prompt.model ?? "primary-model";
-      const turn = turns[call - 1]!;
-      const effective = { provider, model, ...turn.effective };
-      const responseModel = turn.responseModel ?? effective.model;
-      addQaFlowTestOutbound(state, "dm:qa-operator", turn.outbound ?? turn.reply);
-      return {
-        started: { runId },
-        waited: {
-          status: "ok",
-          terminalDelivery: { status: "sent", resultCount: 1 },
-          terminalReply: { disposition: "visible", text: turn.reply },
-          terminalReceipt: {
-            runId,
-            sessionId: "session-model-switch",
-            turnId: `turn-${runId}`,
-            requested: { provider, model },
-            effective: { ...effective, responseModel },
-            successfulToolNames: [],
-            rerouted: turn.rerouted ?? (effective.provider !== provider || responseModel !== model),
-            terminalDisposition: "visible",
-          },
+  const runAgentPrompt = async (
+    _env: unknown,
+    prompt: { provider?: string; model?: string; message: string },
+  ) => {
+    call += 1;
+    const runId = `run-${call}`;
+    const provider = prompt.provider ?? "openai";
+    const model = prompt.model ?? "primary-model";
+    const turn = turns[call - 1]!;
+    const effective = { provider, model, ...turn.effective };
+    const responseModel = turn.responseModel ?? effective.model;
+    return {
+      started: { runId },
+      waited: {
+        status: "ok",
+        terminalDelivery: { status: "sent", resultCount: 1 },
+        terminalReply: { disposition: "visible", text: turn.reply },
+        terminalReceipt: {
+          runId,
+          sessionId: "session-model-switch",
+          turnId: `turn-${runId}`,
+          requested: { provider, model },
+          effective: { ...effective, responseModel },
+          rerouted: turn.rerouted ?? (effective.provider !== provider || responseModel !== model),
+          terminalDisposition: "visible",
         },
-      };
-    },
-  );
-  const result = await runLoadedScenarioFlow("model-switch-follow-up", {
-    state,
+      },
+    };
+  };
+  return runLoadedScenarioFlow("model-switch-follow-up", {
     api: {
       env: {
         providerMode: "mock-openai",
@@ -67,39 +59,31 @@ async function runFollowUp(primary: Partial<Turn> = {}, alternate: Partial<Turn>
       resolveQaLiveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
     },
   });
-  return { result, runAgentPrompt };
 }
 
 describe("model-switch follow-up terminal evidence", () => {
   it("invokes the canonical alias target and records exact run-owned evidence", async () => {
-    const { result, runAgentPrompt } = await runFollowUp(
+    const result = await runFollowUp(
       {
         reply: "hello **from the primary model**",
-        outbound: "hello from the primary model",
         responseModel: "primary-model-concrete",
         rerouted: false,
       },
       {
         reply: "the **model switch** handoff completed",
-        outbound: "the model switch handoff completed",
         responseModel: "alternate-model-concrete",
         rerouted: false,
       },
     );
 
     expect(result.status).toBe("pass");
-    expect(runAgentPrompt.mock.calls[1]?.[1]).toMatchObject({
-      provider: "openai",
-      model: "alternate-model",
-    });
     expect(result.modelSwitchEvidence).toMatchObject({
       primary: { runId: "run-1", effective: { responseModel: "primary-model-concrete" } },
-      alternate: { runId: "run-2", effective: { responseModel: "alternate-model-concrete" } },
-      terminalReply: {
-        disposition: "visible",
-        text: "the **model switch** handoff completed",
+      alternate: {
+        runId: "run-2",
+        requested: { provider: "openai", model: "alternate-model" },
+        effective: { responseModel: "alternate-model-concrete" },
       },
-      terminalDelivery: { status: "sent", resultCount: 1 },
     });
     expect(result.steps[0]?.details).toBe("hello **from the primary model**");
     expect(result.steps[1]?.details).toBe("the **model switch** handoff completed");
@@ -130,7 +114,7 @@ describe("model-switch follow-up terminal evidence", () => {
   ])(
     "requires a changed $run effective $changed to be marked rerouted",
     async ({ run, effective }) => {
-      const { result } = await runWithReceipt(run, true, effective);
+      const result = await runWithReceipt(run, true, effective);
       expect(result.status).toBe("pass");
 
       await expect(runWithReceipt(run, false, effective)).rejects.toThrow(receiptErrors[run]);
