@@ -97,88 +97,69 @@ describe("CronService one-shot lifecycle", () => {
   });
 
   it.each([
-    {
-      name: "default delivery failure",
-      bestEffort: undefined,
-      unknown: false,
-      reason: undefined,
-      completion: "failed",
-    },
-    {
-      name: "best-effort delivery failure",
-      bestEffort: true,
-      unknown: false,
-      reason: undefined,
-      completion: "succeeded",
-    },
-    {
-      name: "unknown delivery",
-      bestEffort: undefined,
-      unknown: true,
-      reason: undefined,
-      completion: "unknown",
-    },
-    {
-      name: "silent suppression",
-      bestEffort: false,
-      unknown: false,
-      reason: "silent" as const,
-      completion: "succeeded",
-    },
-  ])("cleans up $name once across restart", async ({ bestEffort, unknown, reason, completion }) => {
-    const runIsolatedAgentJob = vi.fn(async () => ({
-      status: "ok" as const,
-      summary: "payload completed",
-      delivered: unknown ? undefined : false,
-      deliveryError: unknown || reason ? undefined : "delivery rejected",
-      deliverySuppressionReason: reason,
-    }));
-    const { cron, state, deps, clock, finished, cleanup } = await fixture({ runIsolatedAgentJob });
-    let current = cron;
-    try {
-      const job = await cron.add(isolatedJob({ delivery: { mode: "announce", bestEffort } }));
-      clock.setTime(atMs);
-      await onTimer(state);
-      expect(await finished).toMatchObject({
-        status: "ok",
-        completionStatus: completion,
-        deliveryStatus: unknown ? "unknown" : "not-delivered",
-        nextRunAtMs: undefined,
-        ...(reason ? { deliverySuppressionReason: reason } : {}),
+    ["default delivery failure", undefined, false, undefined, "failed"],
+    ["best-effort delivery failure", true, false, undefined, "succeeded"],
+    ["unknown delivery", undefined, true, undefined, "unknown"],
+    ["silent suppression", false, false, "silent", "succeeded"],
+  ] as const)(
+    "cleans up %s once across restart",
+    async (_name, bestEffort, unknown, reason, completion) => {
+      const runIsolatedAgentJob = vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "payload completed",
+        delivered: unknown ? undefined : false,
+        deliveryError: unknown || reason ? undefined : "delivery rejected",
+        deliverySuppressionReason: reason,
+      }));
+      const { cron, state, deps, clock, finished, cleanup } = await fixture({
+        runIsolatedAgentJob,
       });
-      expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      const retained = cron.getJob(job.id);
-      if (completion === "succeeded") {
-        expect(retained).toBeUndefined();
-      } else {
-        expect(retained).toMatchObject({
-          enabled: false,
-          state: { lastRunStatus: "ok", consecutiveErrors: 0 },
+      let current = cron;
+      try {
+        const job = await cron.add(isolatedJob({ delivery: { mode: "announce", bestEffort } }));
+        clock.setTime(atMs);
+        await onTimer(state);
+        expect(await finished).toMatchObject({
+          status: "ok",
+          completionStatus: completion,
+          deliveryStatus: unknown ? "unknown" : "not-delivered",
+          nextRunAtMs: undefined,
+          ...(reason ? { deliverySuppressionReason: reason } : {}),
         });
+        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        const retained = cron.getJob(job.id);
+        if (completion === "succeeded") {
+          expect(retained).toBeUndefined();
+        } else {
+          expect(retained).toMatchObject({
+            enabled: false,
+            state: { lastRunStatus: "ok", consecutiveErrors: 0 },
+          });
+        }
+        expect(retained?.state.nextRunAtMs).toBeUndefined();
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+        cron.stop();
+        const restartedRun = vi.fn(async () => ({ status: "ok" as const }));
+        const restarted = createCronServiceWithStateForTest({
+          ...deps,
+          scheduler: createTestGatewayScheduler(clock.clock),
+          runIsolatedAgentJob: restartedRun,
+        });
+        current = restarted.cron;
+        await current.start();
+        clock.setTime(clock.clock.now() + 60_000);
+        await onTimer(restarted.state);
+        expect(restartedRun).not.toHaveBeenCalled();
+        if (completion === "succeeded") {
+          expect(current.getJob(job.id)).toBeUndefined();
+        } else {
+          expect(current.getJob(job.id)).toMatchObject({ enabled: false });
+        }
+      } finally {
+        await cleanup(current);
       }
-      expect(retained?.state.nextRunAtMs).toBeUndefined();
-      expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
-      cron.stop();
-      const restartedRun = vi.fn(async () => ({ status: "ok" as const }));
-      const restarted = createCronServiceWithStateForTest({
-        ...deps,
-        scheduler: createTestGatewayScheduler(clock.clock),
-        runIsolatedAgentJob: restartedRun,
-      });
-      current = restarted.cron;
-      await current.start();
-      clock.setTime(clock.clock.now() + 60_000);
-      await onTimer(restarted.state);
-      expect(restartedRun).not.toHaveBeenCalled();
-      if (completion === "succeeded") {
-        expect(current.getJob(job.id)).toBeUndefined();
-      } else {
-        expect(current.getJob(job.id)).toMatchObject({ enabled: false });
-      }
-    } finally {
-      await cleanup(current);
-    }
-  });
+    },
+  );
 
   it("records a refused main-session event as one failure without enqueuing a replay", async () => {
     const runSessionEvent = vi.fn(async () => ({

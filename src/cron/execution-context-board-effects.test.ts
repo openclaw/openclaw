@@ -55,10 +55,8 @@ const LINKED_JOB = {
   sourceConversation: { sessionKey: PARENT.sessionKey, sessionId: "parent-session" },
 } as unknown as CronStoredJob;
 
-// Real session rows, generation leases and board store live in this state directory.
 useWidgetHarness();
 
-// Writes the parent conversation and the run session the way the Gateway persists them.
 function seedSessions() {
   replaceSessionEntrySync(
     { sessionKey: PARENT.sessionKey },
@@ -70,7 +68,6 @@ function seedSessions() {
   );
 }
 
-// A `/new` reset of the parent conversation through the real lifecycle owner.
 async function resetParent() {
   await resetSessionEntryLifecycle({
     storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
@@ -83,7 +80,6 @@ async function resetParent() {
   });
 }
 
-// Wires the real board handlers and Gateway board store behind the in-process gateway caller.
 function useBoard() {
   const store = boardStore;
   const { handlers, context } = createBoardHarness(undefined, {}, store);
@@ -108,7 +104,6 @@ function useBoard() {
   return store;
 }
 
-// Admits one scheduled occurrence the way cron does and builds the run's tools from it.
 async function admitChildRun() {
   const occurrence = await admitScheduledOccurrence({
     cfg: {},
@@ -184,40 +179,33 @@ it("keeps the run session's board for a run admitted without a context", async (
   expect(await tabsOf(PARENT.sessionKey)).not.toContain("report");
 });
 
-it("refuses board writes after the parent resets mid-run", async () => {
-  const store = useBoard();
-  const run = await admitChildRun();
-  const before = await store.getSnapshot(PARENT);
-  await resetParent();
-  await expect(run.dashboard.execute("tab", createTab)).rejects.toThrow();
-  await expect(run.widget.execute("pin", pinReport)).rejects.toThrow();
-  expect(await store.getSnapshot(PARENT)).toEqual(before);
-  run.settle();
-});
-
-it("refuses a write when the parent resets between the tool's check and the commit", async () => {
-  const store = useBoard();
-  const run = await admitChildRun();
-  const before = await store.getSnapshot(PARENT);
-  const applyOps = store.applyOps.bind(store);
-  vi.spyOn(store, "applyOps").mockImplementation(async (...args) => {
-    await resetParent();
-    return await applyOps(...args);
-  });
-  await expect(run.dashboard.execute("tab", createTab)).rejects.toThrow();
-  expect(await store.getSnapshot(PARENT)).toEqual(before);
-  run.settle();
-});
-
-it("refuses writes from tools that outlive their settled occurrence", async () => {
-  const store = useBoard();
-  const run = await admitChildRun();
-  const before = await store.getSnapshot(PARENT);
-  run.settle();
-  await expect(run.dashboard.execute("tab", createTab)).rejects.toThrow();
-  await expect(run.widget.execute("pin", pinReport)).rejects.toThrow();
-  expect(await store.getSnapshot(PARENT)).toEqual(before);
-});
+it.each(["parent reset", "reset at commit", "settled occurrence"] as const)(
+  "refuses board writes after %s",
+  async (revocation) => {
+    const store = useBoard();
+    const run = await admitChildRun();
+    const before = await store.getSnapshot(PARENT);
+    if (revocation === "parent reset") {
+      await resetParent();
+    } else if (revocation === "reset at commit") {
+      const applyOps = store.applyOps.bind(store);
+      vi.spyOn(store, "applyOps").mockImplementation(async (...args) => {
+        await resetParent();
+        return await applyOps(...args);
+      });
+    } else {
+      run.settle();
+    }
+    await expect(run.dashboard.execute("tab", createTab)).rejects.toThrow();
+    if (revocation !== "reset at commit") {
+      await expect(run.widget.execute("pin", pinReport)).rejects.toThrow();
+    }
+    expect(await store.getSnapshot(PARENT)).toEqual(before);
+    if (revocation !== "settled occurrence") {
+      run.settle();
+    }
+  },
+);
 
 it("offers a CLI child pinned authoring on its parent's board through the loopback", async () => {
   const store = useBoard();

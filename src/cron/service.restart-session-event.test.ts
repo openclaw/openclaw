@@ -51,18 +51,28 @@ await Promise.all([
 ]);
 
 const scope = { agentId: "main", sessionKey: "agent:main:main" };
+const reminder = (text: string, wakeMode: "now" | "next-heartbeat" = "next-heartbeat") => ({
+  name: text,
+  enabled: false,
+  deleteAfterRun: false,
+  schedule: { kind: "at" as const, at: new Date(Date.now() + 60_000).toISOString() },
+  sessionTarget: "main" as const,
+  wakeMode,
+  payload: { kind: "systemEvent" as const, text },
+});
+const sessionEntry = () => ({
+  sessionId: "cron-restart-session",
+  lifecycleRevision: "original",
+  permissionMode: "full" as const,
+  updatedAt: Date.now(),
+});
 
 async function prepareCronSessionFixture(state: OpenClawTestState, onQueued?: () => void) {
   const config = completionConfig(state.workspaceDir);
   setRuntimeConfigSnapshot(config);
   await state.writeConfig(config);
   openOpenClawStateDatabase();
-  await replaceSessionEntry(scope, {
-    sessionId: "cron-restart-session",
-    lifecycleRevision: "original",
-    permissionMode: "full",
-    updatedAt: Date.now(),
-  });
+  await replaceSessionEntry(scope, sessionEntry());
   const storePath = state.statePath("cron", "jobs.json");
   const deps: Omit<CronServiceDeps, "scheduler"> = {
     storePath,
@@ -142,15 +152,7 @@ it.for(["next-heartbeat", "now"] as const)(
             signal,
           );
           await first.start();
-          const job = await first.add({
-            name: "Pending reminder",
-            enabled: false,
-            deleteAfterRun: false,
-            schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-            sessionTarget: "main",
-            wakeMode,
-            payload: { kind: "systemEvent", text: "Synthetic pending reminder" },
-          });
+          const job = await first.add(reminder("Synthetic pending reminder", wakeMode));
           running = first.run(job.id, "force");
           await withinTest(
             awaitGateBeforeSettlement(queued.promise, running, "Cron event never queued"),
@@ -274,22 +276,11 @@ it("finishes a queued Cron event only after its adopted turn and transport settl
           ],
         });
         await replaceSessionEntry(scope, {
-          sessionId: "cron-restart-session",
-          lifecycleRevision: "original",
-          permissionMode: "full",
+          ...sessionEntry(),
           delivery: normalizeSessionDeliveryState({ context: route }),
-          updatedAt: Date.now(),
         });
         await cron.start();
-        const job = await cron.add({
-          name: "Adopted reminder",
-          enabled: false,
-          deleteAfterRun: false,
-          schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-          sessionTarget: "main",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "Synthetic adopted reminder" },
-        });
+        const job = await cron.add(reminder("Synthetic adopted reminder"));
         await expect(cron.enqueueRun(job.id, "force")).resolves.toMatchObject({
           ok: true,
           enqueued: true,
