@@ -41,16 +41,16 @@ type QuestionDispatcher = Extract<
 /** Uses the owning stream suite's real registration and session lifecycle. */
 export function registerReplyPromotionTests() {
   it.each([
-    "required",
-    "result-required",
-    "collaborative-required",
-    "collaborative-result-required",
-    "hidden",
-    "closed",
-    "wrong-authority",
+    ["required", "required", undefined],
+    ["result-required", "result-required", undefined],
+    ["collaborative-required", "required", undefined],
+    ["collaborative-result-required", "result-required", undefined],
+    ["hidden", "required", "input_visibility_mismatch"],
+    ["closed", "required", "injection_unavailable"],
+    ["wrong-authority", "required", "tool_authority_mismatch"],
   ] as const)(
     "adopts the human reply obligation only with real session acceptance: %s",
-    async (scenario) => {
+    async (scenario, expectation, rejection) => {
       const runId = `human-reply-${scenario}`;
       const sessionId = `session-${runId}`;
       const sessionKey = "agent:main:synthetic-human-reply";
@@ -160,9 +160,6 @@ export function registerReplyPromotionTests() {
               if (scenario === "closed") {
                 prepared.stopAcceptingSteerMessages();
               }
-              const expectation = scenario.endsWith("result-required")
-                ? "result-required"
-                : "required";
               const injection = await beginReplyMessageInjectionTarget(
                 target!,
                 "Answer this human correction.",
@@ -193,8 +190,7 @@ export function registerReplyPromotionTests() {
                   assertCurrent: () => {},
                 },
               );
-              const accepted =
-                collaborative || scenario === "required" || scenario === "result-required";
+              const accepted = rejection === undefined;
               expect(await injection.acceptance).toBe(accepted);
               // A copied retry must read the logical run's accepted input, not its old policy.
               expect(resolveReplyExpectation({ ...attempt })).toBe(
@@ -212,19 +208,8 @@ export function registerReplyPromotionTests() {
                 expect(shouldDeliverMissingReplyNotice({ ...attempt })).toBe(true);
               }
               held.release();
-              const outcome = await injection.outcome;
-              expect(outcome).toMatchObject(
-                accepted
-                  ? { status: "accepted" }
-                  : {
-                      status: "rejected",
-                      reason:
-                        scenario === "hidden"
-                          ? "input_visibility_mismatch"
-                          : scenario === "closed"
-                            ? "injection_unavailable"
-                            : "tool_authority_mismatch",
-                    },
+              expect(await injection.outcome).toMatchObject(
+                rejection ? { status: "rejected", reason: rejection } : { status: "accepted" },
               );
               await prompt;
               expect(requests).toHaveLength(accepted ? 2 : 1);

@@ -23,10 +23,7 @@ import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeo
 
 const model = makeCompletionsModel({ reasoning: false });
 
-async function openStream(
-  scope: "creation-and-gaps" | "creation-only" = "creation-and-gaps",
-  timeoutMs = 100,
-) {
+async function openStream(timeoutMs = 100) {
   const chunks = new EventStream<ChatCompletionChunk, boolean>(
     () => false,
     () => true,
@@ -78,7 +75,11 @@ async function openStream(
     model,
     signal: new AbortController().signal,
   });
-  const stream = await streamWithIdleTimeout(streamFn, timeoutMs, onTimeout, { scope })(model, {
+  const stream = await streamWithIdleTimeout(
+    streamFn,
+    timeoutMs,
+    onTimeout,
+  )(model, {
     messages: [],
   });
   const events: AssistantMessageEvent[] = [];
@@ -223,21 +224,17 @@ it("aborts Responses silence 120 seconds after initial events through composed r
 });
 
 it("allows 1095 seconds of hidden reasoning while the 120-second idle watchdog sees progress", async () => {
-  const stream = await withStream(
-    async (active) => {
-      for (let index = 0; index < 15; index += 1) {
-        await vi.advanceTimersByTimeAsync(73_000);
-        await active.send(makeCompletionsChunk({ reasoning_content: "x" }));
-      }
-      expect(active.onTimeout).not.toHaveBeenCalled();
-      expect(active.requestSignal?.aborted).toBe(false);
-      expect(active.activity).toHaveLength(15);
-      expect(active.events.filter((event) => event.type === "thinking_delta")).toEqual([]);
-      await active.send(makeCompletionsChunk({ content: "OK" }, "stop"));
-    },
-    "creation-and-gaps",
-    120_000,
-  );
+  const stream = await withStream(async (active) => {
+    for (let index = 0; index < 15; index += 1) {
+      await vi.advanceTimersByTimeAsync(73_000);
+      await active.send(makeCompletionsChunk({ reasoning_content: "x" }));
+    }
+    expect(active.onTimeout).not.toHaveBeenCalled();
+    expect(active.requestSignal?.aborted).toBe(false);
+    expect(active.activity).toHaveLength(15);
+    expect(active.events.filter((event) => event.type === "thinking_delta")).toEqual([]);
+    await active.send(makeCompletionsChunk({ content: "OK" }, "stop"));
+  }, 120_000);
   expect(await stream.completion).toBeUndefined();
   expect(
     stream.events.flatMap((event) => (event.type === "text_delta" ? [event.delta] : [])).join(""),
