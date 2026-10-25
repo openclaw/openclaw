@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { createProps } from "./chat-thread.test-support.ts";
@@ -47,6 +48,23 @@ function render(
 }
 
 afterEach(() => resetChatThreadState());
+
+const before = { role: "user", content: "Review the patch.", timestamp: 999 };
+const after = {
+  role: "assistant",
+  content: "The rollback path is safe.",
+  timestamp: 1001,
+  __openclaw: { runId: "run" },
+};
+const group = (message: { role: string }) => ({
+  kind: "group",
+  role: message.role,
+  messages: [{ message }],
+});
+function expectMidTurn(notice: ChatItem) {
+  expect(chatItemStartsUserTurn(notice)).toBe(false);
+  expect(chatItemStartsDisplayTurn(notice)).toBe(false);
+}
 
 describe("system notices through pending-to-history promotion", () => {
   it.each([
@@ -123,13 +141,6 @@ describe("system notices through pending-to-history promotion", () => {
         }
       }
       const inputs = pending(message);
-      const before = { role: "user", content: "before", timestamp: 999 };
-      const after = {
-        role: "assistant",
-        content: "after",
-        timestamp: 1001,
-        __openclaw: { runId: "run" },
-      };
       const stages = [
         [before, after],
         [before, message, after],
@@ -138,9 +149,9 @@ describe("system notices through pending-to-history promotion", () => {
       for (const [stage, messages] of stages.entries()) {
         const items = render(messages, inputs);
         const canonicalOrder = [
-          { kind: "group", role: "user", messages: [{ message: before }] },
+          group(before),
           { kind: "notice", icon: "cpu", label, text, timestamp: 1000 },
-          { kind: "group", role: "assistant", messages: [{ message: after }] },
+          group(after),
         ];
         expect(items).toMatchObject(
           stage === 1 ? canonicalOrder : [canonicalOrder[0], canonicalOrder[2], canonicalOrder[1]],
@@ -149,8 +160,9 @@ describe("system notices through pending-to-history promotion", () => {
         if (notice?.kind !== "notice") {
           throw new Error("Expected one system notice");
         }
-        expect(notice.startsTurn).toBe(midTurn ? undefined : true);
-        expect(notice.collapsedBody).toBe(midTurn ? true : undefined);
+        expect([notice.startsTurn, notice.collapsedBody]).toEqual(
+          midTurn ? [undefined, true] : [true, undefined],
+        );
         const framed = coalesceAgentRunFrames(items);
         expect(framed).toContain(notice);
         // A known-run reply frames even before promotion supplies a causal boundary.
@@ -160,9 +172,7 @@ describe("system notices through pending-to-history promotion", () => {
         expect(notice.boundaryId).toBe(stage === 1 && !imported ? "send:run" : undefined);
       }
       for (const messages of stages) {
-        expect(render(messages, inputs, "after")).toMatchObject([
-          { kind: "group", role: "assistant", messages: [{ message: after }] },
-        ]);
+        expect(render(messages, inputs, "rollback")).toMatchObject([group(after)]);
       }
     },
   );
@@ -190,8 +200,7 @@ describe("system notices through pending-to-history promotion", () => {
         { kind: "group", role: "tool" },
       ]);
       const notice = items[1]!;
-      expect(chatItemStartsUserTurn(notice)).toBe(false);
-      expect(chatItemStartsDisplayTurn(notice)).toBe(false);
+      expectMidTurn(notice);
     },
   );
 
@@ -219,7 +228,6 @@ describe("plugin steering notices", () => {
   ] as const)(
     "uses plugin attribution without starting an operator turn: %j",
     (pluginSteering, name) => {
-      const before = { role: "user", content: "Review the patch.", timestamp: 999 };
       const steering = {
         ...baseMessage,
         content: "Check the rollback path before continuing.",
@@ -229,16 +237,9 @@ describe("plugin steering notices", () => {
         },
         __openclaw: { ...baseMessage["__openclaw"], pluginSteering },
       };
-      const after = {
-        role: "assistant",
-        content: "The rollback path is safe.",
-        timestamp: 1001,
-        __openclaw: { runId: "run" },
-      };
-
       const items = render([before, steering, after], []);
       expect(items).toMatchObject([
-        { kind: "group", role: "user", messages: [{ message: before }] },
+        group(before),
         {
           kind: "notice",
           label: `${name} guidance`,
@@ -247,15 +248,14 @@ describe("plugin steering notices", () => {
           collapsedBody: true,
           showTimestamp: true,
         },
-        { kind: "group", role: "assistant", messages: [{ message: after }] },
+        group(after),
       ]);
       const notice = items.find((item) => item.kind === "notice");
       expect(notice).not.toHaveProperty("startsTurn");
       if (!notice) {
         throw new Error("Expected a plugin steering notice");
       }
-      expect(chatItemStartsUserTurn(notice)).toBe(false);
-      expect(chatItemStartsDisplayTurn(notice)).toBe(false);
+      expectMidTurn(notice);
       expect(coalesceAgentRunFrames(items)).toMatchObject([
         { kind: "group", role: "user" },
         { kind: "notice", label: `${name} guidance` },
@@ -343,7 +343,7 @@ describe("skill review notices", () => {
     const skills = [{ name: "deploy-staging", action: "updated", summary: "rollback" }];
     expect(render([question, answer, notice(skills)], [])).toMatchObject([
       { kind: "group", role: "user" },
-      { kind: "group", role: "assistant", messages: [{ message: answer }] },
+      group(answer),
       {
         kind: "notice",
         text: "",
@@ -360,9 +360,6 @@ describe("skill review notices", () => {
     const malformed = notice([{ name: "deploy-staging", action: "renamed" }]);
     const items = render([question, malformed], []);
     expect(items.some((item) => item.kind === "notice")).toBe(false);
-    expect(items).toMatchObject([
-      { kind: "group", role: "user" },
-      { kind: "group", role: "assistant", messages: [{ message: malformed }] },
-    ]);
+    expect(items).toMatchObject([{ kind: "group", role: "user" }, group(malformed)]);
   });
 });

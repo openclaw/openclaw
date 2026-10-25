@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
@@ -9,11 +9,7 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  createSessionEventState,
-  emitGatewayEvent,
-  renderedTranscript,
-} from "./chat-state.test-support.ts";
+import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
 const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
@@ -29,6 +25,18 @@ function withAuthStatus(request: GatewayRequestHandler): GatewayRequestHandler {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function fakeTimers() {
+  vi.useFakeTimers();
+  onTestFinished(() => vi.useRealTimers());
+}
+
+function recoveryState(request: GatewayRequestHandler, overrides: Partial<ChatPageHost> = {}) {
+  return createSessionEventState({
+    client: createTestGatewayClient(withAuthStatus(request)),
+    ...overrides,
+  }).state;
+}
 
 describe("terminal reply recovery", () => {
   function createRecoveryPrompt(runId: string, text: string, seq = 1) {
@@ -64,6 +72,8 @@ describe("terminal reply recovery", () => {
   });
   const transcript = (...turns: [role: string, text: string][]) =>
     turns.map(([role, text]) => ({ role, text }));
+  const expectTranscript = (state: ChatPageHost, ...turns: [role: string, text: string][]) =>
+    expect(renderedTranscript(state)).toEqual(transcript(...turns));
   function event(state: ChatPageHost, payload: object, presented = true) {
     return () =>
       handlePageGatewayEvent(
@@ -86,7 +96,7 @@ describe("terminal reply recovery", () => {
     const prompt = createRecoveryPrompt(runId, promptText);
     const persistedReply = reply(runId, replyContent);
     const request = vi.fn().mockResolvedValue(createTerminalHistory([prompt, persistedReply]));
-    const { state } = createSessionEventState({
+    const state = recoveryState(request, {
       chatMessages: [prompt],
       chatHistoryPagination: { hasMore: false },
       chatRunId: runId,
@@ -116,16 +126,11 @@ describe("terminal reply recovery", () => {
         assistant(replyText).content,
         { chatRunId: startsActive ? runId : null },
       );
-      const terminal = {
-        sessionKey: state.sessionKey,
-        runId,
-        state: "final",
-        message: terminalMessage,
-      };
-      emitGatewayEvent(state, "chat", terminal);
+      const finish = event(state, { runId, state: "final", message: terminalMessage });
+      finish();
 
       expect(state.chatRunId).toBeNull();
-      expect(renderedTranscript(state)).toEqual(transcript(["user", "Finish the dashboard task"]));
+      expectTranscript(state, ["user", "Finish the dashboard task"]);
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith(
           "chat.history",
@@ -140,60 +145,51 @@ describe("terminal reply recovery", () => {
       await vi.waitFor(() => expect(state.chatLoading).toBe(false));
       expect(request).toHaveBeenCalledTimes(1);
       await vi.waitFor(() =>
-        expect(renderedTranscript(state)).toEqual(
-          transcript(["user", "Finish the dashboard task"], ["assistant", replyText]),
-        ),
+        expectTranscript(state, ["user", "Finish the dashboard task"], ["assistant", replyText]),
       );
 
       request.mockClear();
-      emitGatewayEvent(state, "chat", terminal);
+      finish();
       expect(request).not.toHaveBeenCalled();
     },
   );
 
   it("recovers a terminal failure once without retrying a missing receipt", async () => {
-    vi.useFakeTimers();
-    try {
-      const runId = "failed-run";
-      const request = vi.fn().mockResolvedValue({
-        ...createTerminalHistory([]),
-        sessionInfo: {
-          ...createTerminalHistory([]).sessionInfo,
-          status: "failed",
-          lastRunId: runId,
-          lastRunError: "Storage is unavailable",
-        },
-      });
-      const { state } = createSessionEventState({
-        chatRunId: runId,
-        pendingSessionMessageReloadSessionKey: null,
-        client: createTestGatewayClient(withAuthStatus(request)),
-      });
-      const fail = event(
-        state,
-        { runId, state: "error", errorMessage: "Storage is unavailable" },
-        false,
-      );
-      fail();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
-      expect(state.chatRunError).toMatchObject({ runId, summary: "Error: Storage is unavailable" });
-      fail();
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    fakeTimers();
+    const runId = "failed-run";
+    const request = vi.fn().mockResolvedValue({
+      ...createTerminalHistory([]),
+      sessionInfo: {
+        ...createTerminalHistory([]).sessionInfo,
+        status: "failed",
+        lastRunId: runId,
+        lastRunError: "Storage is unavailable",
+      },
+    });
+    const state = recoveryState(request, {
+      chatRunId: runId,
+      pendingSessionMessageReloadSessionKey: null,
+    });
+    const historyCalls = () => request.mock.calls.filter(([method]) => method === "chat.history");
+    const fail = event(
+      state,
+      { runId, state: "error", errorMessage: "Storage is unavailable" },
+      false,
+    );
+    fail();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(historyCalls()).toHaveLength(1);
+    expect(state.chatRunError).toMatchObject({ runId, summary: "Error: Storage is unavailable" });
+    fail();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(historyCalls()).toHaveLength(1);
   });
 
   it.each(["other session", "background run"])(
     "does not recover failure history for %s",
     (kind) => {
       const request = vi.fn();
-      const { state } = createSessionEventState({
-        chatRunId: "foreground-run",
-        client: createTestGatewayClient(withAuthStatus(request)),
-      });
+      const state = recoveryState(request, { chatRunId: "foreground-run" });
       event(
         state,
         {
@@ -230,26 +226,21 @@ describe("terminal reply recovery", () => {
   });
 
   it("recovers durable media from a message-less terminal", async () => {
-    vi.useFakeTimers();
-    try {
-      const runId = "run-with-message-less-terminal";
-      const { persistedReply, request, state } = fixture(
-        runId,
-        "Show the generated image",
-        [{ type: "image", url: "data:image/png;base64,aW1hZ2U=" }],
-        {},
-        true,
-      );
-      const terminal = { sessionKey: state.sessionKey, runId, state: "final" };
-      emitGatewayEvent(state, "chat", terminal);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(request).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(request).toHaveBeenCalledTimes(1);
-      expect(state.chatMessages).toContainEqual(persistedReply);
-    } finally {
-      vi.useRealTimers();
-    }
+    fakeTimers();
+    const runId = "run-with-message-less-terminal";
+    const { persistedReply, request, state } = fixture(
+      runId,
+      "Show the generated image",
+      [{ type: "image", url: "data:image/png;base64,aW1hZ2U=" }],
+      {},
+      true,
+    );
+    event(state, { runId, state: "final" })();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.chatMessages).toContainEqual(persistedReply);
   });
   it.each([
     { name: "without a pending session-message reload", pendingReload: false },
@@ -279,28 +270,21 @@ describe("terminal reply recovery", () => {
     const preFinalLoad = loadChatHistory(state);
     expect(request).toHaveBeenCalledTimes(1);
 
-    emitGatewayEvent(state, "chat", {
-      sessionKey: state.sessionKey,
-      runId,
-      state: "final",
-    });
+    event(state, { runId, state: "final" })();
 
     expect(request).toHaveBeenCalledTimes(1);
     staleHistory.resolve(createTerminalHistory([prompt]));
     await freshHistoryStarted.promise;
     expect(request).toHaveBeenCalledTimes(2);
-    expect(renderedTranscript(state)).toEqual(
-      transcript(["user", "Finish after the stale snapshot"]),
-    );
+    expectTranscript(state, ["user", "Finish after the stale snapshot"]);
 
     freshHistory.resolve(createTerminalHistory([prompt, persistedReply]));
     await preFinalLoad;
     expect(state.chatLoading).toBe(false);
-    expect(renderedTranscript(state)).toEqual(
-      transcript(
-        ["user", "Finish after the stale snapshot"],
-        ["assistant", "The post-final snapshot contains this reply."],
-      ),
+    expectTranscript(
+      state,
+      ["user", "Finish after the stale snapshot"],
+      ["assistant", "The post-final snapshot contains this reply."],
     );
   });
 
@@ -316,7 +300,7 @@ describe("terminal reply recovery", () => {
     const runId = "foreground-run";
     const prompt = createRecoveryPrompt(runId, "Finish the dashboard task");
     const request = vi.fn();
-    const { state } = createSessionEventState({
+    const state = recoveryState(request, {
       chatRunId: runId,
       ...(kind === "background"
         ? {
@@ -326,10 +310,8 @@ describe("terminal reply recovery", () => {
         : kind === "live reply"
           ? { chatMessages: [prompt] }
           : {}),
-      client: createTestGatewayClient(withAuthStatus(request)),
     });
-    emitGatewayEvent(state, "chat", {
-      sessionKey: state.sessionKey,
+    event(state, {
       runId: kind.endsWith("background") ? "background-run" : runId,
       state: kind === "aborted" ? "aborted" : "final",
       ...(kind.endsWith("yielded") ? { yielded: true, stopReason: "end_turn" } : {}),
@@ -344,19 +326,20 @@ describe("terminal reply recovery", () => {
             message: assistant("The live reply is already projected."),
           }
         : {}),
-    });
+    })();
     expect(request).not.toHaveBeenCalled();
     if (kind === "background") {
-      expect(state.chatRunId).toBe(runId);
-      expect(state.chatStream).toBe("The foreground reply is still streaming.");
-      expect(state.chatStreamStartedAt).toBe(123);
+      expect(state).toMatchObject({
+        chatRunId: runId,
+        chatStream: "The foreground reply is still streaming.",
+        chatStreamStartedAt: 123,
+      });
     } else if (kind === "live reply") {
       expect(state.chatRunId).toBeNull();
-      expect(renderedTranscript(state)).toEqual(
-        transcript(
-          ["user", "Finish the dashboard task"],
-          ["assistant", "The live reply is already projected."],
-        ),
+      expectTranscript(
+        state,
+        ["user", "Finish the dashboard task"],
+        ["assistant", "The live reply is already projected."],
       );
     }
   });

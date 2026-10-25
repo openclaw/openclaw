@@ -28,6 +28,9 @@ const process = (instanceId = "first"): SessionProcessSummary => ({
 function page(row = process()): SessionsProcessesListResult {
   return { sessionId: "parent-session", processes: [row], truncated: false };
 }
+function workerUnavailableError() {
+  return new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "Worker reconnecting" });
+}
 function fixture(read: (method: string, params: unknown) => unknown) {
   const request = vi.fn(read);
   const connection = createGatewayHarness(createTestGatewayClient(request));
@@ -216,10 +219,7 @@ describe("process panel observation ownership", () => {
       let unavailable = false;
       const f = fixture(() => {
         if (unavailable) {
-          throw new GatewayProtocolRequestError({
-            code: "UNAVAILABLE",
-            message: "Worker reconnecting",
-          });
+          throw workerUnavailableError();
         }
         return result;
       });
@@ -278,10 +278,7 @@ describe("process panel observation ownership", () => {
       const f = fixture((method) => {
         if (method === "sessions.processes.stop") {
           if (unavailable) {
-            throw new GatewayProtocolRequestError({
-              code: "UNAVAILABLE",
-              message: "Worker reconnecting",
-            });
+            throw workerUnavailableError();
           }
           return { requested: false };
         }
