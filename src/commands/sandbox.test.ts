@@ -184,24 +184,9 @@ describe("sandboxRecreateCommand", () => {
     mocks.listSandboxContainers.mockImplementation(async (matches) => containers.filter(matches));
     await recreate({ ...filter, force });
     expect(mocks.removeSandboxContainer.mock.calls).toEqual(removed.map((name) => [name]));
+    expectOutput("log", `${removed.length} removed, 0 failed`);
     expect(clackConfirm).toHaveBeenCalledTimes(force ? 0 : 1);
     expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
-  });
-
-  it("should remove all when --all flag set", async () => {
-    const containers = [
-      createContainer({ containerName: "running-container" }),
-      createContainer({ containerName: "stopped-container", running: false }),
-    ];
-    mocks.listSandboxContainers.mockResolvedValue(containers);
-
-    await recreate({ all: true, force: true });
-
-    expect(runtime.log).toHaveBeenCalledWith("  - running-container [docker] (running)");
-    expect(runtime.log).toHaveBeenCalledWith("  - stopped-container [docker] (stopped)");
-    expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(2);
-    expect(clackConfirm).not.toHaveBeenCalled();
-    expectOutput("log", "✓ Removed", "2 removed, 0 failed", "automatically recreated");
   });
 
   it("should cancel on clack cancel symbol", async () => {
@@ -228,7 +213,7 @@ describe("sandboxRecreateCommand", () => {
   it.each(scopes)("reports $browser removal failures", async ({ browser, command }) => {
     mocks.listSandboxContainers.mockResolvedValue([
       createContainer({ containerName: "success" }),
-      createContainer({ containerName: "failure" }),
+      createContainer({ containerName: "failure", running: false }),
     ]);
     mocks.listSandboxBrowsers.mockResolvedValue([
       createBrowser({ containerName: "success" }),
@@ -239,13 +224,19 @@ describe("sandboxRecreateCommand", () => {
 
     await recreate({ all: true, browser, force: true });
 
+    expect(remove.mock.calls).toEqual([["success"], ["failure"]]);
+    expect(clackConfirm).not.toHaveBeenCalled();
+    if (!browser) {
+      expect(runtime.log).toHaveBeenCalledWith("  - success [docker] (running)");
+      expect(runtime.log).toHaveBeenCalledWith("  - failure [docker] (stopped)");
+    }
     const errorOutput = expectOutput(
       "error",
       "Failed to remove failure: Removal failed.",
       `${command} to inspect what remains.`,
     );
     expect(errorOutput.match(/to inspect what remains\./gu)).toHaveLength(1);
-    expectOutput("log", "1 removed, 1 failed");
+    expectOutput("log", "✓ Removed", "1 removed, 1 failed", "automatically recreated");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

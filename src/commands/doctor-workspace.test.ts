@@ -69,6 +69,18 @@ describe("root memory repair", () => {
     return hasDistinctRootMemoryFiles(tmpDir);
   }
   const repair = () => maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+  function onArchive(
+    before?: (source: Parameters<typeof fs.rename>[0]) => Promise<unknown>,
+    after?: (...paths: Parameters<typeof fs.rename>) => Promise<unknown>,
+  ) {
+    const rename = vi.spyOn(fs, "rename");
+    rename.mockImplementationOnce(async (source, target) => {
+      await before?.(source);
+      rename.mockRestore();
+      await fs.rename(source, target);
+      await after?.(source, target);
+    });
+  }
   function expectSkipped(reason: string) {
     expect(note).toHaveBeenCalledExactlyOnceWith(
       `Workspace memory root repair skipped (${reason}):\n- current: ${canonicalPath}\n- legacy: ${legacyPath}`,
@@ -110,12 +122,7 @@ describe("root memory repair", () => {
     if (!(await seedMemory(canonical))) {
       return;
     }
-    const rename = vi.spyOn(fs, "rename");
-    rename.mockImplementationOnce(async (source, target) => {
-      rename.mockRestore();
-      await fs.rename(source, target);
-      await fs.writeFile(target, invalid);
-    });
+    onArchive(undefined, (_source, target) => fs.writeFile(target, invalid));
 
     await repair();
 
@@ -136,12 +143,7 @@ describe("root memory repair", () => {
       return;
     }
 
-    const rename = vi.spyOn(fs, "rename");
-    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
-      await fs.appendFile(sourcePath, "# Added before archive\n", "utf8");
-      rename.mockRestore();
-      await fs.rename(sourcePath, targetPath);
-    });
+    onArchive((source) => fs.appendFile(source, "# Added before archive\n", "utf8"));
 
     await repair();
     const canonical = await fs.readFile(canonicalPath, "utf8");
@@ -154,13 +156,10 @@ describe("root memory repair", () => {
       return;
     }
 
-    const rename = vi.spyOn(fs, "rename");
-    rename.mockImplementationOnce(async (sourcePath, targetPath) => {
-      await fs.appendFile(sourcePath, Buffer.alloc(9 * 1024 * 1024));
-      rename.mockRestore();
-      await fs.rename(sourcePath, targetPath);
-      await fs.writeFile(sourcePath, "# Concurrent replacement\n", "utf8");
-    });
+    onArchive(
+      (source) => fs.appendFile(source, Buffer.alloc(9 * 1024 * 1024)),
+      (source) => fs.writeFile(source, "# Concurrent replacement\n", "utf8"),
+    );
 
     await repair();
 

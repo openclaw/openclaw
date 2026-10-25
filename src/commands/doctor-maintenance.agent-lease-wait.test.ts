@@ -141,28 +141,13 @@ const refusalMessage = (detail = "An agent database is in use.") =>
   `Doctor could not enter maintenance. ${detail} Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.`;
 
 it.each([
-  { name: "update Doctor", update: true, externalPolicy: false, waitForMaintenance: false },
-  {
-    name: "a published updater's activation Doctor",
-    update: true,
-    externalPolicy: true,
-    waitForMaintenance: false,
-  },
-  {
-    name: "startup credential preparation",
-    update: false,
-    externalPolicy: false,
-    waitForMaintenance: true,
-  },
-  {
-    name: "externally managed startup credential preparation",
-    update: false,
-    externalPolicy: true,
-    waitForMaintenance: true,
-  },
-])(
-  "$name waits, holding no state ownership, for another process to close its agent database",
-  async ({ update, externalPolicy, waitForMaintenance }) => {
+  ["update Doctor", true, false, false],
+  ["a published updater's activation Doctor", true, true, false],
+  ["startup credential preparation", false, false, true],
+  ["externally managed startup credential preparation", false, true, true],
+] as const)(
+  "%s waits, holding no state ownership, for another process to close its agent database",
+  async (_name, update, externalPolicy, waitForMaintenance) => {
     const holder = holdForeignLease({ update, externalPolicy });
     const doctor = startDoctor(waitForMaintenance);
     await doctor.firstWait;
@@ -226,18 +211,13 @@ it.each([false, true])(
 );
 
 it.each([
-  { name: "manual doctor --fix", update: false },
-  { name: "a lease held by Doctor's own process", update: true, own: true },
-  { name: "a live Gateway under the external policy", update: true, gateway: true },
-  {
-    name: "startup with a live Gateway under the external policy",
-    update: false,
-    gateway: true,
-    waitForMaintenance: true,
-  },
-])(
-  "refuses active agent leases immediately ($name)",
-  async ({ update, own, gateway, waitForMaintenance }) => {
+  ["manual doctor --fix", false, false, false, false],
+  ["a lease held by Doctor's own process", true, true, false, false],
+  ["a live Gateway under the external policy", true, false, true, false],
+  ["startup with a live Gateway under the external policy", false, false, true, true],
+] as const)(
+  "refuses active agent leases immediately (%s)",
+  async (_name, update, own, gateway, waitForMaintenance) => {
     const holder = holdForeignLease({ update, own, externalPolicy: gateway });
     // The serving Gateway may own the lease; its lifecycle lock would mask the refusal.
     const serving = gateway ? holdState(holder.databasePath, true) : undefined;
