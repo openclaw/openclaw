@@ -543,6 +543,12 @@ cannot resume reconciliation or hold the shutdown guard. Interrupted maintenance
 retains the lease and provisioning identity for a later sweep; it does not request
 worker destruction. Provider mutations already in progress still settle before
 their owners close.
+Reconciliation also passes cancellation into provider teardown, including Crabbox
+image capture and stop commands. Teardown's provider deadline aborts the command;
+shutdown still joins its subprocess settlement and records the interruption. An
+unconfirmed stop retains the lease and cleanup intent so the next startup retries
+the same environment. Pending replies and terminal persistence keep their normal
+drain obligations.
 Read-only allocation lookups made by reconciliation also release their wait on shutdown, without
 publishing a late lookup result or changing the saved cleanup intent. Reconciliation
 waiting for an environment lock releases its observer on cancellation; any admitted
