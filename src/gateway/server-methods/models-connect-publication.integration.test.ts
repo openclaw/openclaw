@@ -21,7 +21,7 @@ import {
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
 import * as chatMetadataHandler from "./chat-metadata-handler.js";
-import { createModelsTestState } from "./models-integration.test-support.js";
+import { createModelsTestState, modelsTestConfig } from "./models-integration.test-support.js";
 
 // mock-isolation: Optional startup prewarming must not compete with the catalog request drain.
 vi.mock("../server-startup-handler-prewarm.js", () => ({
@@ -108,18 +108,18 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
     models: unknown,
     accountSelection?: unknown,
   ) => [{ scope, catalog: { models, ...(accountSelection ? { accountSelection } : {}) } }];
+  const catalog = (reader: typeof client, sessionKey: string) =>
+    reader.request("models.list", { agentId: "alpha", sessionKey });
   const { client, server } = await startGatewayWithClient({
     ...clientOptions,
     portClaim,
     configPath: state.configPath,
     modelCatalog: {},
-    cfg: {
+    cfg: modelsTestConfig(state, token, {
       gateway: {
-        mode: "local",
-        auth: { mode: "token", token },
+        ...modelsTestConfig(state, token).gateway,
         controlUi: { root: state.workspaceDir, allowedOrigins: [`http://127.0.0.1:${port}`] },
       },
-      plugins: { enabled: false },
       agents: {
         ownership: "explicit",
         entries: {
@@ -149,7 +149,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
           },
         },
       },
-    },
+    }),
     onEvent(event) {
       if (event.event === "models.snapshot") {
         publications.push(event.payload as ModelsSnapshotEvent);
@@ -270,9 +270,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       await expect
         .poll(() => sessionChanges)
         .toContainEqual(expect.objectContaining({ sessionKey, reason: "patch" }));
-      await expect(
-        racingClient.request("models.list", { agentId: "alpha", sessionKey }),
-      ).resolves.toMatchObject({
+      await expect(catalog(racingClient, sessionKey)).resolves.toMatchObject({
         accountSelection: replacementAccount,
       });
       expect(racingClient.snapshots).toEqual([]);
@@ -280,9 +278,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       releasePublication.resolve();
       await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
       // A response on this same socket is a delivery barrier after initial work settles.
-      await expect(
-        racingClient.request("models.list", { agentId: "alpha", sessionKey }),
-      ).resolves.toMatchObject({
+      await expect(catalog(racingClient, sessionKey)).resolves.toMatchObject({
         models: [model("first", true)],
         accountSelection: {
           ...replacementAccount,
@@ -307,7 +303,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
     const requestEntered = createDeferred();
     const releaseRequest = createDeferred();
     const pendingPublication = holdNextPublication(requestEntered, releaseRequest);
-    const pendingCatalog = client.request("models.list", { agentId: "alpha", sessionKey });
+    const pendingCatalog = catalog(client, sessionKey);
     const deliveredCatalog = expect(pendingCatalog).resolves.toMatchObject({
       models: [model("first")],
       accountSelection: replacementAccount,
@@ -330,12 +326,8 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       pendingPublication.mockRestore();
       await Promise.allSettled([pendingCatalog, deliveredCatalog]);
     }
-    for (const clientName of [
-      GATEWAY_CLIENT_IDS.CONTROL_UI,
-      GATEWAY_CLIENT_IDS.CLI,
-      GATEWAY_CLIENT_IDS.IOS_APP,
-      GATEWAY_CLIENT_IDS.ANDROID_APP,
-    ]) {
+    // The publication guard distinguishes Control UI from all other clients.
+    for (const clientName of [GATEWAY_CLIENT_IDS.CONTROL_UI, GATEWAY_CLIENT_IDS.CLI]) {
       await using old = await connect({ clientName });
       await expect(old.request("models.list", { agentId: "alpha" })).resolves.toMatchObject({
         models: [{ id: "first", provider: "fixture" }],

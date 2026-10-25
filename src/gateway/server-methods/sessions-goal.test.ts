@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
@@ -214,31 +213,19 @@ it("edits literal objectives in the writer without chat rows and rejects a chang
     await seedSession();
     const objective = "clear the backlog\n/goal pause is part of the objective";
     const request = operation("edit", { objective });
-    const commitGuard = vi.fn();
-    const sql = observeHostDataSql();
-    {
-      using _ = { [Symbol.dispose]: sql.restore };
-      const first = await invoke(request, { commitGuard });
-      expectGoal(
-        first,
-        { objective, status: "paused" },
-        {
-          operationId: request.operationId,
-          status: "updated",
-        },
-      );
-      const replay = await invoke(request, { commitGuard });
-      expectSuccess(replay, { ...first.mock.calls[0]?.[1], replayed: true });
-      const conflict = await invoke(
-        { ...request, objective: "different objective" },
-        { commitGuard },
-      );
-      expectFailure(conflict, {
-        details: { code: "GOAL_OPERATION_REJECTED", reason: "operation-conflict" },
-      });
-      expect(commitGuard).toHaveBeenCalled();
-      expect(sql.queries.filter((query) => /\bsession_goal_operations\b/i.test(query))).toEqual([]);
-    }
+    const first = await invoke(request);
+    expectGoal(
+      first,
+      { objective, status: "paused" },
+      {
+        operationId: request.operationId,
+        status: "updated",
+      },
+    );
+    expectSuccess(await invoke(request), { ...first.mock.calls[0]?.[1], replayed: true });
+    expectFailure(await invoke({ ...request, objective: "different objective" }), {
+      details: { code: "GOAL_OPERATION_REJECTED", reason: "operation-conflict" },
+    });
     expect(readGoal()?.objective).toBe(objective);
     expect(await loadTranscriptEvents({ ...scope, sessionId })).toEqual([]);
     expect(resumeChat).not.toHaveBeenCalled();

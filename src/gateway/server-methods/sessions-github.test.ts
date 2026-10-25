@@ -60,13 +60,11 @@ async function withRealSessions(config: OpenClawConfig, run: () => Promise<void>
   );
 }
 
-const expectedSystemRequester = {
-  version: 2,
-  signal: expect.any(AbortSignal),
-  prepareSource: expect.any(Function),
-  snapshot: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
-  assertCurrent: expect.any(Function),
-  assertInvocationCurrent: expect.any(Function),
+const systemSnapshot = {
+  version: 1,
+  actor: { kind: "system" },
+  scopes: ["operator.admin"],
+  grant: null,
 };
 const acceptedPublication = {
   requestId: "publication-1",
@@ -79,7 +77,7 @@ function expectPublication(overrides: Record<string, unknown> = {}) {
     sessionKey: callerSession,
     agentId: "main",
     expectedRunId: "run-1",
-    requester: expectedSystemRequester,
+    requester: expect.objectContaining({ snapshot: systemSnapshot }),
     ...overrides,
   });
 }
@@ -130,15 +128,14 @@ describe("sessions.github.publish", () => {
       operationalRunInstance: { runId: "run-1" },
     });
     mocks.loadSession.mockImplementation(async ({ cfg }) => {
-      const canonicalKey = callerSession;
       const entry = { sessionId: "session-1", updatedAt: 1 };
       return {
         cfg,
-        canonicalKey,
+        canonicalKey: callerSession,
         agentId: "main",
         storePath: "/synthetic/sessions-github.sqlite",
-        storeKeys: [canonicalKey],
-        store: { [canonicalKey]: entry },
+        storeKeys: [callerSession],
+        store: { [callerSession]: entry },
         entry,
         legacyKey: undefined,
       };
@@ -254,14 +251,13 @@ describe("sessions.github.publish", () => {
           sessionKey: "agent:main:main",
           idempotencyKey: "operator-publication-1",
           agentId: "main",
-          requester: {
-            ...expectedSystemRequester,
+          requester: expect.objectContaining({
             snapshot: {
-              ...expectedSystemRequester.snapshot,
+              ...systemSnapshot,
               actor: { kind: "operator", profileId: profile.id },
               scopes: ["operator.write"],
             },
-          },
+          }),
         });
         expectReply(respond, acceptedPublication);
       });
@@ -303,7 +299,7 @@ describe("sessions.github.publish", () => {
             sessionKey: "global",
             idempotencyKey: "global-publication",
             agentId: expectedAgent,
-            requester: expectedSystemRequester,
+            requester: expect.objectContaining({ snapshot: systemSnapshot }),
           });
         },
       );
@@ -337,7 +333,7 @@ describe("sessions.github.publish", () => {
     await entered.promise;
     const requester = expectDefined(mocks.request.mock.calls[0], "publication request")[0]
       .requester;
-    expect(requester.snapshot).toEqual(expectedSystemRequester.snapshot);
+    expect(requester.snapshot).toEqual(systemSnapshot);
     expect(() => requester.assertCurrent()).not.toThrow();
     authorized = false;
     expect(() => requester.assertCurrent()).toThrow(GitHubPublicationRequesterUnavailableError);

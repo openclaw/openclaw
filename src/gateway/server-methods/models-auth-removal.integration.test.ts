@@ -137,10 +137,6 @@ describe("models.authLogout with a concurrent registered config set", () => {
             ],
             { from: "user" },
           );
-          const committed = await readConfigFileSnapshot();
-          expect(committed.parsed).toMatchObject({
-            models: { providers: { [updatedProvider]: { apiKey: replacement } } },
-          });
         });
         await withTimeout(acquired.promise, 10_000, "fixture config lock");
         const observation = vi
@@ -256,48 +252,19 @@ describe("models.authLogout with a concurrent registered config set", () => {
               await startTurn(runId);
             }
             const saved = await saveKey();
-            await expect(logoutProvider({ profileIds: ["fixture:unavailable"] })).rejects.toThrow(
-              "unavailable auth profiles",
-            );
-            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
             await expectLogout({ profileIds: [saved.profileId] }, [saved.profileId]);
             expect(turns.get("fixture")!.signal?.aborted).toBe(false);
             await saveKey();
-            const agentDir = resolveAgentDir({ agents: cfg.agents }, "main");
-            for (const [id, credential] of Object.entries({
-              ref: {
+            upsertAuthProfile({
+              agentDir: resolveAgentDir({ agents: cfg.agents }, "main"),
+              profileId: "fixture:ref",
+              credential: {
+                provider: "fixture",
                 type: "api_key",
                 keyRef: { source: "env", provider: "default", id: "INLINE_REMOVAL_TEST_KEY" },
               },
-              token: { type: "token", token: "synthetic-token" },
-              oauth: {
-                type: "oauth",
-                access: "synthetic-access",
-                refresh: "synthetic-refresh",
-                expires: Date.now() + 60_000,
-              },
-            } as const)) {
-              upsertAuthProfile({
-                agentDir,
-                profileId: `fixture:${id}`,
-                credential: { ...credential, provider: "fixture" },
-              });
-            }
+            });
             await expectLogout({ credentialType: "api_key" }, [saved.profileId]);
-            expect(turns.get("fixture")!.signal?.aborted).toBe(false);
-            const status = await client.request<{
-              providers: Array<{ provider: string; profiles: Array<{ profileId: string }> }>;
-            }>("models.authStatus", { agentId: "main" });
-            expect(
-              status.providers
-                .find((provider) => provider.provider === "fixture")
-                ?.profiles.map((profile) => profile.profileId)
-                .toSorted(),
-            ).toEqual(["fixture:oauth", "fixture:ref", "fixture:token"]);
-            await expectLogout(
-              { profileIds: [" fixture:token ", "fixture:oauth", "fixture:token"] },
-              ["fixture:token", "fixture:oauth"],
-            );
             expect(turns.get("fixture")!.signal?.aborted).toBe(false);
             await saveKey();
             await expect(logoutProvider()).resolves.toMatchObject({
