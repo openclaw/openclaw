@@ -287,6 +287,9 @@ const repositoryScriptEntries = [
   "scripts/perf/trajectory-preparation-retention.ts!",
   "scripts/perf/transcript-session-list-measure.ts!",
   "scripts/perf/transport-pull-allocation-measure.mjs!",
+  // scripts/perf/README.md invokes this lazy-import probe and its preload by path.
+  "scripts/perf/lazy-import-feature-probe.mjs!",
+  "scripts/perf/lazy-import-trace-preload.mjs!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.

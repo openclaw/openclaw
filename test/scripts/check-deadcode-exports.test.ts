@@ -236,7 +236,21 @@ const catalog = module.loadControlUiSourceCatalog();`;
     );
 
     const readFileSync = fs.readFileSync.bind(fs);
-    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+    const doctorConsumerPath = path.resolve("src/commands/config-preflight-snapshot.ts");
+    const readFile = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      const source = readFileSync(file, options);
+      return path.resolve(String(file)) === doctorConsumerPath
+        ? String(source).replaceAll(
+            '(doctorIssuesModule ??= import("./doctor/shared/legacy-config-issues.js"))',
+            'import("./doctor/shared/legacy-config-issues.js")',
+          )
+        : source;
+    });
+    expect(compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs")).toContain(
+      'import { addDoctorLegacyIssues as __dynamic3_0 } from "../src/commands/doctor/shared/legacy-config-issues.js";',
+    );
+
+    readFile.mockImplementation((file, options) => {
       const source = readFileSync(file, options);
       if (path.resolve(String(file)) === path.resolve("tsdown.config.ts")) {
         return String(source).replace(
@@ -264,9 +278,7 @@ const catalog = module.loadControlUiSourceCatalog();`;
           "",
         );
       }
-      if (
-        path.resolve(String(file)) === path.resolve("src/commands/config-preflight-snapshot.ts")
-      ) {
+      if (path.resolve(String(file)) === doctorConsumerPath) {
         return String(source).replaceAll(").addDoctorLegacyIssues", ").consumeLegacyIssues");
       }
       return source;
