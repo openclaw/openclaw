@@ -15,8 +15,13 @@ import {
   startModelsGateway,
 } from "./models-integration.test-support.js";
 
-function configuredProvider(apiKey: string, models: { id: string; name: string }[] = []) {
-  return { baseUrl: "http://127.0.0.1:9/v1", api: "openai-completions", apiKey, models };
+function configuredProvider(apiKey: string, name = "Fixture") {
+  return {
+    baseUrl: "http://127.0.0.1:9/v1",
+    api: "openai-completions",
+    apiKey,
+    models: [{ id: "fixture-model", name }],
+  };
 }
 
 const inference = vi.hoisted(() => ({ run: vi.fn() }));
@@ -85,15 +90,9 @@ describe("models.authLogout with a concurrent registered config set", () => {
         gateway: { mode: "local", auth: { mode: "token", token }, reload: { mode: reloadMode } },
         models: {
           providers: {
-            fixture: configuredProvider("synthetic-inline-A", [
-              { id: "fixture-model", name: "Fixture" },
-            ]),
-            FIXTURE: configuredProvider("${INLINE_REMOVAL_TEST_KEY}", [
-              { id: "fixture-model", name: "Fixture" },
-            ]),
-            "other-fixture": configuredProvider("synthetic-unrelated-A", [
-              { id: "fixture-model", name: "Other fixture" },
-            ]),
+            fixture: configuredProvider("synthetic-inline-A"),
+            FIXTURE: configuredProvider("${INLINE_REMOVAL_TEST_KEY}"),
+            "other-fixture": configuredProvider("synthetic-unrelated-A", "Other fixture"),
           },
         },
       };
@@ -235,58 +234,56 @@ describe("models.authLogout with a concurrent registered config set", () => {
             turn.entered.resolve();
             await turn.release.promise;
           });
+          const startTurn = async (runId: string) => {
+            const agentId = runId === "writer" ? "writer" : "main";
+            await client.request("agent", {
+              agentId,
+              sessionKey: `agent:${agentId}:dashboard:auth-${runId}`,
+              message: "Hold inference through credential removal",
+              provider: runId === "other-fixture" ? runId : "fixture",
+              model: "fixture-model",
+              idempotencyKey: runId,
+            });
+            await turns.get(runId)!.entered.promise;
+          };
+          const expectLogout = (selection: Record<string, unknown>, removedProfiles: unknown) =>
+            expect(logoutProvider(selection)).resolves.toMatchObject({
+              removedProfiles,
+              abortedRunIds: [],
+            });
           try {
             for (const runId of ["fixture", "other-fixture", "writer"]) {
-              const agentId = runId === "writer" ? "writer" : "main";
-              await client.request("agent", {
-                agentId,
-                sessionKey: `agent:${agentId}:dashboard:auth-${runId}`,
-                message: "Hold inference through credential removal",
-                provider: runId === "other-fixture" ? runId : "fixture",
-                model: "fixture-model",
-                idempotencyKey: runId,
-              });
-              await turns.get(runId)!.entered.promise;
+              await startTurn(runId);
             }
             const saved = await saveKey();
             await expect(logoutProvider({ profileIds: ["fixture:unavailable"] })).rejects.toThrow(
               "unavailable auth profiles",
             );
             expect(turns.get("fixture")!.signal?.aborted).toBe(false);
-            await expect(logoutProvider({ profileIds: [saved.profileId] })).resolves.toMatchObject({
-              removedProfiles: [saved.profileId],
-              abortedRunIds: [],
-            });
+            await expectLogout({ profileIds: [saved.profileId] }, [saved.profileId]);
             expect(turns.get("fixture")!.signal?.aborted).toBe(false);
             await saveKey();
             const agentDir = resolveAgentDir({ agents: cfg.agents }, "main");
-            for (const [profileId, credential] of [
-              [
-                "fixture:ref",
-                {
-                  type: "api_key",
-                  provider: "fixture",
-                  keyRef: { source: "env", provider: "default", id: "INLINE_REMOVAL_TEST_KEY" },
-                },
-              ],
-              ["fixture:token", { type: "token", provider: "fixture", token: "synthetic-token" }],
-              [
-                "fixture:oauth",
-                {
-                  type: "oauth",
-                  provider: "fixture",
-                  access: "synthetic-access",
-                  refresh: "synthetic-refresh",
-                  expires: Date.now() + 60_000,
-                },
-              ],
-            ] as const) {
-              upsertAuthProfile({ agentDir, profileId, credential });
+            for (const [id, credential] of Object.entries({
+              ref: {
+                type: "api_key",
+                keyRef: { source: "env", provider: "default", id: "INLINE_REMOVAL_TEST_KEY" },
+              },
+              token: { type: "token", token: "synthetic-token" },
+              oauth: {
+                type: "oauth",
+                access: "synthetic-access",
+                refresh: "synthetic-refresh",
+                expires: Date.now() + 60_000,
+              },
+            } as const)) {
+              upsertAuthProfile({
+                agentDir,
+                profileId: `fixture:${id}`,
+                credential: { ...credential, provider: "fixture" },
+              });
             }
-            await expect(logoutProvider({ credentialType: "api_key" })).resolves.toMatchObject({
-              removedProfiles: [saved.profileId],
-              abortedRunIds: [],
-            });
+            await expectLogout({ credentialType: "api_key" }, [saved.profileId]);
             expect(turns.get("fixture")!.signal?.aborted).toBe(false);
             const status = await client.request<{
               providers: Array<{ provider: string; profiles: Array<{ profileId: string }> }>;
@@ -297,12 +294,10 @@ describe("models.authLogout with a concurrent registered config set", () => {
                 ?.profiles.map((profile) => profile.profileId)
                 .toSorted(),
             ).toEqual(["fixture:oauth", "fixture:ref", "fixture:token"]);
-            await expect(
-              logoutProvider({ profileIds: [" fixture:token ", "fixture:oauth", "fixture:token"] }),
-            ).resolves.toMatchObject({
-              removedProfiles: ["fixture:token", "fixture:oauth"],
-              abortedRunIds: [],
-            });
+            await expectLogout(
+              { profileIds: [" fixture:token ", "fixture:oauth", "fixture:token"] },
+              ["fixture:token", "fixture:oauth"],
+            );
             expect(turns.get("fixture")!.signal?.aborted).toBe(false);
             await saveKey();
             await expect(logoutProvider()).resolves.toMatchObject({
@@ -314,15 +309,7 @@ describe("models.authLogout with a concurrent registered config set", () => {
             expect(turns.get("writer")!.signal?.aborted).toBe(false);
             // The remaining config-owned reference is enough for admission;
             // full logout must revoke inference even with no saved profiles.
-            await client.request("agent", {
-              agentId: "main",
-              sessionKey: "agent:main:dashboard:auth-external",
-              message: "Hold inference with externally configured auth",
-              provider: "fixture",
-              model: "fixture-model",
-              idempotencyKey: "external",
-            });
-            await turns.get("external")!.entered.promise;
+            await startTurn("external");
             await expect(logoutProvider()).resolves.toMatchObject({
               removedProfiles: [],
               abortedRunIds: ["external"],
