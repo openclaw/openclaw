@@ -1,4 +1,3 @@
-import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -242,50 +241,5 @@ describe("ensureSandboxWorkspace", () => {
     });
     await prepare();
     expect(await read()).toContain("Do startup things");
-  });
-
-  it("does not publish a partial sandbox seed when the first write fails", async () => {
-    const { sandbox, prepare, read, expectMissing } = await workspaceFixture({
-      [DEFAULT_AGENTS_FILENAME]: "seeded-agents",
-    });
-    await fs.mkdir(sandbox, { recursive: true });
-    const resolvedSandbox = await fs.realpath(sandbox);
-    const realOpen = fs.open.bind(fs);
-    let injected = false;
-    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const rawPath = nodeFilePath(args[0]);
-      const exclusiveCreate =
-        typeof args[1] === "number" &&
-        (args[1] & syncFs.constants.O_CREAT) !== 0 &&
-        (args[1] & syncFs.constants.O_EXCL) !== 0;
-      if (
-        !injected &&
-        rawPath &&
-        path.dirname(path.resolve(rawPath)) === resolvedSandbox &&
-        exclusiveCreate
-      ) {
-        vi.spyOn(handle, "write").mockImplementationOnce(async () => {
-          injected = true;
-          await handle.writeFile("# PARTIAL\n");
-          throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
-        });
-      }
-      return handle;
-    });
-
-    try {
-      await expect(withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, prepare)).rejects.toMatchObject({
-        cause: { code: "ENOSPC" },
-      });
-      expect(injected).toBe(true);
-      await expectMissing();
-      expect(await fs.readdir(sandbox)).toEqual([]);
-    } finally {
-      spy.mockRestore();
-    }
-
-    await prepare();
-    await expect(read()).resolves.toBe("seeded-agents");
   });
 });

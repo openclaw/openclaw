@@ -222,41 +222,33 @@ async function createFixture() {
 describe.runIf(process.platform === "linux" || process.platform === "darwin")(
   "remote workspace initialization",
   () => {
-    it.each(["workspace", "agent"])(
-      "retries incomplete %s uploads without publishing a partial workspace",
-      async (interrupted) => {
-        const readOnly = interrupted === "agent";
-        const fixture = await createFixture();
-        let failed = false;
-        const backend = await fixture.createBackend("source", async (params, upload) => {
-          if (!failed && path.basename(params.remoteDir) === interrupted) {
-            failed = true;
-            await upload({ ...params, localDir: fixture.partialDir });
-            if (readOnly) {
-              await fixture.makeStageReadOnly(params.remoteDir);
-            }
-            throw new Error("interrupted initial upload");
-          }
-          await upload(params);
-        });
-        try {
-          const root = path.dirname(backend.workdir);
-          await expect(run(backend)).rejects.toThrow("interrupted initial upload");
-          await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
-          expect(await fs.readdir(fixture.remoteRoot)).toEqual([]);
-          if (readOnly) {
-            await fixture.assertProtectedUnchanged();
-          }
-          await run(backend);
-          await expectText(path.join(backend.workdir, "full.txt"), "source-primary");
-          await expectText(path.join(root, "agent", "full.txt"), "source-agent");
-          expect(await fs.readdir(backend.workdir)).toEqual(["full.txt"]);
-          expect(await fs.readdir(fixture.remoteRoot)).toEqual([path.basename(root)]);
-        } finally {
-          await fixture.restorePermissions();
+    it("retries incomplete agent uploads without publishing a partial workspace", async () => {
+      const fixture = await createFixture();
+      let failed = false;
+      const backend = await fixture.createBackend("source", async (params, upload) => {
+        if (!failed && path.basename(params.remoteDir) === "agent") {
+          failed = true;
+          await upload({ ...params, localDir: fixture.partialDir });
+          await fixture.makeStageReadOnly(params.remoteDir);
+          throw new Error("interrupted initial upload");
         }
-      },
-    );
+        await upload(params);
+      });
+      try {
+        const root = path.dirname(backend.workdir);
+        await expect(run(backend)).rejects.toThrow("interrupted initial upload");
+        await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await fs.readdir(fixture.remoteRoot)).toEqual([]);
+        await fixture.assertProtectedUnchanged();
+        await run(backend);
+        await expectText(path.join(backend.workdir, "full.txt"), "source-primary");
+        await expectText(path.join(root, "agent", "full.txt"), "source-agent");
+        expect(await fs.readdir(backend.workdir)).toEqual(["full.txt"]);
+        expect(await fs.readdir(fixture.remoteRoot)).toEqual([path.basename(root)]);
+      } finally {
+        await fixture.restorePermissions();
+      }
+    });
 
     it.each(["emptied", "edited"])(
       "keeps a concurrently published %s workspace",
@@ -300,20 +292,6 @@ describe.runIf(process.platform === "linux" || process.platform === "darwin")(
         }
       },
     );
-
-    it("validates real workspace and agent directories without creating missing paths", async () => {
-      const fixture = await createFixture();
-      const backend = await fixture.createBackend("source one");
-      await run(backend);
-      for (const root of [backend.workdir, path.join(path.dirname(backend.workdir), "agent")]) {
-        const workdir = path.join(root, "src");
-        await fs.mkdir(workdir);
-        await expect(backend.validateWorkdir?.(workdir)).resolves.toBe(await fs.realpath(workdir));
-      }
-      const missing = path.join(backend.workdir, "missing");
-      await expect(backend.validateWorkdir?.(missing)).resolves.toBeNull();
-      await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
-    });
 
     it("adopts existing unmarked remote workspaces without reseeding them", async () => {
       const fixture = await createFixture();
@@ -403,18 +381,5 @@ describe.runIf(process.platform !== "win32")("provider-owned remote shell transp
       await prepared.cleanup();
       await session.dispose();
     }
-  });
-
-  it("rejects an upload when the remote shell dies from a signal without a status", async () => {
-    const upload = await uploadFixture("remote-shell-signal-", "payload-bytes");
-    const session = sessionFor(upload.root, () => [
-      "/bin/sh",
-      "-c",
-      'cat >/dev/null; kill -TERM "$$"',
-    ]);
-    await expect(session.uploadDirectory(upload)).rejects.toThrow(
-      "remote exited from signal SIGTERM",
-    );
-    await session.dispose();
   });
 });

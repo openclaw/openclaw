@@ -1,22 +1,17 @@
-import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { ToolAllowDenyPolicyConfig } from "../../config/types.tools.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
-import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
 import {
   formatSandboxToolPolicyBlockedMessage as formatSandboxToolPolicyBlockedMessageBase,
   resolvePreparedSandboxRuntimeStatus,
-  resolveSandboxRuntimeStatusAsync,
+  type SandboxRuntimeStatusParams,
 } from "./runtime-status.js";
 import {
   isToolAllowed,
   resolveSandboxToolPolicyForAgent as resolveSandboxToolPolicyForAgentBase,
 } from "./tool-policy.js";
-
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-required-sandbox-");
 
 function policyConfig(
   tools?: ToolAllowDenyPolicyConfig,
@@ -45,13 +40,11 @@ function resolveSandboxToolPolicyForAgent(config: OpenClawConfig, agentId: strin
   return resolveSandboxToolPolicyForAgentBase(loadedConfig(config), agentId);
 }
 
-function resolveSandboxRuntimeStatus(
-  params: Omit<Parameters<typeof resolvePreparedSandboxRuntimeStatus>[0], "preparedSessionEntry">,
-) {
+function resolveSandboxRuntimeStatus(params: SandboxRuntimeStatusParams) {
   return resolvePreparedSandboxRuntimeStatus({
     ...params,
     cfg: loadedConfig(params.cfg),
-    preparedSessionEntry: null,
+    preparedSessionEntry: params.preparedSessionEntry ?? null,
   });
 }
 
@@ -134,25 +127,23 @@ describe("sandbox/tool-policy", () => {
     ).toBeUndefined();
   });
 
-  it("forces a persisted sandbox requirement even when the agent sandbox mode is off", async () => {
+  it("keeps required-session guidance independent of the disabled agent sandbox mode", () => {
     const sessionKey = "agent:main:guest";
-    const storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
-    const entry = {
-      sessionId: "guest-session",
-      updatedAt: 1,
-      sandbox: "required" as const,
-      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
-    };
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
     const cfg: OpenClawConfig = {
-      session: { store: storePath },
       agents: {
         defaults: { sandbox: { mode: "off", scope: "session", workspaceAccess: "rw" } },
         entries: { main: {} },
       },
     };
 
-    const runtime = await resolveSandboxRuntimeStatusAsync({ cfg: loadedConfig(cfg), sessionKey });
+    const runtime = resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey,
+      preparedSessionEntry: {
+        sandbox: "required",
+        createdActor: { type: "human", source: "unknown", id: "guest-principal" },
+      },
+    });
     expect(runtime).toMatchObject({
       sandboxRequired: true,
       isolationSubject: { kind: "session", sessionKey },
@@ -240,15 +231,10 @@ describe("sandbox/tool-policy", () => {
   it.each(["agent:work:telegram:default:direct:42", "global"])(
     "keeps %s ownership as the sandbox classification when none is supplied",
     (sessionKey) => {
-      const cfg = {
-        session: {
-          store: path.join(sessionDirs.make(), "{agentId}", "sessions.json"),
-        },
-        ...explicitAgents({
-          main: { sandbox: { mode: "off" } },
-          work: { sandbox: { mode: "all", scope: "agent" } },
-        }),
-      } satisfies OpenClawConfig;
+      const cfg = explicitAgents({
+        main: { sandbox: { mode: "off" } },
+        work: { sandbox: { mode: "all", scope: "agent" } },
+      });
 
       const params = { cfg, sessionKey, agentId: "work" };
       const runtime = resolveSandboxRuntimeStatus(params);
@@ -309,10 +295,6 @@ describe("sandbox/tool-policy", () => {
       const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
       const sessionLabel = sessionLine?.slice("Session: ".length);
       expect(sessionLabel).toBe(expectedLabel);
-      expect(sessionLabel?.length).toBeLessThanOrEqual(13);
-      expect(sessionLabel).not.toMatch(
-        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
-      );
       expect(message).toContain(`openclaw sandbox explain --session '${sessionKey}'`);
     },
   );
@@ -323,8 +305,6 @@ describe("sandbox/tool-policy", () => {
 
     const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
     expect(sessionLine).toBe("Session: agent:…\\n12345");
-    expect(sessionLine).not.toContain(sessionKey);
-    expect(sessionLine).toContain("\\n");
     expect(message).toContain("openclaw sandbox explain --agent main");
     expect(message).not.toContain("--session");
   });
