@@ -74,11 +74,11 @@ showed every answer twice. Cron keeps no transcript code of its own.
 
 ## Considered options
 
-- **Opt-in continuation, as in Hermes Agent.** Hermes runs every job in a fresh
-  session and delivers fire-and-forget by default. `cron.mirror_delivery` or a
-  per-job `attach_to_session` adds a labelled user message to the destination
-  session. Rejected as the default: a reply to a delivered message should work
-  without configuration, and a switch per job is a setting users must discover.
+- **Opt-in continuation.** Run every job in a fresh session and deliver
+  fire-and-forget by default; a global or per-job setting adds a labelled user
+  message to the destination session. Rejected as the default: a reply to a
+  delivered message should work without configuration, and a switch per job is a
+  setting users must discover.
 - **Always write to the creating chat too.** Rejected: the creating chat would
   hold messages it never showed, so the agent can refer to things the user did
   not see. Run history already answers "what did that job send?".
@@ -106,8 +106,8 @@ showed every answer twice. Cron keeps no transcript code of its own.
 
 - **Repeated assistant turns.** A result appended after the chat's last assistant
   reply creates two adjacent assistant messages. This has shipped for `current`
-  jobs since #126860 without a known failure, but Hermes broke on the same pattern
-  ([hermes-agent#2221](https://github.com/NousResearch/hermes-agent/issues/2221)).
+  jobs since #126860 without a known failure, but strict providers can reject
+  consecutive assistant turns.
   Add a provider replay test for each supported provider family.
 - **Session key parity.** The write must land in the exact session that an
   inbound reply uses. X has a known mismatch
