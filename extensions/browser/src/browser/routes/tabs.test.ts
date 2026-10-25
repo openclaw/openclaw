@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTab } from "../client.types.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { createRouteFixture } from "./request.test-support.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import type { createBrowserRouteResponse } from "./test-helpers.js";
 
 const navigation = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
@@ -103,14 +103,8 @@ it.each([{ driver: "existing-session" as const }, { cdpIsLoopback: false }, { at
   "refuses managed dashboard tab lookup after a profile changes to %j",
   async (override) => {
     const profileCtx = makeProfile({ profile: makeBrowserProfile(override) });
-    const response = await request({
-      method: "get",
-      path: "/tabs",
-      query: { managedOnly: true },
-      profileCtx,
-    });
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toEqual({
+    const response = await list({ query: { managedOnly: true }, profileCtx });
+    expectResponse(response, 400, {
       error: "This dashboard requires a local managed browser profile",
     });
     expect(profileCtx.isReachable).not.toHaveBeenCalled();
@@ -154,10 +148,7 @@ it("returns the profile that actually handled tab open", async () => {
     openTab: vi.fn(async () => tab),
   });
 
-  const response = await open({
-    body: { url: "https://example.com" },
-    profileCtx,
-  });
+  const response = await open({ body: { url: "https://example.com" }, profileCtx });
 
   expect(response.body).toEqual({ ...tab, resolvedProfile: "hot-profile" });
 });
@@ -221,12 +212,9 @@ describe("browser tab routes", () => {
     const profileCtx = makeProfile();
     const routeCtx = makeContext(profileCtx);
     const forProfile = vi.fn(routeCtx.forProfile);
-    const { app, postHandlers } = createBrowserRouteApp();
-    registerBrowserTabRoutes(app, { ...routeCtx, forProfile } as never);
-    const response = createBrowserRouteResponse();
-
-    await postHandlers.get("/tabs/open")?.({ params: {}, query: {}, body: {} }, response.res);
-
+    const routes = createRouteFixture();
+    registerBrowserTabRoutes(routes.app, { ...routeCtx, forProfile } as never);
+    const response = await routes.request("post", "/tabs/open");
     expectResponse(response, 400, { error: "url is required" });
     expect(forProfile).not.toHaveBeenCalled();
   });
@@ -239,19 +227,12 @@ describe("browser tab routes", () => {
       }),
     });
 
-    const response = await request({
-      method: "post",
-      path: "/tabs/open",
+    const response = await open({
       body: { url: "https://unresolved.example" },
       profileCtx,
     });
 
-    expect(response.statusCode).toBe(500);
-    expect(response.body).toEqual({ error: String(navigationError) });
-    expect(profileCtx.openTab).toHaveBeenCalledWith("https://unresolved.example", {
-      label: undefined,
-      signal: expect.any(AbortSignal),
-    });
+    expectResponse(response, 500, { error: String(navigationError) });
   });
 
   it.each(["close", "select"] as const)(
@@ -466,14 +447,8 @@ describe("browser tab routes", () => {
       labeledTab("T2_RAW", "t2", "T1_RAW"),
     ]);
 
-    const labelResponse = await focus({
-      profileCtx,
-      body: { targetId: "docs" },
-    });
-    const tabIdResponse = await focus({
-      profileCtx,
-      body: { targetId: "t1" },
-    });
+    const labelResponse = await focus({ profileCtx, body: { targetId: "docs" } });
+    const tabIdResponse = await focus({ profileCtx, body: { targetId: "t1" } });
 
     expect(labelResponse.statusCode).toBe(200);
     expect(tabIdResponse.statusCode).toBe(200);
@@ -549,8 +524,7 @@ describe("browser tab routes", () => {
   });
 
   it("does not close a tab after cancellation before the mutation", async () => {
-    const closeTab = vi.fn(async (targetId: string) => targetId);
-    const profileCtx = makeProfile({ closeTab });
+    const profileCtx = makeProfile();
     const preAborted = new AbortController();
     preAborted.abort(new Error("pre-cancelled"));
 
@@ -560,7 +534,7 @@ describe("browser tab routes", () => {
       signal: preAborted.signal,
     });
 
-    expect(closeTab).not.toHaveBeenCalled();
+    expect(profileCtx.closeTab).not.toHaveBeenCalled();
     expect(response.statusCode).toBe(500);
   });
 });

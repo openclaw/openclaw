@@ -167,6 +167,14 @@ function batch(actions: BrowserActRequest[]): BrowserActRequest {
   return { kind: "batch", stopOnError: false, actions };
 }
 
+function expectRevoked(
+  response: ReturnType<typeof startRoute>["response"],
+  pattern = /dashboard/i,
+) {
+  expect(response.statusCode).toBeGreaterThanOrEqual(400);
+  expect(response.body).toMatchObject({ error: expect.stringMatching(pattern) });
+}
+
 function dashboardRoute(
   tab: BrowserTab,
   route: "/act" | "/navigate" = "/act",
@@ -239,10 +247,7 @@ describe("dashboard action ownership", () => {
     const { response } = running;
     await complete(running, revoke, async () => {
       expect(nextEffect).not.toHaveBeenCalled();
-      expect(response.statusCode).toBeGreaterThanOrEqual(400);
-      expect(response.body).toMatchObject({
-        error: expect.stringMatching(/dashboard|Dashboard/),
-      });
+      expectRevoked(response, /dashboard|Dashboard/);
     });
   });
 
@@ -296,8 +301,7 @@ describe("dashboard action ownership", () => {
         expect(page.url()).toBe(requestedUrl);
       } else {
         expect(goto).toHaveBeenCalledTimes(retry ? 1 : 0);
-        expect(response.statusCode).toBeGreaterThanOrEqual(400);
-        expect(response.body).toMatchObject({ error: expect.stringMatching(/dashboard/i) });
+        expectRevoked(response);
         expect(page.url()).toBe(dashboard.url);
       }
       expect(page.unroute).toHaveBeenCalledTimes(retry ? 2 : 1);
@@ -369,19 +373,14 @@ describe("dashboard transfer authority", () => {
       });
       const running = startRoute(transferRoutes(tab).get(path), {
         body: { ...body, targetId },
-        ...(authority === "absent"
-          ? {}
-          : {
-              assertCurrent,
-            }),
+        ...(authority === "absent" ? {} : { assertCurrent }),
       });
       const { response } = running;
       await complete(running, authority === "Stop" ? "Stop" : "none", async () => {
         if (authority === "Stop") {
           expect(nativeEffect).not.toHaveBeenCalled();
           expect(waitForEvent).not.toHaveBeenCalled();
-          expect(response.statusCode).toBeGreaterThanOrEqual(400);
-          expect(response.body).toMatchObject({ error: expect.stringMatching(/dashboard/i) });
+          expectRevoked(response);
         } else {
           expect(response.statusCode).toBe(200);
           if (kind !== "download waiter") {
@@ -514,8 +513,7 @@ describe("dashboard state authority", () => {
     await complete(running, spec.stop ? "Stop" : "none", async () => {
       expect(effect).toHaveBeenCalledTimes(spec.stop ? 0 : (spec.effects ?? 1));
       if (spec.stop) {
-        expect(response.statusCode).toBeGreaterThanOrEqual(400);
-        expect(response.body).toMatchObject({ error: expect.stringMatching(/dashboard/i) });
+        expectRevoked(response);
       } else {
         expect(response).toMatchObject({ statusCode: 200, body: { ok: true } });
       }

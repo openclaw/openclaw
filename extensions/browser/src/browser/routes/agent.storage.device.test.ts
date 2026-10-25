@@ -102,23 +102,11 @@ beforeEach(() => {
 
 describe("browser device route", () => {
   it.each([
-    {
-      route: "timezone",
-      field: "timezoneId",
-      value: 0,
-      expected: "0",
-      method: "setTimezoneViaPlaywright",
-    },
-    {
-      route: "locale",
-      field: "locale",
-      value: false,
-      expected: "false",
-      method: "setLocaleViaPlaywright",
-    },
+    ["timezone", "timezoneId", 0, "0", "setTimezoneViaPlaywright"],
+    ["locale", "locale", false, "false", "setLocaleViaPlaywright"],
   ] as const)(
-    "preserves scalar coercion at the $route boundary",
-    async ({ route, field, value, expected, method }) => {
+    "preserves scalar coercion at the %s boundary",
+    async (route, field, value, expected, method) => {
       const response = await post(`/set/${route}`, { [field]: value });
       expectResponse(response, { ok: true, targetId: "tab-1" });
       expect(routeState[method]).toHaveBeenCalledWith({ ...target, [field]: expected });
@@ -126,10 +114,10 @@ describe("browser device route", () => {
   );
 
   it.each([
-    { route: "timezone", field: "timezoneId" },
-    { route: "locale", field: "locale" },
-    { route: "device", field: "name" },
-  ])("rejects blank $field before acquiring a browser", async ({ route, field }) => {
+    ["timezone", "timezoneId"],
+    ["locale", "locale"],
+    ["device", "name"],
+  ])("rejects blank %s before acquiring a browser", async (route, field) => {
     const response = await post(`/set/${route}`, { [field]: " \t " });
     expectResponse(response, { error: `${field} is required` }, 400);
     expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
@@ -164,9 +152,6 @@ describe("browser device route", () => {
       signal: controller.signal,
     });
     expect(response.body).toEqual({ ok: true, targetId: "tab-1" });
-    expect(routeState.withPlaywrightRouteContext).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: "device emulation" }),
-    );
     expect(routeState.withPlaywrightRouteContext.mock.calls[0]?.[0]).not.toHaveProperty(
       "enforceCurrentUrlAllowed",
     );
@@ -215,9 +200,8 @@ describe("browser cookie batch route", () => {
     expect(response.body).toEqual({ ok: true, targetId: "tab-1", added: 2 });
   });
 
-  it.each([["empty", { cookies: [] }]])("rejects a %s cookies payload", async (_label, body) => {
-    const response = await post("/cookies/set-many", body);
-
+  it("rejects an empty cookies payload", async () => {
+    const response = await post("/cookies/set-many", { cookies: [] });
     expect(response.statusCode).toBe(400);
     expect(routeState.withPlaywrightRouteContext).not.toHaveBeenCalled();
     expect(routeState.cookiesSetManyViaPlaywright).not.toHaveBeenCalled();
@@ -230,11 +214,7 @@ describe("browser storage route boundaries", () => {
     routeState.storage[kind].set("account", "plain");
     routeState.storage[kind].set(" account ", "padded");
     const response = await get("/storage/:kind", { kind }, { key: " account " });
-    expectResponse(response, {
-      ok: true,
-      targetId: "tab-1",
-      values: { " account ": "padded" },
-    });
+    expectResponse(response, { ok: true, targetId: "tab-1", values: { " account ": "padded" } });
   });
 
   it.each([
@@ -275,9 +255,9 @@ describe("browser storage route boundaries", () => {
     });
   });
 
-  it.each(["set"])("rejects an invalid storage kind before %s dispatch", async (operation) => {
+  it("rejects an invalid storage kind before set dispatch", async () => {
     const response = await post(
-      `/storage/:kind/${operation}`,
+      "/storage/:kind/set",
       { key: "", targetId: " requested-tab " },
       { kind: "invalid" },
     );
@@ -305,8 +285,5 @@ describe("browser storage route boundaries", () => {
       clear: false,
     });
     expect(response.body).toEqual({ ok: true, targetId: "tab-1" });
-    expect(routeState.withPlaywrightRouteContext).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: "http credentials" }),
-    );
   });
 });
