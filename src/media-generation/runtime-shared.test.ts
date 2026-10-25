@@ -15,8 +15,11 @@ import {
   throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
 
-function configuredProvider(id: string, defaultModel: string) {
+function configuredProvider(id: string, defaultModel = `${id}-image`) {
   return { id, defaultModel, isConfiguredAsync: async () => true };
+}
+function ref(provider: string, model = `${provider}-image`) {
+  return { provider, model };
 }
 
 type CandidateParams = Parameters<typeof resolveCapabilityModelCandidatesAsync>[0];
@@ -45,13 +48,10 @@ function candidateRequest(capability: "image" | "video", providers: string[]) {
   return { cfg: { agents: { defaults: { mediaModels } } }, autoProviderFallback: false };
 }
 
-const imageModels = {
-  primary: "google/gemini-3.1-flash-image-preview",
-  fallbacks: ["fal/fal-ai/flux/dev"],
-};
-const google = configuredProvider("google", "gemini-3.1-flash-image-preview");
+const imageModels = { primary: "google/google-image", fallbacks: ["fal/fal-ai/flux/dev"] };
+const google = configuredProvider("google");
 const fal = configuredProvider("fal", "fal-ai/flux/dev");
-const openai = configuredProvider("openai", "gpt-image-2");
+const openai = configuredProvider("openai");
 
 it.each([
   ["standard-key", "https://dashscope.example.test", true],
@@ -87,72 +87,52 @@ it.each([
   [2, { enabled: true, maxInputImages: 1 }, "p/m supports at most 1 reference image, 2 requested"],
   [11, { enabled: true }, "p/m supports at most 10 reference images, 11 requested"],
 ] as const)("validates %s reference-image inputs", (inputImageCount, edit, error) => {
-  const result = resolveReferenceImageCapabilityError({
-    candidateRef: "p/m",
-    inputImageCount,
-    edit,
-  });
-  expect(result).toBe(error);
+  expect(resolveReferenceImageCapabilityError({ candidateRef: "p/m", inputImageCount, edit })).toBe(
+    error,
+  );
 });
 
 it.each([
   {
-    name: "appends auth-backed provider defaults after explicit refs by default",
-    providers: [
-      google,
-      configuredProvider("openai", "gpt-image-1"),
-      configuredProvider("minimax", "image-01"),
-    ],
+    name: "appends auth-backed defaults after explicit refs",
+    providers: [google, openai, configuredProvider("minimax")],
     options: {
       cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
       modelConfig: imageModels,
     },
-    expected: [
-      { provider: "google", model: "gemini-3.1-flash-image-preview" },
-      { provider: "fal", model: "fal-ai/flux/dev" },
-      { provider: "openai", model: "gpt-image-1" },
-      { provider: "minimax", model: "image-01" },
-    ],
+    expected: [ref("google"), ref("fal", "fal-ai/flux/dev"), ref("openai"), ref("minimax")],
   },
   {
-    name: "orders auto-detected provider defaults by canonical aliases",
+    name: "orders auto-detected defaults by canonical aliases",
     providers: [fal, { ...openai, aliases: ["media-alias"] }],
-    options: { cfg: { agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } } } },
-    expected: [
-      { provider: "openai", model: "gpt-image-2" },
-      { provider: "fal", model: "fal-ai/flux/dev" },
-    ],
+    options: {
+      cfg: { agents: { defaults: { model: { primary: "media-alias/text" } } } },
+    },
+    expected: [ref("openai"), ref("fal", "fal-ai/flux/dev")],
   },
   {
     name: "treats an explicit model override as exact-only",
     providers: [google],
-    options: { modelConfig: imageModels, modelOverride: "openai/gpt-image-2" },
-    expected: [{ provider: "openai", model: "gpt-image-2" }],
+    options: {
+      modelConfig: imageModels,
+      modelOverride: "openai/openai-image",
+    },
+    expected: [ref("openai")],
   },
 ])("$name", async ({ providers, options, expected }) => {
   expect(await resolveCandidates(providers, options)).toEqual(expected);
 });
 
 it.each([
-  [
-    "uses generic auth without custom readiness",
-    undefined,
-    [{ provider: "media-config-only", model: "configured-video" }],
-  ],
-  ["honors an owner readiness veto over generic auth", () => false, []],
-] as const)("%s", async (_name, isConfigured, expected) => {
+  ["uses generic auth without custom readiness", undefined, true],
+  ["honors an owner readiness veto over generic auth", () => false, false],
+] as const)("%s", async (_name, isConfigured, allowed) => {
   const candidates = await resolveCandidates(
-    [{ id: "media-config-only", defaultModel: "configured-video", isConfigured }],
-    {
-      cfg: providerConfig(
-        "media-config-only",
-        "config-only-media-key",
-        "https://media.example.test/v1",
-      ),
-    },
+    [{ id: "media", defaultModel: "video", isConfigured }],
+    { cfg: providerConfig("media", "test-key", "https://media.example.test/v1") },
   );
 
-  expect(candidates).toEqual(expected);
+  expect(candidates).toEqual(allowed ? [ref("media", "video")] : []);
 });
 
 it("uses async readiness and observes an in-process credential change", async () => {
@@ -171,7 +151,7 @@ it("uses async readiness and observes an in-process credential change", async ()
 
   expect(await resolve()).toEqual([]);
   configured = true;
-  expect(await resolve()).toEqual([{ provider: "media", model: "image" }]);
+  expect(await resolve()).toEqual([ref("media", "image")]);
 });
 
 it("preserves missing, skipped, and failed attempts before the first usable result", async () => {
@@ -200,8 +180,7 @@ it("preserves missing, skipped, and failed attempts before the first usable resu
 
   expect(result.model).toBe("selected-model");
   const failedAttempt = (provider: string, error: string) => ({
-    provider,
-    model: "model",
+    ...ref(provider, "model"),
     error,
     reason: undefined,
     status: undefined,
@@ -209,8 +188,7 @@ it("preserves missing, skipped, and failed attempts before the first usable resu
   });
   expect(result.attempts).toStrictEqual([
     {
-      provider: "missing",
-      model: "model",
+      ...ref("missing", "model"),
       error: "No image-generation provider registered for missing",
     },
     failedAttempt("skipped", "reference inputs unsupported"),
@@ -249,14 +227,11 @@ it("propagates async prepare failures without submitting a fallback", async () =
 it.each([
   [Number.MAX_SAFE_INTEGER, 30_000, MAX_TIMER_TIMEOUT_MS],
   [0, 45_000, 45_000],
-])(
-  "resolves timeout %s with provider default %s",
-  (timeoutMs, providerDefaultTimeoutMs, expected) => {
-    expect(resolveMediaProviderRequestTimeoutMs({ timeoutMs, providerDefaultTimeoutMs })).toBe(
-      expected,
-    );
-  },
-);
+])("resolves timeout %s", (timeoutMs, providerDefaultTimeoutMs, expected) => {
+  expect(resolveMediaProviderRequestTimeoutMs({ timeoutMs, providerDefaultTimeoutMs })).toBe(
+    expected,
+  );
+});
 
 it.each([
   ["9007199254740993x3", ["1024x1024", "1536x1024"], undefined],
