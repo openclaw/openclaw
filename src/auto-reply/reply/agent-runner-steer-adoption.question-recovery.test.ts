@@ -4,15 +4,25 @@ import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
+  withTestTimeout,
 } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import {
+  claimEmbeddedPendingUserInputAnswer,
+  steerActiveSessionWithOptionalDeliveryWait,
+} from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
-import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
+import {
+  QuestionAnswerUnconfirmedError,
+  type AgentQuestionDispatcher,
+} from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
   callGatewayTool,
   withQuestionGateway,
 } from "../../agents/harness/gateway-question.test-support.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import type { ReplyBackendQueueMessageResult } from "../../sessions/session-controller.contracts.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionControllerSourceSettlement } from "../../sessions/session-controller.mailbox.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
@@ -32,23 +42,13 @@ import { withQuestionCreator } from "./reply-run-question.test-support.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 
 const text = "candidate committed answer";
+type QueueOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
 type SteerParams = Parameters<typeof runActiveReplySteer>[0];
 
 function expectNotCalled(...mocks: ReturnType<typeof vi.fn>[]) {
   for (const mock of mocks) {
     expect(mock).not.toHaveBeenCalled();
   }
-}
-
-function enqueue(key: string, run: FollowupRun, followup: SteerParams["runFollowup"]) {
-  return enqueueFollowupRun(
-    key,
-    run,
-    { mode: "followup", debounceMs: 0 },
-    "message-id",
-    followup,
-    false,
-  );
 }
 
 function startSteer(
@@ -68,87 +68,344 @@ function startSteer(
 }
 
 describe("question response custody through reply adoption", () => {
-  it("retains accepted input through source and sibling cancellation until settlement", async () => {
-    const key = "agent:main:accepted-steer-abort";
-    const run = createQueueTestRun({ prompt: text, messageId: "accepted-input" });
-    await withQuestionCreator(key, run, async (operation, fingerprint) => {
+  it("leaves unmatched hidden-run input in visible FIFO followups", async ({ signal }) => {
+    const key = "agent:main:hidden-followup";
+    const first = createQueueTestRun({ prompt: "first input", messageId: "hidden-first" });
+    const firstEntered = createDeferred();
+    const secondEntered = createDeferred();
+    const releaseFirst = createDeferred();
+    const followup = vi.fn(async (run: FollowupRun) => {
+      if (run.messageId === first.messageId) {
+        firstEntered.resolve();
+        await releaseFirst.promise;
+      } else {
+        secondEntered.resolve();
+      }
+    });
+    try {
+      await withQuestionCreator(key, first, async (operation, fingerprint) => {
+        const queueMessage = vi.fn(async () => {});
+        attachSteerBackend(operation, fingerprint, {
+          runId: "accepted-backing-work",
+          queueMessage,
+          claimPendingUserInputAnswer: (message, options, assertCurrent, kind) =>
+            claimEmbeddedPendingUserInputAnswer(message, options, key, undefined, {
+              kind,
+              assertCurrent,
+            }),
+        });
+        registerAgentRunContext("accepted-backing-work", {
+          isControlUiVisible: false,
+          projectSessionMessages: false,
+        });
+        for (const run of [
+          first,
+          { ...first, prompt: "second input", messageId: "hidden-second" },
+        ]) {
+          const state: ReplyOperationRunState = {};
+          await startSteer(key, run, operation, followup, state);
+          expect(state.admission).toEqual({
+            status: "accepted",
+            mode: "followup",
+            reason: "steering-unavailable",
+          });
+        }
+        expect(queueMessage).not.toHaveBeenCalled();
+        operation.complete();
+      });
+      // The creator callback retains real execution custody until it returns.
+      await withinTest(firstEntered.promise, signal);
+      expect(followup).toHaveBeenCalledOnce();
+      expect(followup.mock.calls[0]?.[0].prompt).toBe("first input");
+      releaseFirst.resolve();
+      await withinTest(secondEntered.promise, signal);
+      expect(followup.mock.calls.map(([run]) => run.prompt)).toEqual([
+        "first input",
+        "second input",
+      ]);
+    } finally {
+      releaseFirst.resolve();
+      await Promise.allSettled(followup.mock.results.map((result) => result.value));
+      clearAgentRunContext("accepted-backing-work");
+      clearSessionQueues([key]);
+    }
+  });
+
+  it("cancels a waiting steer without waiting for its predecessor's acceptance", async () => {
+    const key = "agent:main:waiting-steer-abort";
+    const first = createQueueTestRun({ prompt: "first input", messageId: "first-input" });
+    await withQuestionCreator(key, first, async (operation, fingerprint) => {
+      const backendEntered = createDeferred();
+      const firstOutcome = createDeferred();
+      const firstAdopted = vi.fn(async () => {});
+      const firstAbandoned = vi.fn();
+      const secondDeferred = createDeferred();
       const source = new AbortController();
-      const accepted = createDeferred();
-      const delivery = createDeferred();
-      const adopted = vi.fn(async () => {});
       const abandoned = vi.fn();
       const settled = vi.fn();
-      const cancel = vi.fn();
+      const adopted = vi.fn(async () => {});
       const followup = vi.fn(async (_run: FollowupRun) => {});
-      run.abortSignal = source.signal;
-      run.turnAdoptionLifecycle = {
-        onAdopted: adopted,
-        onAbandoned: abandoned,
-        onSettled: settled,
+      first.turnAdoptionLifecycle = { onAdopted: firstAdopted, onAbandoned: firstAbandoned };
+      const second: FollowupRun = {
+        ...first,
+        prompt: "waiting input",
+        messageId: "waiting-input",
+        abortSignal: source.signal,
+        turnAdoptionLifecycle: {
+          onDeferred: () => secondDeferred.resolve(),
+          onAdopted: adopted,
+          onAbandoned: abandoned,
+          onSettled: settled,
+        },
       };
+      const queueMessage = vi.fn((_message: string) => {
+        backendEntered.resolve();
+        // No acceptance callback yet: the next parked input must wait for this outcome.
+        return firstOutcome.promise;
+      });
       attachSteerBackend(operation, fingerprint, {
         runId: "accepted-backing-work",
-        cancel,
-        queueMessage: (_message, options, assertCurrent) => {
-          assertCurrent();
-          options?.onQueueAccepted?.(true);
-          accepted.resolve();
-          return delivery.promise;
-        },
+        queueMessage,
       });
-      const state: ReplyOperationRunState = {};
-      const adoption = startSteer(key, run, operation, followup, state);
-      void adoption.catch(() => undefined);
-      const tryDuplicate = () =>
-        enqueue(
-          key,
-          {
-            ...createQueueTestRun({ prompt: text, messageId: run.messageId }),
-            run: { ...run.run },
-          },
-          followup,
-        );
+      const firstSteer = startSteer(key, first, operation, followup);
+      let waitingSteer: ReturnType<typeof startSteer> | undefined;
       try {
         await awaitGateBeforeSettlement(
-          accepted.promise,
-          adoption,
-          "steering finished before backend acceptance",
+          backendEntered.promise,
+          firstSteer,
+          "first steer did not reach backend injection",
         );
-        source.abort(new Error("source released while accepted input awaits confirmation"));
-        // The injection owner still holds this input; cancellation must not make it replayable.
-        expectNotCalled(abandoned, settled, adopted);
-        expect(tryDuplicate()).toBe(false);
-        expect(followup).not.toHaveBeenCalled();
-        const siblingSource = new AbortController();
-        const siblingSettled = vi.fn();
-        const siblingCleanup = vi.fn(async (_run: FollowupRun) => {});
-        const sibling = createQueueTestRun({ prompt: "cancel sibling", messageId: "sibling" });
-        sibling.run = { ...run.run };
-        sibling.abortSignal = siblingSource.signal;
-        sibling.turnAdoptionLifecycle = { onAdopted: async () => {}, onSettled: siblingSettled };
-        expect(enqueue(key, sibling, siblingCleanup)).toBe(true);
-        // An ordinary source's sweep must also respect the parked injection owner.
-        siblingSource.abort();
-        await captureSessionControllerSourceSettlement(sibling.controllerInput!);
-        expect(siblingSettled).toHaveBeenCalledOnce();
-        expect(siblingCleanup).toHaveBeenCalledExactlyOnceWith(sibling);
-        expectNotCalled(abandoned, settled);
-        expect(tryDuplicate()).toBe(false);
-        delivery.resolve();
-        await expect(adoption).resolves.toBe("handled");
-        expect(state.admission).toEqual({ status: "accepted", mode: "steer" });
-        expect(adopted).toHaveBeenCalledOnce();
+        waitingSteer = startSteer(key, second, operation, followup);
+        await secondDeferred.promise;
+        source.abort(new Error("cancel source waiting for predecessor acceptance"));
+        await expect(
+          withTestTimeout(waitingSteer, 1_000, "cancelled steer still waits for predecessor"),
+        ).resolves.toBe("handled");
+        expect(abandoned).toHaveBeenCalledOnce();
         expect(settled).toHaveBeenCalledOnce();
-        expectNotCalled(abandoned, followup, cancel);
-        expect(tryDuplicate()).toBe(false);
-        expect(operation.abortSignal.aborted).toBe(false);
+        expectNotCalled(adopted, firstAdopted, firstAbandoned);
+        expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first input"]);
+        expect(
+          enqueueFollowupRun(
+            key,
+            createQueueTestRun({ prompt: "waiting input", messageId: second.messageId }),
+            { mode: "followup", debounceMs: 0 },
+            "message-id",
+            followup,
+            false,
+          ),
+        ).toBe(true);
       } finally {
-        delivery.resolve();
-        await adoption.catch(() => undefined);
+        firstOutcome.resolve();
+        await Promise.allSettled([firstSteer, waitingSteer]);
         clearSessionQueues([key]);
       }
     });
   });
+
+  it.each(["confirmed", "unconfirmed", "backend-error"] as const)(
+    "retains accepted input until its %s outcome settles",
+    async (confirmation) => {
+      const key = `agent:main:accepted-steer-abort-${confirmation}`;
+      const run = createQueueTestRun({ prompt: text, messageId: `accepted-${confirmation}` });
+      await withQuestionCreator(key, run, async (operation, fingerprint) => {
+        const source = new AbortController();
+        const accepted = createDeferred();
+        const delivery = createDeferred<void | ReplyBackendQueueMessageResult>();
+        const adopted = vi.fn(async () => {});
+        const abandoned = vi.fn();
+        const settled = vi.fn();
+        const cancel = vi.fn();
+        const followup = vi.fn(async (_run: FollowupRun) => {});
+        run.abortSignal = source.signal;
+        run.turnAdoptionLifecycle = {
+          onAdopted: adopted,
+          onAbandoned: abandoned,
+          onSettled: settled,
+        };
+        attachSteerBackend(operation, fingerprint, {
+          runId: "accepted-backing-work",
+          cancel,
+          queueMessage: (_message, options, assertCurrent) => {
+            assertCurrent();
+            options?.onQueueAccepted?.(true);
+            accepted.resolve();
+            return delivery.promise;
+          },
+        });
+        const state: ReplyOperationRunState = {};
+        const adoption = startSteer(key, run, operation, followup, state);
+        void adoption.catch(() => undefined);
+        const tryDuplicate = () =>
+          enqueueFollowupRun(
+            key,
+            {
+              ...createQueueTestRun({ prompt: text, messageId: run.messageId }),
+              run: { ...run.run },
+            },
+            { mode: "followup", debounceMs: 0 },
+            "message-id",
+            followup,
+            false,
+          );
+        try {
+          await awaitGateBeforeSettlement(
+            accepted.promise,
+            adoption,
+            "steering finished before backend acceptance",
+          );
+          if (confirmation !== "backend-error") {
+            source.abort(new Error("source released while accepted input awaits confirmation"));
+          }
+          // The injection owner still holds this input; cancellation must not make it replayable.
+          expectNotCalled(abandoned, settled, adopted);
+          expect(tryDuplicate()).toBe(false);
+          expect(followup).not.toHaveBeenCalled();
+          const siblingSource = new AbortController();
+          const siblingSettled = vi.fn();
+          const siblingCleanup = vi.fn(async (_run: FollowupRun) => {});
+          const sibling = createQueueTestRun({ prompt: "cancel sibling", messageId: "sibling" });
+          sibling.run = { ...run.run };
+          sibling.abortSignal = siblingSource.signal;
+          sibling.turnAdoptionLifecycle = { onAdopted: async () => {}, onSettled: siblingSettled };
+          expect(
+            enqueueFollowupRun(
+              key,
+              sibling,
+              { mode: "followup", debounceMs: 0 },
+              "message-id",
+              siblingCleanup,
+              false,
+            ),
+          ).toBe(true);
+          // An ordinary source's sweep must also respect the parked injection owner.
+          siblingSource.abort();
+          await captureSessionControllerSourceSettlement(sibling.controllerInput!);
+          expect(siblingSettled).toHaveBeenCalledOnce();
+          expect(siblingCleanup).toHaveBeenCalledExactlyOnceWith(sibling);
+          expectNotCalled(abandoned, settled);
+          expect(tryDuplicate()).toBe(false);
+          if (confirmation === "confirmed") {
+            delivery.resolve();
+            await expect(adoption).resolves.toBe("handled");
+            expect(state.admission).toEqual({ status: "accepted", mode: "steer" });
+          } else {
+            const errorMessage =
+              confirmation === "backend-error"
+                ? "backend failed after accepting input"
+                : "transcript confirmation lost";
+            if (confirmation === "backend-error") {
+              delivery.reject(new Error("backend failed after accepting input"));
+            } else {
+              delivery.resolve({ transcriptCommit: "unconfirmed", errorMessage });
+            }
+            const result = await adoption;
+            expect(state.admission).toEqual({
+              status: "skipped",
+              reason: "question-response-indeterminate",
+            });
+            expect(result).toMatchObject({
+              isError: true,
+              text: errorMessage,
+            });
+          }
+          expect(adopted).toHaveBeenCalledOnce();
+          expect(settled).toHaveBeenCalledOnce();
+          expectNotCalled(abandoned, followup, cancel);
+          expect(tryDuplicate()).toBe(false);
+          expect(operation.abortSignal.aborted).toBe(false);
+        } finally {
+          delivery.resolve();
+          await adoption.catch(() => undefined);
+          clearSessionQueues([key]);
+        }
+      });
+    },
+  );
+
+  it.for(["accepted", "rejected", "indeterminate"] as const)(
+    "injects the next native steer after an early ACK and keeps the first ahead through a %s outcome",
+    async (outcome, { signal }) => {
+      const key = "agent:main:steer-outcome-" + outcome;
+      const first = createQueueTestRun({ prompt: "first", messageId: "first" });
+      const wait = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+        withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
+      await withQuestionCreator(key, first, async (operation, fingerprint) => {
+        // Construct before either call binds its immutable controller input.
+        const second: FollowupRun = { ...first, prompt: "second", messageId: "second" };
+        const accepted = createDeferred();
+        const nativeOutcome = createDeferred<void | ReplyBackendQueueMessageResult>();
+        const secondParked = createDeferred();
+        const secondQueued = createDeferred();
+        second.turnAdoptionLifecycle = {
+          onDeferred: () => secondParked.resolve(),
+          onAdopted: async () => {},
+        };
+        const abandoned = vi.fn();
+        first.turnAdoptionLifecycle = { onAdopted: async () => {}, onAbandoned: abandoned };
+        const followup = vi.fn(async (_run: FollowupRun) => {});
+        const queueMessage = vi.fn((message: string, options: QueueOptions) => {
+          if (message === "first") {
+            options?.onQueueAccepted?.(true);
+            accepted.resolve();
+            return nativeOutcome.promise;
+          }
+          secondQueued.resolve();
+          return Promise.resolve();
+        });
+        attachSteerBackend(operation, fingerprint, {
+          runId: "accepted-backing-work",
+          queueMessage,
+        });
+        const firstSteer = startSteer(key, first, operation, followup);
+        let secondSteer: ReturnType<typeof startSteer> | undefined;
+        try {
+          await wait(accepted.promise, firstSteer, "first steer ended before native acceptance");
+          secondSteer = startSteer(key, second, operation, followup);
+          await wait(
+            secondParked.promise,
+            secondSteer,
+            "second steer ended before source admission",
+          );
+          await wait(
+            secondQueued.promise,
+            secondSteer,
+            "second steer ended before backend injection",
+          );
+          // A native ACK is final FIFO placement: the owner holds the first input ahead
+          // of the next and never replays it. Its commit can depend on later input.
+          expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first", "second"]);
+          expect(first.controllerInput?.injection?.accepted).toBe(true);
+          expect(first.controllerInput?.phase).toBe("injecting");
+          await expect(secondSteer).resolves.toBe("handled");
+          expect(first.controllerInput?.phase).toBe("injecting");
+          if (outcome === "accepted") {
+            nativeOutcome.resolve();
+          } else {
+            nativeOutcome.reject(
+              outcome === "indeterminate"
+                ? new QuestionAnswerUnconfirmedError("native input outcome unknown")
+                : new Error("native queue rejected after acceptance"),
+            );
+          }
+          await Promise.all([firstSteer, secondSteer]);
+          await Promise.all(
+            [first, second].map((run) =>
+              captureSessionControllerSourceSettlement(run.controllerInput!),
+            ),
+          );
+          expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first", "second"]);
+          expectNotCalled(followup, abandoned);
+          expect(first.controllerInput?.phase).toBe("consumed");
+          expect(second.controllerInput?.phase).toBe("consumed");
+        } finally {
+          nativeOutcome.resolve();
+          await Promise.allSettled([firstSteer, secondSteer]);
+          clearSessionQueues([key]);
+        }
+      });
+    },
+  );
 
   const questionSourceAuthorityChanges = [
     "next-model",

@@ -53,7 +53,7 @@ function jsonRecord(input: object, command = "claude", providerId = `${command}-
   );
 }
 
-const jsonAnswer = (text = "", sessionId: string | undefined = undefined) => ({
+const jsonAnswer = (text = "", sessionId?: string) => ({
   text,
   sessionId,
   usage: undefined,
