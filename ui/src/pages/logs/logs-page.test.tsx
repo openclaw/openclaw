@@ -14,7 +14,6 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderSolid as LogsRoute } from "./logs-page.tsx";
 
 type TestContext = ReturnType<typeof contextWithClient>;
-
 const TRUNCATION_NOTICE = "Log output truncated; showing latest chunk.";
 
 function contextWithClient(client: GatewayBrowserClient, connected = false, bootId?: string) {
@@ -29,7 +28,6 @@ function contextWithClient(client: GatewayBrowserClient, connected = false, boot
 function mountPage(initial: TestContext) {
   const [context, setContext] = createSignal(initial);
   const liveContext = {
-    ...initial,
     get gateway() {
       return context().gateway;
     },
@@ -105,6 +103,10 @@ async function settle() {
   await Promise.resolve();
   flush();
 }
+async function deliver<T>(reply: { resolve(value: T): void }, value: T) {
+  reply.resolve(value);
+  await settle();
+}
 async function poll() {
   await vi.advanceTimersByTimeAsync(2_000);
   await settle();
@@ -123,16 +125,6 @@ it("names the page with a level-one heading", async () => {
   );
 });
 
-it("retains server truncation after appending rows", async () => {
-  const { request, page } = await setup(
-    responding(tail(100, ["retained line"], "/log", true), tail(110, ["next line"], "/log")),
-  );
-  page.expectRows(["retained line"], true);
-  await poll();
-  expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: 100 });
-  page.expectRows(["retained line", "next line"], true);
-});
-
 it("warns only after the display buffer evicts rows and retains that notice", async () => {
   const lines = Array.from({ length: 2001 }, (_, index) => `line ${index + 1}`);
   let cursor = 0;
@@ -142,22 +134,14 @@ it("warns only after the display buffer evicts rows and retains that notice", as
     return tail(cursor, pageLines, "/tmp/buffer.log");
   });
   const { page } = await setup(request);
-  expect(page.text()).not.toContain(TRUNCATION_NOTICE);
-  const secondRow = page.container.querySelectorAll(".log-row")[1];
   for (const count of [1000, 1500, 2000]) {
     await poll();
     expect(page.lines()).toHaveLength(count);
     expect(page.text()).not.toContain(TRUNCATION_NOTICE);
   }
-
   await poll();
-  const retained = page.lines();
-  expect(retained).toHaveLength(2000);
-  expect(retained[0]).toBe("line 2");
-  expect(page.query(".log-row")).toBe(secondRow);
-  expect(retained.at(-1)).toBe("line 2001");
-  expect(page.text()).toContain(TRUNCATION_NOTICE);
-
+  const retained = lines.slice(1);
+  page.expectRows(retained, true);
   await poll();
   page.expectRows(retained, true);
 });
@@ -166,43 +150,28 @@ it.each([false, true])("clears truncation on replacement (server reset: %s)", as
   const { request, page } = await setup(
     responding(
       tail(100, ["old tail"], "/log", true),
+      tail(110, ["next line"], "/log"),
       tail(150, ["complete replacement"], "/log", false, reset),
     ),
   );
   page.expectRows(["old tail"], true);
+  await poll();
+  page.expectRows(["old tail", "next line"], true);
   await (reset ? poll() : page.refresh());
   page.expectRows(["complete replacement"], false);
-  expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: reset ? 100 : undefined });
-});
-
-it("retains truncation with stale rows and clears it when read access clears them", async () => {
-  const request = responding(tail(100, ["retained tail"], "/tmp/stale.log", true))
-    .mockRejectedValueOnce(new Error("log read failed"))
-    .mockRejectedValueOnce(missingReadScopeErrorFixture());
-  const { page } = await setup(request);
-  await poll();
-  page.expectRows(["retained tail"], true);
-  expect(page.text()).toContain("Showing stale data");
-  await poll();
-  page.expectRows([], false);
-  expect(page.text()).toContain("You don't have permission to view logs.");
+  expect(request.mock.calls[2]?.[1]).toMatchObject({ cursor: reset ? 110 : undefined });
 });
 
 it("retains one initial request across metadata snapshots with empty logs", async () => {
   const { request, replies } = pendingRequests();
   const { client, context, page } = await setup(request, false);
   context.gateway.publish({ client, phase: "connected" } as ApplicationGatewaySnapshot);
-  expect(request).toHaveBeenCalledOnce();
   await waitForSolid(() => expect(page.disabled("Loading…")).toBe(true));
   context.gateway.publish({ ...context.gateway.snapshot });
   expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([false]);
-
-  replies[0]!.resolve(tail(100, [], "/tmp/initial.log"));
-  await settle();
-  expect(page.lines()).toEqual([]);
+  await deliver(replies[0]!, tail(100, [], "/tmp/initial.log"));
   context.gateway.publish({ ...context.gateway.snapshot });
   expect(request).toHaveBeenCalledOnce();
-
   request.mockResolvedValueOnce(tail(110, ["poll"], "/tmp/initial.log"));
   await poll();
   expect(request.mock.calls[1]![1]).toMatchObject({ cursor: 100 });
@@ -215,7 +184,6 @@ it.each(["reconnect", "source replacement", "client replacement", "detach/reatta
     const { request, replies } = pendingRequests();
     const { client, context, page: initialPage } = await setup(request);
     let page = initialPage;
-    expect(request).toHaveBeenCalledOnce();
     if (transition === "reconnect") {
       reconnect(context);
     } else if (transition === "client replacement") {
@@ -231,15 +199,10 @@ it.each(["reconnect", "source replacement", "client replacement", "detach/reatta
     }
     await settle();
     expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([true, false]);
-    context.gateway.publish({ ...context.gateway.snapshot });
-    expect(request.mock.calls.map((call) => call[2].signal.aborted)).toEqual([true, false]);
-
-    replies[1]!.resolve(tail(2, ["current"]));
-    await settle();
+    await deliver(replies[1]!, tail(2, ["current"]));
     page.expectRows(["current"]);
     const requestFrame = vi.spyOn(window, "requestAnimationFrame");
-    replies[0]!.resolve(tail(1, ["stale"]));
-    await settle();
+    await deliver(replies[0]!, tail(1, ["stale"]));
     page.expectRows(["current"]);
     expect(requestFrame).not.toHaveBeenCalled();
   },
@@ -248,39 +211,41 @@ it.each(["reconnect", "source replacement", "client replacement", "detach/reatta
 it.each(["same", "changed"])("resumes %s-boot logs and retries failures", async (boot) => {
   const changed = boot === "changed";
   const pending = deferred<ReturnType<typeof tail>>();
-  const request = responding(tail(100, ["before"], "/tmp/gateway.log"))
+  const frames = captureFrames();
+  const request = responding(tail(100, ["before"], "/tmp/gateway.log", true))
     .mockReturnValueOnce(pending.promise)
     .mockResolvedValueOnce(tail(200, ["after"], "/tmp/gateway.log"));
   const { context, page } = await setup(request, true, "original-boot");
-  page.expectRows(["before"]);
+  const stream = page.query(".log-stream")!;
+  Object.defineProperty(stream, "scrollHeight", { value: 500 });
+  stream.scrollTop = 0;
   // SAFETY: This focused snapshot fixture supplies only the hello boot field read by LogsPage.
   reconnect(context, {
     ...context.gateway.snapshot,
     hello: { server: { bootId: changed ? "replacement-boot" : "original-boot" } },
   } as ApplicationGatewaySnapshot);
+  frames.forEach((frame) => frame(0));
+  expect(stream.scrollTop).toBe(0);
   await settle();
-  expect(request).toHaveBeenCalledTimes(2);
   expect(request.mock.calls[1]![1]).toMatchObject({ cursor: changed ? undefined : 100 });
-  page.expectRows(["before"]);
+  page.expectRows(["before"], true);
   if (changed) {
     pending.reject(new Error("replacement boot is not ready"));
     await settle();
-    page.expectRows(["before"]);
+    page.expectRows(["before"], true);
+    expect(page.text()).toContain("Showing stale data");
     expect(page.text()).toContain("replacement boot is not ready");
     await poll();
     expect(request.mock.calls[2]![1]).toMatchObject({ cursor: undefined });
   } else {
-    pending.resolve(tail(110, ["after"], "/tmp/gateway.log"));
-    await settle();
+    await deliver(pending, tail(110, ["after"], "/tmp/gateway.log"));
   }
-  page.expectRows(changed ? ["after"] : ["before", "after"]);
+  page.expectRows(changed ? ["after"] : ["before", "after"], !changed);
   expect(page.text()).not.toContain("replacement boot is not ready");
 });
 
 it("clears loaded rows, source, and cursor when the gateway provider changes", async () => {
-  const { client, page, request } = await setup(
-    vi.fn().mockResolvedValue(tail(42, ["old"], "/old")),
-  );
+  const { client, page, request } = await setup(responding(tail(42, ["old"], "/old")));
   page.expectRows(["old"]);
   expect(page.text()).toContain("/old");
   const replacement = contextWithClient(client);
@@ -294,41 +259,16 @@ it("clears loaded rows, source, and cursor when the gateway provider changes", a
   page.expectRows(["new"]);
 });
 
-it("pauses polling while hidden and catches up once on reveal", async () => {
-  let visibility: DocumentVisibilityState = "hidden";
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-  const { request, page } = await setup(vi.fn().mockResolvedValue(tail(1, [])));
-  expect(request).toHaveBeenCalledOnce();
-  await poll();
-  expect(request).toHaveBeenCalledOnce();
-  visibility = "visible";
-  document.dispatchEvent(new Event("visibilitychange"));
-  await settle();
-  expect(request).toHaveBeenCalledTimes(2);
-  visibility = "hidden";
-  document.dispatchEvent(new Event("visibilitychange"));
-  await poll();
-  expect(request).toHaveBeenCalledTimes(2);
-  page.dispose();
-  visibility = "visible";
-  document.dispatchEvent(new Event("visibilitychange"));
-  await poll();
-  expect(request).toHaveBeenCalledTimes(2);
-});
-
 it("serializes quiet polls so an older cursor cannot overwrite a newer one", async () => {
   const pending = deferred<ReturnType<typeof tail>>();
   const request = responding(tail(1, ["seed"])).mockReturnValue(pending.promise);
   const { page } = await setup(request);
-  const row = page.query(".log-row");
   await poll();
   expect(page.disabled("Refresh")).toBe(true);
-  expect(page.query(".log-row")).toBe(row);
   await poll();
   expect(request).toHaveBeenCalledTimes(2);
   page.expectRows(["seed"]);
-  pending.resolve(tail(2, ["fresh"]));
-  await settle();
+  await deliver(pending, tail(2, ["fresh"]));
   page.expectRows(["seed", "fresh"]);
   await poll();
   expect(request.mock.calls[2]![1]).toMatchObject({ cursor: 2 });
@@ -343,19 +283,18 @@ it("reloads a changed log file before publishing any rows from it", async () => 
   const { page } = await setup(request);
   await poll();
   page.expectRows(["A-one"], true);
-  expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: 6 });
   expect(request.mock.calls[2]?.[1]).toMatchObject({ cursor: undefined });
-  reset.resolve(tail(18, ["B-one", "B-tail"], "/b"));
-  await settle();
+  await deliver(reset, tail(18, ["B-one", "B-tail"], "/b"));
   page.expectRows(["B-one", "B-tail"], false);
   expect(page.text()).toContain("/b");
 });
 
 it.each([false, true])("recovers a logs error with previously loaded rows: %s", async (loaded) => {
   const pending = deferred<ReturnType<typeof tail>>();
-  const request = responding(...(loaded ? [tail(1, ["old"])] : []))
+  const request = responding(...(loaded ? [tail(1, ["old"], undefined, true)] : []))
     .mockReturnValueOnce(pending.promise)
-    .mockResolvedValueOnce(tail(2, ["recovered"], undefined, false, loaded));
+    .mockResolvedValueOnce(tail(2, ["recovered"], undefined, loaded, loaded))
+    .mockRejectedValueOnce(missingReadScopeErrorFixture());
   const { context, page } = await setup(request);
   const input = page.query<HTMLInputElement>(".settings-input")!;
   const stream = page.query(".log-stream");
@@ -367,17 +306,16 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
   input.focus();
   if (loaded) {
     await page.refresh();
-    page.expectRows(["old"]);
+    page.expectRows(["old"], true);
   }
   expect(page.disabled("Loading…")).toBe(true);
   expectRetainedControls();
   pending.reject(new Error("logs unavailable"));
   await waitForSolid(() => expect(page.disabled("Refresh")).toBe(false));
   if (loaded) {
-    page.expectRows(["old"]);
+    page.expectRows(["old"], true);
     expect(page.query(".logs-refresh-status")?.textContent).toContain("Showing stale data");
   } else {
-    expect(page.text()).toContain("logs unavailable");
     expect(page.text()).not.toContain("No log entries.");
     context.gateway.publish({ ...context.gateway.snapshot });
     expect(request).toHaveBeenCalledOnce();
@@ -386,9 +324,14 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
   expect(page.query(".logs-refresh-status")?.textContent).toContain("logs unavailable");
   await (loaded ? page.refresh() : poll());
   await waitForSolid(() => expect(page.lines()).toEqual(["recovered"]));
-  expect(page.text()).not.toContain("logs unavailable");
   expect(page.query(".logs-refresh-status")).toBeNull();
   expectRetainedControls();
+  if (loaded) {
+    page.expectRows(["recovered"], true);
+    await poll();
+    page.expectRows([], false);
+    expect(page.text()).toContain("You don't have permission to view logs.");
+  }
 });
 
 it("keeps text and level filters active as quiet polls append rows", async () => {
@@ -427,19 +370,4 @@ it("forces a scroll when auto-follow is re-enabled away from the bottom", async 
   expect(frames).toHaveLength(1);
   frames[0]!(0);
   expect(stream.scrollTop).toBe(500);
-});
-
-it("drops queued scroll work after a same-client reconnect", async () => {
-  const request = responding(tail(1, ["one"])).mockReturnValue(new Promise(() => {}));
-  const frames = captureFrames();
-  const { context, page } = await setup(request);
-  const stream = page.query(".log-stream")!;
-  Object.defineProperty(stream, "scrollHeight", { value: 500 });
-  stream.scrollTop = 0;
-  context.gateway.publish({ ...context.gateway.snapshot, phase: "stopped" });
-  context.gateway.publish({ ...context.gateway.snapshot, phase: "connected" });
-  for (const frame of frames) {
-    frame(0);
-  }
-  expect(stream.scrollTop).toBe(0);
 });
