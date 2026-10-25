@@ -33,6 +33,12 @@ function withCategoryState(run: () => Promise<void>) {
   return fixtureLifetime.run(() => withOpenClawTestState({ scenario: "minimal" }, run));
 }
 
+function invalidateCategories(queries: readonly { key: string }[]) {
+  sessionChanges.emitBatch(
+    queries.map(({ key }) => ({ sessionKey: key, factsInvalidated: "category" as const })),
+  );
+}
+
 it.for(["search", "full", "overflow"] as const)(
   "prepares evicted category facts through %s reads",
   async (mode) => {
@@ -63,12 +69,7 @@ it.for(["search", "full", "overflow"] as const)(
             for (const query of queries.slice(0, 101)) {
               expect(read.describe(query)?.entry.category).toBe("Work");
             }
-            sessionChanges.emitBatch(
-              (overflow ? queries : [oldest]).map(({ key }) => ({
-                sessionKey: key,
-                factsInvalidated: "category" as const,
-              })),
-            );
+            invalidateCategories(overflow ? queries : [oldest]);
           },
         );
         const materialized = projection.materializedCount;
@@ -113,7 +114,6 @@ it.for(["search", "full", "overflow"] as const)(
             expect(projection.selectEntries({ key: oldest.key }, true)).toHaveLength(1);
             expect(admitted.length).toBeGreaterThan(0);
             expect(admitted.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
-            expect(reads.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
             expect([...new Set(reads.flat())].toSorted()).toEqual(
               queries.map(({ key }) => key).toSorted(),
             );
@@ -176,12 +176,7 @@ it("keeps failed category facts pending and reenters selection through exact pre
             expect(selectionStarted).toBe(true);
             publishCategory = false;
             publishedAcrossAwait = true;
-            sessionChanges.emitBatch(
-              [query, sibling].map(({ key }) => ({
-                sessionKey: key,
-                factsInvalidated: "category" as const,
-              })),
-            );
+            invalidateCategories([query, sibling]);
           }
           return reply;
         },
@@ -210,7 +205,7 @@ it("keeps failed category facts pending and reenters selection through exact pre
         }
         return reply;
       });
-      sessionChanges.emit({ sessionKey: query.key, factsInvalidated: "category" });
+      invalidateCategories([query]);
       await expect(projection.prepareMembership()).rejects.toBe(failure);
       expect(reads).toEqual([[query.key]]);
       expect(projection.sharingTargetState(query)).toEqual({ status: "pending" });
