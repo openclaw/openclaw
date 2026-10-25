@@ -241,7 +241,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     latestRunsByChildSessionKey,
     runsByControllerSessionKey,
     swarmRunsByRequesterSessionKey,
-    getDescendantRuns,
+    getDescendantKeys,
   } = topology;
 
   const isRetainedReadRun = (entry: T, clock = now): boolean => {
@@ -298,8 +298,8 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     ): number => {
       const excludedRunId = options?.excludeRunId?.trim();
       let count = 0;
-      for (const runId of getDescendantRuns(rootSessionKey)) {
-        const entry = runs.get(runId)!;
+      for (const childSessionKey of getDescendantKeys(rootSessionKey)) {
+        const entry = latestRunsByChildSessionKey.get(childSessionKey)!;
         if (entry.runId === excludedRunId) {
           continue;
         }
@@ -337,7 +337,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       options?: { activeOnly?: boolean; excludeSuspendedDelivery?: boolean },
     ): number => {
       const root = rootSessionKey.trim();
-      if (!getDescendantRuns(root).length) {
+      if (!getDescendantKeys(root).length) {
         return 0;
       }
       if (counts.has(root)) {
@@ -378,7 +378,7 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       }) > 0;
 
     const listDescendantRunsForRequester = (rootSessionKey: string): T[] =>
-      getDescendantRuns(rootSessionKey).map((runId) => runs.get(runId)!);
+      getDescendantKeys(rootSessionKey).map((key) => latestRunsByChildSessionKey.get(key)!);
 
     return {
       inputs,

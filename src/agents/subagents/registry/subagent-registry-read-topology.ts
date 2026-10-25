@@ -208,7 +208,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       runsByChildSessionKey.set(key, [entry]);
     }
   }
-  function getDescendantRuns(rootSessionKey: string): readonly string[] {
+  function getDescendantKeys(rootSessionKey: string): readonly string[] {
     const root = rootSessionKey.trim();
     if (!root || !latestRunByRequesterAndChildSessionKey.has(root)) {
       return NO_DESCENDANTS;
@@ -228,8 +228,8 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
         if (latestRunsByChildSessionKey.get(childSessionKey) !== entry) {
           continue;
         }
-        // Membership survives status publications; readers resolve current rows from the owner.
-        descendants.push(entry.runId);
+        // Status updates retain membership; child keys resolve rows from the retained index.
+        descendants.push(childSessionKey);
         if (!visited.has(childSessionKey)) {
           visited.add(childSessionKey);
           pending.push(childSessionKey);
@@ -245,7 +245,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     get revision() {
       return revision;
     },
-    getDescendantRuns,
+    getDescendantKeys,
     inMemoryDisplayByChildSessionKey,
     runsByChildSessionKey,
     latestRunsByChildSessionKey,
