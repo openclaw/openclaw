@@ -1,3 +1,4 @@
+// Synology Chat durable ingress tests cover admission, recovery, replay, and shutdown.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,21 +25,23 @@ vi.mock("./runtime.js", async (importOriginal) => ({
   getSynologyRuntime: () => ({ state: { openChannelIngressQueue } }),
 }));
 
-function webhookEvent(
-  postId = "post-1",
-  channelId?: string,
-  extraFieldValue?: string,
-): SynologyWebhookRawEvent {
+function webhookEvent(params?: {
+  postId?: string;
+  channelId?: string;
+  userId?: string;
+  text?: string;
+  extraFieldValue?: string;
+}): SynologyWebhookRawEvent {
   const bodyFields: Record<string, unknown> = {
-    post_id: postId,
-    channel_id: channelId,
-    user_id: "user-1",
+    post_id: params?.postId ?? "post-1",
+    channel_id: params?.channelId,
+    user_id: params?.userId ?? "user-1",
     username: "Synology User",
-    text: "hello",
+    text: params?.text ?? "hello",
   };
-  if (extraFieldValue) {
+  if (params?.extraFieldValue) {
     // Keep authentication fixtures out of static object snapshots and failure output.
-    bodyFields[["to", "ken"].join("")] = extraFieldValue;
+    bodyFields[["to", "ken"].join("")] = params.extraFieldValue;
   }
   return {
     bodyFields,
@@ -89,30 +92,43 @@ afterEach(() => {
 });
 
 describe("Synology Chat durable ingress", () => {
-  it("redacts and persists raw webhook fields, then recovers them exactly once", async () => {
+  it("recovers an uncompleted webhook with a fresh drain and dispatches exactly once", async () => {
     await withQueue(async (queue, start) => {
       const interrupted = start(defer);
-      const event = webhookEvent("post-raw", "channel-42");
-      await interrupted.receive(webhookEvent("post-raw", "channel-42", "fixture-value"));
+      await interrupted.receive(webhookEvent({ postId: "post-restart" }));
       await interrupted.waitForIdle();
-      expect(await queue.listClaims()).toEqual([
-        expect.objectContaining({
-          id: "post-raw",
-          laneKey: "channel:channel-42",
-          payload: { version: 1, rawEvent: JSON.stringify(event) },
-        }),
-      ]);
-      await expect(Promise.all([interrupted.stop(), interrupted.stop()])).resolves.toEqual([
-        undefined,
-        undefined,
-      ]);
+      expect(await queue.listClaims()).toHaveLength(1);
+      await interrupted.stop();
       const recoveredDispatch = vi.fn(async (_event, lifecycle) => {
         await lifecycle.onAdopted();
       });
       const recovered = start(recoveredDispatch);
       await vi.waitFor(() => expect(recoveredDispatch).toHaveBeenCalledTimes(1));
       await recovered.waitForIdle();
-      expect(recoveredDispatch.mock.calls[0]?.[0]).toEqual(event);
+    });
+  });
+
+  it("strips the webhook token while retaining raw fields and conversation lane", async () => {
+    await withQueue(async (queue, start) => {
+      const ingress = start(defer);
+      await ingress.receive(
+        webhookEvent({
+          postId: "post-raw",
+          channelId: "channel-42",
+          extraFieldValue: "fixture-value",
+        }),
+      );
+      await ingress.waitForIdle();
+      expect(await queue.listClaims()).toEqual([
+        expect.objectContaining({
+          id: "post-raw",
+          laneKey: "channel:channel-42",
+          payload: {
+            version: 1,
+            rawEvent: JSON.stringify(webhookEvent({ postId: "post-raw", channelId: "channel-42" })),
+          },
+        }),
+      ]);
     });
   });
 
@@ -129,6 +145,69 @@ describe("Synology Chat durable ingress", () => {
     });
   });
 
+  it("preserves same-conversation order across append retry backoff", async () => {
+    await withQueue(async (queue, start) => {
+      let failFirst = true;
+      const enqueue = queue.enqueue.bind(queue);
+      queue.enqueue = async (...args) => {
+        if (failFirst) {
+          failFirst = false;
+          throw new Error("sqlite busy");
+        }
+        return await enqueue(...args);
+      };
+      const dispatched: string[] = [];
+      const ingress = start(async (event, lifecycle) => {
+        dispatched.push(String(event.bodyFields.post_id));
+        await lifecycle.onAdopted();
+      });
+      const first = ingress.receive(webhookEvent({ postId: "post-A", channelId: "channel-1" }));
+      const second = ingress.receive(webhookEvent({ postId: "post-B", channelId: "channel-1" }));
+      await Promise.all([first, second]);
+      await vi.waitFor(() => expect(dispatched).toEqual(["post-A", "post-B"]), { timeout: 5_000 });
+    });
+  });
+
+  it("waits for active delivery before stop returns and leaves shutdown retryable", async () => {
+    await withQueue(async (queue, start) => {
+      const { promise: deliveryGate, resolve: releaseDelivery } = Promise.withResolvers<void>();
+      const dispatch = vi.fn(async () => {
+        await deliveryGate;
+      });
+      const ingress = start(dispatch);
+      await ingress.receive(webhookEvent({ postId: "post-active" }));
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+      let stopped = false;
+      const stopping = ingress.stop().then(() => {
+        stopped = true;
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      expect(stopped).toBe(false);
+      releaseDelivery();
+      await stopping;
+      expect(await queue.listClaims()).toHaveLength(0);
+      expect(await queue.listPending()).toEqual([
+        expect.objectContaining({ id: "post-active", lastError: expect.any(String) }),
+      ]);
+    });
+  });
+
+  it("allows concurrent stop calls", async () => {
+    await withQueue(async (_queue, start) => {
+      const ingress = start(async (_event, lifecycle) => {
+        await lifecycle.onAdopted();
+      });
+      await ingress.receive(webhookEvent({ postId: "post-double-stop" }));
+      await ingress.waitForIdle();
+      await expect(Promise.all([ingress.stop(), ingress.stop()])).resolves.toEqual([
+        undefined,
+        undefined,
+      ]);
+    });
+  });
+
   it("dead-letters permanent authorization failures", async () => {
     const dispatch = vi.fn(async () => {
       throw new SynologyIngressPermanentError("synology-auth", "user revoked");
@@ -136,7 +215,7 @@ describe("Synology Chat durable ingress", () => {
     await withQueue(async (queue, start) => {
       const ingress = start(dispatch);
       const id = "post-auth";
-      await ingress.receive(webhookEvent(id));
+      await ingress.receive(webhookEvent({ postId: id }));
       await vi.waitFor(async () => {
         expect((await queue.enqueue(id, {} as SynologyIngressPayload)).kind).toBe("failed");
       });

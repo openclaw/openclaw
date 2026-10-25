@@ -20,6 +20,7 @@ type WorkerRead = Parameters<
 const mocks = vi.hoisted(() => ({
   loadSession:
     vi.fn<(key: string, options?: { agentId?: string }) => SessionRead | Promise<SessionRead>>(),
+  roleScopes: undefined as string[] | undefined,
 }));
 
 // mock-isolation: Reject legacy synchronous reads to enforce the async storage boundary.
@@ -73,6 +74,15 @@ vi.mock("../../state/user-profile-list.js", () => ({
     assertCurrent: () => ({ id: profileId, role: null }),
   }),
 }));
+// mock-isolation: Control role ceilings independently of persistent operator policy.
+vi.mock("../operator-role-policy.js", () => {
+  const resolve = () => (mocks.roleScopes ? { scopes: mocks.roleScopes } : null);
+  return {
+    resolveOperatorRolePolicy: resolve,
+    resolveOperatorRolePolicyForProfile: resolve,
+    resolveOperatorRolePolicyForAssignment: resolve,
+  };
+});
 // mock-isolation: Supply selected-session access without initializing sharing storage.
 vi.mock("../session-sharing.js", () => ({
   createSessionListEntryFilter: () => undefined,
@@ -136,6 +146,7 @@ function holdSessionRead() {
 
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
+  mocks.roleScopes = undefined;
   mocks.loadSession.mockReset();
   mocks.loadSession.mockReturnValue(sessionRead());
 });
@@ -156,32 +167,25 @@ it("shares overlapping options preparation without sharing caller authority or r
   expect(surviving.currentSession().sessionId).toBe(snapshot.entry.sessionId);
   expect(mocks.loadSession).toHaveBeenCalledTimes(1);
   surviving.release();
-  expect(() => surviving.currentSession()).toThrow("session lifecycle changed");
+  expect(() => surviving.currentSession()).toThrow();
   expect(independent.currentSession().sessionId).toBe(snapshot.entry.sessionId);
-  expect(independent.currentSession().archivedAt).toBeNull();
   publish(snapshot, { archivedAt: 123 });
   expect(() => independent.currentSession()).toThrow("session lifecycle changed");
-  expect(() => independent.assertSessionUnchanged(independent.session)).toThrow(
-    "session lifecycle changed",
-  );
   mocks.loadSession.mockReturnValue(sessionRead("main", { archivedAt: 123 }));
   using fresh = await prepare();
   expect(fresh.currentSession().archivedAt).toBe(123);
   expect(mocks.loadSession).toHaveBeenCalledTimes(2);
-  publish(snapshot, { archivedAt: undefined });
-  expect(() => fresh.currentSession()).toThrow("session lifecycle changed");
-  expect(() => fresh.assertSessionUnchanged(fresh.session)).toThrow("session lifecycle changed");
 });
 
 it("prepares the new session store after an in-place config publication", async () => {
   const config = getRuntimeConfigSnapshot()!;
   const { snapshot, pending, entered } = holdSessionRead();
   mocks.loadSession.mockReturnValue(sessionRead("main", { sessionId: "reloaded-session" }));
-  const first = prepare(createRequest(), "main");
+  const first = prepare();
   await entered.promise;
   config.session = { store: "/test/reloaded/sessions.json" };
   setRuntimeConfigSnapshot(config);
-  const second = prepare(createRequest(), "main");
+  const second = prepare();
   await Promise.resolve();
   pending.resolve(snapshot);
   (await first).release();
@@ -213,3 +217,48 @@ it("keeps origin-free personal reads and publication bound to the live ingress g
   expect(() => read.currentSession()).toThrow("connection is no longer current");
   expect(() => publication.action.assertCurrent()).toThrow("current authenticated human");
 });
+
+it.each([
+  ["operator.read", "operator.sessions.write"],
+  ["operator.sessions.write", "operator.read"],
+])("retains shared session-read permission for %s capped by %s", async (grant, ceiling) => {
+  const request = createRequest();
+  request.client.connect.scopes = [grant];
+  mocks.roleScopes = [ceiling];
+
+  using read = await prepare(request);
+  expect(read.currentSession()).toEqual(read.session);
+  expect(read.personal.kind).toBe("ineligible");
+
+  mocks.roleScopes = ["operator.approvals"];
+  expect(() => read.currentSession()).toThrow(
+    "GitHub requires current operator.sessions.read permission.",
+  );
+});
+
+it("reuses the worker result until publication metadata changes", async () => {
+  const agentId = "research";
+  const loaded = sessionRead(agentId);
+  mocks.loadSession.mockReturnValue(loaded);
+  using read = await prepare(createRequest(), agentId);
+  expect(read.currentSession()).toEqual(read.session);
+  publish(loaded, { label: "renamed" });
+  expect(read.currentSession()).toEqual(read.session);
+  expect(mocks.loadSession).toHaveBeenCalledTimes(1);
+  read.release();
+  expect(() => read.currentSession()).toThrow("session lifecycle changed");
+});
+
+it.each([null, 123])(
+  "invalidates a prepared response after an archive receipt from %s",
+  async (archivedAt) => {
+    const loaded = sessionRead();
+    mocks.loadSession.mockReturnValue(sessionRead("main", { archivedAt: archivedAt ?? undefined }));
+    using read = await prepare();
+    const initial = read.currentSession();
+    expect(initial.archivedAt).toBe(archivedAt);
+    publish(loaded, { archivedAt: archivedAt === null ? 123 : undefined });
+    expect(() => read.currentSession()).toThrow("session lifecycle changed");
+    expect(() => read.assertSessionUnchanged(initial)).toThrow("session lifecycle changed");
+  },
+);

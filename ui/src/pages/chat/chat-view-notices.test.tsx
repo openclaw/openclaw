@@ -2,7 +2,7 @@
 
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -50,6 +50,8 @@ const failedPlacement = (error: string) => ({
   error,
 });
 
+afterEach(() => document.body.replaceChildren());
+
 it.each(["transferring", "installing"] as const)("shows %s worker progress", (phase) => {
   const installing = phase === "installing";
   const title = installing
@@ -95,6 +97,7 @@ it.each([
   expect(notice?.querySelector("img, button")).toBeNull();
   publishHistory(publish, initial, () => {
     expect(container.querySelector(".chat-provider-policy-notice")).toBe(notice);
+    expect(notice?.getAttribute("role")).toBe(role);
   });
   publish({ messages: [] });
   flush();
@@ -205,23 +208,24 @@ it.each(["chatgpt_business_usage_limit", "chatgpt_consumer_usage_limit"] as cons
       },
     };
     const view = publishedNotices(renderChatComposerNotices, initial);
-    onTestFinished(() => {
+    try {
+      flush();
+      expect(view.container.querySelector("dialog")?.open).toBe(true);
+      view.getByRole("button", { name: "Close" }).click();
+      flush();
+      publishHistory(view.publish, initial, () => {
+        expect(view.container.querySelector("dialog")?.open).toBe(false);
+      });
+      view.publish({ ...initial, runError: { ...initial.runError!, runId: "run-2" } });
+      flush();
+      expect(view.container.querySelector("dialog")?.open).toBe(true);
+      view.publish({ messages: [] });
+      flush();
+      expect(view.container.querySelector("dialog")).toBeNull();
+    } finally {
       view.unmount();
       restoreDialog();
-    });
-    flush();
-    expect(view.container.querySelector("dialog")?.open).toBe(true);
-    view.getByRole("button", { name: "Close" }).click();
-    flush();
-    publishHistory(view.publish, initial, () => {
-      expect(view.container.querySelector("dialog")?.open).toBe(false);
-    });
-    view.publish({ ...initial, runError: { ...initial.runError!, runId: "run-2" } });
-    flush();
-    expect(view.container.querySelector("dialog")?.open).toBe(true);
-    view.publish({ messages: [] });
-    flush();
-    expect(view.container.querySelector("dialog")).toBeNull();
+    }
   },
 );
 
