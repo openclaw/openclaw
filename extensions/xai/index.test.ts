@@ -7,6 +7,7 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
+import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -35,18 +36,9 @@ function registerXaiAutoEnableProbe(): XaiAutoEnableProbe {
 type XaiBilledToolName = "code_execution" | "x_search";
 
 function billedToolFactory(name: XaiBilledToolName) {
-  const captured: { factory?: Parameters<OpenClawPluginApi["registerTool"]>[0] } = {};
-  plugin.register(
-    createTestPluginApi({
-      registerTool(tool, opts) {
-        if (opts?.name === name) {
-          captured.factory = tool;
-        }
-      },
-    }),
-  );
-
-  const { factory } = captured;
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+  plugin.register(createTestPluginApi({ registerTool }));
+  const factory = registerTool.mock.calls.find(([, opts]) => opts?.name === name)?.[0];
   assert(typeof factory === "function", `Expected ${name} to register a tool factory`);
   return factory;
 }
@@ -68,12 +60,9 @@ function mockXaiRuntimeOAuth() {
   });
 }
 
-function stubXaiFetch(respond: (url: string) => Response | Promise<Response>) {
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    return await respond(url);
-  });
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+function stubXaiFetch(respond: () => Response) {
+  const fetchMock = vi.fn<typeof fetch>(async () => respond());
+  vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
 
@@ -188,13 +177,7 @@ describe("xai provider plugin", () => {
       config,
       baseConfig: config,
       opts: {},
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: (code) => {
-          throw new Error("Unexpected setup exit: " + code);
-        },
-      },
+      runtime: createNonExitingRuntime(),
       resolveApiKey: async () => ({ key: "synthetic-existing-profile", source: "profile" }),
       toApiKeyCredential: () => {
         throw new Error("Existing profile must not be rewritten");
@@ -519,7 +502,7 @@ describe("xai provider plugin", () => {
     ).toEqual([false, false]);
   });
 
-  async function fetchUsage(fetchFn: typeof fetch) {
+  async function fetchUsage(payload: unknown, status = 200) {
     assert(registeredProvider.fetchUsageSnapshot, "xAI usage provider is registered");
     const snapshot = await registeredProvider.fetchUsageSnapshot({
       config: {},
@@ -527,7 +510,16 @@ describe("xai provider plugin", () => {
       provider: "xai",
       token: "oauth-token",
       timeoutMs: 5000,
-      fetchFn,
+      fetchFn: createProviderUsageFetch(async (url, init) => {
+        expect(url).toBe("https://cli-chat-proxy.grok.com/v1/billing?format=credits");
+        expect(init?.headers).toMatchObject({
+          Authorization: "Bearer oauth-token",
+          Accept: "application/json",
+          "x-grok-client-mode": "cli",
+          "x-grok-client-version": "1.0.4",
+        });
+        return makeResponse(status, payload);
+      }),
     });
     assert(snapshot, "xAI usage provider returns a snapshot");
     return snapshot;
@@ -586,17 +578,7 @@ describe("xai provider plugin", () => {
     ] as const)(
       "fetches billing with CLI headers and preserves %s",
       async (_name, config, tier, expected, plan, balance) => {
-        const mockFetch = createProviderUsageFetch(async (url, init) => {
-          expect(url).toBe("https://cli-chat-proxy.grok.com/v1/billing?format=credits");
-          expect(init?.headers).toMatchObject({
-            Authorization: "Bearer oauth-token",
-            Accept: "application/json",
-            "x-grok-client-mode": "cli",
-            "x-grok-client-version": "1.0.4",
-          });
-          return makeResponse(200, { ...tier, config });
-        });
-        await expect(fetchUsage(mockFetch)).resolves.toEqual({
+        await expect(fetchUsage({ ...tier, config })).resolves.toEqual({
           provider: "xai",
           displayName: "SuperGrok",
           billing: [{ type: "balance", label: "Prepaid balance", amount: balance, unit: "USD" }],
@@ -607,10 +589,7 @@ describe("xai provider plugin", () => {
     );
 
     it("returns token-expired errors for billing auth failures", async () => {
-      const mockFetch = createProviderUsageFetch(async () =>
-        makeResponse(401, { error: "expired" }),
-      );
-      await expect(fetchUsage(mockFetch)).resolves.toEqual({
+      await expect(fetchUsage({ error: "expired" }, 401)).resolves.toEqual({
         provider: "xai",
         displayName: "xAI",
         windows: [],
@@ -633,8 +612,7 @@ describe("xai provider plugin", () => {
         "No usage data",
       ],
     ])("returns a stable error for %s", async (_name, payload, error) => {
-      const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
-      const result = await fetchUsage(mockFetch);
+      const result = await fetchUsage(payload);
       expect(result.error).toBe(error);
       expect(result.windows).toHaveLength(0);
     });
