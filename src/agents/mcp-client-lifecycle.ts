@@ -241,11 +241,11 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
       let humanInputWaits = 0;
       let finished = false;
       let timeout = setTimeout(onTimeout, timeoutMs);
-      timeout.unref();
+      timeout.unref?.();
       const armTimeout = (expiresAt: number) => {
         clearTimeout(timeout);
         timeout = setTimeout(onTimeout, Math.max(0, expiresAt - Date.now()));
-        timeout.unref();
+        timeout.unref?.();
       };
       const holdForHumanInput = () => {
         if (humanInputWaits++ === 0) {

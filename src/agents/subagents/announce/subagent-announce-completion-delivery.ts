@@ -94,7 +94,7 @@ export async function runAnnounceAgentCall(params: {
           () => deadline.abort(new Error("gateway request timeout for agent")),
           params.timeoutMs,
         );
-  timer?.unref?.();
+  timer?.unref();
   try {
     signal.throwIfAborted();
     const dispatch = async () => {
