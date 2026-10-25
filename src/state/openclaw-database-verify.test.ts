@@ -76,6 +76,15 @@ let f: ReturnType<typeof fixture>;
 beforeEach(() => {
   f = fixture();
 });
+it("revalidates a latched integrity failure after external repair", () => {
+  const agentPath = f.agent().path;
+  closeOpenClawAgentDatabasesForTest();
+  recordOpenClawAgentDatabaseOpenFailure(agentPath, integrityError("corrupt generation"));
+  execDatabase(agentPath, "CREATE TABLE generation_change (id INTEGER PRIMARY KEY) STRICT;");
+
+  expect(f.agent().db.isOpen).toBe(true);
+});
+
 it("reports an uncleared quarantine row instead of claiming repair success", () => {
   const agentPath = f.agent().path;
   f.state();

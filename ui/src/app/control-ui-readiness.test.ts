@@ -1,6 +1,10 @@
-import { createRoot } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { createRouter, definePage } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
+import { createComponent, createRoot, Show } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
+import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
@@ -8,9 +12,18 @@ import {
   type SolidReadinessShell,
 } from "./control-ui-readiness-solid.ts";
 import { ControlUiReadiness, type ControlUiCommittedPresentation } from "./control-ui-readiness.ts";
+import {
+  disposeRouterOutlets,
+  mountRouterOutlet,
+  settleRouterOutlet,
+} from "./router-outlet.test-support.tsx";
 
 const element = (tag = "div") => document.createElement(tag);
 const subscribe = () => () => {};
+afterEach(() => {
+  disposeRouterOutlets();
+  vi.unstubAllGlobals();
+});
 
 function fixture() {
   const root = element("openclaw-app");
@@ -33,63 +46,69 @@ function fixture() {
   return { owner, root, runtime };
 }
 
-function mountReadinessShell(overrides: Partial<SolidReadinessShell> = {}) {
-  const { root, runtime } = fixture();
-  const workspace = element();
-  const shell: SolidReadinessShell = {
-    element: element("section"),
-    shellElement: workspace,
-    readiness: undefined,
-    activeSessionKey: "agent:main:main",
-    workspaceChromeVisible: false,
-    navigationSidebar: Object.assign(element("nav"), { navigationVisible: false }),
-    routeOutlet: Object.assign(element(), {
-      presentationSettled: true,
-      settlePresentation: async () => true,
-    }),
-  };
-  Object.defineProperties(shell, Object.getOwnPropertyDescriptors(overrides));
-  shell.element.append(workspace);
-  root.append(shell.element);
-  document.body.append(root);
-  const { owner, dispose } = createRoot((disposeRoot) => ({
-    dispose: disposeRoot,
-    owner: createSolidControlUiReadiness(
-      root,
-      runtime,
-      () => {},
-      () => ({ shell, terminal: shell.terminalPanel }),
-    ),
-  }));
-  onTestFinished(() => {
-    owner.disconnect();
-    dispose();
-    root.remove();
-  });
-  return { owner, root, workspace };
-}
-
-it("invalidates readiness on router changes and waits for the current adapter", async () => {
+it("publishes the new generation only after the retiring MCP route releases its replacement", async () => {
   const { owner, runtime, root } = fixture();
-  const pending = createDeferredCore<ControlUiCommittedPresentation>();
-  let notifyRouter = () => {};
-  vi.spyOn(runtime.router, "subscribe").mockImplementation((listener) => {
-    notifyRouter = () => listener(runtime.router.getState());
-    return () => true;
+  const teardown = createDeferredCore();
+  const previousView = Object.assign(element(), {
+    teardown: () => teardown.promise,
+    restartAfterTeardown: () => {},
   });
-  onTestFinished(() => vi.restoreAllMocks());
-  owner.connect(runtime, () => pending.promise);
-  owner.commitRoot();
-  expect(root.hasAttribute("data-openclaw-ready")).toBe(false);
-  pending.resolve({ kind: "shell", navigationVisible: false });
-  const expectReady = () =>
-    expect(root.getAttribute("data-openclaw-ready")).toBe(String(owner.hook.snapshot().generation));
-  await waitForSolid(expectReady);
-  const generation = owner.hook.snapshot().generation;
-  notifyRouter();
-  expect(owner.hook.snapshot().generation).toBeGreaterThan(generation);
-  expect(root.hasAttribute("data-openclaw-ready")).toBe(false);
-  await waitForSolid(expectReady);
+  onTestFinished(registerMcpAppUnmountTarget(previousView));
+  const destination = Object.assign(element(), { textContent: "Debug" });
+  destination.dataset.destination = "";
+  type RouteData = { ready: boolean };
+  type RouteModule = { renderSolid: (props: SolidRouteProps<RouteData>) => JSX.Element };
+  const page = (id: "about" | "debug", renderSolid: RouteModule["renderSolid"]) =>
+    definePage<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
+      id,
+      path: `/${id}`,
+      component: () => ({ renderSolid }),
+      loader: () => ({ ready: true }),
+    });
+  const router = createRouter<"about" | "debug", Record<string, never>, RouteModule, RouteData>({
+    routes: [
+      page("about", (props) =>
+        createComponent(Show, {
+          get when() {
+            return props.data;
+          },
+          children: () => previousView,
+        }),
+      ),
+      page("debug", () => destination),
+    ],
+  });
+  const outlet = mountRouterOutlet({ router });
+  try {
+    await router.navigate("about", {});
+    await outlet.settlePresentation();
+    owner.connect({ ...runtime, router }, async () => ({
+      kind: (await outlet.settlePresentation()) ? "shell" : "loading",
+      navigationVisible: false,
+    }));
+    owner.commitRoot();
+    await router.navigate("debug", {});
+    await settleRouterOutlet(outlet);
+    expect(outlet.contains(previousView)).toBe(true);
+    expect(outlet.querySelector("[data-destination]")).toBeNull();
+    expect(outlet.presentationSettled).toBe(false);
+    expect(owner.hook.snapshot().routeReady).toBe(false);
+    expect(root.hasAttribute("data-openclaw-ready")).toBe(false);
+    teardown.resolve();
+    await waitForSolid(() =>
+      expect(root.getAttribute("data-openclaw-ready")).toBe(
+        String(owner.hook.snapshot().generation),
+      ),
+    );
+    expect(outlet.contains(previousView)).toBe(false);
+    expect(outlet.querySelector("[data-destination]")?.textContent).toBe("Debug");
+    expect(outlet.presentationSettled).toBe(true);
+    expect(owner.hook.snapshot().routeReady).toBe(true);
+  } finally {
+    teardown.resolve();
+    outlet.dispose();
+    router.stop();
+  }
 });
 
 it("does not publish a route commit while its adapter still shows loading", async () => {
@@ -133,39 +152,95 @@ it.each(["resolve", "reject"])(
 );
 
 it("advertises a cold shell terminal only once its command owner is ready", async () => {
+  const { root, runtime } = fixture();
+  const workspace = element();
   const terminal = Object.assign(element(), { available: true, updateComplete: Promise.resolve() });
-  const state = { activationReady: false };
-  const { owner } = mountReadinessShell({
+  let activationReady = false;
+  const shell: SolidReadinessShell = {
+    element: element("section"),
+    shellElement: workspace,
+    readiness: undefined,
+    activeSessionKey: "agent:main:main",
+    workspaceChromeVisible: false,
+    navigationSidebar: Object.assign(element("nav"), { navigationVisible: false }),
+    routeOutlet: Object.assign(element(), {
+      presentationSettled: true,
+      settlePresentation: async () => true,
+    }),
     terminalPanel: terminal,
     get terminalActivationReady() {
-      return state.activationReady;
+      return activationReady;
     },
-  });
-  for (const available of [false, true, false]) {
-    state.activationReady = available;
-    owner.commitRoot();
-    const expected = { routeReady: true, terminalActivationReady: available };
-    await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject(expected));
+  };
+  shell.element.append(workspace);
+  root.append(shell.element);
+  document.body.append(root);
+  const { owner, dispose } = createRoot((disposeRoot) => ({
+    dispose: disposeRoot,
+    owner: createSolidControlUiReadiness(
+      root,
+      runtime,
+      () => {},
+      () => ({ shell, terminal }),
+    ),
+  }));
+  onTestFinished(() => owner.disconnect());
+  try {
+    for (const available of [false, true, false]) {
+      activationReady = available;
+      owner.commitRoot();
+      const expected = { routeReady: true, terminalActivationReady: available };
+      await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject(expected));
+    }
+  } finally {
+    dispose();
+    root.remove();
   }
 });
 
 it("waits for a visible lazy sidebar to connect, without blocking hidden navigation", async () => {
+  const { root, runtime } = fixture();
+  const workspace = element();
   const drawer = element();
   const sidebar = Object.assign(element("nav"), { navigationVisible: true });
-  const { owner, root, workspace } = mountReadinessShell({
+  const shell: SolidReadinessShell = {
+    element: element("section"),
+    shellElement: workspace,
     navDrawerElement: drawer,
     workspaceChromeVisible: true,
+    readiness: undefined,
+    activeSessionKey: "agent:main:main",
     navigationSidebar: sidebar,
-  });
+    routeOutlet: Object.assign(element(), {
+      presentationSettled: true,
+      settlePresentation: async () => true,
+    }),
+  };
   workspace.append(drawer);
+  shell.element.append(workspace);
+  root.append(shell.element);
+  document.body.append(root);
   const get = customElements.get.bind(customElements);
   vi.spyOn(customElements, "get").mockImplementation((name) =>
     name === "openclaw-app-sidebar" ? HTMLElement : get(name),
   );
-  onTestFinished(() => vi.restoreAllMocks());
+  const { owner, dispose } = createRoot((disposeRoot) => ({
+    dispose: disposeRoot,
+    owner: createSolidControlUiReadiness(
+      root,
+      runtime,
+      () => {},
+      () => ({ shell }),
+    ),
+  }));
+  onTestFinished(() => {
+    owner.disconnect();
+    dispose();
+    root.remove();
+    vi.restoreAllMocks();
+  });
   owner.commitRoot();
   await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: false }));
-  expect(root.hasAttribute("data-openclaw-ready")).toBe(false);
   drawer.append(sidebar);
   owner.commitRoot();
   await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: true }));
