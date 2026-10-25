@@ -41,6 +41,11 @@ const fixture = createChatFixture("prompt-cache", {
   },
   configure(config, model) {
     const modelRef = `openai/${model.modelId}`;
+    model.config.models[0].compat = {
+      supportsPromptCacheKey: true,
+      supportsStore: false,
+      sendSessionIdHeader: true,
+    };
     return {
       ...config,
       agents: {
@@ -51,24 +56,7 @@ const fixture = createChatFixture("prompt-cache", {
           models: { [modelRef]: { params: { transport: "sse", openaiWsWarmup: false } } },
         },
       },
-      models: {
-        mode: "replace",
-        providers: {
-          openai: {
-            ...model.config,
-            models: [
-              {
-                ...model.config.models[0],
-                compat: {
-                  supportsPromptCacheKey: true,
-                  supportsStore: false,
-                  sendSessionIdHeader: true,
-                },
-              },
-            ],
-          },
-        },
-      },
+      models: { mode: "replace", providers: { openai: model.config } },
       tools: { allow: ["sessions_spawn"], toolSearch: false },
       plugins: {
         allow: ["openai"],
