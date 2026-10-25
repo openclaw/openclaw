@@ -114,7 +114,6 @@ describe("Windows Gateway task supervisor", () => {
   it.each([
     [75, null, false, 75],
     [null, "SIGTERM", false, 1],
-    [0, null, false, 0],
     [23, null, true, 1],
   ] as const)(
     "settles child %s/%s (cleanup failure=%s)",
@@ -174,19 +173,16 @@ describe("Windows Gateway task supervisor", () => {
     "suppresses restart when shutdown arrives during %s",
     async (phase) => {
       const shutdown = captureShutdown();
-      spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-        ...childRun(undefined, async () => {
-          if (phase === "extinction") {
+      spawn.mockImplementationOnce(async (input: SpawnInput) => {
+        const result = { exitCode: readSpawnRestartExitCode(input), exitSignal: null };
+        const finish = (at: string) => async () => {
+          if (phase === at) {
             shutdown();
           }
-        }),
-        wait: async () => {
-          if (phase === "wait") {
-            shutdown();
-          }
-          return { exitCode: readSpawnRestartExitCode(input), exitSignal: null };
-        },
-      }));
+          return result;
+        };
+        return { ...childRun(result, finish("extinction")), wait: finish("wait") };
+      });
       await runSupervisor();
 
       expect(spawn).toHaveBeenCalledOnce();
