@@ -49,7 +49,8 @@ function expectPair(out: AgentMessage[], mode: Mode, aliases = false) {
   const ids = [idAt(out, 0, 0), idAt(out, 0, 1)];
   expect(ids[0]).not.toBe(ids[1]);
   ids.forEach((id, i) => {
-    expect(typeof id).toBe("string");
+    expect(id).toMatch(/^[a-zA-Z0-9]+$/);
+    expect(id.length).toBeLessThanOrEqual(40);
     expect(sanitizeId(id, mode)).toBe(id);
     expect(out[i + 1]).toMatchObject({ toolCallId: id, ...(aliases ? { toolUseId: id } : {}) });
     if (mode === "strict9") {
@@ -76,21 +77,25 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
     expectRewrite(transcript("call_|item:123-"), "callitem123", "strict");
   });
 
-  it.each<Mode>(["strict", "strict9"])("pairs repeated IDs and aliases in %s mode", (mode) => {
+  it.each([
+    ["repeated aliases", ["edit:22", "edit:22"], "strict", true],
+    ["repeated aliases", ["edit:22", "edit:22"], "strict9", true],
+    [
+      "40-character collisions",
+      [`call_${"a".repeat(60)}`, `call_${"a".repeat(59)}b`],
+      "strict",
+      false,
+    ],
+    ["punctuation collisions", ["call_a|b", "call_a:b"], "strict", false],
+    ["9-character collisions", ["call_abc|item:123", "call_abc|item:456"], "strict9", false],
+  ] as const)("pairs %s (%j, %s mode)", (_name, ids, mode, aliases) => {
     const input = castAgentMessages([
-      sparseAssistant([call("edit:22", "edit"), call("edit:22", "edit")]),
-      ...["one", "two"].map((text) => result("edit:22", text, true, "edit")),
+      sparseAssistant(ids.map((id) => call(id, "edit"))),
+      ...ids.map((id, i) => result(id, String(i), aliases, "edit")),
     ]);
     const out = sanitize(input, mode);
     expect(out).not.toBe(input);
-    expectPair(out, mode, true);
-  });
-
-  it("caps IDs at 40 characters without collisions", () => {
-    const out = sanitize(transcript(`call_${"a".repeat(60)}`, `call_${"a".repeat(59)}b`));
-    for (const id of expectPair(out, "strict")) {
-      expect(id.length).toBeLessThanOrEqual(40);
-    }
+    expectPair(out, mode, aliases);
   });
 
   it("preserves native Anthropic IDs while sanitizing mixed-provider IDs", () => {
@@ -147,15 +152,6 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
     },
   );
 
-  it("uses alphanumeric-only collision suffixes", () => {
-    const input = transcript("call_a|b", "call_a:b");
-    const out = sanitize(input);
-    expect(out).not.toBe(input);
-    for (const id of expectPair(out, "strict")) {
-      expect(id).not.toMatch(/[_-]/);
-    }
-  });
-
   it.each([false, true])(
     "rewrites OpenAI result aliases (canonical ID present: %s)",
     (canonical) => {
@@ -181,11 +177,10 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
     },
   );
 
-  it("preserves native Kimi formats only in strict mode", () => {
+  it("preserves native Kimi formats in strict mode", () => {
     for (const id of ["functions.read:0", "functions.bash_tool:12", "functions.edit-file:3"]) {
       expect(sanitizeId(id)).toBe(id);
     }
-    expect(sanitizeId("functions.read:0", "strict9")).not.toBe("functions.read:0");
   });
 
   it("preserves native Kimi IDs alongside non-Kimi siblings", () => {
@@ -227,13 +222,6 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
     ]) {
       expect(sanitizeId(id)).not.toBe(id);
     }
-  });
-
-  it("enforces distinct 9-character alphanumeric IDs", () => {
-    const input = transcript("call_abc|item:123", "call_abc|item:456");
-    const out = sanitize(input, "strict9");
-    expect(out).not.toBe(input);
-    expectPair(out, "strict9");
   });
 
   it("rewrites native Kimi IDs in strict9 mode", () => {

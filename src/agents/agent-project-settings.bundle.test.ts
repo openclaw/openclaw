@@ -132,7 +132,7 @@ async function createWorkspaceBundle(settings: unknown) {
 
 describe("loadEnabledBundleAgentSettingsSnapshot", () => {
   it("treats a supplied lifecycle snapshot as authoritative across workspaces", async () => {
-    const { workspaceDir, pluginRoot } = await createWorkspaceBundle({ hideThinkingBlock: true });
+    const { workspaceDir } = await createWorkspaceBundle({ hideThinkingBlock: true });
 
     pluginMetadataSnapshotMocks.getCurrentPluginMetadataSnapshot.mockClear();
     pluginMetadataSnapshotMocks.loadPluginMetadataSnapshot.mockClear();
@@ -144,16 +144,11 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
         workspaceDir: "/tmp/gateway-plugin-workspace",
         manifestRegistry: {
           diagnostics: [],
-          plugins: [
-            {
-              id: "claude-bundle",
-              format: "bundle",
-              origin: "global",
-              enabledByDefault: true,
-              settingsFiles: ["settings.json"],
-              rootDir: pluginRoot,
-            },
-          ],
+          plugins: bundleTestDeps
+            .loadBundleRegistry({ workspaceDir })
+            .plugins.map((plugin) =>
+              Object.assign(plugin, { origin: "global", enabledByDefault: true }),
+            ),
         },
         normalizePluginId: (id: string) => id.trim(),
       } as unknown as Parameters<
@@ -188,11 +183,7 @@ describe("loadEnabledBundleAgentSettingsSnapshot", () => {
       cfg: bundleConfig(),
     });
 
-    expect(snapshot.hideThinkingBlock).toBe(true);
-    expect(snapshot.shellPath).toBeUndefined();
-    expect(snapshot.shellCommandPrefix).toBeUndefined();
-    expect(snapshot.compaction?.keepRecentTokens).toBe(64_000);
-    expect(snapshot.mcpServers).toBeUndefined();
+    expect(snapshot).toEqual({ hideThinkingBlock: true, compaction: { keepRecentTokens: 64_000 } });
     const prepared = {
       sessionId: workspaceDir,
       cwd: workspaceDir,

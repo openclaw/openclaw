@@ -133,21 +133,13 @@ it("preserves unframed tool results only for a selected compaction replay window
 
 // Live-verified 2026-09-02: equivalent response-model bindings retain usable reasoning.
 it.each([
-  {
-    source: { provider: "anthropic", model: "claude-sonnet-4-6" },
-    target: "claude-fable-5",
-    keepThinking: false,
-  },
-  {
-    source: {
-      provider: "microsoft-foundry",
-      model: "prod-primary",
-      responseModel: "claude-opus-5",
-    },
-    target: "claude-fable-5-1",
-    keepThinking: true,
-  },
-])("applies thinking binding when switching to $target", ({ source, target, keepThinking }) => {
+  [{ provider: "anthropic", model: "claude-sonnet-4-6" }, "claude-fable-5", false],
+  [
+    { provider: "microsoft-foundry", model: "prod-primary", responseModel: "claude-opus-5" },
+    "claude-fable-5-1",
+    true,
+  ],
+] as const)("applies thinking binding from %j to %s", (source, target, keepThinking) => {
   const result = transformTransportMessages(
     [thinkingMessage(source, "earlier reasoning", "sig_readable", "visible answer")],
     makeModel("anthropic-messages", "anthropic", target),
@@ -165,13 +157,9 @@ it.each([
 });
 
 it.each([
-  {
-    name: "object",
-    content: { type: "text", text: "legacy object" },
-    expected: [text("legacy object")],
-  },
-  { name: "null", content: null, expected: [] },
-])("normalizes $name assistant content before transport conversion", ({ content, expected }) => {
+  [text("legacy object"), [text("legacy object")]],
+  [null, []],
+] as const)("normalizes %j assistant content before transport conversion", (content, expected) => {
   const messages = [
     {
       ...assistantToolCall("call_object"),

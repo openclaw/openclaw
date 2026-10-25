@@ -12,7 +12,6 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   resolveExecApprovalsFromFile,
-  type ExecAllowlistEntry,
   type ExecAsk,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
@@ -75,8 +74,13 @@ function createPolicy(security: ExecSecurity, ask: ExecAsk): NodeApprovalPolicy 
 let executable: string;
 let workdir: string;
 let nodePolicy: PreparedRunExecPolicy;
-let nodeAllowlist: ExecAllowlistEntry[];
-let resolvePolicy: MockInstance<typeof execHostShared.resolveExecHostApprovalContext>;
+let policySpy: MockInstance<typeof execHostShared.resolveExecHostApprovalContext>;
+const autoReviewer = () =>
+  vi.fn<ExecAutoReviewer>(async () => ({
+    decision: "allow-once",
+    risk: "low",
+    rationale: "safe command",
+  }));
 
 function createRequest(overrides: Partial<ExecuteNodeHostCommandParams>) {
   return {
@@ -102,15 +106,14 @@ describe("node-host dispatch cancellation", () => {
 
   beforeEach(() => {
     nodePolicy = { security: "full", ask: "off" };
-    nodeAllowlist = [];
-    resolvePolicy = vi.spyOn(execHostShared, "resolveExecHostApprovalContext");
+    policySpy = vi.spyOn(execHostShared, "resolveExecHostApprovalContext");
     callGatewayToolMock.mockReset().mockImplementation(async (method, _options, params) => {
       if (method === "exec.approvals.node.get") {
         return {
           file: {
             version: 1,
             defaults: nodePolicy,
-            agents: { main: { allowlist: nodeAllowlist } },
+            agents: { main: { allowlist: [] } },
           },
         };
       }
@@ -139,80 +142,69 @@ describe("node-host dispatch cancellation", () => {
   });
 
   it.each([
-    { name: "prepared full/off", security: "full", ask: "off", autoReview: false },
-    {
-      name: "auto-reviewed allowlist",
-      security: "allowlist",
-      ask: "on-miss",
-      autoReview: true,
+    ["full", "off", false],
+    ["allowlist", "on-miss", true],
+  ] as const)(
+    "never dispatches %s/%s after cancellation during final policy",
+    async (security, ask, autoReview) => {
+      const controller = new AbortController();
+      const reason = new Error("cancelled during final node dispatch policy");
+      const policy = createPolicy(security, ask);
+      nodePolicy = { security, ask };
+      const checkpoint = createDeferred<NodeApprovalPolicy>();
+      const policyEntered = createDeferred();
+      policySpy.mockResolvedValueOnce(policy).mockImplementationOnce(() => {
+        policyEntered.resolve();
+        return checkpoint.promise;
+      });
+      const reviewer = autoReviewer();
+
+      const result = executeNodeHostCommand(
+        createRequest({
+          security,
+          ask,
+          autoReview,
+          autoReviewer: reviewer,
+          signal: controller.signal,
+        }),
+      );
+      // Observe early fixture failures immediately and drain blocked work before restoring spies.
+      const drained = result.catch(() => undefined);
+      try {
+        await Promise.race([policyEntered.promise, result]);
+        expect(policySpy).toHaveBeenCalledTimes(2);
+        controller.abort(reason);
+        checkpoint.resolve(policy);
+
+        await expect(result).rejects.toBe(reason);
+        expect(
+          callGatewayToolMock.mock.calls.some(
+            ([method, , params]) => method === "node.invoke" && params?.command === "system.run",
+          ),
+        ).toBe(false);
+        expect(
+          callGatewayToolMock.mock.calls.filter(([method]) => method === "exec.approval.request"),
+        ).toHaveLength(autoReview ? 1 : 0);
+        expect(reviewer).toHaveBeenCalledTimes(autoReview ? 1 : 0);
+      } finally {
+        controller.abort(reason);
+        checkpoint.resolve(policy);
+        await drained;
+      }
     },
-  ] as const)("never dispatches $name after cancellation during final policy", async (scenario) => {
-    const controller = new AbortController();
-    const reason = new Error("cancelled during final node dispatch policy");
-    const policy = createPolicy(scenario.security, scenario.ask);
-    nodePolicy = { security: scenario.security, ask: scenario.ask };
-    const checkpoint = createDeferred<NodeApprovalPolicy>();
-    const policyEntered = createDeferred();
-    resolvePolicy.mockResolvedValueOnce(policy).mockImplementationOnce(() => {
-      policyEntered.resolve();
-      return checkpoint.promise;
-    });
-    const reviewer = vi.fn<ExecAutoReviewer>(async () => ({
-      decision: "allow-once",
-      risk: "low",
-      rationale: "safe command",
-    }));
-
-    const result = executeNodeHostCommand(
-      createRequest({
-        security: scenario.security,
-        ask: scenario.ask,
-        autoReview: scenario.autoReview,
-        autoReviewer: reviewer,
-        signal: controller.signal,
-      }),
-    );
-    // Observe early fixture failures immediately and drain blocked work before restoring spies.
-    const drained = result.catch(() => undefined);
-    try {
-      await Promise.race([policyEntered.promise, result]);
-      expect(resolvePolicy).toHaveBeenCalledTimes(2);
-      controller.abort(reason);
-      checkpoint.resolve(policy);
-
-      await expect(result).rejects.toBe(reason);
-      expect(
-        callGatewayToolMock.mock.calls.some(
-          ([method, , params]) => method === "node.invoke" && params?.command === "system.run",
-        ),
-      ).toBe(false);
-      expect(
-        callGatewayToolMock.mock.calls.filter(([method]) => method === "exec.approval.request"),
-      ).toHaveLength(scenario.autoReview ? 1 : 0);
-      expect(reviewer).toHaveBeenCalledTimes(scenario.autoReview ? 1 : 0);
-    } finally {
-      controller.abort(reason);
-      checkpoint.resolve(policy);
-      await drained;
-    }
-  });
+  );
 
   it("forwards cancellation without removing auto-reviewed execution scopes", async () => {
     const controller = new AbortController();
-    resolvePolicy.mockResolvedValue(createPolicy("allowlist", "on-miss"));
+    policySpy.mockResolvedValue(createPolicy("allowlist", "on-miss"));
     nodePolicy = { security: "allowlist", ask: "on-miss" };
-    const reviewer: ExecAutoReviewer = async () => ({
-      decision: "allow-once",
-      risk: "low",
-      rationale: "safe command",
-    });
 
     const result = await executeNodeHostCommand(
       createRequest({
         security: "allowlist",
         ask: "on-miss",
         autoReview: true,
-        autoReviewer: reviewer,
+        autoReviewer: autoReviewer(),
         signal: controller.signal,
       }),
     );
