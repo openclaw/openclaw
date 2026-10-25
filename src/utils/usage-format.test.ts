@@ -200,6 +200,15 @@ describe("usage cost estimation", () => {
     ).toBe(expected);
   });
 
+  it("preserves provider-billed zero for unpriced aggregate usage", () => {
+    expect(
+      estimateAggregateUsageCost({
+        usage: { input: 1_000, output: 500, cost: { total: 0, totalOrigin: "provider-billed" } },
+        ...unpriced,
+      }),
+    ).toBe(0);
+  });
+
   it("keeps recorded zero components through nested sums without covering an unpriced call", () => {
     const recorded = normalizeUsage({ input: 1_000, cost: { total: 0, input: 0.25 } });
     const run = accumulate(toNormalizedUsage(accumulate(recorded)));

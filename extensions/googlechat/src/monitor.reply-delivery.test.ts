@@ -91,7 +91,9 @@ function deliver(
       core,
       config: {},
     },
-    async (delivery) => delivery.deliver(payload, { kind: "final" }),
+    async (delivery) => {
+      await delivery.deliver(payload, { kind: "final" });
+    },
   );
 }
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { redactMigrationPlan } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -390,6 +391,7 @@ it("rejects oversized Claude Code auto-memory instead of returning a partial pla
 });
 
 it("plans and applies project imports with manual review", async () => {
+  const server = { ...filesystemServer, env: { ANTHROPIC_API_KEY: "synthetic-mcp-secret" } };
   const commandDescriptionPrefix = "a".repeat(179);
   await writeFiles(projectDir, {
     "CLAUDE.md": "# Project instructions\n",
@@ -402,7 +404,7 @@ it("plans and applies project imports with manual review", async () => {
   });
   await writeFile(path.join(workspaceDir, "AGENTS.md"), "# Existing agents\n");
   await writeJson(path.join(projectDir, ".mcp.json"), {
-    mcpServers: { filesystem: filesystemServer },
+    mcpServers: { filesystem: server },
   });
   await writeJson(path.join(projectDir, ".claude", "settings.json"), {
     hooks: { PreToolUse: [] },
@@ -429,6 +431,9 @@ it("plans and applies project imports with manual review", async () => {
   expect(planItemById(plan.items, "archive:project-agents").action).toBe("archive");
   const manualHooksItem = plan.items.find((item) => item.id.startsWith("manual:hooks:"));
   expect(manualHooksItem?.kind).toBe("manual");
+  const redacted = JSON.stringify(redactMigrationPlan(plan));
+  expect(redacted).not.toContain("synthetic-mcp-secret");
+  expect(redacted).toContain("[redacted]");
 
   const result = await provider.apply(context);
 
@@ -436,7 +441,7 @@ it("plans and applies project imports with manual review", async () => {
   expect(planItemById(result.items, "config:mcp-server:project-mcp:filesystem").status).toBe(
     "migrated",
   );
-  expect(context.config.mcp?.servers).toEqual({ filesystem: filesystemServer });
+  expect(context.config.mcp?.servers).toEqual({ filesystem: server });
   expect(await readText(workspaceDir, "AGENTS.md")).toContain(
     "Imported from Claude: project CLAUDE.md",
   );

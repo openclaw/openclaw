@@ -8,7 +8,10 @@ import { promisify } from "node:util";
 import { createChannelIngressDrain } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type * as Plugin from "openclaw/plugin-sdk/plugin-entry";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import * as state from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import * as pluginTest from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -178,7 +181,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
       config: { callbackOrigin: "https://receiver.example.com", maxPendingEvents: 2 },
       runtime: {
         state: {
-          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> => {
             const store = state.createPluginStateKeyedStoreForTests<T>("mcp-events", options);
             const withCurrent = store.withCurrent.bind(store);
             return {
