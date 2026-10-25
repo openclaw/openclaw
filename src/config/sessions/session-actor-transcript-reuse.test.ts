@@ -34,6 +34,16 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
+const accountingOptions = { includeByteSize: true, includeUsage: true, includeTurnTaint: true };
+const header = (id: string) => ({ type: "session", id, version: 3, cwd: "/synthetic" });
+const modelEvent = (id: string, parentId: string | null, modelId: string, timestamp: number) => ({
+  type: "custom",
+  id,
+  parentId,
+  customType: "model-snapshot",
+  data: { provider: "synthetic", modelApi: "test-api", modelId, timestamp },
+});
+const eventWithId = (id: string) => expect.objectContaining({ id });
 
 async function acquireActor(
   fixture: ReturnType<typeof createSessionCompoundWorkerFixture>,
@@ -83,14 +93,8 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
       usage: { input: 200, output: 7 },
     });
     const events = [
-      { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
-      {
-        type: "custom",
-        id: "initial-model",
-        parentId: null,
-        customType: "model-snapshot",
-        data: { provider: "synthetic", modelApi: "test-api", modelId: "first-model", timestamp: 1 },
-      },
+      header(scope.sessionId),
+      modelEvent("initial-model", null, "first-model", 1),
       messageEvent("question", "initial-model", { role: "user", content: "Original question" }),
       {
         type: "custom_message",
@@ -115,7 +119,12 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
       expect(historyReads).not.toHaveBeenCalled();
       expect(discoveryReads).not.toHaveBeenCalled();
     };
-    const accountingOptions = { includeByteSize: true, includeUsage: true, includeTurnTaint: true };
+    const readAccounting = () => readSessionTranscriptAccountingAsync(scope, accountingOptions);
+    const readSummary = () => readActivitySummarySource({ scope, assertCurrent() {} });
+    const expectCanonicalSummary = (summary: Awaited<ReturnType<typeof readSummary>>) =>
+      expect(summaryFacts(summary)).toEqual(summaryFacts(readActivitySummaryBatch({ scope })));
+    const readAnchors = (entryIds: string[]) =>
+      readSessionTranscriptAnchorsAsync(scope, { entryIds });
     const initialAccounting = {
       byteSize: events
         .slice(1)
@@ -125,13 +134,11 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
       usage: { promptTokens: 200, outputTokens: 7, trailingMessages: [] },
     };
     try {
-      expect(await readSessionTranscriptAccountingAsync(scope, accountingOptions)).toEqual(
-        initialAccounting,
-      );
+      expect(await readAccounting()).toEqual(initialAccounting);
       expect(historyReads).toHaveBeenCalled();
-      const cold = await readActivitySummarySource({ scope, assertCurrent() {} });
+      const cold = await readSummary();
       expect(cold?.notes).toEqual(["user: Original question", "assistant: Original answer"]);
-      expect(summaryFacts(cold)).toEqual(summaryFacts(readActivitySummaryBatch({ scope })));
+      expectCanonicalSummary(cold);
       expect(historyReads).toHaveBeenCalled();
       await actor.read(authority);
       await withOwnedSessionTranscriptWrites(
@@ -157,38 +164,21 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             },
           );
           clearReads();
-          const seeded = await readSessionTranscriptAnchorsAsync(scope, {
-            entryIds: ["question"],
-          });
+          const seeded = await readAnchors(["question"]);
           expect(seeded.anchors.map((anchor) => anchor.entryId)).toEqual(["question"]);
           expectResident();
-          const uncovered = await readSessionTranscriptAnchorsAsync(scope, {
-            entryIds: ["answer"],
-          });
+          const uncovered = await readAnchors(["answer"]);
           expect(uncovered.anchors.map((anchor) => anchor.entryId)).toEqual(["answer"]);
           expect(historyReads).toHaveBeenCalled();
           clearReads();
-          const initial = await readActivitySummarySource({ scope, assertCurrent() {} });
+          const initial = await readSummary();
           expect(summaryFacts(initial)).toEqual(summaryFacts(cold));
           expect(initial?.notes).toEqual(cold?.notes);
-          expect(await readSessionTranscriptAccountingAsync(scope, accountingOptions)).toEqual(
-            initialAccounting,
-          );
+          expect(await readAccounting()).toEqual(initialAccounting);
           expectResident();
           const previousSeq = actor.snapshot(authority)!.transcript.version.rawSeq!;
           const metadata = [
-            {
-              type: "custom",
-              id: "switched-model",
-              parentId: "answer",
-              customType: "model-snapshot",
-              data: {
-                provider: "synthetic",
-                modelApi: "test-api",
-                modelId: "second-model",
-                timestamp: 2,
-              },
-            },
+            modelEvent("switched-model", "answer", "second-model", 2),
             {
               type: "custom_message",
               id: "updated-runtime",
@@ -228,12 +218,9 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           )?.anchor;
           assert(userAnchor, "User append omitted its committed anchor");
           clearReads();
-          expect(
-            (await readSessionTranscriptAnchorsAsync(scope, { entryIds: ["next-question"] }))
-              .anchors,
-          ).toContainEqual(userAnchor);
+          expect((await readAnchors(["next-question"])).anchors).toContainEqual(userAnchor);
           expectResident();
-          const accounting = await readSessionTranscriptAccountingAsync(scope, accountingOptions);
+          const accounting = await readAccounting();
           expect(accounting.usage).toEqual({
             promptTokens: 200,
             outputTokens: 7,
@@ -243,10 +230,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           if (trailing?.role === "user") {
             trailing.content = "caller-owned copy";
           }
-          expect(
-            (await readSessionTranscriptAccountingAsync(scope, accountingOptions)).usage
-              ?.trailingMessages,
-          ).toEqual([userMessage]);
+          expect((await readAccounting()).usage?.trailingMessages).toEqual([userMessage]);
           expect(
             await readSessionTranscriptAccountingAsync(scope, {
               ...accountingOptions,
@@ -271,27 +255,21 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             }),
           );
           clearReads();
-          expect(
-            (await readSessionTranscriptAnchorsAsync(scope, { entryIds: ["next-question"] }))
-              .anchors,
-          ).toContainEqual(userAnchor);
+          expect((await readAnchors(["next-question"])).anchors).toContainEqual(userAnchor);
           expectResident();
-          expect(
-            (
-              await appendMessage(
-                actor,
-                scope,
-                "next-answer",
-                {
-                  role: "assistant",
-                  content: "Next answer",
-                  usage: { input: 500, output: 11 },
-                  __openclaw: { turnTainted: true },
-                },
-                5,
-              )
-            ).kind,
-          ).toBe("committed");
+          const reply = await appendMessage(
+            actor,
+            scope,
+            "next-answer",
+            {
+              role: "assistant",
+              content: "Next answer",
+              usage: { input: 500, output: 11 },
+              __openclaw: { turnTainted: true },
+            },
+            5,
+          );
+          expect(reply.kind).toBe("committed");
           clearReads();
           const anchors = await readSessionTranscriptAnchorsAsync(scope, {
             entryIds: ["next-question", "next-answer"],
@@ -308,8 +286,8 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           ]);
           expectResident();
           clearReads();
-          const summary = await readActivitySummarySource({ scope, assertCurrent() {} });
-          expect(summaryFacts(summary)).toEqual(summaryFacts(readActivitySummaryBatch({ scope })));
+          const summary = await readSummary();
+          expectCanonicalSummary(summary);
           expect(summary?.snapshot.totalMessages).toBe(4);
           expect(summary?.notes).toEqual([
             "user: Original question",
@@ -328,10 +306,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           expect((await hydration.read()).snapshot.events).toContainEqual(
             expect.objectContaining({ id: "next-question", message: captured }),
           );
-          const completedAccounting = await readSessionTranscriptAccountingAsync(
-            scope,
-            accountingOptions,
-          );
+          const completedAccounting = await readAccounting();
           expect(completedAccounting).toMatchObject({
             eventCount: 8,
             turnTainted: true,
@@ -341,7 +316,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           expect(
             await runWithSessionTranscriptReadFence(
               { ...userAnchor, logicalTurnId: "next-turn", role: "user" },
-              () => readSessionTranscriptAccountingAsync(scope, accountingOptions),
+              readAccounting,
             ),
           ).toEqual(completedAccounting);
           expect(historyReads).toHaveBeenCalled();
@@ -425,18 +400,14 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           expect(actor.snapshot(authority)).toBeUndefined();
           await recordAndAdopt(3);
           historyReads.mockClear();
-          const rewrittenAnchors = await readSessionTranscriptAnchorsAsync(scope, {
-            entryIds: ["next-question"],
-          });
+          const rewrittenAnchors = await readAnchors(["next-question"]);
           expect(rewrittenAnchors.anchors).toHaveLength(1);
           expect(rewrittenAnchors.anchors[0]).toMatchObject({ entryId: "next-question" });
           expect(rewrittenAnchors.anchors[0]?.generation).not.toBe(userAnchor.generation);
           expect(historyReads).toHaveBeenCalled();
           historyReads.mockClear();
-          const rewrittenSummary = await readActivitySummarySource({ scope, assertCurrent() {} });
-          expect(summaryFacts(rewrittenSummary)).toEqual(
-            summaryFacts(readActivitySummaryBatch({ scope })),
-          );
+          const rewrittenSummary = await readSummary();
+          expectCanonicalSummary(rewrittenSummary);
           expect(rewrittenSummary?.notes).toEqual([
             "user: Original question",
             "assistant: Corrected answer",
@@ -488,9 +459,9 @@ it("slides durable context within its bounds and reloads only when an admission 
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
     const limits = { maxBytes: 4096, maxEvents: 3 };
-    const header = { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" };
+    const sessionHeader = header(scope.sessionId);
     const events = [
-      header,
+      sessionHeader,
       ...Array.from({ length: 5 }, (_, index) =>
         messageEvent(`old-${index}`, index === 0 ? null : `old-${index - 1}`, {
           role: index % 2 === 0 ? "assistant" : "user",
@@ -545,7 +516,7 @@ it("slides durable context within its bounds and reloads only when an admission 
           historyReads.mockClear();
           const cold = await read(first);
           expect(cold).toMatchObject({
-            events: [header, ...events.slice(3)],
+            events: [sessionHeader, ...events.slice(3)],
             totalEvents: 6,
             activeLeafEntryId: "old-4",
             truncated: true,
@@ -564,12 +535,7 @@ it("slides durable context within its bounds and reloads only when an admission 
           historyReads.mockClear();
           const fenced = await read(second);
           expect(fenced).toMatchObject({
-            events: [
-              header,
-              expect.objectContaining({ id: "old-4" }),
-              expect.objectContaining({ id: "first-input" }),
-              expect.objectContaining({ id: "first-reply" }),
-            ],
+            events: [sessionHeader, ...["old-4", "first-input", "first-reply"].map(eventWithId)],
             totalEvents: 8,
             activeLeafEntryId: "first-reply",
           });
@@ -584,9 +550,8 @@ it("slides durable context within its bounds and reloads only when an admission 
           const current = await read();
           expect(current).toMatchObject({
             events: [
-              header,
-              expect.objectContaining({ id: "first-input" }),
-              expect.objectContaining({ id: "first-reply" }),
+              sessionHeader,
+              ...["first-input", "first-reply"].map(eventWithId),
               expect.objectContaining({
                 id: "second-input",
                 message: expect.objectContaining({
@@ -602,7 +567,11 @@ it("slides durable context within its bounds and reloads only when an admission 
           const oversized = await admit("oversized-input", "x".repeat(8192));
           historyReads.mockClear();
           expect(await read(oversized)).toMatchObject({ events: current.events, totalEvents: 9 });
-          expect(await read()).toMatchObject({ events: [header], totalEvents: 9, truncated: true });
+          expect(await read()).toMatchObject({
+            events: [sessionHeader],
+            totalEvents: 9,
+            truncated: true,
+          });
           expect(historyReads).not.toHaveBeenCalled();
           await append("after-oversized", "assistant", "Visible reply after large input");
 
@@ -610,13 +579,13 @@ it("slides durable context within its bounds and reloads only when an admission 
           const evicted = await admit("evicting-input", "y".repeat(600 * 1024));
           historyReads.mockClear();
           expect(await read()).toMatchObject({
-            events: [header],
+            events: [sessionHeader],
             totalEvents: 11,
             truncated: true,
           });
           expect(historyReads).not.toHaveBeenCalled();
           expect(await read(evicted)).toMatchObject({
-            events: [header, expect.objectContaining({ id: "after-oversized" })],
+            events: [sessionHeader, eventWithId("after-oversized")],
             totalEvents: 11,
             activeLeafEntryId: "after-oversized",
           });

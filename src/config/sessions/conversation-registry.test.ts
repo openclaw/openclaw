@@ -73,12 +73,14 @@ describe("conversation registry", () => {
     );
     return receipts;
   };
-  const expectPostimage = (fact: unknown, row: unknown, kind?: string) =>
-    expect(fact).toMatchObject({ kind: "postimage", value: { ...(kind ? { kind } : {}), row } });
+  const expectPostimage = (fact: unknown, row: unknown) =>
+    expect(fact).toMatchObject({ kind: "postimage", value: { row } });
 
   const registryScope = () => ({ agentId: "main", storePath });
   const sessionScope = (sessionKey: string) => ({ ...registryScope(), sessionKey });
   const read = (ref: string) => readConversation(registryScope(), ref);
+  const list = (options: Parameters<typeof listConversations>[1] = {}) =>
+    listConversations(registryScope(), options);
   const primary = (
     scope: Omit<Parameters<typeof resolveCurrentSessionPrimaryConversation>[0], "sessionId">,
     sessionId: string,
@@ -141,6 +143,18 @@ describe("conversation registry", () => {
     await closeOpenClawAgentDatabasesAsync(tempDir);
     return openDatabase(scope);
   };
+  const reopenSql = async () => {
+    const { db } = await reopenDatabase(registryScope());
+    return (sql: string, ...values: (string | number)[]) => db.prepare(sql).run(...values);
+  };
+  const changeRows = async (
+    query: (
+      db: ReturnType<typeof getSessionKysely>,
+    ) => Parameters<typeof executeSqliteQuerySync>[1],
+  ) => {
+    const database = await reopenDatabase(registryScope());
+    return executeSqliteQuerySync(database.db, query(getSessionKysely(database.db)));
+  };
   const tempDirs = createTempDirTracker();
   afterEach(async () => {
     for (const unsubscribe of subscriptions.splice(0)) {
@@ -163,19 +177,9 @@ describe("conversation registry", () => {
       nativeDirectUserId: "peer-a",
       label: "@peer-a's agent",
     });
-    const receipts = watchFacts();
     await registerConversationAddresses(registryScope(), [identity!], 100);
-    expect(receipts).toHaveLength(1);
-    expectPostimage(
-      receipts[0]?.facts.get(JSON.stringify(["catalogue", identity!.conversationRef])),
-      {
-        conversation_id: identity!.conversationRef,
-        kind: identity!.kind,
-      },
-      "catalogue",
-    );
 
-    const [conversation] = await listConversations(registryScope(), { channel: "reef" });
+    const [conversation] = await list({ channel: "reef" });
     expect(conversation).toMatchObject({
       conversationRef: identity?.conversationRef,
       target: "reef:peer-a",
@@ -277,7 +281,7 @@ describe("conversation registry", () => {
       memberRoleIds: ["support", "admin"],
     };
     await commitInitialization(scope, { routeContext });
-    const canonicalConversation = (await listConversations(scope)).find(
+    const canonicalConversation = (await list()).find(
       (conversation) => conversation.peerId === "canonical-ops",
     );
     const conversationRef = canonicalConversation!.conversationRef;
@@ -296,7 +300,7 @@ describe("conversation registry", () => {
     await commitInitialization(scope, {
       entry: { updatedAt: canonicalConversation!.lastSeenAt + 100 },
     });
-    const resumed = await readConversation(scope, conversationRef);
+    const resumed = await read(conversationRef);
     expect(resumed!.lastSeenAt).toBeGreaterThan(canonicalConversation!.lastSeenAt);
     expect(resumed).toEqual({ ...canonicalConversation, lastSeenAt: resumed!.lastSeenAt });
 
@@ -304,20 +308,20 @@ describe("conversation registry", () => {
       totalTokens: 42,
       updatedAt: resumed!.lastSeenAt + 100,
     });
-    expect(await readConversation(scope, conversationRef)).toEqual(resumed);
+    expect(await read(conversationRef)).toEqual(resumed);
     expect(await primary(scope, "ops-session")).toEqual(resumed);
 
     await commitInitialization(scope, {
       routeContext: { peerId: "canonical-ops", guildId: "guild-b" },
     });
-    const observed = await readConversation(scope, conversationRef);
+    const observed = await read(conversationRef);
     expect(observed).toMatchObject({ routeContext: { guildId: "guild-b" } });
     expect(observed!.lastSeenAt).toBeGreaterThan(resumed!.lastSeenAt);
 
     await upsertCanonicalSessionEntry(scope, { label: "generic current write", updatedAt: 200 });
-    expect(
-      (await listConversations(scope)).filter((conversation) => conversation.role === "primary"),
-    ).toEqual([expect.objectContaining({ conversationRef, peerId: "canonical-ops" })]);
+    expect((await list()).filter((conversation) => conversation.role === "primary")).toEqual([
+      expect.objectContaining({ conversationRef, peerId: "canonical-ops" }),
+    ]);
     const afterCurrentWrite = await read(conversationRef);
     expect(afterCurrentWrite).toMatchObject({
       label: "generic current write",
@@ -325,13 +329,14 @@ describe("conversation registry", () => {
       routeContext: { guildId: "guild-b" },
     });
 
-    const database = await reopenDatabase(scope);
-    const updatedAssociation = database.db
-      .prepare(
-        `UPDATE session_conversations SET last_seen_at = ?
-         WHERE session_id = ? AND conversation_id = ? AND role = 'primary'`,
-      )
-      .run(afterCurrentWrite!.lastSeenAt, "ops-session", conversationRef);
+    const run = await reopenSql();
+    const updatedAssociation = run(
+      `UPDATE session_conversations SET last_seen_at = ?
+       WHERE session_id = ? AND conversation_id = ? AND role = 'primary'`,
+      afterCurrentWrite!.lastSeenAt,
+      "ops-session",
+      conversationRef,
+    );
     expect(Number(updatedAssociation.changes)).toBe(1);
     await closeOpenClawAgentDatabasesAsync(tempDir);
     closeOpenClawAgentDatabasesForTest();
@@ -364,17 +369,15 @@ describe("conversation registry", () => {
     await writeRoute("channel:beta", "guild-beta", 400);
 
     expect(
-      (await listConversations(scope, { channel: "discord" }))
+      (await list({ channel: "discord" }))
         .map(({ target, routeContext }) => ({ target, routeContext }))
         .toSorted((left, right) => left.target.localeCompare(right.target)),
     ).toEqual([
       { target: "channel:alpha", routeContext: { guildId: "guild-alpha" } },
       { target: "channel:beta", routeContext: { guildId: "guild-beta" } },
     ]);
-    const database = await reopenDatabase(scope);
-    executeSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
+    await changeRows((db) =>
+      db
         .updateTable("session_conversations")
         .set({ last_seen_at: 500 })
         .where("session_id", "=", "shared-session")
@@ -391,7 +394,7 @@ describe("conversation registry", () => {
     const routeContext = { guildId: "guild-a", memberRoleIds: ["support"] };
     await commitInitialization(scope, { routeContext });
     await commitInitialization(scope, { entry: { sessionId: "after-rollover", updatedAt: 200 } });
-    expect((await listConversations(scope))[0]).toMatchObject({
+    expect((await list())[0]).toMatchObject({
       sessionId: "after-rollover",
       routeContextObserved: true,
       routeContext,
@@ -402,7 +405,7 @@ describe("conversation registry", () => {
     });
 
     await commitInitialization(scope, { routeContext: null });
-    const cleared = (await listConversations(scope))[0];
+    const cleared = (await list())[0];
     expect(cleared).toMatchObject({
       sessionId: "after-rollover",
       routeContextObserved: true,
@@ -416,17 +419,12 @@ describe("conversation registry", () => {
     { entry_json: JSON.stringify({ sessionId: "wrong-session", updatedAt: 100 }) },
   ])("does not bind an invalid current entry to its primary address: %j", async (invalid) => {
     const scope = await seed();
-    const database = await reopenDatabase(scope);
-    executeSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .updateTable("session_nodes")
-        .set(invalid)
-        .where("session_key", "=", scope.sessionKey),
+    await changeRows((db) =>
+      db.updateTable("session_nodes").set(invalid).where("session_key", "=", scope.sessionKey),
     );
     expect(await primary(scope, "peer-a-session")).toBeUndefined();
     if (invalid.entry_json !== undefined) {
-      const [conversation] = await listConversations(scope);
+      const [conversation] = await list();
       expect(conversation).toMatchObject({ target: "reef:peer-a" });
       expect([conversation?.sessionId, conversation?.sessionKey]).toEqual([undefined, undefined]);
     }
@@ -438,7 +436,7 @@ describe("conversation registry", () => {
     const freshAt = Date.now() + 1_000;
     await registerConversationAddresses(registryScope(), [freshIdentity!], freshAt);
 
-    expect(await listConversations(registryScope(), { channel: "reef", limit: 1 })).toEqual([
+    expect(await list({ channel: "reef", limit: 1 })).toEqual([
       expect.objectContaining({
         conversationRef: freshIdentity?.conversationRef,
         target: "reef:peer-b",
@@ -475,9 +473,7 @@ describe("conversation registry", () => {
       db.deleteFrom("session_nodes").where("session_key", "=", staleSessionKey),
     );
 
-    expect(
-      (await listConversations(registryScope(), { channel: "reef", limit: 1 }))[0],
-    ).toMatchObject({
+    expect((await list({ channel: "reef", limit: 1 }))[0]).toMatchObject({
       target: "reef:peer-a",
       sessionId: "live-session",
       sessionKey: liveSessionKey,
@@ -487,7 +483,7 @@ describe("conversation registry", () => {
 
   it("retains a deleted session's address without exposing a stale binding", async () => {
     const scope = await seed("peer-a", "reef", "deleted-session");
-    const [linked] = await listConversations(registryScope(), { channel: "reef" });
+    const [linked] = await list({ channel: "reef" });
     expect(linked?.sessionId).toBe("deleted-session");
 
     await deleteSessionEntryLifecycle({
@@ -497,11 +493,12 @@ describe("conversation registry", () => {
     });
     expect(await primary(scope, "deleted-session")).toBeUndefined();
 
-    expect(await read(linked?.conversationRef ?? "missing")).toMatchObject({
+    const retained = await read(linked?.conversationRef ?? "missing");
+    expect(retained).toMatchObject({
       conversationRef: linked?.conversationRef,
       target: "reef:peer-a",
     });
-    expect(await read(linked?.conversationRef ?? "missing")).not.toMatchObject({
+    expect(retained).not.toMatchObject({
       sessionId: expect.any(String),
       sessionKey: expect.any(String),
     });
@@ -556,7 +553,7 @@ describe("conversation registry", () => {
     } finally {
       associationReads.restore();
     }
-    expect(await readConversation(scope, identities[1]!.conversationRef)).toMatchObject({
+    expect(await read(identities[1]!.conversationRef)).toMatchObject({
       routeContext: { guildId: "receipt-guild" },
     });
     const associationKey = (index: number, role: string) =>
@@ -613,6 +610,7 @@ describe("conversation registry", () => {
       updated_at: 100,
     });
     expect(events).toEqual(["facts", "reply"]);
+    expect(receipts).toHaveLength(1);
     expect(receipts[0]?.facts.get(JSON.stringify(["catalogue", identity.conversationRef]))).toEqual(
       {
         kind: "postimage",
