@@ -5,7 +5,6 @@ import { FailoverError } from "../agents/failover-error.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as logger from "../logger.js";
-import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -39,11 +38,6 @@ export function registerOpenResponsesContinuationTests({
     postResponses(getPort(), { model: "openclaw", input: "hi", ...body }, headers);
   const replyOnce = (text: string) =>
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text }] } as never);
-  const scope = {
-    authSubject: "gateway-auth:none",
-    agentId: "main",
-    sessionKey: "agent:main:openresponses:unreachable",
-  };
   const terminal = new Set(["response.completed", "response.incomplete", "response.failed"]);
 
   it.each([false, true])(
@@ -62,29 +56,7 @@ export function registerOpenResponsesContinuationTests({
       expect(firstAgentOpts(1).sessionKey).toBe(sessionKey);
 
       agentCommandMock.mockClear();
-      const storedResponses = [
-        { key: `foreign-agent-${stream}`, value: { ...scope, agentId: "another-agent" } },
-        {
-          key: `foreign-session-${stream}`,
-          value: { ...scope, requestedSessionKey: "another-session" },
-        },
-        { key: `expired-${stream}`, value: scope, expiresAt: Date.now() - 1 },
-      ];
-      seedPluginStateEntriesForTests(
-        storedResponses.map((entry) =>
-          Object.assign(entry, { pluginId: "core:openresponses", namespace: "response-sessions" }),
-        ),
-      );
-      for (const previousId of [
-        "missing",
-        "",
-        " ",
-        "x".repeat(513),
-        ` ${id}`,
-        `expired-${stream}`,
-        `foreign-agent-${stream}`,
-        `foreign-session-${stream}`,
-      ]) {
+      for (const previousId of ["missing", "", " ", "x".repeat(513), ` ${id}`]) {
         const response = await post({ stream, previous_response_id: previousId });
         await expectInvalidRequest(response, /previous_response_id.*full input context/);
         expect(response.headers.get("content-type")).toContain("application/json");

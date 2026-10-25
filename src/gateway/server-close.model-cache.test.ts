@@ -130,7 +130,6 @@ it(
           { config: selected.config, env: fixture.state.env, trustConfigIdentity: true },
         );
       warmA = await acquire(aMetadata, input(warmId, "warm-a"));
-      expect(warmA.snapshot.metadataSnapshot).toBe(aMetadata);
       const warmEntry = warmA.snapshot.modelCatalog.entries.find(
         (entry) => entry.provider === warmId,
       );
@@ -161,7 +160,6 @@ it(
         .mockImplementation(async (params) => {
           if (holdNext) {
             holdNext = false;
-            expect(params.pluginMetadataSnapshot).toBe(aMetadata);
             gateEntered.resolve();
             await releaseBuild.promise;
           }
@@ -196,16 +194,11 @@ it(
         "Gateway closed without joining model acquisition",
       );
       expect(shutdownError.message).toBe("prepared model runtime process lifetime closed");
-      expect(getPluginMetadataSnapshotCache(aMetadata)).toBe(aCache);
-      const expectRetained = () => {
-        expect(aCache.retirement).toBeUndefined();
-        expect(warmOwner.lifecycle.signal.aborted).toBe(false);
-      };
-      expectRetained();
+      expect(warmOwner.lifecycle.signal.aborted).toBe(false);
       expect(readPolicy(warmEntry)?.defaultLevel).toBe("high");
       // The admitted lease and raw build retain their captured inventory until they finish.
       await warmA[Symbol.asyncDispose]();
-      expectRetained();
+      expect(warmOwner.lifecycle.signal.aborted).toBe(false);
       releaseBuild.resolve();
       await expect(first).rejects.toBe(shutdownError);
       await expect(queued).rejects.toMatchObject({

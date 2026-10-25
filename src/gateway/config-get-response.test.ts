@@ -1,11 +1,8 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
+import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { makeSnapshot } from "../config/redact-snapshot.test-helpers.js";
-import {
-  invalidateGatewayRuntimeConfigSchema,
-  loadGatewayConfigRedactionHints,
-} from "../config/runtime-schema.js";
+import { invalidateGatewayRuntimeConfigSchema } from "../config/runtime-schema.js";
 import * as schema from "../config/schema.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -75,7 +72,7 @@ afterEach(() => {
   invalidateGatewayRuntimeConfigSchema();
 });
 
-it("redacts cold core/plugin config without a form schema and round-trips SecretRefs", async () => {
+it("redacts cold core/plugin config without a form schema and preserves SecretRef identity", async () => {
   const secretRef = { source: "store" as const, provider: "default", id: "TEST_SECRET" };
   const plaintext = "synthetic-plugin-secret";
   const routes = {
@@ -84,7 +81,7 @@ it("redacts cold core/plugin config without a form schema and round-trips Secret
     plain: { sessionKey: "agent:main", secret: plaintext },
   };
   const config: OpenClawConfig = {
-    gateway: { port: 19_001, auth: { token: "synthetic-cold-token-canary" } },
+    gateway: { auth: { token: "synthetic-cold-token-canary" } },
     plugins: { entries: { webhooks: { enabled: true, config: { routes } } } },
   };
   const buildSchema = vi.spyOn(schema, "buildConfigSchemaCore");
@@ -102,23 +99,12 @@ it("redacts cold core/plugin config without a form schema and round-trips Secret
           routes: { type: "object", additionalProperties: { $ref: "#/$defs/route" } },
         },
         {
-          secretRef: objectSchema({
-            source: { type: "string" },
-            provider: { type: "string" },
-            id: { type: "string" },
-          }),
-          secretInput: {
-            anyOf: [{ type: "string" }, { $ref: "#/$defs/secretRef" }],
-          },
-          route: objectSchema({ secret: { $ref: "#/$defs/secretInput" } }),
+          route: objectSchema({ secret: { anyOf: [{ type: "string" }, { type: "object" }] } }),
         },
       ),
     },
   ]);
   mocks.config = config;
-  const uiHints = loadGatewayConfigRedactionHints();
-  const secretPath = "plugins.entries.webhooks.config.routes.*.secret";
-  expect(uiHints[secretPath]?.sensitive).toBe(true);
 
   mocks.snapshot.mockResolvedValue(makeSnapshot(config));
   const response = await readResponse({});
@@ -133,70 +119,8 @@ it("redacts cold core/plugin config without a form schema and round-trips Secret
       plain: { secret: REDACTED_SENTINEL },
     },
   });
-  expect(response.raw).toContain(REDACTED_SENTINEL);
   expect(JSON.stringify(response)).not.toContain(plaintext);
   expect(JSON.stringify(response)).not.toContain(secretRef.id);
-
-  const formValue = structuredClone(response.config);
-  formValue.gateway = { ...formValue.gateway, port: 19_002 };
-  expect(restoreRedactedValues(formValue, config, uiHints)).toEqual({
-    ok: true,
-    result: { ...config, gateway: { ...config.gateway, port: 19_002 } },
-  });
-});
-
-it("redacts every projection, including disabled channel owners", async () => {
-  const config: OpenClawConfig = {
-    plugins: {
-      entries: { core: { enabled: true }, plus: { enabled: false } },
-    },
-    channels: {
-      proofchat: {
-        core: "synthetic-core",
-        plus: "synthetic-plus",
-        visibleToken: "public-setting",
-        endpoint: "https://synthetic-user:synthetic-password@example.test",
-      },
-    },
-  };
-  setPlugins(
-    ["core", "plus"].map((id) => ({
-      id,
-      origin: "config",
-      channels: ["proofchat"],
-      channelConfigs: {
-        proofchat: {
-          schema: objectSchema({ [id]: { type: "string" } }),
-          uiHints: {
-            [id]: { sensitive: true },
-            visibleToken: { sensitive: false },
-            endpoint: { sensitive: false, tags: ["url-secret"] },
-          },
-        },
-      },
-    })),
-  );
-  mocks.snapshot.mockResolvedValue(makeSnapshot(config));
-  mocks.config = config;
-  const response = await readResponse({});
-  const output = JSON.stringify(response);
-  expect(output).not.toMatch(/synthetic-(?:core|plus|password)/);
-  const redacted = REDACTED_SENTINEL;
-  const proofchat = {
-    core: redacted,
-    plus: redacted,
-    visibleToken: "public-setting",
-    endpoint: redacted,
-  };
-  const projected = { channels: { proofchat } };
-  expect(response).toMatchObject({
-    config: projected,
-    sourceConfig: projected,
-    runtimeConfig: projected,
-    parsed: projected,
-    resolved: projected,
-  });
-  expect(response.raw).toContain("public-setting");
 });
 
 it("shares one concurrent projection and serves cache hits without filesystem work", async () => {

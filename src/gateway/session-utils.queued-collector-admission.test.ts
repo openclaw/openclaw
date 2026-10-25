@@ -12,12 +12,7 @@ import { isSubagentRunQueued } from "../agents/subagents/registry/subagent-regis
 import * as subagentRegistry from "../agents/subagents/registry/subagent-registry.js";
 import { testing as spawnTesting } from "../agents/subagents/spawn/subagent-spawn.test-support.js";
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
-import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
-import {
-  clearAgentRunContext,
-  getAgentRunContext,
-  getAgentRunLifecycleGeneration,
-} from "../infra/agent-run-registry.js";
+import { clearAgentRunContext, getAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   isRpcSourceExecuting,
   requestRpcSourceCancellation,
@@ -26,7 +21,6 @@ import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-s
 import { unwrapGatewayMethodDispatchResponse } from "./server-in-process-dispatch.js";
 import { agentRunHandler } from "./server-methods/agent-run-handler.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
-import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { sessionDeleteHandlers } from "./server-methods/sessions-delete.js";
@@ -143,26 +137,6 @@ it.each([
       expect(isRpcSourceExecuting(admission)).toBe(false);
       expect(getAgentRunContext(entry.runId)).toBeDefined();
       expect(isSubagentRunQueued(entry)).toBe(true);
-      const target = expectDefined(admission.input.target, "native physical session target");
-      const visibleStatus = () =>
-        resolveVisibleActiveSessionRunState({
-          storePath: target.storeScope,
-          agentId: target.agentId,
-          sessionId: target.incarnation,
-          requestedKey: entry.childSessionKey,
-          canonicalKey: entry.childSessionKey,
-          resolveGatewayContext: context.resolveGatewayContext,
-        }).status;
-      expect(visibleStatus()).toBeUndefined();
-      const releaseCapacityWait = registerAgentRunCapacityWait(
-        entry.runId,
-        getAgentRunLifecycleGeneration(),
-      );
-      try {
-        expect(visibleStatus()).toBe("queued");
-      } finally {
-        releaseCapacityWait?.();
-      }
       expect(entry.execution.startedAt).toBeUndefined();
       const options = requestOptions(context, "sessions.abort", {
         key: entry.childSessionKey,

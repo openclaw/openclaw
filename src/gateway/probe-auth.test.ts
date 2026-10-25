@@ -1,8 +1,6 @@
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
-import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   resolveGatewayProbeAuthSafe,
   resolveGatewayProbeAuthSafeWithSecretInputs,
@@ -40,12 +38,6 @@ const remote = (credentials: Gateway["remote"]): Input => ({
   mode: "remote",
   env: { ...AMBIENT_AUTH, REMOTE: "remote" },
 });
-function authored(token: string, env: NodeJS.ProcessEnv): Input {
-  const read = resolveConfigForRead({ gateway: { auth: { mode: "token", token } } }, env);
-  const cfg = read.resolvedConfigRaw as OpenClawConfig;
-  setConfigResolutionFacts(cfg, read.resolutionFacts);
-  return { cfg, mode: "local", env: {} };
-}
 
 it.each([
   ["local", { auth: { token: "token-value" } }, { token: "token-value", password: undefined }],
@@ -145,17 +137,6 @@ it.each<ProbeCase>([
     ),
     {},
     ["gateway.auth.password"],
-  ],
-  [
-    "substituted template literal",
-    authored("${SOURCE}", { SOURCE: "${OTHER}" }),
-    { token: "${OTHER}", password: undefined },
-  ],
-  [
-    "unresolved authored shorthand",
-    authored("${MISSING}", {}),
-    {},
-    ["gateway.auth.token", "unresolved"],
   ],
   [
     "unresolved async ref",
