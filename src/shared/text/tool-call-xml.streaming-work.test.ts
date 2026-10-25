@@ -112,7 +112,7 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
   it("keeps settled XML output reusable across blank-line-separated prose", () => {
     const paragraph = "Answer paragraph with ordinary prose.\n\n";
     const source = `<tool_call>{}</tool_call>\n\n${paragraph.repeat(512)}Done.`;
-    const reuse = vi.spyOn(codeRegions, "canReuseMarkdownOwnership");
+    const regions = vi.spyOn(codeRegions, "findCodeRegions");
     try {
       const projection = createTextProjection([
         toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
@@ -121,12 +121,13 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
         projection.append(source.slice(offset, offset + CHUNK));
       }
       expect(projection.text).toBe(stripToolCallXmlTags(source));
-      const rejected = reuse.mock.results.filter(
-        (result) => result.type === "return" && !result.value,
-      ).length;
-      expect(rejected).toBeLessThan(16);
+      const parsedCharacters = regions.mock.calls.reduce(
+        (total, [parsed]) => total + parsed.length,
+        0,
+      );
+      expect(parsedCharacters).toBeLessThan(source.length * 2);
     } finally {
-      reuse.mockRestore();
+      regions.mockRestore();
     }
   });
 

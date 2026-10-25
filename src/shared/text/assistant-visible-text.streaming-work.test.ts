@@ -273,8 +273,10 @@ it("bounds prefix line searches for an unfinished plain tool call", () => {
       stream.append(source.slice(offset, offset + 4));
     }
     searchedCharacters = probe.mock.calls.reduce((total, [search], index) => {
-      const receiver = probe.mock.contexts[index] as string;
-      return receiver.length >= 4_096 && (search === "\n" || search === "\r")
+      const receiver = probe.mock.contexts[index];
+      return typeof receiver === "string" &&
+        receiver.length >= 4_096 &&
+        (search === "\n" || search === "\r")
         ? total + receiver.length
         : total;
     }, 0);
