@@ -20,7 +20,6 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DevicePage } from "./device-page.tsx";
 import { DevicePermissionsPage } from "./permissions-page.tsx";
 
-const providers: HTMLElement[] = [];
 const unmounts = new WeakMap<HTMLElement, () => void>();
 
 function createCapability(
@@ -65,16 +64,13 @@ async function mount(
   nativeDeviceSettings: NativeDeviceSettingsCapability | null,
 ) {
   const context = { nativeDeviceSettings } as ApplicationContext;
-  const provider = document.createElement("div");
-  document.body.append(provider);
-  providers.push(provider);
   const fixture = createSolidApplicationContextProvider(context);
   const mounted = mountSolid(
     () => createComponent(tag === "openclaw-device-page" ? DevicePage : DevicePermissionsPage, {}),
-    { container: provider, wrapper: fixture.wrapper },
+    { wrapper: fixture.wrapper },
   );
   flush();
-  const page = provider.querySelector<HTMLElement>(tag)!;
+  const page = mounted.container.querySelector<HTMLElement>(tag)!;
   unmounts.set(page, mounted.unmount);
   return page;
 }
@@ -193,10 +189,7 @@ function addDomain(page: HTMLElement, value: string) {
 }
 
 beforeEach(() => i18n.setLocale("en"));
-afterEach(async () => {
-  providers.splice(0).forEach((provider) => provider.remove());
-  await Promise.resolve();
-  flush();
+afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
