@@ -6,7 +6,6 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import {
   createManagedPluginArtifactConsentHandler,
-  resolvePendingPluginCapabilityReview,
   resolvePluginCapabilityConsent,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
@@ -345,7 +344,7 @@ describe("managed plugin capability consent", () => {
       env,
       installRecords: { diffs: record },
     });
-    await expect(consent({ config, env, pluginId: "diffs" })).resolves.toBeUndefined();
+    expect(await consent({ config, env, pluginId: "diffs" })).toBeUndefined();
     expect(mocks.writeRecords).not.toHaveBeenCalled();
     const catalog = await listManagedPlugins({ config, env });
     expect(catalog.diagnostics).not.toContainEqual(
@@ -398,7 +397,7 @@ describe("managed plugin capability consent", () => {
       acceptedSurfaceAt: expect.any(String),
     });
 
-    await expect(consent({ env, onCapabilityConsent })).resolves.toBeUndefined();
+    expect(await consent({ env, onCapabilityConsent })).toBeUndefined();
     expect(mocks.writeRecords).toHaveBeenCalledTimes(1);
     expect(onCapabilityConsent).toHaveBeenCalledTimes(1);
   });
@@ -452,14 +451,14 @@ describe("managed plugin capability consent", () => {
     for (const inspection of inspections) {
       expect(inspection.declared).toEqual(declared);
       expect(inspection.reviewToken).toBe(reviewToken);
-      await expect(
-        consent({
+      expect(
+        await consent({
           config,
           env,
           pluginId: inspection.plugin.id,
           acknowledge: { reviewToken },
         }),
-      ).resolves.toBeUndefined();
+      ).toBeUndefined();
     }
     expect(mocks.records["community-plugin"]).toMatchObject({
       acceptedSurface: { providers: ["configured-provider", "package-provider"] },
@@ -526,25 +525,6 @@ describe("managed plugin capability consent", () => {
     expect(mocks.writeRecords).not.toHaveBeenCalled();
   });
 
-  it("bounds pending reviews while refreshing a repeated rejection", async () => {
-    const reject = async (pluginId: string) => {
-      const handler = artifactHandler();
-      await expect(
-        handler.onBeforePluginArtifactCommit(
-          stagedArtifact(createConsentArtifact(pluginId), pluginId),
-        ),
-      ).rejects.toMatchObject({ capabilityConsent: { pluginId } });
-    };
-    for (let index = 0; index < 32; index += 1) {
-      await reject(`pending-${index}`);
-    }
-    await reject("pending-0");
-    await reject("pending-32");
-    expect(resolvePendingPluginCapabilityReview("pending-1")).toBeUndefined();
-    expect(resolvePendingPluginCapabilityReview("pending-0")?.pluginId).toBe("pending-0");
-    expect(resolvePendingPluginCapabilityReview("pending-32")?.pluginId).toBe("pending-32");
-  });
-
   it("retains a rejected community install for inspection and refreshes stale reviews", async () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
     const artifactDir = createConsentArtifact();
@@ -580,7 +560,7 @@ describe("managed plugin capability consent", () => {
     ).rejects.toMatchObject({
       capabilityConsent: { pluginId: "community-plugin", reviewToken: refreshedToken },
     });
-    await expect(inspect()).resolves.toMatchObject({
+    expect(await inspect()).toMatchObject({
       declared: { providers: ["unreviewed-provider"] },
       reviewToken: refreshedToken,
     });

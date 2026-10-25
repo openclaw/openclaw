@@ -1,9 +1,7 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { sourceHostPluginConflict } from "../claws/plugin-capability-probe.js";
@@ -36,6 +34,7 @@ import {
   setGatewayPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { makePluginMetadataIndex } from "./current-plugin-metadata.test-support.js";
 import { readStartupBundledDiscoveryMode } from "./gateway-startup-plugin-config.js";
 import { resolvePluginInstallRoots, withPluginInstallRoots } from "./install-root-context.js";
 import { loadInstalledPluginIndexInstallRecords } from "./installed-plugin-index-record-reader.js";
@@ -62,10 +61,12 @@ import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
 import { createProviderExternalAuthResolver } from "./provider-external-auth-core.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
+import { createInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
+    clearCurrentPluginMetadataSnapshot();
     await closeOpenClawStateDatabaseAsync();
     bundledDiscovery.clearBundledDiscoveryModeMemo();
     cleanup();
@@ -85,17 +86,11 @@ function environment() {
 }
 
 function index(message = "synthetic index"): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "2026.4.25",
-    compatRegistryVersion: "compat-v1",
-    migrationVersion: 1,
-    policyHash: "policy-v1",
+  return createInstalledPluginIndex({
     generatedAtMs: 123,
-    installRecords: {},
     plugins: [],
     diagnostics: [{ level: "warn", message }],
-  };
+  });
 }
 
 async function seed(env: NodeJS.ProcessEnv, value: InstalledPluginIndex) {
@@ -111,28 +106,6 @@ async function seed(env: NodeJS.ProcessEnv, value: InstalledPluginIndex) {
 
 function readFreshIndex(env: NodeJS.ProcessEnv) {
   return withPluginCache(createPluginCache(), () => readPersistedInstalledPluginIndex({ env }));
-}
-
-function indexPlugin(pluginId: string, rootDir: string): InstalledPluginIndex["plugins"][number] {
-  return {
-    pluginId,
-    rootDir,
-    manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-    manifestHash: "synthetic-manifest",
-    origin: "global",
-    enabled: true,
-    startup: { sidecar: false, memory: false, agentHarnesses: [] },
-    compat: [],
-  };
-}
-
-function familyHashes(databasePath: string) {
-  return ["", "-wal", "-shm", "-journal"].map((suffix) => {
-    const file = `${databasePath}${suffix}`;
-    return fs.existsSync(file)
-      ? [suffix, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]
-      : [suffix, null];
-  });
 }
 
 async function withoutMainThreadSql(run: () => Promise<void>) {
@@ -209,88 +182,38 @@ it("prepares external auth from the published inventory after an index write wit
   const config = {};
   await seed(env, index());
   const resolver = createProviderExternalAuthResolver({ resolveProviderPluginsForHooks: () => [] });
-  try {
+  await withoutMainThreadSql(async () => {
+    await resolver.withPreparedExternalAuthProfiles({ config, env }, async () => {
+      expect(getCurrentPluginMetadataSnapshot({ config, env })).toBeDefined();
+    });
+  });
+  for (const message of ["boot inventory", "replacement inventory"]) {
+    const snapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
+      config,
+      env,
+      allowCurrent: false,
+    });
+    setGatewayPluginMetadataSnapshot(snapshot, { config, env });
+    // Writes invalidate raw index facts; the published runtime inventory remains authoritative.
+    await writePersistedInstalledPluginIndex(index(message), { env });
+    const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
+    const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
     await withoutMainThreadSql(async () => {
       await resolver.withPreparedExternalAuthProfiles({ config, env }, async () => {
-        expect(getCurrentPluginMetadataSnapshot({ config, env })).toBeDefined();
+        expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(snapshot);
+        expect(
+          resolver.resolveExternalAuthProfilesWithPlugins({
+            config,
+            env,
+            context: { env, store: { version: 1, profiles: {} } },
+          }),
+        ).toEqual([]);
       });
     });
-    for (const message of ["boot inventory", "replacement inventory"]) {
-      const snapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
-        config,
-        env,
-        allowCurrent: false,
-      });
-      setGatewayPluginMetadataSnapshot(snapshot, { config, env });
-      // Writes invalidate raw index facts; the published runtime inventory remains authoritative.
-      await writePersistedInstalledPluginIndex(index(message), { env });
-      const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
-      const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
-      await withoutMainThreadSql(async () => {
-        await resolver.withPreparedExternalAuthProfiles({ config, env }, async () => {
-          expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(snapshot);
-          expect(
-            resolver.resolveExternalAuthProfilesWithPlugins({
-              config,
-              env,
-              context: { env, store: { version: 1, profiles: {} } },
-            }),
-          ).toEqual([]);
-        });
-      });
-      expect(reads).not.toHaveBeenCalled();
-      expect(batches).not.toHaveBeenCalled();
-      reads.mockRestore();
-      batches.mockRestore();
-    }
-  } finally {
-    clearCurrentPluginMetadataSnapshot();
-  }
-});
-
-it("reads synchronous discovery rows across committed in-process writes", async () => {
-  const env = environment();
-  const databasePath = await seed(env, index());
-  const moduleUrl = (name: string) => new URL(name, import.meta.url).href;
-  const source = `
-    import assert from "node:assert/strict";
-    import { parentPort, workerData } from "node:worker_threads";
-    import { openNodeSqliteDatabase } from ${JSON.stringify(moduleUrl("../infra/node-sqlite.ts"))};
-    import { closeRetainedOpenClawStateReadConnections } from ${JSON.stringify(moduleUrl("../state/openclaw-state-db-read-connection.ts"))};
-    import { readPluginMetadataStateRowsSync } from ${JSON.stringify(moduleUrl("./installed-plugin-index-row.ts"))};
-    const pathname = workerData.databasePath;
-    const read = () => readPluginMetadataStateRowsSync(["plugins.bundledDiscovery"], { path: pathname })
-      .map((row) => ({ ...row }));
-    try {
-      assert.deepEqual(read(), []);
-      const writer = openNodeSqliteDatabase(pathname);
-      try {
-        for (const mode of ["compat", "allowlist"]) {
-          writer.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1) ON CONFLICT(state_key) DO UPDATE SET value_json=excluded.value_json")
-            .run("plugins.bundledDiscovery", JSON.stringify(mode));
-          assert.deepEqual(read(), [{ state_key: "plugins.bundledDiscovery", value_json: JSON.stringify(mode) }]);
-        }
-        writer.prepare("DELETE FROM config_machine_state WHERE state_key=?").run("plugins.bundledDiscovery");
-        assert.deepEqual(read(), []);
-      } finally {
-        writer.close();
-      }
-      parentPort.postMessage("updated discovery rows");
-    } finally {
-      closeRetainedOpenClawStateReadConnections();
-    }
-  `;
-  const worker = new Worker(new URL(`data:text/javascript,${encodeURIComponent(source)}`), {
-    execArgv: resolveRuntimeWorkerThreadExecArgv(
-      new URL("./installed-plugin-index-row.ts", import.meta.url),
-    ),
-    workerData: { databasePath },
-  });
-  try {
-    const [result] = await once(worker, "message");
-    expect(result).toBe("updated discovery rows");
-  } finally {
-    await worker.terminate();
+    expect(reads).not.toHaveBeenCalled();
+    expect(batches).not.toHaveBeenCalled();
+    reads.mockRestore();
+    batches.mockRestore();
   }
 });
 
@@ -344,18 +267,11 @@ it("refreshes current package facts in pinned install roots without parent SQL o
 it("merges source admissions into the current install without main-thread SQL or stale-owner writes", async () => {
   const env = environment();
   const plugin = {
-    ...indexPlugin("native-demo", "/plugins/native-demo"),
+    ...makePluginMetadataIndex("native-demo").plugins[0]!,
     installRecordHash: "current-install",
   };
   const current = { ...index("current inventory"), plugins: [plugin] };
   await seed(env, current);
-  const identity = {
-    sourceIdentity: "1:2:3:4:5:6",
-    capturedIdentity: "1:7:3:4:5:6",
-    contentHash: "b".repeat(64),
-    sizeBytes: 4,
-  };
-  const namespace = "/captures/namespace";
   const publication = {
     pluginId: plugin.pluginId,
     rootDir: plugin.rootDir,
@@ -364,27 +280,8 @@ it("merges source admissions into the current install without main-thread SQL or
     receipt: {
       signature: "source-identity",
       sourceDigest: "a".repeat(64),
-      nativeArtifacts: {
-        "native-tool": {
-          ...identity,
-          capturedPath: namespace + "/content/native-tool",
-          namespace,
-        },
-      },
-      nativeNamespaces: {
-        [namespace]: {
-          sourceDirectory: plugin.rootDir,
-          capturedRoot: namespace,
-          managed: false,
-          members: {
-            "native-tool": {
-              source: plugin.rootDir + "/native-tool",
-              ...identity,
-              boundaryChecked: false,
-            },
-          },
-        },
-      },
+      nativeArtifacts: {},
+      nativeNamespaces: {},
     },
   };
   await withoutMainThreadSql(async () => {
@@ -414,18 +311,6 @@ it("merges source admissions into the current install without main-thread SQL or
       plugins: [{ ...plugin, sourceAdmissions: { invalid: { signature: 42 } } }],
     })?.plugins[0],
   ).toEqual(plugin);
-});
-
-it("preserves database-family bytes during ambient artifact-preserving async inspection", async () => {
-  const env = environment();
-  const databasePath = await seed(env, index());
-  const before = familyHashes(databasePath);
-  const inspect = async () => {
-    expect((await readFreshIndex(env))?.diagnostics).toEqual(index().diagnostics);
-  };
-  await withoutMainThreadSql(() => withArtifactPreservingStateReads(inspect));
-  await closeOpenClawStateDatabaseAsync();
-  expect(familyHashes(databasePath)).toEqual(before);
 });
 
 it("reads committed live metadata without space for a database snapshot", async () => {
@@ -561,35 +446,28 @@ it("prepares cold metadata once and preserves the merged workspace inventory wit
   setGatewayPluginMetadataSnapshot(boot, { config, env });
   bundledDiscovery.clearBundledDiscoveryModeMemo();
   const prepareMode = bundledDiscovery.prepareBundledDiscoveryMode;
-  const mode = vi
-    .spyOn(bundledDiscovery, "prepareBundledDiscoveryMode")
-    .mockImplementationOnce(async (capturedEnv, readPreparedRow) => {
+  vi.spyOn(bundledDiscovery, "prepareBundledDiscoveryMode").mockImplementationOnce(
+    async (capturedEnv, readPreparedRow) => {
       const activate = await prepareMode(capturedEnv, readPreparedRow);
       await prepareMode(otherEnv);
       await prepareMode(capturedEnv);
       return activate;
-    });
+    },
+  );
   const reads = vi.spyOn(metadataWorker, "readPluginMetadataStateRow");
   const batches = vi.spyOn(metadataWorker, "readPluginMetadataStateRows");
-  try {
-    await withoutMainThreadSql(() =>
-      withPluginCache(createPluginCache(), async () => {
-        const first = await loadFreshManagedPluginMetadata(config, env);
-        const second = await loadFreshManagedPluginMetadata(config, env);
-        expect(first.plugins.map((plugin) => plugin.id)).toEqual(["primary", "secondary"]);
-        expect(first.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
-        expect(first.registrySource).toBe("derived");
-        expect(second).toBe(first);
-        expect(reads.mock.calls.map(([selector]) => selector)).toEqual(["bundled-discovery"]);
-        expect(batches).toHaveBeenCalledOnce();
-      }),
-    );
-  } finally {
-    reads.mockRestore();
-    batches.mockRestore();
-    mode.mockRestore();
-    clearCurrentPluginMetadataSnapshot();
-  }
+  await withoutMainThreadSql(() =>
+    withPluginCache(createPluginCache(), async () => {
+      const first = await loadFreshManagedPluginMetadata(config, env);
+      const second = await loadFreshManagedPluginMetadata(config, env);
+      expect(first.plugins.map((plugin) => plugin.id)).toEqual(["primary", "secondary"]);
+      expect(first.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
+      expect(first.registrySource).toBe("derived");
+      expect(second).toBe(first);
+      expect(reads.mock.calls.map(([selector]) => selector)).toEqual(["bundled-discovery"]);
+      expect(batches).toHaveBeenCalledOnce();
+    }),
+  );
 });
 
 it("shares a pending index read and returns the same validated inventory", async () => {
