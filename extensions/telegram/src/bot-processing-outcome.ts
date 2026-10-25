@@ -6,6 +6,10 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 export type TelegramMessageProcessingResult =
   | { kind: "completed" }
   | { kind: "skipped" }
+  | {
+      kind: "dropped";
+      reason: Parameters<NonNullable<ChannelIngressMonitorLifecycle["onDropped"]>>[0];
+    }
   | { kind: "failed-retryable"; error: unknown };
 
 type TelegramUpdateProcessingFrame = {

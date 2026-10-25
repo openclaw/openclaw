@@ -519,6 +519,11 @@ describe("getFollowupQueue", () => {
       enqueuedAt: index,
       run: makeRun(),
       onQueueDisposition: vi.fn(),
+      turnAdoptionLifecycle: {
+        onAdopted: vi.fn(),
+        onDropped: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
       deliveryCorrelations: [{ begin: () => undefined }],
     }));
     for (const source of sources) {
@@ -532,6 +537,10 @@ describe("getFollowupQueue", () => {
     }
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
     expect(sources[0]?.onQueueDisposition).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+    expect(sources[0]?.turnAdoptionLifecycle.onDropped).toHaveBeenCalledExactlyOnceWith(
+      "queue-cap-old",
+    );
+    expect(sources[0]?.turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
     for (const source of sources.slice(1)) {
       expect(source.onQueueDisposition).not.toHaveBeenCalled();
     }

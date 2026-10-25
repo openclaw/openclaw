@@ -55,6 +55,20 @@ export function isPreAdoptionState<TPayload, TMetadata>(
   );
 }
 
+/** Share the same settlement owner for runtime failures and terminal policy drops. */
+export function settlePreAdoptionFailure<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+  error: unknown,
+  applyFailure: (
+    claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
+    error: unknown,
+  ) => Promise<void>,
+): Promise<void> | undefined {
+  return isPreAdoptionState(state)
+    ? state.settleOnce(() => applyFailure(state.claim, error))
+    : undefined;
+}
+
 export function createIngressSettleOwner<TPayload, TMetadata>(
   state: ActiveHandlerState<TPayload, TMetadata>,
   removeActive: (state: ActiveHandlerState<TPayload, TMetadata>) => void,

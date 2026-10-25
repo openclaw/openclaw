@@ -305,6 +305,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             onFailed: (error) => settleLifecycle(() => lifecycle.onFailed?.(error)),
             onCancelled: () => settleLifecycle(() => lifecycle.onCancelled?.()),
             onAbandoned: () => settleLifecycle(() => lifecycle.onAbandoned()),
+            onDropped: (reason) => settleLifecycle(() => lifecycle.onDropped?.(reason)),
           };
 
           // Adoption can complete before delivery returns; track both lifetimes so stop

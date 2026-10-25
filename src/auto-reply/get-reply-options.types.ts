@@ -16,10 +16,12 @@ import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
+import type { FollowupQueueDisposition } from "./reply/queue-policy.js";
 import type { TypingController } from "./reply/typing.js";
 import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
+export type { FollowupQueueDisposition } from "./reply/queue-policy.js";
 
 /** An accepted visible work session and its canonical Control UI link. */
 export type VisibleWorkSession = {
@@ -134,6 +136,8 @@ export type TurnAdoptionLifecycle = {
   deferredHeartbeatIntervalMs?: number;
   /** Deferred turn finished without owning the reply lane. */
   onAbandoned?: () => void | Promise<void>;
+  /** Explicit queue-cap loss; unlike abandonment, this is a terminal policy decision. */
+  onDropped?: (reason: FollowupQueueDisposition) => void | Promise<void>;
   /** Always fires when the followup ownership cycle ends (admitted or not). Gateway cleanup. */
   onSettled?: () => void | Promise<void>;
   /** Retires cancellation ownership while retaining live identity. */
@@ -206,9 +210,7 @@ export type GetReplyOptions = {
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
   /** Reports terminal queue-cap rejection or eviction when no agent run will report an outcome. */
-  onFollowupQueueDisposition?: (
-    disposition: "queue-cap" | "queue-cap-old" | "queue-cap-new",
-  ) => void;
+  onFollowupQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /**
    * Reports fresh visible children before their first turn and accepted spawns at settlement.
    * Creation reports include the key even when no public session URL is configured.

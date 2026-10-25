@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createInboundDebouncer } from "../auto-reply/inbound-debounce.js";
 import {
   fanInChannelIngressLifecycles,
   meetsIdentifierAuthentication,
@@ -92,6 +93,32 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(lifecycle.onAbandoned).toHaveBeenCalledOnce();
     expect(lifecycle.onFailed).not.toHaveBeenCalled();
     expect(fanInChannelIngressLifecycles([]).lifecycle).toBeUndefined();
+  });
+
+  it("preserves a queue-cap drop through channel fan-in and inbound debounce", async () => {
+    const first = { ...createLifecycle(), onDropped: vi.fn(async () => {}) };
+    const second = { ...createLifecycle(), onDropped: vi.fn(async () => {}) };
+    const combined = fanInChannelIngressLifecycles([first, second]);
+    const debouncer = createInboundDebouncer({
+      debounceMs: 0,
+      buildKey: () => "room",
+      onFlush: (_items, createFlush) =>
+        createFlush({
+          lifecycle: combined.lifecycle,
+          dispatch: async (lifecycle) => {
+            await lifecycle.onDropped?.("queue-cap-old");
+          },
+        }),
+    });
+
+    await debouncer.enqueue({ id: "message" });
+    await debouncer.drain();
+    await combined.abandon();
+
+    for (const source of [first, second]) {
+      expect(source.onDropped).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+      expect(source.onAbandoned).not.toHaveBeenCalled();
+    }
   });
 
   it("cancellation-settles every source in mixed capable and legacy fan-in", async () => {

@@ -11,6 +11,35 @@ describe("durable ingress downstream handoff", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
+
+  it("dead-letters a queue-cap policy drop once without replaying the claim", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      await queue.enqueue("dropped", { text: "x" }, { laneKey: "l", receivedAt: 1 });
+      const dispatched: string[] = [];
+      const drain = createChannelIngressDrain<Payload>({
+        queue,
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatched.push(event.id);
+          await lifecycle.onDropped?.("queue-cap-old");
+          return { kind: "deferred" };
+        },
+      });
+      try {
+        await drain.drainOnce();
+        await drain.waitForIdle();
+        await drain.drainOnce();
+        await drain.waitForIdle();
+        expect(dispatched).toEqual(["dropped"]);
+        expect(await queue.listPending()).toEqual([]);
+        expect(await queue.listFailed?.()).toEqual([
+          expect.objectContaining({ id: "dropped", reason: "queue-cap-old" }),
+        ]);
+      } finally {
+        drain.dispose();
+      }
+    });
+  });
   afterEach(() => {
     vi.useRealTimers();
     closeOpenClawStateDatabaseForTest();

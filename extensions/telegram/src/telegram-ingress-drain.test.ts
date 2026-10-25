@@ -443,6 +443,22 @@ describe("createTelegramIngressMonitor", () => {
     });
   });
 
+  it("dead-letters a deferred queue-cap drop instead of completing the spool row", async () => {
+    await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
+      const { eventId } = await enqueue(6);
+      const { monitor, participant } = await startDeferred(makeMonitor, "test:late-queue-cap");
+      participant.current?.settle({ kind: "dropped", reason: "queue-cap-old" });
+
+      await vi.waitFor(async () =>
+        expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+          { id: eventId, reason: "queue-cap-old" },
+        ]),
+      );
+      expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      await monitor.stop();
+    });
+  });
+
   it("dead-letters a late deferred dispatch dedupe rollback failure", async () => {
     await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
       const { eventId } = await enqueue(5);

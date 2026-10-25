@@ -394,6 +394,25 @@ describe("telegram bot message processor", () => {
     expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(1);
   });
 
+  it("settles a spooled queue-cap drop with its terminal reason", async () => {
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
+      await turnAdoptionLifecycle?.onDropped?.("queue-cap-old");
+      return { kind: "completed" };
+    });
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    const update = { update_id: 123460 };
+    const replay = await runWithTelegramSpooledReplayUpdate(update, async () =>
+      processSampleMessage(processMessage, undefined, { update }),
+    );
+
+    expect(replay.value).toEqual({ kind: "dropped", reason: "queue-cap-old" });
+    await expect(replay.deferredWork?.task).resolves.toEqual({
+      kind: "dropped",
+      reason: "queue-cap-old",
+    });
+  });
+
   it("owns spooled dispatch through draft cleanup and fallback delivery after adoption", async () => {
     const cleanup = createDeferred<void>();
     const draftCleaned = createDeferred<void>();

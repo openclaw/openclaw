@@ -325,6 +325,63 @@ describe("createSlackMessageHandler", () => {
   });
 
   it.each([false, true])(
+    "settles its logical claim after forwarding a terminal queue drop (fails=%s)",
+    async (shouldFail) => {
+      const handle = {
+        keys: ["terminal-drop"] as const,
+        commit: vi.fn(async () => true),
+        release: vi.fn(),
+      };
+      const { createChannelReplayGuard } = await import("openclaw/plugin-sdk/persistent-dedupe");
+      const guard = createChannelReplayGuard<{ keys: readonly string[] }>({
+        dedupe: { ttlMs: 0, memoryMaxSize: 10 },
+        buildReplayKey: (event) => event.keys,
+      });
+      guard.claim = vi.fn(async () => ({ kind: "claimed" as const, handle }));
+      vi.spyOn(dedupe, "createSlackMessageDispatchReplayGuard").mockReturnValueOnce(guard);
+      const turnAdoptionLifecycle = {
+        ...lifecycle(),
+        onSessionRouted: vi.fn(async () => {}),
+        onDropped: vi.fn(async () => {
+          if (shouldFail) {
+            throw new Error("terminal settlement failed");
+          }
+        }),
+      };
+      prepareMock.mockResolvedValueOnce({
+        ctxPayload: {},
+        route: { sessionKey: "agent:main:slack:channel:C111" },
+      });
+      dispatchMock.mockImplementationOnce(async (prepared) => {
+        prepared.turnAdoptionLifecycle?.onDeferred?.();
+      });
+      const { handler } = createHandlerWithTracker();
+      const handled = handler(makeMessage("1709000000.000551", "drop me"), {
+        awaitDispatch: true,
+        turnAdoptionLifecycle,
+      });
+      await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledOnce());
+      await runOnFlush([queuedEntries()[0]!]);
+      await handled;
+
+      const prepared = dispatchMock.mock.calls[0]![0];
+      if (shouldFail) {
+        await expect(prepared.turnAdoptionLifecycle?.onDropped?.("queue-cap-old")).rejects.toThrow(
+          "terminal settlement failed",
+        );
+        expect(handle.commit).not.toHaveBeenCalled();
+        expect(handle.release).toHaveBeenCalledOnce();
+      } else {
+        await prepared.turnAdoptionLifecycle?.onDropped?.("queue-cap-old");
+        expect(handle.commit).toHaveBeenCalledOnce();
+        expect(handle.release).not.toHaveBeenCalled();
+      }
+      expect(turnAdoptionLifecycle.onDropped).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+      expect(turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
     "prepares twins once and dispatches only when allowed (denied=%s)",
     async (denied) => {
       if (denied) {

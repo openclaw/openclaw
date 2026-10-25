@@ -248,6 +248,12 @@ export function fanInChannelIngressLifecycles(
     await Promise.all(targets.map(async (lifecycle) => await invoke(lifecycle)));
   };
   const abandonAll = () => settleOnce(() => fanOut((lifecycle) => lifecycle.onAbandoned()));
+  const dropAll = (reason: Parameters<NonNullable<ChannelIngressLifecycle["onDropped"]>>[0]) =>
+    settleOnce(() =>
+      fanOut((lifecycle) =>
+        lifecycle.onDropped ? lifecycle.onDropped(reason) : lifecycle.onAbandoned(),
+      ),
+    );
   const failEach = (targets: readonly ChannelIngressLifecycle[], error: unknown) =>
     fanOut(
       (lifecycle) => (lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned()),
@@ -329,6 +335,10 @@ export function fanInChannelIngressLifecycles(
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();
+      },
+      onDropped: async (reason) => {
+        handedOff = true;
+        await dropAll(reason);
       },
     },
     // A gated or deliberately skipped turn still consumed every source claim.

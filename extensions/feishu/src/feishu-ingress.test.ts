@@ -49,6 +49,7 @@ function createLifecycle(
     onDeferred: vi.fn(),
     onAdoptionFinalizing: vi.fn(),
     onAbandoned: vi.fn(async () => {}),
+    onDropped: vi.fn(async () => {}),
   };
   const transport: FeishuIngressLifecycle = {
     abortSignal: new AbortController().signal,
@@ -314,6 +315,18 @@ describe("Feishu durable ingress", () => {
     expect(onReplayCommitError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "dedupe persistence failed" }),
     );
+  });
+
+  it("forwards a terminal queue drop across flush claims", async () => {
+    const replayClaim = createReplayClaim("queue-drop");
+    const { lifecycle, calls } = createLifecycle({}, replayClaim);
+
+    await lifecycle?.onDropped?.("queue-cap-old");
+
+    expect(calls.onDropped).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+    expect(calls.onAbandoned).not.toHaveBeenCalled();
+    expect(replayClaim.commit).toHaveBeenCalledOnce();
+    expect(replayClaim.release).not.toHaveBeenCalled();
   });
 
   it("abandons logical claims when transport adoption persistence fails", async () => {
