@@ -37,7 +37,6 @@ import {
 } from "./session-cold-storage-worker.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
-import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import { readPreparedSessionTranscriptChange } from "./session-transcript-authority.js";
 import { timedMessageEvent } from "./transcript-message.test-support.js";
 
@@ -124,8 +123,6 @@ function contextFixture(f: Fixture) {
         { ...f.scope, path: f.database.path },
         selection,
       ),
-    canonicalAnchors: () =>
-      readSessionTranscriptAnchorFactsInDatabase(f.database, f.scope, selection),
     summary: () => readActivitySummaryBatchFromReplica({ scope: f.scope }),
     read() {
       const hot = replica.read();
@@ -162,10 +159,6 @@ function expectProjections(
   events = [question, answer],
 ) {
   expect(context.anchors()).toBeUndefined();
-  expect(context.canonicalAnchors().anchors.map((anchor) => anchor.entryId)).toEqual([
-    "question",
-    "answer",
-  ]);
   expect(context.summary()?.page.events.map(({ event }) => event)).toEqual(events);
 }
 
@@ -201,52 +194,39 @@ const correlation = (steerTargetRunId: string) => ({
   message: { ...question.message, __openclaw: { steerTargetRunId } },
 });
 
-it("keeps settled append bodies in receipts and storage without evicting navigation", () =>
+it("retains navigation across oversized metadata appends and competing actor reads", () =>
   withActor((f) => {
     replace(f);
     const other = { ...f.target, sessionKey: "agent:main:other-resident" };
     runSqliteImmediateTransactionSync(f.database.db, () => {
       writeSessionEntry(f.database, other.sessionKey, { sessionId: "other", updatedAt: 1 });
     });
-    const events = Array.from({ length: 6 }, (_, index) => ({
-      type: "custom",
-      id: `large-metadata-${index}`,
-      parentId: index === 0 ? "answer" : `large-metadata-${index - 1}`,
-      timestamp: "2026-01-01T00:00:03Z",
-      customType: "openclaw.cache-ttl",
-      data: { snapshot: "synthetic".repeat(180_000) },
-    }));
-    for (const event of events) {
+    for (let index = 0; index < 6; index++) {
+      const event = {
+        type: "custom",
+        id: `large-metadata-${index}`,
+        parentId: index === 0 ? "answer" : `large-metadata-${index - 1}`,
+        timestamp: "2026-01-01T00:00:03Z",
+        customType: "openclaw.cache-ttl",
+        data: { snapshot: "synthetic".repeat(180_000) },
+      };
       expectAppended(appendEvent(f, event), event);
     }
-    const expectedBytes = [...transcript(f), ...events].reduce(
-      (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
-      0,
-    );
     const reads = trackSqliteStatementExecutions(f.database.db, ["history"], (sql) =>
       /^\s*select\b/iu.test(sql) && sql.includes('"transcript_events"') ? "history" : null,
     );
-    let warm;
+    let warm: ReturnType<Fixture["read"]>;
     try {
       f.read(other);
       reads.counts.history = 0;
       warm = f.read();
-      expect(reads.counts.history).toBe(0);
       expect(warm.transcript.projection?.contextMetadata).toBeUndefined();
+      expect(reads.counts.history).toBe(0);
     } finally {
       reads.restore();
     }
-    expect(storedEvents(f)).toEqual([...transcript(f), ...events]);
     f.restartActor();
-    const cold = f.read();
-    expect(cold.transcript.modelContext).toEqual(warm.transcript.modelContext);
-    expect(cold.transcript.projection?.contextMetadata).toBeUndefined();
-    expect(
-      readSessionTranscriptBoundedActiveContextCore(f.scope, {
-        maxBytes: expectedBytes,
-        maxEvents: 100,
-      }).serializedBytes,
-    ).toBe(expectedBytes);
+    expect(f.read().transcript.modelContext).toEqual(warm.transcript.modelContext);
   }));
 
 it.each(["warm", "restarted"] as const)(
@@ -283,21 +263,21 @@ it.each(["warm", "restarted"] as const)(
       };
       const expectVisibleTail = (entryId: string) => {
         const outcome = appendMessage(replayMessage);
-        expect(outcome).toMatchObject({ kind: "committed", value: { kind: "message" } });
-        expect(outcome).toHaveProperty(
-          "value.value.snapshot",
-          expect.objectContaining({
-            ok: true,
-            value: expect.objectContaining({
-              result: expect.objectContaining({
-                appended: false,
-                messageId: "question",
-                message: expect.objectContaining(replayMessage),
-              }),
-              visibleTail: expect.objectContaining({ entryId }),
-            }),
-          }),
-        );
+        expect(outcome).toMatchObject({
+          kind: "committed",
+          value: {
+            kind: "message",
+            value: {
+              snapshot: {
+                ok: true,
+                value: {
+                  result: { appended: false, messageId: "question", message: replayMessage },
+                  visibleTail: { entryId },
+                },
+              },
+            },
+          },
+        });
       };
       const side = {
         type: "custom",

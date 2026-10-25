@@ -397,6 +397,12 @@ it("keeps reset history closed across compaction with a warm history cache", asy
     expect(page.totalMessages).toBe(ids.length);
     expect(page.events.map(({ event }) => (event as { id: string }).id)).toEqual(ids);
   };
+  const expectContext = (messages: unknown[]) => {
+    expect(manager.buildSessionContext().messages).toMatchObject(messages);
+    expect(activeStats(scope).eventCount).toBe(messages.length);
+  };
+  const summary = (text: string) => ({ role: "compactionSummary", summary: text });
+  const message = (content: string) => ({ role: "user", content });
 
   appendUser("before-reset user");
   manager.appendMessage(
@@ -410,35 +416,26 @@ it("keeps reset history closed across compaction with a warm history cache", asy
   manager.appendCompaction("fresh-only summary", freshUserId, 100);
   await settle();
   expectHistory([freshUserId]);
-  expect(manager.buildSessionContext().messages).toMatchObject([
-    { role: "compactionSummary", summary: "fresh-only summary" },
-    { role: "user", content: "fresh user" },
-  ]);
-  expect(activeStats(scope).eventCount).toBe(2);
+  expectContext([summary("fresh-only summary"), message("fresh user")]);
 
   const nextUserId = appendUser("after compaction");
   await settle();
   expectHistory([freshUserId, nextUserId]);
   expect(activeStats(scope).eventCount).toBe(3);
 
-  // A newer reset wins for both scopes; another compaction must not revive older resets.
   manager.appendResetBoundary("new", nextUserId);
   const newestUserId = appendUser("after second reset");
   await settle();
   expectHistory([nextUserId, newestUserId]);
-  expect(manager.buildSessionContext().messages).toMatchObject([
-    { role: "user", content: "after compaction" },
-    { role: "user", content: "after second reset" },
-  ]);
-  expect(activeStats(scope).eventCount).toBe(2);
+  expectContext([message("after compaction"), message("after second reset")]);
 
   manager.appendCompaction("newest-only summary", newestUserId, 100);
   await settle();
   expectHistory([nextUserId, newestUserId]);
   const reopened = SessionManager.open(scope);
   expect(reopened.buildSessionContext().messages).toMatchObject([
-    { role: "compactionSummary", summary: "newest-only summary" },
-    { role: "user", content: "after second reset" },
+    summary("newest-only summary"),
+    message("after second reset"),
   ]);
   expect(activeStats(scope).eventCount).toBe(2);
 });
