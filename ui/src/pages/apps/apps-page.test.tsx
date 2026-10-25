@@ -151,7 +151,7 @@ it("loads conversation alongside discovery, retries errors, and retires a closed
 });
 
 it("discovers the session's agent while selection is switching", async () => {
-  const discovered = createDeferred<void>();
+  const discovered = createDeferred();
   const mounted = mountApps(discovered.promise, {
     selectedId: "claude",
     sessionKey: "agent:main:main",
