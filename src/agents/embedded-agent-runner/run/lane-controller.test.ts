@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -6,6 +7,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import {
+  getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
@@ -25,10 +27,13 @@ import {
   readSessionControllerOperationState,
 } from "../../../sessions/session-controller.state.js";
 import { testing } from "../../../sessions/session-controller.test-support.js";
+import { drainGlobalSingletonLifecycleState } from "../../../shared/global-singleton.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { createSessionMaintenanceOwner } from "../../session-maintenance/coordinator.js";
 import { detachActiveEmbeddedRun, attachActiveEmbeddedRun } from "../runs.js";
 import { createEmbeddedRunHandle } from "../runs.test-support.js";
+import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { createLaneControllerFixture } from "./lane-controller.test-support.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS as GRACE_MS } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -710,5 +715,185 @@ describe("exact attempt deadline transfer", () => {
     expect(onAbort).toHaveBeenCalledOnce();
     expect(nextAbort).not.toHaveBeenCalled();
     expect(getCommandLaneSnapshot(attemptLane).activeCount).toBe(1);
+  });
+});
+
+describe("foreground cancellation before queue admission", () => {
+  afterEach(async () => {
+    await drainGlobalSingletonLifecycleState("close");
+  });
+
+  it.each(
+    [false, true].flatMap((preemptible) =>
+      ["error", "string"].map((reasonType) => ({ preemptible, reasonType })),
+    ),
+  )(
+    "settles $reasonType Stop before held maintenance cleanup, preemptible=$preemptible",
+    async ({ preemptible, reasonType }) => {
+      const laneKey = `foreground-maintenance-${preemptible}`;
+      const started = createDeferred();
+      const cleanup = createDeferred();
+      const owner = createSessionMaintenanceOwner({ sessionKey: laneKey, preemptible });
+      let writerFinished = false;
+      const work = owner.track(
+        owner.run(async () => {
+          started.resolve();
+          await cleanup.promise;
+          writerFinished = true;
+        }),
+      );
+      await started.promise;
+      const abort = new AbortController();
+      const reason =
+        reasonType === "error" ? new Error("foreground stopped") : "foreground stopped";
+      let generation = getAgentEventLifecycleGeneration();
+      let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+        abortSignal: abort.signal,
+        lifecycleGeneration: generation,
+        prompt: "hello",
+        runId: laneKey,
+        sessionFile: laneKey,
+        sessionId: laneKey,
+        sessionKey: laneKey,
+        timeoutMs: 30_000,
+        trigger: "user",
+        workspaceDir: "/tmp",
+      };
+      const controller = createEmbeddedRunLaneController({
+        getLifecycleGeneration: () => generation,
+        getParams: () => params,
+        globalLane: `${laneKey}-global`,
+        initialQueuedLifecycleGeneration: generation,
+        setLifecycleGeneration: (next) => {
+          generation = next;
+        },
+        setParams: (next) => {
+          params = next;
+        },
+      });
+      let taskRan = false;
+      let settled = false;
+      const run = controller
+        .enqueueSession(async () => {
+          taskRan = true;
+        })
+        .then(
+          () => {
+            settled = true;
+            return undefined;
+          },
+          (error: unknown) => {
+            settled = true;
+            return error;
+          },
+        );
+      // Session-controller admission runs before the foreground reservation; Stop
+      // must land while that reservation waits on the held maintenance writer.
+      for (let turn = 0; turn < 50; turn += 1) {
+        if (preemptible && owner.signal.aborted) {
+          break;
+        }
+        await nextTurn();
+      }
+      abort.abort(reason);
+      let beforeCleanup: { settled: boolean; writerFinished: boolean; taskRan: boolean };
+      try {
+        await nextTurn();
+        beforeCleanup = { settled, writerFinished, taskRan };
+        expect(getCommandLaneSnapshot(laneKey).queuedCount).toBe(0);
+        expect(beforeCleanup.writerFinished).toBe(false);
+        expect(beforeCleanup.taskRan).toBe(false);
+        expect(owner.signal.aborted).toBe(preemptible);
+        expect(
+          beforeCleanup.settled,
+          "Stop must settle independently of an unrelated writer's held cleanup",
+        ).toBe(true);
+      } finally {
+        cleanup.resolve();
+        await work;
+        await run;
+      }
+      if (reason instanceof Error) {
+        expect(await run).toBe(reason);
+      } else {
+        expect(await run).toMatchObject({ name: "AbortError", cause: reason });
+      }
+      expect(writerFinished).toBe(true);
+      expect(taskRan).toBe(false);
+      // A later optional owner must remain usable after the canceled caller drains.
+      const successorAbort = new AbortController();
+      const successor = createSessionMaintenanceOwner({
+        sessionKey: laneKey,
+        preemptible: true,
+        abortSignal: successorAbort.signal,
+      });
+      let successorRan = false;
+      const successorWork = successor.track(
+        successor.run(async () => {
+          successorRan = true;
+        }),
+      );
+      try {
+        await nextTurn();
+        expect(successorRan).toBe(true);
+      } finally {
+        successorAbort.abort();
+        await Promise.allSettled([successorWork]);
+      }
+    },
+  );
+
+  it("surfaces a non-abort admission failure even once the lane signal is aborted", async () => {
+    const laneKey = "foreground-maintenance-real-failure";
+    const abort = new AbortController();
+    const failure = new Error("maintenance store unavailable");
+    vi.resetModules();
+    vi.doMock("../../session-maintenance/coordinator.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../session-maintenance/coordinator.js")>()),
+      // Cancel first, so the lane's catch sees an aborted signal alongside a real failure.
+      beginForegroundSessionMaintenance: async () => {
+        abort.abort(new Error("user stopped"));
+        throw failure;
+      },
+    }));
+    try {
+      const { createEmbeddedRunLaneController: createController } =
+        await import("./lane-controller.js");
+      let generation = getAgentEventLifecycleGeneration();
+      let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+        abortSignal: abort.signal,
+        lifecycleGeneration: generation,
+        prompt: "hello",
+        runId: laneKey,
+        sessionFile: laneKey,
+        sessionId: laneKey,
+        sessionKey: laneKey,
+        timeoutMs: 30_000,
+        trigger: "user",
+        workspaceDir: "/tmp",
+      };
+      const controller = createController({
+        getLifecycleGeneration: () => generation,
+        getParams: () => params,
+        globalLane: `${laneKey}-global`,
+        initialQueuedLifecycleGeneration: generation,
+        setLifecycleGeneration: (next) => {
+          generation = next;
+        },
+        setParams: (next) => {
+          params = next;
+        },
+      });
+      let taskRan = false;
+      await expect(
+        controller.enqueueSession(async () => {
+          taskRan = true;
+        }),
+      ).rejects.toBe(failure);
+      expect(taskRan).toBe(false);
+    } finally {
+      vi.doUnmock("../../session-maintenance/coordinator.js");
+      vi.resetModules();
+    }
   });
 });

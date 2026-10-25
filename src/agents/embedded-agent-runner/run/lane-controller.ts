@@ -1,7 +1,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
-import { createAbortError } from "../../../infra/abort-signal.js";
+import { createAbortError, isAbortError } from "../../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -563,7 +563,15 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         sessionLanePolicy.priority === "foreground"
           ? await beginForegroundSessionMaintenance(
               options.getParams().sessionKey ?? options.getParams().sessionId,
-            )
+              abortSignal,
+            ).catch((error: unknown) => {
+              // Only re-map cancellation. A genuine maintenance failure must survive
+              // even when this lane's signal happens to be aborted by now.
+              if (isAbortError(error)) {
+                throwIfAborted();
+              }
+              throw error;
+            })
           : undefined;
     } finally {
       operation?.markDeferredMaintenanceWaitEnded();
@@ -571,6 +579,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     // Mailbox and maintenance waits do not consume the admitted execution budget.
     noteLaneTaskProgress();
     try {
+      throwIfAborted();
       let executing = true;
       const watchdog =
         operation?.watchdog ??
