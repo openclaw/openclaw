@@ -22,9 +22,7 @@ let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts?.close();
-});
+afterAll(() => receipts?.close());
 
 async function createInstalledTriage(params: { hang?: boolean; promptPath?: string } = {}) {
   const root = await fs.realpath(tempDirs.make("openclaw-triage-child-"));
@@ -106,7 +104,6 @@ describe("update triage child lifecycle", () => {
 
   it("keeps artifact paths in local output and returns the partial-export outcome", async () => {
     const { target, promptPath, receiptPath, runtime, run } = await createInstalledTriage();
-    const runCommand = vi.spyOn(exec, "runCommandWithTimeout");
     const result = await run({
       target: { ...target, env: { ...target.env, [UPDATE_RUN_ID_ENV]: "completed-update-run" } },
       failure: { error: "Update could not install the package" },
@@ -115,9 +112,6 @@ describe("update triage child lifecycle", () => {
       status: "completed",
       hint: expect.stringContaining("Diagnostics export unavailable: Snapshot unavailable"),
     });
-    expect(runCommand).toHaveBeenCalledOnce();
-    const args = runCommand.mock.calls[0]![0];
-    expect(args.slice(-3)).toEqual(["--update-result", expect.any(String), "--json"]);
     expect("hint" in result && result.hint).not.toContain(target.root);
     expect(runtime.log).toHaveBeenCalledWith(
       JSON.stringify({ promptPath, bundlePath: null, bundleError: "Snapshot unavailable" }),

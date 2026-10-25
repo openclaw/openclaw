@@ -31,11 +31,8 @@ async function fixture(canary = false) {
   const root = await fs.realpath(tempDirs.make("snapshot-watchdog-"));
   const stateDir = path.join(root, "source");
   const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir, TMPDIR: root };
-  const worker = path.join(
-    root,
-    "dist",
-    runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
-  );
+  const dist = path.join(root, "dist");
+  const worker = path.join(dist, runtimeProcessEntrypoints.updateCandidateState.distWorkerPath);
   await fs.mkdir(path.dirname(worker), { recursive: true });
   await fs.writeFile(
     path.join(root, "package.json"),
@@ -46,7 +43,7 @@ async function fixture(canary = false) {
       "index.js",
       runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
     ]) {
-      await fs.writeFile(path.join(root, "dist", file), "");
+      await fs.writeFile(path.join(dist, file), "");
     }
   }
   return { root, stateDir, env, worker, pidFile: path.join(root, "worker.pid") };
