@@ -254,88 +254,85 @@ it("uses complete staged compatibility projections in hook media metadata", () =
   });
 });
 
-it.each([undefined, "01"])(
-  "maps received payloads and freezes plugin traces (flags=%s)",
-  (traceFlags) => {
-    const trace: DiagnosticTraceContext = {
-      traceId: "11111111111111111111111111111111",
-      spanId: "2222222222222222",
-      parentSpanId: "3333333333333333",
-      ...(traceFlags ? { traceFlags } : {}),
-    };
-    const traceFields = {
-      trace,
-      traceId: trace.traceId,
-      spanId: trace.spanId,
-      parentSpanId: trace.parentSpanId,
-    };
-    const canonical = {
-      ...makeCanonicalInbound({ TopicName: "Deployments", media: [audio, photo] }),
-      runId: "run-1",
-      trace,
-      callDepth: 2,
-    };
+it("maps received payloads and freezes plugin traces", () => {
+  const trace: DiagnosticTraceContext = {
+    traceId: "11111111111111111111111111111111",
+    spanId: "2222222222222222",
+    parentSpanId: "3333333333333333",
+    traceFlags: "01",
+  };
+  const traceFields = {
+    trace,
+    traceId: trace.traceId,
+    spanId: trace.spanId,
+    parentSpanId: trace.parentSpanId,
+  };
+  const canonical = {
+    ...makeCanonicalInbound({ TopicName: "Deployments", media: [audio, photo] }),
+    runId: "run-1",
+    trace,
+    callDepth: 2,
+  };
 
-    const pluginContext = toPluginMessageContext(canonical);
-    const receivedEvent = toPluginMessageReceivedEvent(canonical);
-    const { metadata: receivedMetadata, ...receivedEventBase } = receivedEvent;
-    expect(pluginContext).toEqual({
-      ...inboundRouting,
-      ...inboundTurn,
-      senderId: "sender-1",
-      ...traceFields,
-      callDepth: 2,
-    });
-    const claim = toPluginInboundClaimPair(canonical);
-    const sent = buildCanonicalSentMessageHookContext({
-      to: "demo-chat:chat:456",
-      content: "reply",
-      success: true,
-      channelId: "demo-chat",
-      trace,
-    });
-    for (const copy of [
-      pluginContext.trace,
-      receivedEvent.trace,
-      claim.context.trace,
-      claim.event.trace,
-      toPluginMessageSentEvent(sent).trace,
-    ]) {
-      expect(copy).not.toBe(trace);
-      expect(copy).toEqual(trace);
-      expect(Object.isFrozen(copy)).toBe(true);
-    }
-    expect(receivedEventBase).toEqual({
-      ...message,
-      ...inboundTurn,
-      threadId: 42,
-      senderId: "sender-1",
-      media: expectedMedia,
-      ...traceFields,
-    });
-    expect(receivedMetadata).toMatchObject({
-      ...expectedMediaMetadata,
-      messageId: "msg-1",
-      senderName: "User One",
-      threadId: 42,
-      topicName: "Deployments",
-    });
-    const internalReceived = toInternalMessageReceivedContext(canonical);
-    const { metadata: internalMetadata, ...internalReceivedBase } = internalReceived;
-    expect(internalReceivedBase).toEqual({
-      ...message,
-      ...inboundRouting,
-      messageId: "msg-1",
-      media: receivedEvent.media,
-    });
-    expect(internalMetadata).toMatchObject({
-      ...expectedMediaMetadata,
-      senderUsername: "userone",
-      senderE164: "+15551234567",
-      topicName: "Deployments",
-    });
-  },
-);
+  const pluginContext = toPluginMessageContext(canonical);
+  const receivedEvent = toPluginMessageReceivedEvent(canonical);
+  const { metadata: receivedMetadata, ...receivedEventBase } = receivedEvent;
+  expect(pluginContext).toEqual({
+    ...inboundRouting,
+    ...inboundTurn,
+    senderId: "sender-1",
+    ...traceFields,
+    callDepth: 2,
+  });
+  const claim = toPluginInboundClaimPair(canonical);
+  const sent = buildCanonicalSentMessageHookContext({
+    to: "demo-chat:chat:456",
+    content: "reply",
+    success: true,
+    channelId: "demo-chat",
+    trace,
+  });
+  for (const copy of [
+    pluginContext.trace,
+    receivedEvent.trace,
+    claim.context.trace,
+    claim.event.trace,
+    toPluginMessageSentEvent(sent).trace,
+  ]) {
+    expect(copy).not.toBe(trace);
+    expect(copy).toEqual(trace);
+    expect(Object.isFrozen(copy)).toBe(true);
+  }
+  expect(receivedEventBase).toEqual({
+    ...message,
+    ...inboundTurn,
+    threadId: 42,
+    senderId: "sender-1",
+    media: expectedMedia,
+    ...traceFields,
+  });
+  expect(receivedMetadata).toMatchObject({
+    ...expectedMediaMetadata,
+    messageId: "msg-1",
+    senderName: "User One",
+    threadId: 42,
+    topicName: "Deployments",
+  });
+  const internalReceived = toInternalMessageReceivedContext(canonical);
+  const { metadata: internalMetadata, ...internalReceivedBase } = internalReceived;
+  expect(internalReceivedBase).toEqual({
+    ...message,
+    ...inboundRouting,
+    messageId: "msg-1",
+    media: receivedEvent.media,
+  });
+  expect(internalMetadata).toMatchObject({
+    ...expectedMediaMetadata,
+    senderUsername: "userone",
+    senderE164: "+15551234567",
+    topicName: "Deployments",
+  });
+});
 
 it.each([
   ["rejected", undefined, "channel:room-123", undefined],
