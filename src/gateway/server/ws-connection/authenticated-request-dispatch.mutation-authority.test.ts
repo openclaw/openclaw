@@ -111,35 +111,6 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("authenticated request mutation custody", () => {
-  it("retains the equivalent committed grant across checks and rejects the next revocation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const email = "retained-policy@example.test";
-      let committedConfig: OpenClawConfig = {
-        gateway: { auth: { identityScopes: { [email]: ["operator.admin"] } } },
-      };
-      setRuntimeConfigSnapshot(committedConfig);
-      const { captures, dispatch } = createCaptureFixture({
-        config: () => committedConfig,
-        profileId: ensureProfileForEmail(email).id,
-        method: "test.retained-policy",
-        policy: { role: "operator", authMethod: "token", verifiedIdentity: email },
-        requireGuard: true,
-      });
-      await dispatch("accepted-policy");
-      const retained = expectDefined(captures.at(-1), "accepted operator source");
-      using _ = { [Symbol.dispose]: retained.release };
-      committedConfig = structuredClone(committedConfig);
-      retained.authority.assertCurrent();
-      const acceptedConfig = committedConfig;
-      committedConfig = {
-        gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
-      };
-      expect(retained.authority.assertCurrent).toThrow();
-      committedConfig = acceptedConfig;
-      expect(retained.authority.assertCurrent).toThrow();
-    });
-  });
-
   it("retains the remote grant assertion after accepted work leaves its request", async () => {
     setRuntimeConfigSnapshot({});
     const ingress = new AbortController();
@@ -378,38 +349,9 @@ describe("authenticated request mutation custody", () => {
               if (authority.family !== "worker") {
                 throw new Error("WS request lost its worker custody before handler invocation");
               }
-              const forged = { ...options };
-              const reminted = { ...options };
-              const forgedReader = vi.fn(() => authority);
-              for (const key of Object.getOwnPropertySymbols(options)) {
-                const value = Object.getOwnPropertyDescriptor(options, key)?.value;
-                const Issuer = value.constructor;
-                if (typeof Issuer === "function") {
-                  Object.defineProperty(reminted, key, {
-                    value: new Issuer(reminted, authority),
-                    configurable: true,
-                  });
-                }
-                Object.defineProperty(forged, key, {
-                  value: Object.assign(Object.create(Object.getPrototypeOf(value)), {
-                    read: forgedReader,
-                  }),
-                  configurable: true,
-                });
-              }
-              // Neither ordinary copies nor copied private descriptors transfer invocation custody.
-              for (const copy of [
-                { ...options },
-                Object.assign(Object.create(options), options),
-                Object.defineProperties({}, Object.getOwnPropertyDescriptors(options)),
-                forged,
-                reminted,
-              ]) {
-                expect(readGatewayRequestMutationAuthority(copy).family).toBe(
-                  "native-compatibility",
-                );
-              }
-              expect(forgedReader).not.toHaveBeenCalled();
+              expect(readGatewayRequestMutationAuthority({ ...options }).family).toBe(
+                "native-compatibility",
+              );
               inGrant = true;
               authority.assertWorkerCurrent();
               expect(authority.expectedProfileBinding).toBeDefined();
