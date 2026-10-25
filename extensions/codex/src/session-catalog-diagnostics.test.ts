@@ -330,6 +330,8 @@ it("shares one cold hydration across four callers without logging session data",
   expect(pages[0]?.trace).toMatchObject(traces[0]!);
   expect(new Set(records.map((record) => fields(record).diagnosticEpoch)).size).toBe(1);
   expect(JSON.stringify(records)).not.toContain(f.home);
+  expect(await f.list()).toEqual(results[0]);
+  expect(nativeRequest).toHaveBeenCalledOnce();
 });
 
 it("records complete native hydration before resident title filtering", async () => {

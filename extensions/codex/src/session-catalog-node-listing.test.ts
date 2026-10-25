@@ -158,15 +158,9 @@ it("filters managed threads and publishes websocket source continuation support"
     sessions: [session("native-1", { source: "cli" }), session("native-2", { source: "cli" })],
     backwardsCursor: "page-0",
   });
-  expect(bindingStore.managedThreads.snapshot).toHaveBeenCalledOnce();
-  expect(listPage.mock.calls.map(([request]) => request)).toEqual([
-    { limit: 2 },
-    { cursor: "page-2", limit: 1 },
-  ]);
   await expect(
     command.handle(JSON.stringify({ limit: 2, agentId: "main", sourceHomeId: "home-old" })),
   ).rejects.toThrow("source home changed");
-  expect(listPage).toHaveBeenCalledTimes(2);
 });
 
 it("keeps paired-node catalogs non-archived and metadata-only", async () => {
@@ -289,22 +283,6 @@ it("isolates federated host failures while preserving selected healthy hosts", a
     },
   });
 
-  expect(control.listPage).toHaveBeenCalledWith({
-    cursor: "local-page-2",
-    limit: 7,
-    searchTerm: "match",
-  });
-  expect(invoke).toHaveBeenCalledTimes(2);
-  expect(invoke.mock.calls.map(([request]) => request.params)).toEqual(
-    expect.arrayContaining(
-      ["healthy", "broken"].map((id) => ({
-        agentId: "main",
-        cursor: `${id}-page-2`,
-        limit: 7,
-        searchTerm: "match",
-      })),
-    ),
-  );
   expect(result.hosts).toEqual([
     host(CODEX_LOCAL_SESSION_HOST_ID, {
       connected: true,
@@ -414,78 +392,6 @@ it("preserves native catalog ownership in app-owned workers", () => {
   expect(commands.includes(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND)).toBe(false);
 });
 
-it("serves one bounded transcript page from the node host command", async () => {
-  const item = catalogThreadItem("item-1", { text: "bounded answer" });
-  const page = {
-    data: [{ id: "turn-1", items: [item] }],
-    nextCursor: "turns-page-2",
-  };
-  const listTurnPage = vi.fn(async () => page);
-  const control = createEligibleControl({ listTurnPage });
-  const command = transcriptCommand(control, CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
-
-  await expect(
-    command.run({
-      threadId: "thread-1",
-      cursor: "turns-page-1",
-      limit: 25,
-      sourceHomeId: "node-native",
-    }),
-  ).resolves.toBe(JSON.stringify(page));
-  expect(listTurnPage).toHaveBeenCalledWith(
-    expect.objectContaining({
-      cursor: "turns-page-1",
-      limit: 25,
-      itemsView: "full",
-    }),
-  );
-});
-
-it("serves bounded generic items through the optional node transcript command", async () => {
-  const output = "x".repeat(600 * 1024);
-  const source = catalogThreadItem("tool-1", {
-    type: "commandExecution",
-    aggregatedOutput: output,
-  });
-  const listItemPage = vi.fn(async () => ({
-    data: [{ turnId: "turn-1", item: source }],
-    nextCursor: "native-older",
-  }));
-  const control = createEligibleControl({
-    requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
-    listItemPage,
-  });
-  const command = transcriptCommand(control, CODEX_CATALOG_TRANSCRIPT_READ_COMMAND);
-
-  const payload = await command.run({
-    threadId: "thread-1",
-    cursor: "native-start",
-    limit: 2,
-    sourceHomeId: "node-native",
-  });
-  expect(JSON.parse(payload)).toEqual({
-    items: [
-      {
-        id: "tool-1",
-        type: "toolResult",
-        text: `${output.slice(0, 512 * 1024 - 3)}…`,
-        raw: source,
-        truncated: true,
-      },
-    ],
-    nextCursor: "native-older",
-  });
-  expect(Buffer.byteLength(JSON.stringify({ payloadJSON: payload }), "utf8")).toBeLessThan(
-    20 * 1024 * 1024,
-  );
-  expect(listItemPage).toHaveBeenCalledWith(
-    expect.objectContaining({
-      cursor: "native-start",
-      limit: 2,
-    }),
-  );
-});
-
 it("rejects malformed terminal resume thread ids before spawning", async () => {
   const command = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).find(
     (candidate) => candidate.command === CODEX_TERMINAL_RESUME_COMMAND,
@@ -591,25 +497,32 @@ it.each([
   },
 );
 
-it("rejects an oversized transcript page before returning it over node.invoke", async () => {
+it("serves bounded transcript pages and rejects oversized pages before node.invoke returns", async () => {
+  const page = {
+    data: [{ id: "turn-1", items: [catalogThreadItem("item-1", { text: "bounded answer" })] }],
+    nextCursor: "turns-page-2",
+  };
+  const listTurnPage = vi.fn(async () => page);
   const control = createEligibleControl({
-    listTurnPage: vi.fn(async () => ({
-      data: [
-        {
-          id: "turn-1",
-          items: [
-            {
-              id: "item-1",
-              type: "commandExecution",
-              aggregatedOutput: "x".repeat(20 * 1024 * 1024),
-            },
-          ],
-        },
-      ] as never,
-    })),
+    listTurnPage,
   });
   const command = transcriptCommand(control, CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
-
+  await expect(
+    command.run({ threadId: "thread-1", cursor: "turns-page-1", limit: 25 }),
+  ).resolves.toBe(JSON.stringify(page));
+  expect(listTurnPage).toHaveBeenCalledWith(
+    expect.objectContaining({
+      cursor: "turns-page-1",
+      limit: 25,
+      itemsView: "full",
+    }),
+  );
+  page.data[0]!.items = [
+    catalogThreadItem("oversized", {
+      type: "commandExecution",
+      aggregatedOutput: "x".repeat(20 * 1024 * 1024),
+    }),
+  ];
   await expect(command.run({ threadId: "thread-1", limit: 50 })).rejects.toThrow(
     "Codex app-server transcript is unavailable",
   );

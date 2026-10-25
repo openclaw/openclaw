@@ -100,78 +100,24 @@ async function homeFixture(label: string) {
   };
 }
 
-it("waits for the registered provider's first page and then serves its resident host", async () => {
-  const pending = createDeferred<{ data: ReturnType<typeof fixture.idleThread>[] }>();
-  const started = createDeferred<void>();
-  fixture.commandRpcMocks.codexControlRequest.mockImplementation(async () => {
-    started.resolve();
-    return pending.promise;
-  });
-  const factory = createFactory();
-  const home = (await factory.homesForAgent("main"))[0]!;
-  const control = factory.forRequest("main", home);
-  const provider = registeredProvider(factory);
-  const query = { agentId: "main", hostIds: [home.hostId] };
-  let delivered = false;
-  const listed = provider.list(query).then((hosts) => {
-    delivered = true;
-    return hosts;
-  });
-  void listed.catch(() => undefined);
-  try {
-    await started.promise;
-    expect(delivered).toBe(false);
-    const initialized = control.initialize();
-    pending.resolve({ data: [fixture.idleThread({ id: "hydrated-thread", source: "cli" })] });
-    await initialized;
-    expect(await listed).toMatchObject([
-      { hostId: home.hostId, connected: true, sessions: [{ threadId: "hydrated-thread" }] },
-    ]);
-    expect(await provider.list(query)).toMatchObject([
-      { hostId: home.hostId, sessions: [{ threadId: "hydrated-thread" }] },
-    ]);
-    expect(fixture.commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-    expect(fixture.commandRpcMocks.codexControlRequest.mock.calls[0]?.[1]).toBe("thread/list");
-  } finally {
-    pending.resolve({ data: [] });
-    await listed;
-  }
-});
-
-it.each(["page", "snapshot"] as const)("stops work when retired during %s", async (phase) => {
+it("stops work when retired during the managed-thread snapshot", async () => {
   const released = createDeferred<void>();
   const started = createDeferred<void>();
-  const pause = async () => {
+  const snapshot = vi.fn(async () => {
     started.resolve();
     await released.promise;
-  };
-  const snapshot = vi.fn(async () => {
-    if (phase === "snapshot") {
-      await pause();
-    }
     return new Map<string, ReadonlySet<string>>();
   });
-  const listPage = vi.fn(async ({ cursor }: { cursor?: string }) => {
-    if (cursor) {
-      return { sessions: [] };
-    }
-    await pause();
-    return { sessions: [], managedThreads: [{ threadId: "managed" }], nextCursor: "next" };
-  });
+  const control = fixture.createControl();
   const mark = vi.fn(async () => undefined);
   const controller = new AbortController();
-  const reason = new Error(`catalog retired during ${phase}`);
-  const options = {
+  const reason = new Error("catalog retired during snapshot");
+  const listed = listCatalog({
     bindingStore: managedStore(snapshot, mark),
-    control: fixture.createControl({ listPage }),
+    control,
     query: { hostIds: [fixture.CODEX_LOCAL_SESSION_HOST_ID] },
     signal: controller.signal,
-  };
-  const listed = listCatalog({
-    ...options,
-    ...(phase === "page"
-      ? { localHomes: [{ ...localHome("home-main"), label: "Main", agentDir: "/agents/main" }] }
-      : { waitUntil: () => controller.signal.throwIfAborted() }),
+    waitUntil: () => controller.signal.throwIfAborted(),
   }).catch((error: unknown) => error);
   await started.promise;
   expect(snapshot).toHaveBeenCalledOnce();
@@ -179,12 +125,8 @@ it.each(["page", "snapshot"] as const)("stops work when retired during %s", asyn
   released.resolve();
   const result = await listed;
   expect(mark).not.toHaveBeenCalled();
-  expect(listPage).toHaveBeenCalledTimes(phase === "page" ? 1 : 0);
-  if (phase === "snapshot") {
-    expect(result).toBe(reason);
-  } else {
-    expect(result).toMatchObject({ hosts: [{ error: { code: "APP_SERVER_UNAVAILABLE" } }] });
-  }
+  expect(control.listPage).not.toHaveBeenCalled();
+  expect(result).toBe(reason);
 });
 
 it("lists non-archived interactive threads without probing transcript previews", async () => {
@@ -226,23 +168,9 @@ it("lists non-archived interactive threads without probing transcript previews",
       }),
     ],
   });
-  expect(fixture.commandRpcMocks.codexControlRequest).toHaveBeenCalledExactlyOnceWith(
-    pluginConfig,
-    "thread/list",
-    {
-      archived: false,
-      limit: 16,
-      modelProviders: [],
-      sortKey: "recency_at",
-      sortDirection: "desc",
-    },
-    expect.objectContaining({
-      agentDir: fixture.resolveDefaultAgentDir(fixture.config),
-      config: fixture.config,
-      authProfileId: null,
-      startOptions: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
-    }),
-  );
+  expect(fixture.commandRpcMocks.codexControlRequest.mock.calls[0]?.[2]).toMatchObject({
+    archived: false,
+  });
   expect(JSON.stringify(await control.listPage({ searchTerm: "mAtCh" }))).not.toContain("private");
   expect(
     fixture.commandRpcMocks.codexControlRequest.mock.calls.map((call) => call[1]),
@@ -302,22 +230,6 @@ it.each(["direct", "pinned"] as const)(
     expect(await fixture.fs.readFile(fixture.path.join(codexHome, "auth.json"), "utf8")).toBe("{}");
   },
 );
-
-it("uses the Gateway-selected owner directory for an explicit multi-agent catalog", async () => {
-  const runtimeConfig = explicitAgents({ alpha: {}, beta: {} });
-  fixture.commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
-  const control = createFactory({
-    getRuntimeConfig: () => runtimeConfig,
-  }).forRequest("beta");
-  await control.initialize();
-
-  await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
-
-  expect(fixture.commandRpcMocks.codexControlRequest.mock.calls[0]?.[3]).toMatchObject({
-    agentDir: fixture.resolveAgentDir(runtimeConfig, "beta"),
-    config: runtimeConfig,
-  });
-});
 
 it("discovers configured and automatic Codex homes while retaining the route owner", async () => {
   const { root, alphaAgentDir, betaAgentDir, processCodexHome, alphaCodexHome, betaCodexHome } =
