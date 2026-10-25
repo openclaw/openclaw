@@ -41,8 +41,9 @@ results = {"candidateSha256": hashlib.sha256(candidate.read_bytes()).hexdigest()
 with tarfile.open(candidate, "r:gz") as archive:
     candidate_files = {entry.name.removeprefix("package/"): hashlib.sha256(archive.extractfile(entry).read()).hexdigest()
         for entry in archive.getmembers() if entry.isfile() and (
-            entry.name in ["package/package.json", "package/openclaw.mjs"] or
-            (entry.name.startswith("package/dist/") and entry.name.endswith(".mjs")))}
+            entry.name == "package/package.json" or
+            (entry.name.startswith("package/") and entry.name.count("/") == 1 and entry.name.endswith(".mjs")) or
+            entry.name.startswith("package/dist/"))}
     candidate_version = json.load(archive.extractfile("package/package.json"))["version"]
 assert len(candidate_files) > 3, "Candidate distribution module identities missing"
 results["candidateVersion"] = candidate_version
