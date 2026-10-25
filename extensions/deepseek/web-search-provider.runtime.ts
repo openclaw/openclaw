@@ -23,6 +23,7 @@ import {
   asNonArrayRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDeepSeekModelKeyFallback } from "./model-credential.js";
 
 const SEARCH_URL = "https://api.deepseek.com/v1/tools/search";
 
@@ -64,21 +65,19 @@ export async function executeDeepSeekSearch(
     resolveProviderWebSearchPluginConfig(ctx.config, "deepseek"),
   );
   const deepseek = asNonArrayRecord(searchConfig?.deepseek);
+  const modelKey = resolveDeepSeekModelKeyFallback(ctx.config);
   const apiKey =
     readConfiguredSecretString(
       deepseek.apiKey,
       "plugins.entries.deepseek.config.webSearch.apiKey",
     ) ??
     readProviderEnvValue(["DEEPSEEK_API_KEY"]) ??
-    readConfiguredSecretString(
-      ctx.config?.models?.providers?.deepseek?.apiKey,
-      "models.providers.deepseek.apiKey",
-    );
+    (modelKey ? readConfiguredSecretString(modelKey.value, modelKey.path) : undefined);
   if (!apiKey) {
     return {
       error: "missing_deepseek_api_key",
       message:
-        "web_search (deepseek) needs a DeepSeek API key. Set DEEPSEEK_API_KEY, configure plugins.entries.deepseek.config.webSearch.apiKey, or reuse models.providers.deepseek.apiKey. Use web_fetch for a specific URL if you do not want to configure search.",
+        'web_search (deepseek) needs a DeepSeek API key. Configure plugins.entries.deepseek.config.webSearch.apiKey or set DEEPSEEK_API_KEY; for chat, DEEPSEEK_API_KEY outranks models.providers.deepseek.apiKey unless models.providers.deepseek.auth is "api-key". models.providers.deepseek.apiKey is reused only while that provider and its models use https://api.deepseek.com. Use web_fetch for a specific URL if you do not want to configure search.',
       docs: "https://docs.openclaw.ai/providers/deepseek#web-search",
     };
   }

@@ -404,7 +404,10 @@ provider-neutral for CLI, app, and Control UI consumers.
   and typed USD budget when configured; otherwise shows aggregate spend and a
   request/token/cost summary.
 - **DeepSeek**: API key via env/config/auth store (`DEEPSEEK_API_KEY`).
-  Shows each provider-reported currency balance.
+  Shows each provider-reported currency balance. Skipped for every credential
+  source, including `DEEPSEEK_API_KEY`, while `models.providers.deepseek.baseUrl`
+  or a model `baseUrl` under it points somewhere other than
+  `https://api.deepseek.com`.
 - **GitHub Copilot**: OAuth tokens in auth profiles.
 - **MiniMax**: API key or MiniMax OAuth auth profile. OpenClaw treats
   `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota
