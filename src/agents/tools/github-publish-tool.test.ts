@@ -27,68 +27,54 @@ const publication = {
   status: "requested" as const,
   message: "Publication was accepted.",
 };
+const pullRequestUrl = "https://github.com/example/repository/pull/1";
+const inspection = { action: "inspect_pr", pullRequestUrl };
+const preparation = { ...inspection, action: "prepare_pr" };
+const unavailable = async () => {
+  throw new Error("Schema fixture must not perform IO");
+};
+function restrictActions(
+  definition: Pick<ReturnType<typeof createGitHubPublishTool>, "name" | "parameters">,
+  actions: string[],
+) {
+  const [tool] = applyGatewayToolPolicy([definition], {
+    tools: { gatewayPolicy: { allow: ["github_publish"], actions: { github_publish: actions } } },
+  });
+  return expectDefined(tool, "restricted tool").parameters;
+}
 function setup(actionsAvailable = false) {
   const callGateway = vi
     .mocked(callInProcessGatewayTool)
     .mockReset()
     .mockResolvedValue(publication);
-  const tool = createGitHubPublishTool({
-    actionsAvailable,
-  });
+  const tool = createGitHubPublishTool({ actionsAvailable });
   const execute = (args: unknown, id = "choice") =>
     withGatewayToolCallerIdentity(caller, () => tool.execute(id, args));
   return { callGateway, tool, execute };
 }
 
 it("applies deployment action limits when publication and operator actions are available", () => {
-  const [tool] = applyGatewayToolPolicy([createGitHubPublishTool({ actionsAvailable: true })], {
-    tools: {
-      gatewayPolicy: {
-        allow: ["github_publish"],
-        actions: { github_publish: ["publish", "inspect"] },
-      },
-    },
-  });
-  expect(tool?.parameters).toMatchObject({
+  const restricted = restrictActions(createGitHubPublishTool({ actionsAvailable: true }), [
+    "publish",
+    "inspect",
+  ]);
+  expect(restricted).toMatchObject({
     properties: { action: { enum: ["publish", "inspect"] } },
   });
-  const inspection = {
-    action: "inspect_pr",
-    pullRequestUrl: "https://github.com/example/repository/pull/1",
-  };
-  expect(Value.Check(expectDefined(tool, "restricted tool").parameters, inspection)).toBe(false);
+  expect(Value.Check(restricted, inspection)).toBe(false);
   for (const definition of [
     githubPublishToolDefinition,
     createGitHubPublishTool(),
     createGitHubPublishTool({ publicationAvailable: false, actionsAvailable: true }),
   ]) {
-    const [allowed] = applyGatewayToolPolicy([definition], {
-      tools: {
-        gatewayPolicy: {
-          allow: ["github_publish"],
-          actions: { github_publish: ["inspect_pr"] },
-        },
-      },
-    });
-    expect(Value.Check(expectDefined(allowed, "inspection tool").parameters, inspection)).toBe(
-      true,
-    );
+    expect(Value.Check(restrictActions(definition, ["inspect_pr"]), inspection)).toBe(true);
   }
-  const preparation = { ...inspection, action: "prepare_pr" };
-  expect(Value.Check(expectDefined(tool, "restricted tool").parameters, preparation)).toBe(false);
+  expect(Value.Check(restricted, preparation)).toBe(false);
   for (const definition of [
     githubPublishToolDefinition,
     createGitHubPublishTool({ sandbox: publicationSandbox() }),
   ]) {
-    const [allowed] = applyGatewayToolPolicy([definition], {
-      tools: {
-        gatewayPolicy: {
-          allow: ["github_publish"],
-          actions: { github_publish: ["prepare_pr"] },
-        },
-      },
-    });
-    const parameters = expectDefined(allowed, "preparation tool").parameters;
+    const parameters = restrictActions(definition, ["prepare_pr"]);
     expect(Value.Check(parameters, preparation)).toBe(true);
     expect(Value.Check(parameters, inspection)).toBe(false);
     expect(Value.Check(parameters, { pullRequestUrl: preparation.pullRequestUrl })).toBe(false);
@@ -101,87 +87,44 @@ function publicationSandbox(overrides: Partial<SandboxContext> = {}) {
       workspaceSource: "managed-worktree",
       fsBridge: {
         ...createHostSandboxFsBridge("/tmp/github-publish"),
-        readFileWithSource: async () => {
-          throw new Error("Schema fixture does not read files");
-        },
+        readFileWithSource: unavailable,
       },
       backend: {
         id: "docker",
         runtimeId: "fixture",
         runtimeLabel: "fixture",
         workdir: "/workspace",
-        buildExecSpec: async () => {
-          throw new Error("Schema fixture does not execute commands");
-        },
-        runShellCommand: async () => {
-          throw new Error("Schema fixture does not execute commands");
-        },
+        buildExecSpec: unavailable,
+        runShellCommand: unavailable,
       },
       ...overrides,
     },
   });
 }
 
-it.each<{
-  name: string;
-  sandbox: Partial<SandboxContext> | null;
-  prepare: boolean;
-  refresh: boolean;
-  evidence: boolean;
-}>([
-  { name: "direct session", sandbox: null, prepare: false, refresh: false, evidence: false },
-  { name: "writable managed sandbox", sandbox: {}, prepare: true, refresh: true, evidence: true },
-  {
-    name: "read-only managed sandbox",
-    sandbox: { workspaceAccess: "ro" },
-    prepare: false,
-    refresh: false,
-    evidence: true,
-  },
-  {
-    // An ordinary local Docker or Podman conversation adopts a managed workspace.
-    name: "unmanaged local sandbox",
-    sandbox: { workspaceSource: undefined },
-    prepare: true,
-    refresh: false,
-    evidence: true,
-  },
-  {
-    name: "unmanaged remote sandbox",
-    sandbox: { workspaceSource: undefined, backendId: "ssh" },
-    prepare: false,
-    refresh: false,
-    evidence: true,
-  },
-  {
-    name: "missing backend",
-    sandbox: { backend: undefined },
-    prepare: false,
-    refresh: false,
-    evidence: true,
-  },
-  {
-    name: "missing file bridge",
-    sandbox: { fsBridge: undefined },
-    prepare: true,
-    refresh: true,
-    evidence: false,
-  },
-  {
-    name: "missing source-aware read",
-    sandbox: { fsBridge: createHostSandboxFsBridge("/tmp/github-publish") },
-    prepare: true,
-    refresh: true,
-    evidence: false,
-  },
-  {
-    name: "disabled sandbox",
-    sandbox: { enabled: false },
-    prepare: false,
-    refresh: false,
-    evidence: false,
-  },
-])("offers only supported sandbox actions for $name", ({ sandbox, prepare, refresh, evidence }) => {
+it.each<[string, Partial<SandboxContext> | null, boolean, boolean, boolean]>([
+  ["direct session", null, false, false, false],
+  ["writable managed sandbox", {}, true, true, true],
+  ["read-only managed sandbox", { workspaceAccess: "ro" }, false, false, true],
+  ["unmanaged local sandbox", { workspaceSource: undefined }, true, false, true],
+  [
+    "unmanaged remote sandbox",
+    { workspaceSource: undefined, backendId: "ssh" },
+    false,
+    false,
+    true,
+  ],
+  ["missing backend", { backend: undefined }, false, false, true],
+  ["missing file bridge", { fsBridge: undefined }, true, true, false],
+  [
+    "missing source-aware read",
+    { fsBridge: createHostSandboxFsBridge("/tmp/github-publish") },
+    true,
+    true,
+    false,
+  ],
+  ["disabled sandbox", { enabled: false }, false, false, false],
+])("offers only supported sandbox actions for %s", (_name, sandbox, prepare, refresh, evidence) => {
   for (const actionsAvailable of [false, true]) {
     const tool = createGitHubPublishTool({
       sandbox: sandbox === null ? null : publicationSandbox(sandbox),
@@ -207,21 +150,6 @@ it.each<{
       expect(tool.description).not.toMatch(/refresh/i);
     }
     expect(Value.Check(tool.parameters, {})).toBe(true);
-    expect(
-      Value.Check(tool.parameters, {
-        action: "inspect_pr",
-        pullRequestUrl: "https://github.com/example/repository/pull/1",
-      }),
-    ).toBe(true);
-    for (const action of ["publish", "edit", "ready", "request_review"]) {
-      expect(Value.Check(tool.parameters, { action }), action).toBe(true);
-    }
-    for (const action of ["inspect", "merge", "close"]) {
-      expect(Value.Check(tool.parameters, { action }), action).toBe(actionsAvailable);
-    }
-    expect(
-      Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
-    ).toBe(actionsAvailable);
     const description = tool.description;
     finalizeAgentToolAvailability([tool]);
     expect(tool.description).toBe(description);
@@ -252,8 +180,7 @@ it.each([
 ])(
   "dispatches preparation with its current sandbox and acknowledgement %j before owner qualification",
   async (acknowledgement) => {
-    const workspaceSource = "managed-worktree";
-    const sandbox = publicationSandbox({ workspaceSource });
+    const sandbox = publicationSandbox();
     const callGateway = vi
       .mocked(callInProcessGatewayTool)
       .mockReset()
@@ -262,12 +189,8 @@ it.each([
         return publication;
       });
     const tool = createGitHubPublishTool({ sandbox });
-    const input = {
-      action: "prepare_pr",
-      pullRequestUrl: "https://github.com/example/repository/pull/1",
-      ...acknowledgement,
-    };
-    expect(Value.Check(tool.parameters, input)).toBe(workspaceSource === "managed-worktree");
+    const input = { ...preparation, ...acknowledgement };
+    expect(Value.Check(tool.parameters, input)).toBe(true);
     await withGatewayToolCallerIdentity(caller, () => tool.execute("prepare", input));
     expect(callGateway).toHaveBeenCalledExactlyOnceWith(
       "sessions.github.action",
@@ -281,20 +204,13 @@ it("offers current-PR preparation without privileged actions", () => {
   const tool = createGitHubPublishTool({ sandbox: publicationSandbox() });
   const check = (args: unknown, valid = true) =>
     expect(Value.Check(tool.parameters, args)).toBe(valid);
-  check({
-    action: "inspect_pr",
-    pullRequestUrl: "https://github.com/example/repository/pull/1",
-  });
-  const prepare = {
-    action: "prepare_pr",
-    pullRequestUrl: "https://github.com/example/repository/pull/1",
-  };
-  check(prepare);
+  check(inspection);
+  check(preparation);
   const request = {
     requestId: "a1111111-1111-4111-8111-111111111111",
     expectedHeadCommit: "a".repeat(40),
   };
-  for (const action of ["edit", "ready"]) {
+  for (const action of ["publish", "edit", "ready", "request_review"]) {
     check({ action });
   }
   check({ action: "request_review", ...request });
@@ -312,17 +228,29 @@ it("offers current-PR preparation without privileged actions", () => {
     check({ action, publishingSessionKey: "another" }, false);
   }
   expect(tool.description).toContain("omit action to append accepted changes to the original PR");
-  expect(tool.description).not.toContain("Imported source publication is not available");
   expect(tool.description).toContain("used only when creating a PR");
   expect(tool.description).toContain("retain requestId, finish the turn and await its result here");
   expect(tool.description).toContain("do not submit another publication to recover it");
   expect(tool.description).toContain("Edit never synchronizes, stages, commits or pushes");
+  expect(tool.description).not.toContain("Imported source publication is not available");
   const actionOnly = createGitHubPublishTool({
     publicationAvailable: false,
     actionsAvailable: true,
   });
   expect(Value.Check(actionOnly.parameters, { action: "edit" })).toBe(false);
-  expect(Value.Check(actionOnly.parameters, prepare)).toBe(false);
+  expect(Value.Check(actionOnly.parameters, preparation)).toBe(false);
+  const operator = createGitHubPublishTool({ actionsAvailable: true });
+  for (const action of ["inspect", "merge", "close"]) {
+    for (const { parameters } of [actionOnly, operator]) {
+      expect(Value.Check(parameters, { action })).toBe(true);
+    }
+  }
+  expect(
+    Value.Check(operator.parameters, {
+      action: "ready",
+      publishingSessionKey: "agent:main:child",
+    }),
+  ).toBe(true);
 });
 
 it.each(["available", "absent", "self-scoped", "denied"] as const)(
