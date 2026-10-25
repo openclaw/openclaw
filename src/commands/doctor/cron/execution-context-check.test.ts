@@ -148,8 +148,8 @@ describe("noteScheduledContextReport", () => {
     mocks.roles.set("profile-1", "contractor");
     const text = await noteText(roleConfig());
     // Today's runs already sandbox this creator, so the sandbox is not a loss.
-    expect(text).toContain(
-      "- sandboxed (sandboxed): owner-only tools such as sessions, portal, nodes, gateway and plugins",
+    expect(text?.split("\n")).toContain(
+      "- sandboxed (sandboxed): owner-only tools such as sessions, portal, nodes, gateway and plugins (the creator is not currently an owner)",
     );
     expect(text).not.toContain("unsandboxed execution");
     expect(text).not.toContain("could not be evaluated");
